@@ -99,11 +99,27 @@ pub fn route(
     start: (i64, i64, u8),
     goal: (i64, i64, u8),
 ) -> Option<Vec<(i64, i64, u8)>> {
+    let goals: std::collections::HashSet<(i64, i64, u8)> = std::iter::once(goal).collect();
+    route_to_any(grid, net, start, &goals, &[(goal.0, goal.1)])
+}
+
+/// Multi-goal A*: the path ends at the first cell contained in `goals`.
+/// `h_targets` (cell x/y) drive the heuristic — the nearest one by
+/// Manhattan distance; goals that are not targets (e.g. existing tracks)
+/// may be found earlier than the heuristic predicts, which only makes
+/// the result slightly less optimal, never wrong.
+pub fn route_to_any(
+    grid: &Grid,
+    net: &str,
+    start: (i64, i64, u8),
+    goals: &std::collections::HashSet<(i64, i64, u8)>,
+    h_targets: &[(i64, i64)],
+) -> Option<Vec<(i64, i64, u8)>> {
     let start_state: State = (start.0, start.1, start.2, NO_DIR);
     let mut table = StateTable::new(grid);
     let mut heap = BinaryHeap::new();
 
-    let h = |cx: i64, cy: i64| (cx - goal.0).abs() + (cy - goal.1).abs();
+    let h = |cx: i64, cy: i64| h_targets.iter().map(|&(gx, gy)| (cx - gx).abs() + (cy - gy).abs()).min().unwrap_or(0);
 
     let start_idx = table.index(start_state);
     table.best[start_idx] = 0;
@@ -117,7 +133,7 @@ pub fn route(
             continue; // stale queue entry
         }
         let (cx, cy, layer, dir) = state;
-        if cx == goal.0 && cy == goal.1 && layer == goal.2 {
+        if goals.contains(&(cx, cy, layer)) {
             goal_state = Some(state);
             break;
         }

@@ -449,6 +449,17 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         }
 
         let root = uf.find(0);
+        if std::env::var_os("EDA_GATE_DEBUG").is_some() {
+            for (pi, p) in net_pads.iter().enumerate() {
+                eprintln!("gate {}: pad {} rect {:?} layers {:?} comp {}", net.name, p.refpin, p.rect, p.layers, uf.find(pi));
+            }
+            for (ti, t) in tracks.iter().enumerate() {
+                eprintln!("gate {}: track {ti} {} {:?} comp {}", net.name, t.layer, t.pts, uf.find(tv_base[ti]));
+            }
+            for (vi, v) in vias.iter().enumerate() {
+                eprintln!("gate {}: via {vi} {:?} comp {}", net.name, v.at, uf.find(via_base + vi));
+            }
+        }
         let disconnected: Vec<&str> = net_pads.iter().enumerate().filter(|(i, _)| uf.find(*i) != root).map(|(_, p)| p.refpin.as_str()).collect();
         if !disconnected.is_empty() {
             ok = false;

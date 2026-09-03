@@ -403,7 +403,11 @@ fn random30_layout_is_fast() {
     let start = std::time::Instant::now();
     let _ = layout(&g, &opts);
     let elapsed = start.elapsed();
-    assert!(elapsed.as_millis() < 10, "30-node layout took {elapsed:?}, expected well under 10ms");
+    // The wire-aware repair pass (maze) costs ~15k A* expansions on this
+    // graph: ~5 ms in release, ~60 ms unoptimised. Loop-1 latency is
+    // judged on release builds.
+    let budget_ms = if cfg!(debug_assertions) { 150 } else { 10 };
+    assert!(elapsed.as_millis() < budget_ms, "30-node layout took {elapsed:?}, expected under {budget_ms}ms");
 }
 
 #[test]

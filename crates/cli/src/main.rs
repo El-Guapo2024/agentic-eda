@@ -15,7 +15,7 @@
 //! ```
 
 use eda::prelude::*;
-use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, route, to_circuit_json, PlaceOptions};
+use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, to_circuit_json, PlaceOptions};
 use eda::ExportMeta;
 use eda_model::ir::Stage;
 use std::path::{Path, PathBuf};
@@ -137,6 +137,7 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
 fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
     let opts = PlaceOptions { seed: cx.args.seed, ..Default::default() };
     let placed = place(design, &cx.model, &opts)?;
+    save_design(&cx.args.out, &placed)?;
     let checks = check_placement(&placed, &cx.model);
     let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model) });
     cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
@@ -147,7 +148,19 @@ fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
 }
 
 fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
-    let routed = route(design, &cx.model, &cx.model.board, cx.args.seed)?;
+    let routed = match eda::route_partial(design, &cx.model, &cx.model.board, cx.args.seed) {
+        (Some(d), fails) if fails.is_empty() => d,
+        (partial, fails) => {
+            // Persist the partial result for review, then fail the stage.
+            if let Some(d) = partial {
+                save_design(&cx.args.out, &d)?;
+                export(cx, &d).ok();
+            }
+            return Err(fails);
+        }
+    };
+    // Always persist the candidate: a gate-failed one is what review reads.
+    save_design(&cx.args.out, &routed)?;
     let checks = check_routing(&routed, &cx.model);
     let r = routed.routing.as_ref().unwrap();
     let metrics = serde_json::json!({ "tracks": r.tracks.len(), "vias": r.vias.len() });

@@ -28,8 +28,32 @@ struct PadInfo {
     layers: Vec<u8>,
 }
 
-/// One 2-pin routing target: either the sole edge of a 2-pin net, or one
-/// spoke of a multi-pin net's star topology (all spokes share `a_pin`).
+/// Grid cells whose centre lies strictly inside the pad's copper, so a
+/// track ending on any of them is guaranteed to touch the pad. Computed
+/// from the real rectangle: a pad centre is rarely grid-aligned.
+fn pad_interior_cells(grid: &Grid, pad: &PadInfo, rules: &RouteRules) -> Vec<(i64, i64)> {
+    let (cx, cy) = grid.to_cell(pad.pt);
+    let hx = (pad.size.0 / 2 + rules.grid) / rules.grid;
+    let hy = (pad.size.1 / 2 + rules.grid) / rules.grid;
+    let (x0, x1) = (pad.pt.x - pad.size.0 / 2, pad.pt.x + pad.size.0 / 2);
+    let (y0, y1) = (pad.pt.y - pad.size.1 / 2, pad.pt.y + pad.size.1 / 2);
+    let mut out = vec![(cx, cy)];
+    for dx in -hx..=hx {
+        for dy in -hy..=hy {
+            let p = grid.to_point(cx + dx, cy + dy);
+            if p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1 && (dx, dy) != (0, 0) {
+                out.push((cx + dx, cy + dy));
+            }
+        }
+    }
+    out
+}
+
+/// One routing step: connect `a_pin` to the net's already-connected
+/// copper (pads of earlier steps plus every track/via routed so far);
+/// `b_pin` is the nearest earlier pin, used for the heuristic and for
+/// rip-up region selection. Steps come in Prim (nearest-first) order, so
+/// the net grows as a spanning tree instead of a star out of one pad.
 struct Edge {
     a_pin: String,
     b_pin: String,
@@ -47,10 +71,25 @@ pub fn route(
     rules: &RouteRules,
     seed: u64,
 ) -> Result<Design, Vec<CheckResult>> {
+    match route_partial(design, model, rules, seed) {
+        (Some(d), fails) if fails.is_empty() => Ok(d),
+        (_, fails) => Err(fails),
+    }
+}
+
+/// Like [`route`], but on failure also returns whatever was routed (for
+/// review/rendering). `None` design means a precondition failed before
+/// routing started. `route` is the gated contract; use this for diagnostics.
+pub fn route_partial(
+    design: &Design,
+    model: &ConstraintModel,
+    rules: &RouteRules,
+    seed: u64,
+) -> (Option<Design>, Vec<CheckResult>) {
     let placement = match &design.placement {
         Some(p) => p,
         None => {
-            return Err(vec![CheckResult::fail(
+            return (None, vec![CheckResult::fail(
                 "route_precondition",
                 "design",
                 "placement section is required before routing",
@@ -58,7 +97,7 @@ pub fn route(
         }
     };
     if placement.outline.len() < 3 {
-        return Err(vec![CheckResult::fail(
+        return (None, vec![CheckResult::fail(
             "route_precondition",
             "design.placement.outline",
             "board outline needs at least 3 points",
@@ -105,7 +144,7 @@ pub fn route(
         }
     }
     if !precondition.is_empty() {
-        return Err(precondition);
+        return (None, precondition);
     }
 
     // --- 2. grid & obstacle map -----------------------------------------
@@ -148,13 +187,32 @@ pub fn route(
         if resolved.len() < 2 {
             continue;
         }
+        // Prim's MST over pad centres (Manhattan), deterministic: ties go
+        // to the lexically smaller pin ref.
         let mut es = Vec::new();
         let mut total = 0i64;
-        for i in 1..resolved.len() {
-            let a = &pads[resolved[0]].pt;
-            let b = &pads[resolved[i]].pt;
-            total += (a.x - b.x).abs() + (a.y - b.y).abs();
-            es.push(Edge { a_pin: resolved[0].clone(), b_pin: resolved[i].clone() });
+        let mut in_tree: Vec<&String> = vec![resolved[0]];
+        let mut rest: Vec<&String> = resolved[1..].to_vec();
+        while !rest.is_empty() {
+            let mut best: Option<(i64, usize, &String)> = None;
+            for (ri, r) in rest.iter().enumerate() {
+                for t in &in_tree {
+                    let (a, b) = (&pads[*r].pt, &pads[*t].pt);
+                    let d = (a.x - b.x).abs() + (a.y - b.y).abs();
+                    let better = match best {
+                        None => true,
+                        Some((bd, bri, bt)) => d < bd || (d == bd && (r.as_str(), t.as_str()) < (rest[bri].as_str(), bt.as_str())),
+                    };
+                    if better {
+                        best = Some((d, ri, t));
+                    }
+                }
+            }
+            let (d, ri, t) = best.unwrap();
+            let r = rest.remove(ri);
+            total += d;
+            es.push(Edge { a_pin: r.clone(), b_pin: t.clone() });
+            in_tree.push(r);
         }
         airline_by_net.insert(net.name.clone(), total);
         edges_by_net.insert(net.name.clone(), es);
@@ -240,14 +298,9 @@ pub fn route(
     all_vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
     out.routing = Some(RoutingSection { tracks: all_tracks, vias: all_vias, zones: vec![] });
 
-    if fails.is_empty() {
-        Ok(out)
-    } else {
-        // v1 contract: on any unrouted net, fail loudly rather than
-        // silently degrade (`fails` carries one CheckResult per unrouted
-        // net) instead of returning a partially-routed `Design` unmarked.
-        Err(fails)
-    }
+    // Contract: `route` fails loudly on any unrouted net; the partial
+    // design is only exposed through `route_partial` for diagnostics.
+    (Some(out), fails)
 }
 
 /// Attempts to route every star edge of one net. On success returns the new
@@ -263,6 +316,11 @@ fn route_net(
     let mut tracks = Vec::new();
     let mut vias = Vec::new();
 
+    // Pins connected so far (their pad cells are valid goals).
+    let mut connected: Vec<&String> = Vec::new();
+    if let Some(first) = edges.first() {
+        connected.push(&first.b_pin);
+    }
     for e in edges {
         let pa = &pads[&e.a_pin];
         let pb = &pads[&e.b_pin];
@@ -271,19 +329,69 @@ fn route_net(
         let start = (ax, ay, pa.layers[0]);
         let goal = (bx, by, pb.layers[0]);
 
-        match astar::route(grid, net, start, goal) {
+        // Goal set: routed copper of this net plus the pads of connected pins.
+        let mut goals: HashSet<(i64, i64, u8)> = grid.routed_cells_of(net).into_iter().collect();
+        let mut h_targets: Vec<(i64, i64)> = Vec::new();
+        for c in &connected {
+            let pc = &pads[*c];
+            let (cx, cy) = grid.to_cell(pc.pt);
+            for &l in &pc.layers {
+                for (gx, gy) in pad_interior_cells(grid, pc, rules) {
+                    goals.insert((gx, gy, l));
+                }
+            }
+            h_targets.push((cx, cy));
+        }
+        if h_targets.is_empty() {
+            h_targets.push((bx, by));
+        }
+        // Never terminate inside the start pad itself.
+        let shx = (pa.size.0 / 2 + rules.grid / 2) / rules.grid;
+        let shy = (pa.size.1 / 2 + rules.grid / 2) / rules.grid;
+        for &l in &pa.layers {
+            for dx in -shx..=shx {
+                for dy in -shy..=shy {
+                    goals.remove(&(ax + dx, ay + dy, l));
+                }
+            }
+        }
+
+        match astar::route_to_any(grid, net, start, &goals, &h_targets) {
             Some(path) => {
+                connected.push(&e.a_pin);
                 // Mark cells so later edges of the same star net see this
                 // one as routed (same net, so still passable for them).
                 for (i, &(cx, cy, l)) in path.iter().enumerate() {
                     let is_via = (i > 0 && path[i - 1].2 != l) || (i + 1 < path.len() && path[i + 1].2 != l);
                     grid.set(cx, cy, l, net, if is_via { Occ::Via } else { Occ::Track });
                 }
-                let (edge_tracks, edge_vias) = path_to_geometry(net, &e.a_pin, &e.b_pin, &path, grid, rules);
+                // Which connected pin (if any) does the path end on?
+                let end = path.last().copied().unwrap_or(start);
+                let end_pin: Option<&String> = connected.iter().copied().find(|c| {
+                    let pc = &pads[*c];
+                    pc.layers.contains(&end.2) && pad_interior_cells(grid, pc, rules).contains(&(end.0, end.1))
+                });
+                let (edge_tracks, edge_vias) = path_to_geometry(net, &e.a_pin, end_pin.map(|s| s.as_str()).unwrap_or(""), &path, grid, rules);
                 tracks.extend(edge_tracks);
                 vias.extend(edge_vias);
             }
-            None => return Err((start, goal)),
+            None => {
+                if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+                    eprintln!("route: net {net} pin {} -> nearest {} failed; start {:?} goals {} targets {:?}", e.a_pin, e.b_pin, start, goals.len(), h_targets);
+                    for l in 0..grid.num_layers as u8 {
+                        eprintln!("layer {l} around start (passable-as-track: P):\n{}", grid.dump_around(start.0, start.1, l, net, 8));
+                        let mut row = String::new();
+                        for dy in -8..=8i64 {
+                            for dx in -8..=8i64 {
+                                row.push(if grid.passable(start.0 + dx, start.1 + dy, l, net) { 'P' } else { '.' });
+                            }
+                            row.push('\n');
+                        }
+                        eprintln!("{row}");
+                    }
+                }
+                return Err((start, goal));
+            }
         }
     }
     Ok((tracks, vias))
@@ -353,7 +461,7 @@ fn segment_track(net: &str, span: &SegmentSpan, grid: &Grid, rules: &RouteRules)
     if start == 0 {
         pins.push(a_pin.to_string());
     }
-    if end == path.len() - 1 {
+    if end == path.len() - 1 && !b_pin.is_empty() {
         pins.push(b_pin.to_string());
     }
     Track { net: net.to_string(), pins, layer, width: rules.track_width, pts }

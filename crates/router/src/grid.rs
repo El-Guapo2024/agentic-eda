@@ -137,8 +137,65 @@ impl Grid {
     pub fn set(&mut self, cx: i64, cy: i64, layer: u8, net: &str, kind: Occ) {
         let net_id = self.net_id(net);
         if let Some(i) = self.idx(cx, cy, layer) {
+            // A pad never downgrades to track/via copper of its own net:
+            // rip-up must keep the pad as an obstacle.
+            if let Some(c) = &self.occ[i] {
+                if c.kind == Occ::Pad && c.net_id == net_id {
+                    return;
+                }
+            }
             self.occ[i] = Some(Cell { net_id, kind });
         }
+    }
+
+    /// Debug: one character per cell around (cx, cy) on `layer`:
+    /// `.` free, `#` other-net pad, `=` other-net track, `o` other-net via,
+    /// lowercase for own-net copper, ` ` outside the outline.
+    pub fn dump_around(&self, cx: i64, cy: i64, layer: u8, net: &str, r: i64) -> String {
+        let own = self.net_id_ro(net);
+        let mut out = String::new();
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let (x, y) = (cx + dx, cy + dy);
+                let ch = if !self.in_outline(x, y) {
+                    ' '
+                } else {
+                    match self.idx(x, y, layer).and_then(|i| self.occ[i].as_ref()) {
+                        None => '.',
+                        Some(c) => {
+                            let mine = Some(c.net_id) == own;
+                            match (c.kind, mine) {
+                                (Occ::Pad, true) => 'p',
+                                (Occ::Pad, false) => '#',
+                                (Occ::Track, true) => 't',
+                                (Occ::Track, false) => '=',
+                                (Occ::Via, true) => 'v',
+                                (Occ::Via, false) => 'o',
+                            }
+                        }
+                    }
+                };
+                out.push(if dx == 0 && dy == 0 { '@' } else { ch });
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Every cell currently holding routed copper (track or via) of `net`.
+    pub fn routed_cells_of(&self, net: &str) -> Vec<(i64, i64, u8)> {
+        let Some(net_id) = self.net_id_ro(net) else { return Vec::new() };
+        let mut out = Vec::new();
+        for (i, c) in self.occ.iter().enumerate() {
+            if let Some(c) = c {
+                if c.net_id == net_id && c.kind != Occ::Pad {
+                    let layer = (i % self.num_layers) as u8;
+                    let cell = (i / self.num_layers) as i64;
+                    out.push((cell % self.cells_x, cell / self.cells_x, layer));
+                }
+            }
+        }
+        out
     }
 
     pub fn clear_net(&mut self, net: &str) {

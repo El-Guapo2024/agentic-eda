@@ -85,8 +85,6 @@ enum Expect {
 fn default_expect(stem: &str) -> Expect {
     match stem {
         "unroutable_tiny_outline" => Expect::ExpectedFail(Stage::Placement),
-        // 30-part board: the grid router gives up on one net (route_net_unrouted).
-        "mcu_board_30plus" => Expect::KnownFail(Stage::Routing),
         _ => Expect::Clean,
     }
 }

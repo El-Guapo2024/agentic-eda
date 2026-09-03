@@ -30,6 +30,7 @@ pub fn lint(model: &ConstraintModel) -> Vec<CheckResult> {
     out.extend(check_no_power_net(model));
     out.extend(check_power_pin_direct_short(model));
     out.extend(check_duplicate_reference(model));
+    out.extend(check_pin_on_multiple_nets(model));
     out.extend(check_missing_footprint(model));
     out.extend(check_control_pin_unconnected(model));
 
@@ -213,6 +214,31 @@ fn check_duplicate_reference(model: &ConstraintModel) -> Vec<CheckResult> {
         .collect()
 }
 
+/// A pin can carry exactly one net. Listing it on two is the intent
+/// contradicting itself; downstream the first net silently wins the pad
+/// and the second becomes unroutable, which is much harder to diagnose.
+fn check_pin_on_multiple_nets(model: &ConstraintModel) -> Vec<CheckResult> {
+    let mut nets_of: HashMap<&str, Vec<&str>> = HashMap::new();
+    for net in &model.nets {
+        for pin in &net.pins {
+            nets_of.entry(pin.as_str()).or_default().push(net.name.as_str());
+        }
+    }
+    let mut out: Vec<CheckResult> = nets_of
+        .into_iter()
+        .filter(|(_, nets)| nets.len() > 1)
+        .map(|(pin, nets)| {
+            CheckResult::fail(
+                "source_pin_multiple_nets",
+                pin.to_string(),
+                format!("pin is listed on {} nets: {}", nets.len(), nets.join(", ")),
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| a.location.cmp(&b.location));
+    out
+}
+
 fn check_missing_footprint(model: &ConstraintModel) -> Vec<CheckResult> {
     model
         .parts
@@ -233,6 +259,32 @@ fn check_missing_footprint(model: &ConstraintModel) -> Vec<CheckResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_on_two_nets_is_flagged() {
+        let model = ConstraintModel {
+            parts: vec![crate_test_part("U1", 2)],
+            nets: vec![
+                eda_model::Net { name: "A".into(), pins: vec!["U1.1".into(), "U1.2".into()] },
+                eda_model::Net { name: "B".into(), pins: vec!["U1.2".into()] },
+            ],
+            ..Default::default()
+        };
+        let hits: Vec<_> = check_pin_on_multiple_nets(&model);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].location.as_deref(), Some("U1.2"));
+    }
+
+    fn crate_test_part(reference: &str, n: usize) -> eda_model::Part {
+        eda_model::Part {
+            reference: reference.into(),
+            mpn: None,
+            value: None,
+            package: Some("0603".into()),
+            footprint: None,
+            pins: (1..=n).map(|i| eda_model::Pin { number: i.to_string(), name: None, kind: eda_model::PinKind::Signal }).collect(),
+        }
+    }
     use eda_model::{Net, Part, Pin};
 
     fn part(reference: &str, pins: Vec<Pin>) -> Part {

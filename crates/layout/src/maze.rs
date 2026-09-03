@@ -185,7 +185,18 @@ struct Window {
     h: i64,
 }
 
-fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64, i64)) -> Option<Vec<(i64, i64)>> {
+/// Result of one windowed search: the path, or why it failed.
+enum Search {
+    Found(Vec<(i64, i64)>),
+    /// Exhausted, but some expansion was cut off by the window edge, so a
+    /// larger window may succeed.
+    WindowBound,
+    /// Exhausted without ever touching the window edge: enlarging the
+    /// window cannot help.
+    BoxedIn,
+}
+
+fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64, i64)) -> Search {
     let n = (win.w * win.h) as usize * 5;
     let index = |s: State| (((s.1 - win.y0) * win.w + (s.0 - win.x0)) as usize) * 5 + s.2 as usize;
     let inside = |x: i64, y: i64| x >= win.x0 && y >= win.y0 && x < win.x0 + win.w && y < win.y0 + win.h;
@@ -198,6 +209,7 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
     heap.push(Item { f: h(start.0, start.1), g: 0, s: s0 });
     let mut expansions = 0;
     let mut end: Option<State> = None;
+    let mut touched_edge = false;
     while let Some(Item { g, s, .. }) = heap.pop() {
         if g > best[index(s)] {
             continue;
@@ -211,7 +223,7 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
             if std::env::var_os("EDA_MAZE_DEBUG").is_some() {
                 eprintln!("maze: expansion budget hit");
             }
-            return None;
+            return Search::WindowBound;
         }
         let here = grid.get(s.0, s.1);
         // Inside a foreign crossing cell we must keep going straight.
@@ -223,6 +235,7 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
             }
             let (nx, ny) = (s.0 + dx, s.1 + dy);
             if !inside(nx, ny) {
+                touched_edge = true;
                 continue;
             }
             let Some(extra) = enter_cost(grid.get(nx, ny), group, d) else { continue };
@@ -244,7 +257,7 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
             let nb: Vec<String> = DIRS.iter().map(|(dx, dy)| show(grid.get(start.0 + dx, start.1 + dy))).collect();
             eprintln!("maze: exhausted after {expansions} expansions, win {}x{}; start={} goal={} start-neighbours={:?}", win.w, win.h, show(sc), show(gc), nb);
         }
-        return None;
+        return if touched_edge { Search::WindowBound } else { Search::BoxedIn };
     };
     let mut path = vec![(end.0, end.1)];
     let mut cur = index(end);
@@ -256,7 +269,7 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
     }
     path.reverse();
     path.dedup();
-    Some(path)
+    Search::Found(path)
 }
 
 /// Axis-aligned segments touch or cross (closed segments).
@@ -451,9 +464,13 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
                 )
             };
             let win = Window { x0, y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
-            if let Some(path) = astar(&grid, &win, group, ca, cb) {
-                found = Some(path);
-                break;
+            match astar(&grid, &win, group, ca, cb) {
+                Search::Found(path) => {
+                    found = Some(path);
+                    break;
+                }
+                Search::BoxedIn => break,
+                Search::WindowBound => {}
             }
             if margin == i64::MAX {
                 break;

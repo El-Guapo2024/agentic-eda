@@ -17,7 +17,7 @@ pub use eda_intent::lint::lint;
 pub use eda_render::render_schematic;
 pub use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
 pub use eda_interchange::to_circuit_json;
-pub use eda_router::{route, RouteRules};
+pub use eda_router::{route, route_partial, RouteRules};
 pub use eda_place::{hpwl, place, PlaceOptions};
 pub use eda_gates::{check_placement, check_routing};
 pub use eda_logger::{now_rfc3339, EscalationPolicy, Event, RunLog, Tier};
