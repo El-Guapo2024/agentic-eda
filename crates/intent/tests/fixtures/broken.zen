@@ -1,0 +1,6 @@
+# Deliberately broken: calls an undefined function. Must not panic; must
+# come back as Vec<CheckResult>.
+
+Component("U1", pins = [("1", "VCC", "power")])
+
+this_function_does_not_exist("oops")

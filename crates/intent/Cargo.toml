@@ -1,0 +1,14 @@
+[package]
+name = "eda-intent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+eda-model = { path = "../model" }
+starlark = { workspace = true }
+allocative = { workspace = true }
+anyhow = { workspace = true }

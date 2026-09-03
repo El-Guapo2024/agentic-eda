@@ -1,0 +1,15 @@
+[package]
+name = "eda-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "eda"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+blake3 = { workspace = true }
+eda = { path = "../eda" }
+eda-model = { path = "../model" }

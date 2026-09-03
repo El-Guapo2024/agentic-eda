@@ -1,0 +1,269 @@
+//! `eda` — the loop runner. Drives intent -> schematic -> placement ->
+//! routing through the gates, logging every candidate to JSONL, and
+//! writing `design.json` plus renders/exports next to it.
+//!
+//! No argument-parsing crate: the surface is small and stable.
+//!
+//! ```text
+//! eda lint      <intent.zen|model.yaml>
+//! eda schematic <intent> [-o out_dir] [--seed N]
+//! eda place     <intent> [-o out_dir] [--seed N] [--design design.json]
+//! eda route     <intent> [-o out_dir] [--seed N] [--design design.json]
+//! eda pipeline  <intent> [-o out_dir] [--seed N]        # all three, gated
+//! eda export    <intent> --design design.json [-o out_dir]   # kicad_sch + circuit json
+//! eda check     <intent> --design design.json          # run every gate, print scorecard
+//! ```
+
+use eda::prelude::*;
+use eda::{export_kicad_sch, hpwl, lint, place, render_schematic, route, to_circuit_json, PlaceOptions};
+use eda::ExportMeta;
+use eda_model::ir::Stage;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+
+struct Args {
+    cmd: String,
+    intent: PathBuf,
+    out: PathBuf,
+    seed: u64,
+    design: Option<PathBuf>,
+    use_pcb_cli: bool,
+}
+
+fn parse_args() -> Result<Args, String> {
+    let mut it = std::env::args().skip(1);
+    let cmd = it.next().ok_or("missing command")?;
+    let mut intent: Option<PathBuf> = None;
+    let mut out = PathBuf::from("out");
+    let mut seed = 0u64;
+    let mut design = None;
+    let mut use_pcb_cli = false;
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "-o" | "--out" => out = PathBuf::from(it.next().ok_or("-o needs a path")?),
+            "--seed" => seed = it.next().ok_or("--seed needs a number")?.parse().map_err(|_| "bad --seed")?,
+            "--design" => design = Some(PathBuf::from(it.next().ok_or("--design needs a path")?)),
+            "--pcb-cli" => use_pcb_cli = true,
+            s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
+            s => intent = Some(PathBuf::from(s)),
+        }
+    }
+    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli })
+}
+
+fn usage() -> ExitCode {
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|export|check> <intent> [-o out] [--seed N] [--design design.json] [--pcb-cli]");
+    ExitCode::from(2)
+}
+
+fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
+    let fails = checks.iter().filter(|c| c.status == CheckStatus::Fail).count();
+    let warns = checks.iter().filter(|c| c.status == CheckStatus::Warn).count();
+    println!("{title}: {} checks, {fails} fail, {warns} warn", checks.len());
+    for c in checks {
+        if c.status != CheckStatus::Pass {
+            println!("  [{:?}] {} @ {}: {}", c.status, c.check, c.location.as_deref().unwrap_or("-"), c.hint.as_deref().unwrap_or(""));
+        }
+    }
+    fails == 0
+}
+
+fn load_model(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>> {
+    let ext = args.intent.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match ext {
+        "yaml" | "yml" => {
+            let text = std::fs::read_to_string(&args.intent).map_err(|e| vec![CheckResult::fail("io", args.intent.display().to_string(), e.to_string())])?;
+            serde_yaml::from_str(&text).map_err(|e| vec![CheckResult::fail("yaml", args.intent.display().to_string(), e.to_string())])
+        }
+        "json" => {
+            let text = std::fs::read_to_string(&args.intent).map_err(|e| vec![CheckResult::fail("io", args.intent.display().to_string(), e.to_string())])?;
+            serde_json::from_str(&text).map_err(|e| vec![CheckResult::fail("json", args.intent.display().to_string(), e.to_string())])
+        }
+        _ => {
+            if args.use_pcb_cli {
+                import_zen_cli(&args.intent)
+            } else {
+                import_zen(&args.intent)
+            }
+        }
+    }
+}
+
+fn intent_hash(path: &Path) -> String {
+    std::fs::read(path).map(|b| blake3::hash(&b).to_hex().to_string()).unwrap_or_default()
+}
+
+fn write(path: &Path, bytes: &[u8]) -> Result<(), Vec<CheckResult>> {
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p).map_err(|e| vec![CheckResult::fail("io", p.display().to_string(), e.to_string())])?;
+    }
+    std::fs::write(path, bytes).map_err(|e| vec![CheckResult::fail("io", path.display().to_string(), e.to_string())])
+}
+
+fn load_design(path: &Path) -> Result<Design, Vec<CheckResult>> {
+    let text = std::fs::read_to_string(path).map_err(|e| vec![CheckResult::fail("io", path.display().to_string(), e.to_string())])?;
+    serde_json::from_str(&text).map_err(|e| vec![CheckResult::fail("design_json", path.display().to_string(), e.to_string())])
+}
+
+fn save_design(out: &Path, design: &Design) -> Result<(), Vec<CheckResult>> {
+    let bytes = design.canonical_bytes().map_err(|e| vec![CheckResult::fail("design_json", "design", e.to_string())])?;
+    write(&out.join("design.json"), &bytes)
+}
+
+struct Ctx {
+    args: Args,
+    model: ConstraintModel,
+    log: RunLog,
+    ihash: String,
+}
+
+fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
+    let opts = EngineOptions { seed: cx.args.seed, intent_hash: cx.ihash.clone(), ..Default::default() };
+    let design = derive_schematic(&cx.model, &opts)?;
+    let checks = check_schematic(&design, &cx.model);
+    cx.log.candidate(Stage::Schematic, 0, cx.args.seed, &design, Tier::Geometry, &checks, serde_json::Value::Null).ok();
+    // Always persist the candidate: a failed one is what review reads.
+    save_design(&cx.args.out, &design)?;
+    let ok = print_checks("schematic gates", &checks);
+    let svg = render_schematic(&design, &cx.model)?;
+    write(&cx.args.out.join("schematic.svg"), svg.as_bytes())?;
+    if !ok {
+        return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
+    }
+    Ok(design)
+}
+
+fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
+    let opts = PlaceOptions { seed: cx.args.seed, ..Default::default() };
+    let placed = place(design, &cx.model, &opts)?;
+    let checks = check_placement(&placed, &cx.model);
+    let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model) });
+    cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
+    if !print_checks("placement gates", &checks) {
+        return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
+    }
+    Ok(placed)
+}
+
+fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
+    let routed = route(design, &cx.model, &cx.model.board, cx.args.seed)?;
+    let checks = check_routing(&routed, &cx.model);
+    let r = routed.routing.as_ref().unwrap();
+    let metrics = serde_json::json!({ "tracks": r.tracks.len(), "vias": r.vias.len() });
+    cx.log.candidate(Stage::Routing, 0, cx.args.seed, &routed, Tier::Geometry, &checks, metrics).ok();
+    if !print_checks("routing gates", &checks) {
+        return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
+    }
+    Ok(routed)
+}
+
+fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
+    if design.schematic.is_some() {
+        let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
+        let date = eda::now_rfc3339();
+        let sch = export_kicad_sch(design, &cx.model, &ExportMeta { date: &date[..10], title })?;
+        write(&cx.args.out.join(format!("{title}.kicad_sch")), sch.as_bytes())?;
+    }
+    let cj = to_circuit_json(design, &cx.model)?;
+    write(&cx.args.out.join("circuit.json"), serde_json::to_string_pretty(&cj).unwrap_or_default().as_bytes())?;
+    Ok(())
+}
+
+fn run(args: Args) -> Result<(), Vec<CheckResult>> {
+    let model = load_model(&args)?;
+    if args.cmd == "lint" {
+        let checks = lint(&model);
+        return if print_checks("lint", &checks) { Ok(()) } else { Err(checks) };
+    }
+    let ihash = intent_hash(&args.intent);
+    let run_id = format!("{}-{}", &ihash[..8.min(ihash.len())], args.seed);
+    let mut log = RunLog::open(&args.out.join("runs.jsonl"), run_id.clone())
+        .map_err(|e| vec![CheckResult::fail("io", args.out.display().to_string(), e.to_string())])?;
+    log.write(&Event::RunStarted {
+        run_id,
+        ts: eda::now_rfc3339(),
+        intent_path: args.intent.display().to_string(),
+        intent_hash: ihash.clone(),
+        engine_version: env!("CARGO_PKG_VERSION").into(),
+    })
+    .ok();
+    let mut cx = Ctx { args, model, log, ihash };
+
+    let lint_checks = lint(&cx.model);
+    if !print_checks("lint", &lint_checks) {
+        return Err(lint_checks);
+    }
+
+    let prior = match &cx.args.design {
+        Some(p) => Some(load_design(p)?),
+        None => None,
+    };
+    let blank = || Design {
+        schema: 1,
+        provenance: eda_model::ir::Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: cx.ihash.clone(), seed: cx.args.seed, stage_hashes: vec![] },
+        schematic: None,
+        placement: None,
+        routing: None,
+    };
+
+    let design = match cx.args.cmd.as_str() {
+        "schematic" => stage_schematic(&mut cx)?,
+        "place" => {
+            let base = prior.unwrap_or_else(blank);
+            stage_place(&mut cx, &base)?
+        }
+        "route" => {
+            let base = prior.ok_or_else(|| vec![CheckResult::fail("cli", "route", "route needs --design with a placement")])?;
+            stage_route(&mut cx, &base)?
+        }
+        "pipeline" => {
+            let d = stage_schematic(&mut cx)?;
+            let d = stage_place(&mut cx, &d)?;
+            stage_route(&mut cx, &d)?
+        }
+        "export" => {
+            let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "export", "export needs --design")])?;
+            export(&cx, &d)?;
+            return Ok(());
+        }
+        "check" => {
+            let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "check", "check needs --design")])?;
+            let mut ok = true;
+            if d.schematic.is_some() {
+                ok &= print_checks("schematic gates", &check_schematic(&d, &cx.model));
+            }
+            if d.placement.is_some() {
+                ok &= print_checks("placement gates", &check_placement(&d, &cx.model));
+            }
+            if d.routing.is_some() {
+                ok &= print_checks("routing gates", &check_routing(&d, &cx.model));
+            }
+            return if ok { Ok(()) } else { Err(vec![CheckResult::fail("check", "design", "gate failures above")]) };
+        }
+        other => return Err(vec![CheckResult::fail("cli", other, "unknown command")]),
+    };
+    save_design(&cx.args.out, &design)?;
+    export(&cx, &design)?;
+    println!("wrote {}", cx.args.out.join("design.json").display());
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    let args = match parse_args() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return usage();
+        }
+    };
+    match run(args) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(fails) => {
+            for f in &fails {
+                eprintln!("FAIL {} @ {}: {}", f.check, f.location.as_deref().unwrap_or("-"), f.hint.as_deref().unwrap_or(""));
+            }
+            ExitCode::FAILURE
+        }
+    }
+}

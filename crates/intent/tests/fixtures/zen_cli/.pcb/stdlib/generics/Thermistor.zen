@@ -1,0 +1,109 @@
+load("../io.zen", "io")
+load("../interfaces.zen", "Net")
+
+load("../units.zen", "Capacitance", "Inductance", "Resistance", "Voltage")
+load("../utils.zen", "format_value")
+
+Package = enum("0201", "0402", "0603", "0805")
+TemperatureCoefficient = enum("NTC", "PTC")
+Mount = enum("SMD")
+package = config(Package, default=Package("0603"))
+value = config(Resistance)
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+voltage = config(Voltage, optional=True, help="Maximum operating voltage")
+temperature_coefficient = config(
+    TemperatureCoefficient, optional=True, help="Temperature coefficient type (NTC or PTC)"
+)
+use_us_symbol = config(bool, default=False, optional=True, help="Use US symbol")
+properties = {
+    "value": format_value(value, temperature_coefficient, voltage),
+    "package": package,
+    "resistance": value,
+}
+
+if voltage:
+    properties["voltage"] = voltage
+
+P1 = io(Net)
+P2 = io(Net)
+
+
+def _symbol(
+    mount: Mount, package: Package, temperature_coefficient: TemperatureCoefficient | None, use_us_symbol: bool
+):
+    name = ""
+
+    if temperature_coefficient == TemperatureCoefficient("PTC"):
+        name = "Thermistor_PTC"
+    elif temperature_coefficient == TemperatureCoefficient("NTC"):
+        name = "Thermistor_NTC"
+    else:
+        name = "Thermistor"
+
+    if use_us_symbol:
+        name = name + "_US"
+
+    return "../kicad-symbols/Device.kicad_symdir/" + name + ".kicad_sym"
+
+
+def _footprint(mount: Mount, package: Package):
+    kicad_footprints = {
+        Package("0201"): "../kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod",
+        Package("0402"): "../kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
+        Package("0603"): "../kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
+        Package("0805"): "../kicad-footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
+    }
+
+    if package not in kicad_footprints:
+        error("Invalid package: " + str(package))
+
+    return kicad_footprints[package]
+
+
+def _spice_args(value, package):
+    """Derive thermistor model parameters including HF parasitics.
+
+    ESL and Cp are estimated from package size, matching the Resistor model.
+    """
+    esl_table = {
+        Package("0201"): Inductance("0.15nH"),
+        Package("0402"): Inductance("0.3nH"),
+        Package("0603"): Inductance("0.5nH"),
+        Package("0805"): Inductance("0.7nH"),
+    }
+
+    cp_table = {
+        Package("0201"): Capacitance("0.02pF"),
+        Package("0402"): Capacitance("0.04pF"),
+        Package("0603"): Capacitance("0.05pF"),
+        Package("0805"): Capacitance("0.08pF"),
+    }
+
+    return {
+        "RVAL": value,
+        "ESL": esl_table.get(package, Inductance("0.5nH")),
+        "CP": cp_table.get(package, Capacitance("0.05pF")),
+    }
+
+
+Component(
+    name="TH",
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
+    symbol=Symbol(_symbol(mount, package, temperature_coefficient, use_us_symbol)),
+    footprint=File(_footprint(mount, package)),
+    prefix="TH",
+    pins={
+        "1": P1,
+        "2": P2,
+    },
+    spice_model=SpiceModel(
+        "spice/Thermistor.lib",
+        "TH",
+        nets=[P1, P2],
+        args=_spice_args(value, package),
+    ),
+    properties=properties,
+    type="thermistor",
+)

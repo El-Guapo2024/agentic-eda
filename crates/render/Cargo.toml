@@ -1,0 +1,12 @@
+[package]
+name = "eda-render"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eda-model = { path = "../model" }
+eda-engine = { path = "../engine" }
+eda-layout = { path = "../layout" }
+
+[dev-dependencies]
+roxmltree = "0.20"

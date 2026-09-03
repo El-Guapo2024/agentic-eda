@@ -1,0 +1,65 @@
+load("../io.zen", "io")
+load("../interfaces.zen", "Opamp", "Power")
+load("../units.zen", "Frequency", "Resistance", "Voltage")
+load("../utils.zen", "format_value")
+
+warn("generics/OperationalAmplifier.zen is deprecated.", kind="deprecated")
+
+Variant = enum("Single")
+Package = enum("SOIC8")
+variant = config(Variant, default=Variant("Single"), optional=True, help="Op-amp configuration")
+package = config(Package, default=Package("SOIC8"), optional=True, help="Package size")
+
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+properties = {
+    "value": format_value(variant),
+    "package": package,
+    "variant": variant,
+}
+
+VP = io(Power)
+VN = io(Power)
+OPA1 = io(Opamp)
+
+
+def _symbol(variant: Variant):
+    """Returns the symbol for a specific variant."""
+    return {
+        Variant("Single"): "../kicad-symbols/Simulation_SPICE.kicad_symdir/OPAMP.kicad_sym",
+    }[variant]
+
+
+def _footprint(package: Package):
+    return {
+        Package("SOIC8"): "../kicad-footprints/Package_SO.pretty/SOIC-8_7.5x5.85mm_P1.27mm.kicad_mod",
+    }[package]
+
+
+Component(
+    name="U",
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
+    symbol=Symbol(_symbol(variant)),
+    footprint=File(_footprint(package)),
+    prefix="OPA",
+    pins={
+        "+": OPA1.IN_P,
+        "-": OPA1.IN_N,
+        "V+": VP,
+        "V-": VN,
+        "5": OPA1.OUT,
+    },
+    spice_model=SpiceModel(
+        "../kicad-symbols/Simulation_SPICE.sp",
+        "kicad_builtin_opamp",
+        nets=[OPA1.IN_P, OPA1.IN_N, VP, VN, OPA1.OUT],
+        args={
+            "POLE": "20",
+            "GAIN": "20k",
+            "VOFF": "10m",
+            "ROUT": "10",
+        },
+    ),
+    properties=properties,
+    type="opamp",
+)

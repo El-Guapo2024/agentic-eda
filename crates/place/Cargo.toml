@@ -1,0 +1,11 @@
+[package]
+name = "eda-place"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eda-model = { path = "../model" }
+
+[dev-dependencies]
+eda-gates = { path = "../gates" }
+eda-router = { path = "../router" }

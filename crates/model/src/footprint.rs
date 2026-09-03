@@ -1,0 +1,360 @@
+//! Footprint pad geometry — the physical truth the placer and router work
+//! against. Local frame: micrometers, origin at the footprint centre, +x
+//! right, +y down (same convention as `ir`), un-rotated, as seen from the
+//! top side. Instances apply `rot` then translate; bottom-side instances
+//! mirror x first (KiCad's flip convention).
+//!
+//! Geometry comes from two places, in priority order:
+//! 1. `ConstraintModel::footprints` — explicit definitions in the intent.
+//! 2. [`builtin`] — a small library of standard packages keyed by the bare
+//!    package name (`"0603"`, `"SOT-23"`) or by a KiCad footprint id whose
+//!    library-name prefix and metric suffix we strip (`"Capacitor_SMD:
+//!    C_0603_1608Metric"` -> `"0603"`).
+//!
+//! A part with no resolvable footprint is a hard error for every physical
+//! stage — there is deliberately no synthetic "pins on a line" stand-in.
+
+use crate::ir::{FootprintInstance, Point, Side, Um};
+use crate::{ConstraintModel, Part};
+use serde::{Deserialize, Serialize};
+
+/// A pad transformed into board space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacedPad {
+    pub number: String,
+    pub center: Point,
+    /// Full axis-aligned extents in board space (w, h).
+    pub size: (Um, Um),
+    pub through_hole: bool,
+}
+
+/// Transform a local-frame point of `fp` into board space: bottom-side
+/// instances mirror x, then rotate about the origin, then translate.
+pub fn to_board(fp: &FootprintInstance, local: (Um, Um)) -> Point {
+    let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
+    let (sin, cos) = rad.sin_cos();
+    let mirror = if fp.side == Side::Bottom { -1.0 } else { 1.0 };
+    let lx = local.0 as f64 * mirror;
+    let ly = local.1 as f64;
+    Point { x: fp.at.x + (lx * cos - ly * sin).round() as Um, y: fp.at.y + (lx * sin + ly * cos).round() as Um }
+}
+
+/// Axis-aligned board-space extents of a local (w, h) box under `fp`'s
+/// rotation. Exact for multiples of 90°, conservative otherwise.
+pub fn rotated_extent(fp: &FootprintInstance, size: (Um, Um)) -> (Um, Um) {
+    let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
+    let (sin, cos) = rad.sin_cos();
+    let (w, h) = (size.0 as f64, size.1 as f64);
+    ((w * cos.abs() + h * sin.abs()).round() as Um, (w * sin.abs() + h * cos.abs()).round() as Um)
+}
+
+/// Every pad of `fp` in board space, sorted by pad number. `None` when the
+/// part has no resolvable footprint.
+pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<Vec<PlacedPad>> {
+    let footprint = model.footprint_of(part)?;
+    let mut pads: Vec<PlacedPad> = footprint
+        .pads
+        .iter()
+        .map(|p| PlacedPad {
+            number: p.number.clone(),
+            center: to_board(fp, p.at),
+            size: rotated_extent(fp, p.size),
+            through_hole: p.kind == PadKind::ThroughHole,
+        })
+        .collect();
+    pads.sort_by(|a, b| a.number.cmp(&b.number));
+    Some(pads)
+}
+
+/// Board-space courtyard rectangle `(min_x, min_y, max_x, max_y)` of `fp`.
+pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
+    let footprint = model.footprint_of(part)?;
+    let (hw, hh) = footprint.courtyard_half();
+    let (w, h) = rotated_extent(fp, (hw * 2, hh * 2));
+    Some((fp.at.x - w / 2, fp.at.y - h / 2, fp.at.x + w / 2, fp.at.y + h / 2))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Footprint {
+    pub name: String,
+    #[serde(default)]
+    pub pads: Vec<Pad>,
+    /// Courtyard half-extents (w, h) in µm, centred on the origin. When
+    /// absent the placer derives one from the pad bounding box plus margin.
+    #[serde(default)]
+    pub courtyard: Option<(Um, Um)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pad {
+    pub number: String,
+    /// Centre in the local frame, µm.
+    pub at: (Um, Um),
+    /// Full (width, height) in µm, un-rotated.
+    pub size: (Um, Um),
+    #[serde(default)]
+    pub shape: PadShape,
+    #[serde(default)]
+    pub kind: PadKind,
+    /// Drill diameter, µm. Only meaningful for `PadKind::ThroughHole`.
+    #[serde(default)]
+    pub drill: Option<Um>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PadShape {
+    #[default]
+    Rect,
+    RoundRect,
+    Circle,
+    Oval,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PadKind {
+    #[default]
+    Smd,
+    ThroughHole,
+}
+
+impl Footprint {
+    /// Axis-aligned bounding box of the pads in the local frame:
+    /// `(min_x, min_y, max_x, max_y)`. Zero box for a pad-less footprint.
+    pub fn pad_bbox(&self) -> (Um, Um, Um, Um) {
+        let mut b = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+        for p in &self.pads {
+            b.0 = b.0.min(p.at.0 - p.size.0 / 2);
+            b.1 = b.1.min(p.at.1 - p.size.1 / 2);
+            b.2 = b.2.max(p.at.0 + p.size.0 / 2);
+            b.3 = b.3.max(p.at.1 + p.size.1 / 2);
+        }
+        if self.pads.is_empty() {
+            (0, 0, 0, 0)
+        } else {
+            b
+        }
+    }
+
+    /// Courtyard half-extents about the origin: explicit, else the pad
+    /// bbox's largest reach from the origin + 250 µm margin (so an
+    /// asymmetric pad layout still gets a courtyard that covers it).
+    pub fn courtyard_half(&self) -> (Um, Um) {
+        if let Some(c) = self.courtyard {
+            return c;
+        }
+        let (x0, y0, x1, y1) = self.pad_bbox();
+        let hw = x0.abs().max(x1.abs()) + 250;
+        let hh = y0.abs().max(y1.abs()) + 250;
+        (hw.max(250), hh.max(250))
+    }
+}
+
+// ------------------------------------------------------------- built-ins
+
+/// Normalise a footprint or package name to a built-in key.
+pub fn normalize_name(name: &str) -> String {
+    // Strip KiCad library prefix.
+    let s = name.rsplit(':').next().unwrap_or(name);
+    let mut s = s.to_ascii_uppercase();
+    // Strip KiCad's "<Letter>_" prefix ("C_0603_1608Metric", "R_0402_...").
+    if s.len() > 2 && s.as_bytes()[1] == b'_' && s.as_bytes()[0].is_ascii_alphabetic() {
+        s = s[2..].to_string();
+    }
+    // Strip "_1608METRIC" style suffix.
+    if let Some(i) = s.find("_") {
+        if s[i + 1..].ends_with("METRIC") {
+            s = s[..i].to_string();
+        }
+    }
+    // "SOT-23-5" / "SOT23-5" / "SOT_23_5" -> "SOT-23-5"
+    s = s.replace('_', "-");
+    if s.starts_with("SOT") && !s.starts_with("SOT-") {
+        s = format!("SOT-{}", &s[3..]);
+    }
+    if s.starts_with("SOIC") && !s.starts_with("SOIC-") {
+        s = format!("SOIC-{}", &s[4..]);
+    }
+    if s.starts_with("TSSOP") && !s.starts_with("TSSOP-") {
+        s = format!("TSSOP-{}", &s[5..]);
+    }
+    s
+}
+
+fn two_pad(name: &str, pitch: Um, pw: Um, ph: Um) -> Footprint {
+    Footprint {
+        name: name.into(),
+        pads: vec![
+            Pad { number: "1".into(), at: (-pitch / 2, 0), size: (pw, ph), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+            Pad { number: "2".into(), at: (pitch / 2, 0), size: (pw, ph), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+        ],
+        courtyard: None,
+    }
+}
+
+/// Dual-row gull-wing package: `n` pins total, rows at ±`row_y`, pins 1..n/2
+/// left-to-right on the bottom row (+y), n/2+1..n right-to-left on top.
+fn dual_row(name: &str, n: usize, pitch: Um, row_y: Um, pw: Um, ph: Um) -> Footprint {
+    let per_row = n / 2;
+    let x0 = -((per_row as Um - 1) * pitch) / 2;
+    let mut pads = Vec::with_capacity(n);
+    for i in 0..per_row {
+        pads.push(Pad {
+            number: (i + 1).to_string(),
+            at: (x0 + i as Um * pitch, row_y),
+            size: (pw, ph),
+            shape: PadShape::RoundRect,
+            kind: PadKind::Smd,
+            drill: None,
+        });
+    }
+    for i in 0..per_row {
+        pads.push(Pad {
+            number: (per_row + i + 1).to_string(),
+            at: (x0 + (per_row - 1 - i) as Um * pitch, -row_y),
+            size: (pw, ph),
+            shape: PadShape::RoundRect,
+            kind: PadKind::Smd,
+            drill: None,
+        });
+    }
+    Footprint { name: name.into(), pads, courtyard: None }
+}
+
+/// Single-row 2.54 mm through-hole header, `n` pins along +x, centred.
+fn pin_header(name: &str, n: usize) -> Footprint {
+    let x0 = -((n as Um - 1) * 2540) / 2;
+    let pads = (0..n)
+        .map(|i| Pad {
+            number: (i + 1).to_string(),
+            at: (x0 + i as Um * 2540, 0),
+            size: (1700, 1700),
+            shape: if i == 0 { PadShape::Rect } else { PadShape::Circle },
+            kind: PadKind::ThroughHole,
+            drill: Some(1000),
+        })
+        .collect();
+    Footprint { name: name.into(), pads, courtyard: None }
+}
+
+/// Built-in package library. Dimensions follow IPC-7351 nominal land
+/// patterns as used by the KiCad standard libraries.
+pub fn builtin(name: &str) -> Option<Footprint> {
+    let key = normalize_name(name);
+    let fp = match key.as_str() {
+        "0201" => two_pad(&key, 600, 300, 400),
+        "0402" => two_pad(&key, 900, 500, 600),
+        "0603" => two_pad(&key, 1600, 800, 950),
+        "0805" => two_pad(&key, 1900, 1000, 1300),
+        "1206" => two_pad(&key, 3000, 1150, 1800),
+        "1210" => two_pad(&key, 3000, 1150, 2600),
+        "SOD-123" => two_pad(&key, 3200, 1100, 1200),
+        "SOD-323" => two_pad(&key, 2300, 700, 900),
+        "SMA" => two_pad(&key, 4200, 2000, 1500),
+        "SOT-23" | "SOT-23-3" => Footprint {
+            name: "SOT-23".into(),
+            pads: vec![
+                Pad { number: "1".into(), at: (-950, 1000), size: (600, 900), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "2".into(), at: (950, 1000), size: (600, 900), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "3".into(), at: (0, -1000), size: (600, 900), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+            ],
+            courtyard: None,
+        },
+        "SOT-23-5" | "SOT-23-6" => {
+            let n = if key == "SOT-23-5" { 5 } else { 6 };
+            let mut fp = dual_row(&key, 6, 950, 1100, 600, 1000);
+            if n == 5 {
+                // SOT-23-5 omits pin 5 (top-middle); renumber 6 -> 5.
+                fp.pads.retain(|p| p.number != "5");
+                for p in fp.pads.iter_mut() {
+                    if p.number == "6" {
+                        p.number = "5".into();
+                    }
+                }
+            }
+            fp
+        }
+        "SOT-223" => Footprint {
+            name: key.clone(),
+            pads: vec![
+                Pad { number: "1".into(), at: (-2300, 3150), size: (1200, 2000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "2".into(), at: (0, 3150), size: (1200, 2000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "3".into(), at: (2300, 3150), size: (1200, 2000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "4".into(), at: (0, -3150), size: (3400, 2000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+            ],
+            courtyard: None,
+        },
+        "SOIC-8" => dual_row(&key, 8, 1270, 2700, 600, 1550),
+        "SOIC-14" => dual_row(&key, 14, 1270, 2700, 600, 1550),
+        "SOIC-16" => dual_row(&key, 16, 1270, 2700, 600, 1550),
+        "TSSOP-8" => dual_row(&key, 8, 650, 2900, 450, 1450),
+        "TSSOP-14" => dual_row(&key, 14, 650, 2900, 450, 1450),
+        "TSSOP-16" => dual_row(&key, 16, 650, 2900, 450, 1450),
+        "TSSOP-20" => dual_row(&key, 20, 650, 2900, 450, 1450),
+        "MSOP-8" => dual_row(&key, 8, 650, 2300, 450, 1450),
+        "MSOP-10" => dual_row(&key, 10, 500, 2300, 300, 1450),
+        _ => {
+            // Generic headers: "PINHEADER-N" / "PIN_HEADER_1X04" / "1X04".
+            let digits: String = key.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
+            if (key.starts_with("PINHEADER-") || key.starts_with("PIN-HEADER-") || key.starts_with("1X") || key.contains("-1X"))
+                && !digits.is_empty()
+            {
+                pin_header(&key, digits.parse().ok()?)
+            } else {
+                return None;
+            }
+        }
+    };
+    Some(fp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_kicad_ids() {
+        assert_eq!(normalize_name("Capacitor_SMD:C_0603_1608Metric"), "0603");
+        assert_eq!(normalize_name("Resistor_SMD:R_0402_1005Metric"), "0402");
+        assert_eq!(normalize_name("Package_TO_SOT_SMD:SOT-23-5"), "SOT-23-5");
+        assert_eq!(normalize_name("sot23"), "SOT-23");
+        assert_eq!(normalize_name("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"), "SOIC-8_3.9X4.9MM_P1.27MM".replace('_', "-"));
+    }
+
+    #[test]
+    fn builtins_have_unique_numbered_pads() {
+        for name in ["0402", "0603", "0805", "SOT-23", "SOT-23-5", "SOT-23-6", "SOIC-8", "TSSOP-16", "SOT-223", "PINHEADER-4"] {
+            let fp = builtin(name).unwrap_or_else(|| panic!("{name}"));
+            let mut nums: Vec<&str> = fp.pads.iter().map(|p| p.number.as_str()).collect();
+            let n = nums.len();
+            nums.sort();
+            nums.dedup();
+            assert_eq!(nums.len(), n, "{name} duplicate pad numbers");
+            // Pads must not overlap each other.
+            for (i, a) in fp.pads.iter().enumerate() {
+                for b in fp.pads.iter().skip(i + 1) {
+                    let dx = (a.at.0 - b.at.0).abs();
+                    let dy = (a.at.1 - b.at.1).abs();
+                    assert!(dx * 2 >= a.size.0 + b.size.0 || dy * 2 >= a.size.1 + b.size.1, "{name}: pads {} & {} overlap", a.number, b.number);
+                }
+            }
+        }
+        assert_eq!(builtin("SOT-23-5").unwrap().pads.len(), 5);
+        assert_eq!(builtin("SOIC-8").unwrap().pads.len(), 8);
+        assert!(builtin("NOPE").is_none());
+    }
+
+    #[test]
+    fn courtyard_derives_from_pads() {
+        let fp = builtin("0603").unwrap();
+        let (hw, hh) = fp.courtyard_half();
+        assert_eq!(hw, 1600 / 2 + 400 + 250);
+        assert_eq!(hh, 950 / 2 + 250);
+        let hdr = builtin("PINHEADER-4").unwrap();
+        let (x0, _, x1, _) = hdr.pad_bbox();
+        assert_eq!(x0, -x1, "headers are centred");
+    }
+}

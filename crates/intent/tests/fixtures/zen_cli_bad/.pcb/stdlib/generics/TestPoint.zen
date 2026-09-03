@@ -1,0 +1,152 @@
+load("../io.zen", "io")
+load("../interfaces.zen", "Net")
+
+Color = enum("Black", "Red", "White", "Yellow")
+
+Variant = enum(
+    "Bridge_Pitch2.0mm_Drill0.7mm",
+    "Bridge_Pitch2.54mm_Drill0.7mm",
+    "Bridge_Pitch2.54mm_Drill1.0mm",
+    "Bridge_Pitch2.54mm_Drill1.3mm",
+    "Bridge_Pitch3.81mm_Drill1.3mm",
+    "Bridge_Pitch5.08mm_Drill0.7mm",
+    "Bridge_Pitch5.08mm_Drill1.3mm",
+    "Bridge_Pitch6.35mm_Drill1.3mm",
+    "Bridge_Pitch7.62mm_Drill1.3mm",
+    "ICT",
+    "Keystone_5005-5009_Compact",
+    "Loop_D1.80mm_Drill1.0mm_Beaded",
+    "Loop_D2.50mm_Drill1.0mm_LowProfile",
+    "Loop_D2.50mm_Drill1.0mm",
+    "Loop_D2.50mm_Drill1.85mm",
+    "Loop_D2.54mm_Drill1.5mm_Beaded",
+    "Loop_D2.60mm_Drill0.9mm_Beaded",
+    "Loop_D2.60mm_Drill1.4mm_Beaded",
+    "Loop_D2.60mm_Drill1.6mm_Beaded",
+    "Loop_D3.50mm_Drill0.9mm_Beaded",
+    "Loop_D3.50mm_Drill1.4mm_Beaded",
+    "Loop_D3.80mm_Drill2.0mm",
+    "Loop_D3.80mm_Drill2.5mm",
+    "Loop_D3.80mm_Drill2.8mm",
+    "Pad_1.0x1.0mm",
+    "Pad_1.5x1.5mm",
+    "Pad_2.0x2.0mm",
+    "Pad_2.5x2.5mm",
+    "Pad_3.0x3.0mm",
+    "Pad_4.0x4.0mm",
+    "Pad_D1.0mm",
+    "Pad_D1.5mm",
+    "Pad_D2.0mm",
+    "Pad_D2.5mm",
+    "Pad_D3.0mm",
+    "Pad_D4.0mm",
+    "Plated_Hole_D2.0mm",
+    "Plated_Hole_D3.0mm",
+    "Plated_Hole_D4.0mm",
+    "Plated_Hole_D5.0mm",
+    "THTPad_1.0x1.0mm_Drill0.5mm",
+    "THTPad_1.5x1.5mm_Drill0.7mm",
+    "THTPad_2.0x2.0mm_Drill1.0mm",
+    "THTPad_2.5x2.5mm_Drill1.2mm",
+    "THTPad_3.0x3.0mm_Drill1.5mm",
+    "THTPad_4.0x4.0mm_Drill2.0mm",
+    "THTPad_D1.0mm_Drill0.5mm",
+    "THTPad_D1.5mm_Drill0.7mm",
+    "THTPad_D2.0mm_Drill1.0mm",
+    "THTPad_D2.5mm_Drill1.2mm",
+    "THTPad_D3.0mm_Drill1.5mm",
+    "THTPad_D4.0mm_Drill2.0mm",
+)
+variant = config(Variant, help="Test point style and size")
+ict = config(
+    str,
+    optional=True,
+    allowed=[
+        "swd",
+        "swdio",
+        "swclk",
+        "nrst",
+        "swo",
+        "gnd",
+        "vusb",
+        "vtarget",
+        "usb_dp",
+        "usb_dm",
+        "ls",
+    ],
+    help="Optional ICT fixture role, copied onto the footprint. Implies the TestPoint_ICT footprint, whose 3mm courtyard reserves the interposer pogo pitch.",
+)
+
+P1 = io(Net)
+
+if variant.value == "ICT" and not ict:
+    error('variant Variant("ICT") requires an ict= role')
+if ict and "Keystone" in variant.value:
+    error("ict= is not supported on Keystone test points; they are real parts, not bare pads")
+
+
+def _properties(base):
+    if ict:
+        base["ict"] = ict
+    return base
+
+
+def _symbol(variant: Variant):
+    return "../kicad-symbols/Connector.kicad_symdir/TestPoint_Small.kicad_sym"
+
+
+def _footprint(variant):
+    """Returns the footprint for a specific variant."""
+    name = "ICT" if ict else variant.value
+    return f"../kicad-footprints/TestPoint.pretty/TestPoint_{name}.kicad_mod"
+
+
+def _keystone_mpn(variant: Variant, color: Color):
+    series = int(variant.value.split("_")[1].split("-")[0])
+    return (
+        series
+        + {
+            Color("Red"): 0,
+            Color("Black"): 1,
+            Color("White"): 2,
+            Color("Yellow"): 4,
+        }[color]
+    )
+
+
+if "Keystone" in variant.value:
+    color = config(Color, default=Color("Black"), optional=True, help="Test point color")
+    Component(
+        name="TP",
+        prefix="TP",
+        mpn=_keystone_mpn(variant, color),
+        symbol=Symbol(_symbol(variant)),
+        footprint=File(_footprint(variant)),
+        properties=_properties(
+            {
+                "color": color,
+            }
+        ),
+        pins={
+            "1": P1,
+        },
+    )
+else:
+    Component(
+        name="TP",
+        prefix="TP",
+        symbol=Symbol(_symbol(variant)),
+        footprint=File(_footprint(variant)),
+        properties=_properties(
+            {
+                "variant": variant,
+            }
+        ),
+        pins={
+            "1": P1,
+        },
+        skip_bom=True,
+        skip_pos=True,
+    )
+
+# pcb:sch TP x=194.5800 y=301.2600 rot=0

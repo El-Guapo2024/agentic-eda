@@ -1,0 +1,35 @@
+load("units.zen", "Voltage")
+
+Severity = enum("error", "warning", "advice")
+
+
+def voltage_within(
+    within: str | Voltage, name: str = "voltage_check", severity: Severity = Severity("error")
+) -> typing.Callable:
+    def ensure_voltage_within(_module, net_name: str, voltage: Voltage, within: str | Voltage):
+        within = Voltage(within)
+        # drop nominal in within:
+        within = Voltage(min=within.min, max=within.max)
+        # ensure voltage is within within
+        err_msg = "Voltage range " + str(voltage) + " of " + net_name + " is not within " + str(within)
+        check(voltage in within, err_msg)
+
+    def check_gen(actual, severity: Severity = severity, name: str = name):
+        if hasattr(actual, "NET"):
+            check_name = actual.name + "_" + name
+            if not actual.voltage:
+                return
+            voltage = actual.voltage
+            net_name = actual.name
+        else:
+            voltage = Voltage(actual)
+            net_name = name
+            check_name = name
+        builtin.add_electrical_check(
+            name=check_name,
+            check_fn=ensure_voltage_within,
+            inputs={"voltage": voltage, "within": within, "net_name": net_name},
+            severity=severity.value,
+        )
+
+    return check_gen

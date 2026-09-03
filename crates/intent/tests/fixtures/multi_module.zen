@@ -1,0 +1,53 @@
+# Multi-cluster / multi-module design: a power stage and an MCU stage.
+
+Component(
+    "U1",
+    mpn = "MCP1700T-3302E/TT",
+    value = "3.3V LDO",
+    package = "SOT-23",
+    pins = [
+        ("1", "GND", "ground"),
+        ("2", "VOUT", "power"),
+        ("3", "VIN", "power"),
+    ],
+)
+
+Component(
+    "C1",
+    value = "1uF",
+    package = "0402",
+    pins = [
+        ("1", "1", "passive"),
+        ("2", "2", "ground"),
+    ],
+)
+
+Component(
+    "U2",
+    mpn = "STM32F103C8T6",
+    value = "MCU",
+    package = "LQFP-48",
+    pins = [
+        ("1", "VDD", "power"),
+        ("2", "VSS", "ground"),
+        ("3", "PA0", "signal"),
+    ],
+)
+
+Component(
+    "C2",
+    value = "100nF",
+    package = "0402",
+    pins = [
+        ("1", "1", "passive"),
+        ("2", "2", "ground"),
+    ],
+)
+
+Net("VIN", ["U1.3"])
+Net("VOUT", ["U1.2", "C1.1", "U2.1", "C2.1"])
+Net("GND", ["U1.1", "C1.2", "U2.2", "C2.2"])
+Net("PA0", ["U2.3"])
+
+Module("U1", ["U1", "C1"])
+Module("U2", ["U2", "C2"])

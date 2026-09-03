@@ -1,0 +1,108 @@
+load("../io.zen", "io")
+load("../interfaces.zen", "Net")
+load("../units.zen", "Current", "Frequency", "Resistance", "Impedance")
+load("../utils.zen", "format_value")
+
+Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512")
+Mount = enum("SMD")
+package = config(Package)
+
+dcr = config(Resistance, optional=True, help="DC resistance")
+impedance = config("value", Impedance, default=Impedance("220Ohm"), optional=True, help="Impedance at rated frequency")
+frequency = config(Frequency, default=Frequency("100MHz"), optional=True, help="Rated frequency for impedance spec")
+mpn = config(str, optional=True, help="Manufacturer Part Number")
+manufacturer = config(str, optional=True, help="Manufacturer")
+mount = config(Mount, default=Mount("SMD"), optional=True, help="Mounting type")
+current = config(Current, optional=True, help="Maximum rated current")
+
+if not impedance:
+    error("FerriteBead requires 'value' to be specified")
+properties = {
+    "value": format_value(impedance, current, frequency),
+    "package": package,
+    "impedance": impedance,
+}
+
+if dcr:
+    properties["dcr"] = dcr
+if frequency:
+    properties["frequency"] = frequency
+if current:
+    properties["current"] = current
+
+P1 = io(Net)
+P2 = io(Net)
+
+
+def _symbol(package: Package):
+    return "../kicad-symbols/Device.kicad_symdir/FerriteBead_Small.kicad_sym"
+
+
+def _footprint(package: Package) -> str:
+    """Returns the resistor SMD footprint for the ferrite bead based on the package."""
+    resistor_footprints = {
+        Package("0201"): "../kicad-footprints/Resistor_SMD.pretty/R_0201_0603Metric.kicad_mod",
+        Package("0402"): "../kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
+        Package("0603"): "../kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
+        Package("0805"): "../kicad-footprints/Resistor_SMD.pretty/R_0805_2012Metric.kicad_mod",
+        Package("1206"): "../kicad-footprints/Resistor_SMD.pretty/R_1206_3216Metric.kicad_mod",
+        Package("1210"): "../kicad-footprints/Resistor_SMD.pretty/R_1210_3225Metric.kicad_mod",
+        Package("2010"): "../kicad-footprints/Resistor_SMD.pretty/R_2010_5025Metric.kicad_mod",
+        Package("2512"): "../kicad-footprints/Resistor_SMD.pretty/R_2512_6332Metric.kicad_mod",
+    }
+
+    if package not in resistor_footprints:
+        error("Invalid package: " + str(package))
+
+    return resistor_footprints[package]
+
+
+def _spice_args(impedance, frequency, dcr):
+    """Derive RLC model parameters from rated impedance and frequency.
+
+    At resonance of L and Cp, only Rac remains, giving the rated impedance.
+    L is sized so its reactance equals Rac at the rated frequency (Q ≈ 1).
+    Cp is set to resonate with L at the rated frequency.
+    """
+    rac = impedance
+    freq = frequency
+    rdc = dcr or Resistance("0.3Ohm")
+    pi = 3.14159265358979
+
+    if rac <= 0 or freq <= 0:
+        return {
+            "RDC": rdc,
+            "L": "0",
+            "RAC": rac,
+            "CP": "0",
+        }
+
+    l_val = rac / (2 * pi * freq)
+    cp_val = 1.0 / (2 * pi * freq * rac)
+    return {
+        "RDC": rdc,
+        "L": l_val,
+        "RAC": rac,
+        "CP": cp_val,
+    }
+
+
+Component(
+    name="FB",
+    part=builtin.Part(mpn=mpn, manufacturer=manufacturer) if mpn and manufacturer else None,
+    symbol=Symbol(_symbol(package)),
+    footprint=File(_footprint(package)),
+    prefix="FB",
+    pins={
+        "1": P1,
+        "2": P2,
+    },
+    spice_model=SpiceModel(
+        "spice/FerriteBead.lib",
+        "FB",
+        nets=[P1, P2],
+        args=_spice_args(impedance, frequency, dcr),
+    ),
+    properties=properties,
+    type="ferrite_bead",
+)

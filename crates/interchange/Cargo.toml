@@ -1,0 +1,11 @@
+[package]
+name = "eda-interchange"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eda-model = { path = "../model" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]

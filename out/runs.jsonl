@@ -1,0 +1,2 @@
+{"kind":"run_started","run_id":"0deacfaf-0","ts":"2026-09-03T20:32:29Z","intent_path":"examples/ldo.yaml","intent_hash":"0deacfaf8ff11b71b024042203460fa2265af287f21799b6e92641d7682fc99a","engine_version":"0.1.0"}
+{"kind":"run_started","run_id":"8b975fec-0","ts":"2026-09-03T20:33:11Z","intent_path":"examples/ldo.yaml","intent_hash":"8b975fece6f879c8629f033ad979028ab5e828303ff0d3fc66fcbf16df9924b8","engine_version":"0.1.0"}

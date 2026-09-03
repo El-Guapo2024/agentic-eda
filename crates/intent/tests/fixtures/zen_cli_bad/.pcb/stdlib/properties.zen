@@ -1,0 +1,73 @@
+Part = builtin.Part
+
+Hint = struct(
+    near=lambda a, b: "near({}, {})".format(a, b),
+    right=lambda a, b: "right({}, {})".format(a, b),
+    left=lambda a, b: "left({}, {})".format(a, b),
+    above=lambda a, b: "above({}, {})".format(a, b),
+    below=lambda a, b: "below({}, {})".format(a, b),
+)
+
+
+def Project(
+    name: str,
+    path: str | None = None,
+    hints: list | None = None,
+    modifiers: list | None = None,
+    schematic: bool = True,
+    layout: bool = True,
+) -> None:
+    """Register a KiCad project for this module."""
+
+    # Only register at root
+    if len(builtin.current_module_path()) == 0:
+        if modifiers:
+            for modifier in modifiers:
+                builtin.add_component_modifier(modifier)
+
+    if layout:
+        if path:
+            builtin.add_property("layout_path", Path(path, allow_not_exist=True))
+        builtin.add_property("layout_name", name)
+        if hints:
+            builtin.add_property("layout_hints", hints)
+
+    if schematic:
+        if path:
+            builtin.add_property("schematic_path", Path(path, allow_not_exist=True))
+        builtin.add_property("schematic_name", name)
+
+
+def Layout(
+    name: str,
+    path: str | None = None,
+    hints: list | None = None,
+    modifiers: list | None = None,
+) -> None:
+    """Register a layout-only KiCad project. Prefer Project()."""
+
+    Project(
+        name=name,
+        path=path,
+        hints=hints,
+        modifiers=modifiers,
+        schematic=False,
+    )
+
+
+def Simulation(
+    name: str,
+    setup: str | None = None,
+    modifiers: list | None = None,
+) -> None:
+    """Helper function to create a simulations object"""
+
+    # `name` is explicitly not used, but kept for consistency and future compatibility
+
+    builtin.set_sim_setup(content=setup)
+
+    # Only register at root, matching Layout().
+    if len(builtin.current_module_path()) == 0:
+        if modifiers:
+            for modifier in modifiers:
+                builtin.add_component_modifier(modifier)
