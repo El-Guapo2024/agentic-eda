@@ -1,0 +1,167 @@
+# Exercises: a larger board (30+ parts) -- SOIC-16 MCU, decoupling caps,
+# resistors, LEDs, and a header -- stressing placement/routing at scale.
+# Expected outcome: clean pipeline at all seeds (may be the slowest case).
+parts:
+  - reference: U1
+    mpn: MCU16
+    value: MCU
+    package: SOIC-16
+    pins:
+      - { number: "1", name: VDD, kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: PA0, kind: signal }
+      - { number: "4", name: PA1, kind: signal }
+      - { number: "5", name: PA2, kind: signal }
+      - { number: "6", name: PA3, kind: signal }
+      - { number: "7", name: PA4, kind: signal }
+      - { number: "8", name: PA5, kind: signal }
+      - { number: "9", name: PA6, kind: signal }
+      - { number: "10", name: PA7, kind: signal }
+      - { number: "11", name: RESET, kind: signal }
+      - { number: "12", name: NC1, kind: nc }
+      - { number: "13", name: NC2, kind: nc }
+      - { number: "14", name: VDD2, kind: power }
+      - { number: "15", name: GND2, kind: ground }
+      - { number: "16", name: EN, kind: signal }
+  - reference: R1
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R2
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R3
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R4
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R5
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R6
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R7
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R8
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D1
+    value: LED
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D2
+    value: LED
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D3
+    value: LED
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D4
+    value: LED
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D5
+    value: LED
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D6
+    value: LED
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D7
+    value: LED
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D8
+    value: LED
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C1
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C2
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C3
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C4
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C5
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C6
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C7
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C8
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C9
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C10
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C11
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C12
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: J1
+    value: HDR
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: VIN, kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: SWD, kind: signal }
+      - { number: "4", name: RESET, kind: signal }
+nets:
+  - { name: VDD, pins: [U1.1, U1.14, J1.1, C1.1, C2.1, C3.1, C4.1, C5.1, C6.1, C7.1, C8.1, C9.1, C10.1, C11.1, C12.1] }
+  - { name: GND, pins: [U1.2, U1.15, J1.2, C1.2, C2.2, C3.2, C4.2, C5.2, C6.2, C7.2, C8.2, C9.2, C10.2, C11.2, C12.2] }
+  - { name: RESET, pins: [U1.11, J1.4] }
+  - { name: SWD, pins: [U1.16, J1.3] }
+  - { name: PA0, pins: [U1.3, R1.1] }
+  - { name: LED1, pins: [R1.2, D1.1] }
+  - { name: PA1, pins: [U1.4, R2.1] }
+  - { name: LED2, pins: [R2.2, D2.1] }
+  - { name: PA2, pins: [U1.5, R3.1] }
+  - { name: LED3, pins: [R3.2, D3.1] }
+  - { name: PA3, pins: [U1.6, R4.1] }
+  - { name: LED4, pins: [R4.2, D4.1] }
+  - { name: PA4, pins: [U1.7, R5.1] }
+  - { name: LED5, pins: [R5.2, D5.1] }
+  - { name: PA5, pins: [U1.8, R6.1] }
+  - { name: LED6, pins: [R6.2, D6.1] }
+  - { name: PA6, pins: [U1.9, R7.1] }
+  - { name: LED7, pins: [R7.2, D7.1] }
+  - { name: PA7, pins: [U1.10, R8.1] }
+  - { name: LED8, pins: [R8.2, D8.1] }
+  - { name: LED_GND, pins: [D1.2, D2.2, D3.2, D4.2, D5.2, D6.2, D7.2, D8.2, U1.2] }

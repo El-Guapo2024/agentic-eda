@@ -20,6 +20,9 @@ use eda_layout::{Port, Side};
 use eda_model::ir::{Design, NetLabel, SymbolInstance, Wire};
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
+mod pcb;
+pub use pcb::export_kicad_pcb;
+
 const STUB_MM: f64 = 1.27;
 
 /// Fixed provenance for the title block. Passed explicitly (never system
@@ -298,11 +301,11 @@ fn baked_local(sym: &SymbolInstance, width: f64, lx: f64, ly: f64) -> (f64, f64)
     (rx / 1000.0, ry / 1000.0)
 }
 
-fn mm(um: i64) -> String {
+pub(crate) fn mm(um: i64) -> String {
     fmt_mm_f(um as f64 / 1000.0)
 }
 
-fn fmt_mm_f(v: f64) -> String {
+pub(crate) fn fmt_mm_f(v: f64) -> String {
     // Round to 0.1 um to kill float noise from trig, keep well under the
     // 1 um round-trip tolerance.
     let rounded = (v * 10_000.0).round() / 10_000.0;
@@ -312,14 +315,14 @@ fn fmt_mm_f(v: f64) -> String {
     if s.is_empty() || s == "-0" { "0".to_string() } else { s.to_string() }
 }
 
-fn sexpr_str(s: &str) -> String {
+pub(crate) fn sexpr_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 /// Deterministic UUID-shaped id derived from a stable string (blake3, not a
 /// true RFC 4122 v5, but stable/collision-resistant and structurally valid
 /// so KiCad accepts it as a UUID field).
-fn duid(seed: &str) -> String {
+pub(crate) fn duid(seed: &str) -> String {
     let hash = blake3::hash(seed.as_bytes());
     let b = hash.as_bytes();
     let mut bytes = [0u8; 16];

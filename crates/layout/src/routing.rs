@@ -222,7 +222,7 @@ fn ext_layer_of_real(ext: &ExtGraph, node_id: usize) -> Option<usize> {
 /// Diagonal segments never occur in this router's output, but if one ever
 /// did we'd rather over-block (return true) than silently draw through a
 /// box.
-fn seg_intersects_box(a: Point, b: Point, top_left: Point, w: i64, h: i64) -> bool {
+pub(crate) fn seg_intersects_box(a: Point, b: Point, top_left: Point, w: i64, h: i64) -> bool {
     let (x0, x1) = (top_left.x, top_left.x + w);
     let (y0, y1) = (top_left.y, top_left.y + h);
     if a.y == b.y {

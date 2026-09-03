@@ -195,26 +195,29 @@ fn two_pad(name: &str, pitch: Um, pw: Um, ph: Um) -> Footprint {
     }
 }
 
-/// Dual-row gull-wing package: `n` pins total, rows at ±`row_y`, pins 1..n/2
-/// left-to-right on the bottom row (+y), n/2+1..n right-to-left on top.
-fn dual_row(name: &str, n: usize, pitch: Um, row_y: Um, pw: Um, ph: Um) -> Footprint {
-    let per_row = n / 2;
-    let x0 = -((per_row as Um - 1) * pitch) / 2;
+/// Dual-column gull-wing package (SOIC/TSSOP/MSOP-style): `n` pins total in
+/// two columns at x = ∓`col_x`, pitch `pitch` along y. Pin 1 is at the top
+/// of the left column (min y), numbering increases going down the left
+/// column, then continues up the right column from bottom to top — matching
+/// KiCad's standard SOIC/TSSOP footprint numbering.
+fn dual_row(name: &str, n: usize, pitch: Um, col_x: Um, pw: Um, ph: Um) -> Footprint {
+    let per_col = n / 2;
+    let y0 = -((per_col as Um - 1) * pitch) / 2;
     let mut pads = Vec::with_capacity(n);
-    for i in 0..per_row {
+    for i in 0..per_col {
         pads.push(Pad {
             number: (i + 1).to_string(),
-            at: (x0 + i as Um * pitch, row_y),
+            at: (-col_x, y0 + i as Um * pitch),
             size: (pw, ph),
             shape: PadShape::RoundRect,
             kind: PadKind::Smd,
             drill: None,
         });
     }
-    for i in 0..per_row {
+    for i in 0..per_col {
         pads.push(Pad {
-            number: (per_row + i + 1).to_string(),
-            at: (x0 + (per_row - 1 - i) as Um * pitch, -row_y),
+            number: (per_col + i + 1).to_string(),
+            at: (col_x, y0 + (per_col - 1 - i) as Um * pitch),
             size: (pw, ph),
             shape: PadShape::RoundRect,
             kind: PadKind::Smd,
@@ -240,34 +243,51 @@ fn pin_header(name: &str, n: usize) -> Footprint {
     Footprint { name: name.into(), pads, courtyard: None }
 }
 
+/// All fixed-key built-ins (excludes the generic `PINHEADER-N` family, which
+/// is parameterized by pin count — see [`builtin`]'s fallback branch).
+pub fn builtin_names() -> &'static [&'static str] {
+    &[
+        "0201", "0402", "0603", "0805", "1206", "1210", "SOD-123", "SOD-323", "SMA", "SOT-23", "SOT-23-5", "SOT-23-6", "SOT-223",
+        "SOIC-8", "SOIC-14", "SOIC-16", "TSSOP-8", "TSSOP-14", "TSSOP-16", "TSSOP-20", "MSOP-8", "MSOP-10",
+    ]
+}
+
 /// Built-in package library. Dimensions follow IPC-7351 nominal land
 /// patterns as used by the KiCad standard libraries.
 pub fn builtin(name: &str) -> Option<Footprint> {
     let key = normalize_name(name);
     let fp = match key.as_str() {
-        "0201" => two_pad(&key, 600, 300, 400),
-        "0402" => two_pad(&key, 900, 500, 600),
-        "0603" => two_pad(&key, 1600, 800, 950),
-        "0805" => two_pad(&key, 1900, 1000, 1300),
-        "1206" => two_pad(&key, 3000, 1150, 1800),
-        "1210" => two_pad(&key, 3000, 1150, 2600),
-        "SOD-123" => two_pad(&key, 3200, 1100, 1200),
-        "SOD-323" => two_pad(&key, 2300, 700, 900),
-        "SMA" => two_pad(&key, 4200, 2000, 1500),
+        // Two-pad passives: pitch/size taken from KiCad's Resistor_SMD.pretty
+        // (canonical for the shared two-pad shape; nearly identical to
+        // Capacitor_SMD).
+        "0201" => two_pad(&key, 640, 460, 400),
+        "0402" => two_pad(&key, 1020, 540, 640),
+        "0603" => two_pad(&key, 1650, 800, 950),
+        "0805" => two_pad(&key, 1825, 1025, 1400),
+        "1206" => two_pad(&key, 2925, 1125, 1750),
+        "1210" => two_pad(&key, 2925, 1125, 2650),
+        "SOD-123" => two_pad(&key, 3300, 900, 1200),
+        "SOD-323" => two_pad(&key, 2100, 600, 450),
+        "SMA" => two_pad(&key, 4000, 2500, 1800),
+        // Package_TO_SOT_SMD.pretty/SOT-23.kicad_mod: pins 1,2 on the left
+        // column (top/bottom), pin 3 alone on the right column (middle).
         "SOT-23" | "SOT-23-3" => Footprint {
             name: "SOT-23".into(),
             pads: vec![
-                Pad { number: "1".into(), at: (-950, 1000), size: (600, 900), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "2".into(), at: (950, 1000), size: (600, 900), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "3".into(), at: (0, -1000), size: (600, 900), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "1".into(), at: (-938, -950), size: (1475, 600), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "2".into(), at: (-938, 950), size: (1475, 600), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "3".into(), at: (938, 0), size: (1475, 600), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
             ],
             courtyard: None,
         },
+        // Package_TO_SOT_SMD.pretty/SOT-23-5.kicad_mod / SOT-23-6.kicad_mod:
+        // both columns at x = ∓1.1375mm, pitch 0.95mm. SOT-23-5 omits the
+        // right-column middle pad (built as a 6-pad dual_row, then pin 5 —
+        // the right-middle pad — dropped and pin 6 renumbered to 5).
         "SOT-23-5" | "SOT-23-6" => {
             let n = if key == "SOT-23-5" { 5 } else { 6 };
-            let mut fp = dual_row(&key, 6, 950, 1100, 600, 1000);
+            let mut fp = dual_row(&key, 6, 950, 1138, 1325, 600);
             if n == 5 {
-                // SOT-23-5 omits pin 5 (top-middle); renumber 6 -> 5.
                 fp.pads.retain(|p| p.number != "5");
                 for p in fp.pads.iter_mut() {
                     if p.number == "6" {
@@ -277,25 +297,33 @@ pub fn builtin(name: &str) -> Option<Footprint> {
             }
             fp
         }
+        // Package_TO_SOT_SMD.pretty/SOT-223-3_TabPin2.kicad_mod: pins 1 and
+        // 3 are the small leads on the left column; pin 2 is the tab — a
+        // large pad on the right column (KiCad also draws a small redundant
+        // copper pad for pin 2 on the left column at the same net; we merge
+        // that into the single tab pad since our Pad numbers must be
+        // unique).
         "SOT-223" => Footprint {
             name: key.clone(),
             pads: vec![
-                Pad { number: "1".into(), at: (-2300, 3150), size: (1200, 2000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "2".into(), at: (0, 3150), size: (1200, 2000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "3".into(), at: (2300, 3150), size: (1200, 2000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "4".into(), at: (0, -3150), size: (3400, 2000), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "1".into(), at: (-3150, -2300), size: (2000, 1500), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "2".into(), at: (3150, 0), size: (2000, 3800), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad { number: "3".into(), at: (-3150, 2300), size: (2000, 1500), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
             ],
             courtyard: None,
         },
-        "SOIC-8" => dual_row(&key, 8, 1270, 2700, 600, 1550),
-        "SOIC-14" => dual_row(&key, 14, 1270, 2700, 600, 1550),
-        "SOIC-16" => dual_row(&key, 16, 1270, 2700, 600, 1550),
-        "TSSOP-8" => dual_row(&key, 8, 650, 2900, 450, 1450),
-        "TSSOP-14" => dual_row(&key, 14, 650, 2900, 450, 1450),
-        "TSSOP-16" => dual_row(&key, 16, 650, 2900, 450, 1450),
-        "TSSOP-20" => dual_row(&key, 20, 650, 2900, 450, 1450),
-        "MSOP-8" => dual_row(&key, 8, 650, 2300, 450, 1450),
-        "MSOP-10" => dual_row(&key, 10, 500, 2300, 300, 1450),
+        // Package_SO.pretty SOIC-8/14/16_3.9x*mm_P1.27mm.
+        "SOIC-8" => dual_row(&key, 8, 1270, 2475, 1950, 600),
+        "SOIC-14" => dual_row(&key, 14, 1270, 2475, 1950, 600),
+        "SOIC-16" => dual_row(&key, 16, 1270, 2475, 1950, 600),
+        // Package_SO.pretty TSSOP-*_4.4x*mm_P0.65mm.
+        "TSSOP-8" => dual_row(&key, 8, 650, 2863, 1475, 400),
+        "TSSOP-14" => dual_row(&key, 14, 650, 2863, 1475, 400),
+        "TSSOP-16" => dual_row(&key, 16, 650, 2863, 1475, 400),
+        "TSSOP-20" => dual_row(&key, 20, 650, 2863, 1475, 400),
+        // Package_SO.pretty MSOP-8_3x3mm_P0.65mm / MSOP-10_3x3mm_P0.5mm.
+        "MSOP-8" => dual_row(&key, 8, 650, 2113, 1625, 400),
+        "MSOP-10" => dual_row(&key, 10, 500, 2100, 1500, 350),
         _ => {
             // Generic headers: "PINHEADER-N" / "PIN_HEADER_1X04" / "1X04".
             let digits: String = key.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
@@ -351,7 +379,7 @@ mod tests {
     fn courtyard_derives_from_pads() {
         let fp = builtin("0603").unwrap();
         let (hw, hh) = fp.courtyard_half();
-        assert_eq!(hw, 1600 / 2 + 400 + 250);
+        assert_eq!(hw, 1650 / 2 + 800 / 2 + 250);
         assert_eq!(hh, 950 / 2 + 250);
         let hdr = builtin("PINHEADER-4").unwrap();
         let (x0, _, x1, _) = hdr.pad_bbox();

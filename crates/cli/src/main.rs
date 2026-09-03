@@ -15,7 +15,7 @@
 //! ```
 
 use eda::prelude::*;
-use eda::{export_kicad_sch, hpwl, lint, place, render_schematic, route, to_circuit_json, PlaceOptions};
+use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, route, to_circuit_json, PlaceOptions};
 use eda::ExportMeta;
 use eda_model::ir::Stage;
 use std::path::{Path, PathBuf};
@@ -164,6 +164,12 @@ fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
         let date = eda::now_rfc3339();
         let sch = export_kicad_sch(design, &cx.model, &ExportMeta { date: &date[..10], title })?;
         write(&cx.args.out.join(format!("{title}.kicad_sch")), sch.as_bytes())?;
+    }
+    if design.placement.is_some() {
+        let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
+        let date = eda::now_rfc3339();
+        let pcb = export_kicad_pcb(design, &cx.model, &ExportMeta { date: &date[..10], title })?;
+        write(&cx.args.out.join(format!("{title}.kicad_pcb")), pcb.as_bytes())?;
     }
     let cj = to_circuit_json(design, &cx.model)?;
     write(&cx.args.out.join("circuit.json"), serde_json::to_string_pretty(&cj).unwrap_or_default().as_bytes())?;

@@ -1,0 +1,13 @@
+{
+  "name": "agentic-eda-elk-bench",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Differential bench: elkjs (original) vs eda-layout (port), run on a shared case corpus.",
+  "scripts": {
+    "bench": "node run.mjs"
+  },
+  "dependencies": {
+    "elkjs": "0.12.0"
+  }
+}

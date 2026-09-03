@@ -1,0 +1,31 @@
+# Exercises: a deliberately impossible board outline -- far too small to
+# fit the parts' courtyards. Expected outcome: passes lint and schematic,
+# but FAILS at the placement stage with placement_within_outline (or
+# similar coverage/outline check) -- not a panic.
+parts:
+  - reference: U1
+    mpn: AMS1117-3.3
+    value: "3.3V LDO"
+    package: SOT-223
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VOUT, kind: power }
+      - { number: "3", name: VIN, kind: power }
+  - reference: C1
+    value: 10uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C2
+    value: 22uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+nets:
+  - { name: VIN, pins: [U1.3, C1.1] }
+  - { name: GND, pins: [U1.1, C1.2, C2.2] }
+  - { name: VOUT, pins: [U1.2, C2.1] }
+board:
+  outline:
+    - { x: 0, y: 0 }
+    - { x: 500, y: 0 }
+    - { x: 500, y: 500 }
+    - { x: 0, y: 500 }

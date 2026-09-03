@@ -25,11 +25,14 @@ fn design() -> Design {
 
 /// An LDO-ish board: regulator + in/out caps + 8 pull-ups + a header.
 fn ldo_model() -> ConstraintModel {
-    let mut parts = vec![part("U1", "SOT-223", 4), part("C1", "0805", 2), part("C2", "0805", 2), part("J1", "PINHEADER-4", 4), part("J2", "PINHEADER-8", 8)];
+    // SOT-223 is a 3-net part in the corrected builtin footprint: the tab
+    // (VOUT here) and pin 2 are the same physical pad (KiCad numbers the
+    // tab as pin 2), so there is no separate "pin 4".
+    let mut parts = vec![part("U1", "SOT-223", 3), part("C1", "0805", 2), part("C2", "0805", 2), part("J1", "PINHEADER-4", 4), part("J2", "PINHEADER-8", 8)];
     let mut nets = vec![
         Net { name: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into(), "J1.1".into()] },
         Net { name: "GND".into(), pins: vec!["U1.1".into(), "C1.2".into(), "C2.2".into(), "J1.2".into()] },
-        Net { name: "VOUT".into(), pins: vec!["U1.2".into(), "U1.4".into(), "C2.1".into(), "J1.3".into()] },
+        Net { name: "VOUT".into(), pins: vec!["U1.2".into(), "C2.1".into(), "J1.3".into()] },
     ];
     for i in 1..=8 {
         parts.push(part(&format!("R{i}"), "0603", 2));

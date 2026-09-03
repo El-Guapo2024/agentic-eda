@@ -443,6 +443,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda-bench"
+version = "0.1.0"
+dependencies = [
+ "eda",
+ "eda-model",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
 name = "eda-cli"
 version = "0.1.0"
 dependencies = [
@@ -502,6 +512,8 @@ dependencies = [
  "eda-engine",
  "eda-layout",
  "eda-model",
+ "eda-place",
+ "eda-router",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -511,6 +523,10 @@ dependencies = [
 [[package]]
 name = "eda-layout"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "eda-logger"

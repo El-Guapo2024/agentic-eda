@@ -108,6 +108,16 @@ pub fn layout(g: &LayoutGraph, opts: &LayoutOptions) -> LayoutResult {
     let channel_demand = dummy::channel_demand(&ext);
     let coords = coords::assign_coords(&gt, &ext, &order, opts, &channel_demand);
 
+    if std::env::var_os("EDA_LAYOUT_DEBUG").is_some() {
+        for (l, layer) in order.iter().enumerate() {
+            let row: Vec<String> = layer.iter().map(|&id| format!("{}{}@{}w{}", if ext.ext_nodes[id].real_node.is_some() { "N" } else { "d" }, ext.ext_nodes[id].real_node.map(|r| r.to_string()).unwrap_or_default(), coords.center_x[id], ext.ext_nodes[id].width)).collect();
+            eprintln!("layer {l} y={} : {}", coords.layer_y[l], row.join("  "));
+        }
+        let mut dup = std::collections::HashMap::new();
+        for layer in order.iter() { for &id in layer { *dup.entry(id).or_insert(0) += 1; } }
+        let total: usize = order.iter().map(|l| l.len()).sum();
+        eprintln!("order: {} entries, {} ext nodes, dups={}", total, ext.ext_nodes.len(), dup.values().filter(|&&c| c > 1).count());
+    }
     let real_ext = coords::real_ext_lookup(&ext);
     let mut node_top_left_t = vec![Point { x: 0, y: 0 }; gt.node_count()];
     for (node_id, &ext_id) in &real_ext {

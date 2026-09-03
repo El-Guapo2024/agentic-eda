@@ -13,7 +13,7 @@
 //! Everything here works in the solver's transposed frame, exactly like
 //! `routing`, on the layout grid.
 
-use crate::graph::{LayoutGraph, Point, Side, STUB_LEN};
+use crate::graph::{LayoutGraph, Point};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
@@ -44,6 +44,9 @@ enum Cell {
     Wire { group: usize, horizontal: bool },
     /// A wire end or bend of `group`: solid for every other group.
     Vertex { group: usize },
+    /// Two different nets cross here: `h` runs horizontally, `v`
+    /// vertically. Each may pass in its own direction; nobody else may.
+    Cross { h: usize, v: usize },
 }
 
 struct Grid {
@@ -91,8 +94,13 @@ impl Grid {
                     let new = match self.get(cx, cy) {
                         Cell::Free => Cell::Wire { group, horizontal },
                         Cell::Wire { group: g, .. } | Cell::Vertex { group: g } if g == group => Cell::Wire { group, horizontal },
-                        // Two different nets already meet here: nobody
-                        // else may use this cell at all.
+                        // Perpendicular different-net wires: a crossing.
+                        Cell::Wire { group: g, horizontal: h2 } if h2 != horizontal => {
+                            if horizontal { Cell::Cross { h: group, v: g } } else { Cell::Cross { h: g, v: group } }
+                        }
+                        Cell::Cross { h, v } if h == group || v == group => Cell::Cross { h, v },
+                        // Same-direction different nets (the overlap being
+                        // repaired) or a third party: nobody passes.
                         _ => Cell::Solid,
                     };
                     self.set(cx, cy, new);
@@ -106,10 +114,8 @@ impl Grid {
                 !((a.x == p.x && c.x == p.x) || (a.y == p.y && c.y == p.y))
             };
             if is_bend || i == 0 || i + 1 == poly.len() {
-                let new = match self.get(cx, cy) {
-                    Cell::Free | Cell::Wire { .. } | Cell::Vertex { .. } if matches!(self.get(cx, cy), Cell::Free) || self.get(cx, cy).group() == Some(group) => Cell::Vertex { group },
-                    _ => Cell::Solid,
-                };
+                let here = self.get(cx, cy);
+                let new = if matches!(here, Cell::Free) || here.group() == Some(group) { Cell::Vertex { group } } else { Cell::Solid };
                 self.set(cx, cy, new);
             }
         }
@@ -124,6 +130,14 @@ fn enter_cost(cell: Cell, group: usize, dir: u8) -> Option<i64> {
         Cell::Solid => None,
         Cell::Vertex { group: g } => {
             if g == group {
+                Some(0)
+            } else {
+                None
+            }
+        }
+        Cell::Cross { h, v } => {
+            let moving_horizontal = dir == 1 || dir == 3;
+            if (moving_horizontal && h == group) || (!moving_horizontal && v == group) {
                 Some(0)
             } else {
                 None
@@ -194,11 +208,14 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
         }
         expansions += 1;
         if expansions > MAX_EXPANSIONS {
+            if std::env::var_os("EDA_MAZE_DEBUG").is_some() {
+                eprintln!("maze: expansion budget hit");
+            }
             return None;
         }
         let here = grid.get(s.0, s.1);
         // Inside a foreign crossing cell we must keep going straight.
-        let must_go_straight = matches!(here, Cell::Wire { group: g2, .. } if g2 != group) && s.2 != NO_DIR;
+        let must_go_straight = (matches!(here, Cell::Wire { group: g2, .. } if g2 != group) || matches!(here, Cell::Cross { .. })) && s.2 != NO_DIR;
         for (d, (dx, dy)) in DIRS.iter().enumerate() {
             let d = d as u8;
             if must_go_straight && d != s.2 {
@@ -219,7 +236,16 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
             }
         }
     }
-    let end = end?;
+    let Some(end) = end else {
+        if std::env::var_os("EDA_MAZE_DEBUG").is_some() {
+            let sc = grid.get(start.0, start.1);
+            let gc = grid.get(goal.0, goal.1);
+            let show = |c: Cell| match c { Cell::Free => "free".to_string(), Cell::Solid => "solid".into(), Cell::Wire { group, horizontal } => format!("wire g{group} h{horizontal}"), Cell::Vertex { group } => format!("vertex g{group}"), Cell::Cross { h, v } => format!("cross h{h} v{v}") };
+            let nb: Vec<String> = DIRS.iter().map(|(dx, dy)| show(grid.get(start.0 + dx, start.1 + dy))).collect();
+            eprintln!("maze: exhausted after {expansions} expansions, win {}x{}; start={} goal={} start-neighbours={:?}", win.w, win.h, show(sc), show(gc), nb);
+        }
+        return None;
+    };
     let mut path = vec![(end.0, end.1)];
     let mut cur = index(end);
     while from[cur] != u32::MAX {
@@ -231,6 +257,15 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
     path.reverse();
     path.dedup();
     Some(path)
+}
+
+/// Axis-aligned segments touch or cross (closed segments).
+fn seg_touches_seg(a: Point, b: Point, c: Point, d: Point) -> bool {
+    let (ax0, ax1) = (a.x.min(b.x), a.x.max(b.x));
+    let (ay0, ay1) = (a.y.min(b.y), a.y.max(b.y));
+    let (cx0, cx1) = (c.x.min(d.x), c.x.max(d.x));
+    let (cy0, cy1) = (c.y.min(d.y), c.y.max(d.y));
+    ax0 <= cx1 && cx0 <= ax1 && ay0 <= cy1 && cy0 <= ay1
 }
 
 fn collinear_overlap(a: Point, b: Point, c: Point, d: Point) -> bool {
@@ -247,11 +282,34 @@ fn collinear_overlap(a: Point, b: Point, c: Point, d: Point) -> bool {
     false
 }
 
-/// Indices of edges whose wire overlaps collinearly with a different
-/// group's wire, sorted ascending. Only the later edge of each pair is
-/// reported so the earlier one keeps its wire.
-pub fn overlapping_edges(g: &LayoutGraph, polys: &[Vec<Point>]) -> Vec<usize> {
+/// Indices of edges that need repair, sorted ascending: wires that overlap
+/// collinearly with a different group's wire (only the later edge of each
+/// pair, so the earlier one keeps its wire), and wires that cut through
+/// any node box.
+pub fn overlapping_edges(g: &LayoutGraph, node_top_left: &[Point], polys: &[Vec<Point>]) -> Vec<usize> {
     let mut bad = std::collections::BTreeSet::new();
+    for (i, poly) in polys.iter().enumerate() {
+        let through_box = poly.windows(2).any(|s| {
+            g.nodes.iter().enumerate().any(|(id, n)| crate::routing::seg_intersects_box(s[0], s[1], node_top_left[id], n.width, n.height))
+        });
+        // A wire running over another port's stub or tip (a foreign pin).
+        let own = [(g.edges[i].from.node, g.edges[i].from.port), (g.edges[i].to.node, g.edges[i].to.port)];
+        let through_stub = poly.windows(2).any(|s| {
+            g.nodes.iter().enumerate().any(|(id, n)| {
+                (0..n.ports.len()).any(|pi| {
+                    if own.contains(&(id, pi)) {
+                        return false;
+                    }
+                    let pp = n.port_point(node_top_left[id], pi);
+                    let tip = n.stub_tip(node_top_left[id], pi);
+                    seg_touches_seg(s[0], s[1], pp, tip)
+                })
+            })
+        });
+        if through_box || through_stub {
+            bad.insert(i);
+        }
+    }
     for i in 0..polys.len() {
         for j in i + 1..polys.len() {
             if g.edges[i].group == g.edges[j].group || shares_pin(&g.edges[i], &g.edges[j]) {
@@ -294,7 +352,7 @@ fn simplify(path: &[(i64, i64)], grid: &Grid) -> Vec<Point> {
 /// them). Returns the number of edges rerouted.
 pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>], grid_um: i64) -> usize {
     let t0 = std::time::Instant::now();
-    let bad = overlapping_edges(g, polys);
+    let bad = overlapping_edges(g, node_top_left, polys);
     let debug = std::env::var_os("EDA_MAZE_DEBUG").is_some();
     if debug {
         eprintln!("maze: {} edges, {} overlapping, detect {:?}", polys.len(), bad.len(), t0.elapsed());
@@ -337,7 +395,7 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
                 grid.set(cx, cy, Cell::Solid);
             }
         }
-        for (pi, port) in n.ports.iter().enumerate() {
+        for pi in 0..n.ports.len() {
             let pp = n.port_point(tl, pi);
             let tip = n.stub_tip(tl, pi);
             let (a, b) = (grid.to_cell(pp), grid.to_cell(tip));
@@ -346,7 +404,6 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
                     grid.set(cx, cy, Cell::Solid);
                 }
             }
-            let _ = port.side;
         }
     }
     let base_cells = grid.cells.clone();
@@ -377,7 +434,6 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
                 }
             }
             grid.set(t.0, t.1, Cell::Wire { group, horizontal: false });
-            let _ = matches!(n.ports[port].side, Side::Top | Side::Bottom | Side::Left | Side::Right);
         };
         free_stub(&mut grid, edge.from.node, edge.from.port);
         free_stub(&mut grid, edge.to.node, edge.to.port);
@@ -435,6 +491,5 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
     if debug {
         eprintln!("maze: rerouted {rerouted}/{} in {:?}", bad.len(), t0.elapsed());
     }
-    let _ = STUB_LEN;
     rerouted
 }

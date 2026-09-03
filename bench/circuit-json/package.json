@@ -1,0 +1,13 @@
+{
+  "name": "circuit-json-bench",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "circuit-json": "latest",
+    "circuit-to-svg": "latest",
+    "circuit-json-to-connectivity-map": "latest",
+    "@tscircuit/circuit-json-util": "latest",
+    "@tscircuit/footprinter": "latest",
+    "schematic-symbols": "latest"
+  }
+}

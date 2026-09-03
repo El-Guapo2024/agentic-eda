@@ -1,0 +1,39 @@
+# Exercises: an explicit, tightly-sized (but still feasible) rectangular
+# board outline forcing dense placement. Expected outcome: clean pipeline
+# at all seeds -- placement and routing must succeed within the small
+# outline, not just on an auto-sized board.
+parts:
+  - reference: R1
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R2
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R3
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C1
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C2
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+nets:
+  - { name: N1, pins: [R1.1, R2.1, C1.1] }
+  - { name: N2, pins: [R2.2, R3.1, C1.2] }
+  - { name: N3, pins: [R3.2, C2.1] }
+  - { name: N4, pins: [R1.2, C2.2] }
+board:
+  grid: 254
+  track_width: 200
+  clearance: 200
+  outline:
+    - { x: 0, y: 0 }
+    - { x: 12000, y: 0 }
+    - { x: 12000, y: 8000 }
+    - { x: 0, y: 8000 }

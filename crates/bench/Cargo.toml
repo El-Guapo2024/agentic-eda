@@ -1,0 +1,13 @@
+[package]
+name = "eda-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+eda = { path = "../eda" }
+eda-model = { path = "../model" }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }

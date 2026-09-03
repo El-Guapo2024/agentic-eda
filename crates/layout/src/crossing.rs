@@ -5,132 +5,233 @@
 use crate::dummy::{Chain, ExtId, ExtGraph};
 
 /// Returns the chosen ordering: for each layer, a Vec<ExtId> left-to-right.
+///
+/// ELK-style layer sweep: alternating down/up barycenter sweeps where each
+/// layer is ordered by the positions of its neighbours in the *fixed*
+/// adjacent layer only, followed by a transposition pass (adjacent swaps
+/// that reduce crossings), repeated until no improvement; several
+/// deterministic random restarts, best total crossing count wins.
+/// `sweeps` bounds the sweeps per restart.
 pub fn minimize_crossings(ext: &ExtGraph, sweeps: usize) -> Vec<Vec<ExtId>> {
-    let mut order: Vec<Vec<ExtId>> = ext.layers.clone();
-    // Deterministic initial order: ext ids are already assigned in a
-    // deterministic (insertion) order; sort each layer by ext id so the
-    // starting point never depends on hash iteration.
-    for layer in order.iter_mut() {
+    let n = ext.ext_nodes.len();
+    let num_layers = ext.layers.len();
+    let mut base: Vec<Vec<ExtId>> = ext.layers.clone();
+    for layer in base.iter_mut() {
         layer.sort_unstable();
     }
+    if num_layers < 2 {
+        return base;
+    }
 
-    // adjacency: for each ext node, its neighbor ext ids (from chain
-    // consecutive pairs only — chains only ever link adjacent layers).
-    let n = ext.ext_nodes.len();
-    let mut neighbors: Vec<Vec<ExtId>> = vec![Vec::new(); n];
+    let mut layer_of: Vec<usize> = vec![0; n];
+    for (l, layer) in base.iter().enumerate() {
+        for &id in layer {
+            layer_of[id] = l;
+        }
+    }
+    // up[id]: neighbours in layer-1, down[id]: neighbours in layer+1.
+    let mut up: Vec<Vec<ExtId>> = vec![Vec::new(); n];
+    let mut down: Vec<Vec<ExtId>> = vec![Vec::new(); n];
     for Chain { nodes, .. } in &ext.chains {
         for w in nodes.windows(2) {
-            neighbors[w[0]].push(w[1]);
-            neighbors[w[1]].push(w[0]);
-        }
-    }
-    for nb in neighbors.iter_mut() {
-        nb.sort_unstable();
-        nb.dedup();
-    }
-
-    let mut pos: Vec<usize> = vec![0; n]; // position within its layer
-    let sync_pos = |order: &Vec<Vec<ExtId>>, pos: &mut Vec<usize>| {
-        for layer in order {
-            for (i, &id) in layer.iter().enumerate() {
-                pos[id] = i;
-            }
-        }
-    };
-    sync_pos(&order, &mut pos);
-
-    let mut best_order = order.clone();
-    let mut best_crossings = count_crossings(&order, &pos, &ext.chains);
-
-    let num_layers = order.len();
-    if num_layers < 2 {
-        return best_order;
-    }
-
-    for sweep in 0..sweeps {
-        let downward = sweep % 2 == 0;
-        let layer_indices: Vec<usize> = if downward { (0..num_layers).collect() } else { (0..num_layers).rev().collect() };
-
-        for &l in &layer_indices {
-            // Skip the first layer processed in this direction: it has no
-            // "already updated" neighbor layer to derive a barycenter from.
-            let is_first = (downward && l == 0) || (!downward && l == num_layers - 1);
-            if is_first {
+            if layer_of[w[0]] == layer_of[w[1]] {
+                // Same-node / same-layer edge: no boundary to cross.
                 continue;
             }
-            let mut with_bary: Vec<(f64, ExtId)> = order[l]
-                .iter()
-                .map(|&id| {
-                    let nb = &neighbors[id];
-                    let bary = if nb.is_empty() {
-                        pos[id] as f64
-                    } else {
-                        nb.iter().map(|&w| pos[w] as f64).sum::<f64>() / nb.len() as f64
-                    };
-                    (bary, id)
-                })
-                .collect();
-            // Stable sort by barycenter; ties keep prior relative order
-            // (stable sort preserves that automatically).
-            with_bary.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-            order[l] = with_bary.into_iter().map(|(_, id)| id).collect();
-            sync_pos(&order, &mut pos);
+            let (a, b) = if layer_of[w[0]] < layer_of[w[1]] { (w[0], w[1]) } else { (w[1], w[0]) };
+            down[a].push(b);
+            up[b].push(a);
         }
-
-        let crossings = count_crossings(&order, &pos, &ext.chains);
-        if crossings < best_crossings {
-            best_crossings = crossings;
-            best_order = order.clone();
+    }
+    for v in up.iter_mut().chain(down.iter_mut()) {
+        v.sort_unstable();
+        v.dedup();
+    }
+    // Per-boundary edge list (upper ext id, lower ext id).
+    let mut boundary_edges: Vec<Vec<(ExtId, ExtId)>> = vec![Vec::new(); num_layers - 1];
+    for (a, ds) in down.iter().enumerate() {
+        for &b in ds {
+            boundary_edges[layer_of[a]].push((a, b));
         }
     }
 
-    best_order
-}
+    let sweeps = sweeps.max(1);
+    let restarts = 4usize;
+    let mut best_order: Option<Vec<Vec<ExtId>>> = None;
+    let mut best_crossings = usize::MAX;
 
-fn count_crossings(order: &[Vec<ExtId>], pos: &[usize], chains: &[Chain]) -> usize {
-    // For each adjacent layer pair, gather the (upper_pos, lower_pos) edges
-    // that cross that boundary and count inversions.
-    let num_layers = order.len();
-    if num_layers < 2 {
-        return 0;
-    }
-    let mut total = 0usize;
-    for l in 0..num_layers - 1 {
-        let mut segs: Vec<(usize, usize)> = Vec::new();
-        for chain in chains {
-            for w in chain.nodes.windows(2) {
-                let (a, b) = (w[0], w[1]);
-                // both endpoints must sit in layers l and l+1 respectively
-                // (chains only ever connect consecutive layers by
-                // construction, so just check membership).
-                let la = layer_of(order, a);
-                let lb = layer_of(order, b);
-                if la == Some(l) && lb == Some(l + 1) {
-                    segs.push((pos[a], pos[b]));
-                } else if lb == Some(l) && la == Some(l + 1) {
-                    segs.push((pos[b], pos[a]));
+    for restart in 0..restarts {
+        let mut order = base.clone();
+        if restart > 0 {
+            let mut state = 0x9E37_79B9_7F4A_7C15u64.wrapping_mul(restart as u64 + 1);
+            for layer in order.iter_mut() {
+                for k in (1..layer.len()).rev() {
+                    state = splitmix(state);
+                    layer.swap(k, (state as usize) % (k + 1));
                 }
             }
         }
-        segs.sort_unstable();
-        // Count inversions among the lower-layer positions via a simple
-        // O(k^2) pass (k = edges crossing this boundary, small for
-        // schematic-scale graphs).
-        for i in 0..segs.len() {
-            for j in (i + 1)..segs.len() {
-                let inverted = (segs[i].0 <= segs[j].0 && segs[i].1 > segs[j].1)
-                    || (segs[i].0 < segs[j].0 && segs[i].1 >= segs[j].1);
-                if inverted {
-                    total += 1;
+        let mut pos: Vec<usize> = vec![0; n];
+        sync_pos(&order, &mut pos);
+        let mut cur = total_crossings(&boundary_edges, &pos);
+        let mut stale = 0;
+        for sweep in 0..sweeps.max(8) * 2 {
+            let downward = sweep % 2 == 0;
+            if downward {
+                for l in 1..num_layers {
+                    barycenter_layer(&mut order[l], &up, &pos);
+                    sync_layer(&order[l], &mut pos);
                 }
+            } else {
+                for l in (0..num_layers - 1).rev() {
+                    barycenter_layer(&mut order[l], &down, &pos);
+                    sync_layer(&order[l], &mut pos);
+                }
+            }
+            transpose(&mut order, &mut pos, &up, &down);
+            let c = total_crossings(&boundary_edges, &pos);
+            if c < cur {
+                cur = c;
+                stale = 0;
+            } else {
+                stale += 1;
+                if stale >= 2 {
+                    break;
+                }
+            }
+        }
+        if cur < best_crossings {
+            best_crossings = cur;
+            best_order = Some(order);
+        }
+        if best_crossings == 0 {
+            break;
+        }
+    }
+    best_order.unwrap_or(base)
+}
+
+fn splitmix(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E3779B97F4A7C15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+
+fn sync_pos(order: &[Vec<ExtId>], pos: &mut [usize]) {
+    for layer in order {
+        sync_layer(layer, pos);
+    }
+}
+
+fn sync_layer(layer: &[ExtId], pos: &mut [usize]) {
+    for (i, &id) in layer.iter().enumerate() {
+        pos[id] = i;
+    }
+}
+
+/// Reorder `layer` by the mean position of each node's neighbours in the
+/// fixed reference layer; nodes without such neighbours keep their slot
+/// (stable sort on current position as the key).
+fn barycenter_layer(layer: &mut Vec<ExtId>, refs: &[Vec<ExtId>], pos: &[usize]) {
+    let mut keyed: Vec<(f64, usize, ExtId)> = layer
+        .iter()
+        .map(|&id| {
+            let nb = &refs[id];
+            let key = if nb.is_empty() { pos[id] as f64 } else { nb.iter().map(|&w| pos[w] as f64).sum::<f64>() / nb.len() as f64 };
+            (key, pos[id], id)
+        })
+        .collect();
+    keyed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.cmp(&b.1)));
+    *layer = keyed.into_iter().map(|(_, _, id)| id).collect();
+}
+
+/// Crossings across one boundary given positions.
+fn boundary_crossings(edges: &[(ExtId, ExtId)], pos: &[usize]) -> usize {
+    let mut segs: Vec<(usize, usize)> = edges.iter().map(|&(a, b)| (pos[a], pos[b])).collect();
+    segs.sort_unstable();
+    // Inversions in the lower sequence: O(k log k) via merge count is
+    // overkill for schematic scale; k^2 with early exit is fine.
+    let mut total = 0;
+    for i in 0..segs.len() {
+        let (ua, la) = segs[i];
+        for &(ub, lb) in &segs[i + 1..] {
+            if (ua < ub && la > lb) || (ua == ub && la > lb) {
+                total += 1;
             }
         }
     }
     total
 }
 
-fn layer_of(order: &[Vec<ExtId>], id: ExtId) -> Option<usize> {
-    order.iter().position(|layer| layer.contains(&id))
+fn total_crossings(boundary_edges: &[Vec<(ExtId, ExtId)>], pos: &[usize]) -> usize {
+    boundary_edges.iter().map(|e| boundary_crossings(e, pos)).sum()
+}
+
+/// Adjacent-swap local search: for every layer, swap neighbouring nodes
+/// while doing so lowers the crossings on the boundaries above and below.
+/// Only edges incident to the swapped pair can change, so the delta is
+/// computed from those alone (O(deg_a * deg_b) per candidate swap).
+fn transpose(order: &mut [Vec<ExtId>], pos: &mut [usize], up: &[Vec<ExtId>], down: &[Vec<ExtId>]) {
+    let num_layers = order.len();
+    let mut improved = true;
+    let mut rounds = 0;
+    while improved && rounds < 20 {
+        improved = false;
+        rounds += 1;
+        for l in 0..num_layers {
+            for i in 0..order[l].len().saturating_sub(1) {
+                let (a, b) = (order[l][i], order[l][i + 1]);
+                // a is left of b now. Crossings between a's and b's edges to
+                // a fixed layer: pair (u of a, v of b) crosses iff pos[u] >
+                // pos[v]; after swapping, iff pos[u] < pos[v].
+                let mut delta: i64 = 0;
+                for refs in [up, down] {
+                    for &u in &refs[a] {
+                        for &v in &refs[b] {
+                            if pos[u] > pos[v] {
+                                delta -= 1;
+                            } else if pos[u] < pos[v] {
+                                delta += 1;
+                            }
+                        }
+                    }
+                }
+                if delta < 0 {
+                    order[l].swap(i, i + 1);
+                    pos[a] = i + 1;
+                    pos[b] = i;
+                    improved = true;
+                }
+            }
+        }
+    }
+}
+
+/// Total crossings of an ordering (used by tests and callers).
+pub fn count_crossings(order: &[Vec<ExtId>], pos: &[usize], chains: &[Chain]) -> usize {
+    let num_layers = order.len();
+    if num_layers < 2 {
+        return 0;
+    }
+    let mut layer_of = std::collections::HashMap::new();
+    for (l, layer) in order.iter().enumerate() {
+        for &id in layer {
+            layer_of.insert(id, l);
+        }
+    }
+    let mut boundary_edges: Vec<Vec<(ExtId, ExtId)>> = vec![Vec::new(); num_layers - 1];
+    for chain in chains {
+        for w in chain.nodes.windows(2) {
+            if layer_of[&w[0]] == layer_of[&w[1]] {
+                continue;
+            }
+            let (a, b) = if layer_of[&w[0]] < layer_of[&w[1]] { (w[0], w[1]) } else { (w[1], w[0]) };
+            boundary_edges[layer_of[&a]].push((a, b));
+        }
+    }
+    total_crossings(&boundary_edges, pos)
 }
 
 #[cfg(test)]

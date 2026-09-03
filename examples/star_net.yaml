@@ -1,0 +1,32 @@
+# Exercises: a single star net with 5+ pins (fan-out routing/wiring), mixed
+# with normal 2-pin nets. Expected outcome: clean pipeline at all seeds.
+parts:
+  - reference: R1
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R2
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R3
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R4
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R5
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R6
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+nets:
+  - { name: STAR, pins: [R1.1, R2.1, R3.1, R4.1, R5.1, R6.1] }
+  - { name: N1, pins: [R1.2, R2.2] }
+  - { name: N2, pins: [R3.2, R4.2] }
+  - { name: N3, pins: [R5.2, R6.2] }

@@ -15,7 +15,7 @@ pub use eda_gates::check_schematic;
 pub use eda_intent::{import_zen, import_zen_cli};
 pub use eda_intent::lint::lint;
 pub use eda_render::render_schematic;
-pub use eda_kicad::{export_kicad_sch, ExportMeta};
+pub use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
 pub use eda_interchange::to_circuit_json;
 pub use eda_router::{route, RouteRules};
 pub use eda_place::{hpwl, place, PlaceOptions};
@@ -32,7 +32,7 @@ pub mod prelude {
     pub use eda_model::ir::{Design, Stage};
     pub use eda_model::{CheckResult, CheckStatus, ConstraintModel};
     pub use super::{check_schematic, derive_schematic, import_zen, import_zen_cli, lint, render_schematic, EngineOptions};
-    pub use super::{export_kicad_sch, route, to_circuit_json, RouteRules};
+    pub use super::{export_kicad_pcb, export_kicad_sch, route, to_circuit_json, RouteRules};
     pub use super::{check_placement, check_routing, hpwl, place, PlaceOptions};
     pub use super::{EscalationPolicy, Event, RunLog, Tier};
 }

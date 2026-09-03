@@ -1,0 +1,30 @@
+# Exercises: nets made entirely of power/ground-kind pins become net labels
+# rather than drawn wires in the schematic. Expected outcome: clean
+# pipeline at all seeds; schematic should have labels for VCC/GND, not wires
+# tying those nets together.
+parts:
+  - reference: U1
+    mpn: AMS1117-3.3
+    value: "3.3V LDO"
+    package: SOT-223
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VOUT, kind: power }
+      - { number: "3", name: VIN, kind: power }
+  - reference: U2
+    mpn: AMS1117-3.3
+    value: "3.3V LDO"
+    package: SOT-223
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VOUT, kind: power }
+      - { number: "3", name: VIN, kind: power }
+  - reference: C1
+    value: 10uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+nets:
+  - { name: VIN, pins: [U1.3, U2.3] }
+  - { name: GND, pins: [U1.1, U2.1] }
+  - { name: N1, pins: [C1.1, U1.2] }
+  - { name: N2, pins: [C1.2, U2.2] }
