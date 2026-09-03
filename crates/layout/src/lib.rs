@@ -19,6 +19,7 @@ pub mod dummy;
 pub mod graph;
 pub mod layering;
 pub mod routing;
+pub mod maze;
 
 pub use graph::{EdgeEndpoint, LayoutGraph, Node, Point, Port, Side};
 
@@ -118,7 +119,10 @@ pub fn layout(g: &LayoutGraph, opts: &LayoutOptions) -> LayoutResult {
         node_top_left_t[*node_id] = Point { x: snap(left, opts.grid), y: top };
     }
 
-    let edge_polylines_t = routing::route_edges(&gt, &ext, &coords, &node_top_left_t, opts.grid, &channel_demand);
+    let mut edge_polylines_t = routing::route_edges(&gt, &ext, &coords, &node_top_left_t, opts.grid, &channel_demand);
+    // Wire-aware repair: re-route any edge left collinear on another
+    // net's wire (see `maze`).
+    maze::repair(&gt, &node_top_left_t, &mut edge_polylines_t, opts.grid);
 
     let mut positions = BTreeMap::new();
     for (id, p) in node_top_left_t.into_iter().enumerate() {

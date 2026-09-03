@@ -95,6 +95,10 @@ pub struct EdgeEndpoint {
 pub struct Edge {
     pub from: EdgeEndpoint,
     pub to: EdgeEndpoint,
+    /// Edges in the same group are the same electrical net: their wires
+    /// may legitimately share segments (star spokes leaving one hub stub).
+    /// Wires of *different* groups must never run collinear-overlapping.
+    pub group: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -115,8 +119,15 @@ impl LayoutGraph {
         id
     }
 
+    /// Adds an edge in its own group (no other edge may share its wire).
     pub fn add_edge(&mut self, from: EdgeEndpoint, to: EdgeEndpoint) {
-        self.edges.push(Edge { from, to });
+        let group = usize::MAX - self.edges.len();
+        self.edges.push(Edge { from, to, group });
+    }
+
+    /// Adds an edge belonging to net `group`.
+    pub fn add_edge_in_group(&mut self, from: EdgeEndpoint, to: EdgeEndpoint, group: usize) {
+        self.edges.push(Edge { from, to, group });
     }
 
     pub fn node_count(&self) -> usize {

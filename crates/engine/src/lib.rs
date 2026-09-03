@@ -96,7 +96,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     let mut nets = model.nets.clone();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
 
-    for net in &nets {
+    for (net_group, net) in nets.iter().enumerate() {
         if net.pins.len() < 2 {
             continue;
         }
@@ -125,7 +125,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             };
             let edge =
                 build_edge(&node_id_of, &pin_port_of, drv_part, &drv_pin.number, load_part, &load_pin.number);
-            g.add_edge(edge.0, edge.1);
+            g.add_edge_in_group(edge.0, edge.1, net_group);
             edge_meta.push((net.name.clone(), vec![drv_pin_ref.clone(), load_pin_ref.clone()]));
         } else {
             // star: pick hub (prefer power/ground pin, else lexically-lowest "REF.PIN").
@@ -140,7 +140,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                 let (other_ref_str, other_pin_num) = split_pin_ref(other_pin_ref);
                 let other_part = parts_by_ref[other_ref_str];
                 let edge = build_edge(&node_id_of, &pin_port_of, hub_part, hub_pin_num, other_part, other_pin_num);
-                g.add_edge(edge.0, edge.1);
+                g.add_edge_in_group(edge.0, edge.1, net_group);
                 edge_meta.push((net.name.clone(), vec![hub_pin_ref.clone(), other_pin_ref.clone()]));
             }
         }
