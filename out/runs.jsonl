@@ -6,3 +6,4 @@
 {"kind":"run_started","run_id":"54781bef-0","ts":"2026-09-03T21:31:50Z","intent_path":"examples/mcu_board_30plus.yaml","intent_hash":"54781bef2c46541c064f3530fb172ef42795aacaa9f99d7243cef59fef450464","engine_version":"0.1.0"}
 {"kind":"run_started","run_id":"54781bef-0","ts":"2026-09-03T21:32:15Z","intent_path":"examples/mcu_board_30plus.yaml","intent_hash":"54781bef2c46541c064f3530fb172ef42795aacaa9f99d7243cef59fef450464","engine_version":"0.1.0"}
 {"kind":"run_started","run_id":"54781bef-0","ts":"2026-09-03T21:33:10Z","intent_path":"examples/mcu_board_30plus.yaml","intent_hash":"54781bef2c46541c064f3530fb172ef42795aacaa9f99d7243cef59fef450464","engine_version":"0.1.0"}
+{"kind":"run_started","run_id":"3bfeb373-0","ts":"2026-09-03T21:50:49Z","intent_path":"examples/through_hole_headers.yaml","intent_hash":"3bfeb373b9d3ec92a4a9f284e2c258250fb253a88b4fb8f0f7bc992568646830","engine_version":"0.1.0"}

@@ -235,7 +235,30 @@ struct PadItem {
     refpin: String,
     net: String,
     rect: Rect,
+    /// Shape-aware geometry for connectivity (KiCad semantics: the track
+    /// end must lie in the pad copper); clearance keeps the conservative
+    /// bounding rect.
+    geom: eda_model::footprint::PlacedPad,
     layers: Vec<String>,
+}
+
+/// Distance from a segment's centreline to the pad's copper (0 = touches).
+fn seg_pad_dist(a: Point, b: Point, pad: &PadItem) -> f64 {
+    let g = &pad.geom;
+    let center = g.center;
+    if g.is_round() {
+        let rmin = (g.size.0.min(g.size.1) / 2) as f64;
+        (seg_point_dist(a, b, center) - rmin).max(0.0)
+    } else {
+        let r = g.corner_radius();
+        let inset = Rect(
+            (center.x as f64 - g.size.0 as f64 / 2.0 + r).round() as Um,
+            (center.y as f64 - g.size.1 as f64 / 2.0 + r).round() as Um,
+            (center.x as f64 + g.size.0 as f64 / 2.0 - r).round() as Um,
+            (center.y as f64 + g.size.1 as f64 / 2.0 - r).round() as Um,
+        );
+        (seg_rect_dist(a, b, &inset) - r).max(0.0)
+    }
 }
 
 struct Uf(Vec<usize>);
@@ -294,7 +317,7 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
             } else {
                 vec![if fp.side == Side::Top { outer_top.clone() } else { outer_bot.clone() }]
             };
-            pads.push(PadItem { refpin, net, rect: Rect::centered(g.center, g.size), layers });
+            pads.push(PadItem { refpin, net, rect: Rect::centered(g.center, g.size), geom: g.clone(), layers });
         }
     }
     if fp_ok {
@@ -418,7 +441,12 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
                 for k in 0..t.pts.len() {
                     let a = t.pts[k];
                     let b = if k + 1 < t.pts.len() { t.pts[k + 1] } else { a };
-                    if seg_rect_dist(a, b, &pad.rect) <= half {
+                    // KiCad connects a track to a pad when the track's
+                    // end point lies inside the pad copper; a mere graze
+                    // of the track's width does not count.
+                    let touches = pad.geom.contains(a) || pad.geom.contains(b);
+                    let _ = (half, seg_pad_dist(a, b, pad));
+                    if touches {
                         uf.union(pi, tv_base[ti] + k);
                         break;
                     }
@@ -430,18 +458,22 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
                 }
             }
         }
-        // Segment-segment touching on same layer (T-junctions).
+        // Track-track joins (KiCad anchor rule): an END POINT of one
+        // track lies within the other track's copper on the same layer.
+        // Mere crossings do not connect.
         for ti in 0..tracks.len() {
-            for tj in ti + 1..tracks.len() {
-                if tracks[ti].layer != tracks[tj].layer {
+            for tj in 0..tracks.len() {
+                if ti == tj || tracks[ti].layer != tracks[tj].layer {
                     continue;
                 }
-                let half = ((tracks[ti].width + tracks[tj].width) / 2) as f64;
-                'outer: for k in 0..tracks[ti].pts.len().saturating_sub(1) {
+                let half = (tracks[tj].width / 2) as f64;
+                let ends = [(0usize, tracks[ti].pts.first()), (tracks[ti].pts.len().saturating_sub(1), tracks[ti].pts.last())];
+                for (k, end) in ends {
+                    let Some(&end) = end else { continue };
                     for m in 0..tracks[tj].pts.len().saturating_sub(1) {
-                        if seg_seg_dist(tracks[ti].pts[k], tracks[ti].pts[k + 1], tracks[tj].pts[m], tracks[tj].pts[m + 1]) <= half {
+                        if seg_point_dist(tracks[tj].pts[m], tracks[tj].pts[m + 1], end) <= half {
                             uf.union(tv_base[ti] + k, tv_base[tj] + m);
-                            break 'outer;
+                            break;
                         }
                     }
                 }

@@ -1,6 +1,6 @@
 # KiCad export bench report
 
-Generated 2026-09-03T21:15:25Z by `bench/kicad/run.sh` (cargo build profile: debug).
+Generated 2026-09-03T21:54:37Z by `bench/kicad/run.sh` (cargo build profile: debug).
 
 kicad-cli: /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli
 
@@ -14,25 +14,25 @@ kicad-cli: /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli
 | dense_small_outline | 1 | ok | 0 | 0 | 13 |  |
 | dense_small_outline | 2 | ok | 0 | 0 | 14 |  |
 | dense_small_outline | 3 | ok | 0 | 0 | 15 |  |
-| ldo_proximity_heavy | 0 | ok | 0 | 0 | 21 |  |
-| ldo_proximity_heavy | 1 | ok | 0 | 0 | 22 |  |
-| ldo_proximity_heavy | 2 | ok | 0 | 0 | 23 |  |
-| ldo_proximity_heavy | 3 | ok | 0 | 0 | 22 |  |
-| ldo | 0 | ok | 0 | 0 | 16 |  |
+| ldo_proximity_heavy | 0 | ok | 0 | 0 | 19 |  |
+| ldo_proximity_heavy | 1 | ok | 0 | 0 | 20 |  |
+| ldo_proximity_heavy | 2 | ok | 0 | 0 | 21 |  |
+| ldo_proximity_heavy | 3 | ok | 0 | 0 | 21 |  |
+| ldo | 0 | ok | 0 | 0 | 14 |  |
 | ldo | 1 | ok | 0 | 0 | 16 |  |
-| ldo | 2 | ok | 0 | 0 | 19 |  |
+| ldo | 2 | ok | 0 | 0 | 16 |  |
 | ldo | 3 | ok | 0 | 0 | 15 |  |
-| mcu_board_30plus | 0 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.fuiW6j/mcu_board_30plus_0/pipeline.log` |
-| mcu_board_30plus | 1 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.fuiW6j/mcu_board_30plus_1/pipeline.log` |
-| mcu_board_30plus | 2 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.fuiW6j/mcu_board_30plus_2/pipeline.log` |
-| mcu_board_30plus | 3 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.fuiW6j/mcu_board_30plus_3/pipeline.log` |
+| mcu_board_30plus | 0 | ok | 0 | 0 | 73 |  |
+| mcu_board_30plus | 1 | ok | 0 | 0 | 73 |  |
+| mcu_board_30plus | 2 | ok | 0 | 0 | 70 |  |
+| mcu_board_30plus | 3 | ok | 0 | 0 | 78 |  |
 | nc_pins | 0 | ok | 0 | 0 | 6 |  |
 | nc_pins | 1 | ok | 0 | 0 | 5 |  |
-| nc_pins | 2 | ok | 0 | 0 | 8 |  |
+| nc_pins | 2 | ok | 0 | 0 | 6 |  |
 | nc_pins | 3 | ok | 0 | 0 | 5 |  |
 | opamp_filter | 0 | ok | 0 | 0 | 15 |  |
 | opamp_filter | 1 | ok | 0 | 0 | 18 |  |
-| opamp_filter | 2 | ok | 0 | 0 | 19 |  |
+| opamp_filter | 2 | ok | 0 | 0 | 18 |  |
 | opamp_filter | 3 | ok | 0 | 0 | 15 |  |
 | passive_divider_ladder | 0 | ok | 0 | 0 | 14 |  |
 | passive_divider_ladder | 1 | ok | 0 | 0 | 17 |  |
@@ -50,7 +50,7 @@ kicad-cli: /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli
 | two_pin_nets | 1 | ok | 0 | 0 | 8 |  |
 | two_pin_nets | 2 | ok | 0 | 0 | 7 |  |
 | two_pin_nets | 3 | ok | 0 | 0 | 8 |  |
-| unroutable_tiny_outline | 0 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.fuiW6j/unroutable_tiny_outline_0/pipeline.log` |
-| unroutable_tiny_outline | 1 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.fuiW6j/unroutable_tiny_outline_1/pipeline.log` |
-| unroutable_tiny_outline | 2 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.fuiW6j/unroutable_tiny_outline_2/pipeline.log` |
-| unroutable_tiny_outline | 3 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.fuiW6j/unroutable_tiny_outline_3/pipeline.log` |
+| unroutable_tiny_outline | 0 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.ZEqYoQ/unroutable_tiny_outline_0/pipeline.log` |
+| unroutable_tiny_outline | 1 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.ZEqYoQ/unroutable_tiny_outline_1/pipeline.log` |
+| unroutable_tiny_outline | 2 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.ZEqYoQ/unroutable_tiny_outline_2/pipeline.log` |
+| unroutable_tiny_outline | 3 | FAIL | - | - | - | pipeline failed, see `/var/folders/h1/4z3hks0d2zbd_y_lng5ww0680000gn/T//eda_bench_kicad.ZEqYoQ/unroutable_tiny_outline_3/pipeline.log` |

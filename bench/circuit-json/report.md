@@ -1,6 +1,6 @@
 # circuit-json differential validation report
 
-Generated: 2026-09-03T21:00:57Z
+Generated: 2026-09-03T21:41:18Z
 
 ## `bench/circuit-json/out/dense_small_outline_seed0/circuit.json`
 
@@ -22,6 +22,28 @@ element counts by type:
 validation errors: 0
 schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed0/circuit.schematic.svg
 pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed0/circuit.pcb.svg
+```
+
+## `bench/circuit-json/out/dense_small_outline_seed1/circuit.json`
+
+```
+file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed1/circuit.json
+elements: 75
+element counts by type:
+  pcb_component: 5
+  pcb_port: 10
+  pcb_smtpad: 10
+  pcb_trace: 6
+  schematic_component: 5
+  schematic_port: 10
+  schematic_trace: 6
+  source_component: 5
+  source_net: 4
+  source_port: 10
+  source_trace: 4
+validation errors: 0
+schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed1/circuit.schematic.svg
+pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed1/circuit.pcb.svg
 ```
 
 ## `bench/circuit-json/out/dense_small_outline_seed2/circuit.json`
@@ -90,6 +112,29 @@ schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/den
 pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed4/circuit.pcb.svg
 ```
 
+## `bench/circuit-json/out/dense_small_outline_seed5/circuit.json`
+
+```
+file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed5/circuit.json
+elements: 79
+element counts by type:
+  pcb_component: 5
+  pcb_port: 10
+  pcb_smtpad: 10
+  pcb_trace: 8
+  pcb_via: 2
+  schematic_component: 5
+  schematic_port: 10
+  schematic_trace: 6
+  source_component: 5
+  source_net: 4
+  source_port: 10
+  source_trace: 4
+validation errors: 0
+schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed5/circuit.schematic.svg
+pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/dense_small_outline_seed5/circuit.pcb.svg
+```
+
 ## `bench/circuit-json/out/nc_pins_seed0/circuit.json`
 
 ```
@@ -117,14 +162,13 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/nc_pins_s
 
 ```
 file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/nc_pins_seed1/circuit.json
-elements: 75
+elements: 71
 element counts by type:
   pcb_component: 3
   pcb_plated_hole: 6
   pcb_port: 11
   pcb_smtpad: 5
-  pcb_trace: 7
-  pcb_via: 2
+  pcb_trace: 5
   schematic_component: 3
   schematic_port: 12
   schematic_trace: 5
@@ -141,14 +185,13 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/nc_pins_s
 
 ```
 file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/nc_pins_seed2/circuit.json
-elements: 75
+elements: 71
 element counts by type:
   pcb_component: 3
   pcb_plated_hole: 6
   pcb_port: 11
   pcb_smtpad: 5
-  pcb_trace: 7
-  pcb_via: 2
+  pcb_trace: 5
   schematic_component: 3
   schematic_port: 12
   schematic_trace: 5
@@ -188,14 +231,13 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/nc_pins_s
 
 ```
 file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/nc_pins_seed4/circuit.json
-elements: 75
+elements: 71
 element counts by type:
   pcb_component: 3
   pcb_plated_hole: 6
   pcb_port: 11
   pcb_smtpad: 5
-  pcb_trace: 7
-  pcb_via: 2
+  pcb_trace: 5
   schematic_component: 3
   schematic_port: 12
   schematic_trace: 5
@@ -235,13 +277,13 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/nc_pins_s
 
 ```
 file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_filter_seed0/circuit.json
-elements: 153
+elements: 145
 element counts by type:
   pcb_component: 7
   pcb_port: 20
   pcb_smtpad: 20
-  pcb_trace: 18
-  pcb_via: 6
+  pcb_trace: 14
+  pcb_via: 2
   schematic_component: 7
   schematic_port: 20
   schematic_trace: 12
@@ -281,13 +323,13 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_fil
 
 ```
 file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_filter_seed2/circuit.json
-elements: 149
+elements: 145
 element counts by type:
   pcb_component: 7
   pcb_port: 20
   pcb_smtpad: 20
-  pcb_trace: 16
-  pcb_via: 4
+  pcb_trace: 14
+  pcb_via: 2
   schematic_component: 7
   schematic_port: 20
   schematic_trace: 12
@@ -304,13 +346,13 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_fil
 
 ```
 file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_filter_seed3/circuit.json
-elements: 149
+elements: 151
 element counts by type:
   pcb_component: 7
   pcb_port: 20
   pcb_smtpad: 20
-  pcb_trace: 16
-  pcb_via: 4
+  pcb_trace: 17
+  pcb_via: 5
   schematic_component: 7
   schematic_port: 20
   schematic_trace: 12
@@ -327,13 +369,13 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_fil
 
 ```
 file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_filter_seed4/circuit.json
-elements: 149
+elements: 145
 element counts by type:
   pcb_component: 7
   pcb_port: 20
   pcb_smtpad: 20
-  pcb_trace: 16
-  pcb_via: 4
+  pcb_trace: 14
+  pcb_via: 2
   schematic_component: 7
   schematic_port: 20
   schematic_trace: 12
@@ -350,13 +392,13 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_fil
 
 ```
 file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/opamp_filter_seed5/circuit.json
-elements: 149
+elements: 147
 element counts by type:
   pcb_component: 7
   pcb_port: 20
   pcb_smtpad: 20
-  pcb_trace: 16
-  pcb_via: 4
+  pcb_trace: 15
+  pcb_via: 3
   schematic_component: 7
   schematic_port: 20
   schematic_trace: 12
@@ -413,6 +455,95 @@ schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/pas
 pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed1/circuit.pcb.svg
 ```
 
+## `bench/circuit-json/out/passive_divider_ladder_seed2/circuit.json`
+
+```
+file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed2/circuit.json
+elements: 94
+element counts by type:
+  pcb_component: 6
+  pcb_port: 12
+  pcb_smtpad: 12
+  pcb_trace: 9
+  pcb_via: 2
+  schematic_component: 6
+  schematic_port: 12
+  schematic_trace: 7
+  source_component: 6
+  source_net: 5
+  source_port: 12
+  source_trace: 5
+validation errors: 0
+schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed2/circuit.schematic.svg
+pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed2/circuit.pcb.svg
+```
+
+## `bench/circuit-json/out/passive_divider_ladder_seed3/circuit.json`
+
+```
+file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed3/circuit.json
+elements: 90
+element counts by type:
+  pcb_component: 6
+  pcb_port: 12
+  pcb_smtpad: 12
+  pcb_trace: 7
+  schematic_component: 6
+  schematic_port: 12
+  schematic_trace: 7
+  source_component: 6
+  source_net: 5
+  source_port: 12
+  source_trace: 5
+validation errors: 0
+schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed3/circuit.schematic.svg
+pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed3/circuit.pcb.svg
+```
+
+## `bench/circuit-json/out/passive_divider_ladder_seed4/circuit.json`
+
+```
+file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed4/circuit.json
+elements: 90
+element counts by type:
+  pcb_component: 6
+  pcb_port: 12
+  pcb_smtpad: 12
+  pcb_trace: 7
+  schematic_component: 6
+  schematic_port: 12
+  schematic_trace: 7
+  source_component: 6
+  source_net: 5
+  source_port: 12
+  source_trace: 5
+validation errors: 0
+schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed4/circuit.schematic.svg
+pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed4/circuit.pcb.svg
+```
+
+## `bench/circuit-json/out/passive_divider_ladder_seed5/circuit.json`
+
+```
+file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed5/circuit.json
+elements: 90
+element counts by type:
+  pcb_component: 6
+  pcb_port: 12
+  pcb_smtpad: 12
+  pcb_trace: 7
+  schematic_component: 6
+  schematic_port: 12
+  schematic_trace: 7
+  source_component: 6
+  source_net: 5
+  source_port: 12
+  source_trace: 5
+validation errors: 0
+schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed5/circuit.schematic.svg
+pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/passive_divider_ladder_seed5/circuit.pcb.svg
+```
+
 ## `bench/circuit-json/out/place_only/circuit.json`
 
 ```
@@ -430,6 +561,24 @@ element counts by type:
 validation errors: 0
 schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/place_only/circuit.schematic.svg
 pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/place_only/circuit.pcb.svg
+```
+
+## `bench/circuit-json/out/schematic_only/circuit.json`
+
+```
+file: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/schematic_only/circuit.json
+elements: 60
+element counts by type:
+  schematic_component: 6
+  schematic_port: 15
+  schematic_trace: 10
+  source_component: 6
+  source_net: 4
+  source_port: 15
+  source_trace: 4
+validation errors: 0
+schematic SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/schematic_only/circuit.schematic.svg
+pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/schematic_only/circuit.pcb.svg
 ```
 
 ## `bench/circuit-json/out/star_net_seed0/circuit.json`
@@ -698,21 +847,21 @@ pcb SVG: /Users/juanantonioluera/ws/agentic-eda/bench/circuit-json/out/two_pin_n
 
 ## Summary
 
-- files validated: 31
+- files validated: 38
 - total validation errors: 0
 
 ### Element counts across the whole corpus
 
-- pcb_component: 152
+- pcb_component: 186
 - pcb_plated_hole: 40
-- pcb_port: 373
-- pcb_smtpad: 333
-- pcb_trace: 236
-- pcb_via: 30
-- schematic_component: 146
-- schematic_port: 364
-- schematic_trace: 206
-- source_component: 152
-- source_net: 138
-- source_port: 379
-- source_trace: 138
+- pcb_port: 441
+- pcb_smtpad: 401
+- pcb_trace: 266
+- pcb_via: 20
+- schematic_component: 186
+- schematic_port: 447
+- schematic_trace: 256
+- source_component: 192
+- source_net: 170
+- source_port: 462
+- source_trace: 170

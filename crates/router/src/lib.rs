@@ -23,6 +23,8 @@ pub use eda_model::BoardRules as RouteRules;
 struct PadInfo {
     pt: Point,
     size: (i64, i64),
+    /// Full board-space pad geometry (shape-aware containment).
+    geom: eda_model::footprint::PlacedPad,
     net: String,
     /// Copper layers this pad exists on.
     layers: Vec<u8>,
@@ -35,13 +37,17 @@ fn pad_interior_cells(grid: &Grid, pad: &PadInfo, rules: &RouteRules) -> Vec<(i6
     let (cx, cy) = grid.to_cell(pad.pt);
     let hx = (pad.size.0 / 2 + rules.grid) / rules.grid;
     let hy = (pad.size.1 / 2 + rules.grid) / rules.grid;
-    let (x0, x1) = (pad.pt.x - pad.size.0 / 2, pad.pt.x + pad.size.0 / 2);
-    let (y0, y1) = (pad.pt.y - pad.size.1 / 2, pad.pt.y + pad.size.1 / 2);
+    // A track ending on a goal cell must keep its whole copper width
+    // inside the pad (KiCad connectivity wants the end point inside the
+    // pad shape; rounded corners and circles have less copper than their
+    // bounding box). The centre cell is always included: on tiny pads the
+    // margin may exceed the pad, and the centre is the best we can do.
+    let margin = (rules.track_width as f64) / 2.0;
     let mut out = vec![(cx, cy)];
     for dx in -hx..=hx {
         for dy in -hy..=hy {
             let p = grid.to_point(cx + dx, cy + dy);
-            if p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1 && (dx, dy) != (0, 0) {
+            if (dx, dy) != (0, 0) && pad.geom.contains_with_margin(p, margin) {
                 out.push((cx + dx, cy + dy));
             }
         }
@@ -140,7 +146,7 @@ pub fn route_partial(
                 .map(|n| n.name.clone())
                 .unwrap_or_else(|| format!("__unassigned__{refpin}"));
             let layers = if g.through_hole { (0..num_layers as u8).collect() } else { vec![side_layer] };
-            pads.insert(refpin, PadInfo { pt: g.center, size: g.size, net, layers });
+            pads.insert(refpin, PadInfo { pt: g.center, size: g.size, geom: g.clone(), net, layers });
         }
     }
     if !precondition.is_empty() {
@@ -150,17 +156,21 @@ pub fn route_partial(
     // --- 2. grid & obstacle map -----------------------------------------
     let mut grid = Grid::with_widths(placement.outline.clone(), rules.grid, rules.clearance, rules.track_width, rules.via_diameter, num_layers);
     for pad in pads.values() {
+        // Rasterise the pad area from its real rectangle: every cell whose
+        // own square intersects the copper (the cell nearest a corner is
+        // the cell whose square contains it), so the pad edge never lies
+        // more than half a cell past an occupied cell centre — the
+        // invariant `Grid`'s clearance arithmetic relies on. Centring on
+        // the rounded centre cell instead can miss a row when the pad
+        // centre is off-grid.
+        let (x0, y0) = grid.to_cell(Point { x: pad.pt.x - pad.size.0 / 2, y: pad.pt.y - pad.size.1 / 2 });
+        let (x1, y1) = grid.to_cell(Point { x: pad.pt.x + pad.size.0 / 2, y: pad.pt.y + pad.size.1 / 2 });
         let (cx, cy) = grid.to_cell(pad.pt);
-        // Rasterise the pad area: every cell whose own square touches the
-        // pad rectangle, so the pad edge never lies more than half a cell
-        // past an occupied cell centre (the invariant `Grid` clearance
-        // arithmetic relies on).
-        let hx = (pad.size.0 / 2 + rules.grid / 2) / rules.grid;
-        let hy = (pad.size.1 / 2 + rules.grid / 2) / rules.grid;
         for &l in &pad.layers {
-            for dx in -hx..=hx {
-                for dy in -hy..=hy {
-                    grid.set(cx + dx, cy + dy, l, &pad.net, Occ::Pad);
+            grid.set(cx, cy, l, &pad.net, Occ::Pad);
+            for gx in x0..=x1 {
+                for gy in y0..=y1 {
+                    grid.set(gx, gy, l, &pad.net, Occ::Pad);
                 }
             }
         }

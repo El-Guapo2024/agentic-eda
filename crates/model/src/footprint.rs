@@ -26,6 +26,58 @@ pub struct PlacedPad {
     /// Full axis-aligned extents in board space (w, h).
     pub size: (Um, Um),
     pub through_hole: bool,
+    pub shape: PadShape,
+}
+
+impl PlacedPad {
+    /// Round pads (circle/oval) have no copper in the corners of their
+    /// bounding box; treat them as an ellipse for containment.
+    pub fn is_round(&self) -> bool {
+        matches!(self.shape, PadShape::Circle | PadShape::Oval)
+    }
+    /// Corner radius of a rounded-rectangle pad (KiCad default ratio 25%
+    /// of the shorter side), 0 for plain rectangles.
+    pub fn corner_radius(&self) -> f64 {
+        match self.shape {
+            PadShape::RoundRect => 0.25 * self.size.0.min(self.size.1) as f64,
+            _ => 0.0,
+        }
+    }
+
+    /// Signed distance from `p` to the pad's copper edge: negative inside.
+    /// Exact for rect/roundrect/circle; ovals use the inscribed ellipse
+    /// scaled by the shorter radius (conservative).
+    pub fn signed_distance(&self, p: Point) -> f64 {
+        let (hw, hh) = (self.size.0 as f64 / 2.0, self.size.1 as f64 / 2.0);
+        let (dx, dy) = ((p.x - self.center.x) as f64, (p.y - self.center.y) as f64);
+        if self.is_round() {
+            let rmin = hw.min(hh);
+            let e = ((dx / hw).powi(2) + (dy / hh).powi(2)).sqrt();
+            (e - 1.0) * rmin
+        } else {
+            let r = self.corner_radius();
+            // Distance to the rect inset by r, then Minkowski-expand by r.
+            let (iw, ih) = (hw - r, hh - r);
+            let (ox, oy) = ((dx.abs() - iw).max(0.0), (dy.abs() - ih).max(0.0));
+            let outside = (ox * ox + oy * oy).sqrt();
+            if outside > 0.0 {
+                outside - r
+            } else {
+                (dx.abs() - iw).max(dy.abs() - ih) - r
+            }
+        }
+    }
+
+    /// True when `p` lies inside the copper with at least `margin` µm to
+    /// spare (so copper of half-width `margin` centred there stays inside).
+    pub fn contains_with_margin(&self, p: Point, margin: f64) -> bool {
+        self.signed_distance(p) <= -margin
+    }
+
+    /// True when `p` lies strictly inside the pad's copper.
+    pub fn contains(&self, p: Point) -> bool {
+        self.signed_distance(p) < 0.0
+    }
 }
 
 /// Transform a local-frame point of `fp` into board space: bottom-side
@@ -60,6 +112,7 @@ pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance)
             center: to_board(fp, p.at),
             size: rotated_extent(fp, p.size),
             through_hole: p.kind == PadKind::ThroughHole,
+            shape: p.shape,
         })
         .collect();
     pads.sort_by(|a, b| a.number.cmp(&b.number));
