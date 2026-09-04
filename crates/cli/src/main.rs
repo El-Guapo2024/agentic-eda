@@ -12,6 +12,7 @@
 //! eda pipeline  <intent> [-o out_dir] [--seed N]        # all three, gated
 //! eda export    <intent> --design design.json [-o out_dir]   # kicad_sch + circuit json
 //! eda check     <intent> --design design.json          # run every gate, print scorecard
+//! eda import-pl <intent> --design design.json --pl x.gp.pl [-o out]  # Bookshelf placement (Cypress) -> design.json
 //! ```
 
 use eda::prelude::*;
@@ -29,6 +30,7 @@ struct Args {
     seed: u64,
     design: Option<PathBuf>,
     use_pcb_cli: bool,
+    pl: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -39,21 +41,23 @@ fn parse_args() -> Result<Args, String> {
     let mut seed = 0u64;
     let mut design = None;
     let mut use_pcb_cli = false;
+    let mut pl = None;
     while let Some(a) = it.next() {
         match a.as_str() {
             "-o" | "--out" => out = PathBuf::from(it.next().ok_or("-o needs a path")?),
             "--seed" => seed = it.next().ok_or("--seed needs a number")?.parse().map_err(|_| "bad --seed")?,
             "--design" => design = Some(PathBuf::from(it.next().ok_or("--design needs a path")?)),
             "--pcb-cli" => use_pcb_cli = true,
+            "--pl" => pl = Some(PathBuf::from(it.next().ok_or("--pl needs a path")?)),
             s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
             s => intent = Some(PathBuf::from(s)),
         }
     }
-    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli })
+    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl })
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|export|check> <intent> [-o out] [--seed N] [--design design.json] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|export|check|import-pl> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -171,6 +175,9 @@ fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
     Ok(routed)
 }
 
+/// Bookshelf integer unit used for Cypress export/import (100 µm).
+const BOOKSHELF_UNIT_UM: i64 = 100;
+
 fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
     if design.schematic.is_some() {
         let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
@@ -183,6 +190,13 @@ fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
         let date = eda::now_rfc3339();
         let pcb = export_kicad_pcb(design, &cx.model, &ExportMeta { date: &date[..10], title })?;
         write(&cx.args.out.join(format!("{title}.kicad_pcb")), pcb.as_bytes())?;
+    }
+    if design.placement.is_some() {
+        let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
+        let bs = eda::to_bookshelf(design, &cx.model, title, BOOKSHELF_UNIT_UM)?;
+        for (name, content) in bs.files(title) {
+            write(&cx.args.out.join("bookshelf").join(name), content.as_bytes())?;
+        }
     }
     let cj = to_circuit_json(design, &cx.model)?;
     write(&cx.args.out.join("circuit.json"), serde_json::to_string_pretty(&cj).unwrap_or_default().as_bytes())?;
@@ -245,6 +259,21 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
             let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "export", "export needs --design")])?;
             export(&cx, &d)?;
             return Ok(());
+        }
+        "import-pl" => {
+            let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "import-pl", "import-pl needs --design (for the outline)")])?;
+            let pl_path = cx.args.pl.clone().ok_or_else(|| vec![CheckResult::fail("cli", "import-pl", "import-pl needs --pl")])?;
+            let pl = std::fs::read_to_string(&pl_path).map_err(|e| vec![CheckResult::fail("io", pl_path.display().to_string(), e.to_string())])?;
+            let placed = eda::from_bookshelf_pl(&pl, &d, &cx.model, BOOKSHELF_UNIT_UM)?;
+            save_design(&cx.args.out, &placed)?;
+            let checks = check_placement(&placed, &cx.model);
+            let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model), "source": "bookshelf" });
+            cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
+            println!("hpwl_um {}", hpwl(&placed, &cx.model).unwrap_or(-1));
+            if !print_checks("placement gates", &checks) {
+                return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
+            }
+            placed
         }
         "check" => {
             let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "check", "check needs --design")])?;
