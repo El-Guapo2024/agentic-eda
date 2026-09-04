@@ -488,6 +488,26 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
     true
 }
 
+/// A placement generator. Every placer — ours, Cypress, anything wrapped —
+/// speaks this so the loop can run N candidates from any mix and let the
+/// gates and critic choose. Options live on the implementor.
+pub trait Placer {
+    fn name(&self) -> &str;
+    fn place(&self, design: &Design, model: &ConstraintModel, seed: u64) -> Result<Design, Vec<CheckResult>>;
+}
+
+/// `eda-place`'s own annealer as a `Placer`.
+pub struct Anneal(pub PlaceOptions);
+
+impl Placer for Anneal {
+    fn name(&self) -> &str {
+        "eda-place"
+    }
+    fn place(&self, design: &Design, model: &ConstraintModel, seed: u64) -> Result<Design, Vec<CheckResult>> {
+        place(design, model, &PlaceOptions { seed, ..self.0.clone() })
+    }
+}
+
 /// Place every part of `model` on the board. `design` supplies provenance
 /// and (if present) the schematic section, which is carried through
 /// untouched; the returned design has a fresh `placement` section.

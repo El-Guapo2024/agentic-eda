@@ -429,6 +429,7 @@ dependencies = [
 name = "eda"
 version = "0.1.0"
 dependencies = [
+ "eda-cypress",
  "eda-engine",
  "eda-gates",
  "eda-intent",
@@ -461,6 +462,16 @@ dependencies = [
  "eda-model",
  "serde_json",
  "serde_yaml",
+]
+
+[[package]]
+name = "eda-cypress"
+version = "0.1.0"
+dependencies = [
+ "eda-interchange",
+ "eda-model",
+ "eda-place",
+ "serde_json",
 ]
 
 [[package]]

@@ -16,7 +16,7 @@
 //! ```
 
 use eda::prelude::*;
-use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, to_circuit_json, PlaceOptions};
+use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, to_circuit_json, PlaceOptions, Placer};
 use eda::ExportMeta;
 use eda_model::ir::Stage;
 use std::path::{Path, PathBuf};
@@ -31,6 +31,8 @@ struct Args {
     design: Option<PathBuf>,
     use_pcb_cli: bool,
     pl: Option<PathBuf>,
+    /// Placement generator: "anneal" (eda-place, default) or "cypress".
+    placer: String,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -42,6 +44,7 @@ fn parse_args() -> Result<Args, String> {
     let mut design = None;
     let mut use_pcb_cli = false;
     let mut pl = None;
+    let mut placer = "anneal".to_string();
     while let Some(a) = it.next() {
         match a.as_str() {
             "-o" | "--out" => out = PathBuf::from(it.next().ok_or("-o needs a path")?),
@@ -49,15 +52,16 @@ fn parse_args() -> Result<Args, String> {
             "--design" => design = Some(PathBuf::from(it.next().ok_or("--design needs a path")?)),
             "--pcb-cli" => use_pcb_cli = true,
             "--pl" => pl = Some(PathBuf::from(it.next().ok_or("--pl needs a path")?)),
+            "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress")?,
             s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
             s => intent = Some(PathBuf::from(s)),
         }
     }
-    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl })
+    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl, placer })
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|export|check|import-pl> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|export|check|import-pl> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -139,8 +143,16 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
 }
 
 fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
-    let opts = PlaceOptions { seed: cx.args.seed, ..Default::default() };
-    let placed = place(design, &cx.model, &opts)?;
+    let placed = match cx.args.placer.as_str() {
+        "cypress" => {
+            // Cypress needs a board extent: seed it with our placer's
+            // outline (auto-sized) when the design has none yet.
+            let seeded = if design.placement.is_some() { design.clone() } else { place(design, &cx.model, &PlaceOptions { seed: cx.args.seed, moves_per_part: 0, ..Default::default() })? };
+            eda::Cypress(eda::CypressOptions::default()).place(&seeded, &cx.model, cx.args.seed)?
+        }
+        "anneal" => place(design, &cx.model, &PlaceOptions { seed: cx.args.seed, ..Default::default() })?,
+        other => return Err(vec![CheckResult::fail("cli", other, "unknown --placer (anneal|cypress)")]),
+    };
     save_design(&cx.args.out, &placed)?;
     let checks = check_placement(&placed, &cx.model);
     let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model) });

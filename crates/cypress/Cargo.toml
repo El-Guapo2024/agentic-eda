@@ -1,0 +1,10 @@
+[package]
+name = "eda-cypress"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde_json = { workspace = true }
+eda-model = { path = "../model" }
+eda-interchange = { path = "../interchange" }
+eda-place = { path = "../place" }

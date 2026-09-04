@@ -16,3 +16,4 @@ eda-interchange = { path = "../interchange" }
 eda-router = { path = "../router" }
 eda-place = { path = "../place" }
 eda-logger = { path = "../logger" }
+eda-cypress = { path = "../cypress" }
