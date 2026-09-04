@@ -145,10 +145,11 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
 fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
     let placed = match cx.args.placer.as_str() {
         "cypress" => {
-            // Cypress needs a board extent: seed it with our placer's
-            // outline (auto-sized) when the design has none yet.
-            let seeded = if design.placement.is_some() { design.clone() } else { place(design, &cx.model, &PlaceOptions { seed: cx.args.seed, moves_per_part: 0, ..Default::default() })? };
-            eda::Cypress(eda::CypressOptions::default()).place(&seeded, &cx.model, cx.args.seed)?
+            // No fallback: Cypress needs a board extent from the intent.
+            if design.placement.is_none() && cx.model.board.outline.is_none() {
+                return Err(vec![CheckResult::fail("cypress_precondition", "board.outline", "Cypress needs `board.outline` in the intent (or an existing placement); no auto-sizing")]);
+            }
+            eda::Cypress(eda::CypressOptions::default()).place(design, &cx.model, cx.args.seed)?
         }
         "anneal" => place(design, &cx.model, &PlaceOptions { seed: cx.args.seed, ..Default::default() })?,
         other => return Err(vec![CheckResult::fail("cli", other, "unknown --placer (anneal|cypress)")]),
