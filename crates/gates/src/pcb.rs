@@ -230,6 +230,7 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
         out.push(CheckResult::pass("placement_refdes_clear"));
     }
 
+
     // Proximity is courtyard edge-to-edge: "C1 within 5 mm of U1" means
     // the gap between their bodies, not between their centres (which a
     // large package could never satisfy).

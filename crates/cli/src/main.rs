@@ -159,7 +159,8 @@ fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
         other => return Err(vec![CheckResult::fail("cli", other, "unknown --placer (anneal|cypress)")]),
     };
     save_design(&cx.args.out, &placed)?;
-    let checks = check_placement(&placed, &cx.model);
+    let mut checks = check_placement(&placed, &cx.model);
+    checks.extend(eda::preflight(&placed, &cx.model, &cx.model.board));
     let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model) });
     cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
     if !print_checks("placement gates", &checks) {
@@ -297,7 +298,8 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
             let pl = std::fs::read_to_string(&pl_path).map_err(|e| vec![CheckResult::fail("io", pl_path.display().to_string(), e.to_string())])?;
             let placed = eda::from_bookshelf_pl(&pl, &d, &cx.model, BOOKSHELF_UNIT_UM)?;
             save_design(&cx.args.out, &placed)?;
-            let checks = check_placement(&placed, &cx.model);
+            let mut checks = check_placement(&placed, &cx.model);
+    checks.extend(eda::preflight(&placed, &cx.model, &cx.model.board));
             let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model), "source": "bookshelf" });
             cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
             println!("hpwl_um {}", hpwl(&placed, &cx.model).unwrap_or(-1));
@@ -313,7 +315,7 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
                 ok &= print_checks("schematic gates", &check_schematic(&d, &cx.model));
             }
             if d.placement.is_some() {
-                ok &= print_checks("placement gates", &check_placement(&d, &cx.model));
+                ok &= print_checks("placement gates", &{ let mut c = check_placement(&d, &cx.model); c.extend(eda::preflight(&d, &cx.model, &cx.model.board)); c });
             }
             if d.routing.is_some() {
                 ok &= print_checks("routing gates", &check_routing(&d, &cx.model));

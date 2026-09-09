@@ -424,6 +424,12 @@ impl Grid {
         }
     }
 
+    /// True if the cell holds pad copper of `net` on `layer`.
+    pub fn is_pad_of(&self, cx: i64, cy: i64, layer: u8, net: &str) -> bool {
+        let Some(net_id) = self.net_id_ro(net) else { return false };
+        self.idx(cx, cy, layer).and_then(|i| self.occ[i].as_ref()).map(|c| c.kind == Occ::Pad && c.net_id == net_id).unwrap_or(false)
+    }
+
     /// True if pad copper lies within the via-in-pad radius of the cell.
     #[inline]
     pub fn via_near_pad(&self, cx: i64, cy: i64, layer: u8) -> bool {

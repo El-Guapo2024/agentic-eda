@@ -278,45 +278,17 @@ struct EdgeFailure {
     pocket: Vec<(i64, i64, u8)>,
 }
 
-pub fn route(
-    design: &Design,
-    model: &ConstraintModel,
-    rules: &RouteRules,
-    seed: u64,
-) -> Result<Design, Vec<CheckResult>> {
-    match route_partial(design, model, rules, seed) {
-        (Some(d), fails) if fails.is_empty() => Ok(d),
-        (_, fails) => Err(fails),
-    }
+/// The routing obstacle map for a placement: every pad registered with
+/// exact geometry, the between-pad strips hard-blocked, the refdes label
+/// keep-outs marked, on the effective (possibly refined) grid.
+pub(crate) struct ObstacleMap {
+    pub grid: Grid,
+    pub pads: HashMap<String, PadInfo>,
+    pub rules: RouteRules,
+    pub num_layers: usize,
 }
 
-/// Like [`route`], but on failure also returns whatever was routed (for
-/// review/rendering). `None` design means a precondition failed before
-/// routing started. `route` is the gated contract; use this for diagnostics.
-pub fn route_partial(
-    design: &Design,
-    model: &ConstraintModel,
-    rules: &RouteRules,
-    seed: u64,
-) -> (Option<Design>, Vec<CheckResult>) {
-    let placement = match &design.placement {
-        Some(p) => p,
-        None => {
-            return (None, vec![CheckResult::fail(
-                "route_precondition",
-                "design",
-                "placement section is required before routing",
-            )])
-        }
-    };
-    if placement.outline.len() < 3 {
-        return (None, vec![CheckResult::fail(
-            "route_precondition",
-            "design.placement.outline",
-            "board outline needs at least 3 points",
-        )]);
-    }
-
+pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &ConstraintModel, rules: &RouteRules) -> Result<ObstacleMap, Vec<CheckResult>> {
     let dbg = std::env::var_os("EDA_ROUTE_DEBUG").is_some();
     let t_start = std::time::Instant::now();
     // --- 1. pad geometry -----------------------------------------------
@@ -359,7 +331,7 @@ pub fn route_partial(
         }
     }
     if !precondition.is_empty() {
-        return (None, precondition);
+        return Err(precondition);
     }
 
     // The configured grid is a design-rule pitch, not necessarily a
@@ -409,6 +381,149 @@ pub fn route_partial(
     }
     block_pad_gaps(&mut grid, &pads);
     penalise_refdes_boxes(&mut grid, placement, model, num_layers);
+    Ok(ObstacleMap { grid, pads, rules: eff_rules, num_layers })
+}
+
+
+/// Placement-stage routability preflight, with the router's own legality
+/// rules and obstacle map (pads, between-pad strips, label keep-outs, board
+/// edge) and no tracks yet: every pad must be able to leave its pocket. A
+/// pad passes when a flood over passable track cells on one of its layers
+/// reaches open space (`REACH_OPEN` cells), a legal via site (so the net
+/// can change layer), or a pad of its own net. Otherwise the pocket is
+/// closed by placement alone and no rip-up can ever open it (l2 with the
+/// Cypress placement: decoupling caps legalised flush against U2's pin
+/// column) — `placement_pad_reach` fails and the placement goes back.
+pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -> Vec<CheckResult> {
+    const REACH_OPEN: usize = 2_000;
+    let Some(placement) = design.placement.as_ref() else {
+        return vec![CheckResult::fail("placement_pad_reach", "design", "no placement section")];
+    };
+    if placement.outline.len() < 3 {
+        return vec![CheckResult::fail("placement_pad_reach", "design.placement.outline", "board outline needs at least 3 points")];
+    }
+    let ObstacleMap { mut grid, pads, rules: eff_rules, num_layers } = match obstacle_map(placement, model, rules) {
+        Ok(m) => m,
+        Err(f) => return f,
+    };
+    let rules = &eff_rules;
+    grid.soft_active = true;
+    grid.soft_via_active = true;
+    let mut out = Vec::new();
+    let mut refs: Vec<&String> = pads.keys().collect();
+    refs.sort();
+    for refpin in refs {
+        let pad = &pads[refpin];
+        if pad.net.starts_with("__unassigned__") {
+            continue;
+        }
+        let mut reached = false;
+        let mut best_pocket = usize::MAX;
+        for &l in &pad.layers {
+            let mut seen: HashSet<(i64, i64)> = HashSet::new();
+            let mut queue: VecDeque<(i64, i64)> = VecDeque::new();
+            for c in pad_interior_cells(&grid, pad, rules) {
+                if seen.insert(c) {
+                    queue.push_back(c);
+                }
+            }
+            let mut exit = false;
+            while let Some((cx, cy)) = queue.pop_front() {
+                if seen.len() >= REACH_OPEN {
+                    exit = true;
+                    break;
+                }
+                // A legal via site: via copper clear here on this layer and
+                // on some other layer, and not over any pad.
+                if num_layers > 1
+                    && !grid.via_near_pad(cx, cy, l)
+                    && grid.passable_as(cx, cy, l, &pad.net, Occ::Via)
+                    && (0..num_layers as u8).any(|o| o != l && !grid.via_near_pad(cx, cy, o) && grid.passable_as(cx, cy, o, &pad.net, Occ::Via))
+                {
+                    exit = true;
+                    break;
+                }
+                // Another pad of the same net.
+                if grid.is_pad_of(cx, cy, l, &pad.net) && !pad_interior_cells(&grid, pad, rules).contains(&(cx, cy)) {
+                    exit = true;
+                    break;
+                }
+                for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let n = (cx + dx, cy + dy);
+                    if !seen.contains(&n) && grid.passable_as(n.0, n.1, l, &pad.net, Occ::Track) {
+                        seen.insert(n);
+                        queue.push_back(n);
+                    }
+                }
+            }
+            if exit {
+                reached = true;
+                break;
+            }
+            best_pocket = best_pocket.min(seen.len());
+        }
+        if !reached {
+            let um = best_pocket as f64 * (rules.grid as f64 / 1000.0).powi(2);
+            out.push(CheckResult::fail(
+                "placement_pad_reach",
+                refpin,
+                format!("pad is sealed in by placement: its free pocket is {best_pocket} cells (~{um:.1} mm²) with no via site and no same-net pad reachable"),
+            ));
+        }
+    }
+    if out.is_empty() {
+        out.push(CheckResult::pass("placement_pad_reach"));
+    }
+    out
+}
+
+pub fn route(
+    design: &Design,
+    model: &ConstraintModel,
+    rules: &RouteRules,
+    seed: u64,
+) -> Result<Design, Vec<CheckResult>> {
+    match route_partial(design, model, rules, seed) {
+        (Some(d), fails) if fails.is_empty() => Ok(d),
+        (_, fails) => Err(fails),
+    }
+}
+
+/// Like [`route`], but on failure also returns whatever was routed (for
+/// review/rendering). `None` design means a precondition failed before
+/// routing started. `route` is the gated contract; use this for diagnostics.
+pub fn route_partial(
+    design: &Design,
+    model: &ConstraintModel,
+    rules: &RouteRules,
+    seed: u64,
+) -> (Option<Design>, Vec<CheckResult>) {
+    let placement = match &design.placement {
+        Some(p) => p,
+        None => {
+            return (None, vec![CheckResult::fail(
+                "route_precondition",
+                "design",
+                "placement section is required before routing",
+            )])
+        }
+    };
+    if placement.outline.len() < 3 {
+        return (None, vec![CheckResult::fail(
+            "route_precondition",
+            "design.placement.outline",
+            "board outline needs at least 3 points",
+        )]);
+    }
+
+    let dbg = std::env::var_os("EDA_ROUTE_DEBUG").is_some();
+    let t_start = std::time::Instant::now();
+    let ObstacleMap { mut grid, pads, rules: eff_rules, num_layers: _ } = match obstacle_map(placement, model, rules) {
+        Ok(m) => m,
+        Err(f) => return (None, f),
+    };
+    let rules = &eff_rules;
+    if dbg { eprintln!("route: t obstacle map {:?}", t_start.elapsed()); }
     // EDA_ROUTE_PROBE=x_um,y_um,layer,net dumps what the grid knows about
     // the cell nearest that board point once the obstacle map is built.
     if let Ok(spec) = std::env::var("EDA_ROUTE_PROBE") {
@@ -769,8 +884,10 @@ fn route_net(
                         eprintln!("goal ({gx},{gy},{gl}) passable={}", grid.passable(gx, gy, gl, net));
                     }
                     eprintln!("around goal {:?}:\n{}", goal, grid.dump_around(goal.0, goal.1, goal.2, net, 8));
-                    eprintln!("why-blocked around goal:\n{}", grid.dump_why(goal.0, goal.1, goal.2, net, 8));
-                    eprintln!("why-blocked around start (B hard, S soft/refdes, E edge, N foreign copper):\n{}", grid.dump_why(start.0, start.1, start.2, net, 8));
+                    let dr: i64 = std::env::var("EDA_ROUTE_DEBUG_R").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+                    eprintln!("why-blocked around goal:\n{}", grid.dump_why(goal.0, goal.1, goal.2, net, dr));
+                    let dr: i64 = std::env::var("EDA_ROUTE_DEBUG_R").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+                    eprintln!("why-blocked around start (B hard, S soft/refdes, E edge, N foreign copper):\n{}", grid.dump_why(start.0, start.1, start.2, net, dr));
                     for l in 0..grid.num_layers as u8 {
                         eprintln!("layer {l} around start (passable-as-track: P):\n{}", grid.dump_around(start.0, start.1, l, net, 8));
                         let mut row = String::new();
@@ -790,11 +907,27 @@ fn route_net(
                 // large one means the search roamed the board and it is
                 // the goal that is walled in.
                 let r = grid.clearance_cells + 1;
-                let goal_cells: Vec<(i64, i64, u8)> = goals.iter().copied().collect();
-                let pocket = if explored.len() < 2_000 { &explored } else { &goal_cells };
-                let mut fence: Vec<String> = grid.nets_bordering(pocket, r).into_iter().filter(|n| n != net).collect();
+                let pocket: Vec<(i64, i64, u8)> = if explored.len() < 2_000 {
+                    explored
+                } else {
+                    // The goal is the enclosed end: search back from it
+                    // toward the start (with the same keep-outs) — the
+                    // cells that search can reach are the goal's pocket,
+                    // and the copper bordering *that* is the real fence.
+                    // Radius-r around the goal cells alone kept picking
+                    // nets one cell away while the wall sat further out
+                    // (l2 BOOT0: six rounds ripping the wrong nets).
+                    let start_set: std::collections::HashSet<(i64, i64, u8)> = starts.iter().copied().collect();
+                    grid.soft_active = true;
+                    grid.soft_via_active = true;
+                    let (_, back) = astar::route_to_any_ex(grid, net, &goals.iter().copied().collect::<Vec<_>>(), &start_set, &[(start.0, start.1)]);
+                    grid.soft_active = false;
+                    grid.soft_via_active = false;
+                    if back.len() < 2_000 { back } else { goals.iter().copied().collect() }
+                };
+                let mut fence: Vec<String> = grid.nets_bordering(&pocket, r).into_iter().filter(|n| n != net).collect();
                 fence.sort();
-                return Err(EdgeFailure { start, goal, fence, pocket: pocket.clone() });
+                return Err(EdgeFailure { start, goal, fence, pocket });
             }
         }
     }
