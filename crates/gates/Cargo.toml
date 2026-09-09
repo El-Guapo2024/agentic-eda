@@ -7,3 +7,4 @@ edition = "2021"
 eda-model = { path = "../model" }
 eda-engine = { path = "../engine" }
 eda-layout = { path = "../layout" }
+eda-render = { path = "../render" }

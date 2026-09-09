@@ -1,0 +1,21 @@
+GATEBOX U2:ref TextBox { x0: 59.69, y0: 234.64, x1: 61.61, y1: 236.23999999999998 }
+GATEBOX U2:value TextBox { x0: 59.69, y0: 266.44, x1: 62.209999999999994, y1: 267.84 }
+PIN 1 name="VDD" side=Top tx=2.540 ty=1.800 abs_tx=62.230 abs_ty=238.020 anchor=middle font=1.1
+PIN 3 name="VDDA" side=Top tx=5.080 ty=1.800 abs_tx=64.770 abs_ty=238.020 anchor=middle font=1.1
+PIN 19 name="VDD2" side=Top tx=7.620 ty=1.800 abs_tx=67.310 abs_ty=238.020 anchor=middle font=1.1
+PIN 2 name="VSS" side=Bottom tx=2.540 ty=27.140 abs_tx=62.230 abs_ty=263.360 anchor=middle font=1.1
+PIN 4 name="VSSA" side=Bottom tx=5.080 ty=27.140 abs_tx=64.770 abs_ty=263.360 anchor=middle font=1.1
+PIN 20 name="GND2" side=Bottom tx=7.620 ty=27.140 abs_tx=67.310 abs_ty=263.360 anchor=middle font=1.1
+PIN 12 name="IMU_INT" side=Left tx=0.800 ty=4.210 abs_tx=60.490 abs_ty=240.430 anchor=start font=1.1
+PIN 5 name="NRST" side=Left tx=0.800 ty=8.020 abs_tx=60.490 abs_ty=244.240 anchor=start font=1.1
+PIN 6 name="BOOT0" side=Left tx=0.800 ty=10.560 abs_tx=60.490 abs_ty=246.780 anchor=start font=1.1
+PIN 7 name="SWDIO" side=Left tx=0.800 ty=14.370 abs_tx=60.490 abs_ty=250.590 anchor=start font=1.1
+PIN 8 name="SWCLK" side=Left tx=0.800 ty=18.180 abs_tx=60.490 abs_ty=254.400 anchor=start font=1.1
+PIN 9 name="PA0" side=Left tx=0.800 ty=21.990 abs_tx=60.490 abs_ty=258.210 anchor=start font=1.1
+PIN 10 name="SCL" side=Left tx=0.800 ty=24.530 abs_tx=60.490 abs_ty=260.750 anchor=start font=1.1
+PIN 11 name="SDA" side=Right tx=9.360 ty=4.210 abs_tx=69.050 abs_ty=240.430 anchor=end font=1.1
+PIN 13 name="ADC1" side=Right tx=9.360 ty=8.020 abs_tx=69.050 abs_ty=244.240 anchor=end font=1.1
+PIN 14 name="ADC2" side=Right tx=9.360 ty=11.830 abs_tx=69.050 abs_ty=248.050 anchor=end font=1.1
+PIN 15 name="BUZZ_DRIVE" side=Right tx=9.360 ty=16.910 abs_tx=69.050 abs_ty=253.130 anchor=end font=1.1
+PIN 17 name="USB_DP" side=Right tx=9.360 ty=20.720 abs_tx=69.050 abs_ty=256.940 anchor=end font=1.1
+PIN 18 name="USB_DM" side=Right tx=9.360 ty=24.530 abs_tx=69.050 abs_ty=260.750 anchor=end font=1.1

@@ -195,7 +195,7 @@ fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64) {
 
 fn write_lib_symbol(out: &mut String, sym: &SymbolInstance, part: &Part) {
     let lib_id = format!("eda:{}", sym.id);
-    let (width, height) = eda_engine::geometry::node_size(part.pins.len());
+    let (width, height) = eda_engine::geometry::node_size(part);
     let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height);
     let mut pin_of_port: Vec<Option<usize>> = vec![None; ports.len()];
     for (pin_idx, port_idx) in pin_port.iter().enumerate() {
@@ -441,7 +441,7 @@ mod tests {
         let sch = design.schematic.as_ref().unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();
-        let (width, height) = eda_engine::geometry::node_size(part.pins.len());
+        let (width, height) = eda_engine::geometry::node_size(part);
         let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height);
         // VIN is pin "1" -> some port; compute expected world stub tip.
         let port_idx = pin_port[0].unwrap();

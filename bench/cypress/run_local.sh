@@ -9,12 +9,12 @@ cd "$(dirname "$0")/../.."
 SEED="${1:-0}"
 cargo build -q -p eda-cli
 OUT="${CYPRESS_OUT:-$(mktemp -d /tmp/eda_bench_cypress.XXXXXX)}"
-REPORT=bench/cypress/report_local.md
+REPORT="${CYPRESS_REPORT:-bench/cypress/report_local.md}"
 K=/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli
 {
   echo "# Cypress (native CPU) vs eda-place"
   echo
-  echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ) · seed $SEED · Cypress CPU build, judged by eda-gates"
+  echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ) · seed $SEED · Cypress CPU build, stop_overflow ${CYPRESS_STOP_OVERFLOW:-0.30}, judged by eda-gates"
   echo
   echo "| intent | parts | eda-place hpwl (µm) | cypress hpwl (µm) | ratio | cypress placement gate | routed after cypress | kicad DRC |"
   echo "|---|---|---|---|---|---|---|---|"
@@ -39,8 +39,14 @@ PY
 )
   mkdir -p "$d/cypress"
   python3 bench/cypress/local_config.py "$d/bookshelf/$n.aux" "$d/cypress/results" "$((1000+SEED))" > "$d/cypress/config.json"
-  if ! ( cd "${CYPRESS_INSTALL:-$HOME/ws/Cypress/install}" && python dreamplace/Placer.py "$d/cypress/config.json" ) >"$d/cypress/cypress.log" 2>&1; then
+  CYI="${CYPRESS_INSTALL:-$HOME/ws/Cypress/install}"
+  # run inside the per-board dir: Placer.py writes DREAMPlace.log to its cwd
+  if ! ( cd "$d/cypress" && PYTHONPATH="$CYI" python "$CYI/dreamplace/Placer.py" "$d/cypress/config.json" ) >"$d/cypress/cypress.log" 2>&1; then
     echo "| $n | $parts | $ours | cypress failed (see $d/cypress/cypress.log) | - | - | - | - |" >> "$REPORT"; continue
+  fi
+  # Cypress exits 0 on divergence; refuse that like eda-cypress does
+  if grep "Final PPA" "$d/cypress/DREAMPlace.log" | tail -1 | grep -qE "'hpwl': (inf|nan)" || grep -q "skip legalization" "$d/cypress/DREAMPlace.log"; then
+    echo "| $n | $parts | $ours | cypress diverged | - | - | - | - |" >> "$REPORT"; continue
   fi
   cp "$d/cypress/results/$n/$n.gp.pl" "$d/cypress/$n.gp.pl" 2>/dev/null || { echo "| $n | $parts | $ours | no .pl written | - | - | - | - |" >> "$REPORT"; continue; }
   mkdir -p "$d/cy"

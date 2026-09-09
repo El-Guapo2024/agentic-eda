@@ -55,6 +55,187 @@ fn pad_interior_cells(grid: &Grid, pad: &PadInfo, rules: &RouteRules) -> Vec<(i6
     out
 }
 
+/// Grid cells a pad's copper is rasterised over: every cell whose own
+/// square intersects the pad rectangle (the pad edge never lies more
+/// than half a cell past an occupied cell centre — the invariant `Grid`'s
+/// clearance arithmetic relies on), plus the centre cell.
+fn pad_cells(grid: &Grid, pad: &PadInfo) -> Vec<(i64, i64)> {
+    let (x0, y0) = grid.to_cell(Point { x: pad.pt.x - pad.size.0 / 2, y: pad.pt.y - pad.size.1 / 2 });
+    let (x1, y1) = grid.to_cell(Point { x: pad.pt.x + pad.size.0 / 2, y: pad.pt.y + pad.size.1 / 2 });
+    let mut out = vec![grid.to_cell(pad.pt)];
+    for gx in x0..=x1 {
+        for gy in y0..=y1 {
+            out.push((gx, gy));
+        }
+    }
+    out
+}
+
+/// Hard-block the gap strip between two SMD pads of one footprint whose
+/// copper is closer than `BETWEEN_PADS_MAX_GAP`: the strip lies under the
+/// component body, and a track threading it (any net, the pads' own
+/// included) is what a reviewer sends back. Through-hole pin rows are
+/// exempt — routing between header pins is standard practice.
+const BETWEEN_PADS_MAX_GAP: i64 = 2000;
+
+/// Smallest facing-edge gap between two SMD pads of the same footprint
+/// (adjacent pins on the same package), µm. `i64::MAX` when the board has
+/// no multi-pad SMD footprint at all (e.g. every part is a through-hole
+/// connector). Used to decide whether the routing grid needs refining to
+/// escape a fine-pitch part — see the call site in `route_partial`.
+fn smallest_same_footprint_gap(pads: &HashMap<String, PadInfo>) -> i64 {
+    let mut by_fp: HashMap<&str, Vec<&PadInfo>> = HashMap::new();
+    for (refpin, p) in pads {
+        if p.geom.through_hole {
+            continue;
+        }
+        let r = refpin.rsplit_once('.').map(|(r, _)| r).unwrap_or(refpin);
+        by_fp.entry(r).or_default().push(p);
+    }
+    let mut min_gap = i64::MAX;
+    for fpads in by_fp.values() {
+        for i in 0..fpads.len() {
+            for j in i + 1..fpads.len() {
+                let (a, b) = (fpads[i], fpads[j]);
+                let ra = (a.pt.x - a.size.0 / 2, a.pt.y - a.size.1 / 2, a.pt.x + a.size.0 / 2, a.pt.y + a.size.1 / 2);
+                let rb = (b.pt.x - b.size.0 / 2, b.pt.y - b.size.1 / 2, b.pt.x + b.size.0 / 2, b.pt.y + b.size.1 / 2);
+                let (oy0, oy1) = (ra.1.max(rb.1), ra.3.min(rb.3));
+                let (ox0, ox1) = (ra.0.max(rb.0), ra.2.min(rb.2));
+                let gap = if oy1 > oy0 && (ra.2 <= rb.0 || rb.2 <= ra.0) {
+                    if ra.2 <= rb.0 { rb.0 - ra.2 } else { ra.0 - rb.2 }
+                } else if ox1 > ox0 && (ra.3 <= rb.1 || rb.3 <= ra.1) {
+                    if ra.3 <= rb.1 { rb.1 - ra.3 } else { ra.1 - rb.3 }
+                } else {
+                    continue;
+                };
+                min_gap = min_gap.min(gap);
+            }
+        }
+    }
+    min_gap
+}
+
+fn block_pad_gaps(grid: &mut Grid, pads: &HashMap<String, PadInfo>) {
+    let mut by_fp: HashMap<&str, Vec<&PadInfo>> = HashMap::new();
+    for (refpin, p) in pads {
+        if p.geom.through_hole {
+            continue;
+        }
+        let r = refpin.rsplit_once('.').map(|(r, _)| r).unwrap_or(refpin);
+        by_fp.entry(r).or_default().push(p);
+    }
+    for fpads in by_fp.values() {
+        for i in 0..fpads.len() {
+            for j in i + 1..fpads.len() {
+                let (a, b) = (fpads[i], fpads[j]);
+                let ra = (a.pt.x - a.size.0 / 2, a.pt.y - a.size.1 / 2, a.pt.x + a.size.0 / 2, a.pt.y + a.size.1 / 2);
+                let rb = (b.pt.x - b.size.0 / 2, b.pt.y - b.size.1 / 2, b.pt.x + b.size.0 / 2, b.pt.y + b.size.1 / 2);
+                let (ox0, ox1) = (ra.0.max(rb.0), ra.2.min(rb.2));
+                let (oy0, oy1) = (ra.1.max(rb.1), ra.3.min(rb.3));
+                // Strip between the facing edges, limited to the pads'
+                // shared extent along the other axis.
+                let strip = if oy1 > oy0 && (ra.2 <= rb.0 || rb.2 <= ra.0) {
+                    let (gx0, gx1) = if ra.2 <= rb.0 { (ra.2, rb.0) } else { (rb.2, ra.0) };
+                    if gx1 - gx0 > BETWEEN_PADS_MAX_GAP { continue }
+                    (gx0, oy0, gx1, oy1)
+                } else if ox1 > ox0 && (ra.3 <= rb.1 || rb.3 <= ra.1) {
+                    let (gy0, gy1) = if ra.3 <= rb.1 { (ra.3, rb.1) } else { (rb.3, ra.1) };
+                    if gy1 - gy0 > BETWEEN_PADS_MAX_GAP { continue }
+                    (ox0, gy0, ox1, gy1)
+                } else {
+                    continue;
+                };
+                // Only adjacent pairs: a strip that crosses a third pad of
+                // the footprint (pins 1 and 3 of a row) is not a gap.
+                let crosses_other = fpads.iter().enumerate().any(|(k, o)| {
+                    k != i && k != j && {
+                        let ro = (o.pt.x - o.size.0 / 2, o.pt.y - o.size.1 / 2, o.pt.x + o.size.0 / 2, o.pt.y + o.size.1 / 2);
+                        ro.0 < strip.2 && ro.2 > strip.0 && ro.1 < strip.3 && ro.3 > strip.1
+                    }
+                });
+                if crosses_other {
+                    continue;
+                }
+                let (c0x, c0y) = grid.to_cell(Point { x: strip.0, y: strip.1 });
+                let (c1x, c1y) = grid.to_cell(Point { x: strip.2, y: strip.3 });
+                for cx in c0x..=c1x {
+                    for cy in c0y..=c1y {
+                        let p = grid.to_point(cx, cy);
+                        if p.x > strip.0 && p.x < strip.2 && p.y > strip.1 && p.y < strip.3 {
+                            for &l in &a.layers {
+                                grid.set_blocked(cx, cy, l, true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Per-cell surcharge for a track under a refdes label once the strict
+/// pass has given up: 8 steps per cell, so crossing a ~600 µm label costs
+/// about a 2 mm detour. 16 and 24 were tried on the corpus and changed
+/// nothing the strict pass hadn't already decided.
+const REFDES_PENALTY: u8 = 8;
+
+/// Mark the cells under each refdes label as a soft keep-out (enforced on
+/// the strict pass, penalised on the fallback). Silkscreen text over
+/// copper is legal, but the label becomes unreadable; the judge renders
+/// each refdes centred just above its courtyard on the part's own side
+/// (see `eda_judge::render_board_svg` and `eda_gates::pcb::refdes_box`,
+/// which this mirrors).
+fn penalise_refdes_boxes(grid: &mut Grid, placement: &eda_model::ir::PlacementSection, model: &ConstraintModel, num_layers: usize) {
+    let penalty = REFDES_PENALTY;
+    let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+    for p in &placement.outline {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    let m = 2000;
+    let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
+    let fs = (vw.min(vh) / 40).max(600);
+    for fp in &placement.footprints {
+        let Some(part) = model.part(&fp.id) else { continue };
+        let Some((cx0, cy0, cx1, _)) = eda_model::footprint::placed_courtyard(model, part, fp) else { continue };
+        let baseline = cy0 - 200;
+        let half_w = (fs * 6 / 10) * fp.id.chars().count() as i64 / 2;
+        let cx = (cx0 + cx1) / 2;
+        let bx = (cx - half_w, baseline - fs * 3 / 4, cx + half_w, baseline + fs / 5);
+        let layer = match fp.side {
+            eda_model::ir::Side::Top => 0u8,
+            eda_model::ir::Side::Bottom => (num_layers - 1) as u8,
+        };
+        // Two separate dilations, matching the two shapes the gate itself
+        // checks against the label box: a track's centreline (dilated by
+        // its own half-width) and a via's copper (dilated by the via
+        // radius). Using the via radius for both — as a single keep-out
+        // used to — over-blocks the track case by up to a via-vs-track
+        // width difference on every side, which is enough to wall off a
+        // pad on a dense board where a label's soft box sits close to a
+        // neighbour's escape route with no other legal cell to spare.
+        let dt = grid.track_half_um;
+        let dv = grid.via_half_um;
+        let (t0x, t0y) = grid.to_cell(Point { x: bx.0 - dt, y: bx.1 - dt });
+        let (t1x, t1y) = grid.to_cell(Point { x: bx.2 + dt, y: bx.3 + dt });
+        for gx in t0x..=t1x {
+            for gy in t0y..=t1y {
+                grid.add_penalty(gx, gy, layer, penalty);
+                grid.set_soft(gx, gy, layer);
+            }
+        }
+        let (v0x, v0y) = grid.to_cell(Point { x: bx.0 - dv, y: bx.1 - dv });
+        let (v1x, v1y) = grid.to_cell(Point { x: bx.2 + dv, y: bx.3 + dv });
+        for gx in v0x..=v1x {
+            for gy in v0y..=v1y {
+                grid.set_soft_via(gx, gy, layer);
+            }
+        }
+    }
+}
+
 /// One routing step: connect `a_pin` to the net's already-connected
 /// copper (pads of earlier steps plus every track/via routed so far);
 /// `b_pin` is the nearest earlier pin, used for the heuristic and for
@@ -68,8 +249,13 @@ struct Edge {
 /// Grid cell + physical layer of a pad, as an A* endpoint.
 type CellLayer = (i64, i64, u8);
 /// `route_net`'s failure payload: the (start, goal) of the edge that
-/// couldn't be routed, for rip-up victim selection.
-type EdgeFailure = (CellLayer, CellLayer);
+/// couldn't be routed and the nets fencing in the pocket the search was
+/// stuck in, for rip-up victim selection.
+struct EdgeFailure {
+    start: CellLayer,
+    goal: CellLayer,
+    fence: Vec<String>,
+}
 
 pub fn route(
     design: &Design,
@@ -153,6 +339,35 @@ pub fn route_partial(
         return (None, precondition);
     }
 
+    // The configured grid is a design-rule pitch, not necessarily a
+    // resolution the router can escape fine-pitch parts on: a TSSOP at a
+    // 650 um pin pitch, say, has no grid cell landing on the centre line
+    // between two adjacent pads at a 254 um grid, and the pad-to-pad gap
+    // (pitch minus pad size) is regularly smaller than one such cell, so
+    // the router sees a wall around the part instead of the real,
+    // routable gaps beside it. Halving the grid (still coarser than most
+    // clearances, so correctness is untouched) gives escape routing a
+    // real shot at those gaps without the cost of an arbitrary GCD-of-
+    // pitches grid, which for typical pitch/grid combinations (654 vs
+    // 254, gcd 2) would be absurdly fine.
+    //
+    // This is only worth the (substantial — up to ~4x cells, ~4x search
+    // cost) resolution increase when the board actually has a fine-pitch
+    // part: scan same-footprint adjacent SMD pad pairs (the same notion
+    // `block_pad_gaps` uses below) for the smallest facing-edge gap, and
+    // only refine the grid when that gap wouldn't fit a single configured
+    // cell. Boards without such a part keep the coarse grid and its
+    // established performance.
+    let min_pad_gap = smallest_same_footprint_gap(&pads);
+    let mut eff_rules = rules.clone();
+    if rules.grid > 130 && min_pad_gap < rules.grid {
+        eff_rules.grid = rules.grid / 2;
+    }
+    if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+        eprintln!("route: min_pad_gap={min_pad_gap} eff_grid={}", eff_rules.grid);
+    }
+    let rules = &eff_rules;
+
     // --- 2. grid & obstacle map -----------------------------------------
     let mut grid = Grid::with_widths(placement.outline.clone(), rules.grid, rules.clearance, rules.track_width, rules.via_diameter, num_layers);
     for pad in pads.values() {
@@ -163,18 +378,14 @@ pub fn route_partial(
         // invariant `Grid`'s clearance arithmetic relies on. Centring on
         // the rounded centre cell instead can miss a row when the pad
         // centre is off-grid.
-        let (x0, y0) = grid.to_cell(Point { x: pad.pt.x - pad.size.0 / 2, y: pad.pt.y - pad.size.1 / 2 });
-        let (x1, y1) = grid.to_cell(Point { x: pad.pt.x + pad.size.0 / 2, y: pad.pt.y + pad.size.1 / 2 });
-        let (cx, cy) = grid.to_cell(pad.pt);
         for &l in &pad.layers {
-            grid.set(cx, cy, l, &pad.net, Occ::Pad);
-            for gx in x0..=x1 {
-                for gy in y0..=y1 {
-                    grid.set(gx, gy, l, &pad.net, Occ::Pad);
-                }
+            for (gx, gy) in pad_cells(&grid, pad) {
+                grid.set(gx, gy, l, &pad.net, Occ::Pad);
             }
         }
     }
+    block_pad_gaps(&mut grid, &pads);
+    penalise_refdes_boxes(&mut grid, placement, model, num_layers);
 
     // --- 3. net -> star edges --------------------------------------------
     let mut edges_by_net: HashMap<String, Vec<Edge>> = HashMap::new();
@@ -243,6 +454,8 @@ pub fn route_partial(
     let mut fails: Vec<CheckResult> = skipped;
     let mut permanently_failed: HashSet<String> = HashSet::new();
 
+    let max_rounds: u32 = 6;
+    let max_victims: usize = 6;
     let iter_budget = 10 * queue.len().max(1) + 50;
     let mut iters = 0usize;
 
@@ -256,29 +469,61 @@ pub fn route_partial(
             continue;
         }
 
-        match route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules) {
+        // Refdes keep-outs are enforced first; a net that can only route
+        // through a label rips up what fenced it in, and pays the label
+        // penalty only once its rip-up budget is spent.
+        let rounds = *ripup_rounds.get(&net).unwrap_or(&0);
+        let mut result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, true);
+        if result.is_err() && rounds >= max_rounds {
+            result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, false);
+        }
+        match result {
             Ok((net_tracks, net_vias)) => {
                 tracks.insert(net.clone(), net_tracks);
                 vias.insert(net.clone(), net_vias);
                 routed_order.retain(|n| n != &net);
                 routed_order.push(net.clone());
             }
-            Err(failure_region) => {
-                let rounds = *ripup_rounds.get(&net).unwrap_or(&0);
-                let margin = 4;
-                let (fa, fb) = failure_region;
-                let victims: Vec<String> = grid
-                    .nets_in_region((fa.0, fa.1), (fb.0, fb.1), margin)
-                    .into_iter()
-                    .filter(|n| n != &net && routed_order.contains(n))
-                    .collect();
-                // Most-recently-routed first, cap at 3.
+            Err(EdgeFailure { start: fa, goal: fb, fence }) => {
+                // Expressed as a physical distance (four cells at the
+                // reference 254 um grid) rather than a fixed cell count:
+                // a finer grid must still search the same real-world
+                // rip-up neighbourhood, or victim selection quietly loses
+                // reach and the router falls back to the refdes-penalty
+                // pass far more often than the coarse grid ever did.
+                let margin = ((4 * 254 + rules.grid - 1) / rules.grid).max(1);
+                // Prefer the nets fencing in the pocket the search was
+                // stuck in (a pad enclosed by its neighbours' escape
+                // tracks is the common case); fall back to everything in
+                // the start-goal region when the search ran out of budget
+                // in the open.
+                let mut victims: Vec<String> = fence.into_iter().filter(|n| routed_order.contains(n)).collect();
+                if victims.is_empty() {
+                    victims = grid
+                        .nets_in_region((fa.0, fa.1), (fb.0, fb.1), margin)
+                        .into_iter()
+                        .filter(|n| n != &net && routed_order.contains(n))
+                        .collect();
+                }
+                // Shortest-airline-first, cap at 3: a short net is cheap to
+                // reroute (little room for its replacement path to get
+                // worse) and, since nets were routed shortest-first to
+                // begin with, ripping one up reopens grid cells that were
+                // claimed early — before the board got congested — so the
+                // net doing the ripping (which by construction lost to
+                // *something* already routed) has more freedom to find a
+                // clean path through them.
                 let mut victims: Vec<String> = victims;
-                victims.sort_by_key(|n| std::cmp::Reverse(routed_order.iter().position(|r| r == n).unwrap_or(0)));
-                victims.truncate(3);
+                victims.sort_by_key(|n| (airline_by_net.get(n).copied().unwrap_or(i64::MAX), n.clone()));
+                victims.truncate(max_victims);
+                if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+                    eprintln!("route: net {net} failed (round {rounds}) region {:?}-{:?}; victims {:?}", fa, fb, victims);
+                }
 
-                if rounds < 2 && !victims.is_empty() {
+                if rounds < max_rounds && !victims.is_empty() {
                     ripup_rounds.insert(net.clone(), rounds + 1);
+                    // The victims are cleared; this net's own partial
+                    // copper from the failed attempt was never committed.
                     for v in &victims {
                         grid.clear_net(v);
                         tracks.remove(v);
@@ -287,6 +532,11 @@ pub fn route_partial(
                         queue.push_back(v.clone());
                     }
                     // Retry this net after its blockers are cleared.
+                    queue.push_front(net.clone());
+                } else if rounds < max_rounds {
+                    // Nothing to rip up: skip straight to the
+                    // penalty-only pass rather than burn rounds.
+                    ripup_rounds.insert(net.clone(), max_rounds);
                     queue.push_front(net.clone());
                 } else {
                     permanently_failed.insert(net.clone());
@@ -322,9 +572,13 @@ fn route_net(
     pads: &HashMap<String, PadInfo>,
     grid: &mut Grid,
     rules: &RouteRules,
+    strict: bool,
 ) -> Result<(Vec<Track>, Vec<Via>), EdgeFailure> {
     let mut tracks = Vec::new();
     let mut vias = Vec::new();
+    // A previous failed attempt may have left this net's partial copper
+    // in the grid (its tracks were never committed); start clean.
+    grid.clear_net(net);
 
     // Pins connected so far (their pad cells are valid goals).
     let mut connected: Vec<&String> = Vec::new();
@@ -338,6 +592,12 @@ fn route_net(
         let (bx, by) = grid.to_cell(pb.pt);
         let start = (ax, ay, pa.layers[0]);
         let goal = (bx, by, pb.layers[0]);
+        // Every layer the start pad's copper actually exists on is a
+        // legal place to begin the track (through-hole pads exist on
+        // every layer); seeding all of them keeps the router from paying
+        // for a via just because it had to pick one layer to call "the"
+        // start.
+        let starts: Vec<(i64, i64, u8)> = pa.layers.iter().map(|&l| (ax, ay, l)).collect();
 
         // Goal set: routed copper of this net plus the pads of connected pins.
         let mut goals: HashSet<(i64, i64, u8)> = grid.routed_cells_of(net).into_iter().collect();
@@ -366,7 +626,37 @@ fn route_net(
             }
         }
 
-        match astar::route_to_any(grid, net, start, &goals, &h_targets) {
+        // Own-net pads that are neither the start nor already connected
+        // are not stepping stones: a track running straight through a pad
+        // it doesn't terminate on is a pass-through, so block them for
+        // this edge (a later edge connects them properly).
+        let stepping_stones: Vec<&PadInfo> = edges
+            .iter()
+            .flat_map(|x| [&x.a_pin, &x.b_pin])
+            .filter(|p| *p != &e.a_pin && !connected.contains(p))
+            .map(|p| &pads[p])
+            .collect();
+        let mut blocked_cells: Vec<(i64, i64, u8)> = Vec::new();
+        for p in &stepping_stones {
+            for (gx, gy) in pad_cells(grid, p) {
+                for &l in &p.layers {
+                    if !grid.is_blocked(gx, gy, l) {
+                        grid.set_blocked(gx, gy, l, true);
+                        blocked_cells.push((gx, gy, l));
+                    }
+                }
+            }
+        }
+        // First with the soft keep-outs (refdes labels) enforced; only if
+        // that leaves no path at all, fall back to paying the penalty.
+        grid.soft_active = strict;
+        let (found, explored) = astar::route_to_any_ex(grid, net, &starts, &goals, &h_targets);
+        grid.soft_active = false;
+        for &(gx, gy, l) in &blocked_cells {
+            grid.set_blocked(gx, gy, l, false);
+        }
+
+        match found {
             Some(path) => {
                 connected.push(&e.a_pin);
                 // Mark cells so later edges of the same star net see this
@@ -388,6 +678,10 @@ fn route_net(
             None => {
                 if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
                     eprintln!("route: net {net} pin {} -> nearest {} failed; start {:?} goals {} targets {:?}", e.a_pin, e.b_pin, start, goals.len(), h_targets);
+                    for &(gx, gy, gl) in &goals {
+                        eprintln!("goal ({gx},{gy},{gl}) passable={}", grid.passable(gx, gy, gl, net));
+                    }
+                    eprintln!("around goal {:?}:\n{}", goal, grid.dump_around(goal.0, goal.1, goal.2, net, 8));
                     for l in 0..grid.num_layers as u8 {
                         eprintln!("layer {l} around start (passable-as-track: P):\n{}", grid.dump_around(start.0, start.1, l, net, 8));
                         let mut row = String::new();
@@ -400,7 +694,18 @@ fn route_net(
                         eprintln!("{row}");
                     }
                 }
-                return Err((start, goal));
+                // The copper bordering the explored pocket is what has to
+                // move; the pocket itself is bounded by clearance, so look
+                // one clearance radius past its cells.
+                // A small explored set means the start is walled in; a
+                // large one means the search roamed the board and it is
+                // the goal that is walled in.
+                let r = grid.clearance_cells + 1;
+                let goal_cells: Vec<(i64, i64, u8)> = goals.iter().copied().collect();
+                let pocket = if explored.len() < 2_000 { &explored } else { &goal_cells };
+                let mut fence: Vec<String> = grid.nets_bordering(pocket, r).into_iter().filter(|n| n != net).collect();
+                fence.sort();
+                return Err(EdgeFailure { start, goal, fence });
             }
         }
     }

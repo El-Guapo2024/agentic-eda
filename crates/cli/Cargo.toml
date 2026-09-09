@@ -13,3 +13,4 @@ serde_yaml = { workspace = true }
 blake3 = { workspace = true }
 eda = { path = "../eda" }
 eda-model = { path = "../model" }
+eda-judge = { path = "../judge" }

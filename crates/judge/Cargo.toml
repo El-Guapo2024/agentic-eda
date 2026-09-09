@@ -1,0 +1,12 @@
+[package]
+name = "eda-judge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = "0.22"
+ureq = { version = "2", features = ["json"] }
+eda-model = { path = "../model" }
+eda-render = { path = "../render" }

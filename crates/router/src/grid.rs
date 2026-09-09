@@ -18,9 +18,31 @@ pub enum Occ {
 struct Cell {
     net_id: u32,
     kind: Occ,
+    /// Half-extent (µm) of the *widest* copper this cell actually holds.
+    ///
+    /// Not derivable from `kind`: a net's escape track legitimately runs
+    /// over its own pad, and `kind` deliberately stays `Pad` there (rip-up
+    /// must not erase the pad obstacle). The track's copper is wider than
+    /// the pad rasterisation's half-cell extent, though, so deriving the
+    /// required separation from `kind` alone under-reported the copper by
+    /// `track_half - grid/2` and let a foreign track sit one cell too
+    /// close. Every write raises this to the widest kind seen.
+    half_um: Um,
 }
 
 const EMPTY: u32 = u32::MAX;
+
+/// KiCad's default board-setup copper-to-edge clearance, enforced by
+/// `kicad-cli pcb drc` against Edge.Cuts.
+pub const EDGE_CLEARANCE_UM: Um = 500;
+
+fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
+    let (ax, ay, bx, by, px, py) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, p.x as f64, p.y as f64);
+    let (dx, dy) = (bx - ax, by - ay);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 == 0.0 { 0.0 } else { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) };
+    ((px - (ax + t * dx)).powi(2) + (py - (ay + t * dy)).powi(2)).sqrt()
+}
 
 pub struct Grid {
     pub grid_um: Um,
@@ -35,9 +57,31 @@ pub struct Grid {
     /// Clearance dilation radius, in grid cells (Chebyshev).
     pub clearance_cells: i64,
     occ: Vec<Option<Cell>>,
+    /// Hard blocks per (cell, layer) with no clearance dilation: gap strips
+    /// between SMD pads of one footprint, and (per edge) own-net pads a
+    /// track must not use as a stepping stone.
+    blocked: Vec<bool>,
+    /// Extra A* step cost per (cell, layer): soft keep-out for silkscreen
+    /// refdes boxes.
+    penalty: Vec<u8>,
+    /// Soft keep-out per (cell, layer) for track copper: impassable while
+    /// `soft_active`, merely penalised otherwise. An edge is first tried
+    /// with the keep-outs enforced and falls back to the penalty-only pass
+    /// when that leaves no path at all. Dilated by the track's own
+    /// half-width, matching the gate's exact geometric test — not by the
+    /// (much larger) via radius, which used to seal off narrow gaps a
+    /// track alone could still thread.
+    soft: Vec<bool>,
+    /// Soft keep-out per (cell, layer) for via copper: same idea, dilated
+    /// by the via radius (a via's copper is wider than a track's).
+    soft_via: Vec<bool>,
+    pub soft_active: bool,
     /// Precomputed point-in-polygon per cell (`cy * cells_x + cx`), so the
     /// A* hot loop never re-runs the polygon test.
     inside: Vec<bool>,
+    /// Precomputed distance (µm) from each cell centre to the nearest
+    /// outline edge, for the copper-to-edge clearance.
+    edge_dist: Vec<Um>,
     /// Net name interning: index <-> name.
     net_ids: std::collections::HashMap<String, u32>,
     net_names: Vec<String>,
@@ -72,20 +116,37 @@ impl Grid {
             num_layers,
             clearance_cells,
             occ: Vec::new(),
+            blocked: Vec::new(),
+            penalty: Vec::new(),
+            soft: Vec::new(),
+            soft_via: Vec::new(),
+            soft_active: false,
             inside: Vec::new(),
+            edge_dist: Vec::new(),
             net_ids: std::collections::HashMap::new(),
             net_names: Vec::new(),
         };
         let mut inside = vec![false; (cells_x * cells_y) as usize];
+        let mut edge_dist = vec![0; (cells_x * cells_y) as usize];
+        let n = outline.len();
         for cy in 0..cells_y {
             for cx in 0..cells_x {
-                if point_in_polygon(g.to_point(cx, cy), &outline) {
+                let p = g.to_point(cx, cy);
+                if point_in_polygon(p, &outline) {
                     inside[(cy * cells_x + cx) as usize] = true;
+                    let d = (0..n).map(|i| seg_point_dist(outline[i], outline[(i + 1) % n], p)).fold(f64::MAX, f64::min);
+                    edge_dist[(cy * cells_x + cx) as usize] = d as Um;
                 }
             }
         }
         g.inside = inside;
-        g.occ = (0..(cells_x * cells_y * num_layers as i64) as usize).map(|_| None).collect();
+        g.edge_dist = edge_dist;
+        let n = (cells_x * cells_y * num_layers as i64) as usize;
+        g.occ = (0..n).map(|_| None).collect();
+        g.blocked = vec![false; n];
+        g.penalty = vec![0; n];
+        g.soft = vec![false; n];
+        g.soft_via = vec![false; n];
         g
     }
 
@@ -134,18 +195,108 @@ impl Grid {
         self.inside[(cy * self.cells_x + cx) as usize]
     }
 
+    /// The single choke point through which all copper enters the grid.
+    /// Whatever `kind` survives for obstacle bookkeeping, `half_um` always
+    /// ends up at the widest copper the cell holds, so `passable_as`
+    /// cannot under-state the separation another net owes this cell.
     pub fn set(&mut self, cx: i64, cy: i64, layer: u8, net: &str, kind: Occ) {
         let net_id = self.net_id(net);
+        let half = self.half_extent(kind);
         if let Some(i) = self.idx(cx, cy, layer) {
             // A pad never downgrades to track/via copper of its own net:
-            // rip-up must keep the pad as an obstacle.
-            if let Some(c) = &self.occ[i] {
-                if c.kind == Occ::Pad && c.net_id == net_id {
+            // rip-up must keep the pad as an obstacle. Likewise a via
+            // never downgrades to a track when a later edge of the same
+            // net runs through its cell — the via copper is still there,
+            // and other nets must keep via-sized clearance from it.
+            if let Some(c) = &mut self.occ[i] {
+                if c.net_id == net_id {
+                    c.half_um = c.half_um.max(half);
+                    if c.kind == Occ::Pad || (c.kind == Occ::Via && kind == Occ::Track) {
+                        return;
+                    }
+                    c.kind = kind;
                     return;
                 }
             }
-            self.occ[i] = Some(Cell { net_id, kind });
+            self.occ[i] = Some(Cell { net_id, kind, half_um: half });
         }
+    }
+
+    /// Hard-block (or unblock) a cell for every net, without clearance
+    /// dilation. Out-of-range cells are ignored.
+    pub fn set_blocked(&mut self, cx: i64, cy: i64, layer: u8, blocked: bool) {
+        if let Some(i) = self.idx(cx, cy, layer) {
+            self.blocked[i] = blocked;
+        }
+    }
+
+    #[inline]
+    pub fn is_blocked(&self, cx: i64, cy: i64, layer: u8) -> bool {
+        self.is_blocked_as(cx, cy, layer, Occ::Track)
+    }
+
+    /// Kind-aware version of [`Grid::is_blocked`]: a via checks the (wider)
+    /// via soft keep-out, a track the (narrower) track one.
+    #[inline]
+    pub fn is_blocked_as(&self, cx: i64, cy: i64, layer: u8, me: Occ) -> bool {
+        self.idx(cx, cy, layer)
+            .map(|i| {
+                self.blocked[i]
+                    || (self.soft_active
+                        && if me == Occ::Via { self.soft_via[i] } else { self.soft[i] })
+            })
+            .unwrap_or(true)
+    }
+
+    /// Mark a cell as a soft keep-out for track copper (see `soft_active`).
+    pub fn set_soft(&mut self, cx: i64, cy: i64, layer: u8) {
+        if let Some(i) = self.idx(cx, cy, layer) {
+            self.soft[i] = true;
+        }
+    }
+
+    /// Mark a cell as a soft keep-out for via copper (see `soft_active`).
+    pub fn set_soft_via(&mut self, cx: i64, cy: i64, layer: u8) {
+        if let Some(i) = self.idx(cx, cy, layer) {
+            self.soft_via[i] = true;
+        }
+    }
+
+    /// Add `p` to the per-step cost of entering a cell (saturating).
+    pub fn add_penalty(&mut self, cx: i64, cy: i64, layer: u8, p: u8) {
+        if let Some(i) = self.idx(cx, cy, layer) {
+            self.penalty[i] = self.penalty[i].saturating_add(p);
+        }
+    }
+
+    #[inline]
+    pub fn penalty(&self, cx: i64, cy: i64, layer: u8) -> i64 {
+        self.idx(cx, cy, layer).map(|i| self.penalty[i] as i64).unwrap_or(0)
+    }
+
+    /// True if any pad (any net, own included) occupies a cell within
+    /// Chebyshev radius `r` of (cx, cy) on `layer`. Used to keep vias out
+    /// of pad copper: via-in-pad is a fab/assembly defect even on the
+    /// via's own net.
+    pub fn pad_within(&self, cx: i64, cy: i64, layer: u8, r: i64) -> bool {
+        for dx in -r..=r {
+            for dy in -r..=r {
+                if let Some(i) = self.idx(cx + dx, cy + dy, layer) {
+                    if matches!(&self.occ[i], Some(c) if c.kind == Occ::Pad) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Cells whose radius-`r` (Chebyshev) neighbourhood is pad-free are
+    /// legal via sites; `r` is the via copper half-extent plus half a
+    /// cell (the pad edge lies up to half a cell past its outermost cell
+    /// centre), in cells.
+    pub fn via_pad_radius_cells(&self) -> i64 {
+        (self.via_half_um + self.grid_um / 2 + self.grid_um - 1) / self.grid_um
     }
 
     /// Debug: one character per cell around (cx, cy) on `layer`:
@@ -159,6 +310,8 @@ impl Grid {
                 let (x, y) = (cx + dx, cy + dy);
                 let ch = if !self.in_outline(x, y) {
                     ' '
+                } else if self.is_blocked(x, y, layer) {
+                    'x'
                 } else {
                     match self.idx(x, y, layer).and_then(|i| self.occ[i].as_ref()) {
                         None => '.',
@@ -200,10 +353,20 @@ impl Grid {
 
     pub fn clear_net(&mut self, net: &str) {
         let Some(net_id) = self.net_id_ro(net) else { return };
+        let pad_half = self.half_extent(Occ::Pad);
         for c in self.occ.iter_mut() {
             if let Some(cell) = c {
-                if cell.net_id == net_id && cell.kind != Occ::Pad {
-                    *c = None;
+                if cell.net_id == net_id {
+                    if cell.kind == Occ::Pad {
+                        // The pad survives rip-up, but the ripped track
+                        // that ran over it does not: shrink the recorded
+                        // copper back to the pad's own extent, or the
+                        // inflation would outlive the copper that caused
+                        // it and permanently over-block the neighbourhood.
+                        cell.half_um = pad_half;
+                    } else {
+                        *c = None;
+                    }
                 }
             }
         }
@@ -222,10 +385,11 @@ impl Grid {
     }
 
     /// Minimum centre-to-centre separation, in cells, between copper of
-    /// kinds `a` and `b` on different nets.
+    /// kind `a` and copper whose recorded half-extent is `b_half_um`, on
+    /// different nets.
     #[inline]
-    fn min_sep_cells(&self, a: Occ, b: Occ) -> i64 {
-        let um = self.clearance_um + self.half_extent(a) + self.half_extent(b);
+    fn min_sep_cells_half(&self, a: Occ, b_half_um: Um) -> i64 {
+        let um = self.clearance_um + self.half_extent(a) + b_half_um;
         (um + self.grid_um - 1) / self.grid_um
     }
 
@@ -240,10 +404,17 @@ impl Grid {
     /// at least the kind-pair's required separation away (Chebyshev).
     #[inline]
     pub fn passable_as(&self, cx: i64, cy: i64, layer: u8, net: &str, me: Occ) -> bool {
-        if !self.in_outline(cx, cy) {
+        if !self.in_outline(cx, cy) || self.is_blocked_as(cx, cy, layer, me) {
             return false;
         }
         let net_id = self.net_id_ro(net).unwrap_or(EMPTY);
+        // Copper-to-edge clearance (KiCad's 0.5 mm default), except on
+        // the net's own pad copper: a pad legitimately placed at the
+        // board edge must stay reachable.
+        let own_pad = self.idx(cx, cy, layer).and_then(|i| self.occ[i].as_ref()).map(|c| c.kind == Occ::Pad && c.net_id == net_id).unwrap_or(false);
+        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < EDGE_CLEARANCE_UM + self.half_extent(me) {
+            return false;
+        }
         let r = self.clearance_cells;
         for dx in -r..=r {
             for dy in -r..=r {
@@ -251,7 +422,7 @@ impl Grid {
                     if let Some(c) = &self.occ[i] {
                         if c.net_id != net_id {
                             let d = dx.abs().max(dy.abs());
-                            if d < self.min_sep_cells(me, c.kind) {
+                            if d < self.min_sep_cells_half(me, c.half_um) {
                                 return false;
                             }
                         }
@@ -260,6 +431,27 @@ impl Grid {
             }
         }
         true
+    }
+
+    /// Nets whose routed copper (track/via, any layer) lies within
+    /// Chebyshev radius `r` of any of `cells` on that cell's layer: the
+    /// fence around a pocket the search could not leave.
+    pub fn nets_bordering(&self, cells: &[(i64, i64, u8)], r: i64) -> std::collections::HashSet<String> {
+        let mut set = std::collections::HashSet::new();
+        for &(cx, cy, l) in cells {
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    if let Some(i) = self.idx(cx + dx, cy + dy, l) {
+                        if let Some(c) = &self.occ[i] {
+                            if c.kind != Occ::Pad {
+                                set.insert(self.net_names[c.net_id as usize].clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        set
     }
 
     /// Nets whose occupied cells (any layer) fall within the bounding box

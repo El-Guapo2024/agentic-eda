@@ -13,7 +13,6 @@
 //! 3-decimal, trailing-zero-trimmed text — so the same `Design` + model
 //! always produces byte-identical output.
 
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_engine::geometry;
@@ -23,8 +22,6 @@ use eda_model::{CheckResult, ConstraintModel, Part};
 
 /// Pin stub length, in um, drawn from the box edge outward.
 const STUB: i64 = 1_270; // 1.27mm, one GRID
-/// How far inside the box a pin's name text sits from the box edge, in mm.
-const TEXT_MARGIN_MM: f64 = 0.8;
 /// SVG-space margin around all content, in mm.
 const MARGIN_MM: f64 = 5.0;
 
@@ -52,8 +49,62 @@ pub fn render_schematic(design: &Design, model: &ConstraintModel) -> Result<Stri
         return Err(errors);
     }
 
-    let bounds = compute_bounds(&boxes, sch);
-    let (min_x, min_y, max_x, max_y) = bounds;
+    let connected = connected_pins(sch);
+    // Ref/value text boxes for every symbol, computed the same way
+    // `render`'s own ref/value placement does — used below as fixed
+    // obstacles that net-label glyphs must jog clear of (see
+    // `geometry::resolve_net_label`); `eda-gates`' `collect_text_boxes`
+    // mirrors this exact computation so the two crates always agree. Each
+    // symbol's own ref/value placement also steers clear of every earlier
+    // symbol's boxes (`ref_value_boxes` pushes onto `label_obstacles` as it
+    // goes), so this single pass gives ref/value-vs-ref/value clearance too.
+    // Every symbol's box rectangle, in mm — a hard placement obstacle for
+    // net labels (`schematic_label_in_symbol`): a tag must never overlap
+    // ANY symbol's body, not just steer clear of its own pin's box.
+    let symbol_boxes: Vec<geometry::TextBox> =
+        boxes.iter().map(|b| geometry::symbol_box_mm(b.sym.at.x as f64 / 1000.0, b.sym.at.y as f64 / 1000.0, b.width, b.height)).collect();
+
+    let mut label_obstacles: Vec<geometry::TextBox> = Vec::new();
+    for b in &boxes {
+        b.ref_value_boxes(&sch.wires, &mut label_obstacles);
+    }
+    // Pin-name text is a fixed obstacle too (never repositioned, unlike
+    // ref/value/labels), so it's simply appended rather than threaded
+    // through `ref_value_boxes`'s own obstacle-avoidance search.
+    for b in &boxes {
+        label_obstacles.extend(b.pin_text_boxes());
+    }
+
+    // The sheet's own bounding box (and, from it, the SVG viewBox) must be
+    // the union of the FULL drawn extent of every element this function is
+    // about to draw — symbol boxes + pin stub tips, wire points, ref/value/
+    // pin text, and each net label's actual ink (its glyph/tag, not just
+    // its pin anchor) — or a label that legitimately grows outward past the
+    // sheet's other content (e.g. a Right-side pin's tag, which must point
+    // away from its box) gets silently clipped by the viewBox. Net-label
+    // ink can only be known by resolving each label's jog/obstacle search,
+    // so this runs that search once here, purely to measure — against a
+    // *clone* of `label_obstacles` — before the real drawing pass below
+    // runs the identical, deterministic search again from the pristine
+    // list to actually place and draw each label. `eda-gates`'
+    // `schematic_content_in_bounds` re-derives this same box from the same
+    // shared `geometry` functions, so the two can never disagree about
+    // what "in bounds" means.
+    let label_extents: Vec<geometry::TextBox> = {
+        let mut probe_obstacles = label_obstacles.clone();
+        sch.labels
+            .iter()
+            .map(|l| {
+                let (resolved, ink) = geometry::resolve_net_label(l.at.x, l.at.y, &l.net, 1.3, &mut probe_obstacles, &symbol_boxes, &sch.wires);
+                geometry::net_label_extent(&resolved, ink)
+            })
+            .collect()
+    };
+    let mut extra_bounds: Vec<geometry::TextBox> = label_obstacles.clone();
+    extra_bounds.extend(symbol_boxes.iter().copied());
+    extra_bounds.extend(label_extents);
+
+    let (min_x, min_y, max_x, max_y) = compute_bounds(&boxes, sch, &extra_bounds);
     let vb_x = min_x - MARGIN_MM;
     let vb_y = min_y - MARGIN_MM;
     let vb_w = (max_x - min_x) + 2.0 * MARGIN_MM;
@@ -70,16 +121,19 @@ pub fn render_schematic(design: &Design, model: &ConstraintModel) -> Result<Stri
     );
     svg.push_str(STYLE);
 
-    let connected = connected_pins(sch);
+    // `render()` recomputes the same positions independently (it needs to
+    // draw them, not just measure them); start its own obstacle
+    // accumulation fresh so it reproduces `label_obstacles` step for step.
+    let mut render_obstacles: Vec<geometry::TextBox> = Vec::new();
     for b in &boxes {
-        b.render(&mut svg, &connected);
+        b.render(&mut svg, &connected, &sch.wires, &mut render_obstacles);
     }
     for w in &sch.wires {
         render_wire(w, &mut svg);
     }
     render_junctions(sch, &mut svg);
     for l in &sch.labels {
-        render_net_label(l, &mut svg);
+        render_net_label(l, &mut svg, &mut label_obstacles, &symbol_boxes, &sch.wires);
     }
 
     svg.push_str("</svg>\n");
@@ -104,104 +158,170 @@ text{font-family:sans-serif;}
 .label text{font-size:1.3px;font-style:italic;}
 .gnd-label text{fill:#1a3a6b;text-anchor:middle;}
 .pwr-label text{fill:#a6321a;text-anchor:middle;}
-.flag-label text{fill:#1a3a6b;}
+.flag-label text{fill:#1a3a6b;text-anchor:middle;}
 .label line{stroke:#1a3a6b;stroke-width:0.15;}
+.flag-label polygon.tag{fill:none;stroke:#1a3a6b;stroke-width:0.08;}
 .gnd-sym{stroke:#1a3a6b;stroke-width:0.25;fill:none;}
 .pwr-sym{stroke:#a6321a;stroke-width:0.25;fill:none;}
 </style>
 "#;
 
-/// Which glyph a `NetLabel` gets, decided purely from the net name (no
-/// model access needed): `GND*`/`AGND*`/`VSS*` (case-insensitive) draw a
-/// ground symbol, `V*`/`+*`/`VCC`/`VDD` draw a power symbol, anything else
-/// keeps the plain italic flag.
-enum LabelKind {
-    Ground,
-    Power,
-    Flag,
-}
-
-fn label_kind(net: &str) -> LabelKind {
-    let upper = net.to_uppercase();
-    if upper.starts_with("GND") || upper.starts_with("AGND") || upper.starts_with("VSS") {
-        LabelKind::Ground
-    } else if upper.starts_with('V') || upper.starts_with('+') || upper == "VCC" || upper == "VDD" {
-        LabelKind::Power
-    } else {
-        LabelKind::Flag
-    }
-}
-
-fn render_net_label(l: &eda_model::ir::NetLabel, svg: &mut String) {
-    let x = l.at.x as f64 / 1000.0;
-    let y = l.at.y as f64 / 1000.0;
-    match label_kind(&l.net) {
-        LabelKind::Ground => {
+/// Resolves `l`'s on-sheet position (via the shared `geometry::resolve_net_label`,
+/// so `eda-gates` can never disagree on where this label lands), draws it
+/// into `svg`, and returns the label's full drawn-ink extent (via
+/// `geometry::net_label_extent`) so the caller can grow the sheet's own
+/// bounding box to include it — see `render_schematic`'s bounds pass.
+fn render_net_label(l: &eda_model::ir::NetLabel, svg: &mut String, obstacles: &mut Vec<geometry::TextBox>, boxes: &[geometry::TextBox], wires: &[Wire]) -> geometry::TextBox {
+    let font = 1.3;
+    let (resolved, ink) = geometry::resolve_net_label(l.at.x, l.at.y, &l.net, font, obstacles, boxes, wires);
+    match resolved {
+        geometry::ResolvedNetLabel::Ground { x, y, drop, jog_x, ty } => {
             // Uniform short vertical drop from the pin, then three shrinking
             // horizontal bars below it (the standard ground glyph), legible
             // scale (top bar 1.5mm wide) with the net name printed
             // immediately below the bars — compact enough to fit the
             // vertical channel between two vertically-stacked symbols
-            // without reaching into the next one's ref text.
-            let drop = y + 0.5;
-            let d2 = drop + 0.25;
-            let d3 = drop + 0.5;
-            let ty = d3 + 0.8;
+            // without reaching into the next one's ref text. The whole
+            // glyph+text jogs sideways (see `geometry::resolve_net_label`)
+            // when it would otherwise land on a nearby ref/value/label box;
+            // the drop segment from the pin stays put so the connection is
+            // still visually obvious, with a horizontal dogleg to the jog.
+            let [(bx1, _), (bx2, _), (mx1, d2), (mx2, _), (tx1, d3), (tx2, _)] = geometry::ground_glyph_points(jog_x, drop);
+            let dogleg = if (jog_x - x).abs() > 1e-6 {
+                format!(r#"<line class="gnd-sym" x1="{x}" y1="{drop}" x2="{jog_x}" y2="{drop}"/>"#, x = fmt_f(x), drop = fmt_f(drop), jog_x = fmt_f(jog_x))
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 svg,
-                r#"<g class="label gnd-label"><line class="gnd-sym" x1="{x}" y1="{y}" x2="{x}" y2="{drop}"/>
+                r#"<g class="label gnd-label"><line class="gnd-sym" x1="{x}" y1="{y}" x2="{x}" y2="{drop}"/>{dogleg}
 <line class="gnd-sym" x1="{bx1}" y1="{drop}" x2="{bx2}" y2="{drop}"/>
 <line class="gnd-sym" x1="{mx1}" y1="{d2}" x2="{mx2}" y2="{d2}"/>
 <line class="gnd-sym" x1="{tx1}" y1="{d3}" x2="{tx2}" y2="{d3}"/>
-<text x="{x}" y="{ty}">{net}</text></g>"#,
+<text x="{jx}" y="{ty}">{net}</text></g>"#,
                 x = fmt_f(x),
                 y = fmt_f(y),
                 drop = fmt_f(drop),
-                bx1 = fmt_f(x - 0.75),
-                bx2 = fmt_f(x + 0.75),
+                bx1 = fmt_f(bx1),
+                bx2 = fmt_f(bx2),
                 d2 = fmt_f(d2),
-                mx1 = fmt_f(x - 0.45),
-                mx2 = fmt_f(x + 0.45),
+                mx1 = fmt_f(mx1),
+                mx2 = fmt_f(mx2),
                 d3 = fmt_f(d3),
-                tx1 = fmt_f(x - 0.15),
-                tx2 = fmt_f(x + 0.15),
+                tx1 = fmt_f(tx1),
+                tx2 = fmt_f(tx2),
+                jx = fmt_f(jog_x),
                 ty = fmt_f(ty),
                 net = xml_escape(&l.net),
             );
         }
-        LabelKind::Power => {
+        geometry::ResolvedNetLabel::Power { x, y, stem_top, jog_x, ty } => {
             // Small upward flag: a short stem then an arrowhead, net name
-            // printed above it.
-            let stem_top = y - 1.6;
+            // printed above it. Same jog-clear-of-obstacles scheme as
+            // Ground, with a horizontal dogleg at the stem top.
+            let [(ax1, ay), (ax2, _)] = geometry::power_glyph_points(jog_x, stem_top);
+            let dogleg = if (jog_x - x).abs() > 1e-6 {
+                format!(
+                    r#"<line class="pwr-sym" x1="{x}" y1="{stem_top}" x2="{jog_x}" y2="{stem_top}"/>"#,
+                    x = fmt_f(x),
+                    stem_top = fmt_f(stem_top),
+                    jog_x = fmt_f(jog_x)
+                )
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 svg,
-                r#"<g class="label pwr-label"><line class="pwr-sym" x1="{x}" y1="{y}" x2="{x}" y2="{stem_top}"/>
-<path class="pwr-sym" d="M {ax1} {ay} L {x} {atip} L {ax2} {ay}"/>
-<text x="{x}" y="{ty}">{net}</text></g>"#,
+                r#"<g class="label pwr-label"><line class="pwr-sym" x1="{x}" y1="{y}" x2="{x}" y2="{stem_top}"/>{dogleg}
+<path class="pwr-sym" d="M {ax1} {ay} L {jx} {atip} L {ax2} {ay}"/>
+<text x="{jx}" y="{ty}">{net}</text></g>"#,
                 x = fmt_f(x),
                 y = fmt_f(y),
                 stem_top = fmt_f(stem_top),
-                ax1 = fmt_f(x - 0.5),
-                ax2 = fmt_f(x + 0.5),
-                ay = fmt_f(stem_top + 0.6),
+                ax1 = fmt_f(ax1),
+                ax2 = fmt_f(ax2),
+                ay = fmt_f(ay),
+                jx = fmt_f(jog_x),
                 atip = fmt_f(stem_top),
-                ty = fmt_f(stem_top - 0.4),
+                ty = fmt_f(ty),
                 net = xml_escape(&l.net),
             );
         }
-        LabelKind::Flag => {
+        geometry::ResolvedNetLabel::Flag { bend_x, bend_y, dog_x, dog_y, jog_x, ty, side, .. } => {
+            // A signal net label is a *tag*: the same italic-name visual
+            // class as the power/ground flags, but outlined by a
+            // pentagon-with-a-point so a reader can tell "this name
+            // continues elsewhere on the sheet" from "this pin goes to a
+            // rail" at a glance. The outline hugs the text box the gates
+            // already reserve, so it never introduces clearance the gates
+            // do not know about.
+            let anchor = match side {
+                Side::Top | Side::Bottom => geometry::HAnchor::Middle,
+                Side::Left => geometry::HAnchor::End,
+                Side::Right => geometry::HAnchor::Start,
+            };
+            let bbox = geometry::text_bbox(jog_x, ty, &l.net, font, anchor);
+            let (tx0, ty0, tx1, ty1) = (bbox.x0 - 0.25, bbox.y0 - 0.15, bbox.x1 + 0.25, bbox.y1 + 0.15);
+            let nose = 0.45;
+            // The pentagon's point always faces the side the leader departs
+            // toward: right (default) for a Top/Bottom/Left-side tag, whose
+            // pin sits at or to the right of the tag; mirrored — pointing
+            // left — for a Right-side tag, whose pin sits to its left.
+            let tag = if side == Side::Right {
+                format!(
+                    r#"<polygon class="tag" points="{a2},{py} {px2},{py} {b},{my} {px2},{qy} {a2},{qy}"/>"#,
+                    a2 = fmt_f(tx1 + nose),
+                    px2 = fmt_f(tx0),
+                    py = fmt_f(ty0),
+                    qy = fmt_f(ty1),
+                    b = fmt_f(tx0 - nose),
+                    my = fmt_f((ty0 + ty1) / 2.0),
+                )
+            } else {
+                format!(
+                    r#"<polygon class="tag" points="{px},{py} {a},{py} {b},{my} {a},{qy} {px},{qy}"/>"#,
+                    px = fmt_f(tx0 - nose),
+                    py = fmt_f(ty0),
+                    qy = fmt_f(ty1),
+                    a = fmt_f(tx1),
+                    b = fmt_f(tx1 + nose),
+                    my = fmt_f((ty0 + ty1) / 2.0),
+                )
+            };
+            // Leader: pin -> bend point (straight along the pin's outward
+            // normal — see `geometry::resolve_net_label`), then, if the tag
+            // had to slide sideways to dodge a neighbour, a dogleg along the
+            // side to the tag's actual position.
+            let dogleg = if (dog_x - bend_x).abs() > 1e-6 || (dog_y - bend_y).abs() > 1e-6 {
+                format!(r#"<line x1="{x}" y1="{y}" x2="{dx}" y2="{dy}"/>"#, x = fmt_f(bend_x), y = fmt_f(bend_y), dx = fmt_f(dog_x), dy = fmt_f(dog_y))
+            } else {
+                String::new()
+            };
+            // The CSS class default (`text-anchor:middle`) only matches a
+            // Top/Bottom-side tag; a Left/Right-side tag's text was placed
+            // to grow away from the box, and needs the matching SVG anchor
+            // or the renderer's own default centers it back on `jog_x` —
+            // reaching half the text's width back over the very box this
+            // whole gate/fix exists to stay clear of.
+            let anchor_attr = match side {
+                Side::Top | Side::Bottom => "",
+                Side::Left => r#" style="text-anchor:end""#,
+                Side::Right => r#" style="text-anchor:start""#,
+            };
             let _ = writeln!(
                 svg,
-                r#"<g class="label flag-label"><line x1="{x}" y1="{y1}" x2="{x}" y2="{y2}"/><text x="{tx}" y="{ty}">{net}</text></g>"#,
+                r#"<g class="label flag-label"><line x1="{x}" y1="{y1}" x2="{bx}" y2="{by}"/>{dogleg}{tag}<text x="{tx}" y="{ty}"{anchor_attr}>{net}</text></g>"#,
                 x = fmt_mm(l.at.x),
                 y1 = fmt_mm(l.at.y),
-                y2 = fmt_f(y - 1.5),
-                tx = fmt_mm(l.at.x),
-                ty = fmt_f(y - 1.8),
+                bx = fmt_f(bend_x),
+                by = fmt_f(bend_y),
+                tx = fmt_f(jog_x),
+                ty = fmt_f(ty),
                 net = xml_escape(&l.net),
             );
         }
     }
+    geometry::net_label_extent(&resolved, ink)
 }
 
 /// A resolved symbol box: absolute position/size in um plus the pin layout
@@ -217,7 +337,7 @@ struct SymbolBox<'a> {
 
 impl<'a> SymbolBox<'a> {
     fn build(sym: &'a SymbolInstance, part: &'a Part) -> Self {
-        let (width, height) = geometry::node_size(part.pins.len());
+        let (width, height) = geometry::node_size(part);
         let (ports, pin_port) = geometry::build_ports(part, width, height);
         let mut pin_of_port = vec![None; ports.len()];
         for (pin_idx, port_idx) in pin_port.iter().enumerate() {
@@ -255,7 +375,63 @@ impl<'a> SymbolBox<'a> {
         (self.sym.at.x as f64 + rx, self.sym.at.y as f64 + ry)
     }
 
-    fn render(&self, svg: &mut String, connected: &Connected) {
+    /// Ref (and, if present, value) text bounding boxes in absolute mm,
+    /// computed with the exact same offsets `render` uses to place them —
+    /// kept as a separate method so net-label placement can treat them as
+    /// fixed obstacles (see `resolve_label_pos`) without duplicating the
+    /// ref/value placement math a third time (it's already duplicated once,
+    /// deliberately, in `eda-gates`' `collect_text_boxes`).
+    /// Also steers clear of `obstacles` (other symbols' already-placed
+    /// ref/value boxes; see `geometry::resolve_text_y_obs`/
+    /// `resolve_value_pos_obs`) and pushes its own boxes onto `obstacles`
+    /// before returning, so a caller looping over symbols in a fixed order
+    /// gets label-vs-ref/value AND ref/value-vs-ref/value clearance for
+    /// free.
+    fn ref_value_boxes(&self, wires: &[eda_model::ir::Wire], obstacles: &mut Vec<geometry::TextBox>) -> Vec<geometry::TextBox> {
+        let is_passive = geometry::is_two_pin_passive(self.part);
+        let h_mm = self.height as f64 / 1000.0;
+        let cy = h_mm / 2.0;
+        let _ = (is_passive, cy, h_mm);
+        let sym_x = self.sym.at.x as f64 / 1000.0;
+        let sym_y = self.sym.at.y as f64 / 1000.0;
+        let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height);
+        let ref_y = geometry::resolve_text_y_obs(sym_x, sym_y, 0.0, base_ref_y, -1.0, &self.sym.id, 1.6, geometry::HAnchor::Start, wires, obstacles);
+        let ref_box = geometry::text_bbox(sym_x, sym_y + ref_y, &self.sym.id, 1.6, geometry::HAnchor::Start);
+        obstacles.push(ref_box);
+        let mut out = vec![ref_box];
+        if let Some(val) = symbol_value(self.part) {
+            let (base_value_x, base_value_y) = geometry::value_slot_local(self.part, self.height);
+            let vf = geometry::value_font_mm(&val, self.width);
+            let (value_x, value_y) = geometry::resolve_value_pos_obs(sym_x, sym_y, base_value_x, base_value_y, &val, vf, wires, obstacles);
+            let value_box = geometry::text_bbox(sym_x + value_x, sym_y + value_y, &val, vf, geometry::HAnchor::Start);
+            obstacles.push(value_box);
+            out.push(value_box);
+        }
+        out
+    }
+
+    /// Every pin-name/number text box this symbol draws, in absolute mm —
+    /// computed with the exact same `geometry::pin_text_box` the actual
+    /// draw loop below uses. Fed into net-label placement's fixed obstacle
+    /// list (alongside ref/value boxes) so a label jogs clear of pin text
+    /// too, the same way it already jogs clear of ref/value and other
+    /// labels; `eda-gates`' `collect_text_boxes` computes this identically.
+    fn pin_text_boxes(&self) -> Vec<geometry::TextBox> {
+        let sym_x = self.sym.at.x as f64 / 1000.0;
+        let sym_y = self.sym.at.y as f64 / 1000.0;
+        self.ports
+            .iter()
+            .enumerate()
+            .filter_map(|(port_idx, port)| {
+                let pin_idx = self.pin_of_port[port_idx]?;
+                let pin = &self.part.pins[pin_idx];
+                let label = pin.name.clone().unwrap_or_else(|| pin.number.clone());
+                Some(geometry::pin_text_box(port, self.width, self.height, sym_x, sym_y, &label))
+            })
+            .collect()
+    }
+
+    fn render(&self, svg: &mut String, connected: &Connected, wires: &[eda_model::ir::Wire], obstacles: &mut Vec<geometry::TextBox>) {
         let transform = symbol_transform(self.sym, self.width);
         let _ = writeln!(svg, r#"<g{transform}>"#);
 
@@ -278,7 +454,18 @@ impl<'a> SymbolBox<'a> {
         // Ref sits above-left of the box; value sits below-left. Both are
         // left-anchored (rather than centered) so they don't collide with a
         // south-side net-label glyph, which is centered under the box.
-        let ref_y = -0.3;
+        //
+        // For a recognized 2-pin passive the box is sized to fit up-to-4-pin
+        // ICs (see `geometry::node_size`), but the glyph itself is only ever
+        // drawn on the box's vertical center line (`cy = h/2`) — so anchoring
+        // ref/value off the box's top/bottom edge (as for a genuinely tall
+        // IC box) leaves them floating several mm from the part a reader
+        // actually sees. Anchor to `cy` instead for passives.
+        let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height);
+        let sym_x = self.sym.at.x as f64 / 1000.0;
+        let sym_y = self.sym.at.y as f64 / 1000.0;
+        let ref_y = geometry::resolve_text_y_obs(sym_x, sym_y, 0.0, base_ref_y, -1.0, &self.sym.id, 1.6, geometry::HAnchor::Start, wires, obstacles);
+        obstacles.push(geometry::text_bbox(sym_x, sym_y + ref_y, &self.sym.id, 1.6, geometry::HAnchor::Start));
         let _ = writeln!(
             svg,
             r#"<text class="ref" x="{x}" y="{y}">{t}</text>"#,
@@ -293,12 +480,18 @@ impl<'a> SymbolBox<'a> {
             // right-shifted value clears it horizontally) — and, being
             // right-shifted rather than spanning the box's full width below
             // it, it can't reach up into a vertically-stacked neighbor's ref
-            // text either.
-            let value_x = self.width as f64 / 1000.0 + 1.6;
-            let value_y = self.height as f64 / 1000.0 + 1.8;
+            // text either. Passives anchor off `cy` (see above) instead of
+            // the box's bottom edge, so the value hugs the drawn glyph.
+            let (base_value_x, base_value_y) = geometry::value_slot_local(self.part, self.height);
+            let vf = geometry::value_font_mm(&val, self.width);
+            let sym_x = self.sym.at.x as f64 / 1000.0;
+            let sym_y = self.sym.at.y as f64 / 1000.0;
+            let (value_x, value_y) = geometry::resolve_value_pos_obs(sym_x, sym_y, base_value_x, base_value_y, &val, vf, wires, obstacles);
+            obstacles.push(geometry::text_bbox(sym_x + value_x, sym_y + value_y, &val, vf, geometry::HAnchor::Start));
             let _ = writeln!(
                 svg,
-                r#"<text class="value" x="{x}" y="{y}">{t}</text>"#,
+                r#"<text class="value" x="{x}" y="{y}" style="font-size:{f}px">{t}</text>"#,
+                f = fmt_f(vf),
                 x = fmt_f(value_x),
                 y = fmt_f(value_y),
                 t = xml_escape(&val),
@@ -500,17 +693,14 @@ fn stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
 /// Local (mm) pin-name text anchor position + CSS class, placed just inside
 /// the box from the port point.
 fn pin_text_pos(port: &Port, lx_um: f64, ly_um: f64, width_mm: f64) -> (f64, f64, &'static str) {
-    let lx = lx_um / 1000.0;
-    let ly = ly_um / 1000.0;
-    match port.side {
-        Side::Top => (lx, ly + TEXT_MARGIN_MM + 1.0, "pin-vert"),
-        Side::Bottom => (lx, ly - TEXT_MARGIN_MM, "pin-vert"),
-        Side::Left => (lx + TEXT_MARGIN_MM, ly + 0.4, "pin-left"),
-        Side::Right => {
-            let _ = width_mm;
-            (lx - TEXT_MARGIN_MM, ly + 0.4, "pin-right")
-        }
-    }
+    let _ = width_mm;
+    let (dx, dy, anchor) = geometry::pin_text_offset(port.side);
+    let class = match anchor {
+        geometry::HAnchor::Middle => "pin-vert",
+        geometry::HAnchor::Start => "pin-left",
+        geometry::HAnchor::End => "pin-right",
+    };
+    (lx_um / 1000.0 + dx, ly_um / 1000.0 + dy, class)
 }
 
 /// SVG `transform` attribute for a symbol instance (empty when the symbol
@@ -543,23 +733,10 @@ fn render_wire(w: &Wire, svg: &mut String) {
 
 /// T-junction dots: a point where >=3 same-net wire segment endpoints meet.
 fn render_junctions(sch: &SchematicSection, svg: &mut String) {
-    // Count, per net, how many wire segments touch each point (a segment
-    // contributes to both of its endpoints). A pass-through vertex inside a
-    // single polyline touches exactly 2 segments; a real junction — either
-    // several wires sharing an endpoint, or a >2-way star hub — touches >=3.
-    let mut touches: BTreeMap<(&str, Point), usize> = BTreeMap::new();
-    for w in &sch.wires {
-        if w.pts.len() < 2 {
-            continue;
-        }
-        for pair in w.pts.windows(2) {
-            for pt in [pair[0], pair[1]] {
-                *touches.entry((w.net.as_str(), pt)).or_insert(0) += 1;
-            }
-        }
-    }
-    let keys: Vec<_> = touches.iter().filter(|(_, &n)| n >= 3).map(|(k, _)| *k).collect();
-    for (_, pt) in keys {
+    // `geometry::wire_junction_points` is the single source of truth for
+    // what counts as a junction — shared with `eda-gates`'
+    // `schematic_missing_junction` so the two can never disagree.
+    for (_, pt) in geometry::wire_junction_points(&sch.wires) {
         let _ = writeln!(
             svg,
             r#"<circle class="junction" cx="{x}" cy="{y}" r="0.25"/>"#,
@@ -593,13 +770,20 @@ fn connected_pins(sch: &SchematicSection) -> Connected {
     Connected { wired_pins, label_points }
 }
 
-fn compute_bounds(boxes: &[SymbolBox], sch: &SchematicSection) -> (f64, f64, f64, f64) {
+/// Unions the symbol boxes' (+ pin stub tips') absolute extent, every wire
+/// point, and every box in `extra` (ref/value/pin text, symbol box
+/// rectangles, and each net label's full drawn-ink extent — see
+/// `render_schematic`) into one bounding box, in mm. This — not symbol
+/// boxes/wire points/label *anchors* alone — is the sheet's true drawn
+/// extent: an anchor-only union misses a right/east-growing label's ink
+/// entirely, which is exactly how content used to escape the viewBox and
+/// get clipped.
+fn compute_bounds(boxes: &[SymbolBox], sch: &SchematicSection, extra: &[geometry::TextBox]) -> (f64, f64, f64, f64) {
     let mut min_x = f64::INFINITY;
     let mut min_y = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
     let mut max_y = f64::NEG_INFINITY;
-    let mut feed = |x_um: f64, y_um: f64| {
-        let (x, y) = (x_um / 1000.0, y_um / 1000.0);
+    let mut feed = |x: f64, y: f64| {
         min_x = min_x.min(x);
         min_y = min_y.min(y);
         max_x = max_x.max(x);
@@ -612,11 +796,12 @@ fn compute_bounds(boxes: &[SymbolBox], sch: &SchematicSection) -> (f64, f64, f64
     }
     for w in &sch.wires {
         for p in &w.pts {
-            feed(p.x as f64, p.y as f64);
+            feed(p.x as f64 / 1000.0, p.y as f64 / 1000.0);
         }
     }
-    for l in &sch.labels {
-        feed(l.at.x as f64, l.at.y as f64);
+    for b in extra {
+        feed(b.x0, b.y0);
+        feed(b.x1, b.y1);
     }
     if !min_x.is_finite() {
         // Empty schematic: fall back to a trivial origin box.
@@ -724,14 +909,18 @@ mod tests {
 
     #[test]
     fn wire_polyline_matches_design_points() {
+        // Only GND is a true rail name on this fixture (see
+        // `geometry::is_power_or_ground_net_name`); VIN/VOUT stay ordinary
+        // wires. GND draws no wire — every pin gets a ground-glyph label
+        // anchored exactly at its own port point. Check that instead.
         let model = ldo_model();
         let design = ldo_design();
         let svg = render_schematic(&design, &model).unwrap();
         let sch = design.schematic.unwrap();
-        let vin_wire = sch.wires.iter().find(|w| w.net == "VIN").unwrap();
-        let expected: Vec<String> = vin_wire.pts.iter().map(|p| format!("{},{}", fmt_mm(p.x), fmt_mm(p.y))).collect();
-        let expected_points = expected.join(" ");
-        assert!(svg.contains(&expected_points), "expected wire points {expected_points} in SVG:\n{svg}");
+        assert!(sch.wires.iter().all(|w| w.net != "GND"), "GND is power-style: no wire expected");
+        let gnd_label = sch.labels.iter().find(|l| l.net == "GND").unwrap();
+        let expected_anchor = format!(r#"x1="{}" y1="{}""#, fmt_mm(gnd_label.at.x), fmt_mm(gnd_label.at.y));
+        assert!(svg.contains(&expected_anchor), "expected label anchor {expected_anchor} in SVG:\n{svg}");
     }
 
     #[test]

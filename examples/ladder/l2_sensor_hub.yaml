@@ -1,0 +1,335 @@
+# Ladder rung 2/4: sensor hub. Rung 1 (USB->LDO->MCU->SWD/reset/boot/LED)
+# plus an onboard IMU, four I2C sensor headers sharing one pulled-up bus,
+# two analog inputs behind RC anti-alias filters, and a buzzer driven from
+# a GPIO through a small-signal NPN. ~34 parts.
+#
+# Notes on stand-in packages (see crates/model/src/footprint.rs builtin()):
+# - USB-C (J1) again stands in as PINHEADER-16; MCU (U2) is TSSOP-20; the
+#   two momentary switches (SW1/SW2) again use "1206" two-pad footprints.
+# - IMU (U3) is a real LGA-package 6-axis part (e.g. ICM-42688-P, 3x2.5mm
+#   LGA-14) with no built-in LGA/QFN footprint; SOIC-16 stands in per the
+#   ladder brief ("LGA stand-in via SOIC/QFN"). Only the 14 real signals
+#   are wired; the two extra SOIC-16 pads are marked nc.
+# - The buzzer (BZ1) is a 2-pin magnetic transducer; the two-pad "1210"
+#   pattern stands in (no dedicated buzzer footprint in the library).
+# Unused expansion GPIOs are marked kind: nc -- lint's
+# source_pin_not_connected gate fails hard on any unconnected signal pin.
+parts:
+  - reference: J1
+    mpn: GCT-USB4105-GF-A
+    value: "USB-C receptacle"
+    package: PINHEADER-16
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VBUS, kind: power }
+      - { number: "3", name: CC1, kind: signal }
+      - { number: "4", name: CC2, kind: signal }
+      - { number: "5", name: DP1, kind: signal }
+      - { number: "6", name: DM1, kind: signal }
+      - { number: "7", name: SBU1, kind: nc }
+      - { number: "8", name: SBU2, kind: nc }
+      - { number: "9", name: NC1, kind: nc }
+      - { number: "10", name: NC2, kind: nc }
+      - { number: "11", name: NC3, kind: nc }
+      - { number: "12", name: NC4, kind: nc }
+      - { number: "13", name: NC5, kind: nc }
+      - { number: "14", name: NC6, kind: nc }
+      - { number: "15", name: SHIELD1, kind: nc }
+      - { number: "16", name: SHIELD2, kind: nc }
+
+  - reference: R1
+    value: 5.1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R2
+    value: 5.1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: U1
+    mpn: AMS1117-3.3
+    value: "3.3V LDO"
+    package: SOT-223
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VOUT, kind: power }
+      - { number: "3", name: VIN, kind: power }
+  - reference: C1
+    value: 10uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C2
+    value: 22uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: U2
+    mpn: STM32C011F6
+    value: MCU
+    package: TSSOP-20
+    pins:
+      - { number: "1", name: VDD, kind: power }
+      - { number: "2", name: VSS, kind: ground }
+      - { number: "3", name: VDDA, kind: power }
+      - { number: "4", name: VSSA, kind: ground }
+      - { number: "5", name: NRST, kind: signal }
+      - { number: "6", name: BOOT0, kind: signal }
+      - { number: "7", name: SWDIO, kind: signal }
+      - { number: "8", name: SWCLK, kind: signal }
+      - { number: "9", name: PA0, kind: signal }
+      - { number: "10", name: SCL, kind: signal }
+      - { number: "11", name: SDA, kind: signal }
+      - { number: "12", name: IMU_INT, kind: signal }
+      - { number: "13", name: ADC1, kind: signal }
+      - { number: "14", name: ADC2, kind: signal }
+      - { number: "15", name: BUZZ_DRIVE, kind: signal }
+      - { number: "16", name: PA7, kind: nc }
+      - { number: "17", name: USB_DP, kind: signal }
+      - { number: "18", name: USB_DM, kind: signal }
+      - { number: "19", name: VDD2, kind: power }
+      - { number: "20", name: GND2, kind: ground }
+
+  - reference: C3
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C4
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C5
+    value: 1uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: R3
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: SW1
+    mpn: EVQ-P7C01P
+    value: "reset button"
+    package: "1206"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: R4
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: SW2
+    mpn: EVQ-P7C01P
+    value: "boot0 button"
+    package: "1206"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: R5
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D1
+    value: "status LED"
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: J2
+    value: "SWD header"
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: SWDIO, kind: signal }
+      - { number: "2", name: SWCLK, kind: signal }
+      - { number: "3", name: GND, kind: ground }
+      - { number: "4", name: "3V3", kind: power }
+
+  # --- rung 2 additions ---
+
+  # 6-axis IMU (accel+gyro), I2C, LGA-14 real part standing in on SOIC-16.
+  - reference: U3
+    mpn: ICM-42688-P
+    value: "6-axis IMU"
+    package: SOIC-16
+    pins:
+      - { number: "1", name: VDD, kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: SCL, kind: signal }
+      - { number: "4", name: SDA, kind: signal }
+      - { number: "5", name: INT1, kind: signal }
+      - { number: "6", name: AP_AD0, kind: signal }
+      - { number: "7", name: FSYNC, kind: signal }
+      - { number: "8", name: REGOUT, kind: power }
+      - { number: "9", name: VDDIO, kind: power }
+      - { number: "10", name: RESV1, kind: nc }
+      - { number: "11", name: RESV2, kind: nc }
+      - { number: "12", name: RESV3, kind: nc }
+      - { number: "13", name: RESV4, kind: nc }
+      - { number: "14", name: CS, kind: power }
+      - { number: "15", name: PAD1, kind: nc }
+      - { number: "16", name: PAD2, kind: nc }
+  - reference: C6
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C7
+    value: "1uF"
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  # Shared I2C bus pull-ups (one bus feeding the IMU + 4 headers).
+  - reference: R6
+    value: 4.7k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R7
+    value: 4.7k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  # Four I2C sensor headers (VCC, GND, SCL, SDA) on the shared bus.
+  - reference: J3
+    value: "I2C sensor header"
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: "3V3", kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: SCL, kind: signal }
+      - { number: "4", name: SDA, kind: signal }
+  - reference: J4
+    value: "I2C sensor header"
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: "3V3", kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: SCL, kind: signal }
+      - { number: "4", name: SDA, kind: signal }
+  - reference: J5
+    value: "I2C sensor header"
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: "3V3", kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: SCL, kind: signal }
+      - { number: "4", name: SDA, kind: signal }
+  - reference: J6
+    value: "I2C sensor header"
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: "3V3", kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: SCL, kind: signal }
+      - { number: "4", name: SDA, kind: signal }
+
+  # Two analog inputs, each an RC low-pass anti-alias filter ahead of an
+  # MCU ADC pin.
+  - reference: J7
+    value: "analog input 1"
+    package: PINHEADER-2
+    pins:
+      - { number: "1", name: AIN1, kind: signal }
+      - { number: "2", name: GND, kind: ground }
+  - reference: R8
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C8
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: J8
+    value: "analog input 2"
+    package: PINHEADER-2
+    pins:
+      - { number: "1", name: AIN2, kind: signal }
+      - { number: "2", name: GND, kind: ground }
+  - reference: R9
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C9
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  # Buzzer driver: GPIO -> base resistor -> NPN switch -> magnetic buzzer.
+  - reference: R10
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: Q1
+    mpn: MMBT2222A
+    value: "NPN switch"
+    package: SOT-23
+    pins:
+      - { number: "1", name: BASE, kind: signal }
+      - { number: "2", name: EMITTER, kind: ground }
+      - { number: "3", name: COLLECTOR, kind: signal }
+  - reference: BZ1
+    value: "magnetic buzzer"
+    package: "1210"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+nets:
+  - { name: VBUS, pins: [J1.2, U1.3] }
+  - name: GND
+    pins:
+      [
+        J1.1, U1.1, C1.2, C2.2, C3.2, C4.2, C5.2, R1.2, R2.2, R4.2, SW1.2, SW2.2,
+        D1.2, J2.3, U2.2, U2.4, U2.20, U3.2, C6.2, C7.2, J3.2, J4.2, J5.2, J6.2,
+        J7.2, J8.2, Q1.2, C8.2, C9.2,
+      ]
+  - { name: CC1, pins: [J1.3, R1.1] }
+  - { name: CC2, pins: [J1.4, R2.1] }
+  - { name: USB_DP, pins: [J1.5, U2.17] }
+  - { name: USB_DM, pins: [J1.6, U2.18] }
+  - name: "3V3"
+    pins:
+      [
+        U1.2, C1.1, C2.1, C3.1, C4.1, C5.1, R3.1, J2.4, U2.1, U2.3, U2.19, U3.1,
+        U3.8, U3.9, U3.14, C6.1, C7.1, R6.2, R7.2, J3.1, J4.1, J5.1, J6.1, BZ1.1,
+      ]
+  - { name: NRST, pins: [U2.5, R3.2, SW1.1] }
+  - { name: BOOT0, pins: [U2.6, R4.1, SW2.1] }
+  - { name: SWDIO, pins: [U2.7, J2.1] }
+  - { name: SWCLK, pins: [U2.8, J2.2] }
+  - { name: LED_DRIVE, pins: [U2.9, R5.1] }
+  - { name: LED_A, pins: [R5.2, D1.1] }
+  - { name: I2C_SCL, pins: [U2.10, U3.3, R6.1, J3.3, J4.3, J5.3, J6.3] }
+  - { name: I2C_SDA, pins: [U2.11, U3.4, R7.1, J3.4, J4.4, J5.4, J6.4] }
+  - { name: IMU_INT, pins: [U2.12, U3.5] }
+  - { name: IMU_AD0, pins: [U3.6, U3.7] }
+  - { name: AIN1_RAW, pins: [J7.1, R8.1] }
+  - { name: AIN1_FILT, pins: [R8.2, C8.1, U2.13] }
+  - { name: AIN2_RAW, pins: [J8.1, R9.1] }
+  - { name: AIN2_FILT, pins: [R9.2, C9.1, U2.14] }
+  - { name: BUZZ_BASE, pins: [U2.15, R10.1] }
+  - { name: BUZZ_SW, pins: [R10.2, Q1.1] }
+  - { name: BUZZ_DRIVE, pins: [Q1.3, BZ1.2] }
+
+placement_rules:
+  - { kind: proximity, a: U1, b: C1, max_mm: 3.0 }
+  - { kind: proximity, a: U1, b: C2, max_mm: 3.0 }
+  - { kind: proximity, a: U2, b: C3, max_mm: 1.5 }
+  - { kind: proximity, a: U2, b: C4, max_mm: 1.5 }
+  - { kind: proximity, a: U2, b: C5, max_mm: 3.0 }
+  - { kind: proximity, a: J1, b: R1, max_mm: 5.0 }
+  - { kind: proximity, a: J1, b: R2, max_mm: 5.0 }
+  - { kind: proximity, a: U2, b: J2, max_mm: 15.0 }
+  - { kind: proximity, a: U3, b: C6, max_mm: 1.5 }
+  - { kind: proximity, a: U3, b: C7, max_mm: 2.5 }
+  - { kind: proximity, a: U3, b: U2, max_mm: 20.0 }
+  - { kind: proximity, a: R6, b: R7, max_mm: 2.0 }
+  - { kind: proximity, a: J7, b: R8, max_mm: 5.0 }
+  - { kind: proximity, a: R8, b: C8, max_mm: 2.0 }
+  - { kind: proximity, a: J8, b: R9, max_mm: 5.0 }
+  - { kind: proximity, a: R9, b: C9, max_mm: 2.0 }
+  - { kind: proximity, a: Q1, b: R10, max_mm: 3.0 }
+  - { kind: proximity, a: Q1, b: BZ1, max_mm: 8.0 }
+
+board:
+  grid: 254
+  track_width: 200
+  clearance: 200
+  outline:
+    - { x: 0, y: 0 }
+    - { x: 80000, y: 0 }
+    - { x: 80000, y: 55000 }
+    - { x: 0, y: 55000 }

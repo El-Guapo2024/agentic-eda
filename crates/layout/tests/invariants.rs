@@ -371,7 +371,7 @@ fn crossings_bounded_on_known_graph() {
     let reversed = eda_layout::cycle::break_cycles(&g);
     let layers = eda_layout::layering::assign_layers(&g, &reversed);
     let ext = eda_layout::dummy::build(&g, &layers);
-    let order = eda_layout::crossing::minimize_crossings(&ext, opts.crossing_sweeps);
+    let order = eda_layout::crossing::minimize_crossings(&ext, opts.crossing_sweeps, &g, &opts);
     // naive order would give more; assert barycenter result stays under a
     // generous bound for this 8-edge, 2-layer graph.
     let pos = {

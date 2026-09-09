@@ -33,7 +33,40 @@ fn lin(n: usize) -> Footprint {
 }
 
 fn model(parts: Vec<Part>, nets: Vec<Net>) -> ConstraintModel {
-    ConstraintModel { parts, nets, footprints: vec![lin(1), lin(2), lin(3)], ..Default::default() }
+    ConstraintModel { parts, nets, footprints: vec![lin(1), lin(2), lin(3), lin_th(1)], ..Default::default() }
+}
+
+/// Like `lin`, but `n` round through-hole pads (exist on every copper
+/// layer) instead of SMD. Named `LINTH{n}` so it doesn't collide with
+/// `lin`'s footprint names.
+fn lin_th(n: usize) -> Footprint {
+    Footprint {
+        name: format!("LINTH{n}"),
+        pads: (0..n)
+            .map(|i| Pad {
+                number: (i + 1).to_string(),
+                at: (i as i64 * 1000, 0),
+                size: (800, 800),
+                shape: PadShape::Circle,
+                kind: PadKind::ThroughHole,
+                drill: Some(400),
+            })
+            .collect(),
+        courtyard: None,
+    }
+}
+
+fn part_th(reference: &str, npins: usize) -> Part {
+    Part {
+        reference: reference.into(),
+        mpn: None,
+        value: None,
+        package: None,
+        footprint: Some(format!("LINTH{npins}")),
+        pins: (1..=npins)
+            .map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal })
+            .collect(),
+    }
 }
 
 fn fp(id: &str, x: i64, y: i64) -> FootprintInstance {
@@ -121,6 +154,20 @@ fn fixture_via_crossing() -> (Design, ConstraintModel) {
     (d, m)
 }
 
+// -------------------------------------------------------------- fixture 5: two-pin, both through-hole
+fn fixture_2p_through_hole() -> (Design, ConstraintModel) {
+    // Both pads are through-hole, so they exist on every layer; an
+    // unobstructed path between them should never need a via — there's
+    // no obstacle to dodge, and either endpoint can legally start/end on
+    // whichever layer the path finds cheapest.
+    let d = design(rect(20_000, 10_000), vec![fp("U1", 2_000, 5_000), fp("U2", 15_000, 5_000)]);
+    let m = model(vec![part_th("U1", 1), part_th("U2", 1)], vec![Net {
+        name: "NET1".into(),
+        pins: vec!["U1.1".into(), "U2.1".into()],
+    }]);
+    (d, m)
+}
+
 // -------------------------------------------------------------- fixture 4: deliberately unroutable
 fn fixture_unroutable() -> (Design, ConstraintModel) {
     // A wall of paired Top+Bottom obstacle pads at every grid row blocks
@@ -147,17 +194,66 @@ fn fixture_unroutable() -> (Design, ConstraintModel) {
     (d, m)
 }
 
+// -------------------------------------------------------------- fixture 6: pass-through bait
+/// Three-pin net where Prim's order connects the far pin P2 before the
+/// middle pin P3 (P3 is farther by Manhattan airline), and a wall of
+/// obstacle pads forces P2's path along the bottom edge, straight across
+/// P3's copper. Without pass-through blocking the router used P3 as a
+/// stepping stone; with it, the track goes around and a later edge
+/// connects P3 properly.
+fn fixture_pass_through_bait() -> (Design, ConstraintModel) {
+    let mut footprints = vec![fp("P1", 2_000, 5_000), fp("P2", 11_000, 5_000), fp("P3", 6_500, 9_900)];
+    let mut parts = vec![part("P1", 1), part("P2", 1), part("P3", 1)];
+    let mut nets = vec![Net { name: "N".into(), pins: vec!["P1.1".into(), "P2.1".into(), "P3.1".into()] }];
+    let mut y = -500;
+    let mut i = 0;
+    while y <= 9_200 {
+        // Both sides, so a via pair can't duck under the wall.
+        for (side, tag) in [(Side::Top, "T"), (Side::Bottom, "B")] {
+            let id = format!("W{tag}{i}");
+            footprints.push(fp_side(&id, 6_500, y, side));
+            parts.push(part(&id, 1));
+            nets.push(Net { name: format!("WALL{tag}{i}"), pins: vec![format!("{id}.1")] });
+        }
+        // 300 µm between 500 µm pads: legal pad-pad clearance, no room
+        // for a 200 µm track with 200 µm clearance on each side.
+        y += 800;
+        i += 1;
+    }
+    let d = design(rect(20_000, 11_500), footprints);
+    let m = model(parts, nets);
+    (d, m)
+}
+
+#[test]
+fn pass_through_bait_never_uses_a_pad_as_a_stepping_stone() {
+    let (d, m) = fixture_pass_through_bait();
+    let rules = RouteRules::default();
+    let out = route(&d, &m, &rules, 1).expect("should route");
+    let r = out.routing.as_ref().unwrap();
+    // The bait works: the N net does route below the wall, past P3.
+    assert!(r.tracks.iter().any(|t| t.net == "N" && t.pts.iter().any(|p| p.y > 9_400)), "expected a path under the wall: {:?}", r.tracks);
+    // The real gate (pad-mediated connectivity + workmanship).
+    assert_gate_clean(&out, &m);
+}
+
 fn assert_on_grid(design: &Design, rules: &RouteRules) {
+    // The router may escape a fine-pitch part on a finer internal grid
+    // (half the configured pitch) than `rules.grid` — see
+    // `eda_router::route_partial`'s rationale. Accept either resolution,
+    // same as the `routing_offgrid_points` gate does.
+    let half = if rules.grid > 130 { rules.grid / 2 } else { rules.grid };
+    let on_grid = |v: i64| v.rem_euclid(rules.grid) == 0 || v.rem_euclid(half) == 0;
     let r = &design.routing.as_ref().unwrap();
     for t in &r.tracks {
         for p in &t.pts {
-            assert_eq!(p.x % rules.grid, 0, "track point not on grid: {p:?}");
-            assert_eq!(p.y % rules.grid, 0, "track point not on grid: {p:?}");
+            assert!(on_grid(p.x), "track point not on grid: {p:?}");
+            assert!(on_grid(p.y), "track point not on grid: {p:?}");
         }
     }
     for v in &r.vias {
-        assert_eq!(v.at.x % rules.grid, 0);
-        assert_eq!(v.at.y % rules.grid, 0);
+        assert!(on_grid(v.at.x));
+        assert!(on_grid(v.at.y));
     }
 }
 
@@ -205,6 +301,17 @@ fn assert_clearance(design: &Design, rules: &RouteRules) {
             }
         }
     }
+}
+
+/// The loop-3 quality gate (detour ratio, unnecessary-via count) must
+/// agree with the router on every result, same contract as
+/// `assert_gate_clean` for legality.
+fn assert_routing_quality_clean(design: &Design, model: &ConstraintModel) {
+    let fails: Vec<_> = eda_gates::check_routing_quality(design, model)
+        .into_iter()
+        .filter(|c| c.status == eda_model::CheckStatus::Fail)
+        .collect();
+    assert!(fails.is_empty(), "routing quality gate failures: {fails:#?}");
 }
 
 fn assert_connectivity(design: &Design, model: &ConstraintModel) {
@@ -281,6 +388,7 @@ fn fixture_2p2n_fully_routes() {
     assert_clearance(&out, &rules);
     assert_connectivity(&out, &m);
     assert_gate_clean(&out, &m);
+    assert_routing_quality_clean(&out, &m);
 }
 
 #[test]
@@ -293,6 +401,7 @@ fn fixture_4p6n_fully_routes() {
     assert_clearance(&out, &rules);
     assert_connectivity(&out, &m);
     assert_gate_clean(&out, &m);
+    assert_routing_quality_clean(&out, &m);
 }
 
 #[test]
@@ -320,6 +429,27 @@ fn fixture_via_crossing_uses_a_via() {
     assert_on_grid(&out, &rules);
     assert_within_outline(&out);
     assert_clearance(&out, &rules);
+}
+
+#[test]
+fn fixture_2p_through_hole_routes_with_no_via() {
+    // Regression: `route_net` used to pin the start of every star edge to
+    // `pa.layers[0]` (always layer 0), so an all-through-hole two-pin net
+    // routed a via even on a wide-open board with nothing to dodge. The
+    // A* start is now every layer the start pad's copper actually
+    // touches, so the router is free to pick whichever layer needs zero
+    // vias.
+    let (d, m) = fixture_2p_through_hole();
+    let rules = RouteRules::default();
+    let out = route(&d, &m, &rules, 1).expect("should route");
+    let vias = &out.routing.as_ref().unwrap().vias;
+    assert!(vias.iter().all(|v| v.net != "NET1"), "unobstructed through-hole net should need no via, got {vias:?}");
+    assert_on_grid(&out, &rules);
+    assert_within_outline(&out);
+    assert_clearance(&out, &rules);
+    assert_connectivity(&out, &m);
+    assert_gate_clean(&out, &m);
+    assert_routing_quality_clean(&out, &m);
 }
 
 #[test]

@@ -33,6 +33,8 @@ struct Args {
     pl: Option<PathBuf>,
     /// Placement generator: "anneal" (eda-place, default) or "cypress".
     placer: String,
+    /// Run the VLM judge after each stage (pipeline) — needs ANTHROPIC_API_KEY.
+    judge: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -45,6 +47,7 @@ fn parse_args() -> Result<Args, String> {
     let mut use_pcb_cli = false;
     let mut pl = None;
     let mut placer = "anneal".to_string();
+    let mut judge = false;
     while let Some(a) = it.next() {
         match a.as_str() {
             "-o" | "--out" => out = PathBuf::from(it.next().ok_or("-o needs a path")?),
@@ -53,15 +56,16 @@ fn parse_args() -> Result<Args, String> {
             "--pcb-cli" => use_pcb_cli = true,
             "--pl" => pl = Some(PathBuf::from(it.next().ok_or("--pl needs a path")?)),
             "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress")?,
+            "--judge" => judge = true,
             s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
             s => intent = Some(PathBuf::from(s)),
         }
     }
-    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl, placer })
+    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl, placer, judge })
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|export|check|import-pl> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress] [--judge] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -265,8 +269,22 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
         }
         "pipeline" => {
             let d = stage_schematic(&mut cx)?;
+            if cx.args.judge { run_judge(&mut cx, &d, eda_judge::Stage::Schematic)?; }
             let d = stage_place(&mut cx, &d)?;
-            stage_route(&mut cx, &d)?
+            if cx.args.judge { run_judge(&mut cx, &d, eda_judge::Stage::Placement)?; }
+            let d = stage_route(&mut cx, &d)?;
+            if cx.args.judge { run_judge(&mut cx, &d, eda_judge::Stage::Routing)?; }
+            d
+        }
+        "judge" => {
+            let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "judge", "judge needs --design")])?;
+            let mut fails = Vec::new();
+            for (present, stage) in [(d.schematic.is_some(), eda_judge::Stage::Schematic), (d.placement.is_some(), eda_judge::Stage::Placement), (d.routing.is_some(), eda_judge::Stage::Routing)] {
+                if present {
+                    if let Err(f) = run_judge(&mut cx, &d, stage) { fails.extend(f); }
+                }
+            }
+            return if fails.is_empty() { Ok(()) } else { Err(fails) };
         }
         "export" => {
             let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "export", "export needs --design")])?;
@@ -307,6 +325,21 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
     save_design(&cx.args.out, &design)?;
     export(&cx, &design)?;
     println!("wrote {}", cx.args.out.join("design.json").display());
+    Ok(())
+}
+
+/// VLM judge on a gate-clean candidate: verdict → CheckResults, logged at
+/// Tier::Critic. Fails the run on judge_unavailable or judge fails.
+fn run_judge(cx: &mut Ctx, d: &Design, stage: eda_judge::Stage) -> Result<(), Vec<CheckResult>> {
+    let opts = eda_judge::JudgeOptions::default();
+    let (verdict, checks) = eda_judge::judge_stage(stage, d, &cx.model, &cx.args.out, &opts)?;
+    let log_stage = match stage { eda_judge::Stage::Schematic => Stage::Schematic, eda_judge::Stage::Placement => Stage::Placement, eda_judge::Stage::Routing => Stage::Routing };
+    let metrics = serde_json::json!({ "judge_score": verdict.score, "rubric_version": verdict.rubric_version, "judge_model": verdict.model, "summary": verdict.summary });
+    cx.log.candidate(log_stage, 0, cx.args.seed, d, Tier::Critic, &checks, metrics).ok();
+    let label = format!("{} judge ({} {:.1}/10)", stage.name(), verdict.model, verdict.score);
+    if !print_checks(&label, &checks) {
+        return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
+    }
     Ok(())
 }
 

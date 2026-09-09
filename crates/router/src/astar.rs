@@ -13,7 +13,21 @@ const DIRS: [(i64, i64); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)]; // N, E, S, W
 
 const STEP_COST: i64 = 1;
 const BEND_COST: i64 = 2;
-const VIA_COST: i64 = 10;
+/// 30 cells (~7.6 mm of track on the reference 254 µm grid) per layer
+/// change. At 10 a via pair cost less than a 5 mm detour and the router
+/// hopped layers to dodge a single track on a three-part board; at 60 the
+/// 30-part board grew 20% in track length and started crossing refdes
+/// labels rather than via. 30 is the corpus sweet spot at the reference
+/// grid; [`via_cost`] rescales it to cells at the design's actual grid so
+/// the physical via-vs-detour trade-off the corpus was tuned against
+/// doesn't quietly shift when the grid gets finer or coarser.
+const VIA_COST_REF_CELLS: i64 = 30;
+const REF_GRID_UM: i64 = 254;
+
+fn via_cost(grid_um: i64) -> i64 {
+    ((VIA_COST_REF_CELLS * REF_GRID_UM) / grid_um.max(1)).max(1)
+}
+
 
 /// dir 0..=3 = last move direction (index into DIRS), 4 = none (start, or
 /// just came off a via).
@@ -41,7 +55,19 @@ impl PartialOrd for QueueItem {
 }
 
 /// Bound on expanded states, so a hopeless search fails instead of hanging.
-const MAX_EXPANSIONS: usize = 400_000;
+/// Tuned at the reference 254 µm grid; a finer grid has quadratically more
+/// cells to cover the same board, so the same absolute cap would let the
+/// search declare defeat well before it has covered as much *physical*
+/// area as it used to — [`max_expansions`] rescales it by the grid's cell
+/// density relative to the reference, capped so a very fine grid can't
+/// blow the routing time budget.
+const MAX_EXPANSIONS_REF: usize = 400_000;
+const MAX_EXPANSIONS_CAP: usize = 4_000_000;
+
+fn max_expansions(grid_um: i64) -> usize {
+    let ratio = (REF_GRID_UM as f64 / grid_um.max(1) as f64).powi(2);
+    ((MAX_EXPANSIONS_REF as f64 * ratio) as usize).clamp(MAX_EXPANSIONS_REF, MAX_EXPANSIONS_CAP)
+}
 
 struct StateTable {
     cells_x: i64,
@@ -100,32 +126,58 @@ pub fn route(
     goal: (i64, i64, u8),
 ) -> Option<Vec<(i64, i64, u8)>> {
     let goals: std::collections::HashSet<(i64, i64, u8)> = std::iter::once(goal).collect();
-    route_to_any(grid, net, start, &goals, &[(goal.0, goal.1)])
+    route_to_any(grid, net, &[start], &goals, &[(goal.0, goal.1)])
 }
 
-/// Multi-goal A*: the path ends at the first cell contained in `goals`.
-/// `h_targets` (cell x/y) drive the heuristic — the nearest one by
-/// Manhattan distance; goals that are not targets (e.g. existing tracks)
-/// may be found earlier than the heuristic predicts, which only makes
-/// the result slightly less optimal, never wrong.
+/// Multi-goal A*, with multiple valid starting cells (e.g. a through-hole
+/// pad, whose copper — and thus a track's legal starting layer — spans
+/// every layer). Every start is seeded at cost 0, so the search finds
+/// whichever (start, goal) pair is cheapest instead of forcing a via just
+/// because the caller had to pick one layer to name as "the" start;
+/// picking only `pa.layers[0]` here used to add a spurious via on every
+/// two-pin, all-through-hole net whenever the direct path favoured the
+/// other layer.
+///
+/// The path ends at the first cell contained in `goals`. `h_targets`
+/// (cell x/y) drive the heuristic — the nearest one by Manhattan
+/// distance; goals that are not targets (e.g. existing tracks) may be
+/// found earlier than the heuristic predicts, which only makes the
+/// result slightly less optimal, never wrong.
 pub fn route_to_any(
     grid: &Grid,
     net: &str,
-    start: (i64, i64, u8),
+    starts: &[(i64, i64, u8)],
     goals: &std::collections::HashSet<(i64, i64, u8)>,
     h_targets: &[(i64, i64)],
 ) -> Option<Vec<(i64, i64, u8)>> {
-    let start_state: State = (start.0, start.1, start.2, NO_DIR);
+    route_to_any_ex(grid, net, starts, goals, h_targets).0
+}
+
+/// [`route_to_any`], plus the set of cells the search expanded. On
+/// failure that set is the pocket the start is enclosed in, and the
+/// copper bordering it is what has to be ripped up to get out.
+pub fn route_to_any_ex(
+    grid: &Grid,
+    net: &str,
+    starts: &[(i64, i64, u8)],
+    goals: &std::collections::HashSet<(i64, i64, u8)>,
+    h_targets: &[(i64, i64)],
+) -> (Option<Vec<(i64, i64, u8)>>, Vec<(i64, i64, u8)>) {
+    let mut explored: Vec<(i64, i64, u8)> = Vec::new();
     let mut table = StateTable::new(grid);
     let mut heap = BinaryHeap::new();
 
     let h = |cx: i64, cy: i64| h_targets.iter().map(|&(gx, gy)| (cx - gx).abs() + (cy - gy).abs()).min().unwrap_or(0);
 
-    let start_idx = table.index(start_state);
-    table.best[start_idx] = 0;
-    heap.push(QueueItem { f: h(start.0, start.1), g: 0, state: start_state });
+    for &start in starts {
+        let start_state: State = (start.0, start.1, start.2, NO_DIR);
+        let start_idx = table.index(start_state);
+        table.best[start_idx] = 0;
+        heap.push(QueueItem { f: h(start.0, start.1), g: 0, state: start_state });
+    }
 
     let mut expansions = 0usize;
+    let max_expansions = max_expansions(grid.grid_um);
     let mut goal_state: Option<State> = None;
 
     while let Some(QueueItem { g, state, .. }) = heap.pop() {
@@ -138,8 +190,9 @@ pub fn route_to_any(
             break;
         }
         expansions += 1;
-        if expansions > MAX_EXPANSIONS {
-            return None;
+        explored.push((cx, cy, layer));
+        if expansions > max_expansions {
+            return (None, explored);
         }
 
         // Same-layer moves.
@@ -149,7 +202,7 @@ pub fn route_to_any(
                 continue;
             }
             let turn_cost = if dir == NO_DIR || dir == i as u8 { 0 } else { BEND_COST };
-            let ng = g + STEP_COST + turn_cost;
+            let ng = g + STEP_COST + turn_cost + grid.penalty(nx, ny, layer);
             let nstate: State = (nx, ny, layer, i as u8);
             if ng < table.get(nstate) {
                 table.set(nstate, ng, state);
@@ -157,7 +210,9 @@ pub fn route_to_any(
             }
         }
 
-        // Layer change (via) in place.
+        // Layer change (via) in place. Never inside or overlapping pad
+        // copper on either layer, own net included (via-in-pad).
+        let vr = grid.via_pad_radius_cells();
         for nl in 0..grid.num_layers as u8 {
             if nl == layer {
                 continue;
@@ -165,7 +220,10 @@ pub fn route_to_any(
             if !grid.passable_as(cx, cy, nl, net, Occ::Via) || !grid.passable_as(cx, cy, layer, net, Occ::Via) {
                 continue;
             }
-            let ng = g + VIA_COST;
+            if grid.pad_within(cx, cy, nl, vr) || grid.pad_within(cx, cy, layer, vr) {
+                continue;
+            }
+            let ng = g + via_cost(grid.grid_um) + grid.penalty(cx, cy, layer) + grid.penalty(cx, cy, nl);
             let nstate: State = (cx, cy, nl, NO_DIR);
             if ng < table.get(nstate) {
                 table.set(nstate, ng, state);
@@ -174,7 +232,10 @@ pub fn route_to_any(
         }
     }
 
-    let goal_state = goal_state?;
+    if goal_state.is_none() && std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+        eprintln!("astar: no path for {net} after {expansions} expansions (soft_active={})", grid.soft_active);
+    }
+    let Some(goal_state) = goal_state else { return (None, explored) };
     let mut path = vec![goal_state];
     let mut cur_idx = table.index(goal_state);
     loop {
@@ -187,5 +248,5 @@ pub fn route_to_any(
         cur_idx = from as usize;
     }
     path.reverse();
-    Some(path.into_iter().map(|(x, y, l, _)| (x, y, l)).collect())
+    (Some(path.into_iter().map(|(x, y, l, _)| (x, y, l)).collect()), explored)
 }

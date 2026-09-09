@@ -42,7 +42,13 @@ pub fn assign_coords(g: &LayoutGraph, ext: &ExtGraph, order: &[Vec<usize>], opts
         nb.dedup();
     }
 
-    let min_gap = opts.node_spacing.max(1);
+    // Within-layer gap must also fit the two symbols' reserved label slots
+    // (this axis is screen-vertical after the boundary transpose, and that
+    // is where the refdes and value slots live) — otherwise adjacent boxes'
+    // slot obstacles overlap and every escape lane between them is blocked,
+    // which shows up as `schematic_wire_detour` right across the fixtures.
+    let slot_pad = opts.label_slot_above.max(0) + opts.label_slot_below.max(0);
+    let min_gap = (opts.node_spacing + slot_pad).max(1);
 
     // Initial placement: left-to-right packing within each layer.
     let mut center_x: Vec<i64> = vec![0; n];
@@ -115,7 +121,7 @@ pub fn assign_coords(g: &LayoutGraph, ext: &ExtGraph, order: &[Vec<usize>], opts
     // gap to fit `rows` grid-spaced rows there means requiring
     // `gap >= tallest + 2*STUB_LEN + rows*grid`.
     let tallest = g.nodes.iter().map(|n| n.height).max().unwrap_or(0);
-    let base_spacing = snap_up((opts.layer_spacing).max(tallest + min_gap), opts.grid).max(opts.grid);
+    let base_spacing = snap_up((opts.layer_spacing).max(tallest + opts.node_spacing.max(1)), opts.grid).max(opts.grid);
     let mut layer_y: Vec<i64> = vec![0; order.len()];
     for l in 1..order.len() {
         let rows = channel_demand.get(l - 1).map(|d| d.len()).unwrap_or(0);

@@ -1,0 +1,180 @@
+# Ladder rung 1/4: USB-powered MCU breakout ("control hub" ancestor #1).
+# ~17 parts. USB-C in -> 3.3V LDO -> small MCU with SWD, reset, boot,
+# status LED. This is the minimum viable "hello world" board every later
+# rung in the ladder builds on.
+#
+# Notes on stand-in packages (see crates/model/src/footprint.rs builtin()):
+# - USB-C receptacle has no dedicated built-in footprint, so J1 uses the
+#   generic PINHEADER-16 (16 castellated/through-hole pads) as a
+#   pad-count stand-in per the ladder brief. Real USB-C-2.0 breakouts
+#   commonly expose VBUS/GND/CC1/CC2/D+/D- plus duplicated/NC pins on
+#   a 16-pin THT connector (e.g. GCT USB4105), so 16 pins is realistic.
+# - MCU U2 uses TSSOP-20 (STM32C0-class 20-pin part), a real builtin.
+# - Reset/boot momentary switches (SW1/SW2) have no SPST-button
+#   footprint in the library; the 2-pad "1206" pattern stands in for a
+#   2-pin SMD tactile switch (e.g. Panasonic EVQ-P7).
+# Unused expansion GPIOs (PA1-PA7) are marked kind: nc rather than left
+# floating -- lint's source_pin_not_connected gate fails hard on any
+# unconnected signal pin, so unpopulated/reserved pins are declared nc.
+parts:
+  - reference: J1
+    mpn: GCT-USB4105-GF-A
+    value: "USB-C receptacle"
+    package: PINHEADER-16
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VBUS, kind: power }
+      - { number: "3", name: CC1, kind: signal }
+      - { number: "4", name: CC2, kind: signal }
+      - { number: "5", name: DP1, kind: signal }
+      - { number: "6", name: DM1, kind: signal }
+      - { number: "7", name: SBU1, kind: nc }
+      - { number: "8", name: SBU2, kind: nc }
+      - { number: "9", name: NC1, kind: nc }
+      - { number: "10", name: NC2, kind: nc }
+      - { number: "11", name: NC3, kind: nc }
+      - { number: "12", name: NC4, kind: nc }
+      - { number: "13", name: NC5, kind: nc }
+      - { number: "14", name: NC6, kind: nc }
+      - { number: "15", name: SHIELD1, kind: nc }
+      - { number: "16", name: SHIELD2, kind: nc }
+
+  # USB-C CC1/CC2 5.1k pulldowns advertise a default-power (5V/900mA) sink,
+  # per the USB Type-C spec -- without them the board draws no VBUS.
+  - reference: R1
+    value: 5.1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R2
+    value: 5.1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: U1
+    mpn: AMS1117-3.3
+    value: "3.3V LDO"
+    package: SOT-223
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VOUT, kind: power }
+      - { number: "3", name: VIN, kind: power }
+  - reference: C1
+    value: 10uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C2
+    value: 22uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: U2
+    mpn: STM32C011F6
+    value: MCU
+    package: TSSOP-20
+    pins:
+      - { number: "1", name: VDD, kind: power }
+      - { number: "2", name: VSS, kind: ground }
+      - { number: "3", name: VDDA, kind: power }
+      - { number: "4", name: VSSA, kind: ground }
+      - { number: "5", name: NRST, kind: signal }
+      - { number: "6", name: BOOT0, kind: signal }
+      - { number: "7", name: SWDIO, kind: signal }
+      - { number: "8", name: SWCLK, kind: signal }
+      - { number: "9", name: PA0, kind: signal }
+      - { number: "10", name: PA1, kind: nc }
+      - { number: "11", name: PA2, kind: nc }
+      - { number: "12", name: PA3, kind: nc }
+      - { number: "13", name: PA4, kind: nc }
+      - { number: "14", name: PA5, kind: nc }
+      - { number: "15", name: PA6, kind: nc }
+      - { number: "16", name: PA7, kind: nc }
+      - { number: "17", name: USB_DP, kind: signal }
+      - { number: "18", name: USB_DM, kind: signal }
+      - { number: "19", name: VDD2, kind: power }
+      - { number: "20", name: GND2, kind: ground }
+
+  - reference: C3
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C4
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C5
+    value: 1uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: R3
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: SW1
+    mpn: EVQ-P7C01P
+    value: "reset button"
+    package: "1206"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: R4
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: SW2
+    mpn: EVQ-P7C01P
+    value: "boot0 button"
+    package: "1206"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: R5
+    value: 330
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D1
+    value: "status LED"
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+
+  - reference: J2
+    value: "SWD header"
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: SWDIO, kind: signal }
+      - { number: "2", name: SWCLK, kind: signal }
+      - { number: "3", name: GND, kind: ground }
+      - { number: "4", name: "3V3", kind: power }
+
+nets:
+  - { name: VBUS, pins: [J1.2, U1.3] }
+  - { name: GND, pins: [J1.1, U1.1, C1.2, C2.2, C3.2, C4.2, C5.2, R1.2, R2.2, R4.2, SW1.2, SW2.2, D1.2, J2.3, U2.2, U2.4, U2.20] }
+  - { name: CC1, pins: [J1.3, R1.1] }
+  - { name: CC2, pins: [J1.4, R2.1] }
+  - { name: USB_DP, pins: [J1.5, U2.17] }
+  - { name: USB_DM, pins: [J1.6, U2.18] }
+  - { name: "3V3", pins: [U1.2, C1.1, C2.1, C3.1, C4.1, C5.1, R3.1, J2.4, U2.1, U2.3, U2.19] }
+  - { name: NRST, pins: [U2.5, R3.2, SW1.1] }
+  - { name: BOOT0, pins: [U2.6, R4.1, SW2.1] }
+  - { name: SWDIO, pins: [U2.7, J2.1] }
+  - { name: SWCLK, pins: [U2.8, J2.2] }
+  - { name: LED_DRIVE, pins: [U2.9, R5.1] }
+  - { name: LED_A, pins: [R5.2, D1.1] }
+
+placement_rules:
+  - { kind: proximity, a: U1, b: C1, max_mm: 3.0 }
+  - { kind: proximity, a: U1, b: C2, max_mm: 3.0 }
+  - { kind: proximity, a: U2, b: C3, max_mm: 1.5 }
+  - { kind: proximity, a: U2, b: C4, max_mm: 1.5 }
+  - { kind: proximity, a: U2, b: C5, max_mm: 3.0 }
+  - { kind: proximity, a: J1, b: R1, max_mm: 5.0 }
+  - { kind: proximity, a: J1, b: R2, max_mm: 5.0 }
+  - { kind: proximity, a: U2, b: J2, max_mm: 15.0 }
+
+board:
+  grid: 254
+  track_width: 200
+  clearance: 200
+  outline:
+    - { x: 0, y: 0 }
+    - { x: 60000, y: 0 }
+    - { x: 60000, y: 40000 }
+    - { x: 0, y: 40000 }

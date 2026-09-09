@@ -25,6 +25,12 @@ const NO_DIR: u8 = 4;
 const MAX_EXPANSIONS: usize = 300_000;
 /// Free margin around the node bounding box, in grid cells.
 const MARGIN_CELLS: i64 = 8;
+/// Deterministic budget, counted in maze search attempts: past this many
+/// the pass stops trying rip-up cascades and falls back to plain routing for
+/// what is left. Replaces a wall-clock deadline, which made the emitted
+/// schematic depend on how fast the machine happened to be that run — two
+/// back-to-back runs on the same input gave different gate results.
+const CASCADE_WORK: usize = 4;
 
 impl Cell {
     fn group(self) -> Option<usize> {
@@ -363,7 +369,7 @@ fn simplify(path: &[(i64, i64)], grid: &Grid) -> Vec<Point> {
 /// Re-routes every edge in `overlapping_edges` around the others. Edges
 /// the maze cannot route keep their original wire (the gate will report
 /// them). Returns the number of edges rerouted.
-pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>], grid_um: i64) -> usize {
+pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>], grid_um: i64, slot_boxes: &[(usize, Point, i64, i64)]) -> usize {
     let t0 = std::time::Instant::now();
     let bad = overlapping_edges(g, node_top_left, polys);
     let debug = std::env::var_os("EDA_MAZE_DEBUG").is_some();
@@ -398,11 +404,18 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
     let cells_y = (max_y - min_y) / grid_um + MARGIN_CELLS + 1;
     let mut grid = Grid { grid: grid_um, min_x, min_y, cells_x, cells_y, cells: vec![Cell::Free; (cells_x * cells_y) as usize] };
 
-    // Boxes and stubs are solid.
+    // Boxes (grown by their reserved refdes/value label slots, so the maze
+    // never re-routes a wire into space the renderer will fill with text)
+    // and stubs are solid.
     for (id, n) in g.nodes.iter().enumerate() {
         let tl = node_top_left[id];
-        let (x0, y0) = grid.to_cell(tl);
-        let (x1, y1) = grid.to_cell(Point { x: tl.x + n.width, y: tl.y + n.height });
+        let (btl, bw, bh) = slot_boxes
+            .iter()
+            .find(|&&(sid, ..)| sid == id)
+            .map(|&(_, tl, w, h)| (tl, w, h))
+            .unwrap_or((tl, n.width, n.height));
+        let (x0, y0) = grid.to_cell(btl);
+        let (x1, y1) = grid.to_cell(Point { x: btl.x + bw, y: btl.y + bh });
         for cy in y0..=y1 {
             for cx in x0..=x1 {
                 grid.set(cx, cy, Cell::Solid);
@@ -421,87 +434,21 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
     }
     let base_cells = grid.cells.clone();
     let mut rerouted = 0;
+    // Total budget on transitive rip-up attempts across the whole repair
+    // pass, so a pathological board can't spin forever.
+    let mut rip_budget: usize = 40;
+    // Cascades are O(edges) per attempt; on a big board they can blow the
+    // repair pass's time budget for little gain. Once we're this deep into
+    // repair, fall back to plain (non-cascading) routing for what's left.
+    // Deterministic, not wall-clock: a time-based cut-off makes the emitted
+    // schematic depend on how fast the machine happened to be that run, which
+    // showed up directly as two different gate results for the same input on
+    // back-to-back runs. Count search work instead.
+    let mut work: usize = 0;
     for &e in &bad {
-        let edge = &g.edges[e];
-        let group = edge.group;
-        // Rebuild occupancy from every wire except this one, so masked
-        // overlaps between the others are never lost.
-        grid.cells.clone_from(&base_cells);
-        for (i, poly) in polys.iter().enumerate() {
-            if i != e {
-                grid.mark_wire(poly, g.edges[i].group);
-            }
-        }
-        let a = g.nodes[edge.from.node].stub_tip(node_top_left[edge.from.node], edge.from.port);
-        let b = g.nodes[edge.to.node].stub_tip(node_top_left[edge.to.node], edge.to.port);
-        let (ca, cb) = (grid.to_cell(a), grid.to_cell(b));
-        // Free the two endpoint tip cells and their stubs for this group.
-        let free_stub = |grid: &mut Grid, node: usize, port: usize| {
-            let n = &g.nodes[node];
-            let pp = n.port_point(node_top_left[node], port);
-            let tip = n.stub_tip(node_top_left[node], port);
-            let (p, t) = (grid.to_cell(pp), grid.to_cell(tip));
-            for cy in p.1.min(t.1)..=p.1.max(t.1) {
-                for cx in p.0.min(t.0)..=p.0.max(t.0) {
-                    grid.set(cx, cy, Cell::Wire { group, horizontal: false });
-                }
-            }
-            grid.set(t.0, t.1, Cell::Wire { group, horizontal: false });
-        };
-        free_stub(&mut grid, edge.from.node, edge.from.port);
-        free_stub(&mut grid, edge.to.node, edge.to.port);
-
-        let mut found = None;
-        for margin in [6i64, 14, 30, i64::MAX] {
-            let (x0, y0, x1, y1) = if margin == i64::MAX {
-                (0, 0, grid.cells_x - 1, grid.cells_y - 1)
-            } else {
-                (
-                    (ca.0.min(cb.0) - margin).max(0),
-                    (ca.1.min(cb.1) - margin).max(0),
-                    (ca.0.max(cb.0) + margin).min(grid.cells_x - 1),
-                    (ca.1.max(cb.1) + margin).min(grid.cells_y - 1),
-                )
-            };
-            let win = Window { x0, y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
-            match astar(&grid, &win, group, ca, cb) {
-                Search::Found(path) => {
-                    found = Some(path);
-                    break;
-                }
-                Search::BoxedIn => break,
-                Search::WindowBound => {}
-            }
-            if margin == i64::MAX {
-                break;
-            }
-        }
-        if std::env::var_os("EDA_MAZE_DEBUG").is_some() {
-            eprintln!("maze: edge {e} group {group} {a:?}->{b:?} rerouted={}", found.is_some());
-        }
-        if let Some(path) = found {
-            let mut poly = simplify(&path, &grid);
-            // Pin the exact stub tips; if a tip is off the maze grid, add
-            // an orthogonal jog rather than a diagonal.
-            if let Some(&p0) = poly.first() {
-                if p0 != a {
-                    let mut v = vec![a];
-                    if a.x != p0.x && a.y != p0.y {
-                        v.push(Point { x: p0.x, y: a.y });
-                    }
-                    v.extend(poly.into_iter());
-                    poly = v;
-                }
-            }
-            if let Some(&pl) = poly.last() {
-                if pl != b {
-                    if b.x != pl.x && b.y != pl.y {
-                        poly.push(Point { x: pl.x, y: b.y });
-                    }
-                    poly.push(b);
-                }
-            }
-            polys[e] = poly;
+        let mut skip: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let depth = if work > CASCADE_WORK { 0 } else { 3 };
+        if attempt_route(g, node_top_left, &base_cells, &mut grid, polys, e, depth, &mut rip_budget, &mut skip, &mut work, debug) {
             rerouted += 1;
         }
     }
@@ -509,4 +456,226 @@ pub fn repair(g: &LayoutGraph, node_top_left: &[Point], polys: &mut [Vec<Point>]
         eprintln!("maze: rerouted {rerouted}/{} in {:?}", bad.len(), t0.elapsed());
     }
     rerouted
+}
+
+/// Try to route edge `e` into `polys[e]`, treating every edge index in
+/// `skip` as if it had no wire yet (it is mid-rip-up). On failure, tries
+/// ripping up the foreign net(s) most in the way and rerouting them too
+/// (bounded by `depth` and the shared `rip_budget`), restoring everything
+/// on total failure so `polys[e]` is left untouched.
+#[allow(clippy::too_many_arguments)]
+fn attempt_route(
+    g: &LayoutGraph,
+    node_top_left: &[Point],
+    base_cells: &[Cell],
+    grid: &mut Grid,
+    polys: &mut [Vec<Point>],
+    e: usize,
+    depth: u32,
+    rip_budget: &mut usize,
+    skip: &mut std::collections::HashSet<usize>,
+    work: &mut usize,
+    debug: bool,
+) -> bool {
+    *work += 1;
+    if let Some(poly) = route_one(g, node_top_left, base_cells, grid, polys, skip, e) {
+        polys[e] = poly;
+        return true;
+    }
+    if depth == 0 || *rip_budget == 0 {
+        return false;
+    }
+    // Rank foreign groups by how many cells of theirs sit near the
+    // corridor between this edge's endpoints (fewest cells first:
+    // cheapest to rip up). Restrict to that corridor, not the whole
+    // board, so we target the actual blocker instead of a stray stub.
+    let group = g.edges[e].group;
+    let edge = &g.edges[e];
+    let a = g.nodes[edge.from.node].stub_tip(node_top_left[edge.from.node], edge.from.port);
+    let b = g.nodes[edge.to.node].stub_tip(node_top_left[edge.to.node], edge.to.port);
+    let (ca, cb) = (grid.to_cell(a), grid.to_cell(b));
+    let pad = 20i64;
+    let bx0 = (ca.0.min(cb.0) - pad).max(0);
+    let by0 = (ca.1.min(cb.1) - pad).max(0);
+    let bx1 = (ca.0.max(cb.0) + pad).min(grid.cells_x - 1);
+    let by1 = (ca.1.max(cb.1) + pad).min(grid.cells_y - 1);
+    // BTreeMap, and a total sort key below: with a HashMap here the rip-up
+    // candidate order depended on hash seed, so the same input produced
+    // different schematics on different runs.
+    let mut counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for cy in by0..=by1 {
+        for cx in bx0..=bx1 {
+            if let Some(gr) = grid.get(cx, cy).group() {
+                if gr != group {
+                    *counts.entry(gr).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    let mut candidates: Vec<(usize, usize)> = counts.into_iter().collect();
+    candidates.sort_by_key(|&(g, n)| (std::cmp::Reverse(n), g));
+    if debug {
+        eprintln!("maze: edge {e} candidates near corridor: {candidates:?}");
+    }
+    for (cg, _) in candidates.into_iter().take(3) {
+        let group_edges: Vec<usize> =
+            (0..polys.len()).filter(|&i| g.edges[i].group == cg && i != e && !skip.contains(&i) && !polys[i].is_empty()).collect();
+        if group_edges.is_empty() {
+            continue;
+        }
+        let saved: Vec<(usize, Vec<Point>)> = group_edges.iter().map(|&i| (i, polys[i].clone())).collect();
+        // `e`'s own wire is part of what a failed cascade has to undo: the
+        // route we are about to try for it is only valid *while* `cg` is
+        // ripped up, so if we end up restoring `cg`'s old wires we must put
+        // `e`'s old wire back too. Leaving the new one in place is exactly
+        // how a maze reroute ends up collinear on a wire it never saw.
+        let saved_e = polys[e].clone();
+        for &i in &group_edges {
+            skip.insert(i);
+        }
+        if *rip_budget == 0 {
+            for &i in &group_edges {
+                skip.remove(&i);
+            }
+            break;
+        }
+        *rip_budget -= 1;
+        if debug {
+            eprintln!("maze: edge {e} group {group} ripping up group {cg} ({} edges) at depth {depth}", group_edges.len());
+        }
+        *work += 1;
+        if let Some(poly) = route_one(g, node_top_left, base_cells, grid, polys, skip, e) {
+            polys[e] = poly;
+            let mut all_ok = true;
+            for &i in &group_edges {
+                skip.remove(&i);
+                if !attempt_route(g, node_top_left, base_cells, grid, polys, i, depth - 1, rip_budget, skip, work, debug) {
+                    all_ok = false;
+                    break;
+                }
+            }
+            if all_ok {
+                return true;
+            }
+            // Roll back: restore the ripped edges and this edge, then try
+            // the next candidate group.
+            polys[e] = saved_e;
+            for (i, p) in saved {
+                polys[i] = p;
+                skip.remove(&i);
+            }
+        } else {
+            for &i in &group_edges {
+                skip.remove(&i);
+            }
+        }
+    }
+    false
+}
+
+/// One windowed maze search for `e`, ignoring wires in `skip` and `e`
+/// itself. Returns the finished, pin-snapped polyline on success.
+fn route_one(
+    g: &LayoutGraph,
+    node_top_left: &[Point],
+    base_cells: &[Cell],
+    grid: &mut Grid,
+    polys: &[Vec<Point>],
+    skip: &std::collections::HashSet<usize>,
+    e: usize,
+) -> Option<Vec<Point>> {
+    let edge = &g.edges[e];
+    let group = edge.group;
+    grid.cells.clear();
+    grid.cells.extend_from_slice(base_cells);
+    for (i, poly) in polys.iter().enumerate() {
+        if i != e && !skip.contains(&i) {
+            grid.mark_wire(poly, g.edges[i].group);
+        }
+    }
+    let a = g.nodes[edge.from.node].stub_tip(node_top_left[edge.from.node], edge.from.port);
+    let b = g.nodes[edge.to.node].stub_tip(node_top_left[edge.to.node], edge.to.port);
+    let (ca, cb) = (grid.to_cell(a), grid.to_cell(b));
+    let free_stub = |grid: &mut Grid, node: usize, port: usize| {
+        let n = &g.nodes[node];
+        let pp = n.port_point(node_top_left[node], port);
+        let tip = n.stub_tip(node_top_left[node], port);
+        let (p, t) = (grid.to_cell(pp), grid.to_cell(tip));
+        for cy in p.1.min(t.1)..=p.1.max(t.1) {
+            for cx in p.0.min(t.0)..=p.0.max(t.0) {
+                grid.set(cx, cy, Cell::Wire { group, horizontal: false });
+            }
+        }
+        grid.set(t.0, t.1, Cell::Wire { group, horizontal: false });
+    };
+    free_stub(grid, edge.from.node, edge.from.port);
+    free_stub(grid, edge.to.node, edge.to.port);
+
+    let mut found = None;
+    for margin in [6i64, 14, 30, i64::MAX] {
+        let (x0, y0, x1, y1) = if margin == i64::MAX {
+            (0, 0, grid.cells_x - 1, grid.cells_y - 1)
+        } else {
+            (
+                (ca.0.min(cb.0) - margin).max(0),
+                (ca.1.min(cb.1) - margin).max(0),
+                (ca.0.max(cb.0) + margin).min(grid.cells_x - 1),
+                (ca.1.max(cb.1) + margin).min(grid.cells_y - 1),
+            )
+        };
+        let win = Window { x0, y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+        match astar(grid, &win, group, ca, cb) {
+            Search::Found(path) => {
+                found = Some(path);
+                break;
+            }
+            Search::BoxedIn => break,
+            Search::WindowBound => {}
+        }
+        if margin == i64::MAX {
+            break;
+        }
+    }
+    if std::env::var_os("EDA_MAZE_DEBUG").is_some() {
+        eprintln!("maze: edge {e} group {group} {a:?}->{b:?} rerouted={}", found.is_some());
+    }
+    let path = found?;
+    let mut poly = simplify(&path, grid);
+    if let Some(&p0) = poly.first() {
+        if p0 != a {
+            let mut v = vec![a];
+            if a.x != p0.x && a.y != p0.y {
+                v.push(Point { x: p0.x, y: a.y });
+            }
+            v.extend(poly.into_iter());
+            poly = v;
+        }
+    }
+    if let Some(&pl) = poly.last() {
+        if pl != b {
+            if b.x != pl.x && b.y != pl.y {
+                poly.push(Point { x: pl.x, y: b.y });
+            }
+            poly.push(b);
+        }
+    }
+    // Final guard on the finished polyline. The A* passability test refuses
+    // to run along a foreign wire cell, but that is a statement about the
+    // *cell grid*, and the grid is not the polyline: `to_cell` quantises, a
+    // stub freed for this net overwrites whatever was there, and the two
+    // endpoint fix-up legs appended above never went through the search at
+    // all. Any of those can hand back a path that is collinear with a wire
+    // the search believed it had avoided (l2's I2C_SCL reroute running
+    // along USB_DM's escape lane at y=213360). Checking the geometry we
+    // actually emit, against the geometry actually placed, is the only
+    // check that cannot drift from what `schematic_wire_overlap` measures.
+    for (i, other) in polys.iter().enumerate() {
+        if i == e || skip.contains(&i) || g.edges[i].group == group || shares_pin(&g.edges[i], edge) {
+            continue;
+        }
+        if poly.windows(2).any(|s| other.windows(2).any(|t| collinear_overlap(s[0], s[1], t[0], t[1]))) {
+            return None;
+        }
+    }
+    Some(poly)
 }

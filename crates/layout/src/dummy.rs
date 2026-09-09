@@ -39,11 +39,24 @@ pub struct ExtGraph {
 /// layer gap once), so the length of `channel_demand()[l]` is exactly the
 /// number of genuinely distinct rows that channel must provide.
 ///
+/// Rows are keyed by *net group*, not by individual edge: `maze`'s repair
+/// pass already lets same-group wires share cells freely (that is what
+/// bundles a star net's spokes into one stub leaving the hub), so two hops
+/// of the *same* net crossing the same channel can share one track instead
+/// of each reserving its own row. Without this, a single N-pin star net
+/// forces N distinct rows into every channel its spokes cross, inflating
+/// that channel's vertical size (`coords::assign_coords` sizes each gap to
+/// fit one row per demand entry) even though the spokes are allowed to run
+/// side by side. This is exactly what made `star_net` need 368mm of wire
+/// for 6 parts: channel 0 had 6 edges (3 direct STAR spokes + 2 STAR
+/// pass-through hops + one power-pair net) all in different rows, most of
+/// which belong to the same STAR net and could have shared a track.
+///
 /// Used both by `coords::assign_coords` (to size each channel's vertical
 /// gap so it can fit one row per hop) and by `routing::route_edges` (to
-/// assign each hop a unique row index within its channel, deterministically
-/// via the edge's position in this sorted list).
-pub fn channel_demand(ext: &ExtGraph) -> Vec<Vec<usize>> {
+/// assign each hop a shared-by-group row index within its channel,
+/// deterministically via the edge's group's position in this sorted list).
+pub fn channel_demand(ext: &ExtGraph, g: &LayoutGraph) -> Vec<Vec<usize>> {
     let num_channels = ext.layers.len().saturating_sub(1);
     let mut demand: Vec<Vec<usize>> = vec![Vec::new(); num_channels];
     for chain in &ext.chains {
@@ -54,6 +67,7 @@ pub fn channel_demand(ext: &ExtGraph) -> Vec<Vec<usize>> {
         if chain.nodes.len() < 2 {
             continue;
         }
+        let group = g.edges[chain.edge_index].group;
         for w in chain.nodes.windows(2) {
             let a_layer = ext.ext_nodes[w[0]].layer;
             let b_layer = ext.ext_nodes[w[1]].layer;
@@ -62,7 +76,7 @@ pub fn channel_demand(ext: &ExtGraph) -> Vec<Vec<usize>> {
                 // real node/layer. No real channel hop to size.
                 continue;
             }
-            demand[a_layer].push(chain.edge_index);
+            demand[a_layer].push(group);
         }
     }
     for d in &mut demand {

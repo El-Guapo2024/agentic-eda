@@ -87,6 +87,82 @@ pub fn assign_layers(g: &LayoutGraph, reversed: &[bool]) -> Vec<usize> {
     layer
 }
 
+/// Maximum real (non-dummy) nodes a single Sugiyama layer may hold before
+/// `split_overflowing_layers` carves it into side-by-side sub-columns —
+/// matches `eda-gates`' `MAX_COLUMN_SIZE`, the readability threshold the
+/// rendered schematic must respect.
+pub const MAX_NODES_PER_LAYER: usize = 8;
+
+/// Splits any layer holding more than [`MAX_NODES_PER_LAYER`] nodes into
+/// several consecutive new layers ("sub-columns", each within the limit),
+/// renumbering every layer so edge direction (`layer[u] < layer[v]` for
+/// every `u -> v` edge) is preserved: since no edge ever connects two nodes
+/// in the same original layer (that's the layering invariant longest-path
+/// assignment guarantees), splitting one layer into several never needs to
+/// move an edge's endpoints out of order — the new layers for one original
+/// layer are simply inserted, in bulk, between the (unsplit) new layers for
+/// its neighbors.
+///
+/// Nodes within an overflowing layer are grouped by the mean id of their
+/// graph neighbors (a cheap proxy for "which part of the design they hang
+/// off of", since a decoupling cap almost always shares a neighbor — the IC
+/// pin it's next to — with the other passives clustered on that same pin)
+/// and then chunked in that order, so a chunk tends to land nodes that were
+/// already adjacent in the design next to each other in the same
+/// sub-column, rather than splitting arbitrarily by id.
+pub fn split_overflowing_layers(g: &LayoutGraph, reversed: &[bool], layer: &[usize], max_per_layer: usize) -> Vec<usize> {
+    let n = layer.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, e) in g.edges.iter().enumerate() {
+        if e.from.node == e.to.node {
+            continue;
+        }
+        let (a, b) = if reversed[i] { (e.to.node, e.from.node) } else { (e.from.node, e.to.node) };
+        neighbors[a].push(b);
+        neighbors[b].push(a);
+    }
+
+    let max_layer = *layer.iter().max().unwrap_or(&0);
+    let mut new_layer = vec![0usize; n];
+    let mut next = 0usize;
+    for l in 0..=max_layer {
+        let mut nodes: Vec<usize> = (0..n).filter(|&v| layer[v] == l).collect();
+        if nodes.is_empty() {
+            continue;
+        }
+        if nodes.len() <= max_per_layer {
+            for &v in &nodes {
+                new_layer[v] = next;
+            }
+            next += 1;
+            continue;
+        }
+        // Barycenter-of-neighbors sort, id as a stable tiebreak.
+        nodes.sort_by(|&a, &b| {
+            let ba = barycenter(&neighbors[a]);
+            let bb = barycenter(&neighbors[b]);
+            ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+        });
+        for chunk in nodes.chunks(max_per_layer) {
+            for &v in chunk {
+                new_layer[v] = next;
+            }
+            next += 1;
+        }
+    }
+    new_layer
+}
+
+fn barycenter(neighbors: &[usize]) -> f64 {
+    if neighbors.is_empty() {
+        return 0.0;
+    }
+    neighbors.iter().sum::<usize>() as f64 / neighbors.len() as f64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
