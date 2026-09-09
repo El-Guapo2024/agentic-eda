@@ -99,6 +99,11 @@ pub struct Grid {
     /// Per (cell, layer): pad copper within the via-in-pad radius, i.e. a
     /// via may not sit here (see [`Grid::via_pad_radius_cells`]).
     via_near_pad: Vec<bool>,
+    /// PathFinder-style history cost per (cell, layer): bumped around the
+    /// pocket a net could not escape each time its fence is ripped up, so
+    /// the victims' reroutes stop walling the same pad in again. Never
+    /// decays within a run.
+    hist: Vec<u8>,
     /// `EDA_ROUTE_CHECK_NEAR` set: cross-check every summary lookup
     /// against the reference radius scan (slow; for debugging only).
     check_near: bool,
@@ -151,6 +156,7 @@ impl Grid {
             near_track: Vec::new(),
             near_via: Vec::new(),
             via_near_pad: Vec::new(),
+            hist: Vec::new(),
             check_near: std::env::var_os("EDA_ROUTE_CHECK_NEAR").is_some(),
             inside: Vec::new(),
             edge_dist: Vec::new(),
@@ -181,7 +187,22 @@ impl Grid {
         g.near_track = vec![EMPTY; n];
         g.near_via = vec![EMPTY; n];
         g.via_near_pad = vec![false; n];
+        g.hist = vec![0; n];
         g
+    }
+
+    /// Raise the history cost by `amount` on every cell within Chebyshev
+    /// radius `r` of `cells` (each on its own layer).
+    pub fn bump_history(&mut self, cells: &[(i64, i64, u8)], r: i64, amount: u8) {
+        for &(cx, cy, l) in cells {
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    if let Some(i) = self.idx(cx + dx, cy + dy, l) {
+                        self.hist[i] = self.hist[i].saturating_add(amount);
+                    }
+                }
+            }
+        }
     }
 
     /// Record copper of `net_id` with half-extent `half_um` at (cx, cy,
@@ -366,7 +387,7 @@ impl Grid {
 
     #[inline]
     pub fn penalty(&self, cx: i64, cy: i64, layer: u8) -> i64 {
-        self.idx(cx, cy, layer).map(|i| self.penalty[i] as i64).unwrap_or(0)
+        self.idx(cx, cy, layer).map(|i| self.penalty[i] as i64 + self.hist[i] as i64).unwrap_or(0)
     }
 
     /// True if any pad (any net, own included) occupies a cell within

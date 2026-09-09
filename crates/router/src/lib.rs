@@ -184,6 +184,12 @@ fn block_pad_gaps(grid: &mut Grid, pads: &HashMap<String, PadInfo>) {
 /// label corners by 15 µm on the fallback pass.
 const REFDES_PENALTY: u8 = 8;
 
+/// History-cost increment per rip-up round on the contested pocket, in A*
+/// steps per cell (`STEP_COST` = 1). After two rounds a cell in the pocket
+/// costs as much as a ~9-cell detour, which is what moves a victim's
+/// reroute off the pad it was fencing in.
+const HIST_BUMP: u8 = 4;
+
 /// `REFDES_PENALTY` rescaled to the effective grid so that clipping a
 /// label costs the same physical detour regardless of resolution.
 fn refdes_penalty(grid_um: i64) -> u8 {
@@ -267,6 +273,9 @@ struct EdgeFailure {
     start: CellLayer,
     goal: CellLayer,
     fence: Vec<String>,
+    /// Cells the stuck edge needed and could not use (its escape pocket):
+    /// the contested region whose history cost is bumped on rip-up.
+    pocket: Vec<(i64, i64, u8)>,
 }
 
 pub fn route(
@@ -506,7 +515,7 @@ pub fn route_partial(
                 routed_order.retain(|n| n != &net);
                 routed_order.push(net.clone());
             }
-            Err(EdgeFailure { start: fa, goal: fb, fence }) => {
+            Err(EdgeFailure { start: fa, goal: fb, fence, pocket }) => {
                 // Expressed as a physical distance (four cells at the
                 // reference 254 um grid) rather than a fixed cell count:
                 // a finer grid must still search the same real-world
@@ -546,6 +555,12 @@ pub fn route_partial(
                     ripup_rounds.insert(net.clone(), rounds + 1);
                     // The victims are cleared; this net's own partial
                     // copper from the failed attempt was never committed.
+                    // PathFinder-style: the pocket this net could not escape
+                    // gets more expensive for everyone, so the ripped-up
+                    // victims reroute around it instead of walling the same
+                    // pad in again and oscillating with this net for the
+                    // rest of the budget (VDD vs PA0 on mcu_board_30plus).
+                    grid.bump_history(&pocket, margin, HIST_BUMP);
                     for v in &victims {
                         grid.clear_net(v);
                         tracks.remove(v);
@@ -725,6 +740,7 @@ fn route_net(
                         eprintln!("goal ({gx},{gy},{gl}) passable={}", grid.passable(gx, gy, gl, net));
                     }
                     eprintln!("around goal {:?}:\n{}", goal, grid.dump_around(goal.0, goal.1, goal.2, net, 8));
+                    eprintln!("why-blocked around goal:\n{}", grid.dump_why(goal.0, goal.1, goal.2, net, 8));
                     eprintln!("why-blocked around start (B hard, S soft/refdes, E edge, N foreign copper):\n{}", grid.dump_why(start.0, start.1, start.2, net, 8));
                     for l in 0..grid.num_layers as u8 {
                         eprintln!("layer {l} around start (passable-as-track: P):\n{}", grid.dump_around(start.0, start.1, l, net, 8));
@@ -749,7 +765,7 @@ fn route_net(
                 let pocket = if explored.len() < 2_000 { &explored } else { &goal_cells };
                 let mut fence: Vec<String> = grid.nets_bordering(pocket, r).into_iter().filter(|n| n != net).collect();
                 fence.sort();
-                return Err(EdgeFailure { start, goal, fence });
+                return Err(EdgeFailure { start, goal, fence, pocket: pocket.clone() });
             }
         }
     }

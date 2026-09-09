@@ -200,7 +200,13 @@ impl Problem<'_> {
     /// rectangle two parts must not share. Proximity gaps and outline
     /// containment still use the bare courtyard, as the gates do.
     fn keepout(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
-        eda_model::footprint::keepout_for(courtyard(&self.items[i], pose), &self.items[i].id, self.font, self.bbox.1)
+        let c = courtyard(&self.items[i], pose);
+        // The label hangs off the *bare* courtyard (the gate's geometry);
+        // it is silkscreen and needs no routing-channel spacing of its own,
+        // so it is unioned with the spacing-inflated courtyard as is.
+        let sp = self.spacing;
+        let l = eda_model::footprint::refdes_box_for((c.0 + sp, c.1 + sp, c.2 - sp, c.3 - sp), &self.items[i].id, self.font, self.bbox.1);
+        (c.0.min(l.0), c.1.min(l.1), c.2.max(l.2), c.3.max(l.3))
     }
 
     fn pad_center(&self, i: usize, k: usize, pose: Pose) -> Point {
