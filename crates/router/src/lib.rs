@@ -976,6 +976,17 @@ fn route_net(
                 for (i, &(cx, cy, l)) in path.iter().enumerate() {
                     let is_via = (i > 0 && path[i - 1].2 != l) || (i + 1 < path.len() && path[i + 1].2 != l);
                     grid.set(cx, cy, l, net, if is_via { Occ::Via } else { Occ::Track });
+                    // A via is through-hole in v1: its barrel occupies every
+                    // layer, not just the two it connects. Marking only those
+                    // let inner-layer tracks run straight through vias on a
+                    // 4-layer board (35 clearance fails on l3).
+                    if is_via {
+                        for ol in 0..grid.num_layers as u8 {
+                            if ol != l {
+                                grid.set(cx, cy, ol, net, Occ::Via);
+                            }
+                        }
+                    }
                 }
                 // Which connected pin (if any) does the path end on?
                 let end = path.last().copied().unwrap_or(start);

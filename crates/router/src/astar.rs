@@ -216,10 +216,9 @@ pub fn route_to_any_ex(
             if nl == layer {
                 continue;
             }
-            if !grid.passable_as(cx, cy, nl, net, Occ::Via) || !grid.passable_as(cx, cy, layer, net, Occ::Via) {
-                continue;
-            }
-            if grid.via_near_pad(cx, cy, nl) || grid.via_near_pad(cx, cy, layer) {
+            // Through-hole via: legal only if its barrel is clear on every
+            // layer, not just the two it connects.
+            if (0..grid.num_layers as u8).any(|ol| !grid.passable_as(cx, cy, ol, net, Occ::Via) || grid.via_near_pad(cx, cy, ol)) {
                 continue;
             }
             let ng = g + via_cost(grid.grid_um) + grid.penalty(cx, cy, layer) + grid.penalty(cx, cy, nl);
