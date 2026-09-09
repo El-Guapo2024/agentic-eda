@@ -120,6 +120,75 @@ pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance)
 }
 
 /// Board-space courtyard rectangle `(min_x, min_y, max_x, max_y)` of `fp`.
+/// Refdes silkscreen font size for a board: 1/40 of the shorter rendered
+/// side (outline bbox plus a 2 mm margin), never under 600 µm. Shared by
+/// the judge renderer, the gates, the router keep-outs and the placers so
+/// every stage agrees on where the label is.
+pub fn refdes_font_um(outline: &[Point]) -> Um {
+    let (mut x0, mut y0, mut x1, mut y1) = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+    for p in outline {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    if outline.is_empty() {
+        return 600;
+    }
+    let m = 2000;
+    let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
+    (vw.min(vh) / 40).max(600)
+}
+
+/// Refdes label box for a placed courtyard `(x0, y0, x1, y1)`: the text
+/// is centred horizontally just above the courtyard's top edge — or just
+/// below it when "above" would leave the board (`board_top` is the
+/// outline's minimum y; pass `Um::MIN` to always label above, e.g. for
+/// position-independent node geometry). Pure geometry so placers can
+/// evaluate candidate poses without a model.
+pub fn refdes_box_for(courtyard: (Um, Um, Um, Um), refdes: &str, font_um: Um, board_top: Um) -> (Um, Um, Um, Um) {
+    let (cx0, cy0, cx1, cy1) = courtyard;
+    let half_w = (font_um * 6 / 10) * refdes.chars().count() as Um / 2;
+    let cx = (cx0 + cx1) / 2;
+    let (asc, desc) = (font_um * 3 / 4, font_um / 5);
+    let above = cy0 - 200 - asc;
+    if above >= board_top {
+        let baseline = cy0 - 200;
+        (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
+    } else {
+        let baseline = cy1 + 200 + asc;
+        (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
+    }
+}
+
+/// Text baseline y for a label box from [`refdes_box_for`].
+pub fn refdes_baseline(bx: (Um, Um, Um, Um), font_um: Um) -> Um {
+    bx.3 - font_um / 5
+}
+
+/// Minimum y of an outline (`Um::MIN` for an empty one).
+pub fn outline_top(outline: &[Point]) -> Um {
+    outline.iter().map(|p| p.y).min().unwrap_or(Um::MIN)
+}
+
+/// Courtyard plus refdes label: the rectangle a part actually needs kept
+/// free of other parts so its label stays readable and no neighbour's pad
+/// ends up under it (which walls that pad in for routing).
+pub fn keepout_for(courtyard: (Um, Um, Um, Um), refdes: &str, font_um: Um, board_top: Um) -> (Um, Um, Um, Um) {
+    let l = refdes_box_for(courtyard, refdes, font_um, board_top);
+    (courtyard.0.min(l.0), courtyard.1.min(l.1), courtyard.2.max(l.2), courtyard.3.max(l.3))
+}
+
+/// Placed refdes label box (see [`refdes_box_for`]).
+pub fn placed_refdes_box(model: &ConstraintModel, outline: &[Point], part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
+    Some(refdes_box_for(placed_courtyard(model, part, fp)?, &fp.id, refdes_font_um(outline), outline_top(outline)))
+}
+
+/// Placed courtyard-plus-label keep-out (see [`keepout_for`]).
+pub fn placed_keepout(model: &ConstraintModel, outline: &[Point], part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
+    Some(keepout_for(placed_courtyard(model, part, fp)?, &fp.id, refdes_font_um(outline), outline_top(outline)))
+}
+
 pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
     let footprint = model.footprint_of(part)?;
     let (hw, hh) = footprint.courtyard_half();

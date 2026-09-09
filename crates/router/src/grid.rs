@@ -394,6 +394,44 @@ impl Grid {
         (self.via_half_um + self.grid_um / 2 + self.grid_um - 1) / self.grid_um
     }
 
+    /// Debug: why a cell is impassable for a track of `net`: ` ` outside,
+    /// `B` hard-blocked, `S` soft (refdes) keep-out, `E` board-edge
+    /// clearance, `N` foreign copper within separation, `.` passable.
+    pub fn why_blocked(&self, cx: i64, cy: i64, layer: u8, net: &str) -> char {
+        let Some(i) = self.idx(cx, cy, layer) else { return ' ' };
+        if !self.in_outline(cx, cy) {
+            return ' ';
+        }
+        if self.blocked[i] {
+            return 'B';
+        }
+        let net_id = self.net_id_ro(net).unwrap_or(EMPTY);
+        let own_pad = self.occ[i].as_ref().map(|c| c.kind == Occ::Pad && c.net_id == net_id).unwrap_or(false);
+        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < EDGE_CLEARANCE_UM + self.half_extent(Occ::Track) {
+            return 'E';
+        }
+        let near = self.near_track[i];
+        if !(near == EMPTY || near == net_id) {
+            return 'N';
+        }
+        if self.soft[i] {
+            return 'S';
+        }
+        '.'
+    }
+
+    /// Debug: `why_blocked` map around a cell.
+    pub fn dump_why(&self, cx: i64, cy: i64, layer: u8, net: &str, r: i64) -> String {
+        let mut out = String::new();
+        for dy in -r..=r {
+            for dx in -r..=r {
+                out.push(if dx == 0 && dy == 0 { '@' } else { self.why_blocked(cx + dx, cy + dy, layer, net) });
+            }
+            out.push('\n');
+        }
+        out
+    }
+
     /// Debug: one character per cell around (cx, cy) on `layer`:
     /// `.` free, `#` other-net pad, `=` other-net track, `o` other-net via,
     /// lowercase for own-net copper, ` ` outside the outline.

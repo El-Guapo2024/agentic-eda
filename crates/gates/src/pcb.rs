@@ -203,6 +203,33 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
         out.push(CheckResult::pass("placement_courtyard_overlap"));
     }
 
+    // Refdes labels: a label over another part's courtyard is unreadable
+    // silkscreen and, worse, puts that part's pads inside the router's
+    // label keep-out — the pad is then walled in and its net cannot route.
+    // The placer reserves the label box as part of the keep-out; this
+    // gate is the independent check that it did.
+    let mut refdes_ok = true;
+    for fp in &pl.footprints {
+        let Some((bx, side)) = refdes_box(model, pl, fp) else { continue };
+        for (id, (r, s)) in &courtyards {
+            if *id == fp.id || *s != side {
+                continue;
+            }
+            let ov = bx.overlap_area(r);
+            if ov > 0 {
+                refdes_ok = false;
+                out.push(CheckResult::fail(
+                    "placement_refdes_clear",
+                    format!("{}/{}", fp.id, id),
+                    format!("refdes label of {} overlaps the courtyard of {} by {} µm²", fp.id, id, ov),
+                ));
+            }
+        }
+    }
+    if refdes_ok {
+        out.push(CheckResult::pass("placement_refdes_clear"));
+    }
+
     // Proximity is courtyard edge-to-edge: "C1 within 5 mm of U1" means
     // the gap between their bodies, not between their centres (which a
     // large package could never satisfy).
@@ -738,21 +765,8 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
 /// for the label to remain readable. Mirrors `eda_judge::render_board_svg`.
 pub fn refdes_box(model: &ConstraintModel, pl: &eda_model::ir::PlacementSection, fp: &eda_model::ir::FootprintInstance) -> Option<(Rect, Side)> {
     let part = model.part(&fp.id)?;
-    let (cx0, cy0, cx1, _cy1) = placed_courtyard(model, part, fp)?;
-    let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
-    for p in &pl.outline {
-        x0 = x0.min(p.x);
-        y0 = y0.min(p.y);
-        x1 = x1.max(p.x);
-        y1 = y1.max(p.y);
-    }
-    let m = 2000;
-    let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
-    let fs = (vw.min(vh) / 40).max(600);
-    let baseline = cy0 - 200;
-    let half_w = (fs * 6 / 10) * fp.id.chars().count() as Um / 2;
-    let cx = (cx0 + cx1) / 2;
-    Some((Rect(cx - half_w, baseline - fs * 3 / 4, cx + half_w, baseline + fs / 5), fp.side))
+    let (x0, y0, x1, y1) = eda_model::footprint::placed_refdes_box(model, &pl.outline, part, fp)?;
+    Some((Rect(x0, y0, x1, y1), fp.side))
 }
 
 /// Exact-geometry workmanship gates over routed copper. Every one has a

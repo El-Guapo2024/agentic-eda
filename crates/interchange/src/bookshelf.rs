@@ -16,7 +16,7 @@
 //! * `.pl` positions are the node's lower-left corner (Bookshelf), while
 //!   our IR stores centres — converted both ways.
 
-use eda_model::footprint::{placed_courtyard, to_board};
+use eda_model::footprint::{keepout_for, placed_courtyard, refdes_font_um, to_board};
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Side};
 use eda_model::{CheckResult, ConstraintModel};
 use std::collections::BTreeMap;
@@ -96,6 +96,7 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
     // Board rounds DOWN so every legal Cypress position lies inside the outline.
     let bw = ((max_x - min_x) / unit).max(1);
     let bh = ((max_y - min_y) / unit).max(1);
+    let font = refdes_font_um(&outline);
 
     let placed: BTreeMap<&str, &FootprintInstance> =
         design.placement.as_ref().map(|p| p.footprints.iter().map(|f| (f.id.as_str(), f)).collect()).unwrap_or_default();
@@ -120,17 +121,23 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
             continue;
         };
         let (hw, hh) = fp.courtyard_half();
+        // The node is the part's keep-out: courtyard plus the refdes label
+        // above it (gate `placement_refdes_clear`), so Cypress reserves
+        // label space and no neighbour's pad ends up under a label. The
+        // node centre is offset (ox, oy) from the part centre.
+        let ko = keepout_for((-hw, -hh, hw, hh), &part.reference, font, i64::MIN);
+        let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
         // Sizes round UP: Cypress packs nodes flush on its integer grid, so a
         // rounded-down courtyard would overlap its neighbour at µm precision.
-        let w = div_ceil(hw * 2, unit).max(1);
-        let h = div_ceil(hh * 2, unit).max(1);
+        let w = div_ceil(ko.2 - ko.0, unit).max(1);
+        let h = div_ceil(ko.3 - ko.1, unit).max(1);
         writeln!(nodes, "{} {} {}", part.reference, w, h).unwrap();
         let offs: BTreeMap<String, (i64, i64)> =
-            fp.pads.iter().map(|p| (p.number.clone(), (div_round(p.at.0, unit), div_round(p.at.1, unit)))).collect();
+            fp.pads.iter().map(|p| (p.number.clone(), (div_round(p.at.0 - ox, unit), div_round(p.at.1 - oy, unit)))).collect();
         pad_offsets.insert(part.reference.clone(), offs);
         // Initial position: lower-left corner in units.
         let (cx, cy) = match placed.get(part.reference.as_str()) {
-            Some(f) => (f.at.x - min_x, f.at.y - min_y),
+            Some(f) => (f.at.x - min_x + ox, f.at.y - min_y + oy),
             None => ((max_x - min_x) / 2, (max_y - min_y) / 2),
         };
         let llx = div_round(cx, unit) - w / 2;
@@ -263,6 +270,7 @@ pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, uni
     };
     let min_x = outline.iter().map(|p| p.x).min().unwrap();
     let min_y = outline.iter().map(|p| p.y).min().unwrap();
+    let font = refdes_font_um(&outline);
 
     let mut footprints = Vec::new();
     let mut fails = Vec::new();
@@ -288,8 +296,12 @@ pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, uni
             _ => (0, orient.starts_with('F')),
         };
         let (w, h) = if rot == 90_000 || rot == 270_000 { (hh * 2, hw * 2) } else { (hw * 2, hh * 2) };
-        let cx = min_x + (x * unit as f64).round() as i64 + w / 2;
-        let cy = min_y + (y * unit as f64).round() as i64 + h / 2;
+        // Node = keep-out (courtyard + label), see `to_bookshelf_weighted`;
+        // undo the node-centre offset to recover the part centre.
+        let ko = keepout_for((-w / 2, -h / 2, w / 2, h / 2), name, font, i64::MIN);
+        let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
+        let cx = min_x + (x * unit as f64).round() as i64 + (ko.2 - ko.0) / 2 - ox;
+        let cy = min_y + (y * unit as f64).round() as i64 + (ko.3 - ko.1) / 2 - oy;
         footprints.push(FootprintInstance {
             id: name.to_string(),
             at: Point { x: cx, y: cy },

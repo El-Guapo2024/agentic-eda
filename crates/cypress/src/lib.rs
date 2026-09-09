@@ -14,7 +14,7 @@
 
 use eda_interchange::bookshelf::to_bookshelf_weighted;
 use eda_interchange::from_bookshelf_pl;
-use eda_model::footprint::placed_courtyard;
+use eda_model::footprint::{placed_courtyard, placed_keepout};
 use eda_model::ir::{Design, Point};
 use eda_model::{CheckResult, ConstraintModel, PlacementRule};
 use eda_place::Placer;
@@ -171,6 +171,7 @@ pub fn default_is_legal(design: &Design, model: &ConstraintModel) -> bool {
     for f in &placement.footprints {
         let Some(part) = model.part(&f.id) else { return false };
         let Some(ct) = placed_courtyard(model, part, f) else { return false };
+        let Some(ko) = placed_keepout(model, &placement.outline, part, f) else { return false };
         let corners = [
             Point { x: ct.0, y: ct.1 },
             Point { x: ct.2, y: ct.1 },
@@ -180,8 +181,10 @@ pub fn default_is_legal(design: &Design, model: &ConstraintModel) -> bool {
         if !corners.iter().all(|c| point_in_polygon(*c, &placement.outline)) {
             return false;
         }
-        courtyards.push((f.id.as_str(), f.side, ct));
+        courtyards.push((f.id.as_str(), f.side, ko));
     }
+    // Keep-outs (courtyard + refdes label) must not overlap on a side,
+    // mirroring `placement_courtyard_overlap` + `placement_refdes_clear`.
     for i in 0..courtyards.len() {
         for j in i + 1..courtyards.len() {
             if courtyards[i].1 == courtyards[j].1 && rect_overlaps(courtyards[i].2, courtyards[j].2) {
@@ -233,6 +236,7 @@ fn find_spot(
     if sx0 > sx1 || sy0 > sy1 {
         return None;
     }
+    let outline = &base.placement.as_ref()?.outline;
     let mut candidates: Vec<(i64, i32, i64, i64)> = Vec::new(); // (dist2, rot, x, y)
     let mut x = sx0;
     while x <= sx1 {
@@ -253,12 +257,13 @@ fn find_spot(
         candidate_fp.at = Point { x, y };
         candidate_fp.rot = rot as u32;
         let Some(mover_ct) = placed_courtyard(model, mover_part, &candidate_fp) else { continue };
+        let Some(mover_ko) = placed_keepout(model, outline, mover_part, &candidate_fp) else { continue };
         if let Some((other_ct, max_mm)) = gap_check {
             if rect_gap(mover_ct, other_ct) / 1000.0 > max_mm {
                 continue;
             }
         }
-        if avoid.iter().any(|r| rect_overlaps(mover_ct, *r)) {
+        if avoid.iter().any(|r| rect_overlaps(mover_ko, *r)) {
             continue;
         }
         let mut trial = base.clone();
@@ -361,6 +366,7 @@ fn try_ripple(
         candidate_fp.at = Point { x, y };
         candidate_fp.rot = rot as u32;
         let Some(mover_ct) = placed_courtyard(model, mover_part, &candidate_fp) else { continue };
+        let Some(mover_ko) = placed_keepout(model, &placement.outline, mover_part, &candidate_fp) else { continue };
         if rect_gap(mover_ct, anchor_ct) / 1000.0 > max_mm {
             continue;
         }
@@ -373,8 +379,8 @@ fn try_ripple(
                 continue;
             }
             let Some(part) = model.part(&f.id) else { continue };
-            let Some(ct) = placed_courtyard(model, part, f) else { continue };
-            if rect_overlaps(mover_ct, ct) {
+            let Some(ct) = placed_keepout(model, &placement.outline, part, f) else { continue };
+            if rect_overlaps(mover_ko, ct) {
                 blockers.push(f.id.clone());
                 if blockers.len() > MAX_BLOCKERS {
                     ok = false;
@@ -401,7 +407,7 @@ fn try_ripple(
                 break;
             };
             let bsearch = clamp_box(rect_expand(bct, RIPPLE_RADIUS_UM), bounds);
-            match find_spot(model, &work, bid, bpart, &bf, bsearch, None, &[mover_ct], step_um, is_legal) {
+            match find_spot(model, &work, bid, bpart, &bf, bsearch, None, &[mover_ko], step_um, is_legal) {
                 Some((bx, by, brot)) => apply_move(&mut work, bid, bx, by, brot),
                 None => {
                     moved_ok = false;

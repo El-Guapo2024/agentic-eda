@@ -198,23 +198,9 @@ fn refdes_penalty(grid_um: i64) -> u8 {
 /// which this mirrors).
 fn penalise_refdes_boxes(grid: &mut Grid, placement: &eda_model::ir::PlacementSection, model: &ConstraintModel, num_layers: usize) {
     let penalty = refdes_penalty(grid.grid_um);
-    let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
-    for p in &placement.outline {
-        x0 = x0.min(p.x);
-        y0 = y0.min(p.y);
-        x1 = x1.max(p.x);
-        y1 = y1.max(p.y);
-    }
-    let m = 2000;
-    let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
-    let fs = (vw.min(vh) / 40).max(600);
     for fp in &placement.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
-        let Some((cx0, cy0, cx1, _)) = eda_model::footprint::placed_courtyard(model, part, fp) else { continue };
-        let baseline = cy0 - 200;
-        let half_w = (fs * 6 / 10) * fp.id.chars().count() as i64 / 2;
-        let cx = (cx0 + cx1) / 2;
-        let bx = (cx - half_w, baseline - fs * 3 / 4, cx + half_w, baseline + fs / 5);
+        let Some(bx) = eda_model::footprint::placed_refdes_box(model, &placement.outline, part, fp) else { continue };
         let layer = match fp.side {
             eda_model::ir::Side::Top => 0u8,
             eda_model::ir::Side::Bottom => (num_layers - 1) as u8,
@@ -739,6 +725,7 @@ fn route_net(
                         eprintln!("goal ({gx},{gy},{gl}) passable={}", grid.passable(gx, gy, gl, net));
                     }
                     eprintln!("around goal {:?}:\n{}", goal, grid.dump_around(goal.0, goal.1, goal.2, net, 8));
+                    eprintln!("why-blocked around start (B hard, S soft/refdes, E edge, N foreign copper):\n{}", grid.dump_why(start.0, start.1, start.2, net, 8));
                     for l in 0..grid.num_layers as u8 {
                         eprintln!("layer {l} around start (passable-as-track: P):\n{}", grid.dump_around(start.0, start.1, l, net, 8));
                         let mut row = String::new();

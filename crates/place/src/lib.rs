@@ -180,6 +180,9 @@ struct Problem<'a> {
     /// shrink it to the cluster afterwards, so board-use terms don't apply.
     auto_outline: bool,
     spacing: Um,
+    /// Refdes font size for this board; the label box above each courtyard
+    /// is part of the part's keep-out (gate `placement_refdes_clear`).
+    font: Um,
     model: &'a ConstraintModel,
     /// Congestion grid bin size, µm (~2 mm).
     bin_um: Um,
@@ -193,6 +196,13 @@ struct Problem<'a> {
 }
 
 impl Problem<'_> {
+    /// Courtyard (spacing-inflated) plus the refdes label box above it: the
+    /// rectangle two parts must not share. Proximity gaps and outline
+    /// containment still use the bare courtyard, as the gates do.
+    fn keepout(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
+        eda_model::footprint::keepout_for(courtyard(&self.items[i], pose), &self.items[i].id, self.font, self.bbox.1)
+    }
+
     fn pad_center(&self, i: usize, k: usize, pose: Pose) -> Point {
         let fp = instance(&self.items[i], pose);
         eda_model::footprint::to_board(&fp, self.items[i].pads[k].1)
@@ -284,7 +294,7 @@ impl Problem<'_> {
                     if j == i {
                         continue;
                     }
-                    if overlap(probe, courtyard(&self.items[j], poses[j])) > 0 {
+                    if overlap(probe, self.keepout(j, poses[j])) > 0 {
                         blocked += 1;
                         break;
                     }
@@ -314,10 +324,10 @@ impl Problem<'_> {
             let h = self.hpwl(n, poses) as f64;
             c += h + self.compact_cost(n, h);
         }
-        let ci = courtyard(&self.items[i], poses[i]);
+        let ci = self.keepout(i, poses[i]);
         for j in 0..self.items.len() {
             if j != i {
-                let ov = overlap(ci, courtyard(&self.items[j], poses[j]));
+                let ov = overlap(ci, self.keepout(j, poses[j]));
                 if ov > 0 {
                     // sqrt keeps the penalty in µm units and dominant.
                     c += W_OVERLAP * ((ov as f64).sqrt() + 500.0);
@@ -486,9 +496,9 @@ impl Problem<'_> {
             b[2] += self.compact_cost(n, h);
         }
         for i in 0..self.items.len() {
-            let ci = courtyard(&self.items[i], poses[i]);
+            let ci = self.keepout(i, poses[i]);
             for j in i + 1..self.items.len() {
-                let ov = overlap(ci, courtyard(&self.items[j], poses[j]));
+                let ov = overlap(ci, self.keepout(j, poses[j]));
                 if ov > 0 {
                     b[1] += W_OVERLAP * ((ov as f64).sqrt() + 500.0);
                 }
@@ -522,9 +532,9 @@ impl Problem<'_> {
             c += h + self.compact_cost(n, h);
         }
         for i in 0..self.items.len() {
-            let ci = courtyard(&self.items[i], poses[i]);
+            let ci = self.keepout(i, poses[i]);
             for j in i + 1..self.items.len() {
-                let ov = overlap(ci, courtyard(&self.items[j], poses[j]));
+                let ov = overlap(ci, self.keepout(j, poses[j]));
                 if ov > 0 {
                     c += W_OVERLAP * ((ov as f64).sqrt() + 500.0);
                 }
@@ -759,7 +769,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     let congest_capacity = model.board.layers.len() as f64 * bin_um as f64 / pitch as f64;
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
-    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, group_rules, stubs, stub_free, stubs_of, bbox, outline, auto_outline, spacing: opts.spacing, model, bin_um, congest_capacity, congest_nets })
+    let font = eda_model::footprint::refdes_font_um(&outline);
+    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, group_rules, stubs, stub_free, stubs_of, bbox, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
@@ -1066,11 +1077,11 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
 fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
     let n = pb.items.len();
     let clean_at = |pb: &Problem, poses: &[Pose], i: usize| -> bool {
-        let ci = courtyard(&pb.items[i], poses[i]);
+        let ci = pb.keepout(i, poses[i]);
         if outside_area(ci, pb.bbox) > 0 {
             return false;
         }
-        (0..n).all(|j| j == i || overlap(ci, courtyard(&pb.items[j], poses[j])) == 0)
+        (0..n).all(|j| j == i || overlap(ci, pb.keepout(j, poses[j])) == 0)
     };
     let cost_of = |pb: &Problem, poses: &[Pose], i: usize| pb.local_cost(i, poses) + pb.use_cost(poses) + pb.full_congestion_penalty(poses);
     for _sweep in 0..4 {
@@ -1081,14 +1092,14 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
             let mut best = (base, start);
             for rot in 0..4u8 {
                 let probe = Pose { rot, ..start };
-                let ci = courtyard(&pb.items[i], probe);
+                let ci = pb.keepout(i, probe);
                 let (w, h) = (ci.2 - ci.0, ci.3 - ci.1);
                 let mut cands: Vec<(Um, Um)> = vec![(start.x, start.y)];
                 for j in 0..n {
                     if j == i {
                         continue;
                     }
-                    let cj = courtyard(&pb.items[j], poses[j]);
+                    let cj = pb.keepout(j, poses[j]);
                     let (jx, jy) = (poses[j].x, poses[j].y);
                     // Right / left / below / above of j, centre-aligned and
                     // aligned to j's near corners.
@@ -1230,7 +1241,7 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Um, Um, Um,
 fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
     let n = pb.items.len();
     let clamp_inside = |pb: &Problem, poses: &mut [Pose], i: usize| {
-        let ci = courtyard(&pb.items[i], poses[i]);
+        let ci = pb.keepout(i, poses[i]);
         let mut dx = 0;
         let mut dy = 0;
         if ci.0 < pb.bbox.0 {
@@ -1262,8 +1273,8 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
         }
         for i in 0..n {
             for j in i + 1..n {
-                let ci = courtyard(&pb.items[i], poses[i]);
-                let cj = courtyard(&pb.items[j], poses[j]);
+                let ci = pb.keepout(i, poses[i]);
+                let cj = pb.keepout(j, poses[j]);
                 if overlap(ci, cj) == 0 {
                     continue;
                 }
@@ -1304,12 +1315,12 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
     }
     // Final verdict.
     for i in 0..n {
-        let ci = courtyard(&pb.items[i], poses[i]);
+        let ci = pb.keepout(i, poses[i]);
         if outside_area(ci, pb.bbox) > 0 {
             return false;
         }
         for j in i + 1..n {
-            if overlap(ci, courtyard(&pb.items[j], poses[j])) > 0 {
+            if overlap(ci, pb.keepout(j, poses[j])) > 0 {
                 return false;
             }
         }
@@ -1409,13 +1420,13 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
         }
         // Report the offenders so the caller can act.
         for i in 0..pb.items.len() {
-            let ci = courtyard(&pb.items[i], poses[i]);
+            let ci = pb.keepout(i, poses[i]);
             let outside = outside_area(ci, pb.bbox);
             if outside > 0 {
                 fails.push(CheckResult::fail("place_outside", &pb.items[i].id, format!("{outside} µm² outside the board (courtyard {ci:?}, board {:?})", pb.bbox)));
             }
             for j in i + 1..pb.items.len() {
-                let ov = overlap(courtyard(&pb.items[i], poses[i]), courtyard(&pb.items[j], poses[j]));
+                let ov = overlap(pb.keepout(i, poses[i]), pb.keepout(j, poses[j]));
                 if ov > 0 {
                     fails.push(CheckResult::fail("place_overlap", format!("{}/{}", pb.items[i].id, pb.items[j].id), format!("{ov} µm²")));
                 }
