@@ -252,6 +252,26 @@ fn find_spot(
     }
     candidates.sort_by_key(|c| (c.0, c.1, c.2, c.3));
 
+    // Cheap rejection before the full legality check: the mover's keep-out
+    // against every other same-side keep-out and the board bbox, computed
+    // once. Without it an unsatisfiable rule on the 25 um last-resort grid
+    // cloned the design and ran the O(n^2) check for ~2M candidates (l3:
+    // the legaliser sat at 100% CPU for 36 minutes on one rule).
+    let placement = base.placement.as_ref()?;
+    let mover_side = placement.footprints.iter().find(|f| f.id == mover_id)?.side;
+    let others: Vec<(i64, i64, i64, i64)> = placement
+        .footprints
+        .iter()
+        .filter(|f| f.id != mover_id && f.side == mover_side)
+        .filter_map(|f| placed_keepout(model, outline, model.part(&f.id)?, f))
+        .collect();
+    let (bx0, by0, bx1, by1) = (
+        outline.iter().map(|p| p.x).min().unwrap_or(i64::MIN),
+        outline.iter().map(|p| p.y).min().unwrap_or(i64::MIN),
+        outline.iter().map(|p| p.x).max().unwrap_or(i64::MAX),
+        outline.iter().map(|p| p.y).max().unwrap_or(i64::MAX),
+    );
+
     for (_, rot, x, y) in candidates {
         let mut candidate_fp = mover_fp.clone();
         candidate_fp.at = Point { x, y };
@@ -264,6 +284,9 @@ fn find_spot(
             }
         }
         if avoid.iter().any(|r| rect_overlaps(mover_ko, *r)) {
+            continue;
+        }
+        if mover_ct.0 < bx0 || mover_ct.1 < by0 || mover_ct.2 > bx1 || mover_ct.3 > by1 || others.iter().any(|o| rect_overlaps(mover_ko, *o)) {
             continue;
         }
         let mut trial = base.clone();
@@ -334,6 +357,11 @@ fn try_ripple(
 ) -> Option<Design> {
     const MAX_BLOCKERS: usize = 2;
     const RIPPLE_RADIUS_UM: i64 = 6_000; // how far a blocker may look for its own new spot
+    // Each attempted candidate costs up to MAX_BLOCKERS full find_spot
+    // searches; an unsatisfiable rule otherwise walks every candidate in
+    // the halo (l3 U7/C15: the legaliser sat in this loop for 15+ min).
+    const MAX_RIPPLE_TRIES: usize = 40;
+    let mut tries = 0usize;
 
     let search_box = clamp_box(rect_expand(anchor_ct, max_um), bounds);
     // Enumerate gap-ok candidates for the mover (legality ignored), same
@@ -390,6 +418,10 @@ fn try_ripple(
         }
         if !ok || blockers.is_empty() {
             continue;
+        }
+        tries += 1;
+        if tries > MAX_RIPPLE_TRIES {
+            return None;
         }
 
         // Relocate each blocker in turn, chaining through `work` so later
@@ -502,6 +534,12 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
         };
 
         let mut resolved = false;
+        let t0 = std::time::Instant::now();
+        let step = |n: u32, t: &std::time::Instant| {
+            if dbg_on() {
+                eprintln!("DEBUG_LEGALIZE   {a}/{b} step {n} done at {:?}", t.elapsed());
+            }
+        };
 
         // 1. Move the smaller part toward the larger (fixed) one.
         let box1 = clamp_box(rect_expand(large_ct, max_um), bounds);
@@ -510,6 +548,7 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
             resolved = true;
         }
 
+        step(1, &t0);
         // 2. Move the larger part toward the smaller (fixed) one instead —
         // only accepted if it doesn't break one of the larger part's own
         // other rules (e.g. dragging it out of range of a different anchor).
@@ -525,6 +564,7 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
             }
         }
 
+        step(2, &t0);
         // 3. Bounded ripple around the smaller part's best spot.
         if !resolved {
             if let Some(trial) = try_ripple(model, &out, small_id, large_id, small_part, &small_fp, large_ct, *max_mm, bounds, max_um, STEP_UM, is_legal) {
@@ -533,6 +573,7 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
             }
         }
 
+        step(3, &t0);
         // 4. Last resort: finer grid, wider halo, both directions.
         if !resolved {
             let wide_um = max_um + max_um / 2;
