@@ -195,12 +195,12 @@ pub fn keepout_for(courtyard: (Um, Um, Um, Um), refdes: &str, font_um: Um, board
 
 /// Placed refdes label box (see [`refdes_box_for`]).
 pub fn placed_refdes_box(model: &ConstraintModel, outline: &[Point], part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
-    Some(refdes_box_for(placed_courtyard(model, part, fp)?, &fp.id, refdes_font_um(outline), outline_top(outline)))
+    Some(refdes_box_for(placed_courtyard(model, part, fp)?, &fp.id, model.board.refdes_font(outline), outline_top(outline)))
 }
 
 /// Placed courtyard-plus-label keep-out (see [`keepout_for`]).
 pub fn placed_keepout(model: &ConstraintModel, outline: &[Point], part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
-    Some(keepout_for(placed_courtyard(model, part, fp)?, &fp.id, refdes_font_um(outline), outline_top(outline)))
+    Some(keepout_for(placed_courtyard(model, part, fp)?, &fp.id, model.board.refdes_font(outline), outline_top(outline)))
 }
 
 pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {

@@ -77,7 +77,6 @@ fn pad_cells(grid: &Grid, pad: &PadInfo) -> Vec<(i64, i64)> {
 /// component body, and a track threading it (any net, the pads' own
 /// included) is what a reviewer sends back. Through-hole pin rows are
 /// exempt — routing between header pins is standard practice.
-const BETWEEN_PADS_MAX_GAP: i64 = 2000;
 
 /// Smallest facing-edge gap between two SMD pads of the same footprint
 /// (adjacent pins on the same package), µm. `i64::MAX` when the board has
@@ -118,9 +117,7 @@ fn fine_pitch_footprints<'a>(pads: &'a HashMap<String, PadInfo>, grid: i64) -> H
 
 /// Per-cell surcharge in the escape lane of a fine-pitch footprint (see
 /// `penalise_escape_lanes`), in A* steps at the reference grid.
-const ESCAPE_LANE_PENALTY: u8 = 6;
 /// How far the escape lane reaches beyond the pad tips, µm.
-const ESCAPE_LANE_UM: i64 = 1200;
 
 /// Soft penalty on the band just outside each fine-pitch footprint's pad
 /// rows. A pin of such a part can only leave straight out, so a track that
@@ -131,7 +128,8 @@ const ESCAPE_LANE_UM: i64 = 1200;
 /// restoring the same hug each round). Crossing the band perpendicularly
 /// is a few cells and stays cheap; running along it is not.
 fn penalise_escape_lanes(grid: &mut Grid, pads: &HashMap<String, PadInfo>, fine: &HashSet<String>, grid_um: i64) {
-    let penalty = ((ESCAPE_LANE_PENALTY as i64 * 254 + grid_um / 2) / grid_um.max(1)).clamp(1, 255) as u8;
+    let lane_um = grid.tuning.escape_lane_um;
+    let penalty = ((grid.tuning.escape_lane_penalty as i64 * 254 + grid_um / 2) / grid_um.max(1)).clamp(1, 255) as u8;
     let mut by_fp: HashMap<&str, Vec<&PadInfo>> = HashMap::new();
     for (refpin, p) in pads {
         let fp = refpin.split('.').next().unwrap_or("");
@@ -151,10 +149,10 @@ fn penalise_escape_lanes(grid: &mut Grid, pads: &HashMap<String, PadInfo>, fine:
         // A side has a pad row when some pad touches that edge of the bbox.
         let near = |a: i64, b: i64| (a - b).abs() <= grid_um;
         let sides = [
-            (ps.iter().any(|p| near(p.pt.x - p.size.0 / 2, x0)), (x0 - ESCAPE_LANE_UM, y0, x0, y1)),
-            (ps.iter().any(|p| near(p.pt.x + p.size.0 / 2, x1)), (x1, y0, x1 + ESCAPE_LANE_UM, y1)),
-            (ps.iter().any(|p| near(p.pt.y - p.size.1 / 2, y0)), (x0, y0 - ESCAPE_LANE_UM, x1, y0)),
-            (ps.iter().any(|p| near(p.pt.y + p.size.1 / 2, y1)), (x0, y1, x1, y1 + ESCAPE_LANE_UM)),
+            (ps.iter().any(|p| near(p.pt.x - p.size.0 / 2, x0)), (x0 - lane_um, y0, x0, y1)),
+            (ps.iter().any(|p| near(p.pt.x + p.size.0 / 2, x1)), (x1, y0, x1 + lane_um, y1)),
+            (ps.iter().any(|p| near(p.pt.y - p.size.1 / 2, y0)), (x0, y0 - lane_um, x1, y0)),
+            (ps.iter().any(|p| near(p.pt.y + p.size.1 / 2, y1)), (x0, y1, x1, y1 + lane_um)),
         ];
         for (has_row, band) in sides {
             if !has_row {
@@ -226,11 +224,11 @@ fn block_pad_gaps(grid: &mut Grid, pads: &HashMap<String, PadInfo>) {
                 // shared extent along the other axis.
                 let strip = if oy1 > oy0 && (ra.2 <= rb.0 || rb.2 <= ra.0) {
                     let (gx0, gx1) = if ra.2 <= rb.0 { (ra.2, rb.0) } else { (rb.2, ra.0) };
-                    if gx1 - gx0 > BETWEEN_PADS_MAX_GAP { continue }
+                    if gx1 - gx0 > grid.tuning.between_pads_max_gap_um { continue }
                     (gx0, oy0, gx1, oy1)
                 } else if ox1 > ox0 && (ra.3 <= rb.1 || rb.3 <= ra.1) {
                     let (gy0, gy1) = if ra.3 <= rb.1 { (ra.3, rb.1) } else { (rb.3, ra.1) };
-                    if gy1 - gy0 > BETWEEN_PADS_MAX_GAP { continue }
+                    if gy1 - gy0 > grid.tuning.between_pads_max_gap_um { continue }
                     (ox0, gy0, ox1, gy1)
                 } else {
                     continue;
@@ -272,18 +270,16 @@ fn block_pad_gaps(grid: &mut Grid, pads: &HashMap<String, PadInfo>) {
 /// physical detour-per-label ratio (see `refdes_penalty`). At the halved
 /// 127 µm grid the old flat 8 bought only a 1 mm detour and A* clipped
 /// label corners by 15 µm on the fallback pass.
-const REFDES_PENALTY: u8 = 8;
 
 /// History-cost increment per rip-up round on the contested pocket, in A*
 /// steps per cell (`STEP_COST` = 1). After two rounds a cell in the pocket
 /// costs as much as a ~9-cell detour, which is what moves a victim's
 /// reroute off the pad it was fencing in.
-const HIST_BUMP: u8 = 4;
 
 /// `REFDES_PENALTY` rescaled to the effective grid so that clipping a
 /// label costs the same physical detour regardless of resolution.
-fn refdes_penalty(grid_um: i64) -> u8 {
-    ((REFDES_PENALTY as i64 * 254 + grid_um / 2) / grid_um.max(1)).clamp(1, 255) as u8
+fn refdes_penalty(grid: &Grid) -> u8 {
+    ((grid.tuning.refdes_penalty as i64 * 254 + grid.grid_um / 2) / grid.grid_um.max(1)).clamp(1, 255) as u8
 }
 
 /// Mark the cells under each refdes label as a soft keep-out (enforced on
@@ -293,7 +289,7 @@ fn refdes_penalty(grid_um: i64) -> u8 {
 /// (see `eda_judge::render_board_svg` and `eda_gates::pcb::refdes_box`,
 /// which this mirrors).
 fn penalise_refdes_boxes(grid: &mut Grid, placement: &eda_model::ir::PlacementSection, model: &ConstraintModel, num_layers: usize) {
-    let penalty = refdes_penalty(grid.grid_um);
+    let penalty = refdes_penalty(grid);
     for fp in &placement.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
         let Some(bx) = eda_model::footprint::placed_refdes_box(model, &placement.outline, part, fp) else { continue };
@@ -461,6 +457,7 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     // --- 2. grid & obstacle map -----------------------------------------
     if dbg { eprintln!("route: t pads {:?}", t_start.elapsed()); }
     let mut grid = Grid::with_widths(placement.outline.clone(), rules.grid, rules.clearance, rules.track_width, rules.via_diameter, num_layers);
+    grid.tuning = rules.tuning.clone();
     for pad in pads.values() {
         // Rasterise the pad area from its real rectangle: every cell whose
         // own square intersects the copper (the cell nearest a corner is
@@ -491,7 +488,6 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
 /// Cypress placement: decoupling caps legalised flush against U2's pin
 /// column) — `placement_pad_reach` fails and the placement goes back.
 pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -> Vec<CheckResult> {
-    const REACH_OPEN: usize = 2_000;
     let Some(placement) = design.placement.as_ref() else {
         return vec![CheckResult::fail("placement_pad_reach", "design", "no placement section")];
     };
@@ -525,7 +521,7 @@ pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -
             }
             let mut exit = false;
             while let Some((cx, cy)) = queue.pop_front() {
-                if seen.len() >= REACH_OPEN {
+                if seen.len() >= grid.tuning.preflight_reach_cells {
                     exit = true;
                     break;
                 }
@@ -710,7 +706,7 @@ pub fn route_partial(
     // --- 5. route -----------------------------------------------------------
     // Negotiated congestion by default; EDA_ROUTER=sequential keeps the
     // rip-up router for comparison while both exist.
-    if std::env::var("EDA_ROUTER").as_deref() != Ok("sequential") {
+    if std::env::var("EDA_ROUTER").as_deref().unwrap_or(rules.tuning.router.as_str()) != "sequential" {
         let (tracks, vias, mut nfails) = negotiate::run(&mut grid, &pads, rules, &edges_by_net, &nets, dbg);
         let mut fails = skipped;
         fails.append(&mut nfails);
@@ -731,8 +727,8 @@ pub fn route_partial(
     let mut fails: Vec<CheckResult> = skipped;
     let mut permanently_failed: HashSet<String> = HashSet::new();
 
-    let max_rounds: u32 = 6;
-    let max_victims: usize = 6;
+    let max_rounds: u32 = rules.tuning.seq_max_rounds;
+    let max_victims: usize = rules.tuning.seq_max_victims;
     let iter_budget = 10 * queue.len().max(1) + 50;
     let mut iters = 0usize;
 
@@ -811,7 +807,7 @@ pub fn route_partial(
                     // victims reroute around it instead of walling the same
                     // pad in again and oscillating with this net for the
                     // rest of the budget (VDD vs PA0 on mcu_board_30plus).
-                    grid.bump_history(&pocket, margin, HIST_BUMP);
+                    grid.bump_history(&pocket, margin, rules.tuning.seq_hist_bump);
                     for v in &victims {
                         grid.clear_net(v);
                         tracks.remove(v);

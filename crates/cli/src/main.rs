@@ -46,7 +46,7 @@ fn parse_args() -> Result<Args, String> {
     let mut design = None;
     let mut use_pcb_cli = false;
     let mut pl = None;
-    let mut placer = "anneal".to_string();
+    let mut placer = String::new(); // empty = take the intent's solver.placer
     let mut judge = false;
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -147,16 +147,26 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
 }
 
 fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
-    let placed = match cx.args.placer.as_str() {
+    // The intent's `solver` block sets the placer and its tuning; an
+    // explicit --placer on the command line overrides the choice only.
+    let sv = &cx.model.solver;
+    let placer = if cx.args.placer.is_empty() { sv.placer.clone() } else { cx.args.placer.clone() };
+    let placed = match placer.as_str() {
         "cypress" => {
             // No fallback: Cypress needs a board extent from the intent.
             if design.placement.is_none() && cx.model.board.outline.is_none() {
                 return Err(vec![CheckResult::fail("cypress_precondition", "board.outline", "Cypress needs `board.outline` in the intent (or an existing placement); no auto-sizing")]);
             }
-            eda::Cypress(eda::CypressOptions::default()).place(design, &cx.model, cx.args.seed)?
+            let mut o = eda::CypressOptions::default();
+            o.proximity_weight = sv.cypress_proximity_weight;
+            eda::Cypress(o).place(design, &cx.model, cx.args.seed)?
         }
-        "anneal" => place(design, &cx.model, &PlaceOptions { seed: cx.args.seed, ..Default::default() })?,
-        other => return Err(vec![CheckResult::fail("cli", other, "unknown --placer (anneal|cypress)")]),
+        "anneal" => place(
+            design,
+            &cx.model,
+            &PlaceOptions { seed: cx.args.seed, spacing: sv.place_spacing_um, moves_per_part: sv.place_moves_per_part, snap: sv.place_snap_um, ..Default::default() },
+        )?,
+        other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress)")]),
     };
     save_design(&cx.args.out, &placed)?;
     let mut checks = check_placement(&placed, &cx.model);
@@ -230,7 +240,8 @@ fn strategies(model: &ConstraintModel, base_placer: &str) -> Vec<Strategy> {
 /// every gate. No fallback inside a rung — each is a full hard-gated run.
 /// Every attempt is logged; none passing is a hard fail with the table.
 fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResult>> {
-    let ladder = strategies(&cx.model, &cx.args.placer.clone());
+    let base = if cx.args.placer.is_empty() { cx.model.solver.placer.clone() } else { cx.args.placer.clone() };
+    let ladder = strategies(&cx.model, &base);
     let base_board = cx.model.board.clone();
     let base_placer = cx.args.placer.clone();
     let mut table: Vec<String> = Vec::new();

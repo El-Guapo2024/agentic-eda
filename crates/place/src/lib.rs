@@ -775,7 +775,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     let congest_capacity = model.board.layers.len() as f64 * bin_um as f64 / pitch as f64;
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
-    let font = eda_model::footprint::refdes_font_um(&outline);
+    let font = model.board.refdes_font(&outline);
     Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, group_rules, stubs, stub_free, stubs_of, bbox, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 

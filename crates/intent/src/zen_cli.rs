@@ -274,6 +274,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
         footprints: Vec::new(),
         board: Default::default(),
         allow: Default::default(),
+        solver: Default::default(),
     })
 }
 

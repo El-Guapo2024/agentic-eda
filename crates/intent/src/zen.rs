@@ -188,6 +188,7 @@ pub fn import_zen(path: &Path) -> Result<ConstraintModel, Vec<CheckResult>> {
         footprints: Vec::new(),
         board: Default::default(),
         allow: Default::default(),
+        solver: Default::default(),
     };
 
     // Structural sanity check: nets referencing pins on undeclared parts.

@@ -105,7 +105,7 @@ pub fn render_board_svg(design: &Design, model: &ConstraintModel, with_routing: 
     s.push_str("<rect x=\"-1e9\" y=\"-1e9\" width=\"2e9\" height=\"2e9\" fill=\"#0d1b12\"/>\n");
     let pts: Vec<String> = pl.outline.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
     s.push_str(&format!("<polygon points=\"{}\" fill=\"#123d1f\" stroke=\"#f2d34b\" stroke-width=\"150\"/>\n", pts.join(" ")));
-    let fs = eda_model::footprint::refdes_font_um(&pl.outline);
+    let fs = model.board.refdes_font(&pl.outline);
     for fp in &pl.footprints {
         let part = match model.part(&fp.id) { Some(p) => p, None => continue };
         if let Some((cx0, cy0, cx1, cy1)) = placed_courtyard(model, part, fp) {

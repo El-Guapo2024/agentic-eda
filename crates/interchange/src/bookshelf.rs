@@ -16,7 +16,7 @@
 //! * `.pl` positions are the node's lower-left corner (Bookshelf), while
 //!   our IR stores centres — converted both ways.
 
-use eda_model::footprint::{keepout_for, placed_courtyard, refdes_font_um, to_board};
+use eda_model::footprint::{keepout_for, placed_courtyard, to_board};
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Side};
 use eda_model::{CheckResult, ConstraintModel};
 use std::collections::BTreeMap;
@@ -96,7 +96,7 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
     // Board rounds DOWN so every legal Cypress position lies inside the outline.
     let bw = ((max_x - min_x) / unit).max(1);
     let bh = ((max_y - min_y) / unit).max(1);
-    let font = refdes_font_um(&outline);
+    let font = model.board.refdes_font(&outline);
 
     let placed: BTreeMap<&str, &FootprintInstance> =
         design.placement.as_ref().map(|p| p.footprints.iter().map(|f| (f.id.as_str(), f)).collect()).unwrap_or_default();
@@ -270,7 +270,7 @@ pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, uni
     };
     let min_x = outline.iter().map(|p| p.x).min().unwrap();
     let min_y = outline.iter().map(|p| p.y).min().unwrap();
-    let font = refdes_font_um(&outline);
+    let font = model.board.refdes_font(&outline);
 
     let mut footprints = Vec::new();
     let mut fails = Vec::new();

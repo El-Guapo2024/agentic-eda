@@ -12,7 +12,6 @@ use std::collections::BinaryHeap;
 pub(crate) const DIRS: [(i64, i64); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)]; // N, E, S, W
 
 pub(crate) const STEP_COST: i64 = 1;
-pub(crate) const BEND_COST: i64 = 2;
 /// 30 cells (~7.6 mm of track on the reference 254 µm grid) per layer
 /// change. At 10 a via pair cost less than a 5 mm detour and the router
 /// hopped layers to dodge a single track on a three-part board; at 60 the
@@ -21,11 +20,10 @@ pub(crate) const BEND_COST: i64 = 2;
 /// grid; [`via_cost`] rescales it to cells at the design's actual grid so
 /// the physical via-vs-detour trade-off the corpus was tuned against
 /// doesn't quietly shift when the grid gets finer or coarser.
-const VIA_COST_REF_CELLS: i64 = 30;
 const REF_GRID_UM: i64 = 254;
 
-pub(crate) fn via_cost(grid_um: i64) -> i64 {
-    ((VIA_COST_REF_CELLS * REF_GRID_UM) / grid_um.max(1)).max(1)
+pub(crate) fn via_cost(grid: &Grid) -> i64 {
+    ((grid.tuning.via_cost_cells.max(1) * REF_GRID_UM) / grid.grid_um.max(1)).max(1)
 }
 
 
@@ -61,12 +59,12 @@ impl PartialOrd for QueueItem {
 /// area as it used to — [`max_expansions`] rescales it by the grid's cell
 /// density relative to the reference, capped so a very fine grid can't
 /// blow the routing time budget.
-const MAX_EXPANSIONS_REF: usize = 400_000;
 const MAX_EXPANSIONS_CAP: usize = 4_000_000;
 
-pub(crate) fn max_expansions(grid_um: i64) -> usize {
-    let ratio = (REF_GRID_UM as f64 / grid_um.max(1) as f64).powi(2);
-    ((MAX_EXPANSIONS_REF as f64 * ratio) as usize).clamp(MAX_EXPANSIONS_REF, MAX_EXPANSIONS_CAP)
+pub(crate) fn max_expansions(grid: &Grid) -> usize {
+    let base = grid.tuning.seq_max_expansions.max(1);
+    let ratio = (REF_GRID_UM as f64 / grid.grid_um.max(1) as f64).powi(2);
+    ((base as f64 * ratio) as usize).clamp(base, MAX_EXPANSIONS_CAP)
 }
 
 pub(crate) struct StateTable {
@@ -177,7 +175,7 @@ pub fn route_to_any_ex(
     }
 
     let mut expansions = 0usize;
-    let max_expansions = max_expansions(grid.grid_um);
+    let max_expansions = max_expansions(grid);
     let mut goal_state: Option<State> = None;
 
     while let Some(QueueItem { g, state, .. }) = heap.pop() {
@@ -201,7 +199,7 @@ pub fn route_to_any_ex(
             if !grid.in_bounds(nx, ny) || !grid.passable(nx, ny, layer, net) {
                 continue;
             }
-            let turn_cost = if dir == NO_DIR || dir == i as u8 { 0 } else { BEND_COST };
+            let turn_cost = if dir == NO_DIR || dir == i as u8 { 0 } else { grid.tuning.bend_cost };
             let ng = g + STEP_COST + turn_cost + grid.penalty(nx, ny, layer);
             let nstate: State = (nx, ny, layer, i as u8);
             if ng < table.get(nstate) {
@@ -221,7 +219,7 @@ pub fn route_to_any_ex(
             if (0..grid.num_layers as u8).any(|ol| !grid.passable_as(cx, cy, ol, net, Occ::Via) || grid.via_near_pad(cx, cy, ol)) {
                 continue;
             }
-            let ng = g + via_cost(grid.grid_um) + grid.penalty(cx, cy, layer) + grid.penalty(cx, cy, nl);
+            let ng = g + via_cost(grid) + grid.penalty(cx, cy, layer) + grid.penalty(cx, cy, nl);
             let nstate: State = (cx, cy, nl, NO_DIR);
             if ng < table.get(nstate) {
                 table.set(nstate, ng, state);

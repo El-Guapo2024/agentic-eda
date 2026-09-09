@@ -8,7 +8,7 @@
 //! board edge) stay impassable exactly as in the sequential router — only
 //! net-vs-net copper is negotiated.
 
-use crate::astar::{max_expansions, via_cost, StateTable, State, BEND_COST, DIRS, NO_DIR, STEP_COST};
+use crate::astar::{via_cost, StateTable, State, DIRS, NO_DIR, STEP_COST};
 use crate::grid::{Grid, Occ};
 use crate::{pad_cells, pad_interior_cells, path_to_geometry, Edge, PadInfo, RouteRules};
 use eda_model::CheckResult;
@@ -16,16 +16,8 @@ use eda_model::ir::{Track, Via};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-/// Iterations before declaring the board unroutable under these rules.
-const MAX_ITERS: usize = 40;
-/// Present-cost factor on the first iteration and its growth per iteration.
-const PRES_FAC_0: f64 = 0.5;
-const PRES_FAC_MULT: f64 = 1.6;
-/// Present-cost ceiling: beyond this the price no longer carries
-/// information and only distorts the search.
-const PRES_FAC_MAX: f64 = 2_000.0;
-/// History increment per unit of overuse per iteration.
-const HIST_INC: u16 = 2;
+// Iteration cap, present-cost start/growth/ceiling and the minimum history
+// increment come from `RoutingTuning` (nc_*), settable in the intent.
 
 #[derive(Eq, PartialEq)]
 struct QueueItem {
@@ -183,7 +175,6 @@ fn search(
     };
     // The grid is finite; under negotiated costs the search may legitimately
     // sweep most of it before the cheap cells run out, so no expansion cap.
-    let _ = max_expansions;
     let mut goal_state: Option<State> = None;
     while let Some(QueueItem { g, state, .. }) = heap.pop() {
         if g > table.get(state) {
@@ -199,7 +190,7 @@ fn search(
             if !grid.passable_as(nx, ny, layer, net, Occ::Track) {
                 continue;
             }
-            let turn = if dir == NO_DIR || dir == i as u8 { 0 } else { BEND_COST };
+            let turn = if dir == NO_DIR || dir == i as u8 { 0 } else { grid.tuning.bend_cost };
             let ng = g + STEP_COST + turn + cost_of(nx, ny, layer);
             let ns: State = (nx, ny, layer, i as u8);
             if ng < table.get(ns) {
@@ -224,7 +215,7 @@ fn search(
             // The ring scan is the expensive part of an expansion; skip it
             // unless the via could improve some layer's best even at zero
             // ring cost (barrel >= 0 is a valid lower bound).
-            let lb = g + via_cost(grid.grid_um);
+            let lb = g + via_cost(grid);
             let worth = (0..grid.num_layers as u8).any(|nl| nl != layer && lb < table.get((cx, cy, nl, NO_DIR)));
             let mut barrel: i64 = 0;
             if worth {
@@ -242,7 +233,7 @@ fn search(
                 if !worth || nl == layer {
                     continue;
                 }
-                let ng = g + via_cost(grid.grid_um) + barrel;
+                let ng = g + via_cost(grid) + barrel;
                 let ns: State = (cx, cy, nl, NO_DIR);
                 if ng < table.get(ns) {
                     table.set(ns, ng, state);
@@ -401,10 +392,11 @@ pub(crate) fn run(
     let mut claims = Claims::new(grid);
     let mut paths: HashMap<String, Vec<(Vec<(i64, i64, u8)>, String)>> = HashMap::new();
     let mut stamped: HashMap<String, (Vec<usize>, Vec<usize>)> = HashMap::new();
-    let mut pres_fac = PRES_FAC_0;
+    let tn = grid.tuning.clone();
+    let mut pres_fac = tn.nc_pres_fac_0;
     let mut unrouted: Vec<String> = Vec::new();
     let mut overused = usize::MAX;
-    for iter in 0..MAX_ITERS {
+    for iter in 0..tn.nc_max_iters {
         let t = std::time::Instant::now();
         unrouted.clear();
         for net in order {
@@ -455,13 +447,13 @@ pub(crate) fn run(
         // History must grow at the scale of the present cost, or two nets
         // with alternatives swap places forever (mcu_board_30plus seed 1:
         // GND/PA7 traded one cell for 40 iterations at a flat +2).
-        let inc = (HIST_INC as f64).max(pres_fac * 2.0).min(u16::MAX as f64 / 4.0) as u16;
+        let inc = (tn.nc_hist_inc as f64).max(pres_fac * 2.0).min(u16::MAX as f64 / 4.0) as u16;
         for j in 0..claims.claims.len() {
             if claims.copper[j] > 0 && claims.claims[j] > 1 {
                 claims.hist[j] = claims.hist[j].saturating_add(inc.saturating_mul(claims.claims[j] - 1));
             }
         }
-        pres_fac = (pres_fac * PRES_FAC_MULT).min(PRES_FAC_MAX);
+        pres_fac = (pres_fac * tn.nc_pres_fac_mult).min(tn.nc_pres_fac_max);
     }
     if dbg && overused > 0 {
         // Which of the contending nets has *any* legal alternative? Re-run
@@ -504,7 +496,7 @@ pub(crate) fn run(
         fails.push(CheckResult::fail("route_net_unrouted", n, "negotiated router found no path for the net under the static obstacles"));
     }
     if overused > 0 {
-        fails.push(CheckResult::fail("route_congestion_unresolved", "board", format!("{overused} cells still claimed by more than one net after {MAX_ITERS} iterations")));
+        fails.push(CheckResult::fail("route_congestion_unresolved", "board", format!("{overused} cells still claimed by more than one net after {} iterations", tn.nc_max_iters)));
     }
     let mut tracks: HashMap<String, Vec<Track>> = HashMap::new();
     let mut vias: HashMap<String, Vec<Via>> = HashMap::new();

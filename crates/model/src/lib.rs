@@ -36,6 +36,10 @@ pub struct ConstraintModel {
     /// exactly as specified or fails.
     #[serde(default)]
     pub allow: Allowances,
+    /// Stage choices and placement tuning (see [`SolverSettings`]); router
+    /// tuning lives in `board.tuning`.
+    #[serde(default)]
+    pub solver: SolverSettings,
 }
 
 /// Design-rule latitude granted to the solver. Every field is an upper or
@@ -61,7 +65,7 @@ pub struct Allowances {
 }
 
 /// Physical design rules. Integer µm throughout.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BoardRules {
     /// Routing grid pitch.
@@ -81,6 +85,121 @@ pub struct BoardRules {
     /// Board outline override, µm. When absent the placer sizes a rectangle.
     #[serde(default)]
     pub outline: Option<Vec<ir::Point>>,
+    /// Refdes silkscreen font size override, µm. None = 1/40 of the shorter
+    /// board side, never under 600.
+    #[serde(default)]
+    pub refdes_font_um: Option<ir::Um>,
+    /// Router tuning. Every value has a default; all are settable here.
+    #[serde(default)]
+    pub tuning: RoutingTuning,
+}
+
+impl BoardRules {
+    /// Refdes font for this board: the override, else 1/40 of the shorter
+    /// rendered side (outline bbox + 2 mm margin), never under 600 µm.
+    pub fn refdes_font(&self, outline: &[ir::Point]) -> ir::Um {
+        if let Some(f) = self.refdes_font_um {
+            return f;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (ir::Um::MAX, ir::Um::MAX, ir::Um::MIN, ir::Um::MIN);
+        for p in outline {
+            x0 = x0.min(p.x);
+            y0 = y0.min(p.y);
+            x1 = x1.max(p.x);
+            y1 = y1.max(p.y);
+        }
+        if outline.is_empty() {
+            return 600;
+        }
+        let m = 2000;
+        let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
+        (vw.min(vh) / 40).max(600)
+    }
+}
+
+/// Every router constant, with the corpus-tuned value as default. Costs are
+/// in A* steps at the reference 254 µm grid (the router rescales them to
+/// the board's grid); distances in µm.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RoutingTuning {
+    /// `negotiated` (PathFinder, default) or `sequential` (rip-up & reroute).
+    pub router: String,
+    /// Cost of a via in reference cells (~7.6 mm of track at 30).
+    pub via_cost_cells: i64,
+    /// Extra cost per direction change.
+    pub bend_cost: i64,
+    /// Copper-to-board-edge clearance (KiCad's default 0.5 mm).
+    pub edge_clearance_um: ir::Um,
+    /// Same-footprint SMD pad gaps narrower than this are hard-blocked.
+    pub between_pads_max_gap_um: ir::Um,
+    /// Penalty per cell under a refdes label (labels are hard keep-outs;
+    /// this only prices the relaxed diagnostics passes).
+    pub refdes_penalty: u8,
+    /// Soft escape lane outside fine-pitch pad rows: reach and per-cell price.
+    pub escape_lane_um: ir::Um,
+    pub escape_lane_penalty: u8,
+    /// Cells a pad's free pocket must reach (or a via site / own pad) to
+    /// pass the placement preflight.
+    pub preflight_reach_cells: usize,
+    /// Sequential router: rip-up rounds per net, victims per round, history
+    /// bump per round, A* expansion cap at the reference grid.
+    pub seq_max_rounds: u32,
+    pub seq_max_victims: usize,
+    pub seq_hist_bump: u8,
+    pub seq_max_expansions: usize,
+    /// Negotiated router: iteration cap, present-cost factor start /
+    /// growth / ceiling, minimum history increment.
+    pub nc_max_iters: usize,
+    pub nc_pres_fac_0: f64,
+    pub nc_pres_fac_mult: f64,
+    pub nc_pres_fac_max: f64,
+    pub nc_hist_inc: u16,
+}
+impl Default for RoutingTuning {
+    fn default() -> Self {
+        RoutingTuning {
+            router: "negotiated".into(),
+            via_cost_cells: 30,
+            bend_cost: 2,
+            edge_clearance_um: 500,
+            between_pads_max_gap_um: 2000,
+            refdes_penalty: 8,
+            escape_lane_um: 1200,
+            escape_lane_penalty: 6,
+            preflight_reach_cells: 2000,
+            seq_max_rounds: 6,
+            seq_max_victims: 6,
+            seq_hist_bump: 4,
+            seq_max_expansions: 400_000,
+            nc_max_iters: 40,
+            nc_pres_fac_0: 0.5,
+            nc_pres_fac_mult: 1.6,
+            nc_pres_fac_max: 2000.0,
+            nc_hist_inc: 2,
+        }
+    }
+}
+
+/// Stage choices and placement tuning the intent may set. Defaults apply
+/// when absent; the CLI flags override when given explicitly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SolverSettings {
+    /// `anneal` (default) or `cypress`.
+    pub placer: String,
+    /// Anneal placer: keep-apart margin around courtyards (routing channel
+    /// space), moves per part, placement snap grid, all µm / counts.
+    pub place_spacing_um: ir::Um,
+    pub place_moves_per_part: usize,
+    pub place_snap_um: ir::Um,
+    /// Cypress: weight of the synthetic proximity-rule nets.
+    pub cypress_proximity_weight: f64,
+}
+impl Default for SolverSettings {
+    fn default() -> Self {
+        SolverSettings { placer: "anneal".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0 }
+    }
 }
 fn d_grid() -> ir::Um { 254 }
 fn d_track() -> ir::Um { 200 }
@@ -90,7 +209,7 @@ fn d_via_dia() -> ir::Um { 600 }
 fn d_layers() -> Vec<String> { vec!["F.Cu".into(), "B.Cu".into()] }
 impl Default for BoardRules {
     fn default() -> Self {
-        BoardRules { grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(), outline: None }
+        BoardRules { grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(), outline: None, refdes_font_um: None, tuning: RoutingTuning::default() }
     }
 }
 

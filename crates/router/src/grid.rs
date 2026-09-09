@@ -7,6 +7,7 @@
 
 use eda_model::footprint::PlacedPad;
 use eda_model::ir::{Point, Um};
+use eda_model::RoutingTuning;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Occ {
@@ -38,6 +39,7 @@ const MULTI: u32 = u32::MAX - 1;
 
 /// KiCad's default board-setup copper-to-edge clearance, enforced by
 /// `kicad-cli pcb drc` against Edge.Cuts.
+/// Default copper-to-edge clearance (see `RoutingTuning::edge_clearance_um`).
 pub const EDGE_CLEARANCE_UM: Um = 500;
 
 fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
@@ -49,6 +51,8 @@ fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
 }
 
 pub struct Grid {
+    /// Router tuning for this board (from the intent's `board.tuning`).
+    pub tuning: RoutingTuning,
     pub grid_um: Um,
     pub clearance_um: Um,
     pub track_half_um: Um,
@@ -144,6 +148,7 @@ impl Grid {
         let clearance_cells = ((clearance_um + via_diameter + grid_um - 1) / grid_um).max(1) - 1;
 
         let mut g = Grid {
+            tuning: RoutingTuning::default(),
             grid_um,
             clearance_um,
             track_half_um: track_width / 2,
@@ -525,7 +530,7 @@ impl Grid {
         }
         let net_id = self.net_id_ro(net).unwrap_or(EMPTY);
         let own_pad = self.occ[i].as_ref().map(|c| c.kind == Occ::Pad && c.net_id == net_id).unwrap_or(false);
-        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < EDGE_CLEARANCE_UM + self.half_extent(Occ::Track) {
+        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < self.tuning.edge_clearance_um + self.half_extent(Occ::Track) {
             return 'E';
         }
         let near = self.near_track[i];
@@ -695,7 +700,7 @@ impl Grid {
         // the net's own pad copper: a pad legitimately placed at the
         // board edge must stay reachable.
         let own_pad = self.idx(cx, cy, layer).and_then(|i| self.occ[i].as_ref()).map(|c| c.kind == Occ::Pad && c.net_id == net_id).unwrap_or(false);
-        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < EDGE_CLEARANCE_UM + self.half_extent(me) {
+        if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < self.tuning.edge_clearance_um + self.half_extent(me) {
             return false;
         }
         // Summary lookup (see `near_track`): equivalent to scanning the
