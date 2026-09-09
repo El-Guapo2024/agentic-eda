@@ -665,6 +665,12 @@ impl Grid {
     /// kind `a` and copper whose recorded half-extent is `b_half_um`, on
     /// different nets.
     #[inline]
+    /// Public wrapper of `min_sep_cells_half` for the negotiated router's
+    /// claim stamping.
+    pub fn sep_cells(&self, a: Occ, b_half_um: Um) -> i64 {
+        self.min_sep_cells_half(a, b_half_um)
+    }
+
     fn min_sep_cells_half(&self, a: Occ, b_half_um: Um) -> i64 {
         let um = self.clearance_um + self.half_extent(a) + b_half_um;
         (um + self.grid_um - 1) / self.grid_um

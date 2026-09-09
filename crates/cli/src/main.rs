@@ -65,7 +65,7 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress] [--judge] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress] [--judge] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -169,6 +169,104 @@ fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
     Ok(placed)
 }
 
+/// One rung of the solver's ladder: a board-rule variant plus a placer.
+#[derive(Clone, Debug)]
+struct Strategy {
+    name: String,
+    placer: String,
+    board: eda_model::BoardRules,
+}
+
+/// Cheapest-first ladder inside the intent's allowances: as written, then
+/// the other permitted placer, then tighter track/clearance (free at the
+/// fab if the user allowed them), then more layers (not free), then both.
+fn strategies(model: &ConstraintModel, base_placer: &str) -> Vec<Strategy> {
+    let a = &model.allow;
+    let base = model.board.clone();
+    let mut placers: Vec<String> = vec![base_placer.to_string()];
+    for p in &a.placers {
+        if !placers.contains(p) {
+            placers.push(p.clone());
+        }
+    }
+    let mut rule_variants: Vec<(String, eda_model::BoardRules)> = vec![("as written".into(), base.clone())];
+    let tight = {
+        let mut b = base.clone();
+        let mut changed = false;
+        if let Some(t) = a.min_track {
+            if t < b.track_width { b.track_width = t; changed = true; }
+        }
+        if let Some(c) = a.min_clearance {
+            if c < b.clearance { b.clearance = c; changed = true; }
+        }
+        changed.then_some(b)
+    };
+    if let Some(b) = &tight {
+        rule_variants.push((format!("track {} / clearance {}", b.track_width, b.clearance), b.clone()));
+    }
+    if let Some(ml) = a.max_layers {
+        if ml >= 4 && base.layers.len() < 4 {
+            let four = vec!["F.Cu".to_string(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+            let mut b = base.clone();
+            b.layers = four.clone();
+            rule_variants.push(("4 layers".into(), b));
+            if let Some(t) = &tight {
+                let mut b = t.clone();
+                b.layers = four;
+                rule_variants.push((format!("4 layers, track {} / clearance {}", b.track_width, b.clearance), b));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (rname, board) in rule_variants {
+        for p in &placers {
+            out.push(Strategy { name: format!("{rname}, placer {p}"), placer: p.clone(), board: board.clone() });
+        }
+    }
+    out
+}
+
+/// Walk the ladder: place + route under each strategy until one passes
+/// every gate. No fallback inside a rung — each is a full hard-gated run.
+/// Every attempt is logged; none passing is a hard fail with the table.
+fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResult>> {
+    let ladder = strategies(&cx.model, &cx.args.placer.clone());
+    let base_board = cx.model.board.clone();
+    let base_placer = cx.args.placer.clone();
+    let mut table: Vec<String> = Vec::new();
+    for (i, st) in ladder.iter().enumerate() {
+        cx.model.board = st.board.clone();
+        cx.args.placer = st.placer.clone();
+        println!("== strategy {i}: {}", st.name);
+        cx.log.note(format!("strategy {i} start: {}", st.name)).ok();
+        let t = std::time::Instant::now();
+        let result = stage_place(cx, schematic).and_then(|d| stage_route(cx, &d));
+        match result {
+            Ok(d) => {
+                let line = format!("strategy {i}: {} -> PASS in {:.1}s", st.name, t.elapsed().as_secs_f64());
+                println!("{line}");
+                cx.log.note(line.clone()).ok();
+                table.push(line);
+                write(&cx.args.out.join("strategy.txt"), table.join("
+").as_bytes())?;
+                return Ok(d);
+            }
+            Err(fails) => {
+                let why: Vec<String> = fails.iter().take(3).map(|c| format!("{}@{}", c.check, c.location.as_deref().unwrap_or("-"))).collect();
+                let line = format!("strategy {i}: {} -> FAIL ({} fails: {}) in {:.1}s", st.name, fails.len(), why.join(", "), t.elapsed().as_secs_f64());
+                println!("{line}");
+                cx.log.note(line.clone()).ok();
+                table.push(line);
+            }
+        }
+    }
+    cx.model.board = base_board;
+    cx.args.placer = base_placer;
+    write(&cx.args.out.join("strategy.txt"), table.join("
+").as_bytes())?;
+    Err(vec![CheckResult::fail("solve", "design", format!("no strategy inside the allowances passed every gate ({} tried; see strategy.txt)", ladder.len()))])
+}
+
 fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
     let routed = match eda::route_partial(design, &cx.model, &cx.model.board, cx.args.seed) {
         (Some(d), fails) if fails.is_empty() => d,
@@ -267,6 +365,11 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
         "route" => {
             let base = prior.ok_or_else(|| vec![CheckResult::fail("cli", "route", "route needs --design with a placement")])?;
             stage_route(&mut cx, &base)?
+        }
+        "solve" => {
+            let d = stage_schematic(&mut cx)?;
+            if cx.args.judge { run_judge(&mut cx, &d, eda_judge::Stage::Schematic)?; }
+            stage_solve(&mut cx, &d)?
         }
         "pipeline" => {
             let d = stage_schematic(&mut cx)?;

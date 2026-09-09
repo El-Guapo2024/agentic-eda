@@ -9,10 +9,10 @@ use crate::grid::{Grid, Occ};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-const DIRS: [(i64, i64); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)]; // N, E, S, W
+pub(crate) const DIRS: [(i64, i64); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)]; // N, E, S, W
 
-const STEP_COST: i64 = 1;
-const BEND_COST: i64 = 2;
+pub(crate) const STEP_COST: i64 = 1;
+pub(crate) const BEND_COST: i64 = 2;
 /// 30 cells (~7.6 mm of track on the reference 254 µm grid) per layer
 /// change. At 10 a via pair cost less than a 5 mm detour and the router
 /// hopped layers to dodge a single track on a three-part board; at 60 the
@@ -24,18 +24,18 @@ const BEND_COST: i64 = 2;
 const VIA_COST_REF_CELLS: i64 = 30;
 const REF_GRID_UM: i64 = 254;
 
-fn via_cost(grid_um: i64) -> i64 {
+pub(crate) fn via_cost(grid_um: i64) -> i64 {
     ((VIA_COST_REF_CELLS * REF_GRID_UM) / grid_um.max(1)).max(1)
 }
 
 
 /// dir 0..=3 = last move direction (index into DIRS), 4 = none (start, or
 /// just came off a via).
-const NUM_DIRS: usize = 5;
-const NO_DIR: u8 = 4;
+pub(crate) const NUM_DIRS: usize = 5;
+pub(crate) const NO_DIR: u8 = 4;
 
 /// (cx, cy, layer, dir)
-type State = (i64, i64, u8, u8);
+pub(crate) type State = (i64, i64, u8, u8);
 
 #[derive(Eq, PartialEq)]
 struct QueueItem {
@@ -64,20 +64,20 @@ impl PartialOrd for QueueItem {
 const MAX_EXPANSIONS_REF: usize = 400_000;
 const MAX_EXPANSIONS_CAP: usize = 4_000_000;
 
-fn max_expansions(grid_um: i64) -> usize {
+pub(crate) fn max_expansions(grid_um: i64) -> usize {
     let ratio = (REF_GRID_UM as f64 / grid_um.max(1) as f64).powi(2);
     ((MAX_EXPANSIONS_REF as f64 * ratio) as usize).clamp(MAX_EXPANSIONS_REF, MAX_EXPANSIONS_CAP)
 }
 
-struct StateTable {
+pub(crate) struct StateTable {
     cells_x: i64,
     num_layers: usize,
-    best: Vec<i64>,
-    came_from: Vec<u32>, // packed state index, or u32::MAX for "none"
+    pub(crate) best: Vec<i64>,
+    pub(crate) came_from: Vec<u32>, // packed state index, or u32::MAX for "none"
 }
 
 impl StateTable {
-    fn new(grid: &Grid) -> Self {
+    pub(crate) fn new(grid: &Grid) -> Self {
         let n = (grid.cells_x * grid.cells_y) as usize * grid.num_layers * NUM_DIRS;
         StateTable {
             cells_x: grid.cells_x,
@@ -88,13 +88,13 @@ impl StateTable {
     }
 
     #[inline]
-    fn index(&self, s: State) -> usize {
+    pub(crate) fn index(&self, s: State) -> usize {
         let (cx, cy, layer, dir) = s;
         (((cy * self.cells_x + cx) as usize * self.num_layers + layer as usize) * NUM_DIRS) + dir as usize
     }
 
     #[inline]
-    fn unindex(&self, i: usize) -> State {
+    pub(crate) fn unindex(&self, i: usize) -> State {
         let dir = (i % NUM_DIRS) as u8;
         let i = i / NUM_DIRS;
         let layer = (i % self.num_layers) as u8;
@@ -105,12 +105,12 @@ impl StateTable {
     }
 
     #[inline]
-    fn get(&self, s: State) -> i64 {
+    pub(crate) fn get(&self, s: State) -> i64 {
         self.best[self.index(s)]
     }
 
     #[inline]
-    fn set(&mut self, s: State, g: i64, from: State) {
+    pub(crate) fn set(&mut self, s: State, g: i64, from: State) {
         let i = self.index(s);
         self.best[i] = g;
         self.came_from[i] = self.index(from) as u32;

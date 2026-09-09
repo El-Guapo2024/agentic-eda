@@ -187,6 +187,7 @@ pub fn import_zen(path: &Path) -> Result<ConstraintModel, Vec<CheckResult>> {
         impedance_targets: Vec::new(),
         footprints: Vec::new(),
         board: Default::default(),
+        allow: Default::default(),
     };
 
     // Structural sanity check: nets referencing pins on undeclared parts.

@@ -31,6 +31,33 @@ pub struct ConstraintModel {
     /// Board rules consumed by the placer, router and routing gates.
     #[serde(default)]
     pub board: BoardRules,
+    /// What the solver may change on its own when the rules as written do
+    /// not route (see `eda solve`). Absent = nothing: the board is built
+    /// exactly as specified or fails.
+    #[serde(default)]
+    pub allow: Allowances,
+}
+
+/// Design-rule latitude granted to the solver. Every field is an upper or
+/// lower bound the user is willing to accept; the solver walks the
+/// cheapest-first ladder of variants inside these bounds and takes the
+/// first one that passes every gate, logging each attempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Allowances {
+    /// Most copper layers the solver may go to (2 or 4). None = as written.
+    #[serde(default)]
+    pub max_layers: Option<usize>,
+    /// Narrowest track the solver may fall back to, µm. None = as written.
+    #[serde(default)]
+    pub min_track: Option<ir::Um>,
+    /// Smallest clearance the solver may fall back to, µm. None = as written.
+    #[serde(default)]
+    pub min_clearance: Option<ir::Um>,
+    /// Placers the solver may try, in preference order (`anneal`, `cypress`).
+    /// Empty = only the one given on the command line.
+    #[serde(default)]
+    pub placers: Vec<String>,
 }
 
 /// Physical design rules. Integer µm throughout.

@@ -814,6 +814,9 @@ fn check_workmanship(design: &Design, model: &ConstraintModel, rt: &eda_model::i
             }
             let crosses = t.pts.windows(2).any(|w| seg_pad_dist(w[0], w[1], p) == 0.0);
             if crosses {
+                if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+                    eprintln!("gate: pass-through {}#{i} pts {:?} through pad {} at {:?} size {:?}", t.net, t.pts, p.refpin, p.geom.center, p.geom.size);
+                }
                 n_pass += 1;
                 out.push(CheckResult::fail("routing_pass_through_pad", format!("{}#{i}/{}", t.net, p.refpin), "track runs through a pad of its own net without terminating on it (max 0)"));
             }

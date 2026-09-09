@@ -6,6 +6,7 @@
 //! and `astar` for the pieces.
 
 pub mod astar;
+mod negotiate;
 pub mod grid;
 pub mod pads;
 
@@ -706,7 +707,22 @@ pub fn route_partial(
     shuffle_ties(&mut nets, &airline_by_net, seed);
 
     if dbg { eprintln!("route: t edges {:?}", t_start.elapsed()); }
-    // --- 5. route with rip-up & reroute -----------------------------------
+    // --- 5. route -----------------------------------------------------------
+    // Negotiated congestion by default; EDA_ROUTER=sequential keeps the
+    // rip-up router for comparison while both exist.
+    if std::env::var("EDA_ROUTER").as_deref() != Ok("sequential") {
+        let (tracks, vias, mut nfails) = negotiate::run(&mut grid, &pads, rules, &edges_by_net, &nets, dbg);
+        let mut fails = skipped;
+        fails.append(&mut nfails);
+        if dbg { eprintln!("route: t routed {:?}", t_start.elapsed()); }
+        let mut out = design.clone();
+        let mut all_tracks: Vec<Track> = tracks.into_values().flatten().collect();
+        let mut all_vias: Vec<Via> = vias.into_values().flatten().collect();
+        all_tracks.sort_by(|a, b| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
+        all_vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
+        out.routing = Some(RoutingSection { tracks: all_tracks, vias: all_vias, zones: vec![] });
+        return (Some(out), fails);
+    }
     let mut queue: VecDeque<String> = nets.into();
     let mut ripup_rounds: HashMap<String, u32> = HashMap::new();
     let mut routed_order: Vec<String> = Vec::new();
