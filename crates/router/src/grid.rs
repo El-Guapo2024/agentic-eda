@@ -741,7 +741,13 @@ impl Grid {
     /// fence around a pocket the search could not leave.
     pub fn nets_bordering(&self, cells: &[(i64, i64, u8)], r: i64) -> std::collections::HashSet<String> {
         let mut set = std::collections::HashSet::new();
-        for &(cx, cy, l) in cells {
+        for &(cx, cy, _l) in cells {
+            // Every layer, not just the pocket's own: when a pocket's only
+            // way out is a via, the copper sealing it is on the *other*
+            // layer (l2 BOOT0: the pocket had via sites in preflight, all
+            // taken by bottom-side tracks at routing time, none ever
+            // ripped up because the fence only looked at the top).
+            for l in 0..self.num_layers as u8 {
             for dx in -r..=r {
                 for dy in -r..=r {
                     if let Some(i) = self.idx(cx + dx, cy + dy, l) {
@@ -753,6 +759,7 @@ impl Grid {
                     }
                 }
             }
+        }
         }
         set
     }

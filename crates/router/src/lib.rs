@@ -83,6 +83,95 @@ const BETWEEN_PADS_MAX_GAP: i64 = 2000;
 /// no multi-pad SMD footprint at all (e.g. every part is a through-hole
 /// connector). Used to decide whether the routing grid needs refining to
 /// escape a fine-pitch part — see the call site in `route_partial`.
+/// Footprints whose smallest same-footprint SMD pad gap is under `grid`
+/// (the fine-pitch class `smallest_same_footprint_gap` refines the grid
+/// for): their pads have no lateral escape at all.
+fn fine_pitch_footprints<'a>(pads: &'a HashMap<String, PadInfo>, grid: i64) -> HashSet<&'a str> {
+    let mut by_fp: HashMap<&str, Vec<&PadInfo>> = HashMap::new();
+    for (refpin, p) in pads {
+        if p.geom.through_hole {
+            continue;
+        }
+        by_fp.entry(refpin.split('.').next().unwrap_or("")).or_default().push(p);
+    }
+    let mut out = HashSet::new();
+    for (fp, ps) in by_fp {
+        let mut min_gap = i64::MAX;
+        for i in 0..ps.len() {
+            for j in i + 1..ps.len() {
+                let (a, b) = (ps[i], ps[j]);
+                let gx = (a.pt.x - b.pt.x).abs() - (a.size.0 + b.size.0) / 2;
+                let gy = (a.pt.y - b.pt.y).abs() - (a.size.1 + b.size.1) / 2;
+                let gap = gx.max(gy);
+                if gap >= 0 {
+                    min_gap = min_gap.min(gap);
+                }
+            }
+        }
+        if min_gap < grid {
+            out.insert(fp);
+        }
+    }
+    out
+}
+
+/// Per-cell surcharge in the escape lane of a fine-pitch footprint (see
+/// `penalise_escape_lanes`), in A* steps at the reference grid.
+const ESCAPE_LANE_PENALTY: u8 = 6;
+/// How far the escape lane reaches beyond the pad tips, µm.
+const ESCAPE_LANE_UM: i64 = 1200;
+
+/// Soft penalty on the band just outside each fine-pitch footprint's pad
+/// rows. A pin of such a part can only leave straight out, so a track that
+/// *runs along* the row in that band seals every pin behind it for the
+/// rest of the run — and that is exactly what the first nets' escapes did
+/// (l2: each fan-out net turned right after its pad and hugged the TSSOP,
+/// walling in the four pins routed last on every placement, rip-up
+/// restoring the same hug each round). Crossing the band perpendicularly
+/// is a few cells and stays cheap; running along it is not.
+fn penalise_escape_lanes(grid: &mut Grid, pads: &HashMap<String, PadInfo>, fine: &HashSet<String>, grid_um: i64) {
+    let penalty = ((ESCAPE_LANE_PENALTY as i64 * 254 + grid_um / 2) / grid_um.max(1)).clamp(1, 255) as u8;
+    let mut by_fp: HashMap<&str, Vec<&PadInfo>> = HashMap::new();
+    for (refpin, p) in pads {
+        let fp = refpin.split('.').next().unwrap_or("");
+        if fine.contains(fp) {
+            by_fp.entry(fp).or_default().push(p);
+        }
+    }
+    for (_fp, ps) in by_fp {
+        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        for p in &ps {
+            x0 = x0.min(p.pt.x - p.size.0 / 2);
+            y0 = y0.min(p.pt.y - p.size.1 / 2);
+            x1 = x1.max(p.pt.x + p.size.0 / 2);
+            y1 = y1.max(p.pt.y + p.size.1 / 2);
+        }
+        let layers: HashSet<u8> = ps.iter().flat_map(|p| p.layers.iter().copied()).collect();
+        // A side has a pad row when some pad touches that edge of the bbox.
+        let near = |a: i64, b: i64| (a - b).abs() <= grid_um;
+        let sides = [
+            (ps.iter().any(|p| near(p.pt.x - p.size.0 / 2, x0)), (x0 - ESCAPE_LANE_UM, y0, x0, y1)),
+            (ps.iter().any(|p| near(p.pt.x + p.size.0 / 2, x1)), (x1, y0, x1 + ESCAPE_LANE_UM, y1)),
+            (ps.iter().any(|p| near(p.pt.y - p.size.1 / 2, y0)), (x0, y0 - ESCAPE_LANE_UM, x1, y0)),
+            (ps.iter().any(|p| near(p.pt.y + p.size.1 / 2, y1)), (x0, y1, x1, y1 + ESCAPE_LANE_UM)),
+        ];
+        for (has_row, band) in sides {
+            if !has_row {
+                continue;
+            }
+            let (c0x, c0y) = grid.to_cell(Point { x: band.0, y: band.1 });
+            let (c1x, c1y) = grid.to_cell(Point { x: band.2, y: band.3 });
+            for &l in &layers {
+                for gx in c0x..=c1x {
+                    for gy in c0y..=c1y {
+                        grid.add_penalty(gx, gy, l, penalty);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn smallest_same_footprint_gap(pads: &HashMap<String, PadInfo>) -> i64 {
     let mut by_fp: HashMap<&str, Vec<&PadInfo>> = HashMap::new();
     for (refpin, p) in pads {
@@ -286,6 +375,10 @@ pub(crate) struct ObstacleMap {
     pub pads: HashMap<String, PadInfo>,
     pub rules: RouteRules,
     pub num_layers: usize,
+    /// Fine-pitch footprints (classified against the *configured* grid,
+    /// before any refinement — the refined grid is exactly the one these
+    /// parts forced, so testing against it would find none).
+    pub fine: HashSet<String>,
 }
 
 pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &ConstraintModel, rules: &RouteRules) -> Result<ObstacleMap, Vec<CheckResult>> {
@@ -354,6 +447,7 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     // cell. Boards without such a part keep the coarse grid and its
     // established performance.
     let min_pad_gap = smallest_same_footprint_gap(&pads);
+    let fine: HashSet<String> = fine_pitch_footprints(&pads, rules.grid).into_iter().map(|s| s.to_string()).collect();
     let mut eff_rules = rules.clone();
     if rules.grid > 130 && min_pad_gap < rules.grid {
         eff_rules.grid = rules.grid / 2;
@@ -381,7 +475,8 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     }
     block_pad_gaps(&mut grid, &pads);
     penalise_refdes_boxes(&mut grid, placement, model, num_layers);
-    Ok(ObstacleMap { grid, pads, rules: eff_rules, num_layers })
+    penalise_escape_lanes(&mut grid, &pads, &fine, rules.grid);
+    Ok(ObstacleMap { grid, pads, rules: eff_rules, num_layers, fine })
 }
 
 
@@ -402,7 +497,7 @@ pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -
     if placement.outline.len() < 3 {
         return vec![CheckResult::fail("placement_pad_reach", "design.placement.outline", "board outline needs at least 3 points")];
     }
-    let ObstacleMap { mut grid, pads, rules: eff_rules, num_layers } = match obstacle_map(placement, model, rules) {
+    let ObstacleMap { mut grid, pads, rules: eff_rules, num_layers, fine: _ } = match obstacle_map(placement, model, rules) {
         Ok(m) => m,
         Err(f) => return f,
     };
@@ -518,7 +613,7 @@ pub fn route_partial(
 
     let dbg = std::env::var_os("EDA_ROUTE_DEBUG").is_some();
     let t_start = std::time::Instant::now();
-    let ObstacleMap { mut grid, pads, rules: eff_rules, num_layers: _ } = match obstacle_map(placement, model, rules) {
+    let ObstacleMap { mut grid, pads, rules: eff_rules, num_layers: _, fine } = match obstacle_map(placement, model, rules) {
         Ok(m) => m,
         Err(f) => return (None, f),
     };
@@ -591,8 +686,23 @@ pub fn route_partial(
 
     // --- 4. deterministic net ordering: shortest airline first, seed
     // shuffles only within ties -------------------------------------------
+    // Escape routing first: a net with a pad on a fine-pitch footprint
+    // (same-footprint pad gap under one configured cell — the TSSOP/QFN
+    // class) has exactly one way out of that pad, straight out and then
+    // a turn in the channel beside the part. Routed after the short
+    // decoupling nets that hug the same part, those pins find the channel
+    // already full and the rip-up budget goes on evicting nets that were
+    // fine (l2: 4-6 MCU fan-out nets unrouted on every placement).
+    let mut fine_pads_by_net: HashMap<String, usize> = HashMap::new();
+    for (refpin, p) in &pads {
+        let fp_id = refpin.split('.').next().unwrap_or("");
+        if fine.contains(fp_id) {
+            *fine_pads_by_net.entry(p.net.clone()).or_insert(0) += 1;
+        }
+    }
     let mut nets: Vec<String> = edges_by_net.keys().cloned().collect();
-    nets.sort_by(|a, b| (airline_by_net[a], a).cmp(&(airline_by_net[b], b)));
+    let prio = |n: &String| std::cmp::Reverse(*fine_pads_by_net.get(n).unwrap_or(&0));
+    nets.sort_by(|a, b| (prio(a), airline_by_net[a], a).cmp(&(prio(b), airline_by_net[b], b)));
     shuffle_ties(&mut nets, &airline_by_net, seed);
 
     if dbg { eprintln!("route: t edges {:?}", t_start.elapsed()); }
