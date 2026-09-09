@@ -248,7 +248,11 @@ fn penalise_refdes_boxes(grid: &mut Grid, placement: &eda_model::ir::PlacementSe
 }
 
 /// How hard the refdes-label keep-outs are enforced for one attempt.
+/// Only `Strict` is used by the router: label crossings are a hard fail
+/// (the gate rejects them, so routing through one never produced a
+/// shippable candidate). The relaxed tiers are kept for diagnostics.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(dead_code)]
 enum SoftMode {
     /// Tracks and vias both kept out of label boxes.
     Strict,
@@ -499,17 +503,13 @@ pub fn route_partial(
         // Refdes keep-outs are enforced first; a net that can only route
         // through a label rips up what fenced it in, and pays the label
         // penalty only once its rip-up budget is spent.
-        // Tiered: strict, then tracks may cross labels but vias still
-        // may not, then everything pays the penalty instead.
+        // Refdes keep-outs are hard: a net that cannot route around the
+        // labels after its rip-up budget fails, and the failure goes
+        // upstream to placement rather than being papered over with a
+        // label crossing.
         let rounds = *ripup_rounds.get(&net).unwrap_or(&0);
         let t_net = std::time::Instant::now();
-        let mut result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, SoftMode::Strict);
-        if result.is_err() && rounds >= max_rounds {
-            result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, SoftMode::TracksRelaxed);
-        }
-        if result.is_err() && rounds >= max_rounds {
-            result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, SoftMode::Relaxed);
-        }
+        let result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, SoftMode::Strict);
         if dbg {
             eprintln!("route: net {net} round {rounds} ok={} in {:?}", result.is_ok(), t_net.elapsed());
         }
