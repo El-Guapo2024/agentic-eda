@@ -221,18 +221,25 @@ fn search(
             // priced every via near any copper 25-50x too high — nets then
             // preferred a same-layer crossing at pres_fac 2000 to a legal
             // via (mcu_board_30plus seed 1, GND x PA7).
+            // The ring scan is the expensive part of an expansion; skip it
+            // unless the via could improve some layer's best even at zero
+            // ring cost (barrel >= 0 is a valid lower bound).
+            let lb = g + via_cost(grid.grid_um);
+            let worth = (0..grid.num_layers as u8).any(|nl| nl != layer && lb < table.get((cx, cy, nl, NO_DIR)));
             let mut barrel: i64 = 0;
-            for ol in 0..grid.num_layers as u8 {
-                let mut worst = 0i64;
-                for dx in -r_extra..=r_extra {
-                    for dy in -r_extra..=r_extra {
-                        worst = worst.max(cost_of(cx + dx, cy + dy, ol));
+            if worth {
+                for ol in 0..grid.num_layers as u8 {
+                    let mut worst = 0i64;
+                    for dx in -r_extra..=r_extra {
+                        for dy in -r_extra..=r_extra {
+                            worst = worst.max(cost_of(cx + dx, cy + dy, ol));
+                        }
                     }
+                    barrel += worst;
                 }
-                barrel += worst;
             }
             for nl in 0..grid.num_layers as u8 {
-                if nl == layer {
+                if !worth || nl == layer {
                     continue;
                 }
                 let ng = g + via_cost(grid.grid_um) + barrel;
