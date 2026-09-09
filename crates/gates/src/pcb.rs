@@ -914,6 +914,9 @@ fn check_workmanship(design: &Design, model: &ConstraintModel, rt: &eda_model::i
             let half = (t.width / 2) as f64;
             if t.pts.windows(2).any(|w| seg_rect_dist(w[0], w[1], &bx) - half < 0.0) {
                 n_refdes += 1;
+                if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+                    eprintln!("gate: refdes box {} = {bx:?}; track {ti} {:?}", fp.id, t.pts);
+                }
                 out.push(CheckResult::fail("routing_over_refdes", format!("{}#{ti}/{}", t.net, fp.id), "track runs under the refdes label (max 0)"));
             }
         }

@@ -212,7 +212,6 @@ pub fn route_to_any_ex(
 
         // Layer change (via) in place. Never inside or overlapping pad
         // copper on either layer, own net included (via-in-pad).
-        let vr = grid.via_pad_radius_cells();
         for nl in 0..grid.num_layers as u8 {
             if nl == layer {
                 continue;
@@ -220,7 +219,7 @@ pub fn route_to_any_ex(
             if !grid.passable_as(cx, cy, nl, net, Occ::Via) || !grid.passable_as(cx, cy, layer, net, Occ::Via) {
                 continue;
             }
-            if grid.pad_within(cx, cy, nl, vr) || grid.pad_within(cx, cy, layer, vr) {
+            if grid.via_near_pad(cx, cy, nl) || grid.via_near_pad(cx, cy, layer) {
                 continue;
             }
             let ng = g + via_cost(grid.grid_um) + grid.penalty(cx, cy, layer) + grid.penalty(cx, cy, nl);
@@ -234,6 +233,9 @@ pub fn route_to_any_ex(
 
     if goal_state.is_none() && std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
         eprintln!("astar: no path for {net} after {expansions} expansions (soft_active={})", grid.soft_active);
+    }
+    if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+        eprintln!("astar: {net} found={} expansions={expansions} heap_left={} soft={}/{}", goal_state.is_some(), heap.len(), grid.soft_active, grid.soft_via_active);
     }
     let Some(goal_state) = goal_state else { return (None, explored) };
     let mut path = vec![goal_state];

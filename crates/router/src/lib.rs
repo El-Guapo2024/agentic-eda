@@ -174,10 +174,21 @@ fn block_pad_gaps(grid: &mut Grid, pads: &HashMap<String, PadInfo>) {
 }
 
 /// Per-cell surcharge for a track under a refdes label once the strict
-/// pass has given up: 8 steps per cell, so crossing a ~600 µm label costs
-/// about a 2 mm detour. 16 and 24 were tried on the corpus and changed
-/// nothing the strict pass hadn't already decided.
+/// pass has given up: 8 steps per cell at the 254 um reference grid, so
+/// crossing a ~600 µm label costs about a 2 mm detour. 16 and 24 were
+/// tried on the corpus and changed nothing the strict pass hadn't already
+/// decided. Cell-denominated: the detour it buys is measured in cells,
+/// so on a finer grid the per-cell price scales up to keep the same
+/// physical detour-per-label ratio (see `refdes_penalty`). At the halved
+/// 127 µm grid the old flat 8 bought only a 1 mm detour and A* clipped
+/// label corners by 15 µm on the fallback pass.
 const REFDES_PENALTY: u8 = 8;
+
+/// `REFDES_PENALTY` rescaled to the effective grid so that clipping a
+/// label costs the same physical detour regardless of resolution.
+fn refdes_penalty(grid_um: i64) -> u8 {
+    ((REFDES_PENALTY as i64 * 254 + grid_um / 2) / grid_um.max(1)).clamp(1, 255) as u8
+}
 
 /// Mark the cells under each refdes label as a soft keep-out (enforced on
 /// the strict pass, penalised on the fallback). Silkscreen text over
@@ -186,7 +197,7 @@ const REFDES_PENALTY: u8 = 8;
 /// (see `eda_judge::render_board_svg` and `eda_gates::pcb::refdes_box`,
 /// which this mirrors).
 fn penalise_refdes_boxes(grid: &mut Grid, placement: &eda_model::ir::PlacementSection, model: &ConstraintModel, num_layers: usize) {
-    let penalty = REFDES_PENALTY;
+    let penalty = refdes_penalty(grid.grid_um);
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
     for p in &placement.outline {
         x0 = x0.min(p.x);
@@ -234,6 +245,17 @@ fn penalise_refdes_boxes(grid: &mut Grid, placement: &eda_model::ir::PlacementSe
             }
         }
     }
+}
+
+/// How hard the refdes-label keep-outs are enforced for one attempt.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SoftMode {
+    /// Tracks and vias both kept out of label boxes.
+    Strict,
+    /// Tracks may cross a label (paying `REFDES_PENALTY`); vias may not.
+    TracksRelaxed,
+    /// Everything merely pays the penalty.
+    Relaxed,
 }
 
 /// One routing step: connect `a_pin` to the net's already-connected
@@ -296,6 +318,8 @@ pub fn route_partial(
         )]);
     }
 
+    let dbg = std::env::var_os("EDA_ROUTE_DEBUG").is_some();
+    let t_start = std::time::Instant::now();
     // --- 1. pad geometry -----------------------------------------------
     let num_layers = rules.layers.len().max(1);
     let mut pads: HashMap<String, PadInfo> = HashMap::new();
@@ -369,6 +393,7 @@ pub fn route_partial(
     let rules = &eff_rules;
 
     // --- 2. grid & obstacle map -----------------------------------------
+    if dbg { eprintln!("route: t pads {:?}", t_start.elapsed()); }
     let mut grid = Grid::with_widths(placement.outline.clone(), rules.grid, rules.clearance, rules.track_width, rules.via_diameter, num_layers);
     for pad in pads.values() {
         // Rasterise the pad area from its real rectangle: every cell whose
@@ -387,6 +412,7 @@ pub fn route_partial(
     block_pad_gaps(&mut grid, &pads);
     penalise_refdes_boxes(&mut grid, placement, model, num_layers);
 
+    if dbg { eprintln!("route: t grid {:?} cells={}x{}x{}", t_start.elapsed(), grid.cells_x, grid.cells_y, grid.num_layers); }
     // --- 3. net -> star edges --------------------------------------------
     let mut edges_by_net: HashMap<String, Vec<Edge>> = HashMap::new();
     let mut airline_by_net: HashMap<String, i64> = HashMap::new();
@@ -445,6 +471,7 @@ pub fn route_partial(
     nets.sort_by(|a, b| (airline_by_net[a], a).cmp(&(airline_by_net[b], b)));
     shuffle_ties(&mut nets, &airline_by_net, seed);
 
+    if dbg { eprintln!("route: t edges {:?}", t_start.elapsed()); }
     // --- 5. route with rip-up & reroute -----------------------------------
     let mut queue: VecDeque<String> = nets.into();
     let mut ripup_rounds: HashMap<String, u32> = HashMap::new();
@@ -472,10 +499,19 @@ pub fn route_partial(
         // Refdes keep-outs are enforced first; a net that can only route
         // through a label rips up what fenced it in, and pays the label
         // penalty only once its rip-up budget is spent.
+        // Tiered: strict, then tracks may cross labels but vias still
+        // may not, then everything pays the penalty instead.
         let rounds = *ripup_rounds.get(&net).unwrap_or(&0);
-        let mut result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, true);
+        let t_net = std::time::Instant::now();
+        let mut result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, SoftMode::Strict);
         if result.is_err() && rounds >= max_rounds {
-            result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, false);
+            result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, SoftMode::TracksRelaxed);
+        }
+        if result.is_err() && rounds >= max_rounds {
+            result = route_net(&net, &edges_by_net[&net], &pads, &mut grid, rules, SoftMode::Relaxed);
+        }
+        if dbg {
+            eprintln!("route: net {net} round {rounds} ok={} in {:?}", result.is_ok(), t_net.elapsed());
         }
         match result {
             Ok((net_tracks, net_vias)) => {
@@ -550,6 +586,7 @@ pub fn route_partial(
         }
     }
 
+    if dbg { eprintln!("route: t routed {:?}", t_start.elapsed()); }
     // --- 6. assemble output design ----------------------------------------
     let mut out = design.clone();
     let mut all_tracks: Vec<Track> = tracks.into_values().flatten().collect();
@@ -572,7 +609,7 @@ fn route_net(
     pads: &HashMap<String, PadInfo>,
     grid: &mut Grid,
     rules: &RouteRules,
-    strict: bool,
+    mode: SoftMode,
 ) -> Result<(Vec<Track>, Vec<Via>), EdgeFailure> {
     let mut tracks = Vec::new();
     let mut vias = Vec::new();
@@ -649,9 +686,29 @@ fn route_net(
         }
         // First with the soft keep-outs (refdes labels) enforced; only if
         // that leaves no path at all, fall back to paying the penalty.
-        grid.soft_active = strict;
-        let (found, explored) = astar::route_to_any_ex(grid, net, &starts, &goals, &h_targets);
-        grid.soft_active = false;
+        // Per edge, not per net: an edge that routes clean under the
+        // strict keep-outs keeps that result even when a sibling edge of
+        // the same net needs a relaxed tier, so a net that fell back for
+        // one boxed-in pad doesn't start clipping labels everywhere else.
+        let tiers: &[SoftMode] = match mode {
+            SoftMode::Strict => &[SoftMode::Strict],
+            SoftMode::TracksRelaxed => &[SoftMode::Strict, SoftMode::TracksRelaxed],
+            SoftMode::Relaxed => &[SoftMode::Strict, SoftMode::TracksRelaxed, SoftMode::Relaxed],
+        };
+        let mut found = None;
+        let mut explored = Vec::new();
+        for &tier in tiers {
+            grid.soft_active = tier == SoftMode::Strict;
+            grid.soft_via_active = tier != SoftMode::Relaxed;
+            let (f, e) = astar::route_to_any_ex(grid, net, &starts, &goals, &h_targets);
+            grid.soft_active = false;
+            grid.soft_via_active = false;
+            found = f;
+            explored = e;
+            if found.is_some() {
+                break;
+            }
+        }
         for &(gx, gy, l) in &blocked_cells {
             grid.set_blocked(gx, gy, l, false);
         }

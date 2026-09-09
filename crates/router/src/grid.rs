@@ -31,6 +31,9 @@ struct Cell {
 }
 
 const EMPTY: u32 = u32::MAX;
+/// Summary marker: copper of two or more different nets is within
+/// separation of this cell, so it is impassable for every net.
+const MULTI: u32 = u32::MAX - 1;
 
 /// KiCad's default board-setup copper-to-edge clearance, enforced by
 /// `kicad-cli pcb drc` against Edge.Cuts.
@@ -75,7 +78,30 @@ pub struct Grid {
     /// Soft keep-out per (cell, layer) for via copper: same idea, dilated
     /// by the via radius (a via's copper is wider than a track's).
     soft_via: Vec<bool>,
+    /// Track keep-out enforced (strict pass).
     pub soft_active: bool,
+    /// Via keep-out enforced. Relaxed separately, and later, than the
+    /// track one: a via's copper is what most often ends up under a label
+    /// on the penalty-only pass, and a via can nearly always sit one cell
+    /// over, so the first fallback tier keeps vias out of labels while
+    /// letting tracks pay the penalty.
+    pub soft_via_active: bool,
+    /// Per (cell, layer): which net's copper lies within *track*
+    /// separation of the cell — `EMPTY`, one net id (the cell is passable
+    /// only for that net), or `MULTI`. Maintained incrementally by
+    /// [`Grid::set`] (copper only ever grows between rip-ups) and rebuilt
+    /// wholesale by [`Grid::clear_net`], so the A* hot loop answers
+    /// [`Grid::passable_as`] with one lookup instead of a radius scan.
+    near_track: Vec<u32>,
+    /// Same for *via* separation (a via's copper is wider, so its radius
+    /// is larger).
+    near_via: Vec<u32>,
+    /// Per (cell, layer): pad copper within the via-in-pad radius, i.e. a
+    /// via may not sit here (see [`Grid::via_pad_radius_cells`]).
+    via_near_pad: Vec<bool>,
+    /// `EDA_ROUTE_CHECK_NEAR` set: cross-check every summary lookup
+    /// against the reference radius scan (slow; for debugging only).
+    check_near: bool,
     /// Precomputed point-in-polygon per cell (`cy * cells_x + cx`), so the
     /// A* hot loop never re-runs the polygon test.
     inside: Vec<bool>,
@@ -121,6 +147,11 @@ impl Grid {
             soft: Vec::new(),
             soft_via: Vec::new(),
             soft_active: false,
+            soft_via_active: false,
+            near_track: Vec::new(),
+            near_via: Vec::new(),
+            via_near_pad: Vec::new(),
+            check_near: std::env::var_os("EDA_ROUTE_CHECK_NEAR").is_some(),
             inside: Vec::new(),
             edge_dist: Vec::new(),
             net_ids: std::collections::HashMap::new(),
@@ -147,7 +178,64 @@ impl Grid {
         g.penalty = vec![0; n];
         g.soft = vec![false; n];
         g.soft_via = vec![false; n];
+        g.near_track = vec![EMPTY; n];
+        g.near_via = vec![EMPTY; n];
+        g.via_near_pad = vec![false; n];
         g
+    }
+
+    /// Record copper of `net_id` with half-extent `half_um` at (cx, cy,
+    /// layer) in the separation summaries: every cell closer than the
+    /// kind-aware minimum separation learns that this net is nearby.
+    fn stamp(&mut self, cx: i64, cy: i64, layer: u8, net_id: u32, half_um: Um, kind: Occ) {
+        for me in [Occ::Track, Occ::Via] {
+            let r = self.min_sep_cells_half(me, half_um) - 1;
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    if let Some(j) = self.idx(cx + dx, cy + dy, layer) {
+                        let slot = if me == Occ::Track { &mut self.near_track[j] } else { &mut self.near_via[j] };
+                        *slot = match *slot {
+                            EMPTY => net_id,
+                            x if x == net_id => x,
+                            _ => MULTI,
+                        };
+                    }
+                }
+            }
+        }
+        if kind == Occ::Pad {
+            let r = self.via_pad_radius_cells();
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    if let Some(j) = self.idx(cx + dx, cy + dy, layer) {
+                        self.via_near_pad[j] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Rebuild every separation summary from the occupancy map (after a
+    /// rip-up removed copper — the summaries only ever grow otherwise).
+    fn rebuild_near(&mut self) {
+        for v in self.near_track.iter_mut() {
+            *v = EMPTY;
+        }
+        for v in self.near_via.iter_mut() {
+            *v = EMPTY;
+        }
+        for v in self.via_near_pad.iter_mut() {
+            *v = false;
+        }
+        let cells: Vec<(usize, u32, Um, Occ)> =
+            self.occ.iter().enumerate().filter_map(|(i, c)| c.as_ref().map(|c| (i, c.net_id, c.half_um, c.kind))).collect();
+        for (i, net_id, half_um, kind) in cells {
+            // Inverse of `idx`: cell-major, layer innermost.
+            let layer = (i % self.num_layers) as u8;
+            let cell = (i / self.num_layers) as i64;
+            let (cx, cy) = (cell % self.cells_x, cell / self.cells_x);
+            self.stamp(cx, cy, layer, net_id, half_um, kind);
+        }
     }
 
     fn net_id(&mut self, net: &str) -> u32 {
@@ -211,15 +299,23 @@ impl Grid {
             if let Some(c) = &mut self.occ[i] {
                 if c.net_id == net_id {
                     c.half_um = c.half_um.max(half);
-                    if c.kind == Occ::Pad || (c.kind == Occ::Via && kind == Occ::Track) {
-                        return;
+                    if !(c.kind == Occ::Pad || (c.kind == Occ::Via && kind == Occ::Track)) {
+                        c.kind = kind;
                     }
-                    c.kind = kind;
+                    let (h, k) = (c.half_um, c.kind);
+                    self.stamp(cx, cy, layer, net_id, h, k);
                     return;
                 }
             }
             self.occ[i] = Some(Cell { net_id, kind, half_um: half });
+            self.stamp(cx, cy, layer, net_id, half, kind);
         }
+    }
+
+    /// True if pad copper lies within the via-in-pad radius of the cell.
+    #[inline]
+    pub fn via_near_pad(&self, cx: i64, cy: i64, layer: u8) -> bool {
+        self.idx(cx, cy, layer).map(|i| self.via_near_pad[i]).unwrap_or(true)
     }
 
     /// Hard-block (or unblock) a cell for every net, without clearance
@@ -242,8 +338,7 @@ impl Grid {
         self.idx(cx, cy, layer)
             .map(|i| {
                 self.blocked[i]
-                    || (self.soft_active
-                        && if me == Occ::Via { self.soft_via[i] } else { self.soft[i] })
+                    || if me == Occ::Via { self.soft_via_active && self.soft_via[i] } else { self.soft_active && self.soft[i] }
             })
             .unwrap_or(true)
     }
@@ -370,6 +465,7 @@ impl Grid {
                 }
             }
         }
+        self.rebuild_near();
     }
 
     /// Copper half-extent (µm) beyond a cell centre for an occupant kind.
@@ -415,6 +511,25 @@ impl Grid {
         if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < EDGE_CLEARANCE_UM + self.half_extent(me) {
             return false;
         }
+        // Summary lookup (see `near_track`): equivalent to scanning the
+        // clearance radius for foreign copper closer than the kind-aware
+        // minimum separation, which is what `stamp` precomputed.
+        let Some(i) = self.idx(cx, cy, layer) else { return false };
+        let near = if me == Occ::Via { self.near_via[i] } else { self.near_track[i] };
+        let fast = near == EMPTY || near == net_id;
+        if self.check_near {
+            let slow = self.passable_scan(cx, cy, layer, net_id, me);
+            if fast != slow {
+                panic!("near-summary mismatch at ({cx},{cy},{layer}) net={net} me={me:?}: fast={fast} slow={slow} near={near}\n{}", self.dump_around(cx, cy, layer, net, 4));
+            }
+        }
+        fast
+    }
+
+    /// Reference implementation of the separation test: scan the
+    /// clearance radius for foreign copper closer than the kind-aware
+    /// minimum separation. Only used to cross-check the summaries.
+    fn passable_scan(&self, cx: i64, cy: i64, layer: u8, net_id: u32, me: Occ) -> bool {
         let r = self.clearance_cells;
         for dx in -r..=r {
             for dy in -r..=r {
