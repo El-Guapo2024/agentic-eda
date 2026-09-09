@@ -86,7 +86,9 @@ pub struct BoardRules {
     #[serde(default)]
     pub outline: Option<Vec<ir::Point>>,
     /// Refdes silkscreen font size override, µm. None = 1/40 of the shorter
-    /// board side, never under 600.
+    /// board side, clamped to 600..=1000 (KiCad's default text is 1 mm; on
+    /// a 100 mm board the unclamped rule gave 2.5 mm labels that dwarfed
+    /// every passive and sealed their pads).
     #[serde(default)]
     pub refdes_font_um: Option<ir::Um>,
     /// Router tuning. Every value has a default; all are settable here.
@@ -96,7 +98,7 @@ pub struct BoardRules {
 
 impl BoardRules {
     /// Refdes font for this board: the override, else 1/40 of the shorter
-    /// rendered side (outline bbox + 2 mm margin), never under 600 µm.
+    /// rendered side (outline bbox + 2 mm margin), clamped to 600..=1000 µm.
     pub fn refdes_font(&self, outline: &[ir::Point]) -> ir::Um {
         if let Some(f) = self.refdes_font_um {
             return f;
@@ -113,7 +115,7 @@ impl BoardRules {
         }
         let m = 2000;
         let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
-        (vw.min(vh) / 40).max(600)
+        (vw.min(vh) / 40).clamp(600, 1000)
     }
 }
 

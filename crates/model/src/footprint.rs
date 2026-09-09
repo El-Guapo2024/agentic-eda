@@ -151,7 +151,7 @@ pub fn refdes_font_um(outline: &[Point]) -> Um {
     }
     let m = 2000;
     let (vw, vh) = (x1 - x0 + 2 * m, y1 - y0 + 2 * m);
-    (vw.min(vh) / 40).max(600)
+    (vw.min(vh) / 40).clamp(600, 1000)
 }
 
 /// Refdes label box for a placed courtyard `(x0, y0, x1, y1)`: the text

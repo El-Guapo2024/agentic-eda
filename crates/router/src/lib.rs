@@ -511,6 +511,18 @@ pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -
         }
         let mut reached = false;
         let mut best_pocket = usize::MAX;
+        // Cells of the net's *other* pads (any layer): reaching one is an
+        // exit. The previous test (`is_pad_of && not interior`) matched
+        // this pad's own outer rasterised cells and passed every sealed pad
+        // (l4: D5.1 boxed in by four neighbours' labels, preflight green).
+        let other_pad_cells: HashSet<(i64, i64, u8)> = pads
+            .iter()
+            .filter(|(r, p)| *r != refpin && p.net == pad.net)
+            .flat_map(|(_, p)| {
+                let cells = pad_cells(&grid, p);
+                p.layers.iter().flat_map(move |&l| cells.clone().into_iter().map(move |(x, y)| (x, y, l))).collect::<Vec<_>>()
+            })
+            .collect();
         for &l in &pad.layers {
             let mut seen: HashSet<(i64, i64)> = HashSet::new();
             let mut queue: VecDeque<(i64, i64)> = VecDeque::new();
@@ -536,7 +548,7 @@ pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -
                     break;
                 }
                 // Another pad of the same net.
-                if grid.is_pad_of(cx, cy, l, &pad.net) && !pad_interior_cells(&grid, pad, rules).contains(&(cx, cy)) {
+                if other_pad_cells.contains(&(cx, cy, l)) {
                     exit = true;
                     break;
                 }
@@ -553,6 +565,11 @@ pub fn preflight(design: &Design, model: &ConstraintModel, rules: &RouteRules) -
                 break;
             }
             best_pocket = best_pocket.min(seen.len());
+        }
+        if std::env::var("EDA_PREFLIGHT_PAD").ok().as_deref() == Some(refpin.as_str()) {
+            eprintln!("preflight: {refpin} net={} layers={:?} reached={reached} smallest_pocket={best_pocket} cells", pad.net, pad.layers);
+            let (cx, cy) = grid.to_cell(pad.pt);
+            eprintln!("{}", grid.dump_why(cx, cy, pad.layers[0], &pad.net, 14));
         }
         if !reached {
             let um = best_pocket as f64 * (rules.grid as f64 / 1000.0).powi(2);
