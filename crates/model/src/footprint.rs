@@ -68,6 +68,20 @@ impl PlacedPad {
         }
     }
 
+    /// Distance from `p` to the pad's axis-aligned bounding rectangle
+    /// (negative inside). This is the clearance measure the routing gates
+    /// use (`routing_clearance` tests segments against pad rects, corner
+    /// rounding ignored), so it is what the router must keep clear of;
+    /// [`PlacedPad::signed_distance`] is the true copper edge and is up to
+    /// one corner radius more lenient at a rounded corner.
+    pub fn rect_distance(&self, p: Point) -> f64 {
+        let (hw, hh) = (self.size.0 as f64 / 2.0, self.size.1 as f64 / 2.0);
+        let (dx, dy) = (((p.x - self.center.x) as f64).abs(), ((p.y - self.center.y) as f64).abs());
+        let (ox, oy) = ((dx - hw).max(0.0), (dy - hh).max(0.0));
+        let outside = (ox * ox + oy * oy).sqrt();
+        if outside > 0.0 { outside } else { (dx - hw).max(dy - hh) }
+    }
+
     /// True when `p` lies inside the copper with at least `margin` µm to
     /// spare (so copper of half-width `margin` centred there stays inside).
     pub fn contains_with_margin(&self, p: Point, margin: f64) -> bool {

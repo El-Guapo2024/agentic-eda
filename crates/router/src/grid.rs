@@ -5,6 +5,7 @@
 //! calling `passable()` millions of times — hashing a tuple key that often
 //! dwarfed the actual pathfinding cost before this was array-indexed.
 
+use eda_model::footprint::PlacedPad;
 use eda_model::ir::{Point, Um};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +105,13 @@ pub struct Grid {
     /// the victims' reroutes stop walling the same pad in again. Never
     /// decays within a run.
     hist: Vec<u8>,
+    /// Every pad's rectangle, per layer, for exact separation stamping:
+    /// a track/via centre must keep `clearance + its own half-width` from
+    /// the pad rect (the gate's measure, see `PlacedPad::rect_distance`). Cell-quantised pad blobs (half a cell of copper at
+    /// every rasterised cell centre, Chebyshev distance) read a 0.65 mm
+    /// pitch TSSOP's straight-out escape — 500 µm to the neighbour's
+    /// copper, 300 needed — as blocked; real geometry does not.
+    pads_exact: Vec<(u32, u8, PlacedPad)>,
     /// `EDA_ROUTE_CHECK_NEAR` set: cross-check every summary lookup
     /// against the reference radius scan (slow; for debugging only).
     check_near: bool,
@@ -157,6 +165,7 @@ impl Grid {
             near_via: Vec::new(),
             via_near_pad: Vec::new(),
             hist: Vec::new(),
+            pads_exact: Vec::new(),
             check_near: std::env::var_os("EDA_ROUTE_CHECK_NEAR").is_some(),
             inside: Vec::new(),
             edge_dist: Vec::new(),
@@ -209,6 +218,22 @@ impl Grid {
     /// layer) in the separation summaries: every cell closer than the
     /// kind-aware minimum separation learns that this net is nearby.
     fn stamp(&mut self, cx: i64, cy: i64, layer: u8, net_id: u32, half_um: Um, kind: Occ) {
+        if kind == Occ::Pad {
+            let r = self.via_pad_radius_cells();
+            for dx in -r..=r {
+                for dy in -r..=r {
+                    if let Some(j) = self.idx(cx + dx, cy + dy, layer) {
+                        self.via_near_pad[j] = true;
+                    }
+                }
+            }
+            // Pad copper itself is stamped exactly from its rectangle (see
+            // `pads_exact`); only an own-net track/via laid over the pad
+            // cell adds cell-centred copper here.
+            if half_um == 0 {
+                return;
+            }
+        }
         for me in [Occ::Track, Occ::Via] {
             let r = self.min_sep_cells_half(me, half_um) - 1;
             for dx in -r..=r {
@@ -224,15 +249,58 @@ impl Grid {
                 }
             }
         }
-        if kind == Occ::Pad {
-            let r = self.via_pad_radius_cells();
-            for dx in -r..=r {
-                for dy in -r..=r {
-                    if let Some(j) = self.idx(cx + dx, cy + dy, layer) {
-                        self.via_near_pad[j] = true;
+    }
+
+    /// Exact separation stamping for one pad's copper on `layer`: every
+    /// cell whose centre is closer than `clearance + half-width(kind)` to
+    /// the pad edge learns that `net_id` is nearby (track and via
+    /// summaries separately).
+    fn stamp_pad_exact(&mut self, net_id: u32, layer: u8, pad: &PlacedPad) {
+        for me in [Occ::Track, Occ::Via] {
+            let need = self.clearance_um + self.half_extent(me);
+            let (hw, hh) = (pad.size.0 / 2 + need + self.grid_um, pad.size.1 / 2 + need + self.grid_um);
+            let (x0, y0) = self.to_cell(Point { x: pad.center.x - hw, y: pad.center.y - hh });
+            let (x1, y1) = self.to_cell(Point { x: pad.center.x + hw, y: pad.center.y + hh });
+            for cx in x0..=x1 {
+                for cy in y0..=y1 {
+                    let Some(j) = self.idx(cx, cy, layer) else { continue };
+                    if pad.rect_distance(self.to_point(cx, cy)) < need as f64 {
+                        let slot = if me == Occ::Track { &mut self.near_track[j] } else { &mut self.near_via[j] };
+                        *slot = match *slot {
+                            EMPTY => net_id,
+                            x if x == net_id => x,
+                            _ => MULTI,
+                        };
                     }
                 }
             }
+        }
+    }
+
+    /// Register a pad: its rasterised `cells` become `Occ::Pad` copper of
+    /// `net` on `layer` (own-net passable, via-in-pad keep-out), and its
+    /// real rectangle is stamped exactly into the separation summaries.
+    pub fn add_pad(&mut self, net: &str, layer: u8, pad: &PlacedPad, cells: &[(i64, i64)]) {
+        let net_id = self.net_id(net);
+        for &(cx, cy) in cells {
+            self.set_occ_pad(cx, cy, layer, net_id);
+        }
+        self.pads_exact.push((net_id, layer, pad.clone()));
+        self.stamp_pad_exact(net_id, layer, pad);
+    }
+
+    /// Pad occupancy for one cell without any exact copper registration.
+    fn set_occ_pad(&mut self, cx: i64, cy: i64, layer: u8, net_id: u32) {
+        let half = 0;
+        if let Some(i) = self.idx(cx, cy, layer) {
+            if let Some(c) = &mut self.occ[i] {
+                if c.net_id == net_id {
+                    c.half_um = c.half_um.max(half);
+                    return;
+                }
+            }
+            self.occ[i] = Some(Cell { net_id, kind: Occ::Pad, half_um: half });
+            self.stamp(cx, cy, layer, net_id, half, Occ::Pad);
         }
     }
 
@@ -257,6 +325,11 @@ impl Grid {
             let (cx, cy) = (cell % self.cells_x, cell / self.cells_x);
             self.stamp(cx, cy, layer, net_id, half_um, kind);
         }
+        let pads = std::mem::take(&mut self.pads_exact);
+        for (net_id, layer, pad) in &pads {
+            self.stamp_pad_exact(*net_id, *layer, pad);
+        }
+        self.pads_exact = pads;
     }
 
     fn net_id(&mut self, net: &str) -> u32 {
@@ -310,7 +383,13 @@ impl Grid {
     /// cannot under-state the separation another net owes this cell.
     pub fn set(&mut self, cx: i64, cy: i64, layer: u8, net: &str, kind: Occ) {
         let net_id = self.net_id(net);
-        let half = self.half_extent(kind);
+        // `half_um` is the cell-centred copper *laid* here (track/via);
+        // pad copper is stamped exactly from its rectangle, so a pad-only
+        // cell carries 0 — a rasterised pad cell may lie up to half a cell
+        // outside the real copper, and a track running over it must stamp
+        // its own width from there (ldo: GND over its tab's edge cell,
+        // VOUT then laid adjacent with a 54 µm gap).
+        let half = if kind == Occ::Pad { 0 } else { self.half_extent(kind) };
         if let Some(i) = self.idx(cx, cy, layer) {
             // A pad never downgrades to track/via copper of its own net:
             // rip-up must keep the pad as an obstacle. Likewise a via
@@ -330,6 +409,18 @@ impl Grid {
             }
             self.occ[i] = Some(Cell { net_id, kind, half_um: half });
             self.stamp(cx, cy, layer, net_id, half, kind);
+            if kind == Occ::Pad {
+                // No real geometry given: the copper is one grid cell.
+                let pad = PlacedPad {
+                    number: String::new(),
+                    center: self.to_point(cx, cy),
+                    size: (self.grid_um, self.grid_um),
+                    through_hole: false,
+                    shape: eda_model::footprint::PadShape::Rect,
+                };
+                self.pads_exact.push((net_id, layer, pad.clone()));
+                self.stamp_pad_exact(net_id, layer, &pad);
+            }
         }
     }
 
@@ -441,6 +532,32 @@ impl Grid {
         '.'
     }
 
+    /// Debug: everything the grid knows about one cell for `net`: the
+    /// why-blocked verdict, the separation summaries, and every registered
+    /// pad within 1.5 mm with its exact distance to the cell centre.
+    pub fn probe(&self, cx: i64, cy: i64, layer: u8, net: &str) -> String {
+        let mut out = format!("probe ({cx},{cy},{layer}) {:?} net={net}: why={} ", self.to_point(cx, cy), self.why_blocked(cx, cy, layer, net));
+        if let Some(i) = self.idx(cx, cy, layer) {
+            let name = |id: u32| match id {
+                EMPTY => "EMPTY".to_string(),
+                MULTI => "MULTI".to_string(),
+                x => self.net_names.get(x as usize).cloned().unwrap_or_else(|| format!("#{x}")),
+            };
+            out += &format!("near_track={} near_via={} occ={:?}\n", name(self.near_track[i]), name(self.near_via[i]), self.occ[i].as_ref().map(|c| (name(c.net_id), c.kind, c.half_um)));
+        }
+        let p = self.to_point(cx, cy);
+        for (nid, l, pad) in &self.pads_exact {
+            if *l != layer {
+                continue;
+            }
+            let d = pad.rect_distance(p);
+            if d < 1500.0 {
+                out += &format!("  pad net={} {:?} center={:?} size={:?} dist={d:.0}\n", self.net_names.get(*nid as usize).cloned().unwrap_or_default(), pad.number, pad.center, pad.size);
+            }
+        }
+        out
+    }
+
     /// Debug: `why_blocked` map around a cell.
     pub fn dump_why(&self, cx: i64, cy: i64, layer: u8, net: &str, r: i64) -> String {
         let mut out = String::new();
@@ -507,17 +624,16 @@ impl Grid {
 
     pub fn clear_net(&mut self, net: &str) {
         let Some(net_id) = self.net_id_ro(net) else { return };
-        let pad_half = self.half_extent(Occ::Pad);
         for c in self.occ.iter_mut() {
             if let Some(cell) = c {
                 if cell.net_id == net_id {
                     if cell.kind == Occ::Pad {
                         // The pad survives rip-up, but the ripped track
-                        // that ran over it does not: shrink the recorded
-                        // copper back to the pad's own extent, or the
-                        // inflation would outlive the copper that caused
-                        // it and permanently over-block the neighbourhood.
-                        cell.half_um = pad_half;
+                        // that ran over it does not: drop the laid copper
+                        // record, or the inflation would outlive the
+                        // copper that caused it and permanently
+                        // over-block the neighbourhood.
+                        cell.half_um = 0;
                     } else {
                         *c = None;
                     }
@@ -594,7 +710,7 @@ impl Grid {
             for dy in -r..=r {
                 if let Some(i) = self.idx(cx + dx, cy + dy, layer) {
                     if let Some(c) = &self.occ[i] {
-                        if c.net_id != net_id {
+                        if c.net_id != net_id && !(c.kind == Occ::Pad && c.half_um == 0) {
                             let d = dx.abs().max(dy.abs());
                             if d < self.min_sep_cells_half(me, c.half_um) {
                                 return false;
@@ -602,6 +718,13 @@ impl Grid {
                         }
                     }
                 }
+            }
+        }
+        let need = (self.clearance_um + self.half_extent(me)) as f64;
+        let p = self.to_point(cx, cy);
+        for (nid, l, pad) in &self.pads_exact {
+            if *l == layer && *nid != net_id && pad.rect_distance(p) < need {
+                return false;
             }
         }
         true

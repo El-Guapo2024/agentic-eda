@@ -1234,6 +1234,9 @@ fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearan
             }
             let gap = seg_seg_dist(s.a, s.b, o.a, o.b) - s.half - o.half;
             if gap < cl {
+                if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+                    eprintln!("gate: clearance {} seg {:?}-{:?} vs {} seg {:?}-{:?} layer {} gap {gap:.0}", s.id, s.a, s.b, o.id, o.a, o.b, s.layer);
+                }
                 fail(s.id.clone(), o.id.clone(), gap);
             }
         }
@@ -1246,6 +1249,9 @@ fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearan
             }
             let gap = seg_rect_dist(s.a, s.b, &p.rect) - s.half;
             if gap < cl {
+                if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+                    eprintln!("gate: clearance {} seg {:?}-{:?} half {} vs pad {} rect {:?} gap {gap:.0}", s.id, s.a, s.b, s.half, p.refpin, p.rect);
+                }
                 fail(s.id.clone(), p.refpin.clone(), gap);
             }
         }

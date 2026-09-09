@@ -402,14 +402,24 @@ pub fn route_partial(
         // invariant `Grid`'s clearance arithmetic relies on. Centring on
         // the rounded centre cell instead can miss a row when the pad
         // centre is off-grid.
+        let cells = pad_cells(&grid, pad);
         for &l in &pad.layers {
-            for (gx, gy) in pad_cells(&grid, pad) {
-                grid.set(gx, gy, l, &pad.net, Occ::Pad);
-            }
+            grid.add_pad(&pad.net, l, &pad.geom, &cells);
         }
     }
     block_pad_gaps(&mut grid, &pads);
     penalise_refdes_boxes(&mut grid, placement, model, num_layers);
+    // EDA_ROUTE_PROBE=x_um,y_um,layer,net dumps what the grid knows about
+    // the cell nearest that board point once the obstacle map is built.
+    if let Ok(spec) = std::env::var("EDA_ROUTE_PROBE") {
+        let f: Vec<&str> = spec.split(',').collect();
+        if f.len() == 4 {
+            if let (Ok(x), Ok(y), Ok(l)) = (f[0].parse::<i64>(), f[1].parse::<i64>(), f[2].parse::<u8>()) {
+                let (cx, cy) = grid.to_cell(Point { x, y });
+                eprintln!("{}", grid.probe(cx, cy, l, f[3]));
+            }
+        }
+    }
 
     if dbg { eprintln!("route: t grid {:?} cells={}x{}x{}", t_start.elapsed(), grid.cells_x, grid.cells_y, grid.num_layers); }
     // --- 3. net -> star edges --------------------------------------------
@@ -588,6 +598,17 @@ pub fn route_partial(
     }
 
     if dbg { eprintln!("route: t routed {:?}", t_start.elapsed()); }
+    if let Ok(spec) = std::env::var("EDA_ROUTE_PROBE") {
+        for one in spec.split(';') {
+            let f: Vec<&str> = one.split(',').collect();
+            if f.len() == 4 {
+                if let (Ok(x), Ok(y), Ok(l)) = (f[0].parse::<i64>(), f[1].parse::<i64>(), f[2].parse::<u8>()) {
+                    let (cx, cy) = grid.to_cell(Point { x, y });
+                    eprintln!("after routing: {}", grid.probe(cx, cy, l, f[3]));
+                }
+            }
+        }
+    }
     // --- 6. assemble output design ----------------------------------------
     let mut out = design.clone();
     let mut all_tracks: Vec<Track> = tracks.into_values().flatten().collect();
@@ -716,6 +737,14 @@ fn route_net(
 
         match found {
             Some(path) => {
+                if std::env::var_os("EDA_ROUTE_DEBUG").is_some() {
+                    for (i, &(cx, cy, l)) in path.iter().enumerate() {
+                        let w = grid.why_blocked(cx, cy, l, net);
+                        if w != '.' {
+                            eprintln!("route: {net} path cell {i}/{} ({cx},{cy},{l}) = {:?} is {w} (start={} end={})", path.len(), grid.to_point(cx, cy), i == 0, i + 1 == path.len());
+                        }
+                    }
+                }
                 connected.push(&e.a_pin);
                 // Mark cells so later edges of the same star net see this
                 // one as routed (same net, so still passable for them).
