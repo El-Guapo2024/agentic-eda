@@ -241,11 +241,17 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
                 let d = ra.gap(rb) / 1000.0;
                 if d > *max_mm {
                     rules_ok = false;
-                    out.push(CheckResult::fail(
-                        "placement_proximity",
-                        format!("{a}/{b}"),
-                        format!("{d:.2} mm apart, rule allows {max_mm} mm"),
-                    ));
+                    let over = d - *max_mm;
+                    let suggest = if over < 0.5 {
+                        "near miss: the placer stopped short of the rule. Raise solver.place_moves_per_part, try another seed, or relax the rule's max_mm"
+                    } else {
+                        "far miss: the pair cannot get closer under the other rules. Move one of the two parts in the intent, drop what sits between them, or relax the rule's max_mm"
+                    };
+                    out.push(
+                        CheckResult::fail("placement_proximity", format!("{a}/{b}"), format!("{d:.2} mm apart, rule allows {max_mm} mm")).with_detail(serde_json::json!({
+                            "pair": [a, b], "gap_mm": (d * 100.0).round() / 100.0, "max_mm": max_mm, "over_mm": (over * 100.0).round() / 100.0, "suggest": suggest,
+                        })),
+                    );
                 }
             }
         }
