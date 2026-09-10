@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Build (or pull) the agentic-eda image so the plugin is self-contained.
+#   EDA_IMAGE      tag (default agentic-eda)
+#   EDA_IMAGE_PULL if set, pull this reference instead of building
+set -euo pipefail
+IMAGE="${EDA_IMAGE:-agentic-eda}"
+if [ -n "${EDA_IMAGE_PULL:-}" ]; then docker pull "$EDA_IMAGE_PULL" && docker tag "$EDA_IMAGE_PULL" "$IMAGE"; exit; fi
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+[ -f "$ROOT/docker/Dockerfile" ] || { echo "no docker/Dockerfile under $ROOT" >&2; exit 1; }
+docker build -f "$ROOT/docker/Dockerfile" -t "$IMAGE" "$ROOT"
+echo "image $IMAGE ready; smoke test:"
+docker run --rm "$IMAGE" lint /opt/agentic-eda/examples/ladder/l1_usb_mcu.yaml

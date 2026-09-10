@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Launch several hard-gated runs of one intent in parallel and collect them.
+#   eda-batch <intent.yaml> <out_dir> [--seeds 0,1,2,3] [--placers cypress,anneal] [--jobs 4]
+# Each run: eda solve (ladder over the intent's allow: block) in its own
+# out_dir/<placer>-s<seed>/ with log.txt, then judge renders.
+set -uo pipefail
+INTENT="${1:?intent}"; OUT="${2:?out dir}"; shift 2
+SEEDS="0,1,2,3"; PLACERS="cypress"; JOBS=4
+while [ $# -gt 0 ]; do case "$1" in
+  --seeds) SEEDS="$2"; shift 2;; --placers) PLACERS="$2"; shift 2;; --jobs) JOBS="$2"; shift 2;;
+  *) echo "unknown arg $1" >&2; exit 2;; esac; done
+EDA="$(dirname "$0")/eda"
+mkdir -p "$OUT"
+run_one() {
+  local p="$1" s="$2"
+  local d="$OUT/$p-s$s"; mkdir -p "$d"
+  local t0=$(date +%s)
+  "$EDA" solve "$INTENT" -o "$d" --seed "$s" --placer "$p" > "$d/log.txt" 2>&1; echo "exit=$?" >> "$d/log.txt"
+  "$EDA" judge "$INTENT" --design "$d/design.json" -o "$d" > "$d/judge.txt" 2>&1
+  echo "wall_s=$(( $(date +%s) - t0 ))" >> "$d/log.txt"
+  echo "$p seed $s: $(grep -E 'PASS|FAIL' "$d/log.txt" | tail -1) ($(( $(date +%s) - t0 )) s)"
+}
+export -f run_one; export OUT INTENT EDA
+for p in ${PLACERS//,/ }; do for s in ${SEEDS//,/ }; do echo "$p $s"; done; done \
+  | xargs -P "$JOBS" -n 2 bash -c 'run_one "$0" "$1"'
+cp "$INTENT" "$OUT/intent.yaml"
+echo "batch done: $OUT"

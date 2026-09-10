@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Runs the agentic-eda engine inside its container. The current directory
+# is mounted at /work, so intent paths and -o paths are relative to it.
+#   EDA_IMAGE  image tag (default agentic-eda)
+#   EDA_NATIVE if set, run a host binary at that path instead of the container
+set -euo pipefail
+if [ -n "${EDA_NATIVE:-}" ]; then exec "$EDA_NATIVE" "$@"; fi
+IMAGE="${EDA_IMAGE:-agentic-eda}"
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  echo "eda: image $IMAGE not found; run /eda-install (plugin/bin/eda-install)" >&2; exit 2
+fi
+exec docker run --rm -v "$PWD":/work -w /work "$IMAGE" "$@"

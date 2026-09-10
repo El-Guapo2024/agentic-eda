@@ -1,0 +1,6 @@
+{
+  "name": "agentic-eda",
+  "description": "Describe a board in a few sentences, launch several hard-gated placement and routing runs in the agentic-eda container, review the results on one page.",
+  "version": "0.1.0",
+  "author": { "name": "Juan Antonio Luera" }
+}

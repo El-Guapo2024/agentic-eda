@@ -1,0 +1,22 @@
+diff --git a/limbo/thirdparty/gzstream/version b/limbo/thirdparty/gzstream/version
+deleted file mode 100644
+index 511137de..00000000
+--- a/limbo/thirdparty/gzstream/version
++++ /dev/null
+@@ -1 +0,0 @@
+-1.5 (08 Jan 2003)
+diff --git a/limbo/thirdparty/lemon/lemon/random.h b/limbo/thirdparty/lemon/lemon/random.h
+index 8de74ede..f9861f39 100644
+--- a/limbo/thirdparty/lemon/lemon/random.h
++++ b/limbo/thirdparty/lemon/lemon/random.h
+@@ -249,8 +249,8 @@ namespace lemon {
+ 
+         current = state + length;
+ 
+-        register Word *curr = state + length - 1;
+-        register long num;
++        Word *curr = state + length - 1;
++        long num;
+ 
+         num = length - shift;
+         while (num--) {

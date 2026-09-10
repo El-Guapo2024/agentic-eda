@@ -1,0 +1,527 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d6b49ed..8a10de4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -46,7 +46,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+ 
+ include(cmake/TorchExtension.cmake)
+ 
+-set(CMAKE_CXX_STANDARD 14)
++set(CMAKE_CXX_STANDARD 17)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ 
+ # without this, clang will complain about linking 
+diff --git a/dreamplace/NesterovAcceleratedGradientOptimizer.py b/dreamplace/NesterovAcceleratedGradientOptimizer.py
+index 7b840ad..83c4fa5 100644
+--- a/dreamplace/NesterovAcceleratedGradientOptimizer.py
++++ b/dreamplace/NesterovAcceleratedGradientOptimizer.py
+@@ -170,6 +170,12 @@ class NesterovAcceleratedGradientOptimizer(Optimizer):
+ 
+                     # logging.debug("alpha_kp1 = %g, line_search_count = %d, obj_eval_count = %d" % (alpha_kp1, backtrack_cnt, group['obj_eval_count']))
+                     # logging.debug("|g_k| = %.6E, |g_kp1| = %.6E" % (g_k.norm(p=2), g_kp1.norm(p=2)))
++                    # Tiny problems (a handful of PCB parts) can produce a step
++                    # where neither position nor gradient changes, giving 0/0
++                    # (nan) or x/0 (inf) here. Keep the previous step size.
++                    if not torch.isfinite(alpha_kp1):
++                        alpha_kp1 = alpha_k.clone()
++                        break
+                     if alpha_kp1 > 0.95 * alpha_k or backtrack_cnt >= max_backtrack_cnt:
+                         alpha_k.data.copy_(alpha_kp1.data)
+                         break
+diff --git a/dreamplace/NonLinearPlace.py b/dreamplace/NonLinearPlace.py
+index 374418b..1bfd5a6 100644
+--- a/dreamplace/NonLinearPlace.py
++++ b/dreamplace/NonLinearPlace.py
+@@ -396,7 +396,7 @@ class NonLinearPlace(BasicPlace.BasicPlace):
+                             % (model.macro_overlap_weight.data)
+                         )
+ 
+-                    optimizer.zero_grad()
++                    optimizer.zero_grad(set_to_none=False)
+ 
+                     update_orient_cond = (
+                         iteration >= 500 and iteration % 100 == 0
+@@ -1194,8 +1194,8 @@ class NonLinearPlace(BasicPlace.BasicPlace):
+         self.data_collections.net_weights.fill_(1.0)
+ 
+         # plot placement
+-        # if params.plot_flag:
+-        self.plot(params, placedb, iteration, cur_pos)
++        if params.plot_flag:
++            self.plot(params, placedb, iteration, cur_pos)
+ 
+         # run RSMT
+         with torch.no_grad():
+diff --git a/dreamplace/PlaceDB.py b/dreamplace/PlaceDB.py
+index 3eacb53..062359e 100644
+--- a/dreamplace/PlaceDB.py
++++ b/dreamplace/PlaceDB.py
+@@ -1485,8 +1485,8 @@ row height = %g, site width = %g
+         tt = time.time()
+         logging.info("writing to %s" % (pl_file))
+         content = "UCLA pl 1.0\n"
+-        str_node_names = np.array(self.node_names).astype(np.str)
+-        str_node_orient = np.array(self.node_orient).astype(np.str)
++        str_node_names = np.array(self.node_names).astype(str)
++        str_node_orient = np.array(self.node_orient).astype(str)
+         for i in range(self.num_movable_nodes):
+             content += "\n%s %g %g : %s" % (
+                 str_node_names[i],
+diff --git a/dreamplace/ops/global_swap/src/global_swap_concurrent.cpp b/dreamplace/ops/global_swap/src/global_swap_concurrent.cpp
+index 564d7ac..906a389 100644
+--- a/dreamplace/ops/global_swap/src/global_swap_concurrent.cpp
++++ b/dreamplace/ops/global_swap/src/global_swap_concurrent.cpp
+@@ -9,6 +9,7 @@
+ #include <cstdlib>
+ #include <limits>
+ #include <numeric>
++#include <random>
+ #include <vector>
+ #include "utility/src/torch.h"
+ #include "utility/src/utils.h"
+@@ -609,7 +610,10 @@ int globalSwapCPULauncher(DetailedPlaceDB<T> db, int batch_size, int max_iters,
+   dreamplacePrint(kINFO, "initial hpwl = %.3f\n", hpwls[0]);
+   for (int iter = 0; iter < max_iters; ++iter) {
+     iter_time_start = CPUTimer::getGlobaltime();
+-    std::random_shuffle(state.ordered_nodes.begin(), state.ordered_nodes.end());
++    {
++      static std::mt19937 dreamplace_rng(std::random_device{}());
++      std::shuffle(state.ordered_nodes.begin(), state.ordered_nodes.end(), dreamplace_rng);
++    }
+     global_swap(db, state);
+     iter_time_stop = CPUTimer::getGlobaltime();
+     dreamplacePrint(
+diff --git a/dreamplace/ops/net_crossing/src/net_crossing.cpp b/dreamplace/ops/net_crossing/src/net_crossing.cpp
+index acf70d3..608a0e4 100644
+--- a/dreamplace/ops/net_crossing/src/net_crossing.cpp
++++ b/dreamplace/ops/net_crossing/src/net_crossing.cpp
+@@ -1,3 +1,4 @@
++#include <cmath>
+ /**
+  * @file   net_crossing.cpp
+  * @author Niansong Zhang
+@@ -43,8 +44,15 @@ void computeNetCrossingLauncher(const T* x, const T* y, const int* flat_netpin,
+           T y4 = y[net_j_sink_pin_id];
+ 
+            // Bezier curve intersection
+-          T t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / ((x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4));          
+-          T u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / ((x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4));
++          T den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
++          // Parallel or degenerate (zero-length) segments: no crossing, and the
++          // slope derivatives below would be x/0 = inf, which then multiplies a
++          // zero bell weight into nan. Same for pairs outside the bell support
++          // (|t-0.5| >= 1 or |u-0.5| >= 1), where both value and gradient are 0.
++          if (den == 0) continue;
++          T t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
++          T u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / den;
++          if (!std::isfinite(t) || !std::isfinite(u) || std::abs(t - 0.5) >= 1 || std::abs(u - 0.5) >= 1) continue;
+ 
+           // std::cout << "custom t: " << t << " u: " << u << "\n";
+ 
+@@ -163,6 +171,7 @@ void computeNetCrossingLauncher(const T* x, const T* y, const int* flat_netpin,
+ /// not
+ std::vector<at::Tensor> net_crossing_forward(at::Tensor pos, at::Tensor flat_netpin,
+                                at::Tensor netpin_start, at::Tensor net_mask,
++                               at::Tensor pin_side, // unused on CPU; kept to match CUDA/Python call signature
+                                at::Tensor lambda, at::Tensor mu, at::Tensor sigma // scalar Tensors
+ ) {
+   CHECK_FLAT_CPU(pos);
+diff --git a/dreamplace/ops/pin_pos/pin_pos.py b/dreamplace/ops/pin_pos/pin_pos.py
+index f3ee5af..23ffd0a 100644
+--- a/dreamplace/ops/pin_pos/pin_pos.py
++++ b/dreamplace/ops/pin_pos/pin_pos.py
+@@ -42,14 +42,10 @@ class PinPosFunction(Function):
+                 flat_node2pin_map, flat_node2pin_start_map,
+                 num_physical_nodes, h, w):
+         ctx.pos = pos.view(pos.numel())
+-        if pos.is_cuda:
+-            func = pin_pos_cuda.forward
+-            output = func(ctx.pos, pin_offset_x, pin_offset_y, theta, pin2node_map,
++        # CPU and CUDA kernels share one signature (rotation-aware).
++        func = pin_pos_cuda.forward if pos.is_cuda else pin_pos_cpp.forward
++        output = func(ctx.pos, pin_offset_x, pin_offset_y, theta, pin2node_map,
+                       flat_node2pin_map, flat_node2pin_start_map, h, w)
+-        else:
+-            func = pin_pos_cpp.forward
+-            output = func(ctx.pos, pin_offset_x, pin_offset_y, pin2node_map,
+-                        flat_node2pin_map, flat_node2pin_start_map)
+         ctx.pin_offset_x = pin_offset_x
+         ctx.pin_offset_y = pin_offset_y
+         ctx.pin2node_map = pin2node_map
+@@ -64,16 +60,14 @@ class PinPosFunction(Function):
+     @staticmethod
+     def backward(ctx, grad_pin_pos):
+         # grad_pin_pos is not contiguous
+-        if grad_pin_pos.is_cuda:
+-            func = pin_pos_cuda.backward
+-        else:
+-            func = pin_pos_cpp.backward
+-        output = func(grad_pin_pos.contiguous(), ctx.pos, ctx.pin_offset_x,
+-                      ctx.pin_offset_y, ctx.theta, ctx.pin2node_map,
+-                      ctx.flat_node2pin_map, ctx.flat_node2pin_start_map,
+-                      ctx.h, ctx.w,
+-                      ctx.num_physical_nodes)
+-        # split pos and theta gradients
++        func = pin_pos_cuda.backward if grad_pin_pos.is_cuda else pin_pos_cpp.backward
++        output = func(
++            grad_pin_pos.contiguous(), ctx.pos, ctx.pin_offset_x,
++            ctx.pin_offset_y, ctx.theta, ctx.pin2node_map,
++            ctx.flat_node2pin_map, ctx.flat_node2pin_start_map,
++            ctx.h, ctx.w,
++            ctx.num_physical_nodes)
++        # output layout: [grad_x | grad_y | grad_theta]
+         num_nodes = ctx.pos.numel() // 2
+         grad_pos = output[:num_nodes * 2]
+         grad_theta = output[num_nodes * 2 : num_nodes * 2 + ctx.theta.numel()]
+@@ -197,7 +191,10 @@ class PinPos(nn.Module):
+                                             self.h, self.w)
+         else:
+             return PinPosFunction.apply(pos, self.pin_offset_x,
+-                                        self.pin_offset_y, self.pin2node_map,
++                                        self.pin_offset_y,
++                                        self.theta,
++                                        self.pin2node_map,
+                                         self.flat_node2pin_map,
+                                         self.flat_node2pin_start_map,
+-                                        self.num_physical_nodes)
++                                        self.num_physical_nodes,
++                                        self.h, self.w)
+diff --git a/dreamplace/ops/pin_pos/src/pin_pos.cpp b/dreamplace/ops/pin_pos/src/pin_pos.cpp
+index 939c17a..aae6260 100644
+--- a/dreamplace/ops/pin_pos/src/pin_pos.cpp
++++ b/dreamplace/ops/pin_pos/src/pin_pos.cpp
+@@ -1,176 +1,114 @@
+-/**
+- * @file   pin_pos.cpp
+- * @author Yibo Lin
+- * @date   Aug 2019
+- * @brief  Given cell locations, compute pin locations on CPU
+- */
++// CPU pin position kernel with rotation (theta), mirroring pin_pos_cuda_kernel.cu.
++// pin2node_map is int32 (PlaceDB builds it with dtype=np.int32).
++#include <cmath>
+ #include "utility/src/torch.h"
+ #include "utility/src/utils.h"
+ 
+ DREAMPLACE_BEGIN_NAMESPACE
+ 
+-/// @brief Given cell locations, compute pin locations
+-/// @param x cell locations in x direction
+-/// @param y cell locations in y direction
+-/// @param pin_offset_x pin offset in x direction
+-/// @param pin_offset_y pin offset in y direction
+-/// @param pin2node_map map pin index to node index
+-/// @param flat_node2pin_map map node index to pins
+-/// @param flat_node2pin_start_map start index of flat_node2pin_map for each
+-/// node
+-/// @param num_pins number of pins
+-/// @param num_threads number of threads
+-/// @param pin_x pin positions in x direction
+-/// @param pin_y pin positions in y direction
+ template <typename T>
+ int computePinPosLauncher(const T* x, const T* y, const T* pin_offset_x,
+-                          const T* pin_offset_y, const long* pin2node_map,
+-                          const int* flat_node2pin_map,
+-                          const int* flat_node2pin_start_map, int num_pins,
+-                          const int num_threads, T* pin_x, T* pin_y);
++                          const T* pin_offset_y, const T* theta,
++                          const int64_t* pin2node_map, int num_pins,
++                          const T* h, const T* w, const int num_threads,
++                          T* pin_x, T* pin_y) {
++#pragma omp parallel for num_threads(num_threads)
++  for (int i = 0; i < num_pins; ++i) {
++    int node_id = pin2node_map[i];
++    T xi = x[node_id], yi = y[node_id];
++    T hi = h[node_id], wi = w[node_id];
++    T c = std::cos(theta[node_id]), s = std::sin(theta[node_id]);
++    T ofx = pin_offset_x[i] - wi / 2, ofy = pin_offset_y[i] - hi / 2;
++    pin_x[i] = (xi + wi / 2) + ofx * c - ofy * s;
++    pin_y[i] = (yi + hi / 2) + ofx * s + ofy * c;
++  }
++  return 0;
++}
+ 
+ template <typename T>
+ int computePinPosGradLauncher(const T* grad_out_x, const T* grad_out_y,
+-                              const T* x, const T* y, const T* pin_offset_x,
+-                              const T* pin_offset_y, const long* pin2node_map,
+-                              const int* flat_node2pin_map,
+-                              const int* flat_node2pin_start_map, int num_nodes,
+-                              int num_pins, const int num_threads, T* grad,
+-                              T* grad_y);
++                              const T* pin_offset_x, const T* pin_offset_y,
++                              const T* theta, const int* flat_node2pin_map,
++                              const int* flat_node2pin_start_map,
++                              const T* h, const T* w, int num_nodes,
++                              const int num_threads, T* grad_x, T* grad_y,
++                              T* grad_theta) {
++#pragma omp parallel for num_threads(num_threads)
++  for (int i = 0; i < num_nodes; ++i) {
++    T gx = 0, gy = 0, gt = 0;
++    T c = std::cos(theta[i]), s = std::sin(theta[i]);
++    T hi = h[i], wi = w[i];
++    for (int j = flat_node2pin_start_map[i]; j < flat_node2pin_start_map[i + 1]; ++j) {
++      int p = flat_node2pin_map[j];
++      gx += grad_out_x[p];
++      gy += grad_out_y[p];
++      T px_pt = c * (hi / 2 - pin_offset_y[p]) + s * (wi / 2 - pin_offset_x[p]);
++      T py_pt = c * (pin_offset_x[p] - wi / 2) + s * (pin_offset_y[p] - hi / 2);
++      gt += grad_out_x[p] * px_pt + grad_out_y[p] * py_pt;
++    }
++    grad_x[i] = gx; grad_y[i] = gy; grad_theta[i] = gt;
++  }
++  return 0;
++}
+ 
+-/// @brief Given cell locations, compute pin locations
+-/// @param pos cell locations in x and then y direction
+-/// @param pin_offset_x pin offset in x direction
+-/// @param pin_offset_y pin offset in y direction
+-/// @param pin2node_map map pin index to node index
+-/// @param flat_node2pin_map map node index to pins
+-/// @param flat_node2pin_start_map start index of flat_node2pin_map for each
+-/// node
+-/// @param num_nodes number of nodes
+-/// @param num_pins number of pins
+-/// @param num_threads number of threads
+-/// @return pin positions in x and then y direction
+ at::Tensor pin_pos_forward(at::Tensor pos, at::Tensor pin_offset_x,
+-                           at::Tensor pin_offset_y, at::Tensor pin2node_map,
+-                           at::Tensor flat_node2pin_map,
+-                           at::Tensor flat_node2pin_start_map) {
+-  CHECK_FLAT_CPU(pos);
+-  CHECK_EVEN(pos);
+-  CHECK_CONTIGUOUS(pos);
+-
++                           at::Tensor pin_offset_y, at::Tensor theta,
++                           at::Tensor pin2node_map, at::Tensor flat_node2pin_map,
++                           at::Tensor flat_node2pin_start_map,
++                           at::Tensor h, at::Tensor w) {
++  CHECK_FLAT_CPU(pos); CHECK_EVEN(pos); CHECK_CONTIGUOUS(pos);
++  TORCH_CHECK(pin2node_map.scalar_type() == at::kLong, "pin2node_map must be int64");
+   auto out = at::zeros(pin_offset_x.numel() * 2, pos.options());
+   int num_nodes = pos.numel() / 2;
+   int num_pins = pin_offset_x.numel();
+-
+   DREAMPLACE_DISPATCH_FLOATING_TYPES(pos, "computePinPosLauncher", [&] {
+     computePinPosLauncher<scalar_t>(
+         DREAMPLACE_TENSOR_DATA_PTR(pos, scalar_t),
+         DREAMPLACE_TENSOR_DATA_PTR(pos, scalar_t) + num_nodes,
+         DREAMPLACE_TENSOR_DATA_PTR(pin_offset_x, scalar_t),
+         DREAMPLACE_TENSOR_DATA_PTR(pin_offset_y, scalar_t),
+-        DREAMPLACE_TENSOR_DATA_PTR(pin2node_map, long),
+-        DREAMPLACE_TENSOR_DATA_PTR(flat_node2pin_map, int),
+-        DREAMPLACE_TENSOR_DATA_PTR(flat_node2pin_start_map, int), num_pins,
+-        at::get_num_threads(), DREAMPLACE_TENSOR_DATA_PTR(out, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(theta, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(pin2node_map, int64_t), num_pins,
++        DREAMPLACE_TENSOR_DATA_PTR(h, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(w, scalar_t),
++        at::get_num_threads(),
++        DREAMPLACE_TENSOR_DATA_PTR(out, scalar_t),
+         DREAMPLACE_TENSOR_DATA_PTR(out, scalar_t) + num_pins);
+   });
+-
+   return out;
+ }
+ 
++/// Returns [grad_x(num_nodes) | grad_y(num_nodes) | grad_theta(num_nodes)]
+ at::Tensor pin_pos_backward(at::Tensor grad_out, at::Tensor pos,
+                             at::Tensor pin_offset_x, at::Tensor pin_offset_y,
+-                            at::Tensor pin2node_map,
++                            at::Tensor theta, at::Tensor pin2node_map,
+                             at::Tensor flat_node2pin_map,
+                             at::Tensor flat_node2pin_start_map,
+-                            int num_physical_nodes) {
+-  CHECK_FLAT_CPU(pos);
+-  CHECK_EVEN(pos);
+-  CHECK_CONTIGUOUS(pos);
+-  CHECK_FLAT_CPU(grad_out);
+-  CHECK_EVEN(grad_out);
+-  CHECK_CONTIGUOUS(grad_out);
+-
+-  auto out = at::zeros_like(pos);
++                            at::Tensor h, at::Tensor w, int num_physical_nodes) {
++  CHECK_FLAT_CPU(pos); CHECK_EVEN(pos); CHECK_CONTIGUOUS(pos);
++  CHECK_FLAT_CPU(grad_out); CHECK_EVEN(grad_out); CHECK_CONTIGUOUS(grad_out);
+   int num_nodes = pos.numel() / 2;
+   int num_pins = pin_offset_x.numel();
+-
+-  DREAMPLACE_DISPATCH_FLOATING_TYPES(
+-      pos, "computePinPosGradLauncher", [&] {
+-        computePinPosGradLauncher<scalar_t>(
+-            DREAMPLACE_TENSOR_DATA_PTR(grad_out, scalar_t),
+-            DREAMPLACE_TENSOR_DATA_PTR(grad_out, scalar_t) + num_pins,
+-            DREAMPLACE_TENSOR_DATA_PTR(pos, scalar_t),
+-            DREAMPLACE_TENSOR_DATA_PTR(pos, scalar_t) + num_nodes,
+-            DREAMPLACE_TENSOR_DATA_PTR(pin_offset_x, scalar_t),
+-            DREAMPLACE_TENSOR_DATA_PTR(pin_offset_y, scalar_t),
+-            DREAMPLACE_TENSOR_DATA_PTR(pin2node_map, long),
+-            DREAMPLACE_TENSOR_DATA_PTR(flat_node2pin_map, int),
+-            DREAMPLACE_TENSOR_DATA_PTR(flat_node2pin_start_map, int),
+-            num_physical_nodes, num_pins, at::get_num_threads(),
+-            DREAMPLACE_TENSOR_DATA_PTR(out, scalar_t),
+-            DREAMPLACE_TENSOR_DATA_PTR(out, scalar_t) + num_nodes);
+-      });
+-
++  auto out = at::zeros(num_nodes * 3, pos.options());
++  DREAMPLACE_DISPATCH_FLOATING_TYPES(pos, "computePinPosGradLauncher", [&] {
++    computePinPosGradLauncher<scalar_t>(
++        DREAMPLACE_TENSOR_DATA_PTR(grad_out, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(grad_out, scalar_t) + num_pins,
++        DREAMPLACE_TENSOR_DATA_PTR(pin_offset_x, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(pin_offset_y, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(theta, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(flat_node2pin_map, int),
++        DREAMPLACE_TENSOR_DATA_PTR(flat_node2pin_start_map, int),
++        DREAMPLACE_TENSOR_DATA_PTR(h, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(w, scalar_t),
++        num_physical_nodes, at::get_num_threads(),
++        DREAMPLACE_TENSOR_DATA_PTR(out, scalar_t),
++        DREAMPLACE_TENSOR_DATA_PTR(out, scalar_t) + num_nodes,
++        DREAMPLACE_TENSOR_DATA_PTR(out, scalar_t) + 2 * num_nodes);
++  });
+   return out;
+ }
+ 
+-/// @brief Given cell locations, compute pin locations
+-/// @param x cell locations in x direction
+-/// @param y cell locations in y direction
+-/// @param pin_offset_x pin offset in x direction
+-/// @param pin_offset_y pin offset in y direction
+-/// @param pin2node_map map pin index to node index
+-/// @param flat_node2pin_map map node index to pins
+-/// @param flat_node2pin_start_map start index of flat_node2pin_map for each
+-/// node
+-/// @param num_nodes number of nodes
+-/// @param num_pins number of pins
+-/// @param num_threads number of threads
+-/// @param pin_x pin positions in x direction
+-/// @param pin_y pin positions in y direction
+-template <typename T>
+-int computePinPosLauncher(const T* x, const T* y, const T* pin_offset_x,
+-                          const T* pin_offset_y, const long* pin2node_map,
+-                          const int* flat_node2pin_map,
+-                          const int* flat_node2pin_start_map, int num_pins,
+-                          const int num_threads, T* pin_x, T* pin_y) {
+-// density_map_tensor should be initialized outside
+-
+-#pragma omp parallel for num_threads(num_threads)
+-  for (int i = 0; i < num_pins; ++i) {
+-    int node_id = pin2node_map[i];
+-    pin_x[i] = pin_offset_x[i] + x[node_id];
+-    pin_y[i] = pin_offset_y[i] + y[node_id];
+-  }
+-
+-  return 0;
+-}
+-
+-template <typename T>
+-int computePinPosGradLauncher(const T* grad_out_x, const T* grad_out_y,
+-                              const T* x, const T* y, const T* pin_offset_x,
+-                              const T* pin_offset_y, const long* pin2node_map,
+-                              const int* flat_node2pin_map,
+-                              const int* flat_node2pin_start_map, int num_nodes,
+-                              int num_pins, const int num_threads, T* grad_x,
+-                              T* grad_y) {
+-#pragma omp parallel for num_threads(num_threads)
+-  for (int i = 0; i < num_nodes; ++i) {
+-    int bgn = flat_node2pin_start_map[i];
+-    int end = flat_node2pin_start_map[i + 1];
+-    T& gx = grad_x[i];
+-    T& gy = grad_y[i];
+-    for (int j = bgn; j < end; ++j) {
+-      int pin_id = flat_node2pin_map[j];
+-      gx += grad_out_x[pin_id];
+-      gy += grad_out_y[pin_id];
+-    }
+-  }
+-
+-  return 0;
+-}
+-
+ DREAMPLACE_END_NAMESPACE
+ 
+ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+diff --git a/dreamplace/ops/place_io/src/Interval.h b/dreamplace/ops/place_io/src/Interval.h
+index cf52d21..ba05d46 100644
+--- a/dreamplace/ops/place_io/src/Interval.h
++++ b/dreamplace/ops/place_io/src/Interval.h
+@@ -95,7 +95,11 @@ class Interval
+         {
+             return m_coords[kHIGH];
+         }
+-        manhattan_distance_type delta() const 
++        coordinate_type center() const
++        {
++            return (m_coords[kLOW] + m_coords[kHIGH]) / 2;
++        }
++        manhattan_distance_type delta() const
+         {
+             return high() - low();
+         }
+diff --git a/dreamplace/ops/utility/src/torch.h b/dreamplace/ops/utility/src/torch.h
+index 6fcc941..41511b9 100644
+--- a/dreamplace/ops/utility/src/torch.h
++++ b/dreamplace/ops/utility/src/torch.h
+@@ -9,9 +9,27 @@
+ 
+ /// As torch may change the header inclusion conventions, it is better to manage
+ /// it in a consistent way.
++///
++/// Limbo's AssertMsg.h defines a 2-arg function-like macro "assert_msg(condition,
++/// message)". Newer torch headers declare a symbol literally named "assert_msg"
++/// (c10::attr::assert_msg), which collides with that macro during preprocessing
++/// (macro rescanning turns "constexpr Symbol assert_msg(...)" into an invocation
++/// of Limbo's macro with too few arguments). Temporarily hide the macro while
++/// including torch headers.
++#ifdef assert_msg
++#pragma push_macro("assert_msg")
++#undef assert_msg
++#define DREAMPLACE_RESTORE_ASSERT_MSG
++#endif
++
+ #if TORCH_MAJOR_VERSION >= 1
+ #include <torch/extension.h>
+ 
++#ifdef DREAMPLACE_RESTORE_ASSERT_MSG
++#pragma pop_macro("assert_msg")
++#undef DREAMPLACE_RESTORE_ASSERT_MSG
++#endif
++
+ #if TORCH_MINOR_VERSION >= 3
+ 
+ #define DREAMPLACE_TENSOR_DATA_PTR(TENSOR, TYPE) \
+@@ -28,8 +46,16 @@
+ 
+ #if TORCH_MAJOR_VERSION > 1 || (TORCH_MAJOR_VERSION == 1 && TORCH_MINOR_VERSION >= 8)
+ 
++#ifdef AT_DISPATCH_CASE
++// torch >= 2.0 removed AT_PRIVATE_CASE_TYPE in favor of AT_DISPATCH_CASE,
++// which no longer takes a NAME argument and always binds the type to
++// "scalar_t" (matching the usage throughout this codebase).
++#define DREAMPLACE_PRIVATE_CASE_TYPE(NAME, enum_type, type, ...) \
++  AT_DISPATCH_CASE(enum_type, __VA_ARGS__)
++#else
+ #define DREAMPLACE_PRIVATE_CASE_TYPE(NAME, enum_type, type, ...) \
+   AT_PRIVATE_CASE_TYPE(NAME, enum_type, type, __VA_ARGS__)
++#endif
+ 
+ #else
+ 
+@@ -70,6 +96,7 @@
+ #define DREAMPLACE_DISPATCH_FLOATING_TYPES(TENSOR, NAME, ...)                         \
+   [&] {                                                                               \
+     at::ScalarType _st = DREAMPLACE_TENSOR_SCALARTYPE(TENSOR);                        \
++    constexpr const char* at_dispatch_name C10_UNUSED = NAME;                                  \
+     switch (_st) {                                                                    \
+       DREAMPLACE_PRIVATE_CASE_TYPE(NAME, at::ScalarType::Double, double, __VA_ARGS__) \
+       DREAMPLACE_PRIVATE_CASE_TYPE(NAME, at::ScalarType::Float, float, __VA_ARGS__)   \
+@@ -83,6 +110,7 @@
+ #define DREAMPLACE_DISPATCH_INT_FLOAT_TYPES(TENSOR, NAME, ...)                        \
+   [&] {                                                                               \
+     at::ScalarType _st = DREAMPLACE_TENSOR_SCALARTYPE(TENSOR);                        \
++    constexpr const char* at_dispatch_name C10_UNUSED = NAME;                                  \
+     switch (_st) {                                                                    \
+       DREAMPLACE_PRIVATE_CASE_TYPE(NAME, at::ScalarType::Float, float, __VA_ARGS__)   \
+       DREAMPLACE_PRIVATE_CASE_TYPE(NAME, at::ScalarType::Double, double, __VA_ARGS__) \
