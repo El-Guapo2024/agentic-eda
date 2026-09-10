@@ -29,6 +29,8 @@ for f in "${FILES[@]}"; do
   fi
   # renders for every stage present (judge writes them before calling the API; without a key it fails after)
   "$BIN" judge "$f" --design "$d/design.json" -o "$d" > "$d/judge.txt" 2>&1
+  # viewer-side 3D render (KiCad is a viewer only; skipped when kicad-cli is absent)
+  [ -f "$d/$n.kicad_pcb" ] && [ -x "${KICAD_CLI:-/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli}" ] && python3 bench/loop/render3d.py "$d/$n.kicad_pcb" "$d/render3d.png" 2>> "$d/judge.txt"
   cp "$f" "$d/intent.yaml"
   echo "wall_s=$(echo "$(date +%s.%N) - $s" | bc)" >> "$d/log.txt"
   echo "$n: $(grep -E 'gates:' "$d/log.txt" | tr '\n' ' ')"
