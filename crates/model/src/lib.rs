@@ -189,7 +189,7 @@ impl Default for RoutingTuning {
             nc_pres_fac_max: 2000.0,
             nc_hist_inc: 2,
             nc_max_wall_s: 900.0,
-            nc_stall_iters: 6,
+            nc_stall_iters: 12,
         }
     }
 }

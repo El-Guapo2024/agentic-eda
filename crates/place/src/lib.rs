@@ -180,6 +180,11 @@ struct Problem<'a> {
     stub_free: Vec<bool>,
     stubs_of: Vec<Vec<usize>>,
     bbox: (Um, Um, Um, Um),
+    /// Board minus the router's edge keep-away: where a non-connector
+    /// part's courtyard must stay so its pads are not sealed against the
+    /// edge (L4 sweep: D3 in a corner failed placement_pad_reach on every
+    /// anneal seed). Connectors still go to `bbox`.
+    inner: (Um, Um, Um, Um),
     outline: Vec<Point>,
     /// No outline was given: we placed on a generous square and will
     /// shrink it to the cluster afterwards, so board-use terms don't apply.
@@ -212,6 +217,11 @@ impl Problem<'_> {
         let sp = self.spacing;
         let l = eda_model::footprint::refdes_box_side((c.0 + sp, c.1 + sp, c.2 - sp, c.3 - sp), &self.items[i].id, self.font, self.bbox.1, if pose.below { LabelSide::Below } else { LabelSide::Above });
         (c.0.min(l.0), c.1.min(l.1), c.2.max(l.2), c.3.max(l.3))
+    }
+
+    /// The rectangle item `i`'s keepout must lie inside.
+    fn bounds(&self, i: usize) -> (Um, Um, Um, Um) {
+        if self.items[i].connector { self.bbox } else { self.inner }
     }
 
     fn pad_center(&self, i: usize, k: usize, pose: Pose) -> Point {
@@ -345,7 +355,7 @@ impl Problem<'_> {
                 }
             }
         }
-        let out = outside_area(ci, self.bbox);
+        let out = outside_area(ci, self.bounds(i));
         if out > 0 {
             c += W_OUTSIDE * ((out as f64).sqrt() + 500.0);
         }
@@ -514,7 +524,7 @@ impl Problem<'_> {
                     b[1] += W_OVERLAP * ((ov as f64).sqrt() + 500.0);
                 }
             }
-            let out = outside_area(ci, self.bbox);
+            let out = outside_area(ci, self.bounds(i));
             if out > 0 {
                 b[1] += W_OUTSIDE * ((out as f64).sqrt() + 500.0);
             }
@@ -550,7 +560,7 @@ impl Problem<'_> {
                     c += W_OVERLAP * ((ov as f64).sqrt() + 500.0);
                 }
             }
-            let out = outside_area(ci, self.bbox);
+            let out = outside_area(ci, self.bounds(i));
             if out > 0 {
                 c += W_OUTSIDE * ((out as f64).sqrt() + 500.0);
             }
@@ -777,13 +787,19 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         outline.iter().map(|p| p.x).max().unwrap(),
         outline.iter().map(|p| p.y).max().unwrap(),
     );
+    // Edge keep-away for pads: the router's edge clearance plus one track
+    // and one clearance, so a pad at the inner bound still has a lane.
+    let edge_margin = model.board.tuning.edge_clearance_um + model.board.track_width + model.board.clearance;
+    let inner = (bbox.0 + edge_margin, bbox.1 + edge_margin, bbox.2 - edge_margin, bbox.3 - edge_margin);
+    let inner = if inner.2 > inner.0 && inner.3 > inner.1 { inner } else { bbox };
+
     let bin_um: Um = 2000;
     let pitch = (model.board.track_width + model.board.clearance).max(1);
     let congest_capacity = model.board.layers.len() as f64 * bin_um as f64 / pitch as f64;
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
     let font = model.board.refdes_font(&outline);
-    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
+    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
@@ -1093,7 +1109,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
     let n = pb.items.len();
     let clean_at = |pb: &Problem, poses: &[Pose], i: usize| -> bool {
         let ci = pb.keepout(i, poses[i]);
-        if outside_area(ci, pb.bbox) > 0 {
+        if outside_area(ci, pb.bounds(i)) > 0 {
             return false;
         }
         (0..n).all(|j| j == i || overlap(ci, pb.keepout(j, poses[j])) == 0)
@@ -1263,7 +1279,7 @@ fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
     let n = pb.items.len();
     let clean_at = |poses: &[Pose], i: usize| -> bool {
         let ci = pb.keepout(i, poses[i]);
-        outside_area(ci, pb.bbox) == 0 && (0..n).all(|j| j == i || overlap(ci, pb.keepout(j, poses[j])) == 0)
+        outside_area(ci, pb.bounds(i)) == 0 && (0..n).all(|j| j == i || overlap(ci, pb.keepout(j, poses[j])) == 0)
     };
     for _ in 0..3 {
         let mut any = false;
@@ -1333,19 +1349,20 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
     let n = pb.items.len();
     let clamp_inside = |pb: &Problem, poses: &mut [Pose], i: usize| {
         let ci = pb.keepout(i, poses[i]);
+        let bb = pb.bounds(i);
         let mut dx = 0;
         let mut dy = 0;
-        if ci.0 < pb.bbox.0 {
-            dx += pb.bbox.0 - ci.0;
+        if ci.0 < bb.0 {
+            dx += bb.0 - ci.0;
         }
-        if ci.2 > pb.bbox.2 {
-            dx -= ci.2 - pb.bbox.2;
+        if ci.2 > bb.2 {
+            dx -= ci.2 - bb.2;
         }
-        if ci.1 < pb.bbox.1 {
-            dy += pb.bbox.1 - ci.1;
+        if ci.1 < bb.1 {
+            dy += bb.1 - ci.1;
         }
-        if ci.3 > pb.bbox.3 {
-            dy -= ci.3 - pb.bbox.3;
+        if ci.3 > bb.3 {
+            dy -= ci.3 - bb.3;
         }
         if dx != 0 || dy != 0 {
             // Snap toward the interior so an odd half-extent can't
@@ -1407,7 +1424,7 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
     // Final verdict.
     for i in 0..n {
         let ci = pb.keepout(i, poses[i]);
-        if outside_area(ci, pb.bbox) > 0 {
+        if outside_area(ci, pb.bounds(i)) > 0 {
             return false;
         }
         for j in i + 1..n {
@@ -1516,7 +1533,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
         // Report the offenders so the caller can act.
         for i in 0..pb.items.len() {
             let ci = pb.keepout(i, poses[i]);
-            let outside = outside_area(ci, pb.bbox);
+            let outside = outside_area(ci, pb.bounds(i));
             if outside > 0 {
                 fails.push(CheckResult::fail("place_outside", &pb.items[i].id, format!("{outside} µm² outside the board (courtyard {ci:?}, board {:?})", pb.bbox)));
             }
