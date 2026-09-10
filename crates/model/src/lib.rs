@@ -157,6 +157,11 @@ pub struct RoutingTuning {
     pub nc_pres_fac_mult: f64,
     pub nc_pres_fac_max: f64,
     pub nc_hist_inc: u16,
+    /// Wall-clock budget for the negotiated router, seconds. When it runs
+    /// out the run fails with route_congestion_unresolved and its hotspots
+    /// instead of grinding through every iteration (L4 took 16-24 min to
+    /// fail). 0 = no budget.
+    pub nc_max_wall_s: f64,
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
@@ -179,6 +184,7 @@ impl Default for RoutingTuning {
             nc_pres_fac_mult: 1.6,
             nc_pres_fac_max: 2000.0,
             nc_hist_inc: 2,
+            nc_max_wall_s: 300.0,
         }
     }
 }

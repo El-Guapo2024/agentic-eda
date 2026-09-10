@@ -396,7 +396,16 @@ pub(crate) fn run(
     let mut pres_fac = tn.nc_pres_fac_0;
     let mut unrouted: Vec<String> = Vec::new();
     let mut overused = usize::MAX;
+    let t_all = std::time::Instant::now();
+    let mut iters_done = 0usize;
+    let mut stopped_by = "converged";
     for iter in 0..tn.nc_max_iters {
+        if tn.nc_max_wall_s > 0.0 && t_all.elapsed().as_secs_f64() > tn.nc_max_wall_s && iter > 0 {
+            stopped_by = "wall_budget";
+            break;
+        }
+        iters_done = iter + 1;
+        stopped_by = "iterations";
         let t = std::time::Instant::now();
         unrouted.clear();
         for net in order {
@@ -442,6 +451,7 @@ pub(crate) fn run(
             eprintln!("negotiate: iter {iter} pres_fac {pres_fac:.2} overused {overused} unrouted {} in {:?}", unrouted.len(), t.elapsed());
         }
         if overused == 0 && unrouted.is_empty() {
+            stopped_by = "converged";
             break;
         }
         // History must grow at the scale of the present cost, or two nets
@@ -513,14 +523,20 @@ pub(crate) fn run(
         hot.sort_by_key(|h| std::cmp::Reverse(h["cells"].as_u64().unwrap_or(0)));
         hot.truncate(8);
         let stuck: Vec<&String> = involved.iter().filter(|n| alternatives.get(*n) == Some(&serde_json::Value::Bool(false))).collect();
-        let suggest = if stuck.is_empty() {
+        let suggest = if !stuck.is_empty() {
+            "a contending net has no legal alternative: move a part next to the hotspot, or raise allow.max_layers"
+        } else if stopped_by == "wall_budget" {
+            "the wall budget ran out while every contending net still had a legal alternative: raise board.tuning.nc_max_wall_s, or move a part next to the hotspot so it converges sooner"
+        } else if stuck.is_empty() {
             "every contending net has a legal alternative: raise board.tuning.nc_max_iters or nc_pres_fac_mult"
         } else {
             "a contending net has no legal alternative: move a part next to the hotspot, or raise allow.max_layers"
         };
         congestion_detail = Some(serde_json::json!({
             "overused_cells": overused,
-            "iterations": tn.nc_max_iters,
+            "iterations": iters_done,
+            "stopped_by": stopped_by,
+            "wall_s": (t_all.elapsed().as_secs_f64() * 10.0).round() / 10.0,
             "nets": involved,
             "alternative_exists": alternatives,
             "hotspots": hot,
@@ -550,7 +566,11 @@ pub(crate) fn run(
         );
     }
     if overused > 0 {
-        let mut f = CheckResult::fail("route_congestion_unresolved", "board", format!("{overused} cells still claimed by more than one net after {} iterations", tn.nc_max_iters));
+        let mut f = CheckResult::fail(
+            "route_congestion_unresolved",
+            "board",
+            format!("{overused} cells still claimed by more than one net after {iters_done} iterations ({stopped_by}, {:.0} s of {:.0} s budget)", t_all.elapsed().as_secs_f64(), tn.nc_max_wall_s),
+        );
         if let Some(d) = congestion_detail { f = f.with_detail(d); }
         fails.push(f);
     }
