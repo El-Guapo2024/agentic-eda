@@ -455,9 +455,12 @@ pub(crate) fn run(
         }
         pres_fac = (pres_fac * tn.nc_pres_fac_mult).min(tn.nc_pres_fac_max);
     }
-    if dbg && overused > 0 {
-        // Which of the contending nets has *any* legal alternative? Re-run
-        // each with foreign claims priced prohibitively.
+    // Structured failure detail: which nets contend, where, and whether
+    // any of them has a legal alternative avoiding every foreign claim.
+    // This is what the agent reads to pick a knob; the dbg prints are the
+    // human-readable twin of the same facts.
+    let mut congestion_detail = None;
+    if overused > 0 {
         let mut involved: Vec<String> = Vec::new();
         for j in 0..claims.claims.len() {
             if claims.copper[j] > 0 && claims.claims[j] > 1 {
@@ -468,35 +471,88 @@ pub(crate) fn run(
                 }
             }
         }
+        involved.sort();
+        let mut alternatives = serde_json::Map::new();
         for n in &involved {
             if let Some((cells, cu)) = stamped.get(n).cloned() {
-                for j in cells { claims.claims[j] -= 1; }
-                for j in cu { claims.copper[j] -= 1; }
+                for j in &cells { claims.claims[*j] -= 1; }
+                for j in &cu { claims.copper[*j] -= 1; }
                 let alt = route_net(n, &edges_by_net[n], pads, grid, rules, &mut claims, 1.0e7);
-                eprintln!("negotiate: net {n} alternative avoiding all foreign claims: {}", if alt.is_some() { "EXISTS" } else { "none" });
-                if let Some((cells, cu)) = stamped.get(n) {
-                    for &j in cells { claims.claims[j] += 1; }
-                    for &j in cu { claims.copper[j] += 1; }
+                if dbg {
+                    eprintln!("negotiate: net {n} alternative avoiding all foreign claims: {}", if alt.is_some() { "EXISTS" } else { "none" });
                 }
+                alternatives.insert(n.clone(), serde_json::Value::Bool(alt.is_some()));
+                for &j in &cells { claims.claims[j] += 1; }
+                for &j in &cu { claims.copper[j] += 1; }
             }
         }
+        // Hotspots: overused cells grouped by (layer, coarse 1 mm bin).
+        let bin = (1000 / grid.grid_um.max(1)).max(1);
+        let mut spots: HashMap<(i64, i64, usize), (usize, std::collections::BTreeSet<String>)> = HashMap::new();
         for j in 0..claims.claims.len() {
             if claims.copper[j] > 0 && claims.claims[j] > 1 {
                 let l = j % claims.num_layers;
                 let c = j / claims.num_layers;
                 let (cx, cy) = (c as i64 % claims.cells_x, c as i64 / claims.cells_x);
-                let owners: Vec<&String> = stamped.iter().filter(|(_, (cells, _))| cells.binary_search(&j).is_ok()).map(|(n, _)| n).collect();
-                let copper: Vec<&String> = stamped.iter().filter(|(_, (_, cu))| cu.binary_search(&j).is_ok()).map(|(n, _)| n).collect();
-                eprintln!("negotiate: overused ({cx},{cy},{l}) {:?} copper={copper:?} claims={owners:?}", grid.to_point(cx, cy));
+                let owners: Vec<String> = stamped.iter().filter(|(_, (cells, _))| cells.binary_search(&j).is_ok()).map(|(n, _)| n.clone()).collect();
+                if dbg {
+                    eprintln!("negotiate: overused ({cx},{cy},{l}) {:?} claims={owners:?}", grid.to_point(cx, cy));
+                }
+                let e = spots.entry((cx / bin, cy / bin, l)).or_insert_with(|| (0, Default::default()));
+                e.0 += 1;
+                e.1.extend(owners);
             }
         }
+        let mut hot: Vec<serde_json::Value> = spots
+            .iter()
+            .map(|(&(bx, by, l), (n, nets))| {
+                let p = grid.to_point(bx * bin + bin / 2, by * bin + bin / 2);
+                serde_json::json!({ "x_um": p.x, "y_um": p.y, "layer": l, "cells": n, "nets": nets })
+            })
+            .collect();
+        hot.sort_by_key(|h| std::cmp::Reverse(h["cells"].as_u64().unwrap_or(0)));
+        hot.truncate(8);
+        let stuck: Vec<&String> = involved.iter().filter(|n| alternatives.get(*n) == Some(&serde_json::Value::Bool(false))).collect();
+        let suggest = if stuck.is_empty() {
+            "every contending net has a legal alternative: raise board.tuning.nc_max_iters or nc_pres_fac_mult"
+        } else {
+            "a contending net has no legal alternative: move a part next to the hotspot, or raise allow.max_layers"
+        };
+        congestion_detail = Some(serde_json::json!({
+            "overused_cells": overused,
+            "iterations": tn.nc_max_iters,
+            "nets": involved,
+            "alternative_exists": alternatives,
+            "hotspots": hot,
+            "suggest": suggest,
+        }));
     }
     let mut fails = Vec::new();
     for n in &unrouted {
-        fails.push(CheckResult::fail("route_net_unrouted", n, "negotiated router found no path for the net under the static obstacles"));
+        // What fences each end of the unrouted net: the foreign nets and
+        // hard obstacles bordering its pads.
+        let own: Vec<&PadInfo> = pads.values().filter(|p| &p.net == n).collect();
+        let mut cells: Vec<(i64, i64, u8)> = Vec::new();
+        for p in &own {
+            let (cx, cy) = grid.to_cell(p.pt);
+            for &l in &p.layers { cells.push((cx, cy, l)); }
+        }
+        let mut fence: Vec<String> = grid.nets_bordering(&cells, 6).into_iter().filter(|f| f != n).collect();
+        fence.sort();
+        let pins: Vec<String> = edges_by_net[n].iter().flat_map(|e| [e.a_pin.clone(), e.b_pin.clone()]).collect();
+        fails.push(
+            CheckResult::fail("route_net_unrouted", n, "negotiated router found no path for the net under the static obstacles").with_detail(serde_json::json!({
+                "net": n,
+                "pins": pins,
+                "fenced_by": fence,
+                "suggest": "no path even at zero congestion: the pads are sealed by static copper. Move the part named in pins, widen board.tuning.escape_lane_um, or raise allow.max_layers",
+            })),
+        );
     }
     if overused > 0 {
-        fails.push(CheckResult::fail("route_congestion_unresolved", "board", format!("{overused} cells still claimed by more than one net after {} iterations", tn.nc_max_iters)));
+        let mut f = CheckResult::fail("route_congestion_unresolved", "board", format!("{overused} cells still claimed by more than one net after {} iterations", tn.nc_max_iters));
+        if let Some(d) = congestion_detail { f = f.with_detail(d); }
+        fails.push(f);
     }
     let mut tracks: HashMap<String, Vec<Track>> = HashMap::new();
     let mut vias: HashMap<String, Vec<Via>> = HashMap::new();

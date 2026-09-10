@@ -744,7 +744,7 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
         check: "routing_offgrid_points".into(),
         status: if offgrid == 0 { CheckStatus::Pass } else { CheckStatus::Warn },
         location: None,
-        hint: Some(format!("{offgrid} track vertices off the {}µm grid", rules.grid)),
+        hint: Some(format!("{offgrid} track vertices off the {}µm grid", rules.grid)), detail: None
     });
 
     // Connectivity: nodes = pads, track vertices, vias.

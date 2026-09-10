@@ -21,6 +21,8 @@ use eda::ExportMeta;
 use eda_model::ir::Stage;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Instant;
+use eda::model::ir::Point;
 
 
 struct Args {
@@ -76,6 +78,9 @@ fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
     for c in checks {
         if c.status != CheckStatus::Pass {
             println!("  [{:?}] {} @ {}: {}", c.status, c.check, c.location.as_deref().unwrap_or("-"), c.hint.as_deref().unwrap_or(""));
+            if let Some(sg) = c.detail.as_ref().and_then(|d| d.get("suggest")).and_then(|v| v.as_str()) {
+                println!("      suggest: {sg}");
+            }
         }
     }
     fails == 0
@@ -128,9 +133,130 @@ struct Ctx {
     model: ConstraintModel,
     log: RunLog,
     ihash: String,
+    /// What result.json is built from: one entry per gate stage run.
+    report: Report,
+}
+
+#[derive(Default)]
+struct Report {
+    stages: Vec<serde_json::Value>,
+    strategy: Option<serde_json::Value>,
+    started: Option<Instant>,
+}
+
+impl Ctx {
+    fn record(&mut self, stage: &str, checks: &[CheckResult], t0: Instant) {
+        let fails = checks.iter().filter(|c| c.status == CheckStatus::Fail).count();
+        let warns = checks.iter().filter(|c| c.status == CheckStatus::Warn).count();
+        self.report.stages.push(serde_json::json!({
+            "stage": stage, "checks": checks.len(), "fail": fails, "warn": warns,
+            "wall_s": (t0.elapsed().as_secs_f64() * 100.0).round() / 100.0,
+            "placer": if stage == "placement" { Some(if self.args.placer.is_empty() { self.model.solver.placer.clone() } else { self.args.placer.clone() }) } else { None },
+            "layers": if stage == "routing" { Some(self.model.board.layers.len()) } else { None },
+        }));
+    }
+}
+
+/// Per-run score: the numbers an agent ranks passing runs by, and the
+/// numbers that say how far a failing one got. All from design.json.
+fn score(design: &Design, model: &ConstraintModel) -> serde_json::Value {
+    let mut out = serde_json::Map::new();
+    if let Some(pl) = &design.placement {
+        let outline_area = polygon_area(&pl.outline);
+        let mut used: i64 = 0;
+        for fp in &pl.footprints {
+            if let Some(part) = model.part(&fp.id) {
+                if let Some((x0, y0, x1, y1)) = eda_model::footprint::placed_courtyard(model, part, fp) {
+                    used += (x1 - x0) * (y1 - y0);
+                }
+            }
+        }
+        out.insert("parts".into(), pl.footprints.len().into());
+        if outline_area > 0 {
+            out.insert("board_use".into(), serde_json::json!((used as f64 / outline_area as f64 * 1000.0).round() / 1000.0));
+        }
+        if let Some(h) = hpwl(design, model) {
+            out.insert("hpwl_um".into(), h.into());
+        }
+    }
+    if let Some(r) = &design.routing {
+        let mut len_by_net: std::collections::BTreeMap<&str, i64> = Default::default();
+        let mut layers: std::collections::BTreeSet<&str> = Default::default();
+        for t in &r.tracks {
+            layers.insert(&t.layer);
+            let l: i64 = t.pts.windows(2).map(|w| (w[1].x - w[0].x).abs() + (w[1].y - w[0].y).abs()).sum();
+            *len_by_net.entry(&t.net).or_default() += l;
+        }
+        let total: i64 = len_by_net.values().sum();
+        out.insert("tracks".into(), r.tracks.len().into());
+        out.insert("vias".into(), r.vias.len().into());
+        out.insert("layers_used".into(), layers.len().into());
+        out.insert("track_len_um".into(), total.into());
+        out.insert("routed_nets".into(), len_by_net.len().into());
+        // Detour: routed length over the net's own half-perimeter bbox of
+        // footprint centres. 1.0 is a straight run; big values are the
+        // nets an agent should look at first.
+        if let Some(pl) = &design.placement {
+            let at: std::collections::HashMap<&str, Point> = pl.footprints.iter().map(|f| (f.id.as_str(), f.at)).collect();
+            let mut detours: Vec<(f64, &str)> = Vec::new();
+            for net in &model.nets {
+                let Some(&len) = len_by_net.get(net.name.as_str()) else { continue };
+                let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+                for pin in &net.pins {
+                    let refdes = pin.split('.').next().unwrap_or("");
+                    if let Some(p) = at.get(refdes) {
+                        x0 = x0.min(p.x); y0 = y0.min(p.y); x1 = x1.max(p.x); y1 = y1.max(p.y);
+                    }
+                }
+                if x0 == i64::MAX { continue }
+                let hp = ((x1 - x0) + (y1 - y0)).max(2000) as f64;
+                detours.push((len as f64 / hp, net.name.as_str()));
+            }
+            detours.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+            if !detours.is_empty() {
+                let mean = detours.iter().map(|d| d.0).sum::<f64>() / detours.len() as f64;
+                out.insert("detour_mean".into(), serde_json::json!((mean * 100.0).round() / 100.0));
+                out.insert("detour_max".into(), serde_json::json!((detours[0].0 * 100.0).round() / 100.0));
+                out.insert("worst_nets".into(), serde_json::json!(detours.iter().take(3).map(|d| serde_json::json!({"net": d.1, "detour": (d.0 * 100.0).round() / 100.0})).collect::<Vec<_>>()));
+            }
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+fn polygon_area(pts: &[Point]) -> i64 {
+    if pts.len() < 3 { return 0 }
+    let mut a: i64 = 0;
+    for i in 0..pts.len() {
+        let (p, q) = (pts[i], pts[(i + 1) % pts.len()]);
+        a += p.x * q.y - q.x * p.y;
+    }
+    a.abs() / 2
+}
+
+/// result.json: one machine-readable verdict per run. Written on every
+/// exit path so a failed run is as readable as a passed one.
+fn write_result(cx: &Ctx, res: &Result<(), Vec<CheckResult>>) {
+    let design = load_design(&cx.args.out.join("design.json")).ok();
+    let failures: Vec<&CheckResult> = res.as_ref().err().map(|f| f.iter().collect()).unwrap_or_default();
+    let v = serde_json::json!({
+        "run_id": cx.log.run_id,
+        "intent": cx.args.intent.display().to_string(),
+        "seed": cx.args.seed,
+        "cmd": cx.args.cmd,
+        "engine_version": env!("CARGO_PKG_VERSION"),
+        "status": if res.is_ok() { "pass" } else { "fail" },
+        "wall_s": cx.report.started.map(|t| (t.elapsed().as_secs_f64() * 100.0).round() / 100.0),
+        "stages": cx.report.stages,
+        "strategy": cx.report.strategy,
+        "score": design.as_ref().map(|d| score(d, &cx.model)),
+        "failures": failures,
+    });
+    let _ = write(&cx.args.out.join("result.json"), serde_json::to_string_pretty(&v).unwrap_or_default().as_bytes());
 }
 
 fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
+    let t0 = Instant::now();
     let opts = EngineOptions { seed: cx.args.seed, intent_hash: cx.ihash.clone(), ..Default::default() };
     let design = derive_schematic(&cx.model, &opts)?;
     let checks = check_schematic(&design, &cx.model);
@@ -138,6 +264,7 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
     // Always persist the candidate: a failed one is what review reads.
     save_design(&cx.args.out, &design)?;
     let ok = print_checks("schematic gates", &checks);
+    cx.record("schematic", &checks, t0);
     let svg = render_schematic(&design, &cx.model)?;
     write(&cx.args.out.join("schematic.svg"), svg.as_bytes())?;
     if !ok {
@@ -147,6 +274,7 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
 }
 
 fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
+    let t0 = Instant::now();
     // The intent's `solver` block sets the placer and its tuning; an
     // explicit --placer on the command line overrides the choice only.
     let sv = &cx.model.solver;
@@ -173,6 +301,7 @@ fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
     checks.extend(eda::preflight(&placed, &cx.model, &cx.model.board));
     let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model) });
     cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
+    cx.record("placement", &checks, t0);
     if !print_checks("placement gates", &checks) {
         return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
     }
@@ -255,6 +384,7 @@ fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResu
         match result {
             Ok(d) => {
                 let line = format!("strategy {i}: {} -> PASS in {:.1}s", st.name, t.elapsed().as_secs_f64());
+                cx.report.strategy = Some(serde_json::json!({ "index": i, "name": st.name, "tried": i + 1, "layers": st.board.layers.len(), "placer": st.placer }));
                 println!("{line}");
                 cx.log.note(line.clone()).ok();
                 table.push(line);
@@ -271,6 +401,7 @@ fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResu
             }
         }
     }
+    cx.report.strategy = Some(serde_json::json!({ "index": null, "tried": ladder.len() }));
     cx.model.board = base_board;
     cx.args.placer = base_placer;
     write(&cx.args.out.join("strategy.txt"), table.join("
@@ -279,6 +410,7 @@ fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResu
 }
 
 fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
+    let t0 = Instant::now();
     let routed = match eda::route_partial(design, &cx.model, &cx.model.board, cx.args.seed) {
         (Some(d), fails) if fails.is_empty() => d,
         (partial, fails) => {
@@ -287,6 +419,7 @@ fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
                 save_design(&cx.args.out, &d)?;
                 export(cx, &d).ok();
             }
+            cx.record("routing", &fails, t0);
             return Err(fails);
         }
     };
@@ -296,6 +429,7 @@ fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
     let r = routed.routing.as_ref().unwrap();
     let metrics = serde_json::json!({ "tracks": r.tracks.len(), "vias": r.vias.len() });
     cx.log.candidate(Stage::Routing, 0, cx.args.seed, &routed, Tier::Geometry, &checks, metrics).ok();
+    cx.record("routing", &checks, t0);
     if !print_checks("routing gates", &checks) {
         return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
     }
@@ -348,13 +482,19 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
         engine_version: env!("CARGO_PKG_VERSION").into(),
     })
     .ok();
-    let mut cx = Ctx { args, model, log, ihash };
+    let mut cx = Ctx { args, model, log, ihash, report: Report { started: Some(Instant::now()), ..Default::default() } };
 
     let lint_checks = lint(&cx.model);
     if !print_checks("lint", &lint_checks) {
+        write_result(&cx, &Err(lint_checks.clone()));
         return Err(lint_checks);
     }
+    let res = run_cmd(&mut cx);
+    write_result(&cx, &res);
+    res
+}
 
+fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
     let prior = match &cx.args.design {
         Some(p) => Some(load_design(p)?),
         None => None,
@@ -368,27 +508,27 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
     };
 
     let design = match cx.args.cmd.as_str() {
-        "schematic" => stage_schematic(&mut cx)?,
+        "schematic" => stage_schematic(cx)?,
         "place" => {
             let base = prior.unwrap_or_else(blank);
-            stage_place(&mut cx, &base)?
+            stage_place(cx, &base)?
         }
         "route" => {
             let base = prior.ok_or_else(|| vec![CheckResult::fail("cli", "route", "route needs --design with a placement")])?;
-            stage_route(&mut cx, &base)?
+            stage_route(cx, &base)?
         }
         "solve" => {
-            let d = stage_schematic(&mut cx)?;
-            if cx.args.judge { run_judge(&mut cx, &d, eda_judge::Stage::Schematic)?; }
-            stage_solve(&mut cx, &d)?
+            let d = stage_schematic(cx)?;
+            if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Schematic)?; }
+            stage_solve(cx, &d)?
         }
         "pipeline" => {
-            let d = stage_schematic(&mut cx)?;
-            if cx.args.judge { run_judge(&mut cx, &d, eda_judge::Stage::Schematic)?; }
-            let d = stage_place(&mut cx, &d)?;
-            if cx.args.judge { run_judge(&mut cx, &d, eda_judge::Stage::Placement)?; }
-            let d = stage_route(&mut cx, &d)?;
-            if cx.args.judge { run_judge(&mut cx, &d, eda_judge::Stage::Routing)?; }
+            let d = stage_schematic(cx)?;
+            if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Schematic)?; }
+            let d = stage_place(cx, &d)?;
+            if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Placement)?; }
+            let d = stage_route(cx, &d)?;
+            if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Routing)?; }
             d
         }
         "judge" => {
@@ -396,14 +536,14 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
             let mut fails = Vec::new();
             for (present, stage) in [(d.schematic.is_some(), eda_judge::Stage::Schematic), (d.placement.is_some(), eda_judge::Stage::Placement), (d.routing.is_some(), eda_judge::Stage::Routing)] {
                 if present {
-                    if let Err(f) = run_judge(&mut cx, &d, stage) { fails.extend(f); }
+                    if let Err(f) = run_judge(cx, &d, stage) { fails.extend(f); }
                 }
             }
             return if fails.is_empty() { Ok(()) } else { Err(fails) };
         }
         "export" => {
             let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "export", "export needs --design")])?;
-            export(&cx, &d)?;
+            export(cx, &d)?;
             return Ok(());
         }
         "import-pl" => {
@@ -439,7 +579,7 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
         other => return Err(vec![CheckResult::fail("cli", other, "unknown command")]),
     };
     save_design(&cx.args.out, &design)?;
-    export(&cx, &design)?;
+    export(cx, &design)?;
     println!("wrote {}", cx.args.out.join("design.json").display());
     Ok(())
 }

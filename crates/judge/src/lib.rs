@@ -267,12 +267,12 @@ pub fn verdict_to_checks(v: &Verdict, o: &JudgeOptions) -> Vec<CheckResult> {
     if v.score < o.min_score {
         out.push(CheckResult::fail(&score_check, "judge", format!("score {:.1} < {:.1}: {}", v.score, o.min_score, v.summary)));
     } else {
-        out.push(CheckResult { check: score_check, status: CheckStatus::Pass, location: None, hint: Some(format!("score {:.1}: {}", v.score, v.summary)) });
+        out.push(CheckResult { check: score_check, status: CheckStatus::Pass, location: None, hint: Some(format!("score {:.1}: {}", v.score, v.summary)), detail: None });
     }
     for d in &v.defects {
         let status = if d.severity.eq_ignore_ascii_case("fail") { CheckStatus::Fail } else { CheckStatus::Warn };
         let name = format!("judge_{}_{}", v.stage.name(), d.check.trim().to_ascii_lowercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_"));
-        out.push(CheckResult { check: name, status, location: Some(d.location.clone()), hint: Some(d.hint.clone()) });
+        out.push(CheckResult { check: name, status, location: Some(d.location.clone()), hint: Some(d.hint.clone()), detail: None });
     }
     out
 }

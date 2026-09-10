@@ -136,7 +136,7 @@ fn check_no_ground_net(model: &ConstraintModel) -> Vec<CheckResult> {
             check: "source_no_ground_net".into(),
             status: eda_model::CheckStatus::Warn,
             location: None,
-            hint: Some("no net or ground-kind pin found in the design".into()),
+            hint: Some("no net or ground-kind pin found in the design".into()), detail: None
         }]
     }
 }
@@ -154,7 +154,7 @@ fn check_no_power_net(model: &ConstraintModel) -> Vec<CheckResult> {
             check: "source_no_power_net".into(),
             status: eda_model::CheckStatus::Warn,
             location: None,
-            hint: Some("no net or power-kind pin found in the design".into()),
+            hint: Some("no net or power-kind pin found in the design".into()), detail: None
         }]
     }
 }
@@ -251,7 +251,7 @@ fn check_missing_footprint(model: &ConstraintModel) -> Vec<CheckResult> {
             hint: Some(format!(
                 "part '{}' has no package or footprint set",
                 p.reference
-            )),
+            )), detail: None
         })
         .collect()
 }

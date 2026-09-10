@@ -151,7 +151,7 @@ fn check_flag_adjacent(sch: &SchematicSection, model: &ConstraintModel, out: &mu
                     location: Some(net_i.to_string()),
                     hint: Some(format!(
                         "two '{net_i}' flag/label texts are only {dist:.2}mm apart (min {LABEL_FONT_MM}mm, one text height) — they read as merged"
-                    )),
+                    )), detail: None
                 });
                 ok = false;
             }
@@ -230,7 +230,7 @@ fn check_flow_direction(sch: &SchematicSection, model: &ConstraintModel, out: &m
                 hint: Some(format!(
                     "connector '{}' at x={} sits right of the average x={:.0} of the parts it drives — signal flow should read left-to-right",
                     sym.id, sym.at.x, avg
-                )),
+                )), detail: None
             });
             ok = false;
         }
@@ -264,7 +264,7 @@ fn check_missing_junction(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
             hint: Some(format!(
                 "net '{net}' has 3+ wire segments meeting at ({},{}) with no shared vertex there (a naive junction-dot renderer would miss it)",
                 pt.x, pt.y
-            )),
+            )), detail: None
         });
         ok = false;
     }
@@ -312,7 +312,7 @@ fn check_label_over_wire(sch: &SchematicSection, model: &ConstraintModel, out: &
                         hint: Some(format!(
                             "text '{name}' is crossed by a wire segment ({},{})->({},{})",
                             seg[0].x, seg[0].y, seg[1].x, seg[1].y
-                        )),
+                        )), detail: None
                     });
                     ok = false;
                 }
@@ -346,7 +346,7 @@ fn check_label_in_symbol(sch: &SchematicSection, model: &ConstraintModel, out: &
                     check: "schematic_label_in_symbol".into(),
                     status: CheckStatus::Fail,
                     location: Some(name.clone()),
-                    hint: Some("net-label ink overlaps a symbol's box — it must sit outside the body, on the pin's stub side".into()),
+                    hint: Some("net-label ink overlaps a symbol's box — it must sit outside the body, on the pin's stub side".into()), detail: None
                 });
                 ok = false;
                 break;
@@ -385,7 +385,7 @@ fn check_value_label_distance(sch: &SchematicSection, model: &ConstraintModel, o
                     check: "schematic_label_far_from_part".into(),
                     status: CheckStatus::Fail,
                     location: Some(format!("{}:{}", sym.id, name)),
-                    hint: Some(format!("{} label is {:.1}mm from {}'s box (max {}mm)", name, dist, sym.id, MAX_LABEL_DIST_MM)),
+                    hint: Some(format!("{} label is {:.1}mm from {}'s box (max {}mm)", name, dist, sym.id, MAX_LABEL_DIST_MM)), detail: None
                 });
                 ok = false;
             }
@@ -544,7 +544,7 @@ fn check_text_overlap(sch: &SchematicSection, model: &ConstraintModel, out: &mut
                     check: "schematic_text_overlap".into(),
                     status: CheckStatus::Fail,
                     location: Some(format!("{}/{}", boxes[i].0, boxes[j].0)),
-                    hint: Some("estimated text bounding boxes overlap".into()),
+                    hint: Some("estimated text bounding boxes overlap".into()), detail: None
                 });
                 ok = false;
             }
@@ -985,7 +985,7 @@ fn check_sheet_density(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_
                 max_col_band * 100.0,
                 max_row_band * 100.0,
                 MAX_EMPTY_BAND_FRACTION * 100.0
-            )),
+            )), detail: None
         });
     } else {
         out.push(CheckResult::pass("schematic_sheet_density"));
@@ -1047,7 +1047,7 @@ fn check_content_in_bounds(design: &Design, sch: &SchematicSection, model: &Cons
                 check: "schematic_content_in_bounds".into(),
                 status: CheckStatus::Fail,
                 location: Some(name.to_string()),
-                hint: Some(format!("({x:.3},{y:.3}) mm lies outside the sheet viewBox ({x0:.3},{y0:.3})..({x1:.3},{y1:.3}) mm")),
+                hint: Some(format!("({x:.3},{y:.3}) mm lies outside the sheet viewBox ({x0:.3},{y0:.3})..({x1:.3},{y1:.3}) mm")), detail: None
             });
             *ok = false;
         }
@@ -1126,7 +1126,7 @@ fn check_crossing_count(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
         check: "schematic_wire_crossing_count".into(),
         status,
         location: None,
-        hint: Some(format!("{count} wire/wire crossing(s) between different nets (max {threshold} = 3x{part_count} parts)")),
+        hint: Some(format!("{count} wire/wire crossing(s) between different nets (max {threshold} = 3x{part_count} parts)")), detail: None
     });
 }
 
@@ -1188,7 +1188,7 @@ fn check_wire_detour(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_>>
                 hint: Some(format!(
                     "wire length {drawn}um is {:.1}x the {manhattan}um Manhattan distance between its pins (max {DETOUR_RATIO}x)",
                     drawn as f64 / manhattan as f64
-                )),
+                )), detail: None
             });
             ok = false;
         }
@@ -1227,7 +1227,7 @@ fn check_power_net_as_wire(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
                 hint: Some(format!(
                     "power/ground net '{}' drawn as a {length}um/{bends}-bend wire (max {MAX_POWER_WIRE_LEN_UM}um / {MAX_POWER_WIRE_BENDS} bends) instead of a flag/glyph at each pin",
                     w.net
-                )),
+                )), detail: None
             });
             ok = false;
         }
@@ -1261,7 +1261,7 @@ fn check_column_overflow(sch: &SchematicSection, model: &ConstraintModel, out: &
                 check: "schematic_column_overflow".into(),
                 status: CheckStatus::Fail,
                 location: Some(format!("x={x}")),
-                hint: Some(format!("column at x={x} has {} symbols (max {MAX_COLUMN_SIZE}): {}", ids.len(), ids.join(","))),
+                hint: Some(format!("column at x={x} has {} symbols (max {MAX_COLUMN_SIZE}): {}", ids.len(), ids.join(","))), detail: None
             });
             ok = false;
         }
@@ -1302,7 +1302,7 @@ fn check_wire_length(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
                     "wire polyline is {:.1}mm long (max {:.1}mm) — this net belongs on a net label, not a wire",
                     len as f64 / 1000.0,
                     MAX_WIRE_LEN_UM as f64 / 1000.0
-                )),
+                )), detail: None
             });
             ok = false;
         }
@@ -1341,7 +1341,7 @@ fn check_wire_ink(sch: &SchematicSection, out: &mut Vec<CheckResult>) {
                 total as f64 / 1000.0,
                 per_part / 1000.0,
                 MAX_WIRE_INK_UM_PER_PART / 1000.0
-            )),
+            )), detail: None
         });
     } else {
         out.push(CheckResult::pass("schematic_wire_ink"));
@@ -1397,7 +1397,7 @@ fn check_cluster_split(
                     members.join(","),
                     spread / 1000.0,
                     packed_side / 1000.0
-                )),
+                )), detail: None
             });
             ok = false;
         }

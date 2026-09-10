@@ -328,6 +328,11 @@ pub struct CheckResult {
     pub location: Option<String>,
     #[serde(default)]
     pub hint: Option<String>,
+    /// Machine-readable failure detail (what blocks, where, which knob
+    /// would change it). Absent for passes and for checks that have not
+    /// been upgraded yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,10 +346,14 @@ pub enum CheckStatus {
 impl CheckResult {
     pub fn fail(check: &str, location: impl Into<String>, hint: impl Into<String>) -> Self {
         Self { check: check.into(), status: CheckStatus::Fail,
-               location: Some(location.into()), hint: Some(hint.into()) }
+               location: Some(location.into()), hint: Some(hint.into()), detail: None }
     }
     pub fn pass(check: &str) -> Self {
-        Self { check: check.into(), status: CheckStatus::Pass, location: None, hint: None }
+        Self { check: check.into(), status: CheckStatus::Pass, location: None, hint: None, detail: None }
+    }
+    pub fn with_detail(mut self, detail: serde_json::Value) -> Self {
+        self.detail = Some(detail);
+        self
     }
 }
 
