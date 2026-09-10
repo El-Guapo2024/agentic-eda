@@ -165,6 +165,9 @@ struct Problem<'a> {
     compact_limit: Vec<Option<f64>>,
     /// (item a, item b, max distance µm)
     pair_rules: Vec<(usize, usize, i64)>,
+    /// The same pairs with the rule's true maximum (µm), for the final
+    /// repair pass that measures exactly as the gate does.
+    pair_rules_true: Vec<(usize, usize, i64)>,
     /// (item, candidate items, max distance µm): the nearest candidate
     /// must be within max — decoupling caps that could serve several ICs.
     group_rules: Vec<(usize, Vec<usize>, i64)>,
@@ -721,6 +724,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     }
 
     let mut pair_rules = Vec::new();
+    let mut pair_rules_true = Vec::new();
     // A capacitor on a shared power net "decouples" every IC on it; like
     // the gate, only the nearest candidate IC has to be close.
     let mut group_rules: Vec<(usize, Vec<usize>, i64)> = Vec::new();
@@ -739,6 +743,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
                 // after snapping, and a linear penalty barely resists a
                 // few-µm excess.
                 pair_rules.push((ia, ib, ((max_mm * 1000.0) as i64 - 300).max(0)));
+                pair_rules_true.push((ia, ib, (max_mm * 1000.0) as i64));
             }
         }
     }
@@ -776,7 +781,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
     let font = model.board.refdes_font(&outline);
-    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, group_rules, stubs, stub_free, stubs_of, bbox, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
+    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
@@ -1244,6 +1249,80 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Um, Um, Um,
 /// Push overlapping courtyards apart (each half the penetration along the
 /// axis of least overlap) and pull stragglers inside the board.
 /// Deterministic, bounded; returns whether the result is clean.
+/// Final pass for proximity rules, measured exactly as the gate does
+/// (true courtyard gap against the rule's true maximum). The anneal's
+/// linear penalty leaves near misses of a few hundred µm (sweep: 5.17 mm
+/// against 5, 1.62 against 1.5); here the part that is not an edge
+/// connector walks toward its partner in snap steps until the rule holds
+/// or the next step would overlap something or leave the board.
+fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
+    let n = pb.items.len();
+    let clean_at = |poses: &[Pose], i: usize| -> bool {
+        let ci = pb.keepout(i, poses[i]);
+        outside_area(ci, pb.bbox) == 0 && (0..n).all(|j| j == i || overlap(ci, pb.keepout(j, poses[j])) == 0)
+    };
+    for _ in 0..3 {
+        let mut any = false;
+        for &(a, b, max) in &pb.pair_rules_true {
+            if pb.rule_gap(a, b, poses) <= max as f64 {
+                continue;
+            }
+            // Try the non-connector (or smaller) part first, then the
+            // other one; a connector only slides along its own edge (one
+            // axis), which legalize re-flushes afterwards.
+            let area = |i: usize| { let c = courtyard(&pb.items[i], poses[i]); (c.2 - c.0) * (c.3 - c.1) };
+            let first = match (pb.items[a].connector, pb.items[b].connector) {
+                (true, false) => b,
+                (false, true) => a,
+                _ => if area(a) <= area(b) { a } else { b },
+            };
+            for mover in [first, if first == a { b } else { a }] {
+            let axis_only = pb.items[mover].connector;
+            // Windowed search: the best clean pose for the mover within
+            // ±8 snaps, then repeat from there. A single axis step is
+            // often blocked by a neighbour's keepout while a diagonal or
+            // a two-snap hop is not.
+            for _round in 0..6 {
+                let d0 = pb.rule_gap(a, b, poses);
+                if d0 <= max as f64 {
+                    break;
+                }
+                let start = poses[mover];
+                let mut best: Option<(f64, Pose)> = None;
+                for rot in 0..4u8 {
+                if axis_only && rot != start.rot { continue }
+                for sx in -40..=40i64 {
+                    for sy in -40..=40i64 {
+                        if sx == 0 && sy == 0 && rot == start.rot { continue }
+                        if axis_only && sx != 0 && sy != 0 { continue }
+                        let probe = Pose { x: start.x + sx * snap_um, y: start.y + sy * snap_um, rot };
+                        poses[mover] = probe;
+                        if clean_at(poses, mover) {
+                            let d = pb.rule_gap(a, b, poses);
+                            if d < d0 && best.map_or(true, |(bd, _)| d < bd) {
+                                best = Some((d, probe));
+                            }
+                        }
+                    }
+                }
+                }
+                match best {
+                    Some((_, p)) => { poses[mover] = p; any = true; }
+                    None => { poses[mover] = start; break; }
+                }
+            }
+            if pb.rule_gap(a, b, poses) <= max as f64 { break; }
+            }
+            if debug {
+                eprintln!("place debug: rule {}-{} gap {:.0} (max {max}) after repair", pb.items[a].id, pb.items[b].id, pb.rule_gap(a, b, poses));
+            }
+        }
+        if !any {
+            break;
+        }
+    }
+}
+
 fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
     let n = pb.items.len();
     let clamp_inside = |pb: &Problem, poses: &mut [Pose], i: usize| {
@@ -1382,6 +1461,10 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
         let t1 = std::time::Instant::now();
         polish(&pb, &mut poses, opts.snap);
         clean = legalize(&pb, &mut poses, opts.snap);
+        if clean {
+            repair_rules(&pb, &mut poses, opts.snap, debug);
+            clean = legalize(&pb, &mut poses, opts.snap);
+        }
         if debug {
             eprintln!("place debug: polish {:.1}s", t1.elapsed().as_secs_f64());
         }
