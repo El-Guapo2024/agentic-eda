@@ -29,7 +29,7 @@
 //! outline (none given) is finally shrunk to the placed cluster.
 
 use eda_model::footprint::{placed_pads, rotated_extent};
-use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Side, Um};
+use eda_model::ir::{LabelSide, Design, FootprintInstance, PlacementSection, Point, Side, Um};
 use eda_model::{CheckResult, ConstraintModel, PlacementRule};
 use std::collections::HashMap;
 
@@ -103,6 +103,8 @@ struct Pose {
     x: Um,
     y: Um,
     rot: u8, // quarter turns
+    /// Refdes label below the part instead of above.
+    below: bool,
 }
 
 struct Rng(u64);
@@ -126,7 +128,7 @@ impl Rng {
 }
 
 fn instance(item: &Item, pose: Pose) -> FootprintInstance {
-    FootprintInstance { id: item.id.clone(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: Side::Top }
+    FootprintInstance { id: item.id.clone(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: Side::Top, label: if pose.below { LabelSide::Below } else { LabelSide::Above } }
 }
 
 fn courtyard(item: &Item, pose: Pose) -> (Um, Um, Um, Um) {
@@ -208,7 +210,7 @@ impl Problem<'_> {
         // it is silkscreen and needs no routing-channel spacing of its own,
         // so it is unioned with the spacing-inflated courtyard as is.
         let sp = self.spacing;
-        let l = eda_model::footprint::refdes_box_for((c.0 + sp, c.1 + sp, c.2 - sp, c.3 - sp), &self.items[i].id, self.font, self.bbox.1);
+        let l = eda_model::footprint::refdes_box_side((c.0 + sp, c.1 + sp, c.2 - sp, c.3 - sp), &self.items[i].id, self.font, self.bbox.1, if pose.below { LabelSide::Below } else { LabelSide::Above });
         (c.0.min(l.0), c.1.min(l.1), c.2.max(l.2), c.3.max(l.3))
     }
 
@@ -835,7 +837,7 @@ fn connectivity_order(pb: &Problem) -> Vec<usize> {
 fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
     let n = pb.items.len();
     let order = connectivity_order(pb);
-    let mut poses = vec![Pose { x: 0, y: 0, rot: 0 }; n];
+    let mut poses = vec![Pose { x: 0, y: 0, rot: 0, below: false }; n];
     let (bx0, by0, bx1, by1) = pb.bbox;
 
     // Edge connectors first, walking the perimeter: along the top edge
@@ -860,7 +862,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
                     2 => (bx1 - c, by1 - thick / 2),
                     _ => (bx0 + thick / 2, by1 - c),
                 };
-                poses[i] = pb.flush_to_edge(i, Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot }, snap_um);
+                poses[i] = pb.flush_to_edge(i, Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot, below: false }, snap_um);
                 inset[edge] = inset[edge].max(thick);
                 along += long;
                 placed = true;
@@ -870,7 +872,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
             along = 0;
         }
         if !placed {
-            poses[i] = pb.flush_to_edge(i, Pose { x: bx0 + long / 2, y: by0 + thick / 2, rot: 0 }, snap_um);
+            poses[i] = pb.flush_to_edge(i, Pose { x: bx0 + long / 2, y: by0 + thick / 2, rot: 0, below: false }, snap_um);
         }
     }
 
@@ -887,7 +889,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
             y += row_h;
             row_h = 0;
         }
-        poses[i] = Pose { x: snap(x + w / 2, snap_um), y: snap(y + h / 2, snap_um), rot: 0 };
+        poses[i] = Pose { x: snap(x + w / 2, snap_um), y: snap(y + h / 2, snap_um), rot: 0, below: false };
         x += w;
         row_h = row_h.max(h);
     }
@@ -984,6 +986,7 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
                 x: snap((old_i.x + dx).clamp(pb.bbox.0, pb.bbox.2), opts.snap),
                 y: snap((old_i.y + dy).clamp(pb.bbox.1, pb.bbox.3), opts.snap),
                 rot: old_i.rot,
+                below: false,
             };
             poses[i] = pb.flush_to_edge(i, poses[i], opts.snap);
             c
@@ -1008,19 +1011,20 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
                     3 => pb.bbox.3 - h / 2,
                     _ => rng.range(pb.bbox.1 + h / 2, (pb.bbox.3 - h / 2).max(pb.bbox.1 + h / 2) + 1),
                 };
-                poses[i] = Pose { x: snap(x, opts.snap), y: snap(y, opts.snap), rot };
+                poses[i] = Pose { x: snap(x, opts.snap), y: snap(y, opts.snap), rot, below: false };
             } else {
                 poses[i] = Pose {
                     x: snap(rng.range(pb.bbox.0, pb.bbox.2 + 1), opts.snap),
                     y: snap(rng.range(pb.bbox.1, pb.bbox.3 + 1), opts.snap),
                     rot: old_i.rot,
-                };
+                below: false,
+            };
             }
             c
         } else if kind < 8 && n > 1 {
             let c = pb.local_cost(i, poses) + pb.local_cost(j, poses);
-            poses[i] = pb.flush_to_edge(i, Pose { x: old_j.x, y: old_j.y, rot: old_i.rot }, opts.snap);
-            poses[j] = pb.flush_to_edge(j, Pose { x: old_i.x, y: old_i.y, rot: old_j.rot }, opts.snap);
+            poses[i] = pb.flush_to_edge(i, Pose { x: old_j.x, y: old_j.y, rot: old_i.rot, below: false }, opts.snap);
+            poses[j] = pb.flush_to_edge(j, Pose { x: old_i.x, y: old_i.y, rot: old_j.rot, below: false }, opts.snap);
             c
         } else {
             let c = pb.local_cost(i, poses);
@@ -1156,7 +1160,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
                     }
                 }
                 for (x, y) in cands {
-                    poses[i] = Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot };
+                    poses[i] = Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot, below: false };
                     if clean_at(pb, poses, i) {
                         let c = cost_of(pb, poses, i);
                         if c < best.0 - 1.0 {
@@ -1289,13 +1293,14 @@ fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
                 }
                 let start = poses[mover];
                 let mut best: Option<(f64, Pose)> = None;
+                for below in [false, true] {
                 for rot in 0..4u8 {
                 if axis_only && rot != start.rot { continue }
                 for sx in -40..=40i64 {
                     for sy in -40..=40i64 {
-                        if sx == 0 && sy == 0 && rot == start.rot { continue }
+                        if sx == 0 && sy == 0 && rot == start.rot && below == start.below { continue }
                         if axis_only && sx != 0 && sy != 0 { continue }
-                        let probe = Pose { x: start.x + sx * snap_um, y: start.y + sy * snap_um, rot };
+                        let probe = Pose { x: start.x + sx * snap_um, y: start.y + sy * snap_um, rot, below };
                         poses[mover] = probe;
                         if clean_at(poses, mover) {
                             let d = pb.rule_gap(a, b, poses);
@@ -1304,6 +1309,7 @@ fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
                             }
                         }
                     }
+                }
                 }
                 }
                 match best {

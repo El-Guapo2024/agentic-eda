@@ -110,7 +110,7 @@ pub fn render_board_svg(design: &Design, model: &ConstraintModel, with_routing: 
         let part = match model.part(&fp.id) { Some(p) => p, None => continue };
         if let Some((cx0, cy0, cx1, cy1)) = placed_courtyard(model, part, fp) {
             s.push_str(&format!("<rect x=\"{cx0}\" y=\"{cy0}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"#c8c8c8\" stroke-width=\"60\" stroke-dasharray=\"300 200\"/>\n", cx1 - cx0, cy1 - cy0));
-            let bx = eda_model::footprint::refdes_box_for((cx0, cy0, cx1, cy1), &fp.id, fs, eda_model::footprint::outline_top(&pl.outline));
+            let bx = eda_model::footprint::refdes_box_side((cx0, cy0, cx1, cy1), &fp.id, fs, eda_model::footprint::outline_top(&pl.outline), fp.label);
             s.push_str(&format!("<text x=\"{}\" y=\"{}\" font-size=\"{fs}\" fill=\"#ffffff\" text-anchor=\"middle\" font-family=\"sans-serif\">{}</text>\n", (cx0 + cx1) / 2, eda_model::footprint::refdes_baseline(bx, fs), fp.id));
         }
         if let Some(pads) = placed_pads(model, part, fp) {

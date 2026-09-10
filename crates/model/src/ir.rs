@@ -138,6 +138,25 @@ pub struct FootprintInstance {
     pub at: Point,
     pub rot: Millideg,
     pub side: Side,
+    /// Which side of the courtyard the refdes label sits on. The placer
+    /// chooses it (a label between two rule partners makes their
+    /// proximity rule infeasible); every consumer reads it from here.
+    #[serde(default, skip_serializing_if = "LabelSide::is_above")]
+    pub label: LabelSide,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelSide {
+    #[default]
+    Above,
+    Below,
+}
+
+impl LabelSide {
+    pub fn is_above(&self) -> bool {
+        *self == LabelSide::Above
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

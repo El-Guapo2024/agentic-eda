@@ -70,11 +70,11 @@ fn part_th(reference: &str, npins: usize) -> Part {
 }
 
 fn fp(id: &str, x: i64, y: i64) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side: Side::Top }
+    FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side: Side::Top, label: Default::default() }
 }
 
 fn fp_side(id: &str, x: i64, y: i64, side: Side) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side }
+    FootprintInstance { id: id.into(), at: Point { x, y }, rot: 0, side, label: Default::default() }
 }
 
 fn design(outline: Vec<Point>, footprints: Vec<FootprintInstance>) -> Design {

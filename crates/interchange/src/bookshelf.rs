@@ -307,6 +307,7 @@ pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, uni
             at: Point { x: cx, y: cy },
             rot,
             side: if side { Side::Bottom } else { Side::Top },
+            label: Default::default(),
         });
     }
     if !fails.is_empty() {
@@ -359,9 +360,9 @@ mod tests {
             placement: Some(PlacementSection {
                 outline,
                 footprints: vec![
-                    FootprintInstance { id: "U1".into(), at: Point { x: 10_000, y: 7_500 }, rot: 0, side: Side::Top },
-                    FootprintInstance { id: "C1".into(), at: Point { x: 3_000, y: 3_000 }, rot: 0, side: Side::Top },
-                    FootprintInstance { id: "R1".into(), at: Point { x: 17_000, y: 12_000 }, rot: 0, side: Side::Top },
+                    FootprintInstance { id: "U1".into(), at: Point { x: 10_000, y: 7_500 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "C1".into(), at: Point { x: 3_000, y: 3_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R1".into(), at: Point { x: 17_000, y: 12_000 }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
             }),
             routing: None,

@@ -241,9 +241,14 @@ fn write_footprint(
 
     let ref_layer = if fp.side == Side::Bottom { "B.SilkS" } else { "F.SilkS" };
     let ref_uuid = duid(&format!("footprint:{}:ref", fp.id));
+    // Label offset from the footprint origin, in the footprint's own frame:
+    // just outside the courtyard on the side the placer chose.
+    let (hw, hh) = footprint.courtyard_half();
+    let _ = hw;
+    let ref_y = if fp.label == eda_model::ir::LabelSide::Below { mm(hh + 700) } else { mm(-(hh + 700)) };
     writeln!(
         out,
-        "\t\t(property \"Reference\" {} (at 0 -1 0) (layer {})\n\t\t\t(uuid \"{ref_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)))\n\t\t)",
+        "\t\t(property \"Reference\" {} (at 0 {ref_y} 0) (layer {})\n\t\t\t(uuid \"{ref_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)))\n\t\t)",
         sexpr_str(&fp.id),
         sexpr_str(ref_layer)
     )
@@ -350,8 +355,8 @@ mod tests {
                 Point { x: 0, y: 20_000 },
             ],
             footprints: vec![
-                FootprintInstance { id: "U1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top },
-                FootprintInstance { id: "C1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 90_000, side: Side::Bottom },
+                FootprintInstance { id: "U1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "C1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 90_000, side: Side::Bottom, label: Default::default() },
             ],
         };
         let design = Design {

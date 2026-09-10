@@ -607,7 +607,7 @@ mod tests {
                 id: "R1".into(),
                 at: Point { x: 5_000, y: 5_000 },
                 rot: 0,
-                side: Side::Top,
+                side: Side::Top, label: Default::default()
             }],
         });
         let v = to_circuit_json(&d, &m).unwrap();

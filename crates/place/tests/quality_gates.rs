@@ -48,7 +48,7 @@ fn square(side: i64) -> Vec<Point> {
 }
 
 fn fp(id: &str, x: i64, y: i64, rot_deg: u32) -> FootprintInstance {
-    FootprintInstance { id: id.into(), at: Point { x, y }, rot: rot_deg * 1000, side: Side::Top }
+    FootprintInstance { id: id.into(), at: Point { x, y }, rot: rot_deg * 1000, side: Side::Top, label: Default::default() }
 }
 
 fn design(outline: Vec<Point>, fps: Vec<FootprintInstance>) -> Design {

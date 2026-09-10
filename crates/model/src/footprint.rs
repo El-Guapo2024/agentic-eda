@@ -14,7 +14,7 @@
 //! A part with no resolvable footprint is a hard error for every physical
 //! stage — there is deliberately no synthetic "pins on a line" stand-in.
 
-use crate::ir::{FootprintInstance, Point, Side, Um};
+use crate::ir::{LabelSide, FootprintInstance, Point, Side, Um};
 use crate::{ConstraintModel, Part};
 use serde::{Deserialize, Serialize};
 
@@ -161,12 +161,18 @@ pub fn refdes_font_um(outline: &[Point]) -> Um {
 /// position-independent node geometry). Pure geometry so placers can
 /// evaluate candidate poses without a model.
 pub fn refdes_box_for(courtyard: (Um, Um, Um, Um), refdes: &str, font_um: Um, board_top: Um) -> (Um, Um, Um, Um) {
+    refdes_box_side(courtyard, refdes, font_um, board_top, LabelSide::Above)
+}
+
+/// [`refdes_box_for`] with an explicit side. `Above` still flips below at
+/// the board top; `Below` is always below.
+pub fn refdes_box_side(courtyard: (Um, Um, Um, Um), refdes: &str, font_um: Um, board_top: Um, side: LabelSide) -> (Um, Um, Um, Um) {
     let (cx0, cy0, cx1, cy1) = courtyard;
     let half_w = (font_um * 6 / 10) * refdes.chars().count() as Um / 2;
     let cx = (cx0 + cx1) / 2;
     let (asc, desc) = (font_um * 3 / 4, font_um / 5);
     let above = cy0 - 200 - asc;
-    if above >= board_top {
+    if side == LabelSide::Above && above >= board_top {
         let baseline = cy0 - 200;
         (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
     } else {
@@ -189,18 +195,23 @@ pub fn outline_top(outline: &[Point]) -> Um {
 /// free of other parts so its label stays readable and no neighbour's pad
 /// ends up under it (which walls that pad in for routing).
 pub fn keepout_for(courtyard: (Um, Um, Um, Um), refdes: &str, font_um: Um, board_top: Um) -> (Um, Um, Um, Um) {
-    let l = refdes_box_for(courtyard, refdes, font_um, board_top);
+    keepout_side(courtyard, refdes, font_um, board_top, LabelSide::Above)
+}
+
+/// [`keepout_for`] with an explicit label side.
+pub fn keepout_side(courtyard: (Um, Um, Um, Um), refdes: &str, font_um: Um, board_top: Um, side: LabelSide) -> (Um, Um, Um, Um) {
+    let l = refdes_box_side(courtyard, refdes, font_um, board_top, side);
     (courtyard.0.min(l.0), courtyard.1.min(l.1), courtyard.2.max(l.2), courtyard.3.max(l.3))
 }
 
 /// Placed refdes label box (see [`refdes_box_for`]).
 pub fn placed_refdes_box(model: &ConstraintModel, outline: &[Point], part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
-    Some(refdes_box_for(placed_courtyard(model, part, fp)?, &fp.id, model.board.refdes_font(outline), outline_top(outline)))
+    Some(refdes_box_side(placed_courtyard(model, part, fp)?, &fp.id, model.board.refdes_font(outline), outline_top(outline), fp.label))
 }
 
 /// Placed courtyard-plus-label keep-out (see [`keepout_for`]).
 pub fn placed_keepout(model: &ConstraintModel, outline: &[Point], part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
-    Some(keepout_for(placed_courtyard(model, part, fp)?, &fp.id, model.board.refdes_font(outline), outline_top(outline)))
+    Some(keepout_side(placed_courtyard(model, part, fp)?, &fp.id, model.board.refdes_font(outline), outline_top(outline), fp.label))
 }
 
 pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
