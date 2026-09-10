@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Rank the runs of a batch directory by their result.json.
+
+  eda-rank <runs_dir> [--json]
+
+Order: pass before fail; then fewer layers, fewer vias, shorter track
+length, less wall time. Failed runs are listed after, with their first
+failure and its suggestion, so the agent sees what to change.
+"""
+import json, os, sys
+
+def load(root):
+    runs = []
+    for name in sorted(os.listdir(root)):
+        p = os.path.join(root, name, "result.json")
+        if not os.path.isfile(p):
+            continue
+        r = json.load(open(p)); r["run"] = name; runs.append(r)
+    return runs
+
+def key(r):
+    s = r.get("score") or {}
+    st = r.get("strategy") or {}
+    return (r["status"] != "pass", st.get("layers") or s.get("layers_used") or 99, s.get("vias", 1e9), s.get("track_len_um", 1e9), r.get("wall_s") or 1e9)
+
+def main():
+    root = sys.argv[1]; as_json = "--json" in sys.argv
+    runs = sorted(load(root), key=key)
+    if as_json:
+        print(json.dumps([{k: r.get(k) for k in ("run", "status", "seed", "wall_s", "strategy", "score")} | {"first_failure": (r.get("failures") or [None])[0]} for r in runs], indent=1)); return
+    print(f"{'run':<14}{'result':<7}{'rung':<5}{'use':<6}{'vias':<6}{'len mm':<8}{'detour':<8}{'wall s':<7} note")
+    for r in runs:
+        s = r.get("score") or {}; st = r.get("strategy") or {}
+        f = (r.get("failures") or [None])[0]
+        note = "" if r["status"] == "pass" else f"{f['check']} @ {f.get('location','-')}" + (f"  -> {f['detail']['suggest']}" if f and f.get("detail", {}).get("suggest") else "")
+        rung = st.get("index"); rung = "-" if rung is None else str(rung)
+        print(f"{r['run']:<14}{r['status']:<7}{rung:<5}{s.get('board_use','-'):<6}{s.get('vias','-'):<6}{(s.get('track_len_um',0)/1000):<8.1f}{s.get('detour_max','-'):<8}{(r.get('wall_s') or 0):<7.0f} {note}")
+    n = len(runs); p = sum(r["status"] == "pass" for r in runs)
+    print(f"\n{p}/{n} passed")
+
+if __name__ == "__main__":
+    main()

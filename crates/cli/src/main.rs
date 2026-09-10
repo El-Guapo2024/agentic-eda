@@ -237,6 +237,12 @@ fn polygon_area(pts: &[Point]) -> i64 {
 /// result.json: one machine-readable verdict per run. Written on every
 /// exit path so a failed run is as readable as a passed one.
 fn write_result(cx: &Ctx, res: &Result<(), Vec<CheckResult>>) {
+    // Only commands that produce or judge a design candidate own
+    // result.json; `judge`/`export`/`check` are read-only passes that
+    // must not clobber the verdict of the run they inspect.
+    if matches!(cx.args.cmd.as_str(), "judge" | "export" | "check" | "lint") {
+        return;
+    }
     let design = load_design(&cx.args.out.join("design.json")).ok();
     let failures: Vec<&CheckResult> = res.as_ref().err().map(|f| f.iter().collect()).unwrap_or_default();
     let v = serde_json::json!({
