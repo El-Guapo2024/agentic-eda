@@ -399,9 +399,15 @@ pub(crate) fn run(
     let t_all = std::time::Instant::now();
     let mut iters_done = 0usize;
     let mut stopped_by = "converged";
+    let mut best_overused = usize::MAX;
+    let mut since_improve = 0usize;
     for iter in 0..tn.nc_max_iters {
         if tn.nc_max_wall_s > 0.0 && t_all.elapsed().as_secs_f64() > tn.nc_max_wall_s && iter > 0 {
             stopped_by = "wall_budget";
+            break;
+        }
+        if tn.nc_stall_iters > 0 && since_improve >= tn.nc_stall_iters {
+            stopped_by = "stalled";
             break;
         }
         iters_done = iter + 1;
@@ -453,6 +459,12 @@ pub(crate) fn run(
         if overused == 0 && unrouted.is_empty() {
             stopped_by = "converged";
             break;
+        }
+        if overused + unrouted.len() < best_overused {
+            best_overused = overused + unrouted.len();
+            since_improve = 0;
+        } else {
+            since_improve += 1;
         }
         // History must grow at the scale of the present cost, or two nets
         // with alternatives swap places forever (mcu_board_30plus seed 1:
@@ -527,6 +539,8 @@ pub(crate) fn run(
             "a contending net has no legal alternative: move a part next to the hotspot, or raise allow.max_layers"
         } else if stopped_by == "wall_budget" {
             "the wall budget ran out while every contending net still had a legal alternative: raise board.tuning.nc_max_wall_s, or move a part next to the hotspot so it converges sooner"
+        } else if stopped_by == "stalled" {
+            "overuse stopped improving: the contending nets are trading the same cells. Move a part next to the hotspot, raise allow.max_layers, or widen board.tuning.nc_pres_fac_mult"
         } else if stuck.is_empty() {
             "every contending net has a legal alternative: raise board.tuning.nc_max_iters or nc_pres_fac_mult"
         } else {
@@ -536,6 +550,7 @@ pub(crate) fn run(
             "overused_cells": overused,
             "iterations": iters_done,
             "stopped_by": stopped_by,
+            "best_overused": best_overused,
             "wall_s": (t_all.elapsed().as_secs_f64() * 10.0).round() / 10.0,
             "nets": involved,
             "alternative_exists": alternatives,
