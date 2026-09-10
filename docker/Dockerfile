@@ -16,10 +16,10 @@ RUN cargo build --release -p eda-cli && strip target/release/eda
 FROM python:3.9-bookworm AS cypress
 ARG CYPRESS_REV=743b07c4e33dc52a00584d55d2e67f38f70957f5
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        cmake ninja-build flex bison libboost-all-dev libcairo2-dev zlib1g-dev git \
+        cmake ninja-build flex libfl-dev bison libboost-all-dev libcairo2-dev zlib1g-dev git \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch==2.2.2 \
-    && pip install --no-cache-dir numpy==1.26.4 scipy matplotlib cairocffi shapely pyunpack patool pkgconfig
+RUN pip install --no-cache-dir --only-binary=:all: --extra-index-url https://download.pytorch.org/whl/cpu torch==2.2.2 torchvision==0.17.2 \
+    && pip install --no-cache-dir --only-binary=:all: numpy==1.26.4 scipy==1.13.1 matplotlib==3.9.4 cairocffi==1.7.1 shapely==2.0.7 pillow
 RUN git clone --recursive https://github.com/NVlabs/Cypress /Cypress \
     && cd /Cypress && git checkout -q $CYPRESS_REV && git submodule update --init --recursive
 COPY docker/cypress/cypress-cpu.patch docker/cypress/limbo.patch /tmp/
@@ -28,7 +28,7 @@ RUN cd /Cypress && git apply /tmp/cypress-cpu.patch \
 RUN cd /Cypress && mkdir build && cd build \
     && cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/cypress \
          -DPYTHON_EXECUTABLE=$(which python) -DCMAKE_CXX_ABI=0 \
-    && ninja install \
+    && ninja -j2 install \
     && rm -rf /Cypress/build
 
 # ---- stage 3: runtime -----------------------------------------------------
