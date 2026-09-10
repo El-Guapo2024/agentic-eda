@@ -380,6 +380,7 @@ fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResu
     let base_board = cx.model.board.clone();
     let base_placer = cx.args.placer.clone();
     let mut table: Vec<String> = Vec::new();
+    let mut last_fails: Vec<CheckResult> = Vec::new();
     for (i, st) in ladder.iter().enumerate() {
         cx.model.board = st.board.clone();
         cx.args.placer = st.placer.clone();
@@ -402,8 +403,13 @@ fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResu
                 let why: Vec<String> = fails.iter().take(3).map(|c| format!("{}@{}", c.check, c.location.as_deref().unwrap_or("-"))).collect();
                 let line = format!("strategy {i}: {} -> FAIL ({} fails: {}) in {:.1}s", st.name, fails.len(), why.join(", "), t.elapsed().as_secs_f64());
                 println!("{line}");
+                // Router failures come back from route_partial without
+                // passing print_checks; show them (and their suggestion)
+                // so the log carries the same facts as result.json.
+                print_checks(&format!("strategy {i} failures"), &fails);
                 cx.log.note(line.clone()).ok();
                 table.push(line);
+                last_fails = fails;
             }
         }
     }
@@ -412,7 +418,11 @@ fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResu
     cx.args.placer = base_placer;
     write(&cx.args.out.join("strategy.txt"), table.join("
 ").as_bytes())?;
-    Err(vec![CheckResult::fail("solve", "design", format!("no strategy inside the allowances passed every gate ({} tried; see strategy.txt)", ladder.len()))])
+    // The last rung's failures keep their detail: that is what the agent
+    // acts on. The solve summary goes first so the headline stays clear.
+    let mut out = vec![CheckResult::fail("solve", "design", format!("no strategy inside the allowances passed every gate ({} tried; see strategy.txt)", ladder.len()))];
+    out.extend(last_fails);
+    Err(out)
 }
 
 fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
