@@ -876,6 +876,14 @@ fn check_workmanship(design: &Design, model: &ConstraintModel, rt: &eda_model::i
                     if &t.layer != layer {
                         continue;
                     }
+                    // A track on either pad's own net is that pad's
+                    // connection, and it may leave along the pad edge that
+                    // faces its neighbour (L3 seed 1: I2C_SCL exiting U3.3
+                    // westward grazed the U3.2-U3.3 gap line at the pad
+                    // boundary). Threading is a *foreign* net's business.
+                    if t.net == a.net || t.net == b.net {
+                        continue;
+                    }
                     let hit = t.pts.windows(2).any(|w| {
                         let o1 = orient(a.geom.center, b.geom.center, w[0]).signum();
                         let o2 = orient(a.geom.center, b.geom.center, w[1]).signum();
@@ -1419,13 +1427,19 @@ mod tests {
 
     #[test]
     fn between_smd_pads_fails_when_foreign_track_threads_the_gap() {
-        // Net B vertical at x=5000: through the gap between R1.1 and R1.2
-        // (pad edges at 4575 and 5425, so clearance is fine).
+        // Net Z (on neither pad) vertical at x=5000: through the gap
+        // between R1.1 and R1.2 (pad edges at 4575 and 5425, so clearance
+        // is fine). The same track on net B, R1.1's own net, is that pad's
+        // connection and must not count.
         let mut rt = clean_routing();
-        rt.tracks.push(track("B", &[(5000, 2000), (5000, 8000)]));
+        rt.tracks.push(track("Z", &[(5000, 2000), (5000, 8000)]));
         let (d, m) = wfixture(rt);
         assert!(fails(&d, &m, "routing_clearance").is_empty());
         assert_eq!(fails(&d, &m, "routing_between_smd_pads").len(), 1);
+        let mut rt = clean_routing();
+        rt.tracks.push(track("B", &[(5000, 2000), (5000, 8000)]));
+        let (d, m) = wfixture(rt);
+        assert!(fails(&d, &m, "routing_between_smd_pads").is_empty());
     }
 
     #[test]
