@@ -172,12 +172,23 @@ pub fn refdes_box_side(courtyard: (Um, Um, Um, Um), refdes: &str, font_um: Um, b
     let cx = (cx0 + cx1) / 2;
     let (asc, desc) = (font_um * 3 / 4, font_um / 5);
     let above = cy0 - 200 - asc;
-    if side == LabelSide::Above && above >= board_top {
-        let baseline = cy0 - 200;
-        (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
-    } else {
-        let baseline = cy1 + 200 + asc;
-        (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
+    match side {
+        LabelSide::Above if above >= board_top => {
+            let baseline = cy0 - 200;
+            (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
+        }
+        LabelSide::Above | LabelSide::Below => {
+            let baseline = cy1 + 200 + asc;
+            (cx - half_w, baseline - asc, cx + half_w, baseline + desc)
+        }
+        LabelSide::Left | LabelSide::Right => {
+            // Beside the courtyard, text still horizontal, vertically
+            // centred on the part.
+            let cy = (cy0 + cy1) / 2;
+            let baseline = cy + asc / 2;
+            let (x0, x1) = if side == LabelSide::Left { (cx0 - 200 - 2 * half_w, cx0 - 200) } else { (cx1 + 200, cx1 + 200 + 2 * half_w) };
+            (x0, baseline - asc, x1, baseline + desc)
+        }
     }
 }
 

@@ -163,8 +163,10 @@ pub struct RoutingTuning {
     /// fail). 0 = no budget.
     pub nc_max_wall_s: f64,
     /// Stop when the overused-cell count has not improved for this many
-    /// iterations: a stalled negotiation is failed early with its hotspots
-    /// while a converging one is allowed to finish. 0 = never.
+    /// iterations. Off by default (0): PathFinder convergence is not
+    /// monotone (L4 seed 0 sat at 26-166 overused cells for 12+ iterations
+    /// and still converged before 40), so the wall budget is the honest
+    /// limit. Set it for fast exploratory batches.
     pub nc_stall_iters: usize,
 }
 impl Default for RoutingTuning {
@@ -189,7 +191,7 @@ impl Default for RoutingTuning {
             nc_pres_fac_max: 2000.0,
             nc_hist_inc: 2,
             nc_max_wall_s: 900.0,
-            nc_stall_iters: 12,
+            nc_stall_iters: 0,
         }
     }
 }

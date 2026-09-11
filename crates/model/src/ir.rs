@@ -151,6 +151,8 @@ pub enum LabelSide {
     #[default]
     Above,
     Below,
+    Left,
+    Right,
 }
 
 impl LabelSide {

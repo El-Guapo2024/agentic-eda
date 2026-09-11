@@ -96,6 +96,28 @@ struct Item {
     half: (Um, Um),
     /// Local pad centres (x, y) at rot 0, per pad number.
     pads: Vec<(String, (Um, Um))>,
+    /// Pads boxed in by a neighbour on both sides along their row: their
+    /// only escape is outward, so the keepout grows on that side of the
+    /// courtyard (`Problem::keepout`). Middle pins of a SOT-23-6 row, the
+    /// inner pins of a SOIC.
+    boxed: Vec<usize>,
+}
+
+/// Indices of pads with an in-line neighbour within `pitch_max` on both
+/// sides (same row or same column).
+fn boxed_pads(pads: &[(String, (Um, Um))], pitch_max: Um) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (k, (_, (x, y))) in pads.iter().enumerate() {
+        let (mut left, mut right, mut up, mut down) = (false, false, false, false);
+        for (j, (_, (ox, oy))) in pads.iter().enumerate() {
+            if j == k { continue }
+            let (dx, dy) = (ox - x, oy - y);
+            if dy.abs() < 250 && dx != 0 && dx.abs() <= pitch_max { if dx < 0 { left = true } else { right = true } }
+            if dx.abs() < 250 && dy != 0 && dy.abs() <= pitch_max { if dy < 0 { up = true } else { down = true } }
+        }
+        if (left && right) || (up && down) { out.push(k) }
+    }
+    out
 }
 
 #[derive(Clone, Copy)]
@@ -103,8 +125,8 @@ struct Pose {
     x: Um,
     y: Um,
     rot: u8, // quarter turns
-    /// Refdes label below the part instead of above.
-    below: bool,
+    /// Refdes label side (the placer's choice; see `Problem::label_side`).
+    label: LabelSide,
 }
 
 struct Rng(u64);
@@ -128,7 +150,7 @@ impl Rng {
 }
 
 fn instance(item: &Item, pose: Pose) -> FootprintInstance {
-    FootprintInstance { id: item.id.clone(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: Side::Top, label: if pose.below { LabelSide::Below } else { LabelSide::Above } }
+    FootprintInstance { id: item.id.clone(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: Side::Top, label: pose.label }
 }
 
 fn courtyard(item: &Item, pose: Pose) -> (Um, Um, Um, Um) {
@@ -180,6 +202,12 @@ struct Problem<'a> {
     stub_free: Vec<bool>,
     stubs_of: Vec<Vec<usize>>,
     bbox: (Um, Um, Um, Um),
+    /// Extra keepout beyond the spaced courtyard on a side where a boxed
+    /// pad must escape: room for a via site, minus the spacing already
+    /// in `Item::half`.
+    escape_lane: Um,
+    /// Lane for parts with at most 8 pads (see `build_problem`).
+    escape_lane_small: Um,
     /// Board minus the router's edge keep-away: where a non-connector
     /// part's courtyard must stay so its pads are not sealed against the
     /// edge (L4 sweep: D3 in a corner failed placement_pad_reach on every
@@ -209,13 +237,54 @@ impl Problem<'_> {
     /// Courtyard (spacing-inflated) plus the refdes label box above it: the
     /// rectangle two parts must not share. Proximity gaps and outline
     /// containment still use the bare courtyard, as the gates do.
-    fn keepout(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
+    /// Board-space courtyard sides (left, right, top, bottom) that a boxed
+    /// pad of item `i` faces: its only escape direction.
+    fn escape_faces(&self, i: usize, pose: Pose) -> (bool, bool, bool, bool) {
         let c = courtyard(&self.items[i], pose);
+        let (mut l, mut r, mut t, mut b) = (false, false, false, false);
+        for &k in &self.items[i].boxed {
+            let p = self.pad_center(i, k, pose);
+            let d = [(p.x - c.0, 0), (c.2 - p.x, 1), (p.y - c.1, 2), (c.3 - p.y, 3)];
+            match d.iter().min_by_key(|(v, _)| *v).unwrap().1 { 0 => l = true, 1 => r = true, 2 => t = true, _ => b = true }
+        }
+        (l, r, t, b)
+    }
+
+    /// Label side for item `i` at `pose`: never on a side a boxed pad must
+    /// escape through (the refdes box is hard for the router, and it
+    /// sealed D3.2 on L4 on every anneal seed); otherwise the pose's choice.
+    fn label_side(&self, i: usize, pose: Pose) -> LabelSide {
+        if self.items[i].boxed.is_empty() {
+            return pose.label;
+        }
+        let (l, r, t, b) = self.escape_faces(i, pose);
+        let blocked = |side: LabelSide| match side { LabelSide::Above => t, LabelSide::Below => b, LabelSide::Left => l, LabelSide::Right => r };
+        if !blocked(pose.label) {
+            return pose.label;
+        }
+        for side in [LabelSide::Above, LabelSide::Below, LabelSide::Left, LabelSide::Right] {
+            if !blocked(side) {
+                return side;
+            }
+        }
+        pose.label
+    }
+
+    fn keepout(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
+        let bare = courtyard(&self.items[i], pose);
+        let mut c = bare;
+        let side = self.label_side(i, pose);
+        let lane = if self.items[i].pads.len() <= 8 { self.escape_lane_small } else { self.escape_lane };
+        if !self.items[i].boxed.is_empty() && lane > 0 {
+            let (l, r, t, b) = self.escape_faces(i, pose);
+            let e = lane;
+            c = (c.0 - if l { e } else { 0 }, c.1 - if t { e } else { 0 }, c.2 + if r { e } else { 0 }, c.3 + if b { e } else { 0 });
+        }
         // The label hangs off the *bare* courtyard (the gate's geometry);
         // it is silkscreen and needs no routing-channel spacing of its own,
         // so it is unioned with the spacing-inflated courtyard as is.
         let sp = self.spacing;
-        let l = eda_model::footprint::refdes_box_side((c.0 + sp, c.1 + sp, c.2 - sp, c.3 - sp), &self.items[i].id, self.font, self.bbox.1, if pose.below { LabelSide::Below } else { LabelSide::Above });
+        let l = eda_model::footprint::refdes_box_side((bare.0 + sp, bare.1 + sp, bare.2 - sp, bare.3 - sp), &self.items[i].id, self.font, self.bbox.1, side);
         (c.0.min(l.0), c.1.min(l.1), c.2.max(l.2), c.3.max(l.3))
     }
 
@@ -668,7 +737,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
                 let mut pads: Vec<(String, (Um, Um))> = fp.pads.iter().map(|p| (p.number.clone(), p.at)).collect();
                 pads.sort_by(|a, b| a.0.cmp(&b.0));
                 let (hw, hh) = fp.courtyard_half();
-                items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half: (hw + opts.spacing, hh + opts.spacing), pads });
+                let boxed = boxed_pads(&pads, 1300);
+                items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half: (hw + opts.spacing, hh + opts.spacing), pads, boxed });
             }
             None => fails.push(CheckResult::fail(
                 "place_precondition",
@@ -787,11 +857,21 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         outline.iter().map(|p| p.x).max().unwrap(),
         outline.iter().map(|p| p.y).max().unwrap(),
     );
-    // Edge keep-away for pads: the router's edge clearance plus one track
-    // and one clearance, so a pad at the inner bound still has a lane.
+    // Edge keep-away for pads: the router's edge clearance plus room for a
+    // via site (diameter + clearance each side) and one track, so a pad
+    // row facing the edge can still escape (D3 on L4 sat 2.7 mm from the
+    // edge with a 1 mm² pocket and no via site).
     let edge_margin = model.board.tuning.edge_clearance_um + model.board.track_width + model.board.clearance;
     let inner = (bbox.0 + edge_margin, bbox.1 + edge_margin, bbox.2 - edge_margin, bbox.3 - edge_margin);
     let inner = if inner.2 > inner.0 && inner.3 > inner.1 { inner } else { bbox };
+    // A track lane (not a via site): the label-side rule is what unsealed
+    // D2/D3 on L4; a via-sized lane on IC pad rows made every 1.5 mm
+    // decoupling rule infeasible (caps ended at 1.55 mm).
+    let escape_lane = (model.board.track_width + 2 * model.board.clearance - opts.spacing).max(0);
+    // Small packages (SOT-23-6, SOT-23-5) have pockets a few cells wide
+    // between their own pads and need room for a via site outward;
+    // IC rows open onto the board and only need a track lane.
+    let escape_lane_small = (model.board.via_diameter + 2 * model.board.clearance + model.board.track_width - opts.spacing).max(0);
 
     let bin_um: Um = 2000;
     let pitch = (model.board.track_width + model.board.clearance).max(1);
@@ -799,7 +879,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
     let font = model.board.refdes_font(&outline);
-    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
+    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
@@ -853,7 +933,7 @@ fn connectivity_order(pb: &Problem) -> Vec<usize> {
 fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
     let n = pb.items.len();
     let order = connectivity_order(pb);
-    let mut poses = vec![Pose { x: 0, y: 0, rot: 0, below: false }; n];
+    let mut poses = vec![Pose { x: 0, y: 0, rot: 0, label: LabelSide::Above }; n];
     let (bx0, by0, bx1, by1) = pb.bbox;
 
     // Edge connectors first, walking the perimeter: along the top edge
@@ -878,7 +958,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
                     2 => (bx1 - c, by1 - thick / 2),
                     _ => (bx0 + thick / 2, by1 - c),
                 };
-                poses[i] = pb.flush_to_edge(i, Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot, below: false }, snap_um);
+                poses[i] = pb.flush_to_edge(i, Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot, label: LabelSide::Above }, snap_um);
                 inset[edge] = inset[edge].max(thick);
                 along += long;
                 placed = true;
@@ -888,7 +968,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
             along = 0;
         }
         if !placed {
-            poses[i] = pb.flush_to_edge(i, Pose { x: bx0 + long / 2, y: by0 + thick / 2, rot: 0, below: false }, snap_um);
+            poses[i] = pb.flush_to_edge(i, Pose { x: bx0 + long / 2, y: by0 + thick / 2, rot: 0, label: LabelSide::Above }, snap_um);
         }
     }
 
@@ -905,7 +985,7 @@ fn initial(pb: &Problem, snap_um: Um) -> Vec<Pose> {
             y += row_h;
             row_h = 0;
         }
-        poses[i] = Pose { x: snap(x + w / 2, snap_um), y: snap(y + h / 2, snap_um), rot: 0, below: false };
+        poses[i] = Pose { x: snap(x + w / 2, snap_um), y: snap(y + h / 2, snap_um), rot: 0, label: LabelSide::Above };
         x += w;
         row_h = row_h.max(h);
     }
@@ -1002,7 +1082,7 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
                 x: snap((old_i.x + dx).clamp(pb.bbox.0, pb.bbox.2), opts.snap),
                 y: snap((old_i.y + dy).clamp(pb.bbox.1, pb.bbox.3), opts.snap),
                 rot: old_i.rot,
-                below: false,
+                label: LabelSide::Above,
             };
             poses[i] = pb.flush_to_edge(i, poses[i], opts.snap);
             c
@@ -1027,20 +1107,20 @@ fn anneal(pb: &Problem, poses: &mut [Pose], opts: &PlaceOptions) {
                     3 => pb.bbox.3 - h / 2,
                     _ => rng.range(pb.bbox.1 + h / 2, (pb.bbox.3 - h / 2).max(pb.bbox.1 + h / 2) + 1),
                 };
-                poses[i] = Pose { x: snap(x, opts.snap), y: snap(y, opts.snap), rot, below: false };
+                poses[i] = Pose { x: snap(x, opts.snap), y: snap(y, opts.snap), rot, label: LabelSide::Above };
             } else {
                 poses[i] = Pose {
                     x: snap(rng.range(pb.bbox.0, pb.bbox.2 + 1), opts.snap),
                     y: snap(rng.range(pb.bbox.1, pb.bbox.3 + 1), opts.snap),
                     rot: old_i.rot,
-                below: false,
+                label: LabelSide::Above,
             };
             }
             c
         } else if kind < 8 && n > 1 {
             let c = pb.local_cost(i, poses) + pb.local_cost(j, poses);
-            poses[i] = pb.flush_to_edge(i, Pose { x: old_j.x, y: old_j.y, rot: old_i.rot, below: false }, opts.snap);
-            poses[j] = pb.flush_to_edge(j, Pose { x: old_i.x, y: old_i.y, rot: old_j.rot, below: false }, opts.snap);
+            poses[i] = pb.flush_to_edge(i, Pose { x: old_j.x, y: old_j.y, rot: old_i.rot, label: LabelSide::Above }, opts.snap);
+            poses[j] = pb.flush_to_edge(j, Pose { x: old_i.x, y: old_i.y, rot: old_j.rot, label: LabelSide::Above }, opts.snap);
             c
         } else {
             let c = pb.local_cost(i, poses);
@@ -1176,7 +1256,7 @@ fn polish(pb: &Problem, poses: &mut [Pose], snap_um: Um) {
                     }
                 }
                 for (x, y) in cands {
-                    poses[i] = Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot, below: false };
+                    poses[i] = Pose { x: snap(x, snap_um), y: snap(y, snap_um), rot, label: LabelSide::Above };
                     if clean_at(pb, poses, i) {
                         let c = cost_of(pb, poses, i);
                         if c < best.0 - 1.0 {
@@ -1309,14 +1389,14 @@ fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
                 }
                 let start = poses[mover];
                 let mut best: Option<(f64, Pose)> = None;
-                for below in [false, true] {
+                for label in [LabelSide::Above, LabelSide::Below, LabelSide::Left, LabelSide::Right] {
                 for rot in 0..4u8 {
                 if axis_only && rot != start.rot { continue }
                 for sx in -40..=40i64 {
                     for sy in -40..=40i64 {
-                        if sx == 0 && sy == 0 && rot == start.rot && below == start.below { continue }
+                        if sx == 0 && sy == 0 && rot == start.rot && label == start.label { continue }
                         if axis_only && sx != 0 && sy != 0 { continue }
-                        let probe = Pose { x: start.x + sx * snap_um, y: start.y + sy * snap_um, rot, below };
+                        let probe = Pose { x: start.x + sx * snap_um, y: start.y + sy * snap_um, rot, label };
                         poses[mover] = probe;
                         if clean_at(poses, mover) {
                             let d = pb.rule_gap(a, b, poses);
@@ -1515,7 +1595,14 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
         let (o, _) = shrink_outline(&pb, &mut poses);
         outline = o;
     }
-    let mut footprints: Vec<FootprintInstance> = pb.items.iter().zip(poses.iter()).map(|(it, p)| instance(it, *p)).collect();
+    if debug {
+        for (i, it) in pb.items.iter().enumerate() {
+            if !it.boxed.is_empty() {
+                eprintln!("place debug: {} boxed {:?} faces {:?} label {:?} pads {:?}", it.id, it.boxed, pb.escape_faces(i, poses[i]), pb.label_side(i, poses[i]), it.pads.iter().map(|p| (p.0.as_str(), p.1)).collect::<Vec<_>>());
+            }
+        }
+    }
+    let mut footprints: Vec<FootprintInstance> = pb.items.iter().enumerate().zip(poses.iter()).map(|((i, it), p)| instance(it, Pose { label: pb.label_side(i, *p), ..*p })).collect();
     footprints.sort_by(|a, b| a.id.cmp(&b.id));
 
     let mut out = design.clone();
@@ -1535,7 +1622,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
             let ci = pb.keepout(i, poses[i]);
             let outside = outside_area(ci, pb.bounds(i));
             if outside > 0 {
-                fails.push(CheckResult::fail("place_outside", &pb.items[i].id, format!("{outside} µm² outside the board (courtyard {ci:?}, board {:?})", pb.bbox)));
+                fails.push(CheckResult::fail("place_outside", &pb.items[i].id, format!("{outside} µm² outside its bound (keepout {ci:?}, bound {:?}; non-connectors keep the edge margin)", pb.bounds(i))));
             }
             for j in i + 1..pb.items.len() {
                 let ov = overlap(pb.keepout(i, poses[i]), pb.keepout(j, poses[j]));

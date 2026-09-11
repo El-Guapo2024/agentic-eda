@@ -244,11 +244,17 @@ fn write_footprint(
     // Label offset from the footprint origin, in the footprint's own frame:
     // just outside the courtyard on the side the placer chose.
     let (hw, hh) = footprint.courtyard_half();
-    let _ = hw;
-    let ref_y = if fp.label == eda_model::ir::LabelSide::Below { mm(hh + 700) } else { mm(-(hh + 700)) };
+    let half_w = 300 * fp.id.chars().count() as eda_model::ir::Um;
+    let (ref_x, ref_y) = match fp.label {
+        eda_model::ir::LabelSide::Above => (0, -(hh + 700)),
+        eda_model::ir::LabelSide::Below => (0, hh + 700),
+        eda_model::ir::LabelSide::Left => (-(hw + 200 + half_w), 0),
+        eda_model::ir::LabelSide::Right => (hw + 200 + half_w, 0),
+    };
+    let (ref_x, ref_y) = (mm(ref_x), mm(ref_y));
     writeln!(
         out,
-        "\t\t(property \"Reference\" {} (at 0 {ref_y} 0) (layer {})\n\t\t\t(uuid \"{ref_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)))\n\t\t)",
+        "\t\t(property \"Reference\" {} (at {ref_x} {ref_y} 0) (layer {})\n\t\t\t(uuid \"{ref_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)))\n\t\t)",
         sexpr_str(&fp.id),
         sexpr_str(ref_layer)
     )
