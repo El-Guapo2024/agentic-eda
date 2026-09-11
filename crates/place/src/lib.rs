@@ -1540,7 +1540,7 @@ impl Placer for Anneal {
 /// and (if present) the schematic section, which is carried through
 /// untouched; the returned design has a fresh `placement` section.
 pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> Result<Design, Vec<CheckResult>> {
-    let pb = build_problem(model, opts)?;
+    let mut pb = build_problem(model, opts)?;
     let debug = std::env::var_os("EDA_PLACE_DEBUG").is_some();
     let t0 = std::time::Instant::now();
     let mut poses = initial(&pb, opts.snap);
@@ -1559,6 +1559,24 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
         poses = initial(&pb, opts.snap);
         anneal(&pb, &mut poses, &PlaceOptions { seed: opts.seed.wrapping_add(retry.wrapping_mul(0x9E37_79B9)), ..opts.clone() });
         clean = legalize(&pb, &mut poses, opts.snap);
+    }
+    // The edge inset is a heuristic against sealed pads, not a rule: on a
+    // board too cramped for it (corpus dense_small_outline) give it up and
+    // let placement_pad_reach be the judge.
+    if !clean && pb.inner != pb.bbox {
+        if debug {
+            eprintln!("place debug: legalisation failed with the edge inset; retrying against the full outline");
+        }
+        pb.inner = pb.bbox;
+        clean = legalize(&pb, &mut poses, opts.snap);
+        for retry in 4..=6u64 {
+            if clean {
+                break;
+            }
+            poses = initial(&pb, opts.snap);
+            anneal(&pb, &mut poses, &PlaceOptions { seed: opts.seed.wrapping_add(retry.wrapping_mul(0x9E37_79B9)), ..opts.clone() });
+            clean = legalize(&pb, &mut poses, opts.snap);
+        }
     }
     if clean {
         let t1 = std::time::Instant::now();
