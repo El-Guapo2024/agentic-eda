@@ -419,6 +419,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
+                    edge: None,
                 },
                 Part {
                     reference: "C1".into(),
@@ -430,6 +431,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
+                    edge: None,
                 },
             ],
             nets: vec![Net { name: "VIN".into(), pins: vec!["R1.1".into(), "C1.1".into()] }],
@@ -511,6 +513,7 @@ mod tests {
             footprint: None,
             package: None,
             pins: vec![],
+            edge: None,
         });
         assert_eq!(ftype, "simple_chip");
     }

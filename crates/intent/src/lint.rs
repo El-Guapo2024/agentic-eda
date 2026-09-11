@@ -283,6 +283,7 @@ mod tests {
             package: Some("0603".into()),
             footprint: None,
             pins: (1..=n).map(|i| eda_model::Pin { number: i.to_string(), name: None, kind: eda_model::PinKind::Signal }).collect(),
+            edge: None,
         }
     }
     use eda_model::{Net, Part, Pin};
@@ -295,6 +296,7 @@ mod tests {
             package: Some("SOT-23".into()),
             footprint: None,
             pins,
+            edge: None,
         }
     }
 
@@ -492,6 +494,7 @@ mod tests {
                 package: Some("SOT-23".into()),
                 footprint: None,
                 pins: vec![Pin { number: "3".into(), name: Some("EN".into()), kind: PinKind::Signal }],
+                edge: None,
             }],
             nets: vec![],
             ..Default::default()
@@ -515,6 +518,7 @@ mod tests {
                     Pin { number: "1".into(), name: Some("VIN".into()), kind: PinKind::Power },
                     Pin { number: "3".into(), name: Some("EN".into()), kind: PinKind::Signal },
                 ],
+                edge: None,
             }],
             nets: vec![Net { name: "VIN".into(), pins: vec!["U1.1".into(), "U1.3".into()] }],
             ..Default::default()

@@ -16,10 +16,11 @@
 //! * `.pl` positions are the node's lower-left corner (Bookshelf), while
 //!   our IR stores centres — converted both ways.
 
-use eda_model::footprint::{keepout_for, placed_courtyard, to_board};
+use eda_model::footprint::{keepout_for, keepout_side, placed_courtyard, to_board};
 use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Side};
 use eda_model::{CheckResult, ConstraintModel};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use eda_model::ir::LabelSide;
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +84,19 @@ pub fn to_bookshelf(design: &Design, model: &ConstraintModel, name: &str, unit_u
 /// extent and initial positions; parts without a placement start at the
 /// board centre.
 pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &str, unit_um: i64, proximity_weight: f64) -> Result<Bookshelf, Vec<CheckResult>> {
+    to_bookshelf_fixed(design, model, name, unit_um, proximity_weight, &BTreeSet::new())
+}
+
+/// Courtyard-to-edge gap, µm, at which a fixed (edge) connector is pinned.
+/// Under the gate's `EDGE_CONNECTOR_MAX_GAP_UM` (1500) with room for the
+/// board's copper edge clearance (500) and a track beside the pads.
+pub const EDGE_PIN_GAP_UM: i64 = 700;
+
+/// [`to_bookshelf_weighted`] with a set of parts written as Bookshelf
+/// *terminals*: `fixed` parts keep their placed position, rotation and
+/// label side (`.nodes` ` terminal`, `.pl` `/FIXED`), and Cypress places
+/// everything else around them. A fixed part must already be placed.
+pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, unit_um: i64, proximity_weight: f64, fixed: &BTreeSet<String>) -> Result<Bookshelf, Vec<CheckResult>> {
     let unit = unit_um.max(1);
     // Board extent.
     let outline: Vec<Point> = match design.placement.as_ref().map(|p| p.outline.clone()).or_else(|| model.board.outline.clone()) {
@@ -121,19 +135,39 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
             continue;
         };
         let (hw, hh) = fp.courtyard_half();
+        let is_fixed = fixed.contains(&part.reference);
+        let placed_fp = placed.get(part.reference.as_str()).copied();
+        if is_fixed && placed_fp.is_none() {
+            fails.push(CheckResult::fail("bookshelf_fixed_unplaced", &part.reference, "fixed part has no placement to pin"));
+            continue;
+        }
+        // A fixed part keeps its rotation and label side; a movable one is
+        // exported upright with the label above (Cypress may rotate it).
+        let (rot, label) = match placed_fp {
+            Some(f) if is_fixed => (f.rot, f.label),
+            _ => (0, LabelSide::Above),
+        };
+        let (hw_r, hh_r) = if rot == 90_000 || rot == 270_000 { (hh, hw) } else { (hw, hh) };
         // The node is the part's keep-out: courtyard plus the refdes label
-        // above it (gate `placement_refdes_clear`), so Cypress reserves
+        // beside it (gate `placement_refdes_clear`), so Cypress reserves
         // label space and no neighbour's pad ends up under a label. The
         // node centre is offset (ox, oy) from the part centre.
-        let ko = keepout_for((-hw, -hh, hw, hh), &part.reference, font, i64::MIN);
+        let ko = keepout_side((-hw_r, -hh_r, hw_r, hh_r), &part.reference, font, i64::MIN, label);
         let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
         // Sizes round UP: Cypress packs nodes flush on its integer grid, so a
         // rounded-down courtyard would overlap its neighbour at µm precision.
         let w = div_ceil(ko.2 - ko.0, unit).max(1);
         let h = div_ceil(ko.3 - ko.1, unit).max(1);
-        writeln!(nodes, "{} {} {}", part.reference, w, h).unwrap();
-        let offs: BTreeMap<String, (i64, i64)> =
-            fp.pads.iter().map(|p| (p.number.clone(), (div_round(p.at.0 - ox, unit), div_round(p.at.1 - oy, unit)))).collect();
+        writeln!(nodes, "{} {} {}{}", part.reference, w, h, if is_fixed { " terminal" } else { "" }).unwrap();
+        let origin = FootprintInstance { id: String::new(), at: Point { x: 0, y: 0 }, rot, side: Side::Top, label };
+        let offs: BTreeMap<String, (i64, i64)> = fp
+            .pads
+            .iter()
+            .map(|p| {
+                let b = to_board(&origin, p.at);
+                (p.number.clone(), (div_round(b.x - ox, unit), div_round(b.y - oy, unit)))
+            })
+            .collect();
         pad_offsets.insert(part.reference.clone(), offs);
         // Initial position: lower-left corner in units.
         let (cx, cy) = match placed.get(part.reference.as_str()) {
@@ -143,7 +177,8 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
         let llx = div_round(cx, unit) - w / 2;
         let lly = div_round(cy, unit) - h / 2;
         centers_units.insert(part.reference.clone(), (llx + w / 2, lly + h / 2));
-        writeln!(pl, "{} {} {} : N", part.reference, llx.max(0), lly.max(0)).unwrap();
+        let orient = match rot { 90_000 => "W", 180_000 => "S", 270_000 => "E", _ => "N" };
+        writeln!(pl, "{} {} {} : {orient}{}", part.reference, llx.max(0), lly.max(0), if is_fixed { " /FIXED" } else { "" }).unwrap();
     }
     if !fails.is_empty() {
         return Err(fails);
@@ -197,7 +232,12 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
     let mut wts_body = String::new();
     let mut num_wts = 0usize;
     for (rule_idx, rule) in model.placement_rules.iter().enumerate() {
-        let eda_model::PlacementRule::Proximity { a, b, .. } = rule else { continue };
+        let eda_model::PlacementRule::Proximity { a, b, max_mm } = rule else { continue };
+        // A synthetic net pulls the pair to *touch*; a rule that allows
+        // 5 mm should pull far less than one that allows 1 mm, or the
+        // loose rules distort everything around them (a filter dragged
+        // onto its connector, away from the pin it feeds).
+        let weight = proximity_weight * (2.0 / max_mm.max(0.1)).min(1.0);
         let (Some(offs_a), Some(offs_b)) = (pad_offsets.get(a), pad_offsets.get(b)) else { continue };
         let (Some(&ca), Some(&cb)) = (centers_units.get(a), centers_units.get(b)) else { continue };
         let nearest = |offs: &BTreeMap<String, (i64, i64)>, center: (i64, i64), target: (i64, i64)| {
@@ -217,7 +257,7 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
         writeln!(net_body, "NetDegree : 2 {net_name}").unwrap();
         writeln!(net_body, "\t{a} I : {} {}", off_a.0, off_a.1).unwrap();
         writeln!(net_body, "\t{b} I : {} {}", off_b.0, off_b.1).unwrap();
-        writeln!(wts_body, "{net_name} {proximity_weight}").unwrap();
+        writeln!(wts_body, "{net_name} {weight:.3}").unwrap();
     }
     writeln!(wts, "UCLA wts 1.0\n\n# {stamp}\n").unwrap();
     wts.push_str(&wts_body);
@@ -226,7 +266,8 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
     writeln!(nets, "UCLA nets 1.0\n\nNumNets : {num_nets}\nNumPins : {num_pins}\n\n# {stamp}\n").unwrap();
     nets.push_str(&net_body);
 
-    let nodes_hdr = format!("UCLA nodes 1.0\n\nNumNodes : {}\nNumTerminals : 0\n\n# {stamp}\n\n", parts.len());
+    let n_fixed = parts.iter().filter(|p| fixed.contains(&p.reference)).count();
+    let nodes_hdr = format!("UCLA nodes 1.0\n\nNumNodes : {}\nNumTerminals : {n_fixed}\n\n# {stamp}\n\n", parts.len());
     let pl_hdr = format!("UCLA pl 1.0\n\n# {stamp}\n\n");
 
     let mut scl = String::new();
@@ -263,7 +304,15 @@ pub fn is_bookshelf_keyword(name: &str) -> bool {
 }
 
 pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, unit_um: i64) -> Result<Design, Vec<CheckResult>> {
+    from_bookshelf_pl_fixed(pl, design, model, unit_um, &BTreeSet::new())
+}
+
+/// [`from_bookshelf_pl`] for a problem written by [`to_bookshelf_fixed`]:
+/// `fixed` parts take their label side from `design`'s placement.
+pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintModel, unit_um: i64, fixed: &BTreeSet<String>) -> Result<Design, Vec<CheckResult>> {
     let unit = unit_um.max(1);
+    let prior: BTreeMap<&str, &FootprintInstance> =
+        design.placement.as_ref().map(|p| p.footprints.iter().map(|f| (f.id.as_str(), f)).collect()).unwrap_or_default();
     let outline: Vec<Point> = match design.placement.as_ref().map(|p| p.outline.clone()).or_else(|| model.board.outline.clone()) {
         Some(o) if o.len() >= 3 => o,
         _ => return Err(vec![CheckResult::fail("bookshelf_outline", "design", "no board outline")]),
@@ -296,9 +345,11 @@ pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, uni
             _ => (0, orient.starts_with('F')),
         };
         let (w, h) = if rot == 90_000 || rot == 270_000 { (hh * 2, hw * 2) } else { (hw * 2, hh * 2) };
-        // Node = keep-out (courtyard + label), see `to_bookshelf_weighted`;
-        // undo the node-centre offset to recover the part centre.
-        let ko = keepout_for((-w / 2, -h / 2, w / 2, h / 2), name, font, i64::MIN);
+        // Node = keep-out (courtyard + label), see `to_bookshelf_fixed`;
+        // undo the node-centre offset to recover the part centre. A fixed
+        // part was exported with its own label side; movable ones upright.
+        let label = if fixed.contains(name) { prior.get(name).map(|f| f.label).unwrap_or_default() } else { LabelSide::Above };
+        let ko = keepout_side((-w / 2, -h / 2, w / 2, h / 2), name, font, i64::MIN, label);
         let (ox, oy) = ((ko.0 + ko.2) / 2, (ko.1 + ko.3) / 2);
         let cx = min_x + (x * unit as f64).round() as i64 + (ko.2 - ko.0) / 2 - ox;
         let cy = min_y + (y * unit as f64).round() as i64 + (ko.3 - ko.1) / 2 - oy;
@@ -307,7 +358,7 @@ pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, uni
             at: Point { x: cx, y: cy },
             rot,
             side: if side { Side::Bottom } else { Side::Top },
-            label: Default::default(),
+            label,
         });
     }
     if !fails.is_empty() {
@@ -322,7 +373,7 @@ pub fn from_bookshelf_pl(pl: &str, design: &Design, model: &ConstraintModel, uni
     if !missing.is_empty() {
         return Err(vec![CheckResult::fail("bookshelf_missing_nodes", "pl", format!("parts absent from .pl: {}", missing.join(", ")))]);
     }
-    let _ = (placed_courtyard, to_board);
+    let _ = (placed_courtyard, keepout_for);
     Ok(out)
 }
 
@@ -340,6 +391,7 @@ mod tests {
             package: Some(pkg.into()),
             footprint: None,
             pins: (1..=n).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
+            edge: None,
         }
     }
 
@@ -391,7 +443,31 @@ mod tests {
         let bs = to_bookshelf_weighted(&d, &m, "t", 100, 77.0).unwrap();
         assert!(bs.nets.contains("NetDegree : 2 prox0"));
         assert!(bs.nets.contains("U1 I :"));
-        assert!(bs.wts.contains("prox0 77"));
+        // Weight scales with slack: 2 mm / 3 mm of the base 77.
+        assert!(bs.wts.contains("prox0 51.333"), "{}", bs.wts);
+        // A tight rule gets the full weight.
+        m.placement_rules[0] = eda_model::PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 1.0 };
+        let bs = to_bookshelf_weighted(&d, &m, "t", 100, 77.0).unwrap();
+        assert!(bs.wts.contains("prox0 77.000"), "{}", bs.wts);
+    }
+
+    #[test]
+    fn fixed_parts_are_terminals_with_rotation_and_label() {
+        let (mut d, m) = fixture();
+        {
+            let f = d.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "U1").unwrap();
+            f.rot = 90_000;
+            f.label = LabelSide::Below;
+        }
+        let fixed: BTreeSet<String> = ["U1".to_string()].into_iter().collect();
+        let bs = to_bookshelf_fixed(&d, &m, "t", 100, 1.0, &fixed).unwrap();
+        assert!(bs.nodes.contains("NumTerminals : 1"));
+        assert!(bs.nodes.lines().any(|l| l.starts_with("U1 ") && l.ends_with(" terminal")), "{}", bs.nodes);
+        assert!(bs.pl.lines().any(|l| l.starts_with("U1 ") && l.contains(": W /FIXED")), "{}", bs.pl);
+        let back = from_bookshelf_pl_fixed(&bs.pl, &d, &m, 100, &fixed).unwrap();
+        let u1 = back.placement.unwrap().footprints.into_iter().find(|f| f.id == "U1").unwrap();
+        assert_eq!(u1.rot, 90_000);
+        assert_eq!(u1.label, LabelSide::Below);
     }
 
     #[test]

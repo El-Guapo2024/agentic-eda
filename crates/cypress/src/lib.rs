@@ -12,10 +12,10 @@
 //! Locate the build with `CYPRESS_INSTALL` (default `~/ws/Cypress/install`)
 //! and `CYPRESS_PYTHON` (default `python`, i.e. whatever env is active).
 
-use eda_interchange::bookshelf::to_bookshelf_weighted;
-use eda_interchange::from_bookshelf_pl;
-use eda_model::footprint::{placed_courtyard, placed_keepout};
-use eda_model::ir::{Design, Point};
+use eda_interchange::bookshelf::{from_bookshelf_pl_fixed, to_bookshelf_fixed, Bookshelf, EDGE_PIN_GAP_UM};
+use eda_model::footprint::{is_edge_connector, placed_courtyard, placed_keepout, placed_pads, usable_edges};
+use eda_model::ir::{Design, LabelSide, Point};
+use std::collections::BTreeSet;
 use eda_model::{CheckResult, ConstraintModel, PlacementRule};
 use eda_place::Placer;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,8 @@ pub const UNIT_UM: i64 = 100;
 
 #[derive(Debug, Clone)]
 pub struct CypressOptions {
+    /// See `SolverSettings::fit_board_utilization`; 0 keeps the outline.
+    pub fit_board_utilization: f64,
     pub install: PathBuf,
     pub python: String,
     /// Scratch directory for Bookshelf files, config and results.
@@ -56,6 +58,7 @@ impl Default for CypressOptions {
     fn default() -> Self {
         let home = std::env::var("HOME").unwrap_or_default();
         CypressOptions {
+            fit_board_utilization: 0.25,
             install: std::env::var("CYPRESS_INSTALL").map(PathBuf::from).unwrap_or_else(|_| Path::new(&home).join("ws/Cypress/install")),
             python: std::env::var("CYPRESS_PYTHON").unwrap_or_else(|_| "python".into()),
             work_dir: std::env::temp_dir().join("eda-cypress"),
@@ -303,6 +306,23 @@ fn find_spot(
     None
 }
 
+/// Number of `Proximity` rules touching `id` that `design` violates.
+fn violations_for(model: &ConstraintModel, design: &Design, id: &str) -> usize {
+    let pl = design.placement.as_ref().unwrap();
+    let ct = |r: &str| pl.footprints.iter().find(|f| f.id == r).and_then(|f| placed_courtyard(model, model.part(r)?, f));
+    model
+        .placement_rules
+        .iter()
+        .filter(|r| match r {
+            PlacementRule::Proximity { a, b, max_mm } if a == id || b == id => match (ct(a), ct(b)) {
+                (Some(ca), Some(cb)) => rect_gap(ca, cb) / 1000.0 > *max_mm,
+                _ => false,
+            },
+            _ => false,
+        })
+        .count()
+}
+
 /// True when every `Proximity` rule touching any of `ids` is satisfied in
 /// `design` — used after a ripple move to confirm a displaced neighbour
 /// (or the mover/anchor) didn't break a rule of its own.
@@ -493,6 +513,15 @@ fn try_ripple(
 /// its own definition (e.g. wired to `eda-gates`' `check_placement`)
 /// instead of the crate-local `default_is_legal`.
 pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_legal: &dyn Fn(&Design) -> bool) -> Design {
+    legalize_proximity_pass_frozen(design, model, is_legal, &BTreeSet::new())
+}
+
+/// [`legalize_proximity_pass`] where `frozen` parts (pinned edge
+/// connectors) are never moved: a rule against a frozen part can only be
+/// met by moving the other part, so the search never even enumerates
+/// candidates for the frozen one (which used to burn half an hour on a
+/// 25 µm grid proving the obvious).
+pub fn legalize_proximity_pass_frozen(design: &Design, model: &ConstraintModel, is_legal: &dyn Fn(&Design) -> bool, frozen: &BTreeSet<String>) -> Design {
     const STEP_UM: i64 = 100;
     const FINE_STEP_UM: i64 = 25;
     let mut out = design.clone();
@@ -533,6 +562,10 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
             (b.as_str(), fb.clone(), pb, cb, a.as_str(), fa.clone(), pa, ca)
         };
 
+        let (small_frozen, large_frozen) = (frozen.contains(small_id), frozen.contains(large_id));
+        if small_frozen && large_frozen {
+            continue;
+        }
         let mut resolved = false;
         let t0 = std::time::Instant::now();
         let step = |n: u32, t: &std::time::Instant| {
@@ -541,18 +574,30 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
             }
         };
 
+        // A move of the smaller part must not leave more of its own rules
+        // broken than before (a cap with two anchors would otherwise be
+        // dragged back and forth, each rule undoing the last).
+        let before = violations_for(model, &out, small_id);
+        let accept_small = |trial: &Design| violations_for(model, trial, small_id) < before;
+
         // 1. Move the smaller part toward the larger (fixed) one.
         let box1 = clamp_box(rect_expand(large_ct, max_um), bounds);
-        if let Some((x, y, rot)) = find_spot(model, &out, small_id, small_part, &small_fp, box1, Some((large_ct, *max_mm)), &[], STEP_UM, is_legal) {
-            apply_move(&mut out, small_id, x, y, rot);
-            resolved = true;
+        if small_frozen {
+            // nothing: only the larger part may move
+        } else if let Some((x, y, rot)) = find_spot(model, &out, small_id, small_part, &small_fp, box1, Some((large_ct, *max_mm)), &[], STEP_UM, is_legal) {
+            let mut trial = out.clone();
+            apply_move(&mut trial, small_id, x, y, rot);
+            if accept_small(&trial) {
+                out = trial;
+                resolved = true;
+            }
         }
 
         step(1, &t0);
         // 2. Move the larger part toward the smaller (fixed) one instead —
         // only accepted if it doesn't break one of the larger part's own
         // other rules (e.g. dragging it out of range of a different anchor).
-        if !resolved {
+        if !resolved && !large_frozen {
             let box2 = clamp_box(rect_expand(small_ct, max_um), bounds);
             if let Some((x, y, rot)) = find_spot(model, &out, large_id, large_part, &large_fp, box2, Some((small_ct, *max_mm)), &[], STEP_UM, is_legal) {
                 let mut trial = out.clone();
@@ -566,7 +611,7 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
 
         step(2, &t0);
         // 3. Bounded ripple around the smaller part's best spot.
-        if !resolved {
+        if !resolved && !small_frozen {
             if let Some(trial) = try_ripple(model, &out, small_id, large_id, small_part, &small_fp, large_ct, *max_mm, bounds, max_um, STEP_UM, is_legal) {
                 out = trial;
                 resolved = true;
@@ -578,10 +623,18 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
         if !resolved {
             let wide_um = max_um + max_um / 2;
             let box1w = clamp_box(rect_expand(large_ct, wide_um), bounds);
-            if let Some((x, y, rot)) = find_spot(model, &out, small_id, small_part, &small_fp, box1w, Some((large_ct, *max_mm)), &[], FINE_STEP_UM, is_legal) {
-                apply_move(&mut out, small_id, x, y, rot);
-                resolved = true;
-            } else {
+            let mut moved_small = false;
+            if small_frozen {
+            } else if let Some((x, y, rot)) = find_spot(model, &out, small_id, small_part, &small_fp, box1w, Some((large_ct, *max_mm)), &[], FINE_STEP_UM, is_legal) {
+                let mut trial = out.clone();
+                apply_move(&mut trial, small_id, x, y, rot);
+                if accept_small(&trial) {
+                    out = trial;
+                    resolved = true;
+                    moved_small = true;
+                }
+            }
+            if !moved_small && !large_frozen {
                 let box2w = clamp_box(rect_expand(small_ct, wide_um), bounds);
                 if let Some((x, y, rot)) = find_spot(model, &out, large_id, large_part, &large_fp, box2w, Some((small_ct, *max_mm)), &[], FINE_STEP_UM, is_legal) {
                     let mut trial = out.clone();
@@ -607,13 +660,10 @@ pub fn legalize_proximity_pass(design: &Design, model: &ConstraintModel, is_lega
 /// Run Cypress on `design` (its placement/outline seeds the problem) and
 /// return a design with Cypress's placement. Precondition failures and
 /// subprocess errors come back as `CheckResult`s like every generator.
-pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o: &CypressOptions) -> Result<Design, Vec<CheckResult>> {
-    if !o.available() {
-        return Err(vec![CheckResult::fail("cypress_unavailable", o.install.display().to_string(), "no dreamplace/Placer.py there; build Cypress or set CYPRESS_INSTALL")]);
-    }
+/// Run Cypress once on a Bookshelf problem; `tag` names the work dir.
+fn run_cypress(bs: &Bookshelf, seed: u64, o: &CypressOptions, tag: &str) -> Result<(String, PathBuf), Vec<CheckResult>> {
     let name = "board";
-    let bs = to_bookshelf_weighted(design, model, name, UNIT_UM, o.proximity_weight)?;
-    let dir = o.work_dir.join(format!("{}-{seed}", std::process::id()));
+    let dir = o.work_dir.join(format!("{}-{seed}-{tag}", std::process::id()));
     let bs_dir = dir.join("bookshelf");
     std::fs::create_dir_all(&bs_dir).map_err(|e| io_fail("work dir", e))?;
     for (fname, content) in bs.files(name) {
@@ -644,13 +694,539 @@ pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o
     let log = std::fs::read_to_string(dir.join("DREAMPlace.log")).unwrap_or_default();
     check_cypress_log(&log).map_err(|hint| vec![CheckResult::fail("cypress_diverged", cfg_path.display().to_string(), hint)])?;
     let pl = std::fs::read_to_string(&pl_path).map_err(|e| io_fail("read .pl", e))?;
-    let mut placed = from_bookshelf_pl(&pl, design, model, UNIT_UM)?;
+    Ok((pl, cfg_path))
+}
+
+/// Spacing, µm, kept between two connectors pinned along one edge.
+const EDGE_SPACING_UM: i64 = 1000;
+/// Extra distance charged to an edge a connector must turn 90° to lie on.
+const ROTATE_PENALTY_UM: i64 = 10_000;
+
+/// Pin every edge connector to the board edge nearest to where Cypress's
+/// free run left it (long side along the edge, per
+/// [`eda_model::footprint::usable_edges`]), sliding connectors that share an
+/// edge apart so their keep-outs do not overlap. The label goes on the
+/// board side of the part (below at the top edge, above elsewhere).
+/// Returns the pinned design and the set of pinned ids; hard-fails when an
+/// edge cannot hold its connectors.
+pub fn pin_connectors_to_edges(design: &Design, model: &ConstraintModel) -> Result<(Design, BTreeSet<String>), Vec<CheckResult>> {
+    let mut out = design.clone();
+    let Some(pl) = out.placement.as_mut() else { return Ok((out, BTreeSet::new())) };
+    let bb = (
+        pl.outline.iter().map(|p| p.x).min().unwrap(),
+        pl.outline.iter().map(|p| p.y).min().unwrap(),
+        pl.outline.iter().map(|p| p.x).max().unwrap(),
+        pl.outline.iter().map(|p| p.y).max().unwrap(),
+    );
+    // Edge choice: nearest usable edge first, then rebalance — while an
+    // edge needs more length than it has, move the connector there whose
+    // second-best usable edge has the most room to spare. Edge 0 left,
+    // 1 right, 2 top, 3 bottom.
+    let edge_len = |e: u8| if e >= 2 { bb.2 - bb.0 } else { bb.3 - bb.1 } - 2 * EDGE_PIN_GAP_UM;
+    let mut cands: Vec<(usize, Vec<(u8, i64)>, i64)> = Vec::new(); // (index, usable (edge, gap) sorted, length along an edge)
+    for (i, f) in pl.footprints.iter().enumerate() {
+        let Some(part) = model.part(&f.id) else { continue };
+        if !is_edge_connector(part) {
+            continue;
+        }
+        let Some(r) = placed_courtyard(model, part, f) else { continue };
+        let Some(k) = placed_keepout(model, &pl.outline, part, f) else { continue };
+        // Every edge is a candidate: an elongated connector turns 90° to
+        // lie along an edge its long side does not already face. Gaps are
+        // measured to the part's centre so the turned cases compare fairly.
+        let (ul, ur, ut, ub) = usable_edges(r);
+        let (cx, cy) = ((r.0 + r.2) / 2, (r.1 + r.3) / 2);
+        let mut gaps: Vec<(u8, i64)> = [(ul, cx - bb.0), (ur, bb.2 - cx), (ut, cy - bb.1), (ub, bb.3 - cy)]
+            .iter()
+            .enumerate()
+            .map(|(e, (u, g))| (e as u8, if *u { *g } else { *g + ROTATE_PENALTY_UM }))
+            .collect();
+        gaps.sort_by_key(|(_, g)| *g);
+        // Along-edge length: the keep-out's long side.
+        cands.push((i, gaps, (k.2 - k.0).max(k.3 - k.1)));
+    }
+    let mut choice: Vec<u8> = cands.iter().map(|(_, g, _)| g[0].0).collect();
+    let need = |choice: &Vec<u8>, e: u8| -> i64 {
+        let n: Vec<i64> = cands.iter().zip(choice).filter(|(_, c)| **c == e).map(|((_, _, l), _)| *l).collect();
+        if n.is_empty() { 0 } else { n.iter().sum::<i64>() + EDGE_SPACING_UM * (n.len() as i64 - 1) }
+    };
+    loop {
+        let Some(over) = (0..4u8).find(|&e| need(&choice, e) > edge_len(e)) else { break };
+        // Best move: a connector on `over` with another usable edge that has room.
+        let mut best: Option<(i64, usize, u8)> = None; // (spare after move, cand idx, edge)
+        for (ci, (_, gaps, l)) in cands.iter().enumerate() {
+            if choice[ci] != over {
+                continue;
+            }
+            for &(e, _) in gaps.iter().skip(1) {
+                let spare = edge_len(e) - need(&choice, e) - l - EDGE_SPACING_UM;
+                if spare >= 0 && best.map_or(true, |(s, _, _)| spare > s) {
+                    best = Some((spare, ci, e));
+                }
+            }
+        }
+        match best {
+            Some((_, ci, e)) => choice[ci] = e,
+            None => break, // left for the row sweep below to report
+        }
+    }
+    let rotations: Vec<Option<u32>> = cands
+        .iter()
+        .zip(&choice)
+        .map(|((i, _, _), edge)| {
+            let f = &pl.footprints[*i];
+            let r = placed_courtyard(model, model.part(&f.id).unwrap(), f).unwrap();
+            let (ul, _, ut, _) = usable_edges(r);
+            let usable = if *edge >= 2 { ut } else { ul };
+            if usable { None } else { Some((f.rot + 90_000) % 360_000) }
+        })
+        .collect();
+    let mut on_edge: Vec<(u8, usize)> = Vec::new();
+    let mut pinned = BTreeSet::new();
+    for (ci, (i, _, _)) in cands.iter().enumerate() {
+        let edge = choice[ci];
+        let i = *i;
+        if let Some(rot) = rotations[ci] {
+            pl.footprints[i].rot = rot;
+        }
+        let f = &mut pl.footprints[i];
+        let part = model.part(&f.id).unwrap();
+        let r = placed_courtyard(model, part, f).unwrap();
+        let (hw, hh) = ((r.2 - r.0) / 2, (r.3 - r.1) / 2);
+        match edge {
+            0 => f.at.x = bb.0 + EDGE_PIN_GAP_UM + hw,
+            1 => f.at.x = bb.2 - EDGE_PIN_GAP_UM - hw,
+            2 => f.at.y = bb.1 + EDGE_PIN_GAP_UM + hh,
+            _ => f.at.y = bb.3 - EDGE_PIN_GAP_UM - hh,
+        }
+        f.label = if edge == 2 { LabelSide::Below } else { LabelSide::Above };
+        on_edge.push((edge, i));
+        pinned.insert(f.id.clone());
+    }
+    // Spread connectors sharing an edge: sweep along the edge, push each
+    // one past the previous keep-out, then pull the whole row back if it
+    // ran off the far end.
+    let mut fails = Vec::new();
+    // Vertical edges first; the horizontal rows then start past whatever
+    // sits in the corners, so a connector on the right edge and one on the
+    // bottom edge cannot meet at the corner.
+    for edge in [0u8, 1, 2, 3] {
+        let horizontal = edge >= 2; // along x
+        let mut ids: Vec<usize> = on_edge.iter().filter(|(e, _)| *e == edge).map(|(_, i)| *i).collect();
+        if ids.is_empty() {
+            continue;
+        }
+        let ko = |pl: &eda_model::ir::PlacementSection, i: usize| {
+            let f = &pl.footprints[i];
+            placed_keepout(model, &pl.outline, model.part(&f.id).unwrap(), f).unwrap()
+        };
+        let along = |k: (i64, i64, i64, i64)| if horizontal { (k.0, k.2) } else { (k.1, k.3) };
+        let (mut lo, mut hi) = if horizontal { (bb.0 + EDGE_PIN_GAP_UM, bb.2 - EDGE_PIN_GAP_UM) } else { (bb.1 + EDGE_PIN_GAP_UM, bb.3 - EDGE_PIN_GAP_UM) };
+        if horizontal {
+            for &(e, j) in &on_edge {
+                let k = ko(pl, j);
+                let vertical_overlap = if edge == 2 { k.1 < bb.1 + 2 * EDGE_PIN_GAP_UM + (k.3 - k.1) } else { k.3 > bb.3 - 2 * EDGE_PIN_GAP_UM - (k.3 - k.1) };
+                if e == 0 && vertical_overlap { lo = lo.max(k.2 + EDGE_SPACING_UM) }
+                if e == 1 && vertical_overlap { hi = hi.min(k.0 - EDGE_SPACING_UM) }
+            }
+        }
+        ids.sort_by_key(|&i| along(ko(pl, i)).0);
+        let mut cursor = lo;
+        for &i in &ids {
+            let k = along(ko(pl, i));
+            let shift = (cursor - k.0).max(0);
+            if horizontal { pl.footprints[i].at.x += shift } else { pl.footprints[i].at.y += shift }
+            cursor = k.1 + shift + EDGE_SPACING_UM;
+        }
+        let last = along(ko(pl, *ids.last().unwrap())).1;
+        let over = last - hi;
+        if over > 0 {
+            // Pull the row back toward the start, closing gaps from the end.
+            let mut cursor = hi;
+            for &i in ids.iter().rev() {
+                let k = along(ko(pl, i));
+                let shift = (k.1 - cursor).max(0);
+                if horizontal { pl.footprints[i].at.x -= shift } else { pl.footprints[i].at.y -= shift }
+                cursor = k.0 - shift - EDGE_SPACING_UM;
+            }
+            if along(ko(pl, ids[0])).0 < lo {
+                let edge_name = ["left", "right", "top", "bottom"][edge as usize];
+                let names: Vec<&str> = ids.iter().map(|&i| pl.footprints[i].id.as_str()).collect();
+                fails.push(CheckResult::fail(
+                    "edge_connectors_overflow",
+                    edge_name,
+                    format!("connectors {} do not fit along this edge ({} µm short); widen the board or move one to another edge", names.join(", "), over),
+                ).with_detail(serde_json::json!({ "suggest": "board.outline", "edge": edge_name, "short_um": over })));
+            }
+        }
+    }
+    if !fails.is_empty() {
+        return Err(fails);
+    }
+    Ok((out, pinned))
+}
+
+/// The model plus one `Proximity` rule per decoupling capacitor (at
+/// [`eda_model::DECOUPLING_MAX_GAP_UM`]) toward *one* IC it decouples —
+/// the gate wants each cap near some IC, and a rail cap shares its nets
+/// with every IC on the rail. ICs are dealt caps evenly, nearest first
+/// by `placed` (the free run), so each IC gets its own before any gets a
+/// second. Caps the intent already constrains keep the intent's rule.
+fn with_decoupling_rules(model: &ConstraintModel, placed: &Design) -> ConstraintModel {
+    let mut m = model.clone();
+    let covered = |c: &str| model.placement_rules.iter().any(|r| matches!(r, PlacementRule::Proximity { a, b, .. } if a == c || b == c));
+    let pl = placed.placement.as_ref();
+    let ct = |id: &str| pl.and_then(|p| p.footprints.iter().find(|f| f.id == id)).and_then(|f| placed_courtyard(model, model.part(id)?, f));
+    let pairs = eda_model::decoupling_pairs(model);
+    let mut caps: Vec<String> = pairs.iter().map(|(c, _)| c.clone()).collect();
+    caps.dedup();
+    let mut dealt: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    // Caps with the fewest candidate ICs choose first.
+    caps.sort_by_key(|c| (pairs.iter().filter(|(cc, _)| cc == c).count(), c.clone()));
+    for c in caps {
+        if covered(&c) {
+            continue;
+        }
+        let Some(rc) = ct(&c) else { continue };
+        let pick = pairs
+            .iter()
+            .filter(|(cc, _)| *cc == c)
+            .filter_map(|(_, u)| ct(u).map(|ru| (*dealt.get(u).unwrap_or(&0), rect_gap(rc, ru) as i64, u.clone())))
+            .min();
+        let Some((_, _, u)) = pick else { continue };
+        *dealt.entry(u.clone()).or_default() += 1;
+        m.placement_rules.push(PlacementRule::Proximity { a: c, b: u, max_mm: eda_model::DECOUPLING_MAX_GAP_UM as f64 / 1000.0 });
+    }
+    m
+}
+
+fn orient(a: Point, b: Point, c: Point) -> i64 {
+    ((b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128).signum() as i64
+}
+
+/// Crossing pairs of 2-pin net stubs where both stubs end on a free 2-pin
+/// part — the same count as the `placement_stub_crossings` gate. Each
+/// entry names the free part on each stub to swap.
+fn stub_crossings(design: &Design, model: &ConstraintModel) -> Vec<(String, String)> {
+    let Some(pl) = design.placement.as_ref() else { return vec![] };
+    let mut centers: std::collections::HashMap<String, Point> = std::collections::HashMap::new();
+    for fp in &pl.footprints {
+        let Some(part) = model.part(&fp.id) else { continue };
+        if let Some(pads) = placed_pads(model, part, fp) {
+            for pad in pads {
+                centers.insert(format!("{}.{}", fp.id, pad.number), pad.center);
+            }
+        }
+    }
+    // (a, b, free part on this stub)
+    let mut stubs: Vec<(Point, Point, Option<String>)> = Vec::new();
+    for net in &model.nets {
+        if net.pins.len() != 2 {
+            continue;
+        }
+        let (Some(ra), Some(rb)) = (net.pins[0].split_once('.'), net.pins[1].split_once('.')) else { continue };
+        if ra.0 == rb.0 {
+            continue;
+        }
+        let (Some(&a), Some(&b)) = (centers.get(&net.pins[0]), centers.get(&net.pins[1])) else { continue };
+        let free = [ra.0, rb.0].iter().find(|r| model.part(r).map_or(false, eda_model::is_free_two_pin)).map(|r| r.to_string());
+        stubs.push((a, b, free));
+    }
+    let mut out = Vec::new();
+    for i in 0..stubs.len() {
+        for j in i + 1..stubs.len() {
+            let (s, t) = (&stubs[i], &stubs[j]);
+            let (Some(fs), Some(ft)) = (&s.2, &t.2) else { continue };
+            if fs == ft {
+                continue;
+            }
+            let o = [orient(s.0, s.1, t.0), orient(s.0, s.1, t.1), orient(t.0, t.1, s.0), orient(t.0, t.1, s.1)];
+            if o.iter().all(|v| *v != 0) && o[0] != o[1] && o[2] != o[3] {
+                out.push((fs.clone(), ft.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Number of `Proximity` rules `design` violates.
+fn total_violations(model: &ConstraintModel, design: &Design) -> usize {
+    let pl = design.placement.as_ref().unwrap();
+    let ct = |r: &str| pl.footprints.iter().find(|f| f.id == r).and_then(|f| placed_courtyard(model, model.part(r)?, f));
+    model
+        .placement_rules
+        .iter()
+        .filter(|r| match r {
+            PlacementRule::Proximity { a, b, max_mm } => match (ct(a), ct(b)) {
+                (Some(ca), Some(cb)) => rect_gap(ca, cb) / 1000.0 > *max_mm,
+                _ => false,
+            },
+            _ => false,
+        })
+        .count()
+}
+
+/// Put `pinned` parts back exactly where `source` has them: the Bookshelf
+/// round trip rounds to its 100 µm unit, and a terminal must not drift.
+fn restore_pinned(design: &mut Design, source: &Design, pinned: &BTreeSet<String>) {
+    let Some(src) = source.placement.as_ref() else { return };
+    let Some(pl) = design.placement.as_mut() else { return };
+    for f in pl.footprints.iter_mut().filter(|f| pinned.contains(&f.id)) {
+        if let Some(s) = src.footprints.iter().find(|s| s.id == f.id) {
+            f.at = s.at;
+            f.rot = s.rot;
+            f.label = s.label;
+        }
+    }
+}
+
+/// Swap pairs of free 2-pin parts whose net stubs cross (what a reviewer
+/// sees as "swap those two"), accepting a swap when it is legal, removes
+/// crossings and breaks no extra proximity rule. Deterministic, bounded.
+pub fn uncross_stubs(design: &Design, model: &ConstraintModel, is_legal: &dyn Fn(&Design) -> bool) -> Design {
+    let mut out = design.clone();
+    for _round in 0..8 {
+        let crossings = stub_crossings(&out, model);
+        if crossings.is_empty() {
+            break;
+        }
+        let before = (crossings.len(), total_violations(model, &out));
+        let mut improved = false;
+        'pairs: for (a, b) in crossings {
+            // Moves, cheapest first: turn one part 180° (its two pads trade
+            // places), turn the other, swap the two, swap and turn.
+            let moves: [(bool, bool, bool); 6] = [(false, true, false), (false, false, true), (true, false, false), (true, true, false), (true, false, true), (true, true, true)];
+            for (swap, turn_a, turn_b) in moves {
+                let mut trial = out.clone();
+                {
+                    let pl = trial.placement.as_mut().unwrap();
+                    let ia = pl.footprints.iter().position(|f| f.id == a);
+                    let ib = pl.footprints.iter().position(|f| f.id == b);
+                    let (Some(ia), Some(ib)) = (ia, ib) else { continue 'pairs };
+                    if swap {
+                        let (fa, fb) = (pl.footprints[ia].clone(), pl.footprints[ib].clone());
+                        pl.footprints[ia].at = fb.at;
+                        pl.footprints[ia].rot = fb.rot;
+                        pl.footprints[ia].label = fb.label;
+                        pl.footprints[ib].at = fa.at;
+                        pl.footprints[ib].rot = fa.rot;
+                        pl.footprints[ib].label = fa.label;
+                    }
+                    if turn_a {
+                        pl.footprints[ia].rot = (pl.footprints[ia].rot + 180_000) % 360_000;
+                    }
+                    if turn_b {
+                        pl.footprints[ib].rot = (pl.footprints[ib].rot + 180_000) % 360_000;
+                    }
+                }
+                let after = (stub_crossings(&trial, model).len(), total_violations(model, &trial));
+                if after.0 < before.0 && after.1 <= before.1 && is_legal(&trial) {
+                    if dbg_on() {
+                        eprintln!("DEBUG_UNCROSS {a}/{b} swap={swap} turn=({turn_a},{turn_b}): crossings {} -> {}", before.0, after.0);
+                    }
+                    out = trial;
+                    improved = true;
+                    break 'pairs;
+                }
+            }
+        }
+        if !improved {
+            break;
+        }
+    }
+    out
+}
+
+/// Margin, µm, kept between the outermost part and a trimmed edge.
+const TRIM_MARGIN_UM: i64 = 1500;
+
+/// Cut blank bands off the sides of a rectangular outline that hold no
+/// pinned connector, keeping [`TRIM_MARGIN_UM`] beyond the outermost
+/// keep-out. Parts keep their board coordinates (shifted when a min side
+/// moves). `None` when nothing is worth trimming (< 2 mm).
+fn trim_empty_edges(design: &Design, model: &ConstraintModel, pinned: &BTreeSet<String>) -> Option<Design> {
+    let pl = design.placement.as_ref()?;
+    if pl.outline.len() != 4 {
+        return None;
+    }
+    let (x0, y0, x1, y1) = (
+        pl.outline.iter().map(|p| p.x).min()?,
+        pl.outline.iter().map(|p| p.y).min()?,
+        pl.outline.iter().map(|p| p.x).max()?,
+        pl.outline.iter().map(|p| p.y).max()?,
+    );
+    if !pl.outline.iter().all(|p| (p.x == x0 || p.x == x1) && (p.y == y0 || p.y == y1)) {
+        return None;
+    }
+    let kos: Vec<(bool, (i64, i64, i64, i64))> = pl
+        .footprints
+        .iter()
+        .filter_map(|f| Some((pinned.contains(&f.id), placed_keepout(model, &pl.outline, model.part(&f.id)?, f)?)))
+        .collect();
+    let used = (
+        kos.iter().map(|(_, k)| k.0).min()?,
+        kos.iter().map(|(_, k)| k.1).min()?,
+        kos.iter().map(|(_, k)| k.2).max()?,
+        kos.iter().map(|(_, k)| k.3).max()?,
+    );
+    // An edge with a pinned connector on it is not trimmed.
+    let near = |k: (i64, i64, i64, i64), edge: u8| match edge {
+        0 => k.0 - x0 < 2 * EDGE_PIN_GAP_UM,
+        1 => x1 - k.2 < 2 * EDGE_PIN_GAP_UM,
+        2 => k.1 - y0 < 2 * EDGE_PIN_GAP_UM,
+        _ => y1 - k.3 < 2 * EDGE_PIN_GAP_UM,
+    };
+    let held = |edge: u8| kos.iter().any(|(p, k)| *p && near(*k, edge));
+    let mut n = (x0, y0, x1, y1);
+    if !held(0) && used.0 - x0 > TRIM_MARGIN_UM + 2000 { n.0 = used.0 - TRIM_MARGIN_UM; }
+    if !held(1) && x1 - used.2 > TRIM_MARGIN_UM + 2000 { n.2 = used.2 + TRIM_MARGIN_UM; }
+    if !held(2) && used.1 - y0 > TRIM_MARGIN_UM + 2000 { n.1 = used.1 - TRIM_MARGIN_UM; }
+    if !held(3) && y1 - used.3 > TRIM_MARGIN_UM + 2000 { n.3 = used.3 + TRIM_MARGIN_UM; }
+    if n == (x0, y0, x1, y1) {
+        return None;
+    }
+    // Whole millimetres, origin back at the old min corner.
+    let w = ((n.2 - n.0) as f64 / 1000.0).ceil() as i64 * 1000;
+    let h = ((n.3 - n.1) as f64 / 1000.0).ceil() as i64 * 1000;
+    let (dx, dy) = (n.0 - x0, n.1 - y0);
+    let mut out = design.clone();
+    let p = out.placement.as_mut()?;
+    p.outline = vec![Point { x: x0, y: y0 }, Point { x: x0 + w, y: y0 }, Point { x: x0 + w, y: y0 + h }, Point { x: x0, y: y0 + h }];
+    for f in &mut p.footprints {
+        f.at = Point { x: f.at.x - dx, y: f.at.y - dy };
+    }
+    eprintln!("cypress: trimmed blank edges, board {}x{} -> {}x{} mm", (x1 - x0) / 1000, (y1 - y0) / 1000, w / 1000, h / 1000);
+    Some(out)
+}
+
+/// Sum of every part's keep-out area (courtyard + label), µm².
+fn keepout_area(design: &Design, model: &ConstraintModel) -> f64 {
+    let Some(pl) = design.placement.as_ref() else { return 0.0 };
+    pl.footprints.iter().filter_map(|f| model.part(&f.id).and_then(|p| placed_keepout(model, &pl.outline, p, f))).map(|k| ((k.2 - k.0) as f64) * ((k.3 - k.1) as f64)).sum()
+}
+
+/// Shrink a rectangular outline (axis-aligned, 4 corners) about its
+/// min corner so the parts' keep-out area is `util` of the board, keeping
+/// the aspect ratio and never growing it. `scale_floor` bounds the shrink
+/// from below (1.0 = as written). Non-rectangular outlines are kept.
+fn fit_outline(design: &Design, model: &ConstraintModel, util: f64, scale_floor: f64) -> Design {
+    let mut out = design.clone();
+    let Some(pl) = out.placement.as_mut() else { return out };
+    if util <= 0.0 || pl.outline.len() != 4 {
+        return out;
+    }
+    let (x0, y0, x1, y1) = (
+        pl.outline.iter().map(|p| p.x).min().unwrap(),
+        pl.outline.iter().map(|p| p.y).min().unwrap(),
+        pl.outline.iter().map(|p| p.x).max().unwrap(),
+        pl.outline.iter().map(|p| p.y).max().unwrap(),
+    );
+    let rect = pl.outline.iter().all(|p| (p.x == x0 || p.x == x1) && (p.y == y0 || p.y == y1));
+    if !rect {
+        return out;
+    }
+    let area = ((x1 - x0) as f64) * ((y1 - y0) as f64);
+    let want = keepout_area(design, model) / util;
+    let scale = (want / area).sqrt().max(scale_floor).min(1.0);
+    if scale >= 0.999 {
+        return out;
+    }
+    // Round the new size up to whole millimetres.
+    let w = ((((x1 - x0) as f64) * scale / 1000.0).ceil() * 1000.0) as i64;
+    let h = ((((y1 - y0) as f64) * scale / 1000.0).ceil() * 1000.0) as i64;
+    pl.outline = vec![Point { x: x0, y: y0 }, Point { x: x0 + w, y: y0 }, Point { x: x0 + w, y: y0 + h }, Point { x: x0, y: y0 + h }];
+    // Parts placed on the old outline start at the new centre; Cypress
+    // spreads them.
+    for f in &mut pl.footprints {
+        f.at = Point { x: x0 + w / 2, y: y0 + h / 2 };
+    }
+    out
+}
+
+/// Run Cypress on `design` (its placement/outline seeds the problem) and
+/// return a design with Cypress's placement: a free run to learn which edge
+/// each connector wants, then a second run with the connectors pinned on
+/// their edges as fixed terminals. Precondition failures and subprocess
+/// errors come back as `CheckResult`s like every generator.
+pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o: &CypressOptions) -> Result<Design, Vec<CheckResult>> {
+    if !o.available() {
+        return Err(vec![CheckResult::fail("cypress_unavailable", o.install.display().to_string(), "no dreamplace/Placer.py there; build Cypress or set CYPRESS_INSTALL")]);
+    }
+    let name = "board";
+    let none = BTreeSet::new();
+    let base_model = model;
+    // Seed design: the outline from the intent (or the existing placement)
+    // with every part at the centre, the shape `to_bookshelf_fixed` reads.
+    let model = base_model;
+    let mut seed_design = design.clone();
+    if seed_design.placement.is_none() {
+        let outline = model.board.outline.clone().unwrap_or_default();
+        let c = Point {
+            x: (outline.iter().map(|p| p.x).min().unwrap_or(0) + outline.iter().map(|p| p.x).max().unwrap_or(0)) / 2,
+            y: (outline.iter().map(|p| p.y).min().unwrap_or(0) + outline.iter().map(|p| p.y).max().unwrap_or(0)) / 2,
+        };
+        seed_design.placement = Some(eda_model::ir::PlacementSection {
+            outline,
+            footprints: model.parts.iter().map(|p| eda_model::ir::FootprintInstance { id: p.reference.clone(), at: c, rot: 0, side: eda_model::ir::Side::Top, label: LabelSide::Above }).collect(),
+        });
+    }
+    // Board fit is a search, not a fallback: start at the target
+    // utilisation and step the board back toward the intent's outline only
+    // when the edge connectors do not fit along its edges.
+    let mut scale_floor = 0.0;
+    let mut placed = loop {
+        let fitted = fit_outline(&seed_design, model, o.fit_board_utilization, scale_floor);
+        let bs = to_bookshelf_fixed(&fitted, base_model, name, UNIT_UM, o.proximity_weight, &none)?;
+        let (pl, _) = run_cypress(&bs, seed, o, "free")?;
+        let free = from_bookshelf_pl_fixed(&pl, &fitted, base_model, UNIT_UM, &none)?;
+        let model = &with_decoupling_rules(base_model, &free);
+        match pin_connectors_to_edges(&free, model) {
+            Ok((pinned_design, pinned)) => {
+                if pinned.is_empty() {
+                    let legal = |d: &Design| default_is_legal(d, model);
+                    let placed = legalize_proximity_pass(&free, model, &legal);
+                    break uncross_stubs(&placed, model, &legal);
+                }
+                let bs = to_bookshelf_fixed(&pinned_design, model, name, UNIT_UM, o.proximity_weight, &pinned)?;
+                let (pl, _) = run_cypress(&bs, seed, o, "pinned")?;
+                let mut placed = from_bookshelf_pl_fixed(&pl, &pinned_design, model, UNIT_UM, &pinned)?;
+                restore_pinned(&mut placed, &pinned_design, &pinned);
+                // Trim empty bands off edges that hold no connector (the
+                // free run's connectors pull everything to their edges and
+                // leave the far side blank), then place once more.
+                for round in 0..2 {
+                    let Some(trimmed) = trim_empty_edges(&placed, model, &pinned) else { break };
+                    let bs = to_bookshelf_fixed(&trimmed, model, name, UNIT_UM, o.proximity_weight, &pinned)?;
+                    let (pl, _) = run_cypress(&bs, seed, o, &format!("trimmed{round}"))?;
+                    placed = from_bookshelf_pl_fixed(&pl, &trimmed, model, UNIT_UM, &pinned)?;
+                    restore_pinned(&mut placed, &trimmed, &pinned);
+                }
+                // Pinned connectors stay where the edge pass put them.
+                let frozen: Vec<(String, Point, u32)> = placed.placement.as_ref().unwrap().footprints.iter().filter(|f| pinned.contains(&f.id)).map(|f| (f.id.clone(), f.at, f.rot)).collect();
+                let legal = |d: &Design| {
+                    default_is_legal(d, model)
+                        && frozen.iter().all(|(id, at, rot)| d.placement.as_ref().unwrap().footprints.iter().any(|f| &f.id == id && f.at == *at && f.rot == *rot))
+                };
+                // The .wts pull rarely satisfies every rule exactly — pin it
+                // down deterministically. No fallback: an unsatisfiable pair
+                // is left violated, so `placement_proximity` still fails.
+                placed = legalize_proximity_pass_frozen(&placed, model, &legal, &pinned);
+                placed = uncross_stubs(&placed, model, &legal);
+                break placed;
+            }
+            Err(fails) => {
+                let fitted_scale = fitted.placement.as_ref().map(|p| (p.outline.iter().map(|q| q.x).max().unwrap() - p.outline.iter().map(|q| q.x).min().unwrap()) as f64).unwrap_or(1.0)
+                    / seed_design.placement.as_ref().map(|p| (p.outline.iter().map(|q| q.x).max().unwrap() - p.outline.iter().map(|q| q.x).min().unwrap()) as f64).unwrap_or(1.0);
+                if fitted_scale >= 0.999 {
+                    return Err(fails);
+                }
+                eprintln!("cypress: board fit at {:.2} of the intent outline leaves no room for the edge connectors; trying larger", fitted_scale);
+                scale_floor = (fitted_scale * 1.25).min(1.0);
+            }
+        }
+    };
     placed.provenance.seed = seed;
     placed.provenance.engine_version = format!("cypress@{}", o.install.display());
-    // The .wts pull (above) rarely satisfies every rule exactly — pin it
-    // down deterministically. No fallback: an unsatisfiable pair is left
-    // violated, so `placement_proximity` still fails on it.
-    placed = legalize_proximity_pass(&placed, model, &|d| default_is_legal(d, model));
     Ok(placed)
 }
 

@@ -53,10 +53,23 @@ index 374418b..1bfd5a6 100644
          # run RSMT
          with torch.no_grad():
 diff --git a/dreamplace/PlaceDB.py b/dreamplace/PlaceDB.py
-index 3eacb53..062359e 100644
+index 3eacb53..5c142e6 100644
 --- a/dreamplace/PlaceDB.py
 +++ b/dreamplace/PlaceDB.py
-@@ -1485,8 +1485,8 @@ row height = %g, site width = %g
+@@ -1014,8 +1014,10 @@ class PlaceDB(object):
+         self.num_btm_phy_nodes = self.num_btm_movable_nodes + self.num_btm_fixed_nodes
+         self.top_fixed_nodes_idx = np.where(self.top_nodes_idx >= self.num_movable_nodes)[0]
+         self.btm_fixed_nodes_idx = np.where(self.btm_nodes_idx >= self.num_movable_nodes)[0]
+-        self.top_movable_macro_mask = self.movable_macro_mask[self.top_nodes_idx]
+-        self.btm_movable_macro_mask = self.movable_macro_mask[self.btm_nodes_idx]
++        # movable_macro_mask covers movable nodes only; terminals (fixed
++        # nodes) sit past num_movable_nodes and must not index into it.
++        self.top_movable_macro_mask = self.movable_macro_mask[self.top_nodes_idx[self.top_nodes_idx < self.num_movable_nodes]]
++        self.btm_movable_macro_mask = self.movable_macro_mask[self.btm_nodes_idx[self.btm_nodes_idx < self.num_movable_nodes]]
+ 
+     def initialize(self, params):
+         """
+@@ -1485,8 +1487,8 @@ row height = %g, site width = %g
          tt = time.time()
          logging.info("writing to %s" % (pl_file))
          content = "UCLA pl 1.0\n"
@@ -525,3 +538,9 @@ index 6fcc941..41511b9 100644
      switch (_st) {                                                                    \
        DREAMPLACE_PRIVATE_CASE_TYPE(NAME, at::ScalarType::Float, float, __VA_ARGS__)   \
        DREAMPLACE_PRIVATE_CASE_TYPE(NAME, at::ScalarType::Double, double, __VA_ARGS__) \
+diff --git a/thirdparty/Limbo b/thirdparty/Limbo
+--- a/thirdparty/Limbo
++++ b/thirdparty/Limbo
+@@ -1 +1 @@
+-Subproject commit e3922b37abcecbd65f25ed579063c1a6c0d6d88c
++Subproject commit e3922b37abcecbd65f25ed579063c1a6c0d6d88c-dirty

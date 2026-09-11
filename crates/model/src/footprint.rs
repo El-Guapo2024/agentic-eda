@@ -544,3 +544,45 @@ mod tests {
         assert_eq!(x0, -x1, "headers are centred");
     }
 }
+
+/// An edge connector: `Part::edge` when set, else a value/mpn naming a
+/// thing a cable plugs into (USB, jack, terminal block, receptacle,
+/// socket, barrel, RJ45, SMA). Shared by the placement gate, the
+/// annealer and the Cypress edge pass so they cannot disagree.
+pub fn is_edge_connector(part: &Part) -> bool {
+    if let Some(e) = part.edge {
+        return e;
+    }
+    // Keywords only on connector-class references (J, P, X): a "USB ESD
+    // array" (D2) or a "USB-UART bridge" (U9) is not a connector.
+    let r = part.reference.as_str();
+    if !(r.starts_with('J') || r.starts_with('P') || r.starts_with('X')) {
+        return false;
+    }
+    let text = format!("{} {}", part.value.clone().unwrap_or_default(), part.mpn.clone().unwrap_or_default()).to_ascii_lowercase();
+    ["usb", "jack", "terminal", "receptacle", "socket", "barrel", "rj45", "sma"].iter().any(|k| text.contains(k))
+}
+
+/// Which board edges a connector courtyard may lie along: an elongated
+/// connector (aspect > 1.3) only counts the two edges parallel to its long
+/// side — a header touching the edge with its short end is not on the
+/// edge, its pins point into the board. Returns `(left, right, top, bottom)`
+/// usable flags.
+pub fn usable_edges(r: (Um, Um, Um, Um)) -> (bool, bool, bool, bool) {
+    let (w, h) = (r.2 - r.0, r.3 - r.1);
+    if w as f64 > 1.3 * h as f64 {
+        (false, false, true, true)
+    } else if h as f64 > 1.3 * w as f64 {
+        (true, true, false, false)
+    } else {
+        (true, true, true, true)
+    }
+}
+
+/// Gap from a connector courtyard to the nearest usable board edge (see
+/// [`usable_edges`]); `bb` is the outline bounding box.
+pub fn edge_connector_gap(r: (Um, Um, Um, Um), bb: (Um, Um, Um, Um)) -> Um {
+    let (l, rt, t, b) = (r.0 - bb.0, bb.2 - r.2, r.1 - bb.1, bb.3 - r.3);
+    let (ul, ur, ut, ub) = usable_edges(r);
+    [(ul, l), (ur, rt), (ut, t), (ub, b)].iter().filter(|(u, _)| *u).map(|(_, g)| *g).min().unwrap_or(l.min(rt).min(t).min(b))
+}

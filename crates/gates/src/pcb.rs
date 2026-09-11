@@ -259,6 +259,9 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
     if rules_ok {
         out.push(CheckResult::pass("placement_proximity"));
     }
+    // Locality: connectors on the edge, board used, decoupling close, nets
+    // compact, no crossed stubs. One gate, so no caller can forget them.
+    out.extend(check_placement_locality(design, model));
     out
 }
 
@@ -344,9 +347,8 @@ pub const EDGE_CONNECTOR_MAX_GAP_UM: i64 = 1500;
 pub const BOARD_USE_MAX_IMBALANCE: f64 = 0.15;
 /// … and must span at least this fraction of each board dimension.
 pub const BOARD_USE_MIN_SPAN: f64 = 0.5;
-/// Max courtyard gap, µm, from a decoupling capacitor to the IC it
-/// decouples (shares both of its nets with).
-pub const DECOUPLING_MAX_GAP_UM: i64 = 3000;
+/// See [`eda_model::DECOUPLING_MAX_GAP_UM`].
+pub const DECOUPLING_MAX_GAP_UM: i64 = eda_model::DECOUPLING_MAX_GAP_UM;
 /// A net's pad bounding-box half-perimeter may not exceed this multiple of
 /// its lower bound, `2·sqrt(Σ member courtyard areas)` — roughly the HPWL
 /// the net would have with its members packed touching.
@@ -368,35 +370,19 @@ pub const NET_COMPACTNESS_MAX_MEMBERS: usize = 6;
 /// routing matter, not a placement defect.
 pub const STUB_CROSSING_MAX_RATIO: f64 = 0.0;
 
-/// A part the placer can freely move to uncross a stub: two pins, not a
-/// connector or an IC.
+/// See [`eda_model::is_free_two_pin`].
 pub fn is_free_two_pin(part: &eda_model::Part) -> bool {
-    part.pins.len() == 2 && !part.reference.starts_with('J') && !part.reference.starts_with('U')
+    eda_model::is_free_two_pin(part)
 }
 
-/// Reference `J…` (jacks/headers/connectors) or a value/mpn that says so.
+/// See [`eda_model::footprint::is_edge_connector`].
 pub fn is_edge_connector(part: &eda_model::Part) -> bool {
-    let r = part.reference.as_str();
-    let by_ref = r.starts_with('J') && r[1..].chars().all(|c| c.is_ascii_digit()) && r.len() > 1;
-    let text = format!("{} {}", part.value.clone().unwrap_or_default(), part.mpn.clone().unwrap_or_default()).to_ascii_lowercase();
-    let by_text = ["header", "hdr", "conn", "usb", "jack", "terminal", "receptacle"].iter().any(|k| text.contains(k));
-    by_ref || by_text
+    eda_model::footprint::is_edge_connector(part)
 }
 
-/// Gap from a connector courtyard to the nearest *usable* board edge: an
-/// elongated connector (aspect > 1.3) only counts the two edges parallel
-/// to its long side — a header touching the edge with its short end is
-/// not on the edge, its pins point into the board.
+/// See [`eda_model::footprint::edge_connector_gap`].
 pub fn edge_connector_gap(r: Rect, bb: (Um, Um, Um, Um)) -> Um {
-    let (w, h) = (r.2 - r.0, r.3 - r.1);
-    let (left, right, top, bottom) = (r.0 - bb.0, bb.2 - r.2, r.1 - bb.1, bb.3 - r.3);
-    if w as f64 > 1.3 * h as f64 {
-        top.min(bottom)
-    } else if h as f64 > 1.3 * w as f64 {
-        left.min(right)
-    } else {
-        left.min(right).min(top).min(bottom)
-    }
+    eda_model::footprint::edge_connector_gap((r.0, r.1, r.2, r.3), bb)
 }
 
 fn placement_edge_connector(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), out: &mut Vec<CheckResult>) {
@@ -459,37 +445,22 @@ fn placement_board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um)
     }
 }
 
-/// Decoupling pairs: a 2-pin `C…` part and a `U…` part that has pins on
-/// both of the capacitor's nets.
+/// See [`eda_model::decoupling_pairs`].
 pub fn decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
-    let net_of_pin: HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
-    let mut pairs = Vec::new();
-    for c in &model.parts {
-        if !c.reference.starts_with('C') || c.pins.len() != 2 {
-            continue;
-        }
-        let nets: Vec<&str> = c.pins.iter().filter_map(|p| net_of_pin.get(format!("{}.{}", c.reference, p.number).as_str()).copied()).collect();
-        if nets.len() != 2 || nets[0] == nets[1] {
-            continue;
-        }
-        for u in &model.parts {
-            if !u.reference.starts_with('U') {
-                continue;
-            }
-            let has = |net: &str| u.pins.iter().any(|p| net_of_pin.get(format!("{}.{}", u.reference, p.number).as_str()) == Some(&net));
-            if has(nets[0]) && has(nets[1]) {
-                pairs.push((c.reference.clone(), u.reference.clone()));
-            }
-        }
-    }
-    pairs
+    eda_model::decoupling_pairs(model)
 }
 
 fn placement_decoupling(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out: &mut Vec<CheckResult>) {
     let mut ok = true;
     let pairs = decoupling_pairs(model);
     let caps: std::collections::BTreeSet<&str> = pairs.iter().map(|(c, _)| c.as_str()).collect();
+    // A cap the intent already places (a Proximity rule, e.g. a
+    // regulator's output cap) is judged by that rule, not by this guess.
+    let ruled = |c: &str| model.placement_rules.iter().any(|r| matches!(r, eda_model::PlacementRule::Proximity { a, b, .. } if a == c || b == c));
     for c in caps {
+        if ruled(c) {
+            continue;
+        }
         let Some(rc) = courtyards.get(c) else { continue };
         let mut best: Option<(f64, &str)> = None;
         for (_, u) in pairs.iter().filter(|(cc, _)| cc == c) {
@@ -533,6 +504,23 @@ fn placement_net_compactness(pl: &eda_model::ir::PlacementSection, model: &Const
             continue;
         }
         if members.iter().any(|m| model.part(m).map_or(false, is_edge_connector)) {
+            continue;
+        }
+        // Where a net runs is set by its anchors: a net between two ICs
+        // (each pulled to its own connector), or one hop from an edge
+        // connector through a filter part, spans the board legitimately.
+        // Judge only local clusters: at most one IC, and no member that
+        // also sits on a net touching an edge connector.
+        let ics = members.iter().filter(|m| m.starts_with('U')).count();
+        if ics > 1 {
+            continue;
+        }
+        let touches_edge = |part: &str| {
+            model.nets.iter().filter(|n| n.pins.iter().any(|p| p.split_once('.').map_or(false, |(r, _)| r == part))).any(|n| {
+                n.pins.iter().filter_map(|p| p.split_once('.').map(|(r, _)| r)).any(|r| model.part(r).map_or(false, is_edge_connector))
+            })
+        };
+        if members.iter().any(|m| !m.starts_with('U') && touches_edge(m)) {
             continue;
         }
         let hpwl = (pts.iter().map(|p| p.x).max().unwrap() - pts.iter().map(|p| p.x).min().unwrap())
@@ -1349,6 +1337,7 @@ mod tests {
             package: Some(package.into()),
             footprint: None,
             pins: (1..=2).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(),
+            edge: None,
         }
     }
 

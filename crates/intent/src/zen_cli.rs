@@ -214,6 +214,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
                 package: attr_str(inst, "package"),
                 footprint: attr_str(inst, "footprint"),
                 pins,
+                edge: None,
             }
         })
         .collect();

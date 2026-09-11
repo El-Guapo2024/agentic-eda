@@ -47,6 +47,7 @@
 # source_pin_not_connected gate fails hard on any unconnected signal pin.
 parts:
   - reference: J1
+    edge: true
     mpn: GCT-USB4105-GF-A
     value: "USB-C receptacle"
     package: PINHEADER-16
@@ -163,6 +164,7 @@ parts:
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 
   - reference: J2
+    edge: false
     value: "SWD header"
     package: PINHEADER-4
     pins:
@@ -216,6 +218,7 @@ parts:
 
   # Four I2C sensor headers (VCC, GND, SCL, SDA) on the shared bus.
   - reference: J3
+    edge: true
     value: "I2C sensor header"
     package: PINHEADER-4
     pins:
@@ -224,6 +227,7 @@ parts:
       - { number: "3", name: SCL, kind: signal }
       - { number: "4", name: SDA, kind: signal }
   - reference: J4
+    edge: true
     value: "I2C sensor header"
     package: PINHEADER-4
     pins:
@@ -232,6 +236,7 @@ parts:
       - { number: "3", name: SCL, kind: signal }
       - { number: "4", name: SDA, kind: signal }
   - reference: J5
+    edge: true
     value: "I2C sensor header"
     package: PINHEADER-4
     pins:
@@ -240,6 +245,7 @@ parts:
       - { number: "3", name: SCL, kind: signal }
       - { number: "4", name: SDA, kind: signal }
   - reference: J6
+    edge: true
     value: "I2C sensor header"
     package: PINHEADER-4
     pins:
@@ -251,6 +257,7 @@ parts:
   # Two analog inputs, each an RC low-pass anti-alias filter ahead of an
   # MCU ADC pin.
   - reference: J7
+    edge: true
     value: "analog input 1"
     package: PINHEADER-2
     pins:
@@ -266,6 +273,7 @@ parts:
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 
   - reference: J8
+    edge: true
     value: "analog input 2"
     package: PINHEADER-2
     pins:
@@ -302,6 +310,7 @@ parts:
 
   # Battery input: fuse + P-FET reverse-polarity protection.
   - reference: J9
+    edge: true
     value: "battery input (2S LiPo)"
     package: PINHEADER-2
     pins:
@@ -414,6 +423,7 @@ parts:
     package: "1210"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: J10
+    edge: true
     value: "motor 1 output"
     package: PINHEADER-2
     pins:
@@ -438,6 +448,7 @@ parts:
     package: "1210"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: J11
+    edge: true
     value: "motor 2 output"
     package: PINHEADER-2
     pins:
@@ -446,6 +457,7 @@ parts:
 
   # Four servo headers (signal, 5V, GND) on the buck 5V rail.
   - reference: J12
+    edge: true
     value: "servo header 1"
     package: PINHEADER-3
     pins:
@@ -453,6 +465,7 @@ parts:
       - { number: "2", name: "5V", kind: power }
       - { number: "3", name: GND, kind: ground }
   - reference: J13
+    edge: true
     value: "servo header 2"
     package: PINHEADER-3
     pins:
@@ -460,6 +473,7 @@ parts:
       - { number: "2", name: "5V", kind: power }
       - { number: "3", name: GND, kind: ground }
   - reference: J14
+    edge: true
     value: "servo header 3"
     package: PINHEADER-3
     pins:
@@ -467,6 +481,7 @@ parts:
       - { number: "2", name: "5V", kind: power }
       - { number: "3", name: GND, kind: ground }
   - reference: J15
+    edge: true
     value: "servo header 4"
     package: PINHEADER-3
     pins:
@@ -545,6 +560,7 @@ parts:
     package: "0402"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: J16
+    edge: false
     value: "debug USB-C receptacle"
     package: PINHEADER-4
     pins:
@@ -584,6 +600,7 @@ parts:
     package: "1210"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: J18
+    edge: true
     value: "motor 3 output"
     package: PINHEADER-2
     pins:
@@ -608,6 +625,7 @@ parts:
 
   # Two more servo headers (6 total across the board).
   - reference: J19
+    edge: true
     value: "servo header 5"
     package: PINHEADER-3
     pins:
@@ -615,6 +633,7 @@ parts:
       - { number: "2", name: "5V", kind: power }
       - { number: "3", name: GND, kind: ground }
   - reference: J20
+    edge: true
     value: "servo header 6"
     package: PINHEADER-3
     pins:
@@ -717,6 +736,7 @@ parts:
     package: "0603"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: J21
+    edge: true
     value: "I2C bus2 header 1"
     package: PINHEADER-4
     pins:
@@ -725,6 +745,7 @@ parts:
       - { number: "3", name: SCL, kind: signal }
       - { number: "4", name: SDA, kind: signal }
   - reference: J22
+    edge: true
     value: "I2C bus2 header 2"
     package: PINHEADER-4
     pins:
@@ -752,6 +773,7 @@ parts:
     package: "0402"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: J23
+    edge: true
     value: "RS-485 bus header"
     package: PINHEADER-2
     pins:

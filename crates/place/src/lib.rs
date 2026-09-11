@@ -668,38 +668,12 @@ fn segments_cross(a: Point, b: Point, c: Point, d: Point) -> bool {
 }
 
 /// Reference `J…` or a value/mpn naming a header/jack/USB/terminal.
-/// Must agree with `eda_gates::pcb::is_edge_connector`.
 fn is_edge_connector(part: &eda_model::Part) -> bool {
-    let r = part.reference.as_str();
-    let by_ref = r.len() > 1 && r.starts_with('J') && r[1..].chars().all(|c| c.is_ascii_digit());
-    let text = format!("{} {}", part.value.clone().unwrap_or_default(), part.mpn.clone().unwrap_or_default()).to_ascii_lowercase();
-    by_ref || ["header", "hdr", "conn", "usb", "jack", "terminal", "receptacle"].iter().any(|k| text.contains(k))
+    eda_model::footprint::is_edge_connector(part)
 }
 
-/// (capacitor, IC) pairs where a 2-pin `C…` shares both its nets with a
-/// `U…`. Must agree with `eda_gates::pcb::decoupling_pairs`.
 fn decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
-    let net_of_pin: HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
-    let mut pairs = Vec::new();
-    for c in &model.parts {
-        if !c.reference.starts_with('C') || c.pins.len() != 2 {
-            continue;
-        }
-        let nets: Vec<&str> = c.pins.iter().filter_map(|p| net_of_pin.get(format!("{}.{}", c.reference, p.number).as_str()).copied()).collect();
-        if nets.len() != 2 || nets[0] == nets[1] {
-            continue;
-        }
-        for u in &model.parts {
-            if !u.reference.starts_with('U') {
-                continue;
-            }
-            let has = |net: &str| u.pins.iter().any(|p| net_of_pin.get(format!("{}.{}", u.reference, p.number).as_str()) == Some(&net));
-            if has(nets[0]) && has(nets[1]) {
-                pairs.push((c.reference.clone(), u.reference.clone()));
-            }
-        }
-    }
-    pairs
+    eda_model::decoupling_pairs(model)
 }
 
 fn snap_up(v: Um, s: Um) -> Um {

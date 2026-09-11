@@ -18,6 +18,7 @@
 # unconnected signal pin, so unpopulated/reserved pins are declared nc.
 parts:
   - reference: J1
+    edge: true
     mpn: GCT-USB4105-GF-A
     value: "USB-C receptacle"
     package: PINHEADER-16
@@ -136,6 +137,7 @@ parts:
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 
   - reference: J2
+    edge: false
     value: "SWD header"
     package: PINHEADER-4
     pins:

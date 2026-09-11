@@ -293,6 +293,7 @@ fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
             }
             let mut o = eda::CypressOptions::default();
             o.proximity_weight = sv.cypress_proximity_weight;
+            o.fit_board_utilization = sv.fit_board_utilization;
             eda::Cypress(o).place(design, &cx.model, cx.args.seed)?
         }
         "anneal" => place(

@@ -8,5 +8,5 @@
 pub mod bookshelf;
 pub mod circuit_json;
 
-pub use bookshelf::{from_bookshelf_pl, to_bookshelf, Bookshelf};
+pub use bookshelf::{from_bookshelf_pl, from_bookshelf_pl_fixed, to_bookshelf, to_bookshelf_fixed, Bookshelf, EDGE_PIN_GAP_UM};
 pub use circuit_json::to_circuit_json;

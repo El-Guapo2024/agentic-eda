@@ -1437,6 +1437,7 @@ mod tests {
                 Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                 Pin { number: "2".into(), name: None, kind: PinKind::Passive },
             ],
+            edge: None,
         };
         ConstraintModel { parts: vec![r1], ..Default::default() }
     }
@@ -1559,11 +1560,14 @@ mod tests {
         let two_conn_model = |_: ()| ConstraintModel {
             parts: vec![
                 Part { reference: "J1".into(), mpn: None, value: None, package: None, footprint: None,
-                       pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }] },
+                       pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
+                       edge: None, },
                 Part { reference: "J2".into(), mpn: None, value: None, package: None, footprint: None,
-                       pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }] },
+                       pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
+                       edge: None, },
                 Part { reference: "U1".into(), mpn: None, value: None, package: None, footprint: None,
-                       pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }] },
+                       pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
+                       edge: None, },
             ],
             ..Default::default()
         };
@@ -1797,7 +1801,7 @@ mod integration {
     }
 
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: None, package: None, footprint: None, pins }
+        Part { reference: reference.into(), mpn: None, value: None, package: None, footprint: None, pins, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {

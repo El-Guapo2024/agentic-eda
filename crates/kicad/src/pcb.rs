@@ -339,7 +339,7 @@ mod tests {
         Pin { number: number.into(), name: None, kind }
     }
     fn part(reference: &str, package: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins }
+        Part { reference: reference.into(), mpn: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }

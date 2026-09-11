@@ -34,6 +34,7 @@ fn ldo_model() -> ConstraintModel {
         package: None,
         footprint: Some("Foo:Bar".into()),
         pins,
+        edge: None,
     };
     let net = |name: &str, pins: &[&str]| Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() };
     let u1 = part(

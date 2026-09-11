@@ -210,11 +210,68 @@ pub struct SolverSettings {
     pub place_snap_um: ir::Um,
     /// Cypress: weight of the synthetic proximity-rule nets.
     pub cypress_proximity_weight: f64,
+    /// Cypress: shrink a rectangular `board.outline` (treated as the
+    /// largest allowed board) until the parts' keep-out area is this
+    /// fraction of the board, so a small design does not float in a big
+    /// blank rectangle. 0 = keep the outline as written.
+    pub fit_board_utilization: f64,
 }
 impl Default for SolverSettings {
     fn default() -> Self {
-        SolverSettings { placer: "anneal".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0 }
+        SolverSettings { placer: "anneal".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25 }
     }
+}
+
+/// Max courtyard gap, µm, from a decoupling capacitor to the IC it
+/// decouples (shares both of its nets with). The placement gate judges it;
+/// the placers pull toward it.
+pub const DECOUPLING_MAX_GAP_UM: ir::Um = 3000;
+
+/// A part the placer can freely move or swap to uncross a stub: two pins,
+/// not a connector or an IC.
+pub fn is_free_two_pin(part: &Part) -> bool {
+    part.pins.len() == 2 && !part.reference.starts_with('J') && !part.reference.starts_with('U')
+}
+
+/// Decoupling pairs: a 2-pin `C…` part between a power net and a ground
+/// net (judged by the pin kinds on those nets), and a `U…` part that has
+/// pins on both. A cap from a signal net to ground is a filter, not
+/// decoupling. Shared by the gate and the placers.
+pub fn decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
+    let net_of_pin: std::collections::HashMap<&str, &str> =
+        model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
+    let kind_of_pin: std::collections::HashMap<String, PinKind> =
+        model.parts.iter().flat_map(|p| p.pins.iter().map(move |pin| (format!("{}.{}", p.reference, pin.number), pin.kind))).collect();
+    let net_kind = |name: &str| -> (bool, bool) {
+        let Some(n) = model.nets.iter().find(|n| n.name == name) else { return (false, false) };
+        let kinds: Vec<PinKind> = n.pins.iter().filter_map(|p| kind_of_pin.get(p).copied()).collect();
+        (kinds.contains(&PinKind::Power), kinds.contains(&PinKind::Ground))
+    };
+    let mut pairs = Vec::new();
+    for c in &model.parts {
+        if !c.reference.starts_with('C') || c.pins.len() != 2 {
+            continue;
+        }
+        let nets: Vec<&str> = c.pins.iter().filter_map(|p| net_of_pin.get(format!("{}.{}", c.reference, p.number).as_str()).copied()).collect();
+        if nets.len() != 2 || nets[0] == nets[1] {
+            continue;
+        }
+        let (k0, k1) = (net_kind(nets[0]), net_kind(nets[1]));
+        let rail_to_ground = (k0.0 && k1.1) || (k1.0 && k0.1);
+        if !rail_to_ground {
+            continue;
+        }
+        for u in &model.parts {
+            if !u.reference.starts_with('U') {
+                continue;
+            }
+            let has = |net: &str| u.pins.iter().any(|p| net_of_pin.get(format!("{}.{}", u.reference, p.number).as_str()) == Some(&net));
+            if has(nets[0]) && has(nets[1]) {
+                pairs.push((c.reference.clone(), u.reference.clone()));
+            }
+        }
+    }
+    pairs
 }
 fn d_grid() -> ir::Um { 254 }
 fn d_track() -> ir::Um { 200 }
@@ -244,6 +301,14 @@ pub struct Part {
     pub footprint: Option<String>,
     #[serde(default)]
     pub pins: Vec<Pin>,
+    /// Cable comes in from outside: the part must sit on a board edge
+    /// (`placement_edge_connector`). Unset = decided from the value/mpn
+    /// (USB, jack, terminal block, receptacle…); a bare `J` header is
+    /// *not* an edge part by itself — in real boards most `J` headers are
+    /// interior (programming, jumpers), so say `edge: true` for the ones
+    /// a cable plugs into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
