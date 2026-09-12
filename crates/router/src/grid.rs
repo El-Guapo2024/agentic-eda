@@ -692,10 +692,22 @@ impl Grid {
     /// at least the kind-pair's required separation away (Chebyshev).
     #[inline]
     pub fn passable_as(&self, cx: i64, cy: i64, layer: u8, net: &str, me: Occ) -> bool {
+        self.passable_as_id(cx, cy, layer, self.net_id_of(net), me)
+    }
+
+    /// The net's grid id, or `EMPTY` if the grid has never seen the name.
+    /// Resolve this once per search and use [`Grid::passable_as_id`]: the
+    /// string form hashes the net name on every cell test, and A* tests
+    /// ~10 cells per node expansion.
+    pub fn net_id_of(&self, net: &str) -> u32 {
+        self.net_ids.get(net).copied().unwrap_or(EMPTY)
+    }
+
+    /// [`Grid::passable_as`] with the net already resolved to an id.
+    pub fn passable_as_id(&self, cx: i64, cy: i64, layer: u8, net_id: u32, me: Occ) -> bool {
         if !self.in_outline(cx, cy) || self.is_blocked_as(cx, cy, layer, me) {
             return false;
         }
-        let net_id = self.net_id_ro(net).unwrap_or(EMPTY);
         // Copper-to-edge clearance (KiCad's 0.5 mm default), except on
         // the net's own pad copper: a pad legitimately placed at the
         // board edge must stay reachable.
@@ -712,7 +724,8 @@ impl Grid {
         if self.check_near {
             let slow = self.passable_scan(cx, cy, layer, net_id, me);
             if fast != slow {
-                panic!("near-summary mismatch at ({cx},{cy},{layer}) net={net} me={me:?}: fast={fast} slow={slow} near={near}\n{}", self.dump_around(cx, cy, layer, net, 4));
+                let name = self.net_ids.iter().find(|(_, &v)| v == net_id).map(|(k, _)| k.as_str()).unwrap_or("?");
+                panic!("near-summary mismatch at ({cx},{cy},{layer}) net={name} me={me:?}: fast={fast} slow={slow} near={near}\n{}", self.dump_around(cx, cy, layer, name, 4));
             }
         }
         fast

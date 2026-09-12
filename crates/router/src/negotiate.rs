@@ -156,14 +156,17 @@ fn search(
     starts: &[(i64, i64, u8)],
     goals: &HashSet<(i64, i64, u8)>,
     h_targets: &[(i64, i64)],
+    table: &mut StateTable,
 ) -> Option<Vec<(i64, i64, u8)>> {
-    let mut table = StateTable::new(grid);
+    table.reset();
     let mut heap = BinaryHeap::new();
+    // Resolve the net name once: A* tests ~10 cells per expansion and the
+    // string form of `passable_as` hashes the name on every one of them.
+    let net_id = grid.net_id_of(net);
     let h = |cx: i64, cy: i64| h_targets.iter().map(|&(gx, gy)| (cx - gx).abs() + (cy - gy).abs()).min().unwrap_or(0);
     for &s in starts {
         let st: State = (s.0, s.1, s.2, NO_DIR);
-        let i = table.index(st);
-        table.best[i] = 0;
+        table.set_start(st);
         heap.push(QueueItem { f: h(s.0, s.1), g: 0, state: st });
     }
     let cost_of = |cx: i64, cy: i64, l: u8| -> i64 {
@@ -187,7 +190,7 @@ fn search(
         }
         for (i, (dx, dy)) in DIRS.iter().enumerate() {
             let (nx, ny) = (cx + dx, cy + dy);
-            if !grid.passable_as(nx, ny, layer, net, Occ::Track) {
+            if !grid.passable_as_id(nx, ny, layer, net_id, Occ::Track) {
                 continue;
             }
             let turn = if dir == NO_DIR || dir == i as u8 { 0 } else { grid.tuning.bend_cost };
@@ -199,7 +202,7 @@ fn search(
             }
         }
         // Through-hole via: barrel clear (statically) on every layer.
-        if grid.num_layers > 1 && !(0..grid.num_layers as u8).any(|ol| !grid.passable_as(cx, cy, ol, net, Occ::Via) || grid.via_near_pad(cx, cy, ol)) {
+        if grid.num_layers > 1 && !(0..grid.num_layers as u8).any(|ol| !grid.passable_as_id(cx, cy, ol, net_id, Occ::Via) || grid.via_near_pad(cx, cy, ol)) {
             // A via's claim radius is wider than a track's, so the copper it
             // will conflict with sits in cells whose claims the via cell
             // itself does not see; price the whole ring it will cover, or
@@ -246,12 +249,9 @@ fn search(
     let mut path = vec![goal_state];
     let mut cur = table.index(goal_state);
     loop {
-        let from = table.came_from[cur];
-        if from == u32::MAX {
-            break;
-        }
-        path.push(table.unindex(from as usize));
-        cur = from as usize;
+        let Some(from) = table.parent(cur) else { break };
+        path.push(table.unindex(from));
+        cur = from;
     }
     path.reverse();
     Some(path.into_iter().map(|(x, y, l, _)| (x, y, l)).collect())
@@ -267,6 +267,7 @@ fn route_net(
     rules: &RouteRules,
     claims: &mut Claims,
     pres_fac: f64,
+    table: &mut StateTable,
 ) -> Option<Vec<(Vec<(i64, i64, u8)>, String)>> {
     claims.epoch += 1;
     let mut out = Vec::new();
@@ -321,7 +322,7 @@ fn route_net(
         }
         grid.soft_active = true;
         grid.soft_via_active = true;
-        let found = search(grid, claims, pres_fac, net, &starts, &goals, &h_targets);
+        let found = search(grid, claims, pres_fac, net, &starts, &goals, &h_targets, table);
         grid.soft_active = false;
         grid.soft_via_active = false;
         for &(gx, gy, l) in &blocked {
@@ -390,6 +391,10 @@ pub(crate) fn run(
     dbg: bool,
 ) -> (HashMap<String, Vec<Track>>, HashMap<String, Vec<Via>>, Vec<CheckResult>) {
     let mut claims = Claims::new(grid);
+    // One search table for the whole run. It spans the grid (cells x
+    // layers x directions) and every net edge of every iteration used to
+    // allocate and fill a fresh one; `reset` is now a counter bump.
+    let mut table = StateTable::new(grid);
     let mut paths: HashMap<String, Vec<(Vec<(i64, i64, u8)>, String)>> = HashMap::new();
     let mut stamped: HashMap<String, (Vec<usize>, Vec<usize>)> = HashMap::new();
     let tn = grid.tuning.clone();
@@ -424,7 +429,7 @@ pub(crate) fn run(
                     claims.copper[j] -= 1;
                 }
             }
-            match route_net(net, &edges_by_net[net], pads, grid, rules, &mut claims, pres_fac) {
+            match route_net(net, &edges_by_net[net], pads, grid, rules, &mut claims, pres_fac, &mut table) {
                 Some(ps) => {
                     let own_pads: Vec<&PadInfo> = pads.values().filter(|p| &p.net == net).collect();
                     let mut cells: Vec<usize> = Vec::new();
@@ -499,7 +504,7 @@ pub(crate) fn run(
             if let Some((cells, cu)) = stamped.get(n).cloned() {
                 for j in &cells { claims.claims[*j] -= 1; }
                 for j in &cu { claims.copper[*j] -= 1; }
-                let alt = route_net(n, &edges_by_net[n], pads, grid, rules, &mut claims, 1.0e7);
+                let alt = route_net(n, &edges_by_net[n], pads, grid, rules, &mut claims, 1.0e7, &mut table);
                 if dbg {
                     eprintln!("negotiate: net {n} alternative avoiding all foreign claims: {}", if alt.is_some() { "EXISTS" } else { "none" });
                 }

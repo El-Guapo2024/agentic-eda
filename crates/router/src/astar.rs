@@ -72,6 +72,15 @@ pub(crate) struct StateTable {
     num_layers: usize,
     pub(crate) best: Vec<i64>,
     pub(crate) came_from: Vec<u32>, // packed state index, or u32::MAX for "none"
+    /// Epoch each entry was last written in. An entry counts as unset
+    /// unless its stamp is the current epoch, so starting a new search is
+    /// `reset()` -- a counter bump -- instead of refilling the table.
+    /// The table spans the whole grid (cells x layers x directions), tens
+    /// of megabytes on a 100 mm board, and negotiated routing runs one
+    /// search per net edge per iteration: refilling it each time cost more
+    /// than the searches did.
+    stamp: Vec<u32>,
+    epoch: u32,
 }
 
 impl StateTable {
@@ -82,7 +91,38 @@ impl StateTable {
             num_layers: grid.num_layers,
             best: vec![i64::MAX; n],
             came_from: vec![u32::MAX; n],
+            stamp: vec![0; n],
+            epoch: 1,
         }
+    }
+
+    /// Mark `s` as a search start: distance zero and no parent.
+    pub(crate) fn set_start(&mut self, s: State) {
+        let i = self.index(s);
+        self.best[i] = 0;
+        self.came_from[i] = u32::MAX;
+        self.stamp[i] = self.epoch;
+    }
+
+    /// Packed index of `i`'s parent, or `None` for a start state or an
+    /// entry left over from an earlier epoch.
+    #[inline]
+    pub(crate) fn parent(&self, i: usize) -> Option<usize> {
+        if self.stamp[i] != self.epoch || self.came_from[i] == u32::MAX {
+            return None;
+        }
+        Some(self.came_from[i] as usize)
+    }
+
+    /// Forget every entry. O(1) except on the rare epoch wrap.
+    pub(crate) fn reset(&mut self) {
+        self.epoch = match self.epoch.checked_add(1) {
+            Some(e) => e,
+            None => {
+                self.stamp.fill(0);
+                1
+            }
+        };
     }
 
     #[inline]
@@ -104,7 +144,12 @@ impl StateTable {
 
     #[inline]
     pub(crate) fn get(&self, s: State) -> i64 {
-        self.best[self.index(s)]
+        let i = self.index(s);
+        if self.stamp[i] == self.epoch {
+            self.best[i]
+        } else {
+            i64::MAX
+        }
     }
 
     #[inline]
@@ -112,6 +157,7 @@ impl StateTable {
         let i = self.index(s);
         self.best[i] = g;
         self.came_from[i] = self.index(from) as u32;
+        self.stamp[i] = self.epoch;
     }
 }
 
@@ -169,8 +215,7 @@ pub fn route_to_any_ex(
 
     for &start in starts {
         let start_state: State = (start.0, start.1, start.2, NO_DIR);
-        let start_idx = table.index(start_state);
-        table.best[start_idx] = 0;
+        table.set_start(start_state);
         heap.push(QueueItem { f: h(start.0, start.1), g: 0, state: start_state });
     }
 
@@ -238,13 +283,10 @@ pub fn route_to_any_ex(
     let mut path = vec![goal_state];
     let mut cur_idx = table.index(goal_state);
     loop {
-        let from = table.came_from[cur_idx];
-        if from == u32::MAX {
-            break;
-        }
-        let from_state = table.unindex(from as usize);
+        let Some(from) = table.parent(cur_idx) else { break };
+        let from_state = table.unindex(from);
         path.push(from_state);
-        cur_idx = from as usize;
+        cur_idx = from;
     }
     path.reverse();
     (Some(path.into_iter().map(|(x, y, l, _)| (x, y, l)).collect()), explored)
