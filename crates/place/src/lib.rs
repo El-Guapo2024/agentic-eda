@@ -31,6 +31,7 @@
 use eda_model::footprint::{placed_pads, rotated_extent};
 use eda_model::ir::{LabelSide, Design, FootprintInstance, PlacementSection, Point, Side, Um};
 use eda_model::{CheckResult, ConstraintModel, PlacementRule};
+use std::cell::Cell;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -120,7 +121,7 @@ fn boxed_pads(pads: &[(String, (Um, Um))], pitch_max: Um) -> Vec<usize> {
     out
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Pose {
     x: Um,
     y: Um,
@@ -231,6 +232,14 @@ struct Problem<'a> {
     /// nets (GND/VCC) spread over the whole board aren't a local
     /// congestion signal and would dominate the bin sums if included.
     congest_nets: Vec<usize>,
+    /// Memoised `keepout`, one entry per item, keyed on the pose it was
+    /// computed for. `keepout` is pure but expensive (courtyard, label
+    /// side, refdes box) and the escape-probe scan asks for the same
+    /// neighbour's rectangle `pads x 4` times per move, so a one-entry
+    /// cache per item turns nearly all of those into a compare and a copy.
+    /// `Cell`, not `RefCell`: the payload is `Copy` and this crate is
+    /// single-threaded.
+    keep_cache: Vec<Cell<Option<(Pose, (Um, Um, Um, Um))>>>,
 }
 
 impl Problem<'_> {
@@ -271,6 +280,17 @@ impl Problem<'_> {
     }
 
     fn keepout(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
+        if let Some((p, r)) = self.keep_cache[i].get() {
+            if p == pose {
+                return r;
+            }
+        }
+        let r = self.keepout_uncached(i, pose);
+        self.keep_cache[i].set(Some((pose, r)));
+        r
+    }
+
+    fn keepout_uncached(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
         let bare = courtyard(&self.items[i], pose);
         let mut c = bare;
         let side = self.label_side(i, pose);
@@ -853,7 +873,8 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
     let congest_nets: Vec<usize> = (0..nets.len()).filter(|&n| nets[n].len() >= 2 && nets[n].len() <= 6).collect();
 
     let font = model.board.refdes_font(&outline);
-    Ok(Problem { items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
+    let keep_cache = (0..items.len()).map(|_| Cell::new(None)).collect();
+    Ok(Problem { keep_cache, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
