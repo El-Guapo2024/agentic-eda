@@ -186,3 +186,43 @@ fn spread_small_net_fails_compactness() {
     assert!(f[0].starts_with("Y "), "{f:?}");
 }
 
+
+/// Separation is the repulsive mirror of proximity: the gate has to fail
+/// when two parts the intent wants apart end up close, and the reason the
+/// author gave has to survive into the failure detail.
+#[test]
+fn separation_rule_fails_when_parts_sit_together() {
+    let mut m = model();
+    m.placement_rules.push(eda_model::PlacementRule::Separation {
+        a: "U1".into(),
+        b: "C1".into(),
+        min_mm: 8.0,
+        reason: Some("regulator runs hot, keep it off the sensor".into()),
+    });
+    // good() puts C1 6.5 mm from U1, inside the 8 mm the rule asks for.
+    let d = design(square(SIDE), good());
+    // Rule checks live in `check_placement`, not the locality subset.
+    let sep = |d: &Design, m: &ConstraintModel| -> Vec<String> {
+        eda_gates::check_placement(d, m)
+            .into_iter()
+            .filter(|c| c.status == CheckStatus::Fail && c.check == "placement_separation")
+            .map(|c| format!("{} {}", c.location.unwrap_or_default(), c.hint.unwrap_or_default()))
+            .collect()
+    };
+    let f = sep(&d, &m);
+    assert_eq!(f.len(), 1, "{f:?}");
+    assert!(f[0].starts_with("U1/C1"), "{f:?}");
+
+    let detail = eda_gates::check_placement(&d, &m)
+        .into_iter()
+        .find(|c| c.check == "placement_separation" && c.status == CheckStatus::Fail)
+        .and_then(|c| c.detail)
+        .expect("failure carries detail");
+    assert_eq!(detail["reason"], "regulator runs hot, keep it off the sensor");
+
+    // Move C1 to the far side: the rule is satisfied and the gate passes.
+    let mut fps = good();
+    fps[2] = fp("C1", 2000, 2000, 0);
+    let d = design(square(SIDE), fps);
+    assert!(sep(&d, &m).is_empty());
+}

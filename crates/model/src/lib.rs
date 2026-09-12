@@ -365,7 +365,34 @@ pub enum Orientation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PlacementRule {
-    Proximity { a: String, b: String, max_mm: f64 },
+    /// Two parts must end up within `max_mm` of each other, measured
+    /// courtyard gap to courtyard gap.
+    Proximity {
+        a: String,
+        b: String,
+        max_mm: f64,
+        /// Why the rule exists, in the author's own words. Carried into
+        /// the gate's failure detail, so a rule can be judged without
+        /// reading whatever produced it. A rule proposed from circuit
+        /// intuition rather than a datasheet says so here.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    /// Two parts must end up at least `min_mm` apart. The mirror of
+    /// `Proximity`, and the reason it exists: heat, noise coupling and
+    /// high-voltage clearance are all repulsive, and until this variant
+    /// the intent could only ever ask for parts to be *closer*. Note that
+    /// the Cypress placer cannot honour it -- proximity reaches Cypress as
+    /// a synthetic weighted net, and a net can only pull -- so a design
+    /// carrying separation rules is an anneal-placer design until that
+    /// changes. The gate fails either way rather than ignoring the rule.
+    Separation {
+        a: String,
+        b: String,
+        min_mm: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
     Keepout { zone: String, refs: Vec<String> },
     ThermalGroup { refs: Vec<String> },
 }

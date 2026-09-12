@@ -44,8 +44,8 @@ fn ldo_model() -> ConstraintModel {
         parts,
         nets,
         placement_rules: vec![
-            PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 5.0 },
-            PlacementRule::Proximity { a: "U1".into(), b: "C2".into(), max_mm: 5.0 },
+            PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 5.0, reason: None },
+            PlacementRule::Proximity { a: "U1".into(), b: "C2".into(), max_mm: 5.0, reason: None },
         ],
         ..Default::default()
     }

@@ -232,7 +232,7 @@ pub fn to_bookshelf_fixed(design: &Design, model: &ConstraintModel, name: &str, 
     let mut wts_body = String::new();
     let mut num_wts = 0usize;
     for (rule_idx, rule) in model.placement_rules.iter().enumerate() {
-        let eda_model::PlacementRule::Proximity { a, b, max_mm } = rule else { continue };
+        let eda_model::PlacementRule::Proximity { a, b, max_mm, .. } = rule else { continue };
         // A synthetic net pulls the pair to *touch*; a rule that allows
         // 5 mm should pull far less than one that allows 1 mm, or the
         // loose rules distort everything around them (a filter dragged
@@ -439,14 +439,14 @@ mod tests {
     fn proximity_rule_emits_weighted_synthetic_net() {
         let (d, m) = fixture();
         let mut m = m;
-        m.placement_rules.push(eda_model::PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 3.0 });
+        m.placement_rules.push(eda_model::PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 3.0 , reason: None });
         let bs = to_bookshelf_weighted(&d, &m, "t", 100, 77.0).unwrap();
         assert!(bs.nets.contains("NetDegree : 2 prox0"));
         assert!(bs.nets.contains("U1 I :"));
         // Weight scales with slack: 2 mm / 3 mm of the base 77.
         assert!(bs.wts.contains("prox0 51.333"), "{}", bs.wts);
         // A tight rule gets the full weight.
-        m.placement_rules[0] = eda_model::PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 1.0 };
+        m.placement_rules[0] = eda_model::PlacementRule::Proximity { a: "U1".into(), b: "C1".into(), max_mm: 1.0 , reason: None };
         let bs = to_bookshelf_weighted(&d, &m, "t", 100, 77.0).unwrap();
         assert!(bs.wts.contains("prox0 77.000"), "{}", bs.wts);
     }

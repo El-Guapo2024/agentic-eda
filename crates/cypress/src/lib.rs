@@ -314,7 +314,7 @@ fn violations_for(model: &ConstraintModel, design: &Design, id: &str) -> usize {
         .placement_rules
         .iter()
         .filter(|r| match r {
-            PlacementRule::Proximity { a, b, max_mm } if a == id || b == id => match (ct(a), ct(b)) {
+            PlacementRule::Proximity { a, b, max_mm, .. } if a == id || b == id => match (ct(a), ct(b)) {
                 (Some(ca), Some(cb)) => rect_gap(ca, cb) / 1000.0 > *max_mm,
                 _ => false,
             },
@@ -330,7 +330,7 @@ fn rules_ok_for(model: &ConstraintModel, design: &Design, ids: &[&str]) -> bool 
     let Some(placement) = design.placement.as_ref() else { return false };
     let fp_of = |id: &str| placement.footprints.iter().find(|f| f.id == id);
     for rule in &model.placement_rules {
-        let PlacementRule::Proximity { a, b, max_mm } = rule else { continue };
+        let PlacementRule::Proximity { a, b, max_mm, .. } = rule else { continue };
         if !ids.contains(&a.as_str()) && !ids.contains(&b.as_str()) {
             continue;
         }
@@ -541,7 +541,7 @@ pub fn legalize_proximity_pass_frozen(design: &Design, model: &ConstraintModel, 
         eprintln!("DEBUG_LEGALIZE baseline is_legal(out)={}", is_legal(&out));
     }
     for rule in &model.placement_rules {
-        let PlacementRule::Proximity { a, b, max_mm } = rule else { continue };
+        let PlacementRule::Proximity { a, b, max_mm, .. } = rule else { continue };
         let max_um = (*max_mm * 1000.0) as i64;
         let (Some(fa), Some(fb)) =
             (out.placement.as_ref().unwrap().footprints.iter().find(|f| &f.id == a).cloned(),
@@ -895,7 +895,7 @@ fn with_decoupling_rules(model: &ConstraintModel, placed: &Design) -> Constraint
             .min();
         let Some((_, _, u)) = pick else { continue };
         *dealt.entry(u.clone()).or_default() += 1;
-        m.placement_rules.push(PlacementRule::Proximity { a: c, b: u, max_mm: eda_model::DECOUPLING_MAX_GAP_UM as f64 / 1000.0 });
+        m.placement_rules.push(PlacementRule::Proximity { a: c, b: u, max_mm: eda_model::DECOUPLING_MAX_GAP_UM as f64 / 1000.0, reason: Some("decoupling cap and the IC it decouples".into()) });
     }
     m
 }
@@ -957,7 +957,7 @@ fn total_violations(model: &ConstraintModel, design: &Design) -> usize {
         .placement_rules
         .iter()
         .filter(|r| match r {
-            PlacementRule::Proximity { a, b, max_mm } => match (ct(a), ct(b)) {
+            PlacementRule::Proximity { a, b, max_mm, .. } => match (ct(a), ct(b)) {
                 (Some(ca), Some(cb)) => rect_gap(ca, cb) / 1000.0 > *max_mm,
                 _ => false,
             },

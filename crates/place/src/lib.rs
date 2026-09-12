@@ -193,6 +193,10 @@ struct Problem<'a> {
     /// The same pairs with the rule's true maximum (µm), for the final
     /// repair pass that measures exactly as the gate does.
     pair_rules_true: Vec<(usize, usize, i64)>,
+    /// Separation rules as (a, b, min gap µm): the repulsive mirror of
+    /// `pair_rules`. Overshoot by 300 µm for the same reason proximity
+    /// undershoots -- the gate measures true courtyards after snapping.
+    sep_rules: Vec<(usize, usize, i64)>,
     /// (item, candidate items, max distance µm): the nearest candidate
     /// must be within max — decoupling caps that could serve several ICs.
     group_rules: Vec<(usize, Vec<usize>, i64)>,
@@ -456,6 +460,14 @@ impl Problem<'_> {
                 }
             }
         }
+        for &(a, b, min) in &self.sep_rules {
+            if a == i || b == i {
+                let d = self.rule_gap(a, b, poses);
+                if d < min as f64 {
+                    c += W_RULE * (min as f64 - d);
+                }
+            }
+        }
         for (a, bs, max) in &self.group_rules {
             if *a == i || bs.contains(&i) {
                 c += self.group_rule_cost(*a, bs, *max, poses);
@@ -660,6 +672,12 @@ impl Problem<'_> {
                 c += W_RULE * (d - max as f64);
             }
         }
+        for &(a, b, min) in &self.sep_rules {
+            let d = self.rule_gap(a, b, poses);
+            if d < min as f64 {
+                c += W_RULE * (min as f64 - d);
+            }
+        }
         for (a, bs, max) in &self.group_rules {
             c += self.group_rule_cost(*a, bs, *max, poses);
         }
@@ -813,13 +831,21 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         }
     }
     for rule in &model.placement_rules {
-        if let PlacementRule::Proximity { a, b, max_mm } = rule {
+        if let PlacementRule::Proximity { a, b, max_mm, .. } = rule {
             if let (Some(&ia), Some(&ib)) = (index.get(a), index.get(b)) {
                 // 300 µm under the rule: the gate measures true courtyards
                 // after snapping, and a linear penalty barely resists a
                 // few-µm excess.
                 pair_rules.push((ia, ib, ((max_mm * 1000.0) as i64 - 300).max(0)));
                 pair_rules_true.push((ia, ib, (max_mm * 1000.0) as i64));
+            }
+        }
+    }
+    let mut sep_rules = Vec::new();
+    for rule in &model.placement_rules {
+        if let PlacementRule::Separation { a, b, min_mm, .. } = rule {
+            if let (Some(&ia), Some(&ib)) = (index.get(a), index.get(b)) {
+                sep_rules.push((ia, ib, (min_mm * 1000.0) as i64 + 300));
             }
         }
     }
@@ -874,7 +900,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
 
     let font = model.board.refdes_font(&outline);
     let keep_cache = (0..items.len()).map(|_| Cell::new(None)).collect();
-    Ok(Problem { keep_cache, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
+    Ok(Problem { keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a

@@ -236,7 +236,7 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
     // large package could never satisfy).
     let mut rules_ok = true;
     for rule in &model.placement_rules {
-        if let PlacementRule::Proximity { a, b, max_mm } = rule {
+        if let PlacementRule::Proximity { a, b, max_mm, reason } = rule {
             if let (Some((ra, _)), Some((rb, _))) = (courtyards.get(a), courtyards.get(b)) {
                 let d = ra.gap(rb) / 1000.0;
                 if d > *max_mm {
@@ -249,7 +249,7 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
                     };
                     out.push(
                         CheckResult::fail("placement_proximity", format!("{a}/{b}"), format!("{d:.2} mm apart, rule allows {max_mm} mm")).with_detail(serde_json::json!({
-                            "pair": [a, b], "gap_mm": (d * 100.0).round() / 100.0, "max_mm": max_mm, "over_mm": (over * 100.0).round() / 100.0, "suggest": suggest,
+                            "pair": [a, b], "gap_mm": (d * 100.0).round() / 100.0, "max_mm": max_mm, "over_mm": (over * 100.0).round() / 100.0, "suggest": suggest, "reason": reason,
                         })),
                     );
                 }
@@ -258,6 +258,34 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
     }
     if rules_ok {
         out.push(CheckResult::pass("placement_proximity"));
+    }
+
+    // Separation: the repulsive mirror. Thermal, noise coupling and
+    // high-voltage clearance all want parts *apart*, and the failure
+    // carries the rule's stated reason because a separation rule is
+    // usually a judgement call rather than a datasheet number.
+    let mut sep_ok = true;
+    for rule in &model.placement_rules {
+        if let PlacementRule::Separation { a, b, min_mm, reason } = rule {
+            if let (Some((ra, _)), Some((rb, _))) = (courtyards.get(a), courtyards.get(b)) {
+                let d = ra.gap(rb) / 1000.0;
+                if d < *min_mm {
+                    sep_ok = false;
+                    let under = *min_mm - d;
+                    out.push(
+                        CheckResult::fail("placement_separation", format!("{a}/{b}"), format!("{d:.2} mm apart, rule wants at least {min_mm} mm"))
+                            .with_detail(serde_json::json!({
+                                "pair": [a, b], "gap_mm": (d * 100.0).round() / 100.0, "min_mm": min_mm,
+                                "under_mm": (under * 100.0).round() / 100.0, "reason": reason,
+                                "suggest": "the placer pulls these together to shorten wire; give one of them somewhere else to be, or relax min_mm if the separation was a guess",
+                            })),
+                    );
+                }
+            }
+        }
+    }
+    if sep_ok {
+        out.push(CheckResult::pass("placement_separation"));
     }
     // Locality: connectors on the edge, board used, decoupling close, nets
     // compact, no crossed stubs. One gate, so no caller can forget them.
