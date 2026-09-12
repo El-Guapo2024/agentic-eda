@@ -279,7 +279,7 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
     Ok(design)
 }
 
-fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
+fn stage_place(cx: &mut Ctx, design: &Design, seed: u64) -> Result<Design, Vec<CheckResult>> {
     let t0 = Instant::now();
     // The intent's `solver` block sets the placer and its tuning; an
     // explicit --placer on the command line overrides the choice only.
@@ -294,12 +294,12 @@ fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
             let mut o = eda::CypressOptions::default();
             o.proximity_weight = sv.cypress_proximity_weight;
             o.fit_board_utilization = sv.fit_board_utilization;
-            eda::Cypress(o).place(design, &cx.model, cx.args.seed)?
+            eda::Cypress(o).place(design, &cx.model, seed)?
         }
         "anneal" => place(
             design,
             &cx.model,
-            &PlaceOptions { seed: cx.args.seed, spacing: sv.place_spacing_um, moves_per_part: sv.place_moves_per_part, snap: sv.place_snap_um, ..Default::default() },
+            &PlaceOptions { seed, spacing: sv.place_spacing_um, moves_per_part: sv.place_moves_per_part, snap: sv.place_snap_um, ..Default::default() },
         )?,
         other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress)")]),
     };
@@ -307,12 +307,71 @@ fn stage_place(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
     let mut checks = check_placement(&placed, &cx.model);
     checks.extend(eda::preflight(&placed, &cx.model, &cx.model.board));
     let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model) });
-    cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
+    cx.log.candidate(Stage::Placement, 0, seed, &placed, Tier::Geometry, &checks, metrics).ok();
     cx.record("placement", &checks, t0);
     if !print_checks("placement gates", &checks) {
         return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
     }
     Ok(placed)
+}
+
+/// Whether another placement seed could plausibly clear these failures.
+///
+/// A near miss on a distance rule, a stub crossing or a compactness
+/// complaint is a *different arrangement* problem, and a different seed is
+/// a different arrangement. A part that will not fit, connectors that
+/// overflow the edges, or Cypress refusing to run are not: those need a
+/// different rung of the ladder, and re-seeding only burns placements.
+///
+/// The "far miss" test reads the suggestion the proximity gate already
+/// writes into its detail. Those hints existed and nothing acted on them.
+fn reseed_may_help(fails: &[CheckResult]) -> bool {
+    const STRUCTURAL: &[&str] = &[
+        "cypress_precondition", "cypress_unavailable", "cypress_io", "cypress_failed", "cypress_diverged",
+        "edge_connectors_overflow", "placement_outline", "placement_present", "placement_within_outline", "cli",
+    ];
+    !fails.iter().any(|c| {
+        STRUCTURAL.contains(&c.check.as_str())
+            || c.detail
+                .as_ref()
+                .and_then(|d| d.get("suggest"))
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.starts_with("far miss"))
+    })
+}
+
+/// Placement as its own feedback loop, inside one rung of the ladder.
+///
+/// Placement is the cheap stage to repeat and the one whose failures are
+/// most often a near miss: on L4 the annealer misses a proximity rule by
+/// 1.5 mm on seed 0 and clears every gate on seed 2. Escalating to the
+/// next rung throws the rung away and re-places anyway under coarser
+/// settings, so try a few seeds here first and only escalate when the
+/// failure says another arrangement will not help.
+fn stage_place_looping(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResult>> {
+    let attempts = cx.model.solver.place_attempts.max(1);
+    let mut last: Vec<CheckResult> = Vec::new();
+    for k in 0..attempts {
+        // Spread the derived seeds far apart so attempt 1 is not attempt 0
+        // with one part nudged; still a pure function of --seed.
+        let seed = cx.args.seed.wrapping_add(k as u64 * 1_000_003);
+        if k > 0 {
+            let why: Vec<&str> = last.iter().map(|c| c.check.as_str()).collect();
+            let line = format!("placement attempt {} of {attempts}, seed {seed} (previous: {})", k + 1, why.join(", "));
+            println!("{line}");
+            cx.log.note(line).ok();
+        }
+        match stage_place(cx, schematic, seed) {
+            Ok(d) => return Ok(d),
+            Err(f) => {
+                if !reseed_may_help(&f) {
+                    return Err(f);
+                }
+                last = f;
+            }
+        }
+    }
+    Err(last)
 }
 
 /// One rung of the solver's ladder: a board-rule variant plus a placer.
@@ -388,7 +447,7 @@ fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResu
         println!("== strategy {i}: {}", st.name);
         cx.log.note(format!("strategy {i} start: {}", st.name)).ok();
         let t = std::time::Instant::now();
-        let result = stage_place(cx, schematic).and_then(|d| stage_route(cx, &d));
+        let result = stage_place_looping(cx, schematic).and_then(|d| stage_route(cx, &d));
         match result {
             Ok(d) => {
                 let line = format!("strategy {i}: {} -> PASS in {:.1}s", st.name, t.elapsed().as_secs_f64());
@@ -528,7 +587,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         "schematic" => stage_schematic(cx)?,
         "place" => {
             let base = prior.unwrap_or_else(blank);
-            stage_place(cx, &base)?
+            stage_place_looping(cx, &base)?
         }
         "route" => {
             let base = prior.ok_or_else(|| vec![CheckResult::fail("cli", "route", "route needs --design with a placement")])?;
@@ -542,7 +601,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         "pipeline" => {
             let d = stage_schematic(cx)?;
             if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Schematic)?; }
-            let d = stage_place(cx, &d)?;
+            let d = stage_place_looping(cx, &d)?;
             if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Placement)?; }
             let d = stage_route(cx, &d)?;
             if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Routing)?; }

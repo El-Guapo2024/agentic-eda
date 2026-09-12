@@ -215,10 +215,16 @@ pub struct SolverSettings {
     /// fraction of the board, so a small design does not float in a big
     /// blank rectangle. 0 = keep the outline as written.
     pub fit_board_utilization: f64,
+    /// How many placement seeds one rung of the solver's ladder may try
+    /// before escalating. Placement is the cheap stage to repeat and most
+    /// of its failures are near misses that a different arrangement
+    /// clears; escalating re-places anyway, under coarser settings. 1 =
+    /// the old single-shot behaviour.
+    pub place_attempts: usize,
 }
 impl Default for SolverSettings {
     fn default() -> Self {
-        SolverSettings { placer: "anneal".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25 }
+        SolverSettings { placer: "anneal".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3 }
     }
 }
 
