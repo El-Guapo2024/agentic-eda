@@ -22,6 +22,10 @@ parts:
   - reference: J1
     value: HDR
     package: PINHEADER-4
+    # A bare `J` refdes is not an edge part (most real J* footprints sit in
+    # the interior); the gates key off this flag, so a fixture that is meant
+    # to exercise them has to set it.
+    edge: true
     pins:
       - { number: "1", name: VIN, kind: power }
       - { number: "2", name: GND, kind: ground }
@@ -35,12 +39,23 @@ parts:
     value: 1k
     package: "0603"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R3
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R4
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 nets:
   - { name: VIN, pins: [U1.3, C1.1, J1.1] }
   - { name: GND, pins: [U1.1, C1.2, J1.2] }
   - { name: A, pins: [J1.3, R1.1] }
   - { name: B, pins: [J1.4, R2.1] }
   - { name: X, pins: [R1.2, R2.2] }
+  # R3/R4 reach no connector, so net Y is the one pair the compactness
+  # gate will actually judge.
+  - { name: Y, pins: [R3.1, R4.1] }
 "#;
 
 fn square(side: i64) -> Vec<Point> {
@@ -78,7 +93,15 @@ const SIDE: i64 = 24000;
 /// A tidy reference layout on a 24 mm board: J1 along the top edge with
 /// R1/R2 just below their header pins, U1 lower-centre with C1 beside it.
 fn good() -> Vec<FootprintInstance> {
-    vec![fp("J1", 12000, 1400, 0), fp("U1", 12000, 18000, 0), fp("C1", 18500, 18000, 0), fp("R1", 10000, 5000, 90), fp("R2", 14000, 5000, 90)]
+    vec![
+        fp("J1", 12000, 1400, 0),
+        fp("U1", 12000, 18000, 0),
+        fp("C1", 18500, 18000, 0),
+        fp("R1", 10000, 5000, 90),
+        fp("R2", 14000, 5000, 90),
+        fp("R3", 4000, 11000, 0),
+        fp("R4", 4000, 13000, 0),
+    ]
 }
 
 #[test]
@@ -153,12 +176,13 @@ fn crossing_stubs_fail() {
 fn spread_small_net_fails_compactness() {
     let m = model();
     let mut fps = good();
-    // R1 in the far corner: net X (R1-R2) is stretched. Net A (J1-R1)
-    // is not judged — it touches an edge connector.
-    fps[3] = fp("R1", 2000, 22000, 90);
+    // R3 dragged across the board: net Y (R3-R4) is stretched. Nets A, B
+    // and X are not judged — every one of them has a member sitting on a
+    // net that reaches the edge connector J1.
+    fps[5] = fp("R3", 20000, 11000, 0);
     let d = design(square(SIDE), fps);
     let f = fails(&d, &m, "placement_net_compactness");
     assert_eq!(f.len(), 1, "{f:?}");
-    assert!(f[0].starts_with("X "), "{f:?}");
+    assert!(f[0].starts_with("Y "), "{f:?}");
 }
 
