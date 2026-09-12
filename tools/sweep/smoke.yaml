@@ -1,0 +1,5 @@
+name: smoke
+placer: cypress
+boards: [examples/ladder/l1_usb_mcu.yaml]
+seeds: [0]
+knobs: [{}, {solver.fit_board_utilization: 0.30}]

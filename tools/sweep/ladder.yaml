@@ -1,0 +1,14 @@
+name: ladder-knobs-1
+placer: cypress
+boards:
+  - examples/ladder/l1_usb_mcu.yaml
+  - examples/ladder/l2_sensor_hub.yaml
+  - examples/ladder/l3_motor_hub.yaml
+  - examples/ladder/l4_control_hub.yaml
+seeds: [0, 1, 2]
+knobs:
+  - {}
+  - solver.fit_board_utilization: 0.20
+  - board.tuning.via_cost_cells: 15
+  - board.tuning.nc_pres_fac_mult: 2.0
+    board.tuning.nc_hist_inc: 3
