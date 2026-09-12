@@ -52,7 +52,7 @@ def run_job(job, args):
     if os.path.exists(f"{d}/design.json"):
         with open(f"{d}/judge.txt", "w") as jl:
             subprocess.call(judge, stdout=jl, stderr=subprocess.STDOUT)
-    verdict = next((l for l in open(f"{d}/log.txt") if re.match(r"^(PASS|FAIL|pass|fail)\b", l)), "no verdict\n").strip()
+    verdict = "pass" if rc == 0 else next((l.strip() for l in open(f"{d}/log.txt") if re.match(r"^(FAIL|fail)\b", l)), f"exit {rc}")
     return f"{os.path.basename(d)}: {verdict[:100]} ({int(time.time() - t0)} s)"
 
 def main():
