@@ -296,65 +296,18 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
             o.fit_board_utilization = sv.fit_board_utilization;
             eda::Cypress(o).place(design, &cx.model, seed)?
         }
-        "anneal" => {
-            // Fit the board to the parts before packing them into it. The
-            // annealer honours whatever outline the intent declared, so
-            // without this L1 ships at 60x40 mm where 44x20 does the job --
-            // and the board-use gate passes it, because it judges how parts
-            // are spread, not how much board they need.
-            // Fit the board to the parts before packing them into it. The
-            // annealer takes its outline from PlaceOptions or the model and
-            // never shrinks it, so without this L1 ships at 60x40 mm where
-            // 44x20 does the job -- and the board-use gate passes that,
-            // because it judges how the parts are spread, not how much
-            // board they needed.
-            let fitted = if sv.fit_board_utilization > 0.0 && cx.model.board.outline.is_some() {
-                // fit_outline measures a placement, so seed one from the
-                // intent's outline with every part at its centre, exactly
-                // as the Cypress path does.
-                let outline = cx.model.board.outline.clone().unwrap_or_default();
-                let c = eda_model::ir::Point {
-                    x: (outline.iter().map(|p| p.x).min().unwrap_or(0) + outline.iter().map(|p| p.x).max().unwrap_or(0)) / 2,
-                    y: (outline.iter().map(|p| p.y).min().unwrap_or(0) + outline.iter().map(|p| p.y).max().unwrap_or(0)) / 2,
-                };
-                let mut seed = design.clone();
-                seed.placement = Some(eda_model::ir::PlacementSection {
-                    outline,
-                    footprints: cx
-                        .model
-                        .parts
-                        .iter()
-                        .map(|p| eda_model::ir::FootprintInstance { id: p.reference.clone(), at: c, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() })
-                        .collect(),
-                });
-                eda::fit_outline(&seed, &cx.model, sv.fit_board_utilization, board_floor).placement.map(|pl| pl.outline)
-            } else {
-                None
-            };
-            let mut placed = place(
-                design,
-                &cx.model,
-                &PlaceOptions { seed, spacing: sv.place_spacing_um, moves_per_part: sv.place_moves_per_part, snap: sv.place_snap_um, outline: fitted, ..Default::default() },
-            )?;
-            // Fitting sizes the board before the parts land; trimming takes
-            // back whatever rim they left empty. Only edges holding no edge
-            // connector are shaved, so connectors stay flush and nothing
-            // has to be re-placed.
-            let edges: std::collections::BTreeSet<String> = cx
-                .model
-                .parts
-                .iter()
-                .filter(|p| eda_model::footprint::is_edge_connector(p))
-                .map(|p| p.reference.clone())
-                .collect();
-            for _ in 0..3 {
-                match eda::trim_empty_edges(&placed, &cx.model, &edges) {
-                    Some(t) => placed = t,
-                    None => break,
-                }
-            }
-            placed
-        }
+        "anneal" => place(
+            design,
+            &cx.model,
+            &PlaceOptions {
+                seed,
+                spacing: sv.place_spacing_um,
+                moves_per_part: sv.place_moves_per_part,
+                snap: sv.place_snap_um,
+                fit_floor: board_floor,
+                ..Default::default()
+            },
+        )?,
         other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress)")]),
     };
     save_design(&cx.args.out, &placed)?;

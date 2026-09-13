@@ -87,10 +87,7 @@ pub fn to_bookshelf_weighted(design: &Design, model: &ConstraintModel, name: &st
     to_bookshelf_fixed(design, model, name, unit_um, proximity_weight, &BTreeSet::new())
 }
 
-/// Courtyard-to-edge gap, µm, at which a fixed (edge) connector is pinned.
-/// Under the gate's `EDGE_CONNECTOR_MAX_GAP_UM` (1500) with room for the
-/// board's copper edge clearance (500) and a track beside the pads.
-pub const EDGE_PIN_GAP_UM: i64 = 700;
+pub use eda_model::board::EDGE_PIN_GAP_UM;
 
 /// [`to_bookshelf_weighted`] with a set of parts written as Bookshelf
 /// *terminals*: `fixed` parts keep their placed position, rotation and

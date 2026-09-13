@@ -1,0 +1,140 @@
+//! Board geometry shared by the placers: sizing the outline to the parts
+//! and shaving whatever rim they leave empty.
+//!
+//! This lives here rather than beside either placer because both need it
+//! and neither may depend on the other. It was written for the Cypress
+//! path; the anneal path needs it for exactly the same reason, since a
+//! board left at whatever outline the intent declared ships two to three
+//! times larger than it has to be.
+
+use crate::footprint::placed_keepout;
+use crate::ir::{Design, Point, Um};
+use crate::ConstraintModel;
+use std::collections::BTreeSet;
+
+/// Margin, µm, kept between the outermost part and a trimmed edge.
+pub const TRIM_MARGIN_UM: Um = 1500;
+
+/// Courtyard-to-edge gap, µm, at which a fixed (edge) connector is pinned.
+/// Under the placement gate's `EDGE_CONNECTOR_MAX_GAP_UM` (1500) with room
+/// for the board's copper edge clearance (500) and a track beside the pads.
+pub const EDGE_PIN_GAP_UM: Um = 700;
+
+/// Sum of every part's keep-out area (courtyard + label), µm².
+pub fn keepout_area(design: &Design, model: &ConstraintModel) -> f64 {
+    let Some(pl) = design.placement.as_ref() else { return 0.0 };
+    pl.footprints.iter().filter_map(|f| model.part(&f.id).and_then(|p| placed_keepout(model, &pl.outline, p, f))).map(|k| ((k.2 - k.0) as f64) * ((k.3 - k.1) as f64)).sum()
+}
+
+/// Cut blank bands off the sides of a rectangular outline that hold no
+/// pinned connector, keeping [`TRIM_MARGIN_UM`] beyond the outermost
+/// keep-out. Parts keep their board coordinates (shifted when a min side
+/// moves). `None` when nothing is worth trimming (< 2 mm).
+/// Shave blank bands off any board edge that holds no pinned connector,
+/// returning `None` when there is nothing to shave. Board geometry, not a
+/// Cypress detail: the anneal path calls it through `eda::trim_empty_edges`
+/// because fitting the board before placing only gets part of the way, and
+/// whatever the placer left empty at the rim is board nobody pays for
+/// twice.
+pub fn trim_empty_edges(design: &Design, model: &ConstraintModel, pinned: &BTreeSet<String>) -> Option<Design> {
+    let pl = design.placement.as_ref()?;
+    if pl.outline.len() != 4 {
+        return None;
+    }
+    let (x0, y0, x1, y1) = (
+        pl.outline.iter().map(|p| p.x).min()?,
+        pl.outline.iter().map(|p| p.y).min()?,
+        pl.outline.iter().map(|p| p.x).max()?,
+        pl.outline.iter().map(|p| p.y).max()?,
+    );
+    if !pl.outline.iter().all(|p| (p.x == x0 || p.x == x1) && (p.y == y0 || p.y == y1)) {
+        return None;
+    }
+    let kos: Vec<(bool, (i64, i64, i64, i64))> = pl
+        .footprints
+        .iter()
+        .filter_map(|f| Some((pinned.contains(&f.id), placed_keepout(model, &pl.outline, model.part(&f.id)?, f)?)))
+        .collect();
+    let used = (
+        kos.iter().map(|(_, k)| k.0).min()?,
+        kos.iter().map(|(_, k)| k.1).min()?,
+        kos.iter().map(|(_, k)| k.2).max()?,
+        kos.iter().map(|(_, k)| k.3).max()?,
+    );
+    // An edge with a pinned connector on it is not trimmed.
+    let near = |k: (i64, i64, i64, i64), edge: u8| match edge {
+        0 => k.0 - x0 < 2 * EDGE_PIN_GAP_UM,
+        1 => x1 - k.2 < 2 * EDGE_PIN_GAP_UM,
+        2 => k.1 - y0 < 2 * EDGE_PIN_GAP_UM,
+        _ => y1 - k.3 < 2 * EDGE_PIN_GAP_UM,
+    };
+    let held = |edge: u8| kos.iter().any(|(p, k)| *p && near(*k, edge));
+    let mut n = (x0, y0, x1, y1);
+    if !held(0) && used.0 - x0 > TRIM_MARGIN_UM + 2000 { n.0 = used.0 - TRIM_MARGIN_UM; }
+    if !held(1) && x1 - used.2 > TRIM_MARGIN_UM + 2000 { n.2 = used.2 + TRIM_MARGIN_UM; }
+    if !held(2) && used.1 - y0 > TRIM_MARGIN_UM + 2000 { n.1 = used.1 - TRIM_MARGIN_UM; }
+    if !held(3) && y1 - used.3 > TRIM_MARGIN_UM + 2000 { n.3 = used.3 + TRIM_MARGIN_UM; }
+    if n == (x0, y0, x1, y1) {
+        return None;
+    }
+    // Whole millimetres, origin back at the old min corner.
+    let w = ((n.2 - n.0) as f64 / 1000.0).ceil() as i64 * 1000;
+    let h = ((n.3 - n.1) as f64 / 1000.0).ceil() as i64 * 1000;
+    let (dx, dy) = (n.0 - x0, n.1 - y0);
+    let mut out = design.clone();
+    let p = out.placement.as_mut()?;
+    p.outline = vec![Point { x: x0, y: y0 }, Point { x: x0 + w, y: y0 }, Point { x: x0 + w, y: y0 + h }, Point { x: x0, y: y0 + h }];
+    for f in &mut p.footprints {
+        f.at = Point { x: f.at.x - dx, y: f.at.y - dy };
+    }
+    eprintln!("cypress: trimmed blank edges, board {}x{} -> {}x{} mm", (x1 - x0) / 1000, (y1 - y0) / 1000, w / 1000, h / 1000);
+    Some(out)
+}
+
+/// Shrink a rectangular outline (axis-aligned, 4 corners) about its
+/// min corner so the parts' keep-out area is `util` of the board, keeping
+/// the aspect ratio and never growing it. `scale_floor` bounds the shrink
+/// from below (1.0 = as written). Non-rectangular outlines are kept.
+/// Shrink a rectangular outline until the parts' keep-out area is `util`
+/// of it, keeping the aspect ratio and never growing it, then park every
+/// part at the new centre for the placer to spread.
+///
+/// This is board geometry, not a Cypress detail; it lives here because
+/// that is where it was written, and the anneal path calls it through
+/// `eda::fit_outline` for exactly the same reason Cypress does: a board
+/// left at whatever outline the intent declared ships two to three times
+/// larger than it needs to be, and board area is money.
+pub fn fit_outline(design: &Design, model: &ConstraintModel, util: f64, scale_floor: f64) -> Design {
+    let mut out = design.clone();
+    let Some(pl) = out.placement.as_mut() else { return out };
+    if util <= 0.0 || pl.outline.len() != 4 {
+        return out;
+    }
+    let (x0, y0, x1, y1) = (
+        pl.outline.iter().map(|p| p.x).min().unwrap(),
+        pl.outline.iter().map(|p| p.y).min().unwrap(),
+        pl.outline.iter().map(|p| p.x).max().unwrap(),
+        pl.outline.iter().map(|p| p.y).max().unwrap(),
+    );
+    let rect = pl.outline.iter().all(|p| (p.x == x0 || p.x == x1) && (p.y == y0 || p.y == y1));
+    if !rect {
+        return out;
+    }
+    let area = ((x1 - x0) as f64) * ((y1 - y0) as f64);
+    let want = keepout_area(design, model) / util;
+    let scale = (want / area).sqrt().max(scale_floor).min(1.0);
+    if scale >= 0.999 {
+        return out;
+    }
+    // Round the new size up to whole millimetres.
+    let w = ((((x1 - x0) as f64) * scale / 1000.0).ceil() * 1000.0) as i64;
+    let h = ((((y1 - y0) as f64) * scale / 1000.0).ceil() * 1000.0) as i64;
+    pl.outline = vec![Point { x: x0, y: y0 }, Point { x: x0 + w, y: y0 }, Point { x: x0 + w, y: y0 + h }, Point { x: x0, y: y0 + h }];
+    // Parts placed on the old outline start at the new centre; Cypress
+    // spreads them.
+    for f in &mut pl.footprints {
+        f.at = Point { x: x0 + w / 2, y: y0 + h / 2 };
+    }
+    out
+}
+

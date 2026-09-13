@@ -19,7 +19,8 @@ pub use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
 pub use eda_interchange::{from_bookshelf_pl, to_bookshelf, to_circuit_json, Bookshelf};
 pub use eda_router::{preflight, route, route_partial, RouteRules};
 pub use eda_place::{hpwl, place, Anneal, PlaceOptions, Placer};
-pub use eda_cypress::{fit_outline, place_with_cypress, trim_empty_edges, Cypress, CypressOptions};
+pub use eda_cypress::{place_with_cypress, Cypress, CypressOptions};
+pub use eda_model::board::{fit_outline, trim_empty_edges};
 pub use eda_gates::{check_placement, check_routing};
 pub use eda_logger::{now_rfc3339, EscalationPolicy, Event, RunLog, Tier};
 

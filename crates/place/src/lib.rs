@@ -46,11 +46,17 @@ pub struct PlaceOptions {
     /// Extra keep-apart margin around every courtyard during placement,
     /// µm — routing channel space. Gates still judge the true courtyards.
     pub spacing: Um,
+    /// Lower bound on the fitted board as a fraction of the outline the
+    /// intent declared. The placer shrinks the board to
+    /// `model.solver.fit_board_utilization` before packing parts into it;
+    /// a caller that has just watched the parts fail to fit raises this to
+    /// make the next attempt roomier. 0 = shrink as far as the target wants.
+    pub fit_floor: f64,
 }
 
 impl Default for PlaceOptions {
     fn default() -> Self {
-        PlaceOptions { seed: 0, snap: 100, moves_per_part: 4000, outline: None, spacing: 600 }
+        PlaceOptions { seed: 0, snap: 100, moves_per_part: 4000, outline: None, spacing: 600, fit_floor: 0.0 }
     }
 }
 
@@ -1561,6 +1567,35 @@ impl Placer for Anneal {
 /// and (if present) the schematic section, which is carried through
 /// untouched; the returned design has a fresh `placement` section.
 pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> Result<Design, Vec<CheckResult>> {
+    // Size the board to the parts before packing them into it. Without
+    // this the placer honours whatever outline the intent declared, and a
+    // board two to three times larger than it needs passes every gate --
+    // the parts are centred and spread across it, which is all the
+    // board-use gate used to ask.
+    let fitted;
+    let opts = if opts.outline.is_none() && model.board.outline.is_some() && model.solver.fit_board_utilization > 0.0 {
+        let outline = model.board.outline.clone().unwrap_or_default();
+        let c = Point {
+            x: (outline.iter().map(|p| p.x).min().unwrap_or(0) + outline.iter().map(|p| p.x).max().unwrap_or(0)) / 2,
+            y: (outline.iter().map(|p| p.y).min().unwrap_or(0) + outline.iter().map(|p| p.y).max().unwrap_or(0)) / 2,
+        };
+        // `fit_outline` measures a placement, so give it one: every part
+        // parked at the centre of the declared outline.
+        let mut seed = design.clone();
+        seed.placement = Some(PlacementSection {
+            outline,
+            footprints: model
+                .parts
+                .iter()
+                .map(|p| FootprintInstance { id: p.reference.clone(), at: c, rot: 0, side: Side::Top, label: LabelSide::Above })
+                .collect(),
+        });
+        let shrunk = eda_model::board::fit_outline(&seed, model, model.solver.fit_board_utilization, opts.fit_floor);
+        fitted = PlaceOptions { outline: shrunk.placement.map(|pl| pl.outline), ..opts.clone() };
+        &fitted
+    } else {
+        opts
+    };
     let mut pb = build_problem(model, opts)?;
     let debug = std::env::var_os("EDA_PLACE_DEBUG").is_some();
     let t0 = std::time::Instant::now();
@@ -1671,6 +1706,19 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
             }
         }
         return Err(fails);
+    }
+    // Fitting sized the board before the parts landed; trimming takes back
+    // whatever rim they left empty. Edges holding an edge connector are
+    // left alone, so connectors stay flush and nothing is re-placed.
+    if model.solver.fit_board_utilization > 0.0 {
+        let edges: std::collections::BTreeSet<String> =
+            model.parts.iter().filter(|p| eda_model::footprint::is_edge_connector(p)).map(|p| p.reference.clone()).collect();
+        for _ in 0..3 {
+            match eda_model::board::trim_empty_edges(&out, model, &edges) {
+                Some(t) => out = t,
+                None => break,
+            }
+        }
     }
     // Silence unused-field lints for fields kept for diagnostics.
     let _ = (&pb.index, &pb.model, placed_pads as fn(&ConstraintModel, &eda_model::Part, &FootprintInstance) -> Option<Vec<eda_model::footprint::PlacedPad>>);

@@ -359,7 +359,7 @@ pub fn check_placement_locality(design: &Design, model: &ConstraintModel) -> Vec
     }
 
     placement_edge_connector(pl, model, &courtyards, bb, &mut out);
-    placement_board_use(&courtyards, bb, &mut out);
+    placement_board_use(&courtyards, bb, model.solver.fit_board_utilization, &mut out);
     placement_decoupling(model, &courtyards, &mut out);
     placement_net_compactness(pl, model, &courtyards, &mut out);
     placement_stub_crossings(pl, model, &mut out);
@@ -375,6 +375,15 @@ pub const EDGE_CONNECTOR_MAX_GAP_UM: i64 = 1500;
 pub const BOARD_USE_MAX_IMBALANCE: f64 = 0.15;
 /// … and must span at least this fraction of each board dimension.
 pub const BOARD_USE_MIN_SPAN: f64 = 0.5;
+/// Least share of the board the parts' own courtyards may cover, as a
+/// fraction of `solver.fit_board_utilization`. Span and imbalance only ask
+/// whether the parts are centred and spread; a board three times larger
+/// than it needs passes both, because shelf packing spreads parts right
+/// across it. This asks the remaining question -- whether the board was
+/// actually fitted to the parts -- and only where the intent asked for a
+/// fit. A board whose outline is fixed by an enclosure sets
+/// `fit_board_utilization: 0` and is exempt.
+pub const BOARD_USE_MIN_DENSITY_FRACTION: f64 = 0.5;
 /// See [`eda_model::DECOUPLING_MAX_GAP_UM`].
 pub const DECOUPLING_MAX_GAP_UM: i64 = eda_model::DECOUPLING_MAX_GAP_UM;
 /// A net's pad bounding-box half-perimeter may not exceed this multiple of
@@ -436,7 +445,7 @@ fn placement_edge_connector(pl: &eda_model::ir::PlacementSection, model: &Constr
     }
 }
 
-fn placement_board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), out: &mut Vec<CheckResult>) {
+fn placement_board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), fit_target: f64, out: &mut Vec<CheckResult>) {
     if courtyards.len() < 2 {
         out.push(CheckResult::pass("placement_board_use"));
         return;
@@ -459,6 +468,22 @@ fn placement_board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um)
             "board",
             format!("parts are off-centre: margins left {l:.0}/right {r:.0}, top {t:.0}/bottom {b:.0} µm (imbalance x {imb_x:.2}, y {imb_y:.2}; max {BOARD_USE_MAX_IMBALANCE})"),
         ));
+    }
+    if fit_target > 0.0 {
+        let parts_area: f64 = courtyards.values().map(|r| ((r.2 - r.0) as f64) * ((r.3 - r.1) as f64)).sum();
+        let density = parts_area / (w * h);
+        let floor = fit_target * BOARD_USE_MIN_DENSITY_FRACTION;
+        if density < floor {
+            ok = false;
+            out.push(
+                CheckResult::fail(
+                    "placement_board_use",
+                    "board",
+                    format!("parts cover {:.0}% of the board; the intent asked it fitted to {:.0}%, so anything under {:.0}% is board nobody needs", density * 100.0, fit_target * 100.0, floor * 100.0),
+                )
+                .with_detail(serde_json::json!({ "density": (density * 1000.0).round() / 1000.0, "fit_target": fit_target, "floor": (floor * 1000.0).round() / 1000.0 })),
+            );
+        }
     }
     if span_x < BOARD_USE_MIN_SPAN || span_y < BOARD_USE_MIN_SPAN {
         ok = false;
