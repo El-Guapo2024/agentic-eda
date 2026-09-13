@@ -363,7 +363,7 @@ pub fn from_bookshelf_pl_fixed(pl: &str, design: &Design, model: &ConstraintMode
     }
     footprints.sort_by(|a, b| a.id.cmp(&b.id));
     let mut out = design.clone();
-    out.placement = Some(PlacementSection { outline, footprints });
+    out.placement = Some(PlacementSection { outline, footprints, modules: Vec::new() });
     out.routing = None;
     // Sanity: every part came back.
     let missing: Vec<&str> = model.parts.iter().map(|p| p.reference.as_str()).filter(|r| !out.placement.as_ref().unwrap().footprints.iter().any(|f| f.id == *r)).collect();
@@ -413,6 +413,7 @@ mod tests {
                     FootprintInstance { id: "C1".into(), at: Point { x: 3_000, y: 3_000 }, rot: 0, side: Side::Top, label: Default::default() },
                     FootprintInstance { id: "R1".into(), at: Point { x: 17_000, y: 12_000 }, rot: 0, side: Side::Top, label: Default::default() },
                 ],
+                modules: Vec::new(),
             }),
             routing: None,
         };

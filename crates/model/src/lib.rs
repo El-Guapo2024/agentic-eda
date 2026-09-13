@@ -3,6 +3,7 @@
 //! JSON internally, YAML at LLM-facing edges.
 
 pub mod board;
+pub mod floorplan;
 pub mod footprint;
 pub mod ir;
 
@@ -228,10 +229,17 @@ pub struct SolverSettings {
     /// clears; escalating re-places anyway, under coarser settings. 1 =
     /// the old single-shot behaviour.
     pub place_attempts: usize,
+    /// Cut the board into functional modules and give each one a region
+    /// before placing any part (see [`floorplan`]). This is how a human
+    /// team lays out a board; on a hundred-part design it turns one large
+    /// placement into a dozen small ones. Off by default: it changes the
+    /// shape of every placement, so an intent opts in.
+    #[serde(default)]
+    pub floorplan: bool,
 }
 impl Default for SolverSettings {
     fn default() -> Self {
-        SolverSettings { placer: "anneal".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3 }
+        SolverSettings { placer: "anneal".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3, floorplan: false }
     }
 }
 

@@ -962,3 +962,8 @@ board:
     - { x: 120000, y: 0 }
     - { x: 120000, y: 90000 }
     - { x: 0, y: 90000 }
+
+# Cheapest-first latitude. The solver only escalates when a rung fails
+# every gate; two layers stays the first and preferred answer.
+allow:
+  max_layers: 4

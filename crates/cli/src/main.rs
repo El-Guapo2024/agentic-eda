@@ -395,6 +395,19 @@ fn stage_place_looping(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<C
     Err(last)
 }
 
+/// Bounding box of the intent's declared outline. The floorplan stage
+/// needs a board before any placement exists, so an intent with no outline
+/// has nothing to plan on and says so rather than inventing one.
+fn board_bb(model: &eda_model::ConstraintModel) -> (eda_model::ir::Um, eda_model::ir::Um, eda_model::ir::Um, eda_model::ir::Um) {
+    match model.board.outline.as_ref().filter(|o| !o.is_empty()) {
+        Some(o) => {
+            let (xs, ys): (Vec<_>, Vec<_>) = o.iter().map(|p| (p.x, p.y)).unzip();
+            (*xs.iter().min().unwrap(), *ys.iter().min().unwrap(), *xs.iter().max().unwrap(), *ys.iter().max().unwrap())
+        }
+        None => (0, 0, 0, 0),
+    }
+}
+
 /// One rung of the solver's ladder: a board-rule variant plus a placer.
 #[derive(Clone, Debug)]
 struct Strategy {
@@ -609,6 +622,22 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         "place" => {
             let base = prior.unwrap_or_else(blank);
             stage_place_looping(cx, &base)?
+        }
+        "floorplan" => {
+            let bb = board_bb(&cx.model);
+            let fp = eda_model::floorplan::plan(&cx.model, bb, 500, cx.args.seed)
+                .map_err(|e| vec![CheckResult::fail("floorplan", "arrange", e)])?;
+            println!("{} modules, {} free parts, board {:.1} x {:.1} mm",
+                fp.modules.len(), fp.free.len(), (bb.2 - bb.0) as f64 / 1000.0, (bb.3 - bb.1) as f64 / 1000.0);
+            for m in &fp.modules {
+                println!("  {:<10} {:>5.1} x {:>5.1} mm at ({:>5.1}, {:>5.1})  {} parts: {}",
+                    m.name, (m.rect.2 - m.rect.0) as f64 / 1000.0, (m.rect.3 - m.rect.1) as f64 / 1000.0,
+                    m.rect.0 as f64 / 1000.0, m.rect.1 as f64 / 1000.0, m.refs.len(), m.refs.join(" "));
+            }
+            if !fp.free.is_empty() {
+                println!("  free (no proximity rule ties them anywhere): {}", fp.free.join(" "));
+            }
+            return Ok(());
         }
         "route" => {
             let base = prior.ok_or_else(|| vec![CheckResult::fail("cli", "route", "route needs --design with a placement")])?;

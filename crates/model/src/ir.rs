@@ -128,6 +128,21 @@ pub struct PlacementSection {
     pub outline: Vec<Point>,
     /// Sorted by `id`.
     pub footprints: Vec<FootprintInstance>,
+    /// The floorplan this placement was built under, when one was used.
+    /// Carried in the design so the gate can judge the placement against
+    /// the plan it was given, and so a reader can see the blocks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<ModuleRegion>,
+}
+
+/// One floorplan block as recorded in a placement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleRegion {
+    pub name: String,
+    pub refs: Vec<String>,
+    /// (x0, y0, x1, y1) µm.
+    pub rect: (Um, Um, Um, Um),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -71,7 +71,7 @@ fn design(outline: Vec<Point>, fps: Vec<FootprintInstance>) -> Design {
         schema: 1,
         provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
-        placement: Some(PlacementSection { outline, footprints: fps }),
+        placement: Some(PlacementSection { outline, footprints: fps, modules: Vec::new() }),
         routing: None,
     }
 }

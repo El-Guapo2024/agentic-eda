@@ -364,6 +364,7 @@ mod tests {
                 FootprintInstance { id: "U1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
                 FootprintInstance { id: "C1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 90_000, side: Side::Bottom, label: Default::default() },
             ],
+            modules: Vec::new(),
         };
         let design = Design {
             schema: 1,

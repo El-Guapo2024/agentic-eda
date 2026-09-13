@@ -287,9 +287,60 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
     if sep_ok {
         out.push(CheckResult::pass("placement_separation"));
     }
+    out.extend(placement_region(design, model));
     // Locality: connectors on the edge, board used, decoupling close, nets
     // compact, no crossed stubs. One gate, so no caller can forget them.
     out.extend(check_placement_locality(design, model));
+    out
+}
+
+/// A placement built under a floorplan must respect it. The plan gave each
+/// module a rectangle; a part that has drifted out of its block means the
+/// placement and the floorplan disagree, and shipping either one alone is
+/// not an answer. A part the floorplan left free is not judged here --
+/// the plan never claimed to know where it goes.
+///
+/// A design with no recorded modules is not floorplanned and this gate has
+/// nothing to say about it.
+pub fn placement_region(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
+    let Some(pl) = design.placement.as_ref() else { return Vec::new() };
+    if pl.modules.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut ok = true;
+    for m in &pl.modules {
+        for id in &m.refs {
+            let Some(fp) = pl.footprints.iter().find(|f| &f.id == id) else {
+                out.push(CheckResult::fail("placement_region", format!("{}/{id}", m.name), "the floorplan assigns this part to a module but the placement does not contain it"));
+                ok = false;
+                continue;
+            };
+            let Some(part) = model.part(id) else { continue };
+            let Some(c) = placed_courtyard(model, part, fp) else { continue };
+            let outx = ((m.rect.0 - c.0).max(0) + (c.2 - m.rect.2).max(0)) as f64 / 1000.0;
+            let outy = ((m.rect.1 - c.1).max(0) + (c.3 - m.rect.3).max(0)) as f64 / 1000.0;
+            if outx > 0.0 || outy > 0.0 {
+                ok = false;
+                out.push(
+                    CheckResult::fail(
+                        "placement_region",
+                        format!("{}/{id}", m.name),
+                        format!("courtyard escapes its module region by {outx:.2} mm in x, {outy:.2} mm in y"),
+                    )
+                    .with_detail(serde_json::json!({
+                        "module": m.name, "part": id, "rect_um": [m.rect.0, m.rect.1, m.rect.2, m.rect.3],
+                        "courtyard_um": [c.0, c.1, c.2, c.3],
+                        "out_x_mm": (outx * 100.0).round() / 100.0, "out_y_mm": (outy * 100.0).round() / 100.0,
+                        "suggest": "far miss: the block is too small for its parts or too tightly boxed by its neighbours. Re-run the floorplan under another seed, or raise floorplan fill headroom",
+                    })),
+                );
+            }
+        }
+    }
+    if ok {
+        out.push(CheckResult::pass("placement_region"));
+    }
     out
 }
 
@@ -1421,7 +1472,7 @@ mod tests {
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
-            placement: Some(PlacementSection { outline, footprints: vec![fpi("R1", 5000), fpi("C1", 10000)] }),
+            placement: Some(PlacementSection { outline, footprints: vec![fpi("R1", 5000), fpi("C1", 10000)], modules: Vec::new() }),
             routing: Some(rt),
         };
         (design, model)

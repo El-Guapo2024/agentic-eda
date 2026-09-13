@@ -52,11 +52,15 @@ pub struct PlaceOptions {
     /// a caller that has just watched the parts fail to fit raises this to
     /// make the next attempt roomier. 0 = shrink as far as the target wants.
     pub fit_floor: f64,
+    /// Module regions from the floorplan stage. `None` = place the whole
+    /// board as one problem, which is what every caller did before the
+    /// floorplan existed and still the default.
+    pub floorplan: Option<eda_model::floorplan::Floorplan>,
 }
 
 impl Default for PlaceOptions {
     fn default() -> Self {
-        PlaceOptions { seed: 0, snap: 100, moves_per_part: 4000, outline: None, spacing: 600, fit_floor: 0.0 }
+        PlaceOptions { seed: 0, snap: 100, moves_per_part: 4000, outline: None, spacing: 600, fit_floor: 0.0, floorplan: None }
     }
 }
 
@@ -68,6 +72,12 @@ const W_OUTSIDE: f64 = 8.0;
 /// Explicit proximity/cluster/decoupling rules are hard gates: their pull
 /// must beat every other linear term (HPWL 1, compactness 3, use 4).
 const W_RULE: f64 = 40.0;
+/// Floorplan region pull, per µm of courtyard escaping the module's
+/// rectangle. Above `W_OUTSIDE` (the board edge) because a part drifting
+/// out of its block is a floorplan violation the gate will fail, but below
+/// `W_RULE`: an explicit proximity rule in the intent still outranks the
+/// block boundary the floorplan derived from it.
+const W_REGION: f64 = 20.0;
 const CLUSTER_MM: f64 = 4.0;
 /// Congestion overflow penalty, µm of HPWL-equivalent per (track-over-capacity)².
 const W_CONGEST: f64 = 6000.0;
@@ -179,6 +189,18 @@ fn gap(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
+/// How far a courtyard escapes a floorplan region, µm, summed over both
+/// axes. Linear in distance on purpose: the board-outline term uses
+/// `sqrt(area)`, which saturates almost immediately, and a saturating
+/// penalty lets a part wander arbitrarily far out of its block for a
+/// modest wirelength gain. A block boundary has to get more expensive the
+/// further you are from it, the way the proximity rules do.
+fn region_escape(c: (Um, Um, Um, Um), r: (Um, Um, Um, Um)) -> f64 {
+    let dx = (r.0 - c.0).max(0) + (c.2 - r.2).max(0);
+    let dy = (r.1 - c.1).max(0) + (c.3 - r.3).max(0);
+    (dx.max(0) + dy.max(0)) as f64
+}
+
 fn outside_area(r: (Um, Um, Um, Um), bb: (Um, Um, Um, Um)) -> i64 {
     let area = (r.2 - r.0) * (r.3 - r.1);
     area - overlap(r, bb)
@@ -250,6 +272,10 @@ struct Problem<'a> {
     /// `Cell`, not `RefCell`: the payload is `Copy` and this crate is
     /// single-threaded.
     keep_cache: Vec<Cell<Option<(Pose, (Um, Um, Um, Um))>>>,
+    /// Per item: the floorplan rectangle it must stay inside, if the
+    /// caller ran the floorplan stage. `None` for a part the floorplan
+    /// left free, and for every part when there is no floorplan.
+    region: Vec<Option<(Um, Um, Um, Um)>>,
 }
 
 impl Problem<'_> {
@@ -457,6 +483,12 @@ impl Problem<'_> {
         let out = outside_area(ci, self.bounds(i));
         if out > 0 {
             c += W_OUTSIDE * ((out as f64).sqrt() + 500.0);
+        }
+        if let Some(r) = self.region[i] {
+            let out = region_escape(courtyard(&self.items[i], poses[i]), r);
+            if out > 0.0 {
+                c += W_REGION * out;
+            }
         }
         for &(a, b, max) in &self.pair_rules {
             if a == i || b == i {
@@ -670,6 +702,12 @@ impl Problem<'_> {
             let out = outside_area(ci, self.bounds(i));
             if out > 0 {
                 c += W_OUTSIDE * ((out as f64).sqrt() + 500.0);
+            }
+            if let Some(r) = self.region[i] {
+                let out = region_escape(courtyard(&self.items[i], poses[i]), r);
+                if out > 0.0 {
+                    c += W_REGION * out;
+                }
             }
         }
         for &(a, b, max) in &self.pair_rules {
@@ -906,7 +944,17 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
 
     let font = model.board.refdes_font(&outline);
     let keep_cache = (0..items.len()).map(|_| Cell::new(None)).collect();
-    Ok(Problem { keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
+    // A floorplan that names a part this board does not have is a stale
+    // plan, not a harmless mismatch: fail rather than silently placing the
+    // rest of the board without the block it thought it had.
+    if let Some(fp) = &opts.floorplan {
+        let unknown: Vec<&str> = fp.modules.iter().flat_map(|m| m.refs.iter()).filter(|r| !index.contains_key(r.as_str())).map(|r| r.as_str()).collect();
+        if !unknown.is_empty() {
+            return Err(vec![CheckResult::fail("floorplan_stale", "modules", format!("the floorplan assigns parts this design does not have: {}", unknown.join(" ")))]);
+        }
+    }
+    let region: Vec<Option<(Um, Um, Um, Um)>> = items.iter().map(|it| opts.floorplan.as_ref().and_then(|f| f.region_of(&it.id))).collect();
+    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
@@ -1384,9 +1432,17 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Um, Um, Um,
 /// or the next step would overlap something or leave the board.
 fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
     let n = pb.items.len();
+    // A repair pose must be clean in every sense the gates check, the
+    // floorplan region included. Without the region test this pass happily
+    // shoves a part a millimetre out of its own block to close a proximity
+    // rule, and the run then fails `placement_region` having "fixed"
+    // `placement_proximity` -- which is what it did on every board until
+    // this clause existed.
     let clean_at = |poses: &[Pose], i: usize| -> bool {
         let ci = pb.keepout(i, poses[i]);
-        outside_area(ci, pb.bounds(i)) == 0 && (0..n).all(|j| j == i || overlap(ci, pb.keepout(j, poses[j])) == 0)
+        outside_area(ci, pb.bounds(i)) == 0
+            && pb.region[i].map_or(true, |r| region_escape(courtyard(&pb.items[i], poses[i]), r) == 0.0)
+            && (0..n).all(|j| j == i || overlap(ci, pb.keepout(j, poses[j])) == 0)
     };
     for _ in 0..3 {
         let mut any = false;
@@ -1528,10 +1584,15 @@ fn legalize(pb: &Problem, poses: &mut [Pose], snap_um: Um) -> bool {
             return true;
         }
     }
-    // Final verdict.
+    // Final verdict. A part sitting outside its floorplan block counts as
+    // not legal here, so `place`'s own re-anneal loop gets a chance at it
+    // rather than handing the gate a placement it is bound to fail.
     for i in 0..n {
         let ci = pb.keepout(i, poses[i]);
         if outside_area(ci, pb.bounds(i)) > 0 {
+            return false;
+        }
+        if pb.region[i].map_or(false, |r| region_escape(courtyard(&pb.items[i], poses[i]), r) > 0.0) {
             return false;
         }
         for j in i + 1..n {
@@ -1589,6 +1650,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
                 .iter()
                 .map(|p| FootprintInstance { id: p.reference.clone(), at: c, rot: 0, side: Side::Top, label: LabelSide::Above })
                 .collect(),
+            modules: Vec::new(),
         });
         let shrunk = eda_model::board::fit_outline(&seed, model, model.solver.fit_board_utilization, opts.fit_floor);
         fitted = PlaceOptions { outline: shrunk.placement.map(|pl| pl.outline), ..opts.clone() };
@@ -1596,13 +1658,46 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
     } else {
         opts
     };
+    // The floorplan is cut on the board the parts will actually get, not
+    // the one the intent declared, so it runs after fitting and never
+    // before. A caller that already has a plan keeps it.
+    let planned;
+    let opts = if model.solver.floorplan && opts.floorplan.is_none() {
+        let o = opts.outline.clone().or_else(|| model.board.outline.clone()).unwrap_or_default();
+        if o.is_empty() {
+            return Err(vec![CheckResult::fail("floorplan_precondition", "board.outline", "solver.floorplan needs a board outline to cut into modules; none was declared and none was fitted")]);
+        }
+        let bb = (
+            o.iter().map(|p| p.x).min().unwrap_or(0),
+            o.iter().map(|p| p.y).min().unwrap_or(0),
+            o.iter().map(|p| p.x).max().unwrap_or(0),
+            o.iter().map(|p| p.y).max().unwrap_or(0),
+        );
+        let fp = eda_model::floorplan::plan(model, bb, opts.snap.max(100), opts.seed)
+            .map_err(|e| vec![CheckResult::fail("floorplan_arrange", "modules", e)])?;
+        planned = PlaceOptions { floorplan: Some(fp), ..opts.clone() };
+        &planned
+    } else {
+        opts
+    };
     let mut pb = build_problem(model, opts)?;
     let debug = std::env::var_os("EDA_PLACE_DEBUG").is_some();
+    if debug {
+        eprintln!("place debug: {} of {} items have a floorplan region", pb.region.iter().filter(|r| r.is_some()).count(), pb.items.len());
+    }
     let t0 = std::time::Instant::now();
     let mut poses = initial(&pb, opts.snap);
     anneal(&pb, &mut poses, opts);
     if debug {
         eprintln!("place debug: anneal {:.1}s", t0.elapsed().as_secs_f64());
+        let rc: f64 = (0..pb.items.len()).map(|i| pb.region[i].map_or(0.0, |r| W_REGION * region_escape(courtyard(&pb.items[i], poses[i]), r))).sum();
+        eprintln!("place debug: region cost after anneal {rc:.0}");
+        for i in 0..pb.items.len() {
+            if let Some(r) = pb.region[i] {
+                let c = courtyard(&pb.items[i], poses[i]);
+                if region_escape(c, r) > 0.0 { eprintln!("  out: {} courtyard {:?} region {:?}", pb.items[i].id, c, r); }
+            }
+        }
     }
     let mut clean = legalize(&pb, &mut poses, opts.snap);
     // A run that legalisation can't clean up is a bad local minimum, not a
@@ -1681,7 +1776,12 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
 
     let mut out = design.clone();
     out.provenance.seed = opts.seed;
-    out.placement = Some(PlacementSection { outline, footprints });
+    let modules = opts
+        .floorplan
+        .as_ref()
+        .map(|f| f.modules.iter().map(|m| eda_model::ir::ModuleRegion { name: m.name.clone(), refs: m.refs.clone(), rect: m.rect }).collect())
+        .unwrap_or_default();
+    out.placement = Some(PlacementSection { outline, footprints, modules });
     out.routing = None;
 
     if !clean {

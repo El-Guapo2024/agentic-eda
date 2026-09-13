@@ -1067,6 +1067,7 @@ pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o
         seed_design.placement = Some(eda_model::ir::PlacementSection {
             outline,
             footprints: model.parts.iter().map(|p| eda_model::ir::FootprintInstance { id: p.reference.clone(), at: c, rot: 0, side: eda_model::ir::Side::Top, label: LabelSide::Above }).collect(),
+            modules: Vec::new(),
         });
     }
     // Board fit is a search, not a fallback: start at the target

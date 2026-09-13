@@ -612,6 +612,7 @@ mod tests {
                 rot: 0,
                 side: Side::Top, label: Default::default()
             }],
+            modules: Vec::new(),
         });
         let v = to_circuit_json(&d, &m).unwrap();
         let arr = v.as_array().unwrap();
