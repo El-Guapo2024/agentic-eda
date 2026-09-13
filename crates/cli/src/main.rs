@@ -279,7 +279,7 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
     Ok(design)
 }
 
-fn stage_place(cx: &mut Ctx, design: &Design, seed: u64) -> Result<Design, Vec<CheckResult>> {
+fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Result<Design, Vec<CheckResult>> {
     let t0 = Instant::now();
     // The intent's `solver` block sets the placer and its tuning; an
     // explicit --placer on the command line overrides the choice only.
@@ -296,11 +296,65 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64) -> Result<Design, Vec<C
             o.fit_board_utilization = sv.fit_board_utilization;
             eda::Cypress(o).place(design, &cx.model, seed)?
         }
-        "anneal" => place(
-            design,
-            &cx.model,
-            &PlaceOptions { seed, spacing: sv.place_spacing_um, moves_per_part: sv.place_moves_per_part, snap: sv.place_snap_um, ..Default::default() },
-        )?,
+        "anneal" => {
+            // Fit the board to the parts before packing them into it. The
+            // annealer honours whatever outline the intent declared, so
+            // without this L1 ships at 60x40 mm where 44x20 does the job --
+            // and the board-use gate passes it, because it judges how parts
+            // are spread, not how much board they need.
+            // Fit the board to the parts before packing them into it. The
+            // annealer takes its outline from PlaceOptions or the model and
+            // never shrinks it, so without this L1 ships at 60x40 mm where
+            // 44x20 does the job -- and the board-use gate passes that,
+            // because it judges how the parts are spread, not how much
+            // board they needed.
+            let fitted = if sv.fit_board_utilization > 0.0 && cx.model.board.outline.is_some() {
+                // fit_outline measures a placement, so seed one from the
+                // intent's outline with every part at its centre, exactly
+                // as the Cypress path does.
+                let outline = cx.model.board.outline.clone().unwrap_or_default();
+                let c = eda_model::ir::Point {
+                    x: (outline.iter().map(|p| p.x).min().unwrap_or(0) + outline.iter().map(|p| p.x).max().unwrap_or(0)) / 2,
+                    y: (outline.iter().map(|p| p.y).min().unwrap_or(0) + outline.iter().map(|p| p.y).max().unwrap_or(0)) / 2,
+                };
+                let mut seed = design.clone();
+                seed.placement = Some(eda_model::ir::PlacementSection {
+                    outline,
+                    footprints: cx
+                        .model
+                        .parts
+                        .iter()
+                        .map(|p| eda_model::ir::FootprintInstance { id: p.reference.clone(), at: c, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() })
+                        .collect(),
+                });
+                eda::fit_outline(&seed, &cx.model, sv.fit_board_utilization, board_floor).placement.map(|pl| pl.outline)
+            } else {
+                None
+            };
+            let mut placed = place(
+                design,
+                &cx.model,
+                &PlaceOptions { seed, spacing: sv.place_spacing_um, moves_per_part: sv.place_moves_per_part, snap: sv.place_snap_um, outline: fitted, ..Default::default() },
+            )?;
+            // Fitting sizes the board before the parts land; trimming takes
+            // back whatever rim they left empty. Only edges holding no edge
+            // connector are shaved, so connectors stay flush and nothing
+            // has to be re-placed.
+            let edges: std::collections::BTreeSet<String> = cx
+                .model
+                .parts
+                .iter()
+                .filter(|p| eda_model::footprint::is_edge_connector(p))
+                .map(|p| p.reference.clone())
+                .collect();
+            for _ in 0..3 {
+                match eda::trim_empty_edges(&placed, &cx.model, &edges) {
+                    Some(t) => placed = t,
+                    None => break,
+                }
+            }
+            placed
+        }
         other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress)")]),
     };
     save_design(&cx.args.out, &placed)?;
@@ -351,20 +405,34 @@ fn reseed_may_help(fails: &[CheckResult]) -> bool {
 fn stage_place_looping(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResult>> {
     let attempts = cx.model.solver.place_attempts.max(1);
     let mut last: Vec<CheckResult> = Vec::new();
+    // Lower bound on the fitted board as a fraction of the intent outline.
+    // Starts unbounded (shrink as far as the utilisation target wants) and
+    // ratchets up when the parts turn out not to fit.
+    let mut board_floor = 0.0f64;
     for k in 0..attempts {
         // Spread the derived seeds far apart so attempt 1 is not attempt 0
         // with one part nudged; still a pure function of --seed.
         let seed = cx.args.seed.wrapping_add(k as u64 * 1_000_003);
         if k > 0 {
             let why: Vec<&str> = last.iter().map(|c| c.check.as_str()).collect();
-            let line = format!("placement attempt {} of {attempts}, seed {seed} (previous: {})", k + 1, why.join(", "));
+            let grew = if board_floor > 0.0 { format!(", board >= {:.0}% of the intent outline", board_floor * 100.0) } else { String::new() };
+            let line = format!("placement attempt {} of {attempts}, seed {seed}{grew} (previous: {})", k + 1, why.join(", "));
             println!("{line}");
             cx.log.note(line).ok();
         }
-        match stage_place(cx, schematic, seed) {
+        match stage_place(cx, schematic, seed, board_floor) {
             Ok(d) => return Ok(d),
             Err(f) => {
                 if !reseed_may_help(&f) {
+                    // A board fitted too tightly reads as structural -- the
+                    // parts genuinely do not fit what we shrank it to. Grow
+                    // it and try again rather than escalating the ladder,
+                    // which would only re-place under coarser rules.
+                    if board_floor < 1.0 {
+                        board_floor = (board_floor + 0.25).min(1.0);
+                        last = f;
+                        continue;
+                    }
                     return Err(f);
                 }
                 last = f;

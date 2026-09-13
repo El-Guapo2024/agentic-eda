@@ -1044,7 +1044,13 @@ const TRIM_MARGIN_UM: i64 = 1500;
 /// pinned connector, keeping [`TRIM_MARGIN_UM`] beyond the outermost
 /// keep-out. Parts keep their board coordinates (shifted when a min side
 /// moves). `None` when nothing is worth trimming (< 2 mm).
-fn trim_empty_edges(design: &Design, model: &ConstraintModel, pinned: &BTreeSet<String>) -> Option<Design> {
+/// Shave blank bands off any board edge that holds no pinned connector,
+/// returning `None` when there is nothing to shave. Board geometry, not a
+/// Cypress detail: the anneal path calls it through `eda::trim_empty_edges`
+/// because fitting the board before placing only gets part of the way, and
+/// whatever the placer left empty at the rim is board nobody pays for
+/// twice.
+pub fn trim_empty_edges(design: &Design, model: &ConstraintModel, pinned: &BTreeSet<String>) -> Option<Design> {
     let pl = design.placement.as_ref()?;
     if pl.outline.len() != 4 {
         return None;
@@ -1109,7 +1115,16 @@ fn keepout_area(design: &Design, model: &ConstraintModel) -> f64 {
 /// min corner so the parts' keep-out area is `util` of the board, keeping
 /// the aspect ratio and never growing it. `scale_floor` bounds the shrink
 /// from below (1.0 = as written). Non-rectangular outlines are kept.
-fn fit_outline(design: &Design, model: &ConstraintModel, util: f64, scale_floor: f64) -> Design {
+/// Shrink a rectangular outline until the parts' keep-out area is `util`
+/// of it, keeping the aspect ratio and never growing it, then park every
+/// part at the new centre for the placer to spread.
+///
+/// This is board geometry, not a Cypress detail; it lives here because
+/// that is where it was written, and the anneal path calls it through
+/// `eda::fit_outline` for exactly the same reason Cypress does: a board
+/// left at whatever outline the intent declared ships two to three times
+/// larger than it needs to be, and board area is money.
+pub fn fit_outline(design: &Design, model: &ConstraintModel, util: f64, scale_floor: f64) -> Design {
     let mut out = design.clone();
     let Some(pl) = out.placement.as_mut() else { return out };
     if util <= 0.0 || pl.outline.len() != 4 {
