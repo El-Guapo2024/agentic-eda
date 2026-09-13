@@ -82,6 +82,12 @@ pub struct BoardRules {
     /// Copper layer names, outer first: `["F.Cu", "B.Cu"]`.
     #[serde(default = "d_layers")]
     pub layers: Vec<String>,
+    /// Per-class track width and routing order. A board without classes
+    /// routes every net at `track_width` in one undifferentiated pass,
+    /// which is not how anyone lays out a board: power wants copper, and
+    /// wants it before the signals have taken the channels.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub net_classes: Vec<NetClass>,
     /// Board outline override, µm. When absent the placer sizes a rectangle.
     #[serde(default)]
     pub outline: Option<Vec<ir::Point>>,
@@ -285,9 +291,33 @@ fn d_clearance() -> ir::Um { 200 }
 fn d_via_drill() -> ir::Um { 300 }
 fn d_via_dia() -> ir::Um { 600 }
 fn d_layers() -> Vec<String> { vec!["F.Cu".into(), "B.Cu".into()] }
+impl BoardRules {
+    /// The class owning `net`, if any: first match wins.
+    pub fn class_of(&self, net: &str) -> Option<&NetClass> {
+        self.net_classes.iter().find(|c| c.matches(net))
+    }
+
+    /// Track width `net` must be routed at.
+    pub fn width_of(&self, net: &str) -> ir::Um {
+        self.class_of(net).and_then(|c| c.track_width).unwrap_or(self.track_width)
+    }
+
+    /// Widest track any net on this board can take. The router's clearance
+    /// summaries are precomputed for one querying width, so they are built
+    /// at this one: conservative for narrow nets, correct for every net.
+    pub fn widest_track(&self) -> ir::Um {
+        self.net_classes.iter().filter_map(|c| c.track_width).fold(self.track_width, ir::Um::max)
+    }
+
+    /// Routing order key: higher priority first. Power before signals.
+    pub fn priority_of(&self, net: &str) -> i32 {
+        self.class_of(net).map_or(0, |c| c.priority)
+    }
+}
+
 impl Default for BoardRules {
     fn default() -> Self {
-        BoardRules { grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(), outline: None, refdes_font_um: None, tuning: RoutingTuning::default() }
+        BoardRules { grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(), net_classes: Vec::new(), outline: None, refdes_font_um: None, tuning: RoutingTuning::default() }
     }
 }
 
@@ -418,6 +448,35 @@ pub struct StackupLayer {
     #[serde(default)]
     pub thickness_mm: Option<f64>,
 }
+
+/// A group of nets that route alike. Matched by glob over the net name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetClass {
+    pub name: String,
+    /// Globs over net names: `["GND", "VBAT*", "3V3"]`. First class whose
+    /// pattern matches a net owns it, so order the list most-specific first.
+    pub nets: Vec<String>,
+    /// Track width for this class. Absent = the board default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_width: Option<ir::Um>,
+    /// Routed before lower numbers. Power belongs first: it needs copper,
+    /// it sets the return paths, and it is the hardest thing to squeeze in
+    /// once signal nets have taken the channels. Default 0; signals sit at
+    /// 0 and power is given a higher number in the intent.
+    #[serde(default)]
+    pub priority: i32,
+}
+
+impl NetClass {
+    /// Whether `net` belongs to this class. `*` is the only wildcard and
+    /// matches any run of characters, which covers the way power nets are
+    /// actually named (`VBAT_RAW`, `VBAT_FUSED`).
+    pub fn matches(&self, net: &str) -> bool {
+        self.nets.iter().any(|pat| glob_match(pat, net))
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

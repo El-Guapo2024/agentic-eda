@@ -457,6 +457,15 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     // --- 2. grid & obstacle map -----------------------------------------
     if dbg { eprintln!("route: t pads {:?}", t_start.elapsed()); }
     let mut grid = Grid::with_widths(placement.outline.clone(), rules.grid, rules.clearance, rules.track_width, rules.via_diameter, num_layers);
+    // Declare class widths before any copper is stamped: each distinct
+    // width gets its own clearance summary, and summaries only build
+    // correctly from empty.
+    for net in &model.nets {
+        let w = rules.width_of(&net.name);
+        if w != rules.track_width {
+            grid.set_net_width(&net.name, w);
+        }
+    }
     grid.tuning = rules.tuning.clone();
     for pad in pads.values() {
         // Rasterise the pad area from its real rectangle: every cell whose
@@ -715,8 +724,12 @@ pub fn route_partial(
         }
     }
     let mut nets: Vec<String> = edges_by_net.keys().cloned().collect();
+    // Class priority outranks everything: power wants the channels before
+    // the signals take them, and it is the hardest copper to add later.
+    // Within a class, fine-pitch escapes first, then shortest airline.
+    let cls = |n: &String| std::cmp::Reverse(rules.priority_of(n));
     let prio = |n: &String| std::cmp::Reverse(*fine_pads_by_net.get(n).unwrap_or(&0));
-    nets.sort_by(|a, b| (prio(a), airline_by_net[a], a).cmp(&(prio(b), airline_by_net[b], b)));
+    nets.sort_by(|a, b| (cls(a), prio(a), airline_by_net[a], a).cmp(&(cls(b), prio(b), airline_by_net[b], b)));
     shuffle_ties(&mut nets, &airline_by_net, seed);
 
     if dbg { eprintln!("route: t edges {:?}", t_start.elapsed()); }
@@ -1151,7 +1164,7 @@ fn segment_track(net: &str, span: &SegmentSpan, grid: &Grid, rules: &RouteRules)
     if end == path.len() - 1 && !b_pin.is_empty() {
         pins.push(b_pin.to_string());
     }
-    Track { net: net.to_string(), pins, layer, width: rules.track_width, pts }
+    Track { net: net.to_string(), pins, layer, width: rules.width_of(net), pts }
 }
 
 fn is_collinear(a: Point, b: Point, c: Point) -> bool {

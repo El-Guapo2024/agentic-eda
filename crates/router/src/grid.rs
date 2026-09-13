@@ -64,6 +64,12 @@ pub struct Grid {
     pub num_layers: usize,
     /// Clearance dilation radius, in grid cells (Chebyshev).
     pub clearance_cells: i64,
+    /// Track half-width per net id, for nets whose class differs from the
+    /// board default. `set` stamps a net's own copper at its own width;
+    /// the *querying* side (`half_extent`) stays at the widest class on the
+    /// board, because the clearance summaries are precomputed for one
+    /// querying width and must never under-state what a net owes a cell.
+    net_track_half: std::collections::HashMap<u32, Um>,
     occ: Vec<Option<Cell>>,
     /// Hard blocks per (cell, layer) with no clearance dilation: gap strips
     /// between SMD pads of one footprint, and (per edge) own-net pads a
@@ -97,7 +103,17 @@ pub struct Grid {
     /// [`Grid::set`] (copper only ever grows between rip-ups) and rebuilt
     /// wholesale by [`Grid::clear_net`], so the A* hot loop answers
     /// [`Grid::passable_as`] with one lookup instead of a radius scan.
-    near_track: Vec<u32>,
+    /// Clearance summary for tracks, one array per *querying* width.
+    /// A summary answers "would copper of width W here violate clearance
+    /// against what is already stamped", and the answer depends on W, so a
+    /// board with net classes needs one per class width. Bucket 0 is the
+    /// board default. Building a single summary at the widest class instead
+    /// looked tempting and sealed every fine-pitch pad on L4.
+    near_track: Vec<Vec<u32>>,
+    /// Querying half-widths, indexed by bucket. Bucket 0 is the default.
+    track_query_halves: Vec<Um>,
+    /// Which bucket a net queries. Absent = bucket 0.
+    net_bucket: std::collections::HashMap<u32, usize>,
     /// Same for *via* separation (a via's copper is wider, so its radius
     /// is larger).
     near_via: Vec<u32>,
@@ -159,6 +175,7 @@ impl Grid {
             cells_y,
             num_layers,
             clearance_cells,
+            net_track_half: std::collections::HashMap::new(),
             occ: Vec::new(),
             blocked: Vec::new(),
             penalty: Vec::new(),
@@ -167,6 +184,8 @@ impl Grid {
             soft_active: false,
             soft_via_active: false,
             near_track: Vec::new(),
+            track_query_halves: Vec::new(),
+            net_bucket: std::collections::HashMap::new(),
             near_via: Vec::new(),
             via_near_pad: Vec::new(),
             hist: Vec::new(),
@@ -198,7 +217,8 @@ impl Grid {
         g.penalty = vec![0; n];
         g.soft = vec![false; n];
         g.soft_via = vec![false; n];
-        g.near_track = vec![EMPTY; n];
+        g.track_query_halves = vec![track_width / 2];
+        g.near_track = vec![vec![EMPTY; n]];
         g.near_via = vec![EMPTY; n];
         g.via_near_pad = vec![false; n];
         g.hist = vec![0; n];
@@ -239,12 +259,12 @@ impl Grid {
                 return;
             }
         }
-        for me in [Occ::Track, Occ::Via] {
-            let r = self.min_sep_cells_half(me, half_um) - 1;
+        for b in 0..self.track_query_halves.len() {
+            let r = self.sep_cells_for(self.track_query_halves[b], half_um) - 1;
             for dx in -r..=r {
                 for dy in -r..=r {
                     if let Some(j) = self.idx(cx + dx, cy + dy, layer) {
-                        let slot = if me == Occ::Track { &mut self.near_track[j] } else { &mut self.near_via[j] };
+                        let slot = &mut self.near_track[b][j];
                         *slot = match *slot {
                             EMPTY => net_id,
                             x if x == net_id => x,
@@ -254,6 +274,32 @@ impl Grid {
                 }
             }
         }
+        let r = self.min_sep_cells_half(Occ::Via, half_um) - 1;
+        for dx in -r..=r {
+            for dy in -r..=r {
+                if let Some(j) = self.idx(cx + dx, cy + dy, layer) {
+                    let slot = &mut self.near_via[j];
+                    *slot = match *slot {
+                        EMPTY => net_id,
+                        x if x == net_id => x,
+                        _ => MULTI,
+                    };
+                }
+            }
+        }
+    }
+
+    /// Public form of [`Grid::sep_cells_for`], for the negotiation
+    /// bookkeeping, which has to size a net's claim to its own copper.
+    pub fn sep_cells_for_pub(&self, query_half_um: Um, b_half_um: Um) -> i64 {
+        self.sep_cells_for(query_half_um, b_half_um)
+    }
+
+    /// Cells of separation a querying half-width owes copper of half-width
+    /// `b_half_um`.
+    fn sep_cells_for(&self, query_half_um: Um, b_half_um: Um) -> i64 {
+        let um = self.clearance_um + query_half_um + b_half_um;
+        (um + self.grid_um - 1) / self.grid_um
     }
 
     /// Exact separation stamping for one pad's copper on `layer`: every
@@ -270,7 +316,7 @@ impl Grid {
                 for cy in y0..=y1 {
                     let Some(j) = self.idx(cx, cy, layer) else { continue };
                     if pad.rect_distance(self.to_point(cx, cy)) < need as f64 {
-                        let slot = if me == Occ::Track { &mut self.near_track[j] } else { &mut self.near_via[j] };
+                        let slot = if me == Occ::Track { &mut self.near_track[0][j] } else { &mut self.near_via[j] };
                         *slot = match *slot {
                             EMPTY => net_id,
                             x if x == net_id => x,
@@ -312,8 +358,10 @@ impl Grid {
     /// Rebuild every separation summary from the occupancy map (after a
     /// rip-up removed copper — the summaries only ever grow otherwise).
     fn rebuild_near(&mut self) {
-        for v in self.near_track.iter_mut() {
-            *v = EMPTY;
+        for b in self.near_track.iter_mut() {
+            for v in b.iter_mut() {
+                *v = EMPTY;
+            }
         }
         for v in self.near_via.iter_mut() {
             *v = EMPTY;
@@ -382,6 +430,36 @@ impl Grid {
         self.inside[(cy * self.cells_x + cx) as usize]
     }
 
+    /// Declare that `net` routes at `width_um`. Call once per net before
+    /// routing; nets never declared use the board default.
+    /// Call before any copper is stamped: it allocates a clearance summary
+    /// for the new width, and summaries only grow correctly from empty.
+    pub fn set_net_width(&mut self, net: &str, width_um: Um) {
+        let id = self.net_id(net);
+        let half = width_um / 2;
+        self.net_track_half.insert(id, half);
+        let bucket = match self.track_query_halves.iter().position(|&h| h == half) {
+            Some(b) => b,
+            None => {
+                let n = self.near_track[0].len();
+                self.track_query_halves.push(half);
+                self.near_track.push(vec![EMPTY; n]);
+                self.track_query_halves.len() - 1
+            }
+        };
+        self.net_bucket.insert(id, bucket);
+    }
+
+    /// Track half-width `net` lays copper at.
+    pub fn net_track_half_of(&self, net: &str) -> Um {
+        self.net_ids.get(net).and_then(|id| self.net_track_half.get(id)).copied().unwrap_or(self.track_half_um)
+    }
+
+    #[inline]
+    fn bucket_of(&self, net_id: u32) -> usize {
+        self.net_bucket.get(&net_id).copied().unwrap_or(0)
+    }
+
     /// The single choke point through which all copper enters the grid.
     /// Whatever `kind` survives for obstacle bookkeeping, `half_um` always
     /// ends up at the widest copper the cell holds, so `passable_as`
@@ -394,7 +472,11 @@ impl Grid {
         // outside the real copper, and a track running over it must stamp
         // its own width from there (ldo: GND over its tab's edge cell,
         // VOUT then laid adjacent with a 54 µm gap).
-        let half = if kind == Occ::Pad { 0 } else { self.half_extent(kind) };
+        let half = match kind {
+            Occ::Pad => 0,
+            Occ::Track => self.net_track_half.get(&net_id).copied().unwrap_or(self.track_half_um),
+            _ => self.half_extent(kind),
+        };
         if let Some(i) = self.idx(cx, cy, layer) {
             // A pad never downgrades to track/via copper of its own net:
             // rip-up must keep the pad as an obstacle. Likewise a via
@@ -533,7 +615,7 @@ impl Grid {
         if !own_pad && self.edge_dist[(cy * self.cells_x + cx) as usize] < self.tuning.edge_clearance_um + self.half_extent(Occ::Track) {
             return 'E';
         }
-        let near = self.near_track[i];
+        let near = self.near_track[0][i];
         if !(near == EMPTY || near == net_id) {
             return 'N';
         }
@@ -554,7 +636,7 @@ impl Grid {
                 MULTI => "MULTI".to_string(),
                 x => self.net_names.get(x as usize).cloned().unwrap_or_else(|| format!("#{x}")),
             };
-            out += &format!("near_track={} near_via={} occ={:?}\n", name(self.near_track[i]), name(self.near_via[i]), self.occ[i].as_ref().map(|c| (name(c.net_id), c.kind, c.half_um)));
+            out += &format!("near_track={} near_via={} occ={:?}\n", name(self.near_track[0][i]), name(self.near_via[i]), self.occ[i].as_ref().map(|c| (name(c.net_id), c.kind, c.half_um)));
         }
         let p = self.to_point(cx, cy);
         for (nid, l, pad) in &self.pads_exact {
@@ -719,7 +801,7 @@ impl Grid {
         // clearance radius for foreign copper closer than the kind-aware
         // minimum separation, which is what `stamp` precomputed.
         let Some(i) = self.idx(cx, cy, layer) else { return false };
-        let near = if me == Occ::Via { self.near_via[i] } else { self.near_track[i] };
+        let near = if me == Occ::Via { self.near_via[i] } else { self.near_track[self.bucket_of(net_id)][i] };
         let fast = near == EMPTY || near == net_id;
         if self.check_near {
             let slow = self.passable_scan(cx, cy, layer, net_id, me);

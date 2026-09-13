@@ -736,9 +736,18 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     let half_grid = if rules.grid > 130 { rules.grid / 2 } else { rules.grid };
     let on_grid = |v: eda_model::ir::Um| v.rem_euclid(rules.grid) == 0 || v.rem_euclid(half_grid) == 0;
     for (i, t) in rt.tracks.iter().enumerate() {
-        if t.width < rules.track_width {
+        // A net in a class must carry that class's copper, not merely the
+        // board minimum: a power net routed at signal width is the failure
+        // the class exists to prevent, and it looks fine by a min-width
+        // test.
+        let want = rules.width_of(&t.net);
+        if t.width < want {
             width_ok = false;
-            out.push(CheckResult::fail("routing_track_width", format!("{}#{i}", t.net), format!("width {} < min {}", t.width, rules.track_width)));
+            let cls = rules.class_of(&t.net).map(|c| c.name.as_str()).unwrap_or("default");
+            out.push(
+                CheckResult::fail("routing_track_width", format!("{}#{i}", t.net), format!("width {} < {want} required by net class {cls}", t.width))
+                    .with_detail(serde_json::json!({ "net": t.net, "width_um": t.width, "required_um": want, "class": cls })),
+            );
         }
         for p in &t.pts {
             if !point_in_polygon(*p, &pl.outline) && !on_boundary(*p, &pl.outline) {

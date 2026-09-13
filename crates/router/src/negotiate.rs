@@ -103,8 +103,11 @@ impl Claims {
         out
     }
 
-    fn footprint(&self, own_pads: &[&PadInfo], grid: &Grid, path: &[(i64, i64, u8)]) -> Vec<usize> {
-        let r_t = grid.sep_cells(Occ::Track, grid.track_half_um) - 1;
+    fn footprint(&self, own_pads: &[&PadInfo], grid: &Grid, path: &[(i64, i64, u8)], half_um: i64) -> Vec<usize> {
+        // Sized to this net's own copper: a 0.6 mm motor track claims far
+        // more than a 0.2 mm signal, and claiming the default width let two
+        // wide tracks negotiate to adjacent cells and overlap in metal.
+        let r_t = grid.sep_cells_for_pub(half_um, half_um) - 1;
         let r_v = grid.sep_cells(Occ::Via, grid.via_half_um) - 1;
         let mut out = Vec::new();
         for (i, &(cx, cy, l)) in path.iter().enumerate() {
@@ -354,7 +357,7 @@ fn route_net(
             }
         }
         let own_pads: Vec<&PadInfo> = pads.values().filter(|p| p.net == net).collect();
-        for j in claims.footprint(&own_pads, grid, &path) {
+        for j in claims.footprint(&own_pads, grid, &path, grid.net_track_half_of(net)) {
             claims.mine[j] = claims.epoch;
         }
         let end = *path.last().unwrap();
@@ -435,7 +438,7 @@ pub(crate) fn run(
                     let mut cells: Vec<usize> = Vec::new();
                     let mut cu: Vec<usize> = Vec::new();
                     for (p, _) in &ps {
-                        cells.extend(claims.footprint(&own_pads, grid, p));
+                        cells.extend(claims.footprint(&own_pads, grid, p, grid.net_track_half_of(net)));
                         cu.extend(claims.copper_cells(&own_pads, grid, p));
                     }
                     cells.sort_unstable();
