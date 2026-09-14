@@ -473,6 +473,7 @@ dependencies = [
  "eda-place",
  "eda-render",
  "eda-router",
+ "serde_json",
 ]
 
 [[package]]

@@ -61,6 +61,23 @@ struct Claims {
 }
 
 impl Claims {
+    /// Rebuild the occupancy counts from the per-net cell lists, leaving
+    /// `hist` (and the epoch scratch) alone: history is what the search
+    /// has learned and must survive a restore, while the counts are pure
+    /// function of who is routed where.
+    fn replay(&mut self, stamped: &HashMap<String, (Vec<usize>, Vec<usize>)>) {
+        self.claims.iter_mut().for_each(|c| *c = 0);
+        self.copper.iter_mut().for_each(|c| *c = 0);
+        for (cells, cu) in stamped.values() {
+            for &j in cells {
+                self.claims[j] += 1;
+            }
+            for &j in cu {
+                self.copper[j] += 1;
+            }
+        }
+    }
+
     fn new(grid: &Grid) -> Self {
         let n = (grid.cells_x * grid.cells_y) as usize * grid.num_layers;
         Claims { cells_x: grid.cells_x, cells_y: grid.cells_y, num_layers: grid.num_layers, claims: vec![0; n], copper: vec![0; n], hist: vec![0; n], mine: vec![0; n], epoch: 1 }
@@ -428,7 +445,12 @@ pub(crate) fn run(
     // conflict are ripped up, so everything settled stays settled and the
     // negotiation can close on the last cell instead of re-rolling it.
     let mut focus: Option<Vec<String>> = None;
-    type BestState = (HashMap<String, Vec<(Vec<(i64, i64, u8)>, String)>>, HashMap<String, (Vec<usize>, Vec<usize>)>, Claims, Vec<String>, usize);
+    // Deliberately no `Claims` in here. Snapshotting the whole grid --
+    // four vectors of cells x layers -- on every improvement cost the
+    // 4p6n fixture 28% of its routing time, and it is redundant: `stamped`
+    // already records exactly which cells each net claims, so the counts
+    // can be replayed on the rare restore instead of copied on every win.
+    type BestState = (HashMap<String, Vec<(Vec<(i64, i64, u8)>, String)>>, HashMap<String, (Vec<usize>, Vec<usize>)>, Vec<String>, usize);
     let mut best_state: Option<BestState> = None;
     for iter in 0..tn.nc_max_iters {
         if tn.nc_max_wall_s > 0.0 && t_all.elapsed().as_secs_f64() > tn.nc_max_wall_s && iter > 0 {
@@ -488,18 +510,20 @@ pub(crate) fn run(
                 }
             }
         }
-        overused = (0..claims.claims.len()).filter(|&j| claims.copper[j] > 0 && claims.claims[j] > 1).count();
+        // One pass, not two: the contested cells are collected here and
+        // reused for the focus set below. Scanning the grid a second time
+        // to find them again cost more than everything the focus saves.
+        let contested: Vec<usize> = (0..claims.claims.len()).filter(|&j| claims.copper[j] > 0 && claims.claims[j] > 1).collect();
+        overused = contested.len();
         // Pick the nets that will be ripped up next time. Below the
         // threshold, that is exactly the ones sharing a contested cell
         // (plus anything still unrouted); above it, everything.
         focus = if overused > 0 && overused <= tn.nc_focus_cells {
             let mut f: Vec<String> = unrouted.clone();
-            for j in 0..claims.claims.len() {
-                if claims.copper[j] > 0 && claims.claims[j] > 1 {
-                    for (n, (cells, _)) in &stamped {
-                        if cells.binary_search(&j).is_ok() && !f.contains(n) {
-                            f.push(n.clone());
-                        }
+            for &j in &contested {
+                for (n, (cells, _)) in &stamped {
+                    if cells.binary_search(&j).is_ok() && !f.contains(n) {
+                        f.push(n.clone());
                     }
                 }
             }
@@ -534,7 +558,7 @@ pub(crate) fn run(
             // the last iteration happened to leave behind. Reporting a
             // result eight times worse than one already in hand is not a
             // verdict on the board.
-            best_state = Some((paths.clone(), stamped.clone(), claims.clone(), unrouted.clone(), overused));
+            best_state = Some((paths.clone(), stamped.clone(), unrouted.clone(), overused));
         } else {
             since_improve += 1;
         }
@@ -542,10 +566,8 @@ pub(crate) fn run(
         // with alternatives swap places forever (mcu_board_30plus seed 1:
         // GND/PA7 traded one cell for 40 iterations at a flat +2).
         let inc = (tn.nc_hist_inc as f64).max(pres_fac * 2.0).min(u16::MAX as f64 / 4.0) as u16;
-        for j in 0..claims.claims.len() {
-            if claims.copper[j] > 0 && claims.claims[j] > 1 {
-                claims.hist[j] = claims.hist[j].saturating_add(inc.saturating_mul(claims.claims[j] - 1));
-            }
+        for &j in &contested {
+            claims.hist[j] = claims.hist[j].saturating_add(inc.saturating_mul(claims.claims[j] - 1));
         }
         pres_fac = (pres_fac * tn.nc_pres_fac_mult).min(tn.nc_pres_fac_max);
 
@@ -558,15 +580,13 @@ pub(crate) fn run(
         // wanders (L4: 1, 14, 1, 15, 1, ...) and whether it ever lands on
         // zero is luck.
         if tn.nc_rollback {
-            if let Some((bp, bs, bc, bu, bov)) = &best_state {
+            if let Some((bp, bs, bu, bov)) = &best_state {
                 if overused + unrouted.len() > *bov {
-                    let learned = std::mem::take(&mut claims.hist);
                     paths = bp.clone();
                     stamped = bs.clone();
-                    claims = bc.clone();
                     unrouted = bu.clone();
                     overused = *bov;
-                    claims.hist = learned;
+                    claims.replay(&stamped);
                     if dbg {
                         eprintln!("negotiate: rolled back to best ({bov} overused), history kept");
                     }
@@ -577,16 +597,16 @@ pub(crate) fn run(
     // Hand back the best iteration, not the last one. Everything below --
     // the congestion detail, the hotspots, the returned paths -- reads the
     // live state, so the restore has to happen before any of it.
-    if let Some((bp, bs, bc, bu, bov)) = best_state {
+    if let Some((bp, bs, bu, bov)) = best_state {
         if bov < overused {
             if dbg {
                 eprintln!("negotiate: returning best iteration ({bov} overused) over the last ({overused})");
             }
             paths = bp;
             stamped = bs;
-            claims = bc;
             unrouted = bu;
             overused = bov;
+            claims.replay(&stamped);
         }
     }
 

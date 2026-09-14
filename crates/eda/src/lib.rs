@@ -17,7 +17,8 @@ pub use eda_intent::lint::lint;
 pub use eda_render::render_schematic;
 pub use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
 pub use eda_interchange::{from_bookshelf_pl, to_bookshelf, to_circuit_json, Bookshelf};
-pub use eda_router::{preflight, route, route_partial, RouteRules};
+pub use eda_router::{preflight, route, RouteRules};
+pub use eda_router::route_partial as route_partial_raw;
 pub use eda_place::{hpwl, place, Anneal, PlaceOptions, Placer};
 pub use eda_cypress::{place_with_cypress, Cypress, CypressOptions};
 pub use eda_model::board::{fit_outline, trim_empty_edges};
@@ -46,4 +47,67 @@ mod tests {
         // Compile-time proof every re-export resolves.
         let _ = super::EngineOptions::default();
     }
+}
+
+
+/// Route, then check that the router and the geometry gate agree about
+/// what they just produced.
+///
+/// The router reasons in grid cells; the gates measure real copper. They
+/// are two independent models of the same physics, and nothing used to
+/// assert they agree. They drifted: with per-width clearance buckets in
+/// play the negotiator reported zero contested cells on an L4 board the
+/// clearance gate found 251 real overlaps on, because pads were stamped
+/// into one bucket only. Both models were internally consistent and both
+/// were wrong about each other, so neither could notice.
+///
+/// That matters more here than in an ordinary tool. These gates are the
+/// reward signal: a router that reports success on a board with 251
+/// violations is an environment that lies, and agents optimise against
+/// whatever it says. A disagreement is therefore a hard failure of the
+/// *engine*, named as such, and never a routing failure to be retried
+/// under another seed -- the board may well be fine; the tooling is not.
+pub fn route_checked(
+    design: &eda_model::ir::Design,
+    model: &eda_model::ConstraintModel,
+    rules: &RouteRules,
+    seed: u64,
+) -> (Option<eda_model::ir::Design>, Vec<eda_model::CheckResult>) {
+    use eda_model::{CheckResult, CheckStatus};
+    let (out, mut fails) = route_partial_raw(design, model, rules, seed);
+    let router_claims_clean = fails.is_empty();
+    let Some(routed) = out else { return (None, fails) };
+    if !router_claims_clean {
+        return (Some(routed), fails);
+    }
+    // Only the checks that describe copper the router itself placed. A
+    // quality or style gate failing is a verdict on the board; a clearance
+    // or short failing here is a verdict on the router's own model.
+    const COPPER: &[&str] = &["routing_clearance", "routing_short", "routing_track_width", "routing_between_smd_pads"];
+    let geometric: Vec<CheckResult> = eda_gates::check_routing(&routed, model)
+        .into_iter()
+        .filter(|c| c.status == CheckStatus::Fail && COPPER.contains(&c.check.as_str()))
+        .collect();
+    if !geometric.is_empty() {
+        let mut by_check: std::collections::BTreeMap<&str, usize> = Default::default();
+        for c in &geometric {
+            *by_check.entry(c.check.as_str()).or_default() += 1;
+        }
+        let summary = by_check.iter().map(|(k, n)| format!("{k} x{n}")).collect::<Vec<_>>().join(", ");
+        let first = geometric.first().map(|c| format!("{} @ {}: {}", c.check, c.location.clone().unwrap_or_default(), c.hint.clone().unwrap_or_default())).unwrap_or_default();
+        fails.push(
+            CheckResult::fail(
+                "engine_router_gate_disagreement",
+                "routing",
+                format!("the router reported a clean board and the geometry gate found {} copper violation(s) on it ({summary}); first: {first}", geometric.len()),
+            )
+            .with_detail(serde_json::json!({
+                "violations": geometric.len(),
+                "by_check": by_check.iter().map(|(k, v)| (k.to_string(), *v)).collect::<std::collections::BTreeMap<String, usize>>(),
+                "suggest": "engine bug, not a board problem: the router's grid model and the geometry gate disagree. Do not retry under another seed -- find the model that is wrong.",
+            })),
+        );
+        fails.extend(geometric);
+    }
+    (Some(routed), fails)
 }

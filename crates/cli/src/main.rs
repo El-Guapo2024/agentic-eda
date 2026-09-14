@@ -521,7 +521,7 @@ fn stage_solve(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResu
 
 fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>> {
     let t0 = Instant::now();
-    let routed = match eda::route_partial(design, &cx.model, &cx.model.board, cx.args.seed) {
+    let routed = match eda::route_checked(design, &cx.model, &cx.model.board, cx.args.seed) {
         (Some(d), fails) if fails.is_empty() => d,
         (partial, fails) => {
             // Persist the partial result for review, then fail the stage.

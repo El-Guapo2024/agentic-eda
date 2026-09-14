@@ -154,10 +154,15 @@ impl Grid {
     /// Full constructor: `track_width` and `via_diameter` in µm feed the
     /// kind-aware clearance in [`Grid::passable_as`].
     pub fn with_widths(outline: Vec<Point>, grid_um: Um, clearance_um: Um, track_width: Um, via_diameter: Um, num_layers: usize) -> Self {
-        let min_x = outline.iter().map(|p| p.x).min().unwrap_or(0);
-        let min_y = outline.iter().map(|p| p.y).min().unwrap_or(0);
-        let max_x = outline.iter().map(|p| p.x).max().unwrap_or(0);
-        let max_y = outline.iter().map(|p| p.y).max().unwrap_or(0);
+        // An empty outline used to fall through to a 1x1-cell board on
+        // which every net trivially "routes". Callers are supposed to
+        // reject that upstream; if one ever stops, this must be a crash
+        // and not a board-shaped object that passes gates.
+        assert!(outline.len() >= 3, "Grid::with_widths needs a real outline, got {} point(s)", outline.len());
+        let min_x = outline.iter().map(|p| p.x).min().expect("outline non-empty");
+        let min_y = outline.iter().map(|p| p.y).min().expect("outline non-empty");
+        let max_x = outline.iter().map(|p| p.x).max().expect("outline non-empty");
+        let max_y = outline.iter().map(|p| p.y).max().expect("outline non-empty");
         let cells_x = ((max_x - min_x) / grid_um).max(0) + 1;
         let cells_y = ((max_y - min_y) / grid_um).max(0) + 1;
         // Widest separation any pair can need: via-to-via.
@@ -478,8 +483,14 @@ impl Grid {
         self.net_ids.get(net).and_then(|id| self.net_track_half.get(id)).copied().unwrap_or(self.track_half_um)
     }
 
+    /// Bucket 0 is the default-width bucket, and a net with no declared
+    /// class genuinely lays copper at the default width -- so this `0` is
+    /// the right answer, not a fallback papering over a missing entry.
+    /// The bug that looked like this one was elsewhere: bucket 0 was the
+    /// only bucket pads were ever stamped into (see `stamp_pad_exact`).
     #[inline]
     fn bucket_of(&self, net_id: u32) -> usize {
+        debug_assert!(!self.track_query_halves.is_empty(), "bucket 0 must exist");
         self.net_bucket.get(&net_id).copied().unwrap_or(0)
     }
 

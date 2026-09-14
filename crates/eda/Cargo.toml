@@ -5,6 +5,7 @@ edition = "2021"
 description = "Agentic EDA toolkit — single-entry facade over the workspace crates"
 
 [dependencies]
+serde_json = { workspace = true }
 eda-model = { path = "../model" }
 eda-intent = { path = "../intent" }
 eda-layout = { path = "../layout" }
