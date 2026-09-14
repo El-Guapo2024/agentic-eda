@@ -176,6 +176,14 @@ pub struct RoutingTuning {
     /// and still converged before 40), so the wall budget is the honest
     /// limit. Set it for fast exploratory batches.
     pub nc_stall_iters: usize,
+    /// Overused-cell count at or below which the negotiator stops ripping
+    /// up the whole board each pass and rips up only the nets actually in
+    /// conflict. 0 disables focusing and always rips up everything.
+    pub nc_focus_cells: usize,
+    /// After an iteration that ends worse than the best seen, restore the
+    /// best board and keep the history learned from the bad pass. Turns
+    /// the negotiation from a random walk into a monotone search.
+    pub nc_rollback: bool,
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
@@ -200,6 +208,8 @@ impl Default for RoutingTuning {
             nc_hist_inc: 2,
             nc_max_wall_s: 900.0,
             nc_stall_iters: 0,
+            nc_focus_cells: 8,
+            nc_rollback: true,
         }
     }
 }

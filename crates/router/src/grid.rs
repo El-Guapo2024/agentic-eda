@@ -307,8 +307,20 @@ impl Grid {
     /// the pad edge learns that `net_id` is nearby (track and via
     /// summaries separately).
     fn stamp_pad_exact(&mut self, net_id: u32, layer: u8, pad: &PlacedPad) {
-        for me in [Occ::Track, Occ::Via] {
-            let need = self.clearance_um + self.half_extent(me);
+        // One pass per track-width bucket plus one for vias. Each bucket
+        // asks its own question -- "how close may a track of *this* half
+        // width come to this pad" -- so each needs its own radius.
+        //
+        // This used to stamp `near_track[0]` only, at the default track
+        // half width. Every bucket a net class created was therefore born
+        // empty of pads and stayed that way, so a 0.45 mm power net saw no
+        // pad separation at all and routed straight into pad copper: on L4
+        // at net-class widths that was 251 routing_clearance failures the
+        // negotiator scored as zero conflicts, against pads like J4.2.
+        let vias = self.track_query_halves.len();
+        for b in 0..=vias {
+            let is_via = b == vias;
+            let need = self.clearance_um + if is_via { self.half_extent(Occ::Via) } else { self.track_query_halves[b] };
             let (hw, hh) = (pad.size.0 / 2 + need + self.grid_um, pad.size.1 / 2 + need + self.grid_um);
             let (x0, y0) = self.to_cell(Point { x: pad.center.x - hw, y: pad.center.y - hh });
             let (x1, y1) = self.to_cell(Point { x: pad.center.x + hw, y: pad.center.y + hh });
@@ -316,7 +328,7 @@ impl Grid {
                 for cy in y0..=y1 {
                     let Some(j) = self.idx(cx, cy, layer) else { continue };
                     if pad.rect_distance(self.to_point(cx, cy)) < need as f64 {
-                        let slot = if me == Occ::Track { &mut self.near_track[0][j] } else { &mut self.near_via[j] };
+                        let slot = if is_via { &mut self.near_via[j] } else { &mut self.near_track[b][j] };
                         *slot = match *slot {
                             EMPTY => net_id,
                             x if x == net_id => x,
@@ -444,6 +456,17 @@ impl Grid {
                 let n = self.near_track[0].len();
                 self.track_query_halves.push(half);
                 self.near_track.push(vec![EMPTY; n]);
+                // A bucket is born empty, so any pad already stamped is
+                // invisible in it. Callers are meant to declare every class
+                // width before laying copper, but a bucket that silently
+                // lacks the board's pads is the kind of hole that shows up
+                // later as unexplained clearance failures -- so re-stamp
+                // rather than trust the call order.
+                let pads = std::mem::take(&mut self.pads_exact);
+                for (pid, layer, pad) in &pads {
+                    self.stamp_pad_exact(*pid, *layer, pad);
+                }
+                self.pads_exact = pads;
                 self.track_query_halves.len() - 1
             }
         };

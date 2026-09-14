@@ -37,6 +37,7 @@ impl PartialOrd for QueueItem {
 }
 
 /// Per (cell, layer) contention state.
+#[derive(Clone)]
 struct Claims {
     cells_x: i64,
     cells_y: i64,
@@ -103,11 +104,19 @@ impl Claims {
         out
     }
 
-    fn footprint(&self, own_pads: &[&PadInfo], grid: &Grid, path: &[(i64, i64, u8)], half_um: i64) -> Vec<usize> {
-        // Sized to this net's own copper: a 0.6 mm motor track claims far
-        // more than a 0.2 mm signal, and claiming the default width let two
-        // wide tracks negotiate to adjacent cells and overlap in metal.
-        let r_t = grid.sep_cells_for_pub(half_um, half_um) - 1;
+    fn footprint(&self, own_pads: &[&PadInfo], grid: &Grid, path: &[(i64, i64, u8)], half_um: i64, widest_half_um: i64) -> Vec<usize> {
+        // A claim has to answer "how close may *any other net's* copper
+        // come to mine", so it is dilated by my half-width, the clearance,
+        // and the widest half-width on the board -- not by my own on both
+        // sides. With my own on both sides a 0.2 mm signal reserved
+        // 0.2 + 0.2 + 0.2 = 0.6 mm while a 0.45 mm power net needs
+        // 0.1 + 0.2 + 0.225 = 0.525 mm of centre distance, so the narrow
+        // net under-reserved against the wide one and the negotiator
+        // scored a real metal overlap as zero conflicts (L4 at net-class
+        // widths: 0 overused cells, 242 routing_clearance failures with
+        // gaps as negative as -325 µm). Conservative for narrow/narrow
+        // pairs, correct for every pair.
+        let r_t = grid.sep_cells_for_pub(half_um, widest_half_um) - 1;
         let r_v = grid.sep_cells(Occ::Via, grid.via_half_um) - 1;
         let mut out = Vec::new();
         for (i, &(cx, cy, l)) in path.iter().enumerate() {
@@ -357,7 +366,7 @@ fn route_net(
             }
         }
         let own_pads: Vec<&PadInfo> = pads.values().filter(|p| p.net == net).collect();
-        for j in claims.footprint(&own_pads, grid, &path, grid.net_track_half_of(net)) {
+        for j in claims.footprint(&own_pads, grid, &path, grid.net_track_half_of(net), rules.widest_track() / 2) {
             claims.mine[j] = claims.epoch;
         }
         let end = *path.last().unwrap();
@@ -394,6 +403,9 @@ pub(crate) fn run(
     dbg: bool,
 ) -> (HashMap<String, Vec<Track>>, HashMap<String, Vec<Via>>, Vec<CheckResult>) {
     let mut claims = Claims::new(grid);
+    // The widest track any net on this board may use: what every claim has
+    // to leave room for, since a claim cannot know which net will ask.
+    let widest_half = rules.widest_track() / 2;
     // One search table for the whole run. It spans the grid (cells x
     // layers x directions) and every net edge of every iteration used to
     // allocate and fill a fresh one; `reset` is now a counter bump.
@@ -409,6 +421,15 @@ pub(crate) fn run(
     let mut stopped_by = "converged";
     let mut best_overused = usize::MAX;
     let mut since_improve = 0usize;
+    let mut last_unrouted: Vec<String> = Vec::new();
+    // When only a handful of cells still contend, rerouting all 76 nets
+    // perturbs a board that is already 99.9% right and the count bounces
+    // (L4: 1, 14, 1, 15, 1...). Past that point only the nets actually in
+    // conflict are ripped up, so everything settled stays settled and the
+    // negotiation can close on the last cell instead of re-rolling it.
+    let mut focus: Option<Vec<String>> = None;
+    type BestState = (HashMap<String, Vec<(Vec<(i64, i64, u8)>, String)>>, HashMap<String, (Vec<usize>, Vec<usize>)>, Claims, Vec<String>, usize);
+    let mut best_state: Option<BestState> = None;
     for iter in 0..tn.nc_max_iters {
         if tn.nc_max_wall_s > 0.0 && t_all.elapsed().as_secs_f64() > tn.nc_max_wall_s && iter > 0 {
             stopped_by = "wall_budget";
@@ -422,7 +443,14 @@ pub(crate) fn run(
         stopped_by = "iterations";
         let t = std::time::Instant::now();
         unrouted.clear();
-        for net in order {
+        let active: Vec<&String> = match &focus {
+            Some(f) => order.iter().filter(|n| f.contains(n)).collect(),
+            None => order.iter().collect(),
+        };
+        if dbg && focus.is_some() {
+            eprintln!("negotiate: focused rip-up on {} of {} nets", active.len(), order.len());
+        }
+        for net in active {
             // Rip up: this net's claims come off before it re-routes.
             if let Some((cells, cu)) = stamped.remove(net) {
                 for j in cells {
@@ -438,7 +466,7 @@ pub(crate) fn run(
                     let mut cells: Vec<usize> = Vec::new();
                     let mut cu: Vec<usize> = Vec::new();
                     for (p, _) in &ps {
-                        cells.extend(claims.footprint(&own_pads, grid, p, grid.net_track_half_of(net)));
+                        cells.extend(claims.footprint(&own_pads, grid, p, grid.net_track_half_of(net), widest_half));
                         cu.extend(claims.copper_cells(&own_pads, grid, p));
                     }
                     cells.sort_unstable();
@@ -461,6 +489,24 @@ pub(crate) fn run(
             }
         }
         overused = (0..claims.claims.len()).filter(|&j| claims.copper[j] > 0 && claims.claims[j] > 1).count();
+        // Pick the nets that will be ripped up next time. Below the
+        // threshold, that is exactly the ones sharing a contested cell
+        // (plus anything still unrouted); above it, everything.
+        focus = if overused > 0 && overused <= tn.nc_focus_cells {
+            let mut f: Vec<String> = unrouted.clone();
+            for j in 0..claims.claims.len() {
+                if claims.copper[j] > 0 && claims.claims[j] > 1 {
+                    for (n, (cells, _)) in &stamped {
+                        if cells.binary_search(&j).is_ok() && !f.contains(n) {
+                            f.push(n.clone());
+                        }
+                    }
+                }
+            }
+            (!f.is_empty()).then_some(f)
+        } else {
+            None
+        };
         if dbg {
             eprintln!("negotiate: iter {iter} pres_fac {pres_fac:.2} overused {overused} unrouted {} in {:?}", unrouted.len(), t.elapsed());
         }
@@ -468,9 +514,27 @@ pub(crate) fn run(
             stopped_by = "converged";
             break;
         }
+        // Negotiation prices congestion; it cannot conjure a path where
+        // none exists. With no contested cells left and the same nets
+        // still unrouted, every further iteration reroutes the same board
+        // to the same result -- on L4 that was 60 iterations of provably
+        // no work. Stop and report the nets, which is the actionable fact.
+        if overused == 0 && !unrouted.is_empty() && unrouted == last_unrouted {
+            stopped_by = "unroutable";
+            break;
+        }
+        last_unrouted = unrouted.clone();
         if overused + unrouted.len() < best_overused {
             best_overused = overused + unrouted.len();
             since_improve = 0;
+            // Keep the state, not just the score. Once `pres_fac`
+            // saturates the negotiation oscillates hard -- on L4 at
+            // net-class widths it hit 3 overused cells on iteration 38 and
+            // 26 on iteration 39 -- and the loop used to return whatever
+            // the last iteration happened to leave behind. Reporting a
+            // result eight times worse than one already in hand is not a
+            // verdict on the board.
+            best_state = Some((paths.clone(), stamped.clone(), claims.clone(), unrouted.clone(), overused));
         } else {
             since_improve += 1;
         }
@@ -484,7 +548,48 @@ pub(crate) fn run(
             }
         }
         pres_fac = (pres_fac * tn.nc_pres_fac_mult).min(tn.nc_pres_fac_max);
+
+        // Never carry a worse board into the next iteration. History has
+        // just been charged for the conflicts this pass found, so the
+        // rollback keeps that learning and throws away only the routing:
+        // the next attempt starts from the best board known and a strictly
+        // better-informed cost map, which is what makes the sequence
+        // monotone instead of a random walk. Without it the negotiation
+        // wanders (L4: 1, 14, 1, 15, 1, ...) and whether it ever lands on
+        // zero is luck.
+        if tn.nc_rollback {
+            if let Some((bp, bs, bc, bu, bov)) = &best_state {
+                if overused + unrouted.len() > *bov {
+                    let learned = std::mem::take(&mut claims.hist);
+                    paths = bp.clone();
+                    stamped = bs.clone();
+                    claims = bc.clone();
+                    unrouted = bu.clone();
+                    overused = *bov;
+                    claims.hist = learned;
+                    if dbg {
+                        eprintln!("negotiate: rolled back to best ({bov} overused), history kept");
+                    }
+                }
+            }
+        }
     }
+    // Hand back the best iteration, not the last one. Everything below --
+    // the congestion detail, the hotspots, the returned paths -- reads the
+    // live state, so the restore has to happen before any of it.
+    if let Some((bp, bs, bc, bu, bov)) = best_state {
+        if bov < overused {
+            if dbg {
+                eprintln!("negotiate: returning best iteration ({bov} overused) over the last ({overused})");
+            }
+            paths = bp;
+            stamped = bs;
+            claims = bc;
+            unrouted = bu;
+            overused = bov;
+        }
+    }
+
     // Structured failure detail: which nets contend, where, and whether
     // any of them has a legal alternative avoiding every foreign claim.
     // This is what the agent reads to pick a knob; the dbg prints are the
