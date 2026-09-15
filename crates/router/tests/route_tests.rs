@@ -595,3 +595,48 @@ fn a_pour_on_a_layer_outside_the_stackup_is_a_hard_fail() {
         fails.iter().map(|f| &f.check).collect::<Vec<_>>()
     );
 }
+
+// ---- budgets mean what they say ----------------------------------------
+
+#[test]
+fn the_wall_budget_starts_no_iteration_it_cannot_afford() {
+    // A budget tested only at the top of the loop is an overrun waiting to
+    // happen: any remaining time at all starts an iteration, and the
+    // iteration is what costs. L4 finished a 900 s budget at 976 s.
+    //
+    // Asserted as a count, not a duration. The first iteration always runs
+    // -- there is no useful answer without one -- and it takes ~30x longer
+    // in a debug build than a release one, so a wall-clock threshold tests
+    // the build rather than the property.
+    let (d, m) = fixture_4p6n();
+    let mut rules = RouteRules::default();
+    rules.tuning.nc_max_wall_s = 1e-9;
+    rules.tuning.nc_max_iters = 100_000;
+    let (_, fails) = eda_router::route_partial(&d, &m, &rules, 1);
+    let Some(hint) = fails
+        .iter()
+        .find(|f| f.check == "route_congestion_unresolved")
+        .and_then(|f| f.hint.clone())
+    else {
+        // Converged inside the first iteration: the budget was never the
+        // binding constraint, so there was nothing to overrun.
+        return;
+    };
+    assert!(
+        hint.contains("after 1 iterations") && hint.contains("wall_budget"),
+        "an exhausted budget should stop after the one mandatory iteration, got: {hint}"
+    );
+}
+
+#[test]
+fn the_iteration_cap_does_not_bind_before_the_wall_budget() {
+    // The cap is a backstop. A board that converges must not be cut off by
+    // an iteration count while its wall budget is still half unspent --
+    // that is what stopped L4 at 40 iterations when it needed 150.
+    let rules = RouteRules::default();
+    assert!(
+        rules.tuning.nc_max_iters >= 150,
+        "iteration cap {} is low enough to bind before the wall budget",
+        rules.tuning.nc_max_iters
+    );
+}

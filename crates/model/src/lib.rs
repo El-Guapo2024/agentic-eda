@@ -120,6 +120,80 @@ pub struct Pour {
 }
 
 impl BoardRules {
+    /// Reject a board that cannot exist, at the door.
+    ///
+    /// Every value here is divided by, measured against, or indexed with
+    /// somewhere downstream. A zero grid divides by zero; an empty stackup
+    /// leaves the outer layers undefined; a via whose drill is wider than
+    /// its pad has no annular ring to solder to. The readers used to cope
+    /// -- `grid_um.max(1)`, `layers.first().unwrap_or("F.Cu")` -- and
+    /// coping means inventing a number nobody wrote down, then measuring
+    /// the board against it and reporting the result as fact.
+    ///
+    /// Validating once at parse time is what makes those guesses
+    /// unnecessary rather than merely discouraged. Every problem is
+    /// reported, not just the first: an agent fixing one value at a time
+    /// across a dozen runs learns nothing a single list would not tell it.
+    pub fn validate(&self) -> Vec<CheckResult> {
+        let mut out = Vec::new();
+        let mut bad = |what: &str, why: String| {
+            out.push(CheckResult::fail("board_rules", format!("board.{what}"), why));
+        };
+        if self.grid <= 0 {
+            bad("grid", format!("routing grid is {} µm; it is the divisor for every cell index on the board", self.grid));
+        }
+        if self.track_width <= 0 {
+            bad("track_width", format!("track width is {} µm; copper with no width has no clearance either", self.track_width));
+        }
+        if self.clearance < 0 {
+            bad("clearance", format!("clearance is {} µm; a negative gap is copper overlapping on purpose", self.clearance));
+        }
+        if self.layers.is_empty() {
+            bad("layers", "board declares no copper layers; there is no such thing as a default stackup".into());
+        }
+        {
+            let mut seen = std::collections::HashSet::new();
+            for l in &self.layers {
+                if !seen.insert(l) {
+                    bad("layers", format!("copper layer {l:?} is listed twice; layer order is the stackup"));
+                }
+            }
+        }
+        if self.via_diameter <= 0 || self.via_drill <= 0 {
+            bad("via", format!("via is {} µm across a {} µm drill; both have to be positive", self.via_diameter, self.via_drill));
+        } else if self.via_drill >= self.via_diameter {
+            bad(
+                "via_drill",
+                format!(
+                    "via drill {} µm is not smaller than the {} µm pad, so the via has no annular ring: \
+                     nothing for the plating to land on",
+                    self.via_drill, self.via_diameter
+                ),
+            );
+        }
+        if let Some(o) = &self.outline {
+            if o.len() < 3 {
+                bad("outline", format!("board outline has {} point(s); a board is at least a triangle", o.len()));
+            }
+        }
+        for c in &self.net_classes {
+            if let Some(w) = c.track_width {
+                if w <= 0 {
+                    bad("net_classes", format!("net class {:?} sets a track width of {w} µm", c.name));
+                }
+            }
+        }
+        for p in &self.pours {
+            if !self.layers.contains(&p.layer) {
+                bad(
+                    "pours",
+                    format!("pour on net {:?} names layer {:?}, which is not in the stackup {:?}", p.net, p.layer, self.layers),
+                );
+            }
+        }
+        out
+    }
+
     /// Refdes font for this board: the override, else 1/40 of the shorter
     /// rendered side (outline bbox + 2 mm margin), clamped to 600..=1000 µm.
     pub fn refdes_font(&self, outline: &[ir::Point]) -> ir::Um {
@@ -175,6 +249,13 @@ pub struct RoutingTuning {
     pub seq_max_expansions: usize,
     /// Negotiated router: iteration cap, present-cost factor start /
     /// growth / ceiling, minimum history increment.
+    ///
+    /// The iteration cap is a backstop, not the budget. `nc_max_wall_s` is
+    /// what should normally stop the router: iterations vary by two orders
+    /// of magnitude between a four-part fixture and L4, so a count means
+    /// nothing across boards while a second means the same everywhere. At
+    /// 40 this cap was the binding constraint on L4 with half the wall
+    /// budget unused, and the board needed 150 to converge.
     pub nc_max_iters: usize,
     pub nc_pres_fac_0: f64,
     pub nc_pres_fac_mult: f64,
@@ -244,7 +325,7 @@ impl Default for RoutingTuning {
             seq_max_victims: 6,
             seq_hist_bump: 4,
             seq_max_expansions: 400_000,
-            nc_max_iters: 40,
+            nc_max_iters: 400,
             nc_pres_fac_0: 0.5,
             nc_pres_fac_mult: 1.6,
             nc_pres_fac_max: 2000.0,

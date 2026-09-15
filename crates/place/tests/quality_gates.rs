@@ -226,3 +226,21 @@ fn separation_rule_fails_when_parts_sit_together() {
     let d = design(square(SIDE), fps);
     assert!(sep(&d, &m).is_empty());
 }
+
+// ---- an absent input must fail, not vanish -----------------------------
+
+#[test]
+fn a_board_with_no_outline_fails_instead_of_returning_nothing() {
+    // It used to return no checks at all on an outline-less board: no
+    // pass, no fail, just a hole where a reward signal should be. Every
+    // distance in this gate is scaled by the board diagonal, and an absent
+    // outline makes that diagonal zero.
+    let d = design(Vec::new(), good());
+    let m = model();
+    let out = eda_gates::check_placement_locality(&d, &m);
+    assert!(
+        out.iter().any(|c| c.check == "placement_outline" && c.status == CheckStatus::Fail),
+        "expected placement_outline to fail, got {:?}",
+        out.iter().map(|c| (&c.check, &c.status)).collect::<Vec<_>>()
+    );
+}

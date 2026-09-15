@@ -820,11 +820,21 @@ impl Grid {
         self.passable_as_id(cx, cy, layer, self.net_id_of(net), me)
     }
 
-    /// The net's grid id, or `EMPTY` if the grid has never seen the name.
-    /// Resolve this once per search and use [`Grid::passable_as_id`]: the
-    /// string form hashes the net name on every cell test, and A* tests
-    /// ~10 cells per node expansion.
+    /// The net's grid id. Resolve this once per search and use
+    /// [`Grid::passable_as_id`]: the string form hashes the net name on
+    /// every cell test, and A* tests ~10 cells per node expansion.
+    ///
+    /// A name the grid has never seen yields `EMPTY`, which is also the
+    /// marker for a cell holding no copper -- so an unregistered net reads
+    /// as matching every free cell on the board and routes wherever it
+    /// likes. Every caller today passes a net that has pads, and the pour
+    /// path proves it with `routing_pour_empty`, but nothing in the type
+    /// says so. The assertion is where that stops being luck.
     pub fn net_id_of(&self, net: &str) -> u32 {
+        debug_assert!(
+            self.net_ids.contains_key(net),
+            "net {net:?} was never stamped into the grid; EMPTY would make every free cell look like its own copper"
+        );
         self.net_ids.get(net).copied().unwrap_or(EMPTY)
     }
 

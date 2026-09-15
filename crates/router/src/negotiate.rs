@@ -452,10 +452,21 @@ pub(crate) fn run(
     // can be replayed on the rare restore instead of copied on every win.
     type BestState = (HashMap<String, Vec<(Vec<(i64, i64, u8)>, String)>>, HashMap<String, (Vec<usize>, Vec<usize>)>, Vec<String>, usize);
     let mut best_state: Option<BestState> = None;
+    // Longest iteration seen so far, used to refuse one that will not fit
+    // in the budget. Tested only at the top of the loop, the budget was
+    // an overrun waiting to happen: any remaining time at all started an
+    // iteration, and L4's take ~42 s, so a 900 s budget finished at 976.
+    // The maximum rather than the mean, deliberately -- a budget that is
+    // occasionally conservative is useful, one that silently overruns by
+    // 8% is not, least of all when hundreds of agents each hold one.
+    let mut worst_iter_s = 0.0f64;
     for iter in 0..tn.nc_max_iters {
-        if tn.nc_max_wall_s > 0.0 && t_all.elapsed().as_secs_f64() > tn.nc_max_wall_s && iter > 0 {
-            stopped_by = "wall_budget";
-            break;
+        if tn.nc_max_wall_s > 0.0 && iter > 0 {
+            let spent = t_all.elapsed().as_secs_f64();
+            if spent + worst_iter_s > tn.nc_max_wall_s {
+                stopped_by = "wall_budget";
+                break;
+            }
         }
         if tn.nc_stall_iters > 0 && since_improve >= tn.nc_stall_iters {
             stopped_by = "stalled";
@@ -534,6 +545,7 @@ pub(crate) fn run(
         if dbg {
             eprintln!("negotiate: iter {iter} pres_fac {pres_fac:.2} overused {overused} unrouted {} in {:?}", unrouted.len(), t.elapsed());
         }
+        worst_iter_s = worst_iter_s.max(t.elapsed().as_secs_f64());
         if overused == 0 && unrouted.is_empty() {
             stopped_by = "converged";
             break;

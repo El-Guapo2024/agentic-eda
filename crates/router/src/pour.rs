@@ -125,15 +125,6 @@ pub fn pour(
     }
     let body = (0..ncomp).max_by_key(|&i| size[i]).map(|i| i as i32);
 
-    let touches_body = |cells: &[(i64, i64)]| -> bool {
-        match body {
-            None => false,
-            Some(b) => cells.iter().any(|&(x, y)| {
-                grid.in_bounds(x, y) && comp[idx(x, y)] == b
-            }),
-        }
-    };
-
     let mut vias = Vec::new();
     let mut tracks = Vec::new();
     let mut unreached = Vec::new();

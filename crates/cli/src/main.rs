@@ -87,6 +87,19 @@ fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
 }
 
 fn load_model(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>> {
+    let m = load_model_unchecked(args)?;
+    // Validate at the door, once, so nothing downstream has to invent a
+    // value for a board that never made sense. Every reader that used to
+    // cope with a zero grid or an empty stackup was quietly deciding what
+    // the board meant; this is where that stops being their problem.
+    let bad = m.board.validate();
+    if !bad.is_empty() {
+        return Err(bad);
+    }
+    Ok(m)
+}
+
+fn load_model_unchecked(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>> {
     let ext = args.intent.extension().and_then(|e| e.to_str()).unwrap_or("");
     match ext {
         "yaml" | "yml" => {

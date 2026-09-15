@@ -363,6 +363,15 @@ pub fn check_placement_locality(design: &Design, model: &ConstraintModel) -> Vec
         return out;
     };
     if pl.outline.len() < 3 {
+        // Not a silent skip. Every distance in this gate is scaled by the
+        // board diagonal, and an absent outline made that diagonal zero --
+        // so the gate returned no checks at all: no pass, no fail, just a
+        // hole where a reward signal should be.
+        out.push(CheckResult::fail(
+            "placement_outline",
+            "design.placement.outline",
+            "outline needs at least 3 points; every locality check here is measured against the board diagonal",
+        ));
         return out;
     }
     let mut courtyards: BTreeMap<String, Rect> = BTreeMap::new();
@@ -761,8 +770,19 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
         out.push(CheckResult::fail("routing_present", "design", "design needs both placement and routing sections"));
         return out;
     };
-    let outer_top = rules.layers.first().cloned().unwrap_or_else(|| "F.Cu".into());
-    let outer_bot = rules.layers.last().cloned().unwrap_or_else(|| "B.Cu".into());
+    // A board with no stackup is not a two-layer board, and guessing one
+    // here put every SMD pad on an invented layer -- after which the
+    // clearance gate compares copper that shares a name with nothing.
+    if rules.layers.is_empty() {
+        out.push(CheckResult::fail(
+            "routing_stackup",
+            "board.layers",
+            "board declares no copper layers; there is no such thing as a default stackup",
+        ));
+        return out;
+    }
+    let outer_top = rules.layers[0].clone();
+    let outer_bot = rules.layers[rules.layers.len() - 1].clone();
 
     // Pads.
     let mut pads: Vec<PadItem> = Vec::new();
@@ -863,7 +883,7 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     // Workmanship: things a human reviewer sends back even when DRC is
     // clean (pass-through pads, via-in-pad, threading between SMD pads,
     // copper under a refdes label).
-    check_workmanship(design, model, rt, &pads, &mut out);
+    check_workmanship(design, model, rt, &pads, &outer_top, &outer_bot, &mut out);
 
     out
 }
@@ -898,13 +918,20 @@ pub fn refdes_box(model: &ConstraintModel, pl: &eda_model::ir::PlacementSection,
 ///   `kicad-cli pcb drc`).
 /// - `routing_over_refdes`: a track on a part's own side crossing the
 ///   refdes label box the judge renders above the courtyard.
-fn check_workmanship(design: &Design, model: &ConstraintModel, rt: &eda_model::ir::RoutingSection, pads: &[PadItem], out: &mut Vec<CheckResult>) {
+fn check_workmanship(
+    design: &Design,
+    model: &ConstraintModel,
+    rt: &eda_model::ir::RoutingSection,
+    pads: &[PadItem],
+    // Passed in rather than re-derived: this used to guess "F.Cu"/"B.Cu"
+    // when the board declared no stackup, which is a board the caller now
+    // rejects outright.
+    outer_top: &str,
+    outer_bot: &str,
+    out: &mut Vec<CheckResult>,
+) {
     const BETWEEN_PADS_MAX_GAP: Um = 2000;
     let Some(pl) = design.placement.as_ref() else { return };
-    let rules = &model.board;
-    let outer_top = rules.layers.first().cloned().unwrap_or_else(|| "F.Cu".into());
-    let outer_bot = rules.layers.last().cloned().unwrap_or_else(|| "B.Cu".into());
-
     // Pass-through pads.
     let mut n_pass = 0usize;
     for (i, t) in rt.tracks.iter().enumerate() {
@@ -1525,6 +1552,21 @@ mod tests {
             vias: vec![],
             zones: vec![],
         }
+    }
+
+    #[test]
+    fn a_board_with_no_stackup_fails_instead_of_being_given_one() {
+        // Guessing F.Cu/B.Cu put every SMD pad on an invented layer, after
+        // which the clearance gate compares copper that shares a name with
+        // nothing on the board -- and reports it clean.
+        let (design, mut model) = wfixture(clean_routing());
+        model.board.layers.clear();
+        let out = check_routing(&design, &model);
+        assert!(
+            out.iter().any(|c| c.check == "routing_stackup" && c.status == CheckStatus::Fail),
+            "expected routing_stackup to fail, got {:?}",
+            out.iter().map(|c| (&c.check, &c.status)).collect::<Vec<_>>()
+        );
     }
 
     #[test]
