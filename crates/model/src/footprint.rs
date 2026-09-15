@@ -261,6 +261,56 @@ pub struct Pad {
     pub drill: Option<Um>,
 }
 
+impl Footprint {
+    /// Reject a footprint that cannot be fabricated.
+    ///
+    /// The drill check is the one that matters. A through-hole pad with no
+    /// drill is not a pad, and both exporters used to invent one -- the
+    /// KiCad writer from `w.min(h) / 2`, the circuit-json writer from
+    /// `size.0 / 2`. For a non-square pad those are different holes, so the
+    /// same part shipped a different board depending on which exporter ran,
+    /// and neither number came from the part's datasheet. There is no right
+    /// value to guess here: the hole is a dimension of the physical lead.
+    pub fn validate(&self) -> Vec<crate::CheckResult> {
+        let mut out = Vec::new();
+        let mut bad = |what: &str, why: String| {
+            out.push(crate::CheckResult::fail("footprint", format!("{}.{what}", self.name), why));
+        };
+        if self.pads.is_empty() {
+            bad("pads", "footprint has no pads; nothing connects it to the board".into());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for p in &self.pads {
+            if !seen.insert(&p.number) {
+                bad("pads", format!("pad {:?} is defined twice", p.number));
+            }
+            if p.size.0 <= 0 || p.size.1 <= 0 {
+                bad(&format!("pad {}", p.number), format!("pad is {} x {} um", p.size.0, p.size.1));
+            }
+            match (p.kind, p.drill) {
+                (PadKind::ThroughHole, None) => bad(
+                    &format!("pad {}", p.number),
+                    "a through-hole pad with no drill is not a pad; the hole is a dimension of the lead, not something an exporter can derive from the copper".into(),
+                ),
+                (PadKind::ThroughHole, Some(d)) if d <= 0 => {
+                    bad(&format!("pad {}", p.number), format!("through-hole pad drills a {d} um hole"))
+                }
+                (PadKind::ThroughHole, Some(d)) if d >= p.size.0.min(p.size.1) => bad(
+                    &format!("pad {}", p.number),
+                    format!("drill {d} um is not smaller than the {} x {} um pad, so there is no annular ring", p.size.0, p.size.1),
+                ),
+                _ => {}
+            }
+        }
+        if let Some((w, h)) = self.courtyard {
+            if w <= 0 || h <= 0 {
+                bad("courtyard", format!("courtyard half-extents are {w} x {h} um"));
+            }
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PadShape {

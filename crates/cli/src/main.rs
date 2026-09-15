@@ -92,7 +92,25 @@ fn load_model(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>> {
     // value for a board that never made sense. Every reader that used to
     // cope with a zero grid or an empty stackup was quietly deciding what
     // the board meant; this is where that stops being their problem.
-    let bad = m.board.validate();
+    let mut bad = m.board.validate();
+    // Validate the footprint each part actually *resolves* to, not just
+    // the intent's inline list: `footprint_of` falls back to the built-in
+    // library, which is where most parts get their pads, so checking only
+    // `m.footprints` would have left the library unchecked and made this
+    // gate a near no-op.
+    let mut checked: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for part in &m.parts {
+        if let Some(fp) = m.footprint_of(part) {
+            if checked.insert(fp.name.clone()) {
+                bad.extend(fp.validate());
+            }
+        }
+    }
+    for fp in &m.footprints {
+        if checked.insert(fp.name.clone()) {
+            bad.extend(fp.validate());
+        }
+    }
     if !bad.is_empty() {
         return Err(bad);
     }

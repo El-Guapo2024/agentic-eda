@@ -269,11 +269,17 @@ fn find_spot(
         .filter(|f| f.id != mover_id && f.side == mover_side)
         .filter_map(|f| placed_keepout(model, outline, model.part(&f.id)?, f))
         .collect();
+    // An empty outline used to yield a board spanning the whole i64
+    // range, on which every candidate is trivially in bounds and the
+    // width arithmetic below overflows. Placement without a board shape
+    // is not a thing to cope with: `check_placement_locality` fails it,
+    // and getting here means that gate was bypassed.
+    assert!(outline.len() >= 3, "legalise needs a board outline, got {} point(s)", outline.len());
     let (bx0, by0, bx1, by1) = (
-        outline.iter().map(|p| p.x).min().unwrap_or(i64::MIN),
-        outline.iter().map(|p| p.y).min().unwrap_or(i64::MIN),
-        outline.iter().map(|p| p.x).max().unwrap_or(i64::MAX),
-        outline.iter().map(|p| p.y).max().unwrap_or(i64::MAX),
+        outline.iter().map(|p| p.x).min().expect("outline non-empty"),
+        outline.iter().map(|p| p.y).min().expect("outline non-empty"),
+        outline.iter().map(|p| p.x).max().expect("outline non-empty"),
+        outline.iter().map(|p| p.y).max().expect("outline non-empty"),
     );
 
     for (_, rot, x, y) in candidates {
@@ -1059,10 +1065,13 @@ pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o
     let model = base_model;
     let mut seed_design = design.clone();
     if seed_design.placement.is_none() {
+        // Same reasoning: a seed design centred on the origin of a board
+        // that has no shape is not a starting point, it is a pile.
         let outline = model.board.outline.clone().unwrap_or_default();
+        assert!(outline.len() >= 3, "cypress needs a board outline, got {} point(s)", outline.len());
         let c = Point {
-            x: (outline.iter().map(|p| p.x).min().unwrap_or(0) + outline.iter().map(|p| p.x).max().unwrap_or(0)) / 2,
-            y: (outline.iter().map(|p| p.y).min().unwrap_or(0) + outline.iter().map(|p| p.y).max().unwrap_or(0)) / 2,
+            x: (outline.iter().map(|p| p.x).min().expect("outline non-empty") + outline.iter().map(|p| p.x).max().expect("outline non-empty")) / 2,
+            y: (outline.iter().map(|p| p.y).min().expect("outline non-empty") + outline.iter().map(|p| p.y).max().expect("outline non-empty")) / 2,
         };
         seed_design.placement = Some(eda_model::ir::PlacementSection {
             outline,

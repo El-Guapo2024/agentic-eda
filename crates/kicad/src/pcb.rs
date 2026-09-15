@@ -156,12 +156,34 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         return Err(errors);
     }
 
+    // Net 0 is KiCad's *unconnected* net. Defaulting a track, via or zone
+    // to it does not lose the copper -- it exports copper that claims to
+    // belong to nothing, so the board KiCad checks is not the board our
+    // gates passed. A GND pour landing on net 0 is a floating plane that
+    // still draws, and `drc --refill-zones` would be answering a question
+    // about a different design than the one we routed. The net has to be
+    // in the netlist or the export fails.
+    let mut errors: Vec<CheckResult> = Vec::new();
+    let mut net_of = |what: &str, where_: &str, net: &str| -> usize {
+        match net_num.get(net) {
+            Some(n) => *n,
+            None => {
+                errors.push(CheckResult::fail(
+                    "kicad.unknown_net",
+                    where_.to_string(),
+                    format!("{what} is on net {net:?}, which is not in the netlist; KiCad would import it as net 0 (unconnected)"),
+                ));
+                0
+            }
+        }
+    };
+
     // ---- routing: segments + vias ----
     if let Some(routing) = &design.routing {
         let mut tracks: Vec<&Track> = routing.tracks.iter().collect();
         tracks.sort_by(|a, b| (&a.net, &a.layer, &a.pts).cmp(&(&b.net, &b.layer, &b.pts)));
         for (ti, t) in tracks.iter().enumerate() {
-            let n = *net_num.get(t.net.as_str()).unwrap_or(&0);
+            let n = net_of("a track", &format!("{} on {}", t.net, t.layer), &t.net);
             for (j, pair) in t.pts.windows(2).enumerate() {
                 let x1 = mm(pair[0].x);
                 let y1 = mm(pair[0].y);
@@ -176,7 +198,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         let mut vias: Vec<&Via> = routing.vias.iter().collect();
         vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
         for v in &vias {
-            let n = *net_num.get(v.net.as_str()).unwrap_or(&0);
+            let n = net_of("a via", &format!("{} at ({}, {})", v.net, v.at.x, v.at.y), &v.net);
             let x = mm(v.at.x);
             let y = mm(v.at.y);
             let dia = mm(v.diameter);
@@ -202,7 +224,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             if z.outline.len() < 3 {
                 continue;
             }
-            let n = *net_num.get(z.net.as_str()).unwrap_or(&0);
+            let n = net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net);
             let uuid = duid(&format!("zone:{}:{}", z.net, z.layer));
             writeln!(out, "\t(zone (net {n}) (net_name {}) (layer {}) (uuid \"{uuid}\")", sexpr_str(&z.net), sexpr_str(&z.layer)).unwrap();
             writeln!(out, "\t\t(hatch edge 0.5)").unwrap();
@@ -234,6 +256,9 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     writeln!(out, ")").unwrap();
+    if !errors.is_empty() {
+        return Err(errors);
+    }
     Ok(out)
 }
 
@@ -331,7 +356,10 @@ fn write_footprint(
         }
         match pad.kind {
             PadKind::ThroughHole => {
-                let drill = mm(pad.drill.unwrap_or(w.min(h) / 2));
+                // Footprint::validate guarantees a through-hole pad
+                // declares its drill; inventing one here shipped a
+                // different hole than the circuit-json writer invented.
+                let drill = mm(pad.drill.expect("through-hole pad without a drill passed Footprint::validate"));
                 write!(out, " (drill {drill})").unwrap();
                 write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
             }
@@ -438,6 +466,35 @@ mod tests {
             expected += model.footprint_of(part).unwrap().pads.len();
         }
         assert_eq!(out.matches("\t\t(pad ").count(), expected);
+    }
+
+    #[test]
+    fn a_track_on_a_net_that_is_not_in_the_netlist_fails_the_export() {
+        // Net 0 is KiCad's *unconnected* net. Defaulting to it exported
+        // copper claiming to belong to nothing, so the board KiCad checked
+        // was not the board our gates passed -- and `drc --refill-zones`
+        // would have been answering about a different design.
+        let (mut design, model) = fixture();
+        design.routing.as_mut().unwrap().tracks[0].net = "NOT_A_NET".into();
+        let err = export_kicad_pcb(&design, &model, &meta()).unwrap_err();
+        assert!(err.iter().any(|c| c.check == "kicad.unknown_net"), "got {err:?}");
+    }
+
+    #[test]
+    fn a_pour_on_a_net_that_is_not_in_the_netlist_fails_the_export() {
+        // The worst case: a plane silently exported as floating copper.
+        let (mut design, model) = fixture();
+        design.routing.as_mut().unwrap().zones = vec![Zone {
+            net: "NOT_A_NET".into(),
+            layer: "B.Cu".into(),
+            outline: vec![
+                Point { x: 0, y: 0 },
+                Point { x: 20_000, y: 0 },
+                Point { x: 20_000, y: 20_000 },
+            ],
+        }];
+        let err = export_kicad_pcb(&design, &model, &meta()).unwrap_err();
+        assert!(err.iter().any(|c| c.check == "kicad.unknown_net"), "got {err:?}");
     }
 
     #[test]

@@ -316,7 +316,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                         "y": um_to_mm(y.round() as i64),
                         "shape": "circle",
                         "outer_diameter": um_to_mm(bw.round() as i64),
-                        "hole_diameter": um_to_mm(pad.drill.unwrap_or(pad.size.0 / 2)),
+                        "hole_diameter": um_to_mm(pad.drill.expect("through-hole pad without a drill passed Footprint::validate")),
                         "layers": ["top", "bottom"],
                     }));
                 } else if shape == "circle" {
