@@ -1361,6 +1361,15 @@ fn plan_pours(
         }
         // Stamp the stitching copper so the signals route around it.
         stamp_routed(grid, &r.tracks, &r.vias, rules);
+        // Reserve the plane's own connectivity before the signals get a
+        // say. Stamped as the net's copper, so the negotiator routes
+        // around it rather than through the plane's only path to a pad.
+        if rules.tuning.pour_reserve_skeleton {
+            let cells = pour::skeleton(&*grid, spec, layer, &r.entries);
+            for (x, y) in cells {
+                grid.set(x, y, layer, &spec.net, Occ::Track);
+            }
+        }
         entries.push((spec.net.clone(), layer, r.entries));
         out_vias.extend(r.vias);
         out_tracks.extend(r.tracks);

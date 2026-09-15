@@ -343,3 +343,75 @@ fn why(grid: &Grid, comp: &[i32], body: Option<i32>, net_id: u32, p: &PourPad, p
          {under_silk} under a silkscreen label, {blocked} blocked by other copper, {no_stub} reachable but with no legal stub"
     )
 }
+
+/// Cells that must stay clear of other nets so the plane can reach every
+/// pad: a shortest-path tree on the poured layer joining all the entry
+/// points.
+///
+/// This is the difference between hoping the signals leave the plane
+/// intact and requiring it. A penalty ring around each entry only
+/// perturbed the routing -- it fixed two L4 pads and broke a third. A
+/// reserved corridor cannot be severed, because the negotiator sees the
+/// net's own copper there and routes around it.
+///
+/// Nothing is emitted. The corridor is grid occupancy only: keep it free
+/// of other nets and the filler lays plane copper along it by itself,
+/// which is exactly what a human does when leaving a channel for a pour.
+/// Emitting tracks would litter the board with GND stubs that the fill
+/// makes redundant.
+///
+/// One BFS does the whole job. At plan time the plane is a single
+/// component, so a breadth-first wave from the first entry reaches all of
+/// them; walking each entry's parent chain back until it meets copper
+/// already reserved yields a tree whose shared prefixes merge for free.
+pub fn skeleton(grid: &Grid, spec: &Pour, layer: u8, entries: &[(String, (i64, i64))]) -> Vec<(i64, i64)> {
+    if entries.len() < 2 {
+        return Vec::new();
+    }
+    let net_id = grid.net_id_of(&spec.net);
+    let w = grid.cells_x;
+    let h = grid.cells_y;
+    let idx = |x: i64, y: i64| (y * w + x) as usize;
+    let pourable = |x: i64, y: i64| {
+        grid.in_bounds(x, y) && grid.in_outline(x, y) && grid.passable_as_id(x, y, layer, net_id, Occ::Track)
+    };
+
+    // -1 unvisited, -2 root; otherwise the index of the cell we came from.
+    let mut parent = vec![-1i64; (w * h) as usize];
+    let root = entries[0].1;
+    if !pourable(root.0, root.1) {
+        return Vec::new();
+    }
+    parent[idx(root.0, root.1)] = -2;
+    let mut q = VecDeque::from([root]);
+    while let Some((x, y)) = q.pop_front() {
+        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (nx, ny) = (x + dx, y + dy);
+            if !pourable(nx, ny) || parent[idx(nx, ny)] != -1 {
+                continue;
+            }
+            parent[idx(nx, ny)] = idx(x, y) as i64;
+            q.push_back((nx, ny));
+        }
+    }
+
+    let mut reserved = vec![false; (w * h) as usize];
+    reserved[idx(root.0, root.1)] = true;
+    let mut out = vec![root];
+    for (_, e) in entries.iter().skip(1) {
+        if !grid.in_bounds(e.0, e.1) || parent[idx(e.0, e.1)] == -1 {
+            // Unreachable at plan time; `pour` already failed this pad.
+            continue;
+        }
+        let mut cur = idx(e.0, e.1);
+        while !reserved[cur] {
+            reserved[cur] = true;
+            out.push(((cur as i64) % w, (cur as i64) / w));
+            match parent[cur] {
+                -2 => break,
+                p => cur = p as usize,
+            }
+        }
+    }
+    out
+}

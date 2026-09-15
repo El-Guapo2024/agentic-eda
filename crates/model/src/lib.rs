@@ -215,6 +215,18 @@ pub struct RoutingTuning {
     /// are hard gates, so on a dense board the first legal site is not
     /// next door. Too short a leash reports a reachable pad unreachable.
     pub pour_stitch_reach_um: ir::Um,
+    /// Reserve a corridor on the poured layer joining every point a pad
+    /// meets the plane, and keep other nets out of it.
+    ///
+    /// Without this, plane connectivity is whatever the signals happen to
+    /// leave behind, and `routing_pour_cut_off` reports the damage after
+    /// the fact. With it, the connection cannot be severed: the corridor
+    /// is the net's own copper as far as the negotiator is concerned.
+    ///
+    /// The cost is real -- that copper is routing space the signals do not
+    /// get -- but so is the physics. A layer carrying a plane is not a
+    /// signal layer with a plane drawn on top of it.
+    pub pour_reserve_skeleton: bool,
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
@@ -243,6 +255,7 @@ impl Default for RoutingTuning {
             nc_rollback: true,
             pour_layer_penalty: 1,
             pour_stitch_reach_um: 3000,
+            pour_reserve_skeleton: true,
         }
     }
 }
