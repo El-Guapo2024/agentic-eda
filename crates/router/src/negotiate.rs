@@ -654,7 +654,7 @@ pub(crate) fn run(
             }
         }
         // Hotspots: overused cells grouped by (layer, coarse 1 mm bin).
-        let bin = (1000 / grid.grid_um.max(1)).max(1);
+        let bin = (1000 / grid.grid_um).max(1);
         let mut spots: HashMap<(i64, i64, usize), (usize, std::collections::BTreeSet<String>)> = HashMap::new();
         for j in 0..claims.claims.len() {
             if claims.copper[j] > 0 && claims.claims[j] > 1 {

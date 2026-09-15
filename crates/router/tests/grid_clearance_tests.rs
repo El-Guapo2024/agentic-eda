@@ -21,7 +21,17 @@ fn hub_grid() -> Grid {
         Point { x: 40000, y: 40000 },
         Point { x: 0, y: 40000 },
     ];
-    Grid::with_widths(outline, 127, 200, 200, 600, 2)
+    let mut g = Grid::with_widths(outline, 127, 200, 200, 600, 2);
+    // Every net these tests ask about has to exist on the board first.
+    // `route_partial` rasterises every pad of every net before it asks the
+    // grid a single passability question, so a net the grid has never seen
+    // is not a state real routing can reach -- and `net_id_of` now asserts
+    // it, because an unknown net resolves to EMPTY and would read as its
+    // own copper everywhere. `3V3` is the probe net below; give it a pad in
+    // the far corner, 200 cells from the action, so it is registered
+    // without touching any clearance under test.
+    g.set(300, 300, 0, "3V3", Occ::Pad);
+    g
 }
 
 /// Sanity: with nothing but a plain track of another net in the cell, the

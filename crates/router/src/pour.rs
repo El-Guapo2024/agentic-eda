@@ -206,7 +206,7 @@ fn stitch(
     let w = grid.cells_x;
     let idx = |x: i64, y: i64| (y * w + x) as usize;
     let (cx, cy) = grid.to_cell(p.start);
-    let max_r = (grid.tuning.pour_stitch_reach_um / grid.grid_um.max(1)).max(2);
+    let max_r = (grid.tuning.pour_stitch_reach_um / grid.grid_um).max(2);
 
     // Via-in-pad is a fab and assembly defect even on the via's own net
     // -- solder wicks down the barrel -- so a stitching via never sits on
@@ -308,7 +308,7 @@ fn why(grid: &Grid, comp: &[i32], body: Option<i32>, net_id: u32, p: &PourPad, p
     let w = grid.cells_x;
     let idx = |x: i64, y: i64| (y * w + x) as usize;
     let (cx, cy) = grid.to_cell(p.at);
-    let max_r = (grid.tuning.pour_stitch_reach_um / grid.grid_um.max(1)).max(2);
+    let max_r = (grid.tuning.pour_stitch_reach_um / grid.grid_um).max(2);
     let (mut off_plane, mut in_pad, mut under_silk, mut blocked, mut no_stub) = (0, 0, 0, 0, 0);
     for dy in -max_r..=max_r {
         for dx in -max_r..=max_r {

@@ -664,10 +664,29 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         "pipeline" => {
             let d = stage_schematic(cx)?;
             if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Schematic)?; }
-            let d = stage_place_looping(cx, &d)?;
-            if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Placement)?; }
-            let d = stage_route(cx, &d)?;
-            if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Routing)?; }
+            // An intent that declares `allow:` is stating what the fab may
+            // do -- four layers, a tighter track -- if the board as written
+            // will not route. Running place+route straight through here
+            // ignored all of it, so `pipeline` failed boards that `solve`
+            // routed, and the difference was invisible: nothing said the
+            // allowance had been skipped. The ladder is the same single
+            // as-written run when no allowance widens it, so this changes
+            // nothing for an intent that declares none.
+            let ladder = strategies(&cx.model, &if cx.args.placer.is_empty() { cx.model.solver.placer.clone() } else { cx.args.placer.clone() });
+            let d = if ladder.len() > 1 {
+                stage_solve(cx, &d)?
+            } else {
+                let d = stage_place_looping(cx, &d)?;
+                if cx.args.judge { run_judge(cx, &d, eda_judge::Stage::Placement)?; }
+                stage_route(cx, &d)?
+            };
+            if cx.args.judge {
+                // stage_solve judges nothing inside the ladder: a rung that
+                // fails its gates is not a candidate worth an opinion. The
+                // winner gets both passes here.
+                if ladder.len() > 1 { run_judge(cx, &d, eda_judge::Stage::Placement)?; }
+                run_judge(cx, &d, eda_judge::Stage::Routing)?;
+            }
             d
         }
         "judge" => {

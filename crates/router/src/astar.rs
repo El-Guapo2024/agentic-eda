@@ -23,7 +23,7 @@ pub(crate) const STEP_COST: i64 = 1;
 const REF_GRID_UM: i64 = 254;
 
 pub(crate) fn via_cost(grid: &Grid) -> i64 {
-    ((grid.tuning.via_cost_cells.max(1) * REF_GRID_UM) / grid.grid_um.max(1)).max(1)
+    ((grid.tuning.via_cost_cells * REF_GRID_UM) / grid.grid_um).max(1)
 }
 
 
@@ -62,8 +62,8 @@ impl PartialOrd for QueueItem {
 const MAX_EXPANSIONS_CAP: usize = 4_000_000;
 
 pub(crate) fn max_expansions(grid: &Grid) -> usize {
-    let base = grid.tuning.seq_max_expansions.max(1);
-    let ratio = (REF_GRID_UM as f64 / grid.grid_um.max(1) as f64).powi(2);
+    let base = grid.tuning.seq_max_expansions;
+    let ratio = (REF_GRID_UM as f64 / grid.grid_um as f64).powi(2);
     ((base as f64 * ratio) as usize).clamp(base, MAX_EXPANSIONS_CAP)
 }
 

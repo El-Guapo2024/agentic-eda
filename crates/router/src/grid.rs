@@ -159,6 +159,12 @@ impl Grid {
         // reject that upstream; if one ever stops, this must be a crash
         // and not a board-shaped object that passes gates.
         assert!(outline.len() >= 3, "Grid::with_widths needs a real outline, got {} point(s)", outline.len());
+        // The pitch is the divisor for every cell index below, and the
+        // layer count is the depth of every lookup. Same reasoning as the
+        // outline: a caller that gets here with either at zero has already
+        // skipped BoardRules::validate, and a crash is the honest outcome.
+        assert!(grid_um > 0, "Grid::with_widths needs a positive pitch, got {grid_um} um");
+        assert!(num_layers > 0, "Grid::with_widths needs at least one copper layer");
         let min_x = outline.iter().map(|p| p.x).min().expect("outline non-empty");
         let min_y = outline.iter().map(|p| p.y).min().expect("outline non-empty");
         let max_x = outline.iter().map(|p| p.x).max().expect("outline non-empty");

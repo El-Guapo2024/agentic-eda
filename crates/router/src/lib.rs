@@ -130,7 +130,7 @@ fn fine_pitch_footprints<'a>(pads: &'a HashMap<String, PadInfo>, grid: i64) -> H
 /// is a few cells and stays cheap; running along it is not.
 fn penalise_escape_lanes(grid: &mut Grid, pads: &HashMap<String, PadInfo>, fine: &HashSet<String>, grid_um: i64) {
     let lane_um = grid.tuning.escape_lane_um;
-    let penalty = ((grid.tuning.escape_lane_penalty as i64 * 254 + grid_um / 2) / grid_um.max(1)).clamp(1, 255) as u8;
+    let penalty = ((grid.tuning.escape_lane_penalty as i64 * 254 + grid_um / 2) / grid_um).clamp(1, 255) as u8;
     let mut by_fp: HashMap<&str, Vec<&PadInfo>> = HashMap::new();
     for (refpin, p) in pads {
         let fp = refpin.split('.').next().unwrap_or("");
@@ -280,7 +280,7 @@ fn block_pad_gaps(grid: &mut Grid, pads: &HashMap<String, PadInfo>) {
 /// `REFDES_PENALTY` rescaled to the effective grid so that clipping a
 /// label costs the same physical detour regardless of resolution.
 fn refdes_penalty(grid: &Grid) -> u8 {
-    ((grid.tuning.refdes_penalty as i64 * 254 + grid.grid_um / 2) / grid.grid_um.max(1)).clamp(1, 255) as u8
+    ((grid.tuning.refdes_penalty as i64 * 254 + grid.grid_um / 2) / grid.grid_um).clamp(1, 255) as u8
 }
 
 /// Mark the cells under each refdes label as a soft keep-out (enforced on
@@ -383,7 +383,7 @@ pub(crate) fn obstacle_map(placement: &eda_model::ir::PlacementSection, model: &
     let dbg = std::env::var_os("EDA_ROUTE_DEBUG").is_some();
     let t_start = std::time::Instant::now();
     // --- 1. pad geometry -----------------------------------------------
-    let num_layers = rules.layers.len().max(1);
+    let num_layers = rules.layers.len();
     let mut pads: HashMap<String, PadInfo> = HashMap::new();
     let mut precondition: Vec<CheckResult> = Vec::new();
     for fp in &placement.footprints {

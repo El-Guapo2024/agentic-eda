@@ -78,3 +78,60 @@ fn every_problem_is_reported_not_just_the_first() {
     let f = failing_fields(&b);
     assert!(f.len() >= 3, "expected every bad field, got {f:?}");
 }
+
+#[test]
+fn the_default_tuning_is_valid() {
+    // Every check below has to be a statement about a *bad* tuning. If the
+    // shipped defaults tripped one, the check would be describing normal
+    // operation and no board would load at all.
+    assert!(failing_fields(&BoardRules::default()).is_empty());
+}
+
+#[test]
+fn a_free_via_is_rejected() {
+    // At zero cost the router sprinkles vias instead of routing.
+    let mut b = BoardRules::default();
+    b.tuning.via_cost_cells = 0;
+    assert!(failing_fields(&b).contains(&"board.tuning.via_cost_cells".to_string()));
+}
+
+#[test]
+fn a_present_cost_that_never_grows_is_rejected() {
+    // PathFinder converges *because* sharing a cell gets dearer each pass.
+    // At a multiplier of 1.0 the negotiation is an infinite loop that the
+    // wall budget happens to interrupt.
+    let mut b = BoardRules::default();
+    b.tuning.nc_pres_fac_mult = 1.0;
+    assert!(failing_fields(&b).contains(&"board.tuning.nc_pres_fac_mult".to_string()));
+}
+
+#[test]
+fn a_zero_iteration_cap_is_rejected() {
+    let mut b = BoardRules::default();
+    b.tuning.nc_max_iters = 0;
+    assert!(failing_fields(&b).contains(&"board.tuning.nc_max_iters".to_string()));
+}
+
+#[test]
+fn a_zero_expansion_cap_is_rejected() {
+    // Every A* search would give up before its first step, and the router
+    // would report the board unroutable.
+    let mut b = BoardRules::default();
+    b.tuning.seq_max_expansions = 0;
+    assert!(failing_fields(&b).contains(&"board.tuning.seq_max_expansions".to_string()));
+}
+
+#[test]
+fn a_router_that_does_not_exist_is_rejected() {
+    let mut b = BoardRules::default();
+    b.tuning.router = "astar".into();
+    assert!(failing_fields(&b).contains(&"board.tuning.router".to_string()));
+}
+
+#[test]
+fn a_stitch_reach_of_zero_is_rejected() {
+    // No via site is ever legal, so every poured pad reports unreachable.
+    let mut b = BoardRules::default();
+    b.tuning.pour_stitch_reach_um = 0;
+    assert!(failing_fields(&b).contains(&"board.tuning.pour_stitch_reach_um".to_string()));
+}

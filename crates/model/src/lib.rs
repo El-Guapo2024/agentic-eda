@@ -191,6 +191,7 @@ impl BoardRules {
                 );
             }
         }
+        self.tuning.validate(&mut out);
         out
     }
 
@@ -308,6 +309,52 @@ pub struct RoutingTuning {
     /// get -- but so is the physics. A layer carrying a plane is not a
     /// signal layer with a plane drawn on top of it.
     pub pour_reserve_skeleton: bool,
+}
+
+impl RoutingTuning {
+    /// Reject a tuning that cannot describe a search. These are knobs, not
+    /// board geometry, but a zero here is just as fatal downstream: it is a
+    /// divisor, a loop bound, or the only thing keeping a cost from being
+    /// free. Checking once at the boundary is what lets every consumer
+    /// divide and index without a guard.
+    pub fn validate(&self, out: &mut Vec<CheckResult>) {
+        let mut bad = |what: &str, why: String| {
+            out.push(CheckResult::fail("board_rules", format!("board.tuning.{what}"), why));
+        };
+        if self.router != "negotiated" && self.router != "sequential" {
+            bad("router", format!("{:?} is not a router; it is `negotiated` or `sequential`", self.router));
+        }
+        if self.via_cost_cells <= 0 {
+            bad("via_cost_cells", format!("a via costs {} cells, so the router would sprinkle them for free", self.via_cost_cells));
+        }
+        if self.bend_cost < 0 {
+            bad("bend_cost", format!("a bend costs {}, so turning would pay the router to spiral", self.bend_cost));
+        }
+        if self.seq_max_expansions == 0 {
+            bad("seq_max_expansions", "the A* expansion cap is 0, so every search gives up before its first step".into());
+        }
+        if self.preflight_reach_cells == 0 {
+            bad("preflight_reach_cells", "a pad pocket must reach 0 cells, which every buried pad satisfies".into());
+        }
+        if self.nc_max_iters == 0 {
+            bad("nc_max_iters", "the negotiator is capped at 0 iterations, so it never routes anything".into());
+        }
+        if !(self.nc_pres_fac_0 > 0.0) {
+            bad("nc_pres_fac_0", format!("the present-cost factor starts at {}; congestion would be free on the first pass", self.nc_pres_fac_0));
+        }
+        if !(self.nc_pres_fac_mult > 1.0) {
+            bad("nc_pres_fac_mult", format!("the present-cost factor grows by x{}, so sharing a cell never gets more expensive and the negotiation cannot converge", self.nc_pres_fac_mult));
+        }
+        if self.nc_pres_fac_max < self.nc_pres_fac_0 {
+            bad("nc_pres_fac_max", format!("the present-cost ceiling {} is below its start {}", self.nc_pres_fac_max, self.nc_pres_fac_0));
+        }
+        if self.nc_max_wall_s < 0.0 {
+            bad("nc_max_wall_s", format!("the wall budget is {} s", self.nc_max_wall_s));
+        }
+        if self.pour_stitch_reach_um <= 0 {
+            bad("pour_stitch_reach_um", format!("a stitching via may sit {} µm from its pad, so no via site is ever legal", self.pour_stitch_reach_um));
+        }
+    }
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
