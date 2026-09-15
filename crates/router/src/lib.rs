@@ -761,30 +761,34 @@ pub fn route_partial(
     // Negotiated congestion by default; EDA_ROUTER=sequential keeps the
     // rip-up router for comparison while both exist.
     if std::env::var("EDA_ROUTER").as_deref().unwrap_or(rules.tuning.router.as_str()) != "sequential" {
+        // Stitch the plane BEFORE the signals route, not after.
+        //
+        // Stitched afterwards, a ground pad can be walled in on its own
+        // layer by tracks that had no reason to avoid it: on L4 three
+        // pads ended with six hundred-odd legal via sites within reach
+        // and no way out to any of them. Real flows drop the ground vias
+        // early and let the signals route around them, which is also the
+        // only ordering that lets the negotiator treat that copper as the
+        // obstacle it is.
+        let (zones, mut pour_tracks, mut pour_vias, pour_entries, pour_fails) =
+            plan_pours(&mut grid, &pads, rules, placement);
+
         let (tracks, vias, mut nfails) = negotiate::run(&mut grid, &pads, rules, &edges_by_net, &nets, dbg);
         let mut fails = skipped;
         fails.append(&mut nfails);
+        fails.extend(pour_fails);
         if dbg { eprintln!("route: t routed {:?}", t_start.elapsed()); }
         let mut out = design.clone();
         let mut all_tracks: Vec<Track> = tracks.into_values().flatten().collect();
         let mut all_vias: Vec<Via> = vias.into_values().flatten().collect();
-        all_tracks.sort_by(|a, b| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
-        all_vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
-        // The negotiator keeps its occupancy in its own `Claims`, not in
-        // the grid, so at this point the grid still knows only pads. A
-        // pour planned against that board places its stitching vias on
-        // copper that is already taken -- caught, on the first real board
-        // with a plane, by the router/gate cross-check. Stamp the routed
-        // geometry back before asking the grid anything about free space.
-        //
-        // Guarded because only the pour pass asks: a board with no plane
-        // should not pay to rebuild an occupancy map nothing reads.
-        if !rules.pours.is_empty() {
-            stamp_routed(&mut grid, &all_tracks, &all_vias, rules);
-        }
-        let (zones, pour_fails) =
-            apply_pours(&grid, &pads, rules, placement, &mut all_tracks, &mut all_vias);
-        fails.extend(pour_fails);
+        all_tracks.append(&mut pour_tracks);
+        all_vias.append(&mut pour_vias);
+        // The plan's reachability answer was about an empty board. Signals
+        // laid since can cut a pad off from the plane -- KiCad's DRC found
+        // exactly that on three L4 connector pads our gates were calling
+        // connected. Re-flood the finished board and hold the plan to its
+        // promise.
+        fails.extend(verify_pours(&mut grid, rules, &all_tracks, &all_vias, &pour_entries));
         all_tracks.sort_by(|a, b| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
         all_vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
         out.routing = Some(RoutingSection { tracks: all_tracks, vias: all_vias, zones });
@@ -1242,21 +1246,26 @@ fn shuffle_ties(nets: &mut [String], airline: &HashMap<String, i64>, seed: u64) 
     }
 }
 
-/// Run every declared pour and fold the result into the routing.
+/// Plan every declared pour and stamp its copper into the grid.
+///
+/// Runs before the signals route, so the stitching vias and stubs are
+/// obstacles the negotiator has to respect rather than latecomers trying
+/// to squeeze into what is left.
 ///
 /// A pour that cannot reach one of its pads is a hard fail, not a
 /// footnote: the board would leave that pin floating, and a gate that
 /// merely reported it would be teaching agents that a plane is free
 /// connectivity.
-fn apply_pours(
-    grid: &Grid,
+fn plan_pours(
+    grid: &mut Grid,
     pads: &HashMap<String, PadInfo>,
     rules: &RouteRules,
     placement: &eda_model::ir::PlacementSection,
-    tracks: &mut Vec<Track>,
-    vias: &mut Vec<Via>,
-) -> (Vec<Zone>, Vec<CheckResult>) {
+) -> (Vec<Zone>, Vec<Track>, Vec<Via>, Vec<(String, u8, Vec<(String, (i64, i64))>)>, Vec<CheckResult>) {
     let mut zones = Vec::new();
+    let mut out_tracks: Vec<Track> = Vec::new();
+    let mut out_vias: Vec<Via> = Vec::new();
+    let mut entries: Vec<(String, u8, Vec<(String, (i64, i64))>)> = Vec::new();
     let mut fails = Vec::new();
     for spec in &rules.pours {
         let layer = match rules.layers.iter().position(|l| *l == spec.layer) {
@@ -1265,62 +1274,66 @@ fn apply_pours(
                 fails.push(CheckResult::fail(
                     "routing_pour_layer",
                     &spec.net,
-                    &format!("pour names layer {} , which is not in the board stackup {:?}", spec.layer, rules.layers),
+                    format!("pour names layer {}, which is not in the board stackup {:?}", spec.layer, rules.layers),
                 ));
                 continue;
             }
         };
-        let pour_pads: Vec<pour::PourPad> = pads
-            .iter()
-            .filter(|(_, p)| p.net == spec.net)
-            .map(|(refpin, p)| {
-                let cells = pad_cells(grid, p);
-                // Leave the pad the same way every other track terminates
-                // on one: from an on-grid interior cell that holds the
-                // whole track width inside the copper. Starting at the raw
-                // pad centre instead put an off-grid vertex on the board,
-                // since a pad centre is rarely grid-aligned. Pads too
-                // small to hold any such cell keep the centre -- connecting
-                // beats being tidy, and the off-grid gate says so too.
-                let start = pad_interior_cells(grid, p, rules)
-                    .into_iter()
-                    .map(|(x, y)| grid.to_point(x, y))
-                    .filter(|&q| p.geom.contains_with_margin(q, (rules.track_width as f64) / 2.0))
-                    .min_by_key(|q| {
-                        let (dx, dy) = ((q.x - p.pt.x) as i128, (q.y - p.pt.y) as i128);
-                        dx * dx + dy * dy
-                    })
-                    // A pad with no grid point strictly inside it (500 µm
-                    // pad, 254 µm grid, and an origin that lands the lines
-                    // badly) falls back to its own centre cell, which is
-                    // what every other track endpoint on this board does.
-                    // On-grid and gate-checked: `routing_connectivity`
-                    // tests the endpoint against the real pad shape, so a
-                    // cell that misses the copper fails loudly.
-                    .unwrap_or_else(|| {
-                        let (cx, cy) = grid.to_cell(p.pt);
-                        grid.to_point(cx, cy)
-                    });
-                pour::PourPad {
-                    refpin: refpin.clone(),
-                    refpin_net: p.net.clone(),
-                    at: p.pt,
-                    start,
-                    layers: p.layers.clone(),
-                    cells,
-                }
-            })
-            .collect();
+        let pour_pads: Vec<pour::PourPad> = {
+            let g = &*grid;
+            let mut v: Vec<pour::PourPad> = pads
+                .iter()
+                .filter(|(_, p)| p.net == spec.net)
+                .map(|(refpin, p)| {
+                    let cells = pad_cells(g, p);
+                    // Leave the pad the same way every other track
+                    // terminates on one: from an on-grid interior cell
+                    // that holds the whole track width inside the copper.
+                    // Starting at the raw pad centre instead put an
+                    // off-grid vertex on the board, since a pad centre is
+                    // rarely grid-aligned.
+                    let start = pad_interior_cells(g, p, rules)
+                        .into_iter()
+                        .map(|(x, y)| g.to_point(x, y))
+                        .filter(|&q| p.geom.contains_with_margin(q, (rules.track_width as f64) / 2.0))
+                        .min_by_key(|q| {
+                            let (dx, dy) = ((q.x - p.pt.x) as i128, (q.y - p.pt.y) as i128);
+                            dx * dx + dy * dy
+                        })
+                        // A pad with no grid point strictly inside it
+                        // falls back to its own centre cell, which is what
+                        // every other track endpoint on this board does.
+                        // `routing_connectivity` tests the endpoint
+                        // against the real pad shape, so a cell that
+                        // misses the copper fails loudly.
+                        .unwrap_or_else(|| {
+                            let (cx, cy) = g.to_cell(p.pt);
+                            g.to_point(cx, cy)
+                        });
+                    pour::PourPad {
+                        refpin: refpin.clone(),
+                        refpin_net: p.net.clone(),
+                        at: p.pt,
+                        start,
+                        layers: p.layers.clone(),
+                        cells,
+                    }
+                })
+                .collect();
+            // Deterministic: pad order out of a HashMap is not.
+            v.sort_by(|a, b| a.refpin.cmp(&b.refpin));
+            v
+        };
         if pour_pads.is_empty() {
             fails.push(CheckResult::fail(
                 "routing_pour_empty",
                 &spec.net,
-                &format!("pour declared on net {} , which has no pads on this board", spec.net),
+                format!("pour declared on net {}, which has no pads on this board", spec.net),
             ));
             continue;
         }
         let r = pour::pour(
-            grid,
+            &*grid,
             spec,
             layer,
             &pour_pads,
@@ -1335,7 +1348,7 @@ fn apply_pours(
             fails.push(CheckResult::fail(
                 "routing_pour_unreachable",
                 &spec.net,
-                &format!(
+                format!(
                     "the {} pour on {} cannot reach {} pad(s) -- no legal stitching via, and no stub to one: {}. \
                      Give the plane a clear path to them (move the blocking copper, or free a via site beside the pad); \
                      a pour that misses a pad leaves it floating.",
@@ -1346,11 +1359,56 @@ fn apply_pours(
                 ),
             ));
         }
-        vias.extend(r.vias);
-        tracks.extend(r.tracks);
+        // Stamp the stitching copper so the signals route around it.
+        stamp_routed(grid, &r.tracks, &r.vias, rules);
+        entries.push((spec.net.clone(), layer, r.entries));
+        out_vias.extend(r.vias);
+        out_tracks.extend(r.tracks);
         zones.push(r.zone);
     }
-    (zones, fails)
+    (zones, out_tracks, out_vias, entries, fails)
+}
+
+/// Re-check every planned pour against the board the router actually built.
+///
+/// `plan_pours` reserves the stitching copper before the signals route,
+/// which is the only ordering that stops a ground pad being walled in.
+/// The cost of planning that early is that its reachability answer
+/// describes an empty board, so this pass re-floods the finished one.
+/// Together they are honest; either alone is not.
+fn verify_pours(
+    grid: &mut Grid,
+    rules: &RouteRules,
+    tracks: &[Track],
+    vias: &[Via],
+    entries: &[(String, u8, Vec<(String, (i64, i64))>)],
+) -> Vec<CheckResult> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+    stamp_routed(grid, tracks, vias, rules);
+    let mut fails = Vec::new();
+    for (net, layer, ent) in entries {
+        let Some(spec) = rules.pours.iter().find(|p| p.net == *net) else { continue };
+        let cut = pour::verify(grid, spec, *layer, ent);
+        if !cut.is_empty() {
+            fails.push(CheckResult::fail(
+                "routing_pour_cut_off",
+                net,
+                format!(
+                    "the {} pour on {} reached {} pad(s) when it was planned, but routing has since cut {} of them \
+                     off from the plane: {}. The signals that isolated them have to move, or the plane needs a \
+                     path back; a pad the plane no longer reaches is floating.",
+                    net,
+                    spec.layer,
+                    ent.len(),
+                    cut.len(),
+                    cut.join(", ")
+                ),
+            ));
+        }
+    }
+    fails
 }
 
 /// Replay routed tracks and vias into the grid's occupancy.

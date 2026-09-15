@@ -45,6 +45,11 @@ pub struct PourResult {
     pub tracks: Vec<Track>,
     /// Pads the plane could not reach, as "REF.PIN".
     pub unreached: Vec<String>,
+    /// Where each reached pad enters the plane, in cells on the poured
+    /// layer: its own copper for a pad already on that layer, else the
+    /// cell its stitching via punches through. `verify` re-tests exactly
+    /// these points once the signals are down.
+    pub entries: Vec<(String, (i64, i64))>,
 }
 
 /// Cells on `layer` the poured net may occupy, as a flood-filled component
@@ -132,11 +137,17 @@ pub fn pour(
     let mut vias = Vec::new();
     let mut tracks = Vec::new();
     let mut unreached = Vec::new();
+    let mut entries = Vec::new();
     for p in pads {
         // A pad already on the poured layer, sitting in the plane's own
         // component, is connected by the copper itself.
-        if p.layers.contains(&layer) && touches_body(&p.cells) {
-            continue;
+        if p.layers.contains(&layer) {
+            if let Some(&cell) = p.cells.iter().find(|&&(x, y)| {
+                grid.in_bounds(x, y) && body.is_some_and(|b| comp[idx(x, y)] == b)
+            }) {
+                entries.push((p.refpin.clone(), cell));
+                continue;
+            }
         }
         // Otherwise it needs a stitching via down to the plane, and the
         // via has to be *on* the pad or joined to it by a stub. A via
@@ -144,6 +155,7 @@ pub fn pour(
         let pad_layer = p.layers.first().copied().unwrap_or(0);
         match stitch(grid, &comp, body, net_id, p, pad_layer) {
             Some((at, stub)) => {
+                entries.push((p.refpin.clone(), grid.to_cell(at)));
                 vias.push(Via {
                     net: spec.net.clone(),
                     at,
@@ -176,6 +188,7 @@ pub fn pour(
         vias,
         tracks,
         unreached,
+        entries,
     }
 }
 
@@ -256,6 +269,39 @@ fn polyline(grid: &Grid, path: &[(i64, i64, u8)]) -> Vec<Point> {
         }
     }
     out.push(grid.to_point(path[path.len() - 1].0, path[path.len() - 1].1));
+    out
+}
+
+/// Re-check a planned pour against the board the router actually built.
+///
+/// The plan runs before the signals route, so its reachability answer is
+/// about an empty board. Signals laid afterwards can cut a pad off from
+/// the plane -- KiCad's own DRC found exactly that on three L4 connector
+/// pads that our gates were calling connected. This is the check that
+/// makes the plan's promise true at the end rather than at the start.
+///
+/// Every pad, stub and stitching via of the poured net is its own copper,
+/// so on a board where the plan held they all flood into one component
+/// with the plane. A pad outside it is floating.
+pub fn verify(grid: &Grid, spec: &Pour, layer: u8, entries: &[(String, (i64, i64))]) -> Vec<String> {
+    let net_id = grid.net_id_of(&spec.net);
+    let (comp, ncomp) = components(grid, layer, net_id);
+    let mut size = vec![0usize; ncomp];
+    for &c in &comp {
+        if c >= 0 {
+            size[c as usize] += 1;
+        }
+    }
+    let Some(body) = (0..ncomp).max_by_key(|&i| size[i]).map(|i| i as i32) else {
+        return entries.iter().map(|(r, _)| r.clone()).collect();
+    };
+    let w = grid.cells_x;
+    let mut out: Vec<String> = entries
+        .iter()
+        .filter(|(_, (x, y))| !grid.in_bounds(*x, *y) || comp[(y * w + x) as usize] != body)
+        .map(|(r, _)| r.clone())
+        .collect();
+    out.sort();
     out
 }
 
