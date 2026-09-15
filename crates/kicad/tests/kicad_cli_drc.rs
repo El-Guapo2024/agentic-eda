@@ -91,7 +91,12 @@ fn kicad_cli_drc_ldo_seed3() {
 
     let drc_report = dir.join("drc.json");
     let drc_out = Command::new(&cli)
-        .args(["pcb", "drc", "--format", "json", "--severity-all", "--exit-code-violations", "--output"])
+        // --refill-zones: a zone is stored as an outline plus a cached
+        // fill, and we export only the outline. Without the refill KiCad
+        // checks connectivity against an empty plane and reports every
+        // stitching via as dangling -- a false failure that says nothing
+        // about the board.
+        .args(["pcb", "drc", "--refill-zones", "--format", "json", "--severity-all", "--exit-code-violations", "--output"])
         .arg(&drc_report)
         .arg(&pcb_path)
         .output()

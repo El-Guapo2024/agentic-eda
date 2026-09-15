@@ -589,6 +589,15 @@ impl Grid {
         }
     }
 
+    /// True if via copper here is a soft keep-out, regardless of whether
+    /// enforcement is currently switched on. Stitching vias need the raw
+    /// answer: `routing_over_refdes` is a hard gate with no allowance, so
+    /// a pour placing a via under a silkscreen label fails the board --
+    /// there is nothing soft about it once the negotiation is over.
+    pub fn is_soft_via(&self, cx: i64, cy: i64, layer: u8) -> bool {
+        self.idx(cx, cy, layer).map(|i| self.soft_via[i]).unwrap_or(true)
+    }
+
     /// Mark a cell as a soft keep-out for via copper (see `soft_active`).
     pub fn set_soft_via(&mut self, cx: i64, cy: i64, layer: u8) {
         if let Some(i) = self.idx(cx, cy, layer) {

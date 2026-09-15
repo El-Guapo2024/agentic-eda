@@ -492,3 +492,106 @@ fn missing_placement_fails_cleanly() {
     let err = route(&d, &m, &rules, 1).expect_err("no placement should fail");
     assert!(err.iter().any(|c| c.check == "route_precondition"));
 }
+
+// ---- copper pours -------------------------------------------------------
+
+/// Four parts around a board with a real ground net: three signals and a
+/// GND that touches every part, which is the shape a plane exists for.
+fn fixture_pour() -> (Design, ConstraintModel) {
+    let d = design(
+        rect(30_000, 30_000),
+        vec![
+            fp("U1", 3_000, 3_000),
+            fp("U2", 25_000, 3_000),
+            fp("U3", 3_000, 25_000),
+            fp("U4", 25_000, 25_000),
+        ],
+    );
+    let parts = vec![part("U1", 3), part("U2", 3), part("U3", 3), part("U4", 3)];
+    let nets = vec![
+        Net { name: "N1".into(), pins: vec!["U1.1".into(), "U2.1".into()] },
+        Net { name: "N2".into(), pins: vec!["U3.1".into(), "U4.1".into()] },
+        Net { name: "N3".into(), pins: vec!["U1.2".into(), "U3.2".into()] },
+        Net {
+            name: "GND".into(),
+            pins: vec!["U1.3".into(), "U2.3".into(), "U3.3".into(), "U4.3".into()],
+        },
+    ];
+    let m = model(parts, nets);
+    (d, m)
+}
+
+fn poured(net: &str) -> RouteRules {
+    let mut r = RouteRules::default();
+    r.pours = vec![eda_model::Pour { net: net.to_string(), layer: "B.Cu".to_string() }];
+    r
+}
+
+#[test]
+fn a_poured_net_is_not_track_routed() {
+    let (d, m) = fixture_pour();
+    let out = route(&d, &m, &poured("GND"), 1).expect("should route");
+    let rt = out.routing.as_ref().unwrap();
+    // Stitching stubs are the only GND copper a pour leaves behind, and
+    // each one ends on a via. A GND track that reaches another GND pad
+    // means the net went through the queue after all.
+    for t in rt.tracks.iter().filter(|t| t.net == "GND") {
+        let ends_on_via = rt.vias.iter().any(|v| v.net == "GND" && Some(&v.at) == t.pts.last());
+        assert!(ends_on_via, "GND track {:?} is not a stitching stub", t.pts);
+    }
+}
+
+#[test]
+fn a_pour_emits_a_zone_on_its_layer() {
+    let (d, m) = fixture_pour();
+    let out = route(&d, &m, &poured("GND"), 1).expect("should route");
+    let z = &out.routing.as_ref().unwrap().zones;
+    assert_eq!(z.len(), 1, "expected exactly one zone");
+    assert_eq!(z[0].net, "GND");
+    assert_eq!(z[0].layer, "B.Cu");
+    assert!(z[0].outline.len() >= 3, "zone outline is not a polygon");
+}
+
+#[test]
+fn a_stitching_via_never_sits_on_pad_copper() {
+    let (d, m) = fixture_pour();
+    let out = route(&d, &m, &poured("GND"), 1).expect("should route");
+    // Via-in-pad is a fab defect on any net, the via's own included.
+    assert_gate_clean(&out, &m);
+}
+
+#[test]
+fn a_poured_board_still_passes_every_routing_gate() {
+    let (d, m) = fixture_pour();
+    let out = route(&d, &m, &poured("GND"), 1).expect("should route");
+    let rules = poured("GND");
+    assert_on_grid(&out, &rules);
+    assert_within_outline(&out);
+    assert_clearance(&out, &rules);
+    assert_gate_clean(&out, &m);
+    assert_routing_quality_clean(&out, &m);
+}
+
+#[test]
+fn a_pour_on_a_net_the_board_does_not_have_is_a_hard_fail() {
+    let (d, m) = fixture_pour();
+    let (_, fails) = eda_router::route_partial(&d, &m, &poured("NOT_A_NET"), 1);
+    assert!(
+        fails.iter().any(|f| f.check == "routing_pour_empty"),
+        "a pour on a net with no pads must fail, got {:?}",
+        fails.iter().map(|f| &f.check).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_pour_on_a_layer_outside_the_stackup_is_a_hard_fail() {
+    let (d, m) = fixture_pour();
+    let mut rules = RouteRules::default();
+    rules.pours = vec![eda_model::Pour { net: "GND".into(), layer: "In7.Cu".into() }];
+    let (_, fails) = eda_router::route_partial(&d, &m, &rules, 1);
+    assert!(
+        fails.iter().any(|f| f.check == "routing_pour_layer"),
+        "a pour on a layer the board does not have must fail, got {:?}",
+        fails.iter().map(|f| &f.check).collect::<Vec<_>>()
+    );
+}

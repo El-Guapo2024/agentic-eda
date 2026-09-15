@@ -99,9 +99,24 @@ pub struct BoardRules {
     /// every passive and sealed their pads).
     #[serde(default)]
     pub refdes_font_um: Option<ir::Um>,
+    /// Copper pours. A poured net is not track-routed at all: its pads
+    /// reach each other through the plane, which is how every real board
+    /// carries GND. Declaring one is a claim the gates then have to check
+    /// -- an unreachable pad is a hard fail, not a silent island.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pours: Vec<Pour>,
     /// Router tuning. Every value has a default; all are settable here.
     #[serde(default)]
     pub tuning: RoutingTuning,
+}
+
+/// One copper plane: a net flooded across a whole layer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pour {
+    pub net: String,
+    /// Stackup layer name ("B.Cu").
+    pub layer: String,
 }
 
 impl BoardRules {
@@ -184,6 +199,22 @@ pub struct RoutingTuning {
     /// best board and keep the history learned from the bad pass. Turns
     /// the negotiation from a random walk into a monotone search.
     pub nc_rollback: bool,
+    /// Extra A* step cost on a layer carrying a copper pour. Signals are
+    /// discouraged from crossing the plane, not forbidden: a track there
+    /// cuts the plane into islands, but sealing the layer outright would
+    /// strand nets that have nowhere else to go. 0 disables.
+    ///
+    /// Kept small deliberately. At 3 (4x the base step) a ten-cell run
+    /// across the plane cost more than a via, the signals crowded onto the
+    /// remaining layer, and L4 went from routing clean to 14 unresolved
+    /// conflicts against its whole wall budget. At 1 the router still
+    /// prefers another layer wherever one will do.
+    pub pour_layer_penalty: u8,
+    /// How far from a pad a stitching via may sit, µm. The via has to
+    /// clear every pad's copper and every silkscreen label, both of which
+    /// are hard gates, so on a dense board the first legal site is not
+    /// next door. Too short a leash reports a reachable pad unreachable.
+    pub pour_stitch_reach_um: ir::Um,
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
@@ -210,6 +241,8 @@ impl Default for RoutingTuning {
             nc_stall_iters: 0,
             nc_focus_cells: 8,
             nc_rollback: true,
+            pour_layer_penalty: 1,
+            pour_stitch_reach_um: 3000,
         }
     }
 }
@@ -336,7 +369,7 @@ impl BoardRules {
 
 impl Default for BoardRules {
     fn default() -> Self {
-        BoardRules { grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(), net_classes: Vec::new(), outline: None, refdes_font_um: None, tuning: RoutingTuning::default() }
+        BoardRules { grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(), net_classes: Vec::new(), outline: None, refdes_font_um: None, pours: Vec::new(), tuning: RoutingTuning::default() }
     }
 }
 

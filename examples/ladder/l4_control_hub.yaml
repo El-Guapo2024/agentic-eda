@@ -962,6 +962,11 @@ board:
     - { x: 120000, y: 0 }
     - { x: 120000, y: 90000 }
     - { x: 0, y: 90000 }
+  # A ground plane, which is how a board with this many returns is
+  # actually built. GND leaves the track queue entirely; the gate checks
+  # the plane reaches every one of its pads.
+  pours:
+    - { net: GND, layer: B.Cu }
 
 # Cheapest-first latitude. The solver only escalates when a rung fails
 # every gate; two layers stays the first and preferred answer.

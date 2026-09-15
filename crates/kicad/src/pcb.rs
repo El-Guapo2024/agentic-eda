@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use eda_model::ir::{Design, FootprintInstance, Side, Track, Via};
+use eda_model::ir::{Design, FootprintInstance, Side, Track, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
 
 use crate::{duid, fmt_mm_f, mm, sexpr_str};
@@ -189,6 +189,32 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
                 sexpr_str(&v.to_layer)
             )
             .unwrap();
+        }
+
+        // ---- copper pours ----
+        // The outline is ours; the fill is KiCad's. We emit the polygon
+        // and the connectivity rules, and let the viewer's filler lay the
+        // copper -- our own reachability check (routing_pour_unreachable)
+        // is what decides whether the plane is honest, not the render.
+        let mut zones: Vec<&Zone> = routing.zones.iter().collect();
+        zones.sort_by(|a, b| (&a.net, &a.layer).cmp(&(&b.net, &b.layer)));
+        for z in &zones {
+            if z.outline.len() < 3 {
+                continue;
+            }
+            let n = *net_num.get(z.net.as_str()).unwrap_or(&0);
+            let uuid = duid(&format!("zone:{}:{}", z.net, z.layer));
+            writeln!(out, "\t(zone (net {n}) (net_name {}) (layer {}) (uuid \"{uuid}\")", sexpr_str(&z.net), sexpr_str(&z.layer)).unwrap();
+            writeln!(out, "\t\t(hatch edge 0.5)").unwrap();
+            writeln!(out, "\t\t(connect_pads (clearance {clearance_mm}))").unwrap();
+            writeln!(out, "\t\t(min_thickness {track_mm})").unwrap();
+            writeln!(out, "\t\t(fill yes (thermal_gap {clearance_mm}) (thermal_bridge_width {track_mm}))").unwrap();
+            writeln!(out, "\t\t(polygon (pts").unwrap();
+            for p in &z.outline {
+                writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
+            }
+            writeln!(out, "\t\t))").unwrap();
+            writeln!(out, "\t)").unwrap();
         }
     }
 

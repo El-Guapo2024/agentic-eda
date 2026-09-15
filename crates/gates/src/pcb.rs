@@ -1203,7 +1203,8 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         let tracks: Vec<&Track> = rt.tracks.iter().filter(|t| t.net == net.name).collect();
         let vias: Vec<&Via> = rt.vias.iter().filter(|v| v.net == net.name).collect();
 
-        // Node ids: pads 0..P, then one per (track, vertex), then vias.
+        // Node ids: pads 0..P, then one per (track, vertex), then vias,
+        // then one per pour.
         let mut n = net_pads.len();
         let mut tv_base = Vec::with_capacity(tracks.len());
         for t in &tracks {
@@ -1212,6 +1213,10 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         }
         let via_base = n;
         n += vias.len();
+        // ... then one node per copper pour on this net: the plane itself
+        // is a conductor, and pads and vias join the net through it.
+        let zone_count = rt.zones.iter().filter(|z| z.net == net.name).count();
+        n += zone_count;
         let mut uf = Uf::new(n);
 
         // Track vertices chain.
@@ -1289,6 +1294,32 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
                             break;
                         }
                     }
+                }
+            }
+        }
+
+        // Copper pours. A plane is a conductor like any other: a pad on
+        // the poured layer, or a via landing in it, joins the net through
+        // the copper rather than through a track.
+        //
+        // This is the *optimistic* half of the pour model -- it assumes
+        // the plane is one piece. The conservative half lives in the
+        // router (`routing_pour_unreachable`), which flood-fills the real
+        // free area and fails when the plane is cut into islands. Neither
+        // subsumes the other: drop the router's check and this gate would
+        // pass a board whose plane is confetti.
+        let zones: Vec<&eda_model::ir::Zone> = rt.zones.iter().filter(|z| z.net == net.name).collect();
+        let zone_base = via_base + vias.len();
+        for (zi, z) in zones.iter().enumerate() {
+            for (pi, pad) in net_pads.iter().enumerate() {
+                if pad.layers.iter().any(|l| *l == z.layer) && point_in_polygon(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, &z.outline) {
+                    uf.union(pi, zone_base + zi);
+                }
+            }
+            for (vi, v) in vias.iter().enumerate() {
+                let spans = v.from_layer == z.layer || v.to_layer == z.layer;
+                if spans && point_in_polygon(v.at, &z.outline) {
+                    uf.union(via_base + vi, zone_base + zi);
                 }
             }
         }
