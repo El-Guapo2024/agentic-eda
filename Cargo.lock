@@ -492,6 +492,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "eda",
+ "eda-fab",
  "eda-judge",
  "eda-model",
  "serde_json",
@@ -515,6 +516,13 @@ dependencies = [
  "eda-layout",
  "eda-model",
  "serde_json",
+]
+
+[[package]]
+name = "eda-fab"
+version = "0.1.0"
+dependencies = [
+ "eda-model",
 ]
 
 [[package]]

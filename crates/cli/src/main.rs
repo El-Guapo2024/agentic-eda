@@ -37,6 +37,8 @@ struct Args {
     placer: String,
     /// Run the VLM judge after each stage (pipeline) — needs ANTHROPIC_API_KEY.
     judge: bool,
+    /// Also write a fabrication package (gerbers, drill, BOM, placement).
+    fab: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -50,6 +52,7 @@ fn parse_args() -> Result<Args, String> {
     let mut pl = None;
     let mut placer = String::new(); // empty = take the intent's solver.placer
     let mut judge = false;
+    let mut fab = false;
     while let Some(a) = it.next() {
         match a.as_str() {
             "-o" | "--out" => out = PathBuf::from(it.next().ok_or("-o needs a path")?),
@@ -59,15 +62,16 @@ fn parse_args() -> Result<Args, String> {
             "--pl" => pl = Some(PathBuf::from(it.next().ok_or("--pl needs a path")?)),
             "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress")?,
             "--judge" => judge = true,
+            "--fab" => fab = true,
             s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
             s => intent = Some(PathBuf::from(s)),
         }
     }
-    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl, placer, judge })
+    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl, placer, judge, fab })
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress] [--judge] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress] [--judge] [--fab] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -602,6 +606,78 @@ fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
     }
     let cj = to_circuit_json(design, &cx.model)?;
     write(&cx.args.out.join("circuit.json"), serde_json::to_string_pretty(&cj).unwrap_or_default().as_bytes())?;
+    if cx.args.fab {
+        export_fab(cx, design)?;
+    }
+    Ok(())
+}
+
+/// Locate `kicad-cli`. Same lookup the DRC test uses.
+fn find_kicad_cli() -> Option<std::path::PathBuf> {
+    if let Ok(out) = std::process::Command::new("which").arg("kicad-cli").output() {
+        if out.status.success() {
+            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !p.is_empty() {
+                return Some(std::path::PathBuf::from(p));
+            }
+        }
+    }
+    let mac = std::path::PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli");
+    mac.exists().then_some(mac)
+}
+
+/// Write the files a board house reads, into `<out>/fab/`.
+///
+/// Gated first, and the gate fails rather than warns: a package missing a
+/// part number is not a good order with a note on it, it is an order the
+/// assembler cannot fill. Getting that back from the factory costs days;
+/// getting it back from here costs nothing.
+fn export_fab(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
+    let checks = eda_fab::check_fab(design, &cx.model);
+    if !print_checks("fab gates", &checks) {
+        return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
+    }
+    let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
+    let dir = cx.args.out.join("fab");
+    write(&dir.join(format!("{title}-bom.csv")), eda_fab::bom_csv(&cx.model).as_bytes())?;
+    write(&dir.join(format!("{title}-positions.csv")), eda_fab::cpl_csv(design)?.as_bytes())?;
+
+    // Gerbers and the drill file are plotted from the .kicad_pcb we just
+    // wrote, so the copper shipped is the copper `kicad-cli pcb drc`
+    // checks. Missing kicad-cli is a hard failure: silently shipping a
+    // BOM and calling it a fab package is exactly the half-done output
+    // that gets discovered at the factory.
+    let pcb = cx.args.out.join(format!("{title}.kicad_pcb"));
+    if !pcb.exists() {
+        return Err(vec![CheckResult::fail("fab_no_board", title, "no .kicad_pcb to plot: a fab package without copper is not a package")]);
+    }
+    let cli = find_kicad_cli().ok_or_else(|| {
+        vec![CheckResult::fail(
+            "fab_no_kicad_cli",
+            "kicad-cli",
+            "kicad-cli was not found, so the gerbers and drill file cannot be plotted.              The BOM and positions alone are not a fabrication package; install KiCad or drop --fab.",
+        )]
+    })?;
+    for (what, args) in [
+        ("gerbers", vec!["pcb", "export", "gerbers"]),
+        ("drill", vec!["pcb", "export", "drill"]),
+    ] {
+        let out = std::process::Command::new(&cli)
+            .args(&args)
+            .arg("-o")
+            .arg(format!("{}/", dir.display()))
+            .arg(&pcb)
+            .output()
+            .map_err(|e| vec![CheckResult::fail("fab_plot", what, format!("could not run kicad-cli: {e}"))])?;
+        if !out.status.success() {
+            return Err(vec![CheckResult::fail(
+                "fab_plot",
+                what,
+                format!("kicad-cli {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()),
+            )]);
+        }
+    }
+    println!("fab package written to {}", dir.display());
     Ok(())
 }
 
