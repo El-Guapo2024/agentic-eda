@@ -32,6 +32,7 @@ pub fn lint(model: &ConstraintModel) -> Vec<CheckResult> {
     out.extend(check_duplicate_reference(model));
     out.extend(check_pin_on_multiple_nets(model));
     out.extend(check_missing_footprint(model));
+    out.extend(check_pin_has_no_pad(model));
     out.extend(check_control_pin_unconnected(model));
 
     out
@@ -254,6 +255,63 @@ fn check_missing_footprint(model: &ConstraintModel) -> Vec<CheckResult> {
             )), detail: None
         })
         .collect()
+}
+
+/// Every pin that is *on a net* must exist as a pad on the land pattern
+/// the part is placed on.
+///
+/// Two deliberate narrowings, both learned from false positives:
+///
+/// A footprint with *more* pads than the part has pins is normal and
+/// legal -- exposed thermal pads, mounting pads and NC pins the intent
+/// never mentions all look like that. Only a pin with no pad is a defect.
+///
+/// And only a pin carrying a net. `nc_pins.yaml` declares an NC pin 4 on
+/// a 3-pad SOT-223 (our built-in models the tab as the oversized pad 2),
+/// and the first cut of this check failed it. Nothing routes to an
+/// unconnected pin, so a missing pad for one costs nothing; failing it
+/// would have made the gate a thing to work around rather than to trust.
+///
+/// What is left fails rather than warns, because the board is
+/// unbuildable: copper reaches a terminal the physical part does not
+/// have, every geometric gate passes, and the next place to find it is
+/// the factory.
+fn check_pin_has_no_pad(model: &ConstraintModel) -> Vec<CheckResult> {
+    let mut on_a_net: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for net in &model.nets {
+        for p in &net.pins {
+            on_a_net.insert(p.as_str());
+        }
+    }
+    let mut out = Vec::new();
+    for part in &model.parts {
+        let Some(fp) = model.footprint_of(part) else { continue };
+        let pads: std::collections::HashSet<&str> = fp.pads.iter().map(|p| p.number.as_str()).collect();
+        let missing: Vec<&str> = part
+            .pins
+            .iter()
+            .map(|p| p.number.as_str())
+            .filter(|n| !pads.contains(n) && on_a_net.contains(format!("{}.{}", part.reference, n).as_str()))
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        out.push(CheckResult {
+            check: "source_pin_has_no_pad".into(),
+            status: eda_model::CheckStatus::Fail,
+            location: Some(part.reference.clone()),
+            hint: Some(format!(
+                "{} routes pin(s) {} that footprint {:?} has no pad for ({} pin(s) against {} pad(s)); copper would reach a terminal the part does not have",
+                part.reference,
+                missing.join(", "),
+                fp.name,
+                part.pins.len(),
+                fp.pads.len()
+            )),
+            detail: None,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -543,5 +601,67 @@ mod tests {
             ..Default::default()
         };
         assert!(check_missing_footprint(&model).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod pad_tests {
+    use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
+
+    fn part_on(reference: &str, package: &str, pins: usize) -> Part {
+        Part {
+            reference: reference.into(),
+            mpn: None,
+            value: None,
+            package: Some(package.into()),
+            footprint: None,
+            pins: (1..=pins).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
+            edge: None,
+        }
+    }
+
+    fn fails(m: &ConstraintModel) -> Vec<String> {
+        super::check_pin_has_no_pad(m).into_iter().filter_map(|c| c.location).collect()
+    }
+
+    #[test]
+    fn a_routed_pin_with_no_pad_fails() {
+        // A 4-pin part on our 3-pad SOT-223, with pin 4 actually carrying
+        // a net: copper reaches a terminal the package does not have.
+        let mut m = ConstraintModel::default();
+        m.parts = vec![part_on("U1", "SOT-223", 4)];
+        m.nets = vec![Net { name: "N1".into(), pins: vec!["U1.4".into()] }];
+        assert_eq!(fails(&m), vec!["U1"]);
+    }
+
+    #[test]
+    fn an_unconnected_pin_with_no_pad_is_fine() {
+        // The nc_pins.yaml case, and the reason this check is narrowed:
+        // nothing routes to an NC pin, so a missing pad costs nothing.
+        let mut m = ConstraintModel::default();
+        m.parts = vec![part_on("U1", "SOT-223", 4)];
+        m.nets = vec![Net { name: "N1".into(), pins: vec!["U1.1".into()] }];
+        assert!(fails(&m).is_empty());
+    }
+
+    #[test]
+    fn a_footprint_with_spare_pads_is_fine() {
+        // Thermal and mounting pads mean more pads than pins is normal.
+        let mut m = ConstraintModel::default();
+        m.parts = vec![part_on("U1", "SOIC-8", 3)];
+        m.nets = vec![Net { name: "N1".into(), pins: vec!["U1.1".into(), "U1.2".into(), "U1.3".into()]  }];
+        assert!(fails(&m).is_empty());
+    }
+
+    #[test]
+    fn a_part_with_no_resolvable_footprint_is_left_to_its_own_check() {
+        // source_missing_footprint owns that case; reporting it twice
+        // just makes the list longer.
+        let mut m = ConstraintModel::default();
+        let mut p = part_on("U1", "SOT-223", 4);
+        p.package = None;
+        m.parts = vec![p];
+        m.nets = vec![Net { name: "N1".into(), pins: vec!["U1.4".into()] }];
+        assert!(fails(&m).is_empty());
     }
 }
