@@ -176,6 +176,7 @@ mod tests {
             package: Some("0402".into()),
             footprint: None,
             pins: vec![],
+            body_um: None,
             edge: None,
         }
     }

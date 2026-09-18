@@ -1437,6 +1437,7 @@ mod tests {
                 Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                 Pin { number: "2".into(), name: None, kind: PinKind::Passive },
             ],
+            body_um: None,
             edge: None,
         };
         ConstraintModel { parts: vec![r1], ..Default::default() }
@@ -1561,12 +1562,15 @@ mod tests {
             parts: vec![
                 Part { reference: "J1".into(), mpn: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
+                       body_um: None,
                        edge: None, },
                 Part { reference: "J2".into(), mpn: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
+                       body_um: None,
                        edge: None, },
                 Part { reference: "U1".into(), mpn: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
+                       body_um: None,
                        edge: None, },
             ],
             ..Default::default()
@@ -1801,7 +1805,7 @@ mod integration {
     }
 
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: None, package: None, footprint: None, pins, edge: None }
+        Part { reference: reference.into(), mpn: None, value: None, package: None, footprint: None, pins, body_um: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {

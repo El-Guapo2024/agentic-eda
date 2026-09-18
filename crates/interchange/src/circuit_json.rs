@@ -419,6 +419,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
+                    body_um: None,
                     edge: None,
                 },
                 Part {
@@ -431,6 +432,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
+                    body_um: None,
                     edge: None,
                 },
             ],
@@ -513,6 +515,7 @@ mod tests {
             footprint: None,
             package: None,
             pins: vec![],
+            body_um: None,
             edge: None,
         });
         assert_eq!(ftype, "simple_chip");

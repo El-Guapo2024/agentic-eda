@@ -93,6 +93,7 @@ fn zen_globals(gb: &mut GlobalsBuilder) {
             package,
             footprint: None,
             pins,
+            body_um: None,
             edge: None,
         });
         Ok(NoneType)

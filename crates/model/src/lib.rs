@@ -530,6 +530,13 @@ pub struct Part {
     pub footprint: Option<String>,
     #[serde(default)]
     pub pins: Vec<Pin>,
+    /// Physical body size (width, height) in µm, as the distributor
+    /// reports it for this exact MPN -- not the package name's nominal
+    /// size. Set when the part is sourced; it is the only thing that
+    /// lets a gate check the land pattern against the part rather than
+    /// against a string. See `source_footprint_body_mismatch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_um: Option<(ir::Um, ir::Um)>,
     /// Cable comes in from outside: the part must sit on a board edge
     /// (`placement_edge_connector`). Unset = decided from the value/mpn
     /// (USB, jack, terminal block, receptacle…); a bare `J` header is

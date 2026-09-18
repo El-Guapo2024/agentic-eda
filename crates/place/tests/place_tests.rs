@@ -10,6 +10,7 @@ fn part(reference: &str, package: &str, npins: usize) -> Part {
         package: Some(package.into()),
         footprint: None,
         pins: (1..=npins).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
+        body_um: None,
         edge: None,
     }
 }

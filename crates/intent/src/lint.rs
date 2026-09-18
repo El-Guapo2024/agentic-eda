@@ -33,6 +33,7 @@ pub fn lint(model: &ConstraintModel) -> Vec<CheckResult> {
     out.extend(check_pin_on_multiple_nets(model));
     out.extend(check_missing_footprint(model));
     out.extend(check_pin_has_no_pad(model));
+    out.extend(check_footprint_body_mismatch(model));
     out.extend(check_control_pin_unconnected(model));
 
     out
@@ -341,6 +342,7 @@ mod tests {
             package: Some("0603".into()),
             footprint: None,
             pins: (1..=n).map(|i| eda_model::Pin { number: i.to_string(), name: None, kind: eda_model::PinKind::Signal }).collect(),
+            body_um: None,
             edge: None,
         }
     }
@@ -354,6 +356,7 @@ mod tests {
             package: Some("SOT-23".into()),
             footprint: None,
             pins,
+            body_um: None,
             edge: None,
         }
     }
@@ -552,6 +555,7 @@ mod tests {
                 package: Some("SOT-23".into()),
                 footprint: None,
                 pins: vec![Pin { number: "3".into(), name: Some("EN".into()), kind: PinKind::Signal }],
+                body_um: None,
                 edge: None,
             }],
             nets: vec![],
@@ -576,6 +580,7 @@ mod tests {
                     Pin { number: "1".into(), name: Some("VIN".into()), kind: PinKind::Power },
                     Pin { number: "3".into(), name: Some("EN".into()), kind: PinKind::Signal },
                 ],
+                body_um: None,
                 edge: None,
             }],
             nets: vec![Net { name: "VIN".into(), pins: vec!["U1.1".into(), "U1.3".into()] }],
@@ -604,6 +609,88 @@ mod tests {
     }
 }
 
+/// The land pattern has to be able to hold the part that was ordered.
+///
+/// Everything else in this pipeline matches a footprint to a part by
+/// *name*, and a name is not a measurement. Two failures that costs
+/// nothing to imagine and a board spin to discover:
+///
+///   - `0603` imperial is 1.6 x 0.8 mm. `0603` metric is 0.6 x 0.3 mm,
+///     which is imperial `0201`. Same string, parts 5x apart in size.
+///   - A USB-C receptacle and a 16-pin 2.54 mm header both have sixteen
+///     pins, so every pin-count check passes and nothing fits.
+///
+/// DRC cannot see either, because DRC checks copper against copper and
+/// never against the physical component.
+///
+/// `Part::body_um` is what makes this checkable: the body size the
+/// distributor reports for that exact MPN, recorded when the part was
+/// sourced. A part without it is skipped rather than failed -- the gate
+/// reports what it can verify, and an intent that has not sourced its
+/// parts yet is an ordinary state, not a defect.
+///
+/// The tolerance is deliberately loose. A rigorous answer needs IPC land
+/// pattern rules and the part's terminal geometry, neither of which is in
+/// a distributor feed. `RATIO` only asks whether these two things could
+/// plausibly be the same component -- it is built to catch the 5x class
+/// of error without inventing authority it does not have. A gate that
+/// fires on real parts gets switched off, and then it catches nothing.
+const BODY_RATIO: f64 = 3.0;
+
+fn check_footprint_body_mismatch(model: &ConstraintModel) -> Vec<CheckResult> {
+    let mut out = Vec::new();
+    for part in &model.parts {
+        let Some((bw, bh)) = part.body_um else { continue };
+        let Some(fp) = model.footprint_of(part) else { continue };
+        if fp.pads.is_empty() || bw <= 0 || bh <= 0 {
+            continue;
+        }
+        // Bounding box of the copper the part has to land on.
+        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        for pad in &fp.pads {
+            x0 = x0.min(pad.at.0 - pad.size.0 / 2);
+            y0 = y0.min(pad.at.1 - pad.size.1 / 2);
+            x1 = x1.max(pad.at.0 + pad.size.0 / 2);
+            y1 = y1.max(pad.at.1 + pad.size.1 / 2);
+        }
+        // Compare like with like: a part may be rotated relative to the
+        // land pattern, so match long-to-long and short-to-short rather
+        // than width-to-width, which would flag every 90-degree part.
+        let (pl, ps) = {
+            let (a, b) = ((x1 - x0) as f64, (y1 - y0) as f64);
+            (a.max(b), a.min(b))
+        };
+        let (bl, bs) = {
+            let (a, b) = (bw as f64, bh as f64);
+            (a.max(b), a.min(b))
+        };
+        let long = pl / bl;
+        let short = ps / bs;
+        if long > BODY_RATIO || long < 1.0 / BODY_RATIO || short > BODY_RATIO || short < 1.0 / BODY_RATIO {
+            out.push(CheckResult {
+                check: "source_footprint_body_mismatch".into(),
+                status: eda_model::CheckStatus::Fail,
+                location: Some(part.reference.clone()),
+                hint: Some(format!(
+                    "{} is a {:.2} x {:.2} mm part on footprint {:?}, whose pads span {:.2} x {:.2} mm \
+                     ({:.1}x by {:.1}x). These cannot be the same component: the package name matched, \
+                     the geometry does not.",
+                    part.reference,
+                    bl / 1000.0,
+                    bs / 1000.0,
+                    fp.name,
+                    pl / 1000.0,
+                    ps / 1000.0,
+                    long,
+                    short
+                )),
+                detail: None,
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod pad_tests {
     use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
@@ -616,6 +703,7 @@ mod pad_tests {
             package: Some(package.into()),
             footprint: None,
             pins: (1..=pins).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
+            body_um: None,
             edge: None,
         }
     }
@@ -663,5 +751,71 @@ mod pad_tests {
         m.parts = vec![p];
         m.nets = vec![Net { name: "N1".into(), pins: vec!["U1.4".into()] }];
         assert!(fails(&m).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod body_tests {
+    use eda_model::{ConstraintModel, Part};
+
+    fn part(reference: &str, package: &str, body: Option<(i64, i64)>) -> Part {
+        Part {
+            reference: reference.into(),
+            mpn: Some("X".into()),
+            value: None,
+            package: Some(package.into()),
+            footprint: None,
+            pins: vec![],
+            body_um: body,
+            edge: None,
+        }
+    }
+
+    fn fails(p: Part) -> Vec<String> {
+        let mut m = ConstraintModel::default();
+        m.parts = vec![p];
+        super::check_footprint_body_mismatch(&m).into_iter().filter_map(|c| c.location).collect()
+    }
+
+    #[test]
+    fn a_real_0603_on_an_0603_footprint_passes() {
+        // Imperial 0603: 1.6 x 0.8 mm. This must not fire, or the gate
+        // gets switched off and then it catches nothing.
+        assert!(fails(part("R1", "0603", Some((1600, 800)))).is_empty());
+    }
+
+    #[test]
+    fn a_real_0402_on_an_0402_footprint_passes() {
+        assert!(fails(part("C1", "0402", Some((1000, 500)))).is_empty());
+    }
+
+    #[test]
+    fn a_metric_0603_on_an_imperial_0603_footprint_fails() {
+        // The classic: metric 0603 is 0.6 x 0.3 mm, which is imperial
+        // 0201. Same string on the reel and in the library, parts 5x
+        // apart, and every name-based check passes.
+        assert_eq!(fails(part("R1", "0603", Some((600, 300)))), vec!["R1"]);
+    }
+
+    #[test]
+    fn a_usb_c_receptacle_on_a_pin_header_fails() {
+        // L1's J1. Sixteen pins either way, so the pin-count gate passes
+        // it; a USB-C receptacle body is nothing like a 16-way 2.54 mm
+        // header, which spans about 40 mm.
+        assert_eq!(fails(part("J1", "PINHEADER-16", Some((9000, 7300)))), vec!["J1"]);
+    }
+
+    #[test]
+    fn a_part_that_has_not_been_sourced_is_skipped_not_failed() {
+        // No body size means nothing was verified, which is an ordinary
+        // state for an intent mid-design -- not a defect.
+        assert!(fails(part("R1", "0603", None)).is_empty());
+    }
+
+    #[test]
+    fn a_rotated_part_is_not_flagged_for_being_rotated() {
+        // Long-to-long, short-to-short: a part described 90 degrees from
+        // its land pattern is the same component.
+        assert!(fails(part("R1", "0603", Some((800, 1600)))).is_empty());
     }
 }

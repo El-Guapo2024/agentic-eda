@@ -867,11 +867,21 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     if outline_ok {
         out.push(CheckResult::pass("routing_within_outline"));
     }
+    // Fails rather than warns. This is not a quality score -- every track
+    // this router emits comes from a cell index times the pitch, so an
+    // off-grid vertex means our own geometry disagrees with the grid we
+    // routed it on, and every clearance we checked was measured against
+    // cells that do not describe the copper. It reads 0 on every board in
+    // the ladder, so promoting it costs nothing and turns an invariant we
+    // were merely hoping for into one that is enforced.
     out.push(CheckResult {
         check: "routing_offgrid_points".into(),
-        status: if offgrid == 0 { CheckStatus::Pass } else { CheckStatus::Warn },
+        status: if offgrid == 0 { CheckStatus::Pass } else { CheckStatus::Fail },
         location: None,
-        hint: Some(format!("{offgrid} track vertices off the {}µm grid", rules.grid)), detail: None
+        hint: Some(format!(
+            "{offgrid} track vertice(s) off the {}µm routing grid; every vertex this router emits is a              cell index times the pitch, so off-grid copper means the geometry and the grid the              clearances were checked against are not the same board",
+            rules.grid
+        )), detail: None
     });
 
     // Connectivity: nodes = pads, track vertices, vias.
@@ -1508,6 +1518,7 @@ mod tests {
             package: Some(package.into()),
             footprint: None,
             pins: (1..=2).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Passive }).collect(),
+            body_um: None,
             edge: None,
         }
     }

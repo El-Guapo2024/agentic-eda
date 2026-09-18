@@ -382,6 +382,30 @@ fn reseed_may_help(fails: &[CheckResult]) -> bool {
     })
 }
 
+/// Failures no amount of retrying can fix.
+///
+/// The placement loop has two recovery moves: a new seed, and a bigger
+/// board. Both are useless against a part that has no land pattern -- no
+/// seed conjures geometry and no amount of space helps -- yet
+/// `place_precondition` used to fall through to both, so an impossible
+/// board burned three full placement attempts before reporting the thing
+/// it knew on the first. On one board that is a slow failure; across a
+/// fleet it is three times the work spent proving the same impossibility.
+///
+/// These are failures about the *input*, not the search. The right
+/// response is to stop and say so.
+fn hopeless(fails: &[CheckResult]) -> bool {
+    const HOPELESS: &[&str] = &[
+        // No footprint geometry: the part is not physically realisable.
+        "place_precondition",
+        // The intent itself is wrong; every stage would fail the same way.
+        "board_rules", "footprint", "source_pin_has_no_pad", "source_footprint_body_mismatch",
+        // The tool is missing, not the answer.
+        "cypress_unavailable",
+    ];
+    fails.iter().any(|c| HOPELESS.contains(&c.check.as_str()))
+}
+
 /// Placement as its own feedback loop, inside one rung of the ladder.
 ///
 /// Placement is the cheap stage to repeat and the one whose failures are
@@ -411,6 +435,9 @@ fn stage_place_looping(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<C
         match stage_place(cx, schematic, seed, board_floor) {
             Ok(d) => return Ok(d),
             Err(f) => {
+                if hopeless(&f) {
+                    return Err(f);
+                }
                 if !reseed_may_help(&f) {
                     // A board fitted too tightly reads as structural -- the
                     // parts genuinely do not fit what we shrank it to. Grow
