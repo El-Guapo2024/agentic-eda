@@ -1770,9 +1770,53 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
     if debug {
         eprintln!("place debug: {} of {} items have a floorplan region", pb.region.iter().filter(|r| r.is_some()).count(), pb.items.len());
     }
+    // Stage snapshots. The pipeline is initial -> anneal -> legalize ->
+    // polish -> repair_rules, and until now the gates only ever saw the
+    // last of those, so a failure could not be attributed to the stage
+    // that caused it. With `EDA_PLACE_STAGES=<dir>` each stage drops a
+    // design.json that `eda check --design` can score, which is also the
+    // per-step scoring a constructive placer needs.
+    let stage_dir = std::env::var_os("EDA_PLACE_STAGES").map(std::path::PathBuf::from);
+    if let Some(d) = &stage_dir {
+        std::fs::create_dir_all(d).expect("EDA_PLACE_STAGES directory is not creatable");
+    }
+    let mut stage_n = 0usize;
+    macro_rules! stage {
+        ($tag:expr, $poses:expr) => {
+            if let Some(d) = &stage_dir {
+                let mut snap = design.clone();
+                snap.provenance.seed = opts.seed;
+                let mut fps: Vec<FootprintInstance> = pb
+                    .items
+                    .iter()
+                    .enumerate()
+                    .zip($poses.iter())
+                    .map(|((i, it), p): ((usize, &Item), &Pose)| instance(it, Pose { label: pb.label_side(i, *p), ..*p }))
+                    .collect();
+                fps.sort_by(|a, b| a.id.cmp(&b.id));
+                snap.placement = Some(PlacementSection {
+                    outline: pb.outline.clone(),
+                    footprints: fps,
+                    modules: opts
+                        .floorplan
+                        .as_ref()
+                        .map(|f| f.modules.iter().map(|m| eda_model::ir::ModuleRegion { name: m.name.clone(), refs: m.refs.clone(), rect: m.rect }).collect())
+                        .unwrap_or_default(),
+                });
+                snap.routing = None;
+                let path = d.join(format!("{stage_n:02}_{}.json", $tag));
+                std::fs::write(&path, serde_json::to_vec_pretty(&snap).expect("a Design always serialises"))
+                    .unwrap_or_else(|e| panic!("could not write the stage snapshot {}: {e}", path.display()));
+                stage_n += 1;
+            }
+        };
+    }
+
     let t0 = std::time::Instant::now();
     let mut poses = initial(&pb, opts.snap);
+    stage!("initial", poses);
     anneal(&pb, &mut poses, opts);
+    stage!("anneal", poses);
     if debug {
         eprintln!("place debug: anneal {:.1}s", t0.elapsed().as_secs_f64());
         let rc: f64 = (0..pb.items.len()).map(|i| pb.region[i].map_or(0.0, |r| W_REGION * region_escape(courtyard(&pb.items[i], poses[i]), r))).sum();
@@ -1785,6 +1829,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
         }
     }
     let mut clean = legalize(&pb, &mut poses, opts.snap);
+    stage!("legalize", poses);
     // A run that legalisation can't clean up is a bad local minimum, not a
     // verdict on the board: re-anneal from the shelf pack under other
     // seeds before giving up.
@@ -1795,6 +1840,7 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
         poses = initial(&pb, opts.snap);
         anneal(&pb, &mut poses, &PlaceOptions { seed: opts.seed.wrapping_add(retry.wrapping_mul(0x9E37_79B9)), ..opts.clone() });
         clean = legalize(&pb, &mut poses, opts.snap);
+        stage!(format!("reseed{retry}"), poses);
     }
     // The edge inset is a heuristic against sealed pads, not a rule: on a
     // board too cramped for it (corpus dense_small_outline) give it up and
@@ -1812,15 +1858,18 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
             poses = initial(&pb, opts.snap);
             anneal(&pb, &mut poses, &PlaceOptions { seed: opts.seed.wrapping_add(retry.wrapping_mul(0x9E37_79B9)), ..opts.clone() });
             clean = legalize(&pb, &mut poses, opts.snap);
+            stage!(format!("reseed{retry}"), poses);
         }
     }
     if clean {
         let t1 = std::time::Instant::now();
         polish(&pb, &mut poses, opts.snap);
         clean = legalize(&pb, &mut poses, opts.snap);
+        stage!("polish", poses);
         if clean {
             repair_rules(&pb, &mut poses, opts.snap, debug);
             clean = legalize(&pb, &mut poses, opts.snap);
+            stage!("repair_rules", poses);
         }
         if debug {
             eprintln!("place debug: polish {:.1}s", t1.elapsed().as_secs_f64());
@@ -1856,6 +1905,9 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
             }
         }
     }
+    // The counter only orders the snapshot filenames; the last increment
+    // has no reader, and this says so rather than letting a warning stand.
+    let _ = stage_n;
     let mut footprints: Vec<FootprintInstance> = pb.items.iter().enumerate().zip(poses.iter()).map(|((i, it), p)| instance(it, Pose { label: pb.label_side(i, *p), ..*p })).collect();
     footprints.sort_by(|a, b| a.id.cmp(&b.id));
 
