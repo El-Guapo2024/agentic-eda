@@ -29,32 +29,48 @@
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 
-const GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v1/systemone";
+// Verified against the live gateway, not taken from documentation. The
+// first guess -- TypeSafe's own /v1/systemone with a questions *array* --
+// returned 404: the gateway speaks its own evaluation-model dialect, at a
+// different path, with questions as a keyed object and the model named in
+// a header rather than the body.
+const GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v4/ai/evaluation-model";
 const MODEL: &str = "typesafe-ai/jev";
+const PROTOCOL_VERSION: &str = "0.0.1";
+const SPEC_VERSION: &str = "4";
 
 /// One typed question about the state.
+///
+/// Serialised as the *value* of its id in a `questions` object, which is
+/// why the id is not a field here.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Question {
-    /// Boolean: returns the probability the answer is yes.
-    Bool { id: String, prompt: String },
+    /// Returns the probability the answer is yes.
+    Boolean { instructions: String },
     /// Pick one of a fixed set; returns per-option probabilities.
-    Choice { id: String, prompt: String, options: Vec<String> },
+    Choice { instructions: String, options: Vec<String> },
     /// Rate against ordered descriptive levels.
-    Score { id: String, prompt: String, levels: Vec<String> },
+    Score { instructions: String, levels: Vec<String> },
 }
 
+/// One answer, keyed by its question id in the response.
+///
+/// Shape confirmed against a live call, not documentation:
+/// `{"answers":{"routes_clean":{"type":"boolean","probability":0.31}}}`.
+/// Probabilities come back rounded to the decimals named in the
+/// response's `rounding` block (2 at the time of writing), which is worth
+/// knowing before anyone treats 0.31 as more precise than it is.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Answer {
-    pub id: String,
+    #[serde(default)]
+    pub r#type: Option<String>,
     #[serde(default)]
     pub probability: Option<f64>,
     #[serde(default)]
     pub choice: Option<String>,
     #[serde(default)]
     pub score: Option<f64>,
-    #[serde(default)]
-    pub confidence: Option<f64>,
 }
 
 /// The gateway key, or `None` when unset.
@@ -80,34 +96,35 @@ pub fn available() -> bool {
 ///
 /// Every question goes in a single request -- that is the model's whole
 /// shape, and asking them one at a time would pay the round trip N times
-/// for no benefit.
-pub fn ask(state: &serde_json::Value, questions: &[Question]) -> Result<Vec<Answer>, Vec<CheckResult>> {
+/// for nothing.
+pub fn ask(
+    state: &serde_json::Value,
+    questions: &std::collections::BTreeMap<String, Question>,
+) -> Result<std::collections::BTreeMap<String, Answer>, Vec<CheckResult>> {
     let key = api_key().ok_or_else(|| {
         vec![CheckResult::fail(
             "jev_no_key",
             "AI_GATEWAY_API_KEY",
             "no Vercel AI Gateway key is set, so no typed decision can be requested. \
-             Export AI_GATEWAY_API_KEY (a vck_... key) or let the caller proceed in its default order.",
+             Export AI_GATEWAY_API_KEY (a vck_... key), or let the caller keep its own order.",
         )]
     })?;
-    let body = serde_json::json!({
-        "model": MODEL,
-        "state": state,
-        "questions": questions,
-        // The state carries a whole board's geometry; it is the user's
-        // design and has no business training anybody's model.
-        "zero_data_retention": true,
-        "no_training": true,
-    });
+    let body = serde_json::json!({ "state": state, "questions": questions });
     let resp = ureq::post(GATEWAY_URL)
         .set("Authorization", &format!("Bearer {key}"))
         .set("Content-Type", "application/json")
+        .set("ai-gateway-protocol-version", PROTOCOL_VERSION)
+        .set("ai-gateway-auth-method", "api-key")
+        .set("ai-evaluation-model-specification-version", SPEC_VERSION)
+        .set("ai-model-id", MODEL)
         .send_json(body)
         .map_err(|e| vec![CheckResult::fail("jev_transport", MODEL, format!("Jev request failed: {e}"))])?;
     let parsed: serde_json::Value = resp
         .into_json()
         .map_err(|e| vec![CheckResult::fail("jev_decode", MODEL, format!("Jev returned unreadable JSON: {e}"))])?;
-    let answers = parsed.get("answers").or_else(|| parsed.get("results")).cloned().unwrap_or(parsed);
+    let answers = parsed.get("answers").cloned().ok_or_else(|| {
+        vec![CheckResult::fail("jev_shape", MODEL, format!("Jev response had no `answers` field: {parsed}"))]
+    })?;
     serde_json::from_value(answers)
         .map_err(|e| vec![CheckResult::fail("jev_shape", MODEL, format!("Jev answers did not match the expected shape: {e}"))])
 }
@@ -123,15 +140,19 @@ pub fn rank_placement(features: &serde_json::Value) -> Result<Option<f64>, Vec<C
     if !available() {
         return Ok(None);
     }
-    let qs = vec![Question::Bool {
-        id: "routes_clean".into(),
-        prompt: "This is a PCB placement, described by its geometry. Will an autorouter connect every \
-                 net on it without clearance violations or unroutable nets? Denser boards, tighter \
-                 courtyard gaps and nets stretched far past their packed bound make this less likely."
-            .into(),
-    }];
+    let mut qs = std::collections::BTreeMap::new();
+    qs.insert(
+        "routes_clean".to_string(),
+        Question::Boolean {
+            instructions: "This is a PCB placement, described by its geometry. Will an autorouter connect \
+                           every net on it without clearance violations or unroutable nets? Denser boards, \
+                           tighter courtyard gaps and nets stretched far past their packed bound make this \
+                           less likely."
+                .into(),
+        },
+    );
     let answers = ask(features, &qs)?;
-    Ok(answers.iter().find(|a| a.id == "routes_clean").and_then(|a| a.probability))
+    Ok(answers.get("routes_clean").and_then(|a| a.probability))
 }
 
 #[cfg(test)]
@@ -149,18 +170,54 @@ mod tests {
     }
 
     #[test]
-    fn questions_serialise_in_the_shape_the_api_expects() {
-        let q = Question::Bool { id: "x".into(), prompt: "y".into() };
+    fn a_boolean_question_serialises_as_the_gateway_expects() {
+        // Verified against the live endpoint: `type` is "boolean" (not
+        // "bool"), and the payload carries `instructions`, not `prompt`.
+        let q = Question::Boolean { instructions: "will it route?".into() };
         let v = serde_json::to_value(&q).unwrap();
-        assert_eq!(v["type"], "bool");
-        assert_eq!(v["id"], "x");
+        assert_eq!(v["type"], "boolean");
+        assert_eq!(v["instructions"], "will it route?");
+        assert!(v.get("id").is_none(), "the id is the key in the questions object, not a field");
     }
 
     #[test]
     fn a_choice_question_carries_its_options() {
-        let q = Question::Choice { id: "rung".into(), prompt: "which".into(), options: vec!["a".into(), "b".into()] };
+        let q = Question::Choice { instructions: "which rung".into(), options: vec!["a".into(), "b".into()] };
         let v = serde_json::to_value(&q).unwrap();
         assert_eq!(v["type"], "choice");
         assert_eq!(v["options"][1], "b");
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    /// A verbatim response from the live gateway, kept so a change in the
+    /// wire format breaks a test here rather than a board somewhere.
+    const REAL_RESPONSE: &str = r#"{"answers":{"routes_clean":{"type":"boolean","probability":0.31}},
+        "rounding":{"probabilityDecimals":2,"scoreDecimals":2},
+        "usage":{"inputTokens":340,"outputTokens":21},"warnings":[],
+        "providerMetadata":{"typesafe":{"confidence":{}}}}"#;
+
+    #[test]
+    fn the_real_response_parses() {
+        let v: serde_json::Value = serde_json::from_str(REAL_RESPONSE).unwrap();
+        let answers: std::collections::BTreeMap<String, Answer> =
+            serde_json::from_value(v["answers"].clone()).unwrap();
+        let a = &answers["routes_clean"];
+        assert_eq!(a.r#type.as_deref(), Some("boolean"));
+        assert_eq!(a.probability, Some(0.31));
+    }
+
+    #[test]
+    fn an_unknown_question_id_is_absent_not_a_default() {
+        // A missing answer must read as "no opinion". Defaulting it to
+        // 0.0 would rank every unanswered candidate last, which looks
+        // exactly like a confident prediction and is not one.
+        let v: serde_json::Value = serde_json::from_str(REAL_RESPONSE).unwrap();
+        let answers: std::collections::BTreeMap<String, Answer> =
+            serde_json::from_value(v["answers"].clone()).unwrap();
+        assert!(answers.get("never_asked").is_none());
     }
 }

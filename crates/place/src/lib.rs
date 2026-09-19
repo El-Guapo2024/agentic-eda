@@ -1484,6 +1484,134 @@ fn shrink_outline(pb: &Problem, poses: &mut [Pose]) -> (Vec<Point>, (Um, Um, Um,
 /// against 5, 1.62 against 1.5); here the part that is not an edge
 /// connector walks toward its partner in snap steps until the rule holds
 /// or the next step would overlap something or leave the board.
+/// Repair against the gates themselves, not against our model of them.
+///
+/// Every cost term in this file is a guess about what
+/// `check_placement_locality` will say, and twice in one afternoon the
+/// guess was wrong in a way no amount of weight tuning could fix:
+/// net-compactness was priced as a soft preference when it fails the run,
+/// and the usable-edge rule was restated on the spacing-inflated
+/// courtyard so the annealer and the gate disagreed about which edges
+/// existed. Tuning a mirror is fighting the reflection.
+///
+/// So this pass asks the real gate, repairs what it actually reports, and
+/// keeps a move only when the gate's own failure count strictly drops.
+/// That last clause is the important one: a weight can trade one gate for
+/// another and call it an improvement (W_COMPACT_GATE took L4 from 4/8 to
+/// 2/8 doing exactly that), while a strict decrease measured on the gate
+/// output cannot.
+///
+/// Bounded and conservative -- it runs after the board is already legal,
+/// reverts anything that does not help, and leaves the seed retry to
+/// handle what it cannot fix.
+fn repair_gates(
+    pb: &Problem,
+    poses: &mut [Pose],
+    design: &Design,
+    model: &ConstraintModel,
+    outline: &[Point],
+    opts: &PlaceOptions,
+    debug: bool,
+) {
+    let snapshot = |poses: &[Pose]| -> Design {
+        let mut footprints: Vec<FootprintInstance> = pb
+            .items
+            .iter()
+            .enumerate()
+            .zip(poses.iter())
+            .map(|((i, it), p)| instance(it, Pose { label: pb.label_side(i, *p), ..*p }))
+            .collect();
+        footprints.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut d = design.clone();
+        d.placement = Some(PlacementSection { outline: outline.to_vec(), footprints, modules: Vec::new() });
+        d.routing = None;
+        d
+    };
+    let score = |poses: &[Pose]| -> usize {
+        eda_gates::pcb::check_placement_locality(&snapshot(poses), model)
+            .iter()
+            .filter(|c| c.status == eda_model::CheckStatus::Fail)
+            .count()
+    };
+
+    let mut best = score(poses);
+    if best == 0 {
+        return;
+    }
+    for round in 0..4 {
+        let fails: Vec<CheckResult> = eda_gates::pcb::check_placement_locality(&snapshot(poses), model)
+            .into_iter()
+            .filter(|c| c.status == eda_model::CheckStatus::Fail)
+            .collect();
+        if fails.is_empty() {
+            return;
+        }
+        let mut improved = false;
+        for f in &fails {
+            let Some(loc) = f.location.as_deref() else { continue };
+            let saved = poses.to_vec();
+            match f.check.as_str() {
+                // The connector is on an edge the gate does not allow for
+                // its shape, or too far from any. `flush_to_edge` already
+                // picks the nearest *usable* one.
+                "placement_edge_connector" => {
+                    let Some(&i) = pb.index.get(loc) else { continue };
+                    poses[i] = pb.flush_to_edge(i, poses[i], opts.snap);
+                }
+                // Pull every part on the stretched net toward the net's
+                // own centre, smallest first: moving a 0402 is far more
+                // likely to legalise than moving the MCU it hangs off.
+                "placement_net_compactness" => {
+                    let members: Vec<usize> = model
+                        .nets
+                        .iter()
+                        .find(|n| n.name == loc)
+                        .map(|n| {
+                            n.pins
+                                .iter()
+                                .filter_map(|pin| pin.split_once('.').and_then(|(r, _)| pb.index.get(r).copied()))
+                                .collect::<std::collections::BTreeSet<_>>()
+                                .into_iter()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if members.len() < 2 {
+                        continue;
+                    }
+                    let cx = members.iter().map(|&i| poses[i].x).sum::<Um>() / members.len() as Um;
+                    let cy = members.iter().map(|&i| poses[i].y).sum::<Um>() / members.len() as Um;
+                    let mut order = members.clone();
+                    order.sort_by_key(|&i| pb.items[i].half.0 * pb.items[i].half.1);
+                    for &i in order.iter().take(2) {
+                        poses[i] = Pose { x: snap((poses[i].x + cx) / 2, opts.snap), y: snap((poses[i].y + cy) / 2, opts.snap), ..poses[i] };
+                    }
+                }
+                _ => continue,
+            }
+            if !legalize(pb, poses, opts.snap) {
+                poses.copy_from_slice(&saved);
+                continue;
+            }
+            let now = score(poses);
+            if now < best {
+                best = now;
+                improved = true;
+                if debug {
+                    eprintln!("place debug: repair_gates round {round} fixed {} @ {loc} -> {now} fail(s)", f.check);
+                }
+            } else {
+                // Not better is not good enough. A repair that merely
+                // moves the failure somewhere else is the reshuffle this
+                // whole pass exists to avoid.
+                poses.copy_from_slice(&saved);
+            }
+        }
+        if !improved {
+            return;
+        }
+    }
+}
+
 fn repair_rules(pb: &Problem, poses: &mut [Pose], snap_um: Um, debug: bool) {
     let n = pb.items.len();
     // A repair pose must be clean in every sense the gates check, the
@@ -1789,6 +1917,10 @@ pub fn place(design: &Design, model: &ConstraintModel, opts: &PlaceOptions) -> R
         clean = legalize(&pb, &mut poses, opts.snap);
         if clean {
             repair_rules(&pb, &mut poses, opts.snap, debug);
+            clean = legalize(&pb, &mut poses, opts.snap);
+        }
+        if clean {
+            repair_gates(&pb, &mut poses, design, model, &pb.outline.clone(), opts, debug);
             clean = legalize(&pb, &mut poses, opts.snap);
         }
         if debug {
