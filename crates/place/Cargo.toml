@@ -5,13 +5,8 @@ edition = "2021"
 
 [dependencies]
 eda-model = { path = "../model" }
-# Not a dev-dependency any more: `repair_gates` closes the placement loop
-# on the real gate output instead of on this crate's model of it. Gates
-# depends on model/engine/layout/render and never on place, so there is
-# no cycle.
-eda-gates = { path = "../gates" }
-
 [dev-dependencies]
+eda-gates = { path = "../gates" }
 eda-router = { path = "../router" }
 serde_yaml = { workspace = true }
 serde_json = { workspace = true }
