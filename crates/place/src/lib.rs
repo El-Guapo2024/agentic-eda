@@ -101,6 +101,26 @@ const W_CROSS: f64 = 15000.0;
 /// partners; this is what says "not 38 mm from the MCU".
 const W_COMPACT: f64 = 3.0;
 const COMPACT_RATIO: f64 = 1.3;
+/// A two-tier version of this was tried and reverted, and the result is
+/// worth keeping so nobody spends the afternoon again.
+///
+/// The reasoning was sound: `placement_net_compactness` *fails the run* at
+/// 1.6x, so weighting it 3 -- below even the board-use pull, and listed
+/// among the soft terms `W_RULE` is documented to outrank -- lets the
+/// annealer buy its way through a hard gate. A steep penalty past the
+/// gate's own threshold should have fixed that.
+///
+/// It did not. At 60 (above `W_RULE`) compactness outranked explicit
+/// proximity rules and L4 failed all three placement attempts. At 25 it
+/// still crowded them out: first-pass success over eight seeds went from
+/// 4/8 to 2/8, with `placement_proximity` failing on four seeds where it
+/// had never appeared. The gate the penalty was protecting simply traded
+/// places with another one.
+///
+/// The lesson is about measurement, not weights: 25 was chosen by A/B on
+/// seed 0 alone, which looked like an improvement because n=1 cannot tell
+/// a fix from a reshuffle. An eight-seed sweep was available and was what
+/// should have decided it.
 /// Auto proximity rule, µm courtyard gap, for a decoupling capacitor and
 /// the IC it decouples (gate: `placement_decoupling`, 3000 µm).
 const DECOUPLING_UM: i64 = 2200;
@@ -166,12 +186,31 @@ impl Rng {
     }
 }
 
+/// The real placed instance, carrying the part's identifier. Used to
+/// build the output; the `id` clone is paid once per part, not per move.
 fn instance(item: &Item, pose: Pose) -> FootprintInstance {
     FootprintInstance { id: item.id.clone(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: Side::Top, label: pose.label }
 }
 
+/// The same pose, for geometry only, with no identifier.
+///
+/// `to_board` and `rotated_extent` read `at`, `rot` and `side` and never
+/// the id -- but building a full instance to ask them a question cloned a
+/// `String` every time, and `pad_center` and `courtyard` sit in the
+/// annealer's innermost loop and inside `full_congestion_penalty`.
+///
+/// Not a micro-optimisation. L4 on seed 6 ran three and a half hours
+/// without finishing, against two to four minutes for its neighbours, and
+/// a stack sample put a third of the samples under `pad_center` in
+/// `String::clone` and `nanov2_malloc_type`. For a fleet a hang is worse
+/// than a failure: a failed board reports and frees the agent, a slow one
+/// holds it forever and looks like work.
+fn geom(pose: Pose) -> FootprintInstance {
+    FootprintInstance { id: String::new(), at: Point { x: pose.x, y: pose.y }, rot: pose.rot as u32 * 90_000, side: Side::Top, label: pose.label }
+}
+
 fn courtyard(item: &Item, pose: Pose) -> (Um, Um, Um, Um) {
-    let fp = instance(item, pose);
+    let fp = geom(pose);
     let (w, h) = rotated_extent(&fp, (item.half.0 * 2, item.half.1 * 2));
     (pose.x - w / 2, pose.y - h / 2, pose.x + w / 2, pose.y + h / 2)
 }
@@ -350,7 +389,7 @@ impl Problem<'_> {
     }
 
     fn pad_center(&self, i: usize, k: usize, pose: Pose) -> Point {
-        let fp = instance(&self.items[i], pose);
+        let fp = geom(pose);
         eda_model::footprint::to_board(&fp, self.items[i].pads[k].1)
     }
 
@@ -529,8 +568,10 @@ impl Problem<'_> {
         let r = courtyard(&self.items[i], pose);
         let (w, h) = (r.2 - r.0, r.3 - r.1);
         let (left, right, top, bottom) = (r.0 - self.bbox.0, self.bbox.2 - r.2, r.1 - self.bbox.1, self.bbox.3 - r.3);
-        let horizontal_ok = !(h as f64 > 1.3 * w as f64); // may lie along top/bottom
-        let vertical_ok = !(w as f64 > 1.3 * h as f64); // may lie along left/right
+        // Classify on the raw courtyard, the way the gate does: spacing is
+        // a clearance margin, not part of the connector's shape. See
+        // `raw_courtyard`.
+        let (vertical_ok, _, horizontal_ok, _) = eda_model::footprint::usable_edges(self.raw_courtyard(i, pose));
         let mut best: Option<(Um, Pose)> = None;
         let mut consider = |gap: Um, p: Pose| {
             if best.map_or(true, |(g, _)| gap < g) {
@@ -548,24 +589,37 @@ impl Problem<'_> {
         best.map_or(pose, |(_, p)| p)
     }
 
+    /// The part's *raw* courtyard: `courtyard()` inflated by `spacing` on
+    /// every side, undone.
+    ///
+    /// This matters for one thing only, and it is a bug that cost L4 a
+    /// whole placement. Which edges a connector may lie along is decided
+    /// from its aspect ratio, and adding the same spacing to both
+    /// half-extents pulls that ratio toward 1.0 -- a part the gate calls
+    /// elongated (top/bottom only, ratio 1.36) can look square to the
+    /// annealer (all four edges, ratio 1.24). The annealer then flushes it
+    /// against a left edge it believes is usable, and
+    /// `placement_edge_connector` measures against edges it never allowed.
+    ///
+    /// Spacing is a clearance margin. It belongs in overlap tests and
+    /// nowhere near a question about the part's own shape.
+    fn raw_courtyard(&self, i: usize, pose: Pose) -> (Um, Um, Um, Um) {
+        let r = courtyard(&self.items[i], pose);
+        (r.0 + self.spacing, r.1 + self.spacing, r.2 - self.spacing, r.3 - self.spacing)
+    }
+
     /// Distance from an edge connector's courtyard to the nearest usable
     /// board edge. Zero for non-connectors.
+    ///
+    /// Calls the gate's own function rather than restating the rule. The
+    /// restatement is what drifted: it was applied to the spacing-inflated
+    /// courtyard, so the two disagreed about which edges were legal for
+    /// exactly the parts near the 1.3 ratio boundary.
     fn edge_cost(&self, i: usize, poses: &[Pose]) -> f64 {
         if !self.items[i].connector {
             return 0.0;
         }
-        let r = courtyard(&self.items[i], poses[i]);
-        let (w, h) = (r.2 - r.0, r.3 - r.1);
-        let (left, right, top, bottom) = (r.0 - self.bbox.0, self.bbox.2 - r.2, r.1 - self.bbox.1, self.bbox.3 - r.3);
-        // Same rule as the gate: an elongated connector only counts the
-        // edges its long side can lie along.
-        let gap = if w as f64 > 1.3 * h as f64 {
-            top.min(bottom)
-        } else if h as f64 > 1.3 * w as f64 {
-            left.min(right)
-        } else {
-            left.min(right).min(top).min(bottom)
-        };
+        let gap = eda_model::footprint::edge_connector_gap(self.raw_courtyard(i, poses[i]), self.bbox);
         W_EDGE * gap.max(0) as f64
     }
 

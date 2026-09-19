@@ -560,6 +560,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda-jev"
+version = "0.1.0"
+dependencies = [
+ "eda-model",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "eda-judge"
 version = "0.1.0"
 dependencies = [

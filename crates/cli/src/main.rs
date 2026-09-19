@@ -348,7 +348,10 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
     save_design(&cx.args.out, &placed)?;
     let mut checks = check_placement(&placed, &cx.model);
     checks.extend(eda::preflight(&placed, &cx.model, &cx.model.board));
-    let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model) });
+    let metrics = serde_json::json!({
+        "hpwl_um": hpwl(&placed, &cx.model),
+        "features": placement_features(&placed, &cx.model),
+    });
     cx.log.candidate(Stage::Placement, 0, seed, &placed, Tier::Geometry, &checks, metrics).ok();
     cx.record("placement", &checks, t0);
     if !print_checks("placement gates", &checks) {
@@ -610,6 +613,103 @@ fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
 
 /// Bookshelf integer unit used for Cypress export/import (100 µm).
 const BOOKSHELF_UNIT_UM: i64 = 100;
+
+/// A placement's shape, as numbers, for every candidate we log.
+///
+/// The run log already records which gates passed, which is a row of
+/// booleans -- and a board that *barely* passes placement is exactly the
+/// one that fails routing, so the booleans throw away the signal worth
+/// having. These are the continuous quantities behind them.
+///
+/// Deliberately computed from the finished `Design` and never from the
+/// annealer's internals: a feature only the annealer can produce is
+/// useless for judging a Cypress placement, and a predictor that cannot
+/// compare the two placers is not worth training.
+///
+/// Nothing consumes these yet. They are here so that every run a fleet
+/// does accumulates (features -> outcome) rows for free; the model comes
+/// after there is data, not before.
+fn placement_features(design: &Design, model: &ConstraintModel) -> serde_json::Value {
+    let Some(pl) = design.placement.as_ref() else { return serde_json::Value::Null };
+    let (xs, ys): (Vec<_>, Vec<_>) = pl.outline.iter().map(|p| (p.x, p.y)).unzip();
+    let (bx0, bx1) = (xs.iter().min().copied().unwrap_or(0), xs.iter().max().copied().unwrap_or(0));
+    let (by0, by1) = (ys.iter().min().copied().unwrap_or(0), ys.iter().max().copied().unwrap_or(0));
+    let board_area = ((bx1 - bx0) as f64 / 1000.0) * ((by1 - by0) as f64 / 1000.0); // mm^2
+
+    let mut court_area = 0.0f64;
+    let mut pads = 0usize;
+    let mut worst_edge_gap = 0i64;
+    let mut rects: Vec<(String, (i64, i64, i64, i64))> = Vec::new();
+    for fp in &pl.footprints {
+        let Some(part) = model.part(&fp.id) else { continue };
+        pads += part.pins.len();
+        if let Some(r) = eda_model::footprint::placed_courtyard(model, part, fp) {
+            court_area += ((r.2 - r.0) as f64 / 1000.0) * ((r.3 - r.1) as f64 / 1000.0);
+            rects.push((fp.id.clone(), r));
+            if eda_model::footprint::is_edge_connector(part) {
+                worst_edge_gap = worst_edge_gap.max(eda_model::footprint::edge_connector_gap(r, (bx0, by0, bx1, by1)));
+            }
+        }
+    }
+
+    // Tightest courtyard gap on the board: how much room legalisation had
+    // left over, which is the thing that decides whether the router can
+    // get a track between two parts at all.
+    let mut min_gap = i64::MAX;
+    for a in 0..rects.len() {
+        for b in a + 1..rects.len() {
+            let (ra, rb) = (rects[a].1, rects[b].1);
+            let dx = (rb.0 - ra.2).max(ra.0 - rb.2).max(0);
+            let dy = (rb.1 - ra.3).max(ra.1 - rb.3).max(0);
+            min_gap = min_gap.min(if dx == 0 && dy == 0 { 0 } else { dx.max(dy) });
+        }
+    }
+
+    // Worst per-net stretch against its packed bound -- the same quantity
+    // `placement_net_compactness` thresholds at 1.6x, kept as the ratio.
+    let mut worst_compact = 0.0f64;
+    for net in &model.nets {
+        let mut refs: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for pin in &net.pins {
+            if let Some((r, _)) = pin.split_once('.') {
+                refs.insert(r);
+            }
+        }
+        if refs.len() < 2 || refs.len() > 6 {
+            continue;
+        }
+        let mut area = 0.0f64;
+        let (mut nx0, mut ny0, mut nx1, mut ny1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        let mut ok = true;
+        for r in &refs {
+            match rects.iter().find(|(id, _)| id == r) {
+                Some((_, c)) => {
+                    area += ((c.2 - c.0) as f64) * ((c.3 - c.1) as f64);
+                    nx0 = nx0.min(c.0); ny0 = ny0.min(c.1); nx1 = nx1.max(c.2); ny1 = ny1.max(c.3);
+                }
+                None => { ok = false; break; }
+            }
+        }
+        if !ok || area <= 0.0 {
+            continue;
+        }
+        let bound = (2.0 * area.sqrt()).max(6000.0);
+        let span = ((nx1 - nx0) + (ny1 - ny0)) as f64;
+        worst_compact = worst_compact.max(span / bound);
+    }
+
+    serde_json::json!({
+        "parts": pl.footprints.len(),
+        "nets": model.nets.len(),
+        "pads": pads,
+        "board_mm2": (board_area * 100.0).round() / 100.0,
+        "courtyard_fill": if board_area > 0.0 { (court_area / board_area * 1000.0).round() / 1000.0 } else { 0.0 },
+        "pad_density_per_mm2": if board_area > 0.0 { (pads as f64 / board_area * 1000.0).round() / 1000.0 } else { 0.0 },
+        "min_courtyard_gap_um": if min_gap == i64::MAX { serde_json::Value::Null } else { min_gap.into() },
+        "worst_compact_ratio": (worst_compact * 1000.0).round() / 1000.0,
+        "worst_edge_gap_um": worst_edge_gap,
+    })
+}
 
 fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
     if design.schematic.is_some() {
