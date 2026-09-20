@@ -34,6 +34,9 @@ use serde::{Deserialize, Serialize};
 // returned 404: the gateway speaks its own evaluation-model dialect, at a
 // different path, with questions as a keyed object and the model named in
 // a header rather than the body.
+pub mod calibration;
+pub use calibration::check_calibration;
+
 const GATEWAY_URL: &str = "https://ai-gateway.vercel.sh/v4/ai/evaluation-model";
 const MODEL: &str = "typesafe-ai/jev";
 const PROTOCOL_VERSION: &str = "0.0.1";

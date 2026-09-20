@@ -828,6 +828,19 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
     .ok();
     let mut cx = Ctx { args, model, log, ihash, report: Report { started: Some(Instant::now()), ..Default::default() } };
 
+    // If a Jev key is configured, this run may take advice from the
+    // evaluation model, so the model's competence is re-measured before
+    // anything is placed. The wire format moved under us once already
+    // and the service behind a model id can change without the id
+    // changing; a run that silently took advice from a degraded model
+    // would be indistinguishable from a good one. No key means no
+    // advice and nothing to check.
+    let cal = eda_jev::check_calibration();
+    if !cal.is_empty() && !print_checks("jev calibration", &cal) {
+        write_result(&cx, &Err(cal.clone()));
+        return Err(cal);
+    }
+
     let lint_checks = lint(&cx.model);
     if !print_checks("lint", &lint_checks) {
         write_result(&cx, &Err(lint_checks.clone()));
