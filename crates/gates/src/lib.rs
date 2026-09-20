@@ -8,7 +8,9 @@
 //! other. A separate Warn-only check counts wire/wire crossings between
 //! different nets, for a future layout scorer.
 
+pub mod partial;
 pub mod pcb;
+pub use partial::check_placement_partial;
 pub use pcb::{check_placement, check_placement_locality, check_routing, check_routing_quality};
 
 use std::collections::BTreeMap;
