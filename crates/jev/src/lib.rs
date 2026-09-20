@@ -48,10 +48,22 @@ const SPEC_VERSION: &str = "4";
 pub enum Question {
     /// Returns the probability the answer is yes.
     Boolean { instructions: String },
-    /// Pick one of a fixed set; returns per-option probabilities.
-    Choice { instructions: String, options: Vec<String> },
-    /// Rate against ordered descriptive levels.
-    Score { instructions: String, levels: Vec<String> },
+    /// Pick one of a fixed set.
+    ///
+    /// `criteria` is a *record* of option id -> what that option means,
+    /// and the answer's `choice` comes back as one of those ids. The
+    /// gateway rejected the older `options: [..]` array outright
+    /// ("expected record, received undefined"), so this is not a
+    /// cosmetic rename: a build carrying the old shape cannot ask a
+    /// choice question at all.
+    Choice { instructions: String, criteria: std::collections::BTreeMap<String, String> },
+    /// Rate against ordered levels, worst first.
+    ///
+    /// `criteria` is an *array* here, not a record -- the two question
+    /// types genuinely disagree, and sending a record to `score` fails
+    /// with "expected array, received object". The answer is the
+    /// expected index over those levels, plus per-index probabilities.
+    Score { instructions: String, criteria: Vec<String> },
 }
 
 /// One answer, keyed by its question id in the response.
@@ -71,6 +83,10 @@ pub struct Answer {
     pub choice: Option<String>,
     #[serde(default)]
     pub score: Option<f64>,
+    /// Per-option probabilities: keyed by option id for a choice, by
+    /// stringified level index for a score. Absent on a boolean.
+    #[serde(default)]
+    pub probabilities: Option<std::collections::BTreeMap<String, f64>>,
 }
 
 /// The gateway key, or `None` when unset.
@@ -181,11 +197,29 @@ mod tests {
     }
 
     #[test]
-    fn a_choice_question_carries_its_options() {
-        let q = Question::Choice { instructions: "which rung".into(), options: vec!["a".into(), "b".into()] };
+    fn a_choice_question_carries_its_criteria_as_a_record() {
+        // Verified against the live gateway: `criteria` is an object of
+        // option id -> meaning. An `options` array is rejected.
+        let q = Question::Choice {
+            instructions: "which rung".into(),
+            criteria: [("a".to_string(), "the first".to_string()), ("b".to_string(), "the second".to_string())]
+                .into_iter()
+                .collect(),
+        };
         let v = serde_json::to_value(&q).unwrap();
         assert_eq!(v["type"], "choice");
-        assert_eq!(v["options"][1], "b");
+        assert_eq!(v["criteria"]["b"], "the second");
+        assert!(v.get("options").is_none(), "the array form is the shape the gateway rejects");
+    }
+
+    #[test]
+    fn a_score_question_carries_its_criteria_as_an_array() {
+        // And `score` disagrees with `choice`: an array, not a record.
+        let q = Question::Score { instructions: "how routable".into(), criteria: vec!["hard".into(), "easy".into()] };
+        let v = serde_json::to_value(&q).unwrap();
+        assert_eq!(v["type"], "score");
+        assert_eq!(v["criteria"][1], "easy");
+        assert!(v["criteria"].is_array(), "a record here fails with `expected array, received object`");
     }
 }
 
@@ -208,6 +242,40 @@ mod wire_tests {
         let a = &answers["routes_clean"];
         assert_eq!(a.r#type.as_deref(), Some("boolean"));
         assert_eq!(a.probability, Some(0.31));
+    }
+
+    /// A live `choice` answer. Note `probabilities`, which the older
+    /// shape had no field for, and that `choice` is an option *id*.
+    const REAL_CHOICE: &str = r#"{"answers":{"nearest":{"type":"choice","choice":"input_ceramic_cap",
+        "probabilities":{"input_ceramic_cap":1,"feedback_divider":0,"enable_pullup":0,"output_bulk_cap":0}}},
+        "rounding":{"probabilityDecimals":2,"scoreDecimals":2},
+        "providerMetadata":{"typesafe":{"confidence":{"nearest":1}}}}"#;
+
+    /// A live `score` answer: the score is the expected index over the
+    /// levels, and the probabilities are keyed by stringified index.
+    const REAL_SCORE: &str = r#"{"answers":{"q":{"type":"score","score":1.17,
+        "probabilities":{"0":0.35,"1":0.13,"2":0.52}}},
+        "rounding":{"probabilityDecimals":2,"scoreDecimals":2}}"#;
+
+    #[test]
+    fn a_live_choice_answer_parses_with_its_probabilities() {
+        let v: serde_json::Value = serde_json::from_str(REAL_CHOICE).unwrap();
+        let answers: std::collections::BTreeMap<String, Answer> =
+            serde_json::from_value(v["answers"].clone()).unwrap();
+        let a = &answers["nearest"];
+        assert_eq!(a.choice.as_deref(), Some("input_ceramic_cap"));
+        assert_eq!(a.probabilities.as_ref().unwrap()["input_ceramic_cap"], 1.0);
+    }
+
+    #[test]
+    fn a_live_score_answer_parses_with_indexed_probabilities() {
+        let v: serde_json::Value = serde_json::from_str(REAL_SCORE).unwrap();
+        let answers: std::collections::BTreeMap<String, Answer> =
+            serde_json::from_value(v["answers"].clone()).unwrap();
+        let a = &answers["q"];
+        assert_eq!(a.score, Some(1.17));
+        // Keyed by level index, as a string -- not by level name.
+        assert_eq!(a.probabilities.as_ref().unwrap()["2"], 0.52);
     }
 
     #[test]
