@@ -1,0 +1,1 @@
+strategy 0: as written, placer anneal -> PASS in 122.8s

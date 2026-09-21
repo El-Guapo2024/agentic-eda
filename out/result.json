@@ -1,0 +1,81 @@
+{
+  "cmd": "pipeline",
+  "engine_version": "0.1.0",
+  "failures": [],
+  "intent": "examples/ladder/l4_control_hub.yaml",
+  "run_id": "67c8c952-0",
+  "score": {
+    "board_use": 0.183,
+    "detour_max": 3.25,
+    "detour_mean": 1.07,
+    "hpwl_um": 1864123,
+    "layers_used": 2,
+    "parts": 100,
+    "routed_nets": 76,
+    "track_len_um": 2606421,
+    "tracks": 362,
+    "vias": 182,
+    "worst_nets": [
+      {
+        "detour": 3.25,
+        "net": "3V3"
+      },
+      {
+        "detour": 2.51,
+        "net": "5V"
+      },
+      {
+        "detour": 1.78,
+        "net": "IMU_AD0"
+      }
+    ]
+  },
+  "seed": 0,
+  "stages": [
+    {
+      "checks": 23,
+      "fail": 0,
+      "layers": null,
+      "placer": null,
+      "stage": "schematic",
+      "wall_s": 0.04,
+      "warn": 1
+    },
+    {
+      "checks": 14,
+      "fail": 2,
+      "layers": null,
+      "placer": "anneal",
+      "stage": "placement",
+      "wall_s": 46.53,
+      "warn": 0
+    },
+    {
+      "checks": 14,
+      "fail": 0,
+      "layers": null,
+      "placer": "anneal",
+      "stage": "placement",
+      "wall_s": 40.99,
+      "warn": 0
+    },
+    {
+      "checks": 11,
+      "fail": 0,
+      "layers": 2,
+      "placer": null,
+      "stage": "routing",
+      "wall_s": 35.29,
+      "warn": 0
+    }
+  ],
+  "status": "pass",
+  "strategy": {
+    "index": 0,
+    "layers": 2,
+    "name": "as written, placer anneal",
+    "placer": "anneal",
+    "tried": 1
+  },
+  "wall_s": 122.9
+}

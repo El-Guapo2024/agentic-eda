@@ -111,6 +111,78 @@ pub fn available() -> bool {
     api_key().is_some()
 }
 
+/// Which check a gateway status belongs to.
+///
+/// Separated from the response handling so it can be tested without a
+/// network: the whole point of this mapping is to be right about 429 vs
+/// 402, and a rule that is only exercised against a live endpoint is a
+/// rule that is checked exactly when it is too late.
+fn check_for(status: u16) -> &'static str {
+    match status {
+        // Asked too fast. Recoverable by waiting.
+        429 => "jev_rate_limit",
+        // Key is missing, wrong, or revoked.
+        401 | 403 => "jev_auth",
+        // Account is out of credit. Not recoverable by waiting.
+        402 => "jev_credit",
+        _ => "jev_transport",
+    }
+}
+
+/// Turn a failed request into a check that says what actually went wrong.
+///
+/// `{e}` on a ureq error prints the status line and throws the response
+/// body away -- which is the only place the gateway says *why*. A
+/// spend-limited account (402) and a too-fast caller (429) then produce
+/// byte-identical output, and the difference between "buy more credit"
+/// and "wait ninety seconds" is not recoverable from our own logs. So
+/// the body and the rate-limit headers are read back out here.
+///
+/// Rate limiting gets its own check id. It is the one failure in this
+/// list that is purely a function of how fast we asked, so a caller that
+/// wants to back off and retry can recognise it without string-matching
+/// a message.
+fn describe_failure(e: ureq::Error) -> Vec<CheckResult> {
+    let resp = match e {
+        ureq::Error::Status(_, resp) => resp,
+        // No HTTP response at all: DNS, TLS, connection refused.
+        ureq::Error::Transport(t) => {
+            return vec![CheckResult::fail("jev_transport", MODEL, format!("could not reach Jev: {t}"))]
+        }
+    };
+    let status = resp.status();
+    // Read these before the body: into_string() consumes the response.
+    let hints: Vec<String> = ["retry-after", "x-ratelimit-remaining", "x-ratelimit-reset", "x-ratelimit-limit"]
+        .iter()
+        .filter_map(|h| resp.header(h).map(|v| format!("{h}: {v}")))
+        .collect();
+    let body = resp.into_string().unwrap_or_default();
+    // The gateway nests its explanation; fall back to the raw body so a
+    // shape we have not seen before is still shown rather than hidden.
+    let detail = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| {
+            let e = v.get("error").unwrap_or(&v);
+            let msg = e.get("message").and_then(|m| m.as_str()).map(str::to_string);
+            let kind = e.get("type").and_then(|t| t.as_str()).map(str::to_string);
+            match (kind, msg) {
+                (Some(k), Some(m)) => Some(format!("{k}: {m}")),
+                (None, Some(m)) => Some(m),
+                (Some(k), None) => Some(k),
+                (None, None) => None,
+            }
+        })
+        .unwrap_or_else(|| body.chars().take(400).collect());
+    let mut text = format!("Jev refused the request with HTTP {status}: {detail}");
+    if !hints.is_empty() {
+        text.push_str(&format!(" [{}]", hints.join(", ")));
+    }
+    // 429 means we asked too fast; it is not an exhausted balance, which
+    // the gateway reports as 402.
+    let check = check_for(status);
+    vec![CheckResult::fail(check, MODEL, text)]
+}
+
 /// Ask Jev a batch of typed questions about one state.
 ///
 /// Every question goes in a single request -- that is the model's whole
@@ -137,7 +209,7 @@ pub fn ask(
         .set("ai-evaluation-model-specification-version", SPEC_VERSION)
         .set("ai-model-id", MODEL)
         .send_json(body)
-        .map_err(|e| vec![CheckResult::fail("jev_transport", MODEL, format!("Jev request failed: {e}"))])?;
+        .map_err(describe_failure)?;
     let parsed: serde_json::Value = resp
         .into_json()
         .map_err(|e| vec![CheckResult::fail("jev_decode", MODEL, format!("Jev returned unreadable JSON: {e}"))])?;
@@ -290,5 +362,35 @@ mod wire_tests {
         let answers: std::collections::BTreeMap<String, Answer> =
             serde_json::from_value(v["answers"].clone()).unwrap();
         assert!(answers.get("never_asked").is_none());
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::check_for;
+
+    /// The distinction this module exists for: a rate limit is not an
+    /// exhausted balance. Conflating them sent us looking at billing
+    /// when the fix was to wait.
+    #[test]
+    fn rate_limit_is_not_credit_exhaustion() {
+        assert_eq!(check_for(429), "jev_rate_limit");
+        assert_eq!(check_for(402), "jev_credit");
+        assert_ne!(check_for(429), check_for(402));
+    }
+
+    #[test]
+    fn auth_failures_are_their_own_class() {
+        assert_eq!(check_for(401), "jev_auth");
+        assert_eq!(check_for(403), "jev_auth");
+    }
+
+    /// Anything unclassified still fails, and still fails loudly -- an
+    /// unknown status must never fall through to a pass.
+    #[test]
+    fn unknown_statuses_still_fail() {
+        for s in [400, 404, 500, 503] {
+            assert_eq!(check_for(s), "jev_transport");
+        }
     }
 }
