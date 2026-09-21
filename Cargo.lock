@@ -496,6 +496,7 @@ dependencies = [
  "eda-jev",
  "eda-judge",
  "eda-model",
+ "eda-ops",
  "serde_json",
  "serde_yaml",
 ]
@@ -634,6 +635,7 @@ name = "eda-ops"
 version = "0.1.0"
 dependencies = [
  "eda-gates",
+ "eda-jev",
  "eda-model",
  "serde",
  "serde_json",

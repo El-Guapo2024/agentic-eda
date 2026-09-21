@@ -217,6 +217,20 @@ impl<'a> Board<'a> {
         &self.design
     }
 
+    pub fn model(&self) -> &'a ConstraintModel {
+        self.model
+    }
+
+    /// A copy to try a command against without committing to it.
+    ///
+    /// A chooser has to see what each candidate would actually do --
+    /// predicting it from a second model of the geometry is how the
+    /// optimiser and the gates drifted apart everywhere else in this
+    /// project.
+    pub fn fork(&self) -> Board<'a> {
+        Board { model: self.model, design: self.design.clone(), snap: self.snap, spacing: self.spacing }
+    }
+
     pub fn into_design(self) -> Design {
         self.design
     }
@@ -351,6 +365,21 @@ impl<'a> Board<'a> {
             .ok_or_else(|| vec![CheckResult::fail("ops_no_footprint", r, "the part has no resolvable footprint, so it has no courtyard to place")])
     }
 
+    /// The rectangle a candidate must actually keep clear: its courtyard
+    /// *plus* its refdes label box.
+    ///
+    /// Testing a bare courtyard against the neighbours' keepouts is
+    /// asymmetric, and the asymmetry is exactly the size of a refdes
+    /// label -- which is why the first real build produced six
+    /// `placement_refdes_clear` failures on a board the annealer clears.
+    /// The gate judges label against courtyard, so the placer has to as
+    /// well.
+    fn keepout_at(&self, r: &str, fp: &FootprintInstance) -> Result<(Um, Um, Um, Um), Vec<CheckResult>> {
+        let p = self.part(r)?;
+        placed_keepout(self.model, &self.placement().outline, p, fp)
+            .ok_or_else(|| vec![CheckResult::fail("ops_no_footprint", r, "the part has no resolvable footprint, so it has no keepout to place")])
+    }
+
     /// Keepout of a placed part, for collision tests.
     fn keepout_of(&self, fp: &FootprintInstance) -> Option<(Um, Um, Um, Um)> {
         let p = self.model.part(&fp.id)?;
@@ -421,7 +450,8 @@ impl<'a> Board<'a> {
                 if cr.0 < bb.0 || cr.1 < bb.1 || cr.2 > bb.2 || cr.3 > bb.3 {
                     continue;
                 }
-                if self.collides(part, cr) {
+                let Ok(kr) = self.keepout_at(part, &fp) else { continue };
+                if self.collides(part, kr) {
                     continue;
                 }
                 self.design.placement.as_mut().unwrap().footprints.push(fp);
@@ -465,7 +495,8 @@ impl<'a> Board<'a> {
                 if cr.0 < bb.0 || cr.1 < bb.1 || cr.2 > bb.2 || cr.3 > bb.3 {
                     continue;
                 }
-                if self.collides(part, cr) {
+                let Ok(kr) = self.keepout_at(part, &fp) else { continue };
+                if self.collides(part, kr) {
                     continue;
                 }
                 self.design.placement.as_mut().unwrap().footprints.push(fp);
@@ -486,7 +517,21 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_fraction", part, format!("fraction {fraction} is outside 0.0..=1.0"))]);
         }
         let bb = self.board_bbox();
-        let probe = FootprintInstance { id: part.into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above };
+        // Turn the part so its long side runs *along* the edge.
+        //
+        // Without this a 40mm sixteen-pin header asked for the west edge
+        // is laid across the board instead of down it: its left side
+        // does touch the edge, but it juts 40mm into a 60mm board and
+        // fails `placement_edge_connector` anyway. The annealer's own
+        // seeding has always done this; leaving it out here was worth
+        // one gate failure on L1 and no clue as to why.
+        let flat = FootprintInstance { id: part.into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above };
+        let c0 = self.courtyard_at(part, &flat)?;
+        let wider_than_tall = (c0.2 - c0.0) >= (c0.3 - c0.1);
+        let horizontal_edge = matches!(edge, Dir::North | Dir::South);
+        let rot: u32 = if horizontal_edge == wider_than_tall { 0 } else { 90_000 };
+
+        let probe = FootprintInstance { id: part.into(), at: Point { x: 0, y: 0 }, rot, side: Side::Top, label: LabelSide::Above };
         let c = self.courtyard_at(part, &probe)?;
         let (half_w, half_h) = ((c.2 - c.0) / 2, (c.3 - c.1) / 2);
 
@@ -501,8 +546,28 @@ impl<'a> Board<'a> {
             Dir::East => Point { x: bb.2 - half_w, y: along(bb.1, bb.3, half_h) },
         };
         let at = Point { x: snap(at.x, self.snap), y: snap(at.y, self.snap) };
-        let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
-        let cr = self.courtyard_at(part, &fp)?;
+        let fp = FootprintInstance { id: part.into(), at, rot, side: Side::Top, label: LabelSide::Above };
+        // A part longer than the edge it was given does not fit on it,
+        // and saying so is the whole point. The other two resolvers
+        // already bound themselves to the outline; this one did not, so
+        // a 40.3mm header went onto a 40mm edge and failed
+        // `placement_within_outline` instead of being refused here.
+        let cy = self.courtyard_at(part, &fp)?;
+        if cy.0 < bb.0 || cy.1 < bb.1 || cy.2 > bb.2 || cy.3 > bb.3 {
+            return Err(vec![CheckResult::fail(
+                "ops_no_room",
+                part,
+                format!(
+                    "does not fit the {} edge: it needs {}x{} µm and the board is {}x{}",
+                    edge.as_str(),
+                    cy.2 - cy.0,
+                    cy.3 - cy.1,
+                    bb.2 - bb.0,
+                    bb.3 - bb.1
+                ),
+            )]);
+        }
+        let cr = self.keepout_at(part, &fp)?;
         if self.collides(part, cr) {
             return Err(vec![CheckResult::fail(
                 "ops_no_room",
@@ -563,7 +628,14 @@ impl<'a> Board<'a> {
 }
 
 /// How far a `Place` will slide along the anchor before giving up.
-const MAX_SLIDE_STEPS: u32 = 60;
+///
+/// In snap steps, so 400 is 40mm at the default 100µm grid -- most of a
+/// board's width. The loop stops at the board edge anyway, so this is
+/// only a bound against spinning, not a policy. It was 60 (6mm) until a
+/// keepout started including the refdes label box, at which point six
+/// capacitors along one side of a SOIC-8 no longer fitted in the slide
+/// range and the sixth was refused.
+const MAX_SLIDE_STEPS: u32 = 400;
 
 fn snap(v: Um, to: Um) -> Um {
     if to <= 0 {
@@ -578,3 +650,6 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+pub mod build;
+pub mod ai;

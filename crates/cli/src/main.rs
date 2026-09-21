@@ -60,7 +60,7 @@ fn parse_args() -> Result<Args, String> {
             "--design" => design = Some(PathBuf::from(it.next().ok_or("--design needs a path")?)),
             "--pcb-cli" => use_pcb_cli = true,
             "--pl" => pl = Some(PathBuf::from(it.next().ok_or("--pl needs a path")?)),
-            "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress")?,
+            "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress|build|ai")?,
             "--judge" => judge = true,
             "--fab" => fab = true,
             s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
@@ -71,7 +71,7 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress] [--judge] [--fab] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress|build|ai] [--judge] [--fab] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -314,6 +314,51 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
     Ok(design)
 }
 
+/// Give the constructive placer an outline to build into.
+///
+/// The annealer gets one from `fit_outline` as part of its own run; the
+/// command-driven placer needs it up front, because every command is
+/// resolved against the board's extent. A design that already carries a
+/// placement keeps its outline.
+fn seed_outline(design: &Design, model: &ConstraintModel, board_floor: f64) -> Result<Design, Vec<CheckResult>> {
+    if design.placement.as_ref().is_some_and(|p| p.outline.len() >= 3) {
+        return Ok(design.clone());
+    }
+    let mut d = design.clone();
+    let outline = match model.board.outline.clone() {
+        Some(o) if o.len() >= 3 => o,
+        _ => {
+            // No declared outline: size one from the part areas the same
+            // way the annealer's fitting pass does, so the two placers
+            // are judged on the same board.
+            let fitted = eda_model::board::fit_outline(
+                &with_empty_placement(design),
+                model,
+                model.solver.fit_board_utilization.max(0.25),
+                board_floor,
+            );
+            fitted
+                .placement
+                .map(|p| p.outline)
+                .filter(|o| o.len() >= 3)
+                .ok_or_else(|| vec![CheckResult::fail("build_precondition", "board.outline", "no board outline in the intent and none could be fitted")])?
+        }
+    };
+    d.placement = Some(eda_model::ir::PlacementSection { outline, footprints: Vec::new(), modules: Vec::new() });
+    Ok(d)
+}
+
+/// `fit_outline` sizes from a placement, so give it an empty one with
+/// every part stacked at the origin -- it reads the part list, not the
+/// poses.
+fn with_empty_placement(design: &Design) -> Design {
+    let mut d = design.clone();
+    if d.placement.is_none() {
+        d.placement = Some(eda_model::ir::PlacementSection { outline: Vec::new(), footprints: Vec::new(), modules: Vec::new() });
+    }
+    d
+}
+
 fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Result<Design, Vec<CheckResult>> {
     let t0 = Instant::now();
     // The intent's `solver` block sets the placer and its tuning; an
@@ -343,7 +388,26 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
                 ..Default::default()
             },
         )?,
-        other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress)")]),
+        // Constructive placement: parts go down one at a time, each
+        // beside one already placed, with the gates run after every
+        // step. `build` chooses by gate outcome; `ai` asks the
+        // evaluation model which neighbour and side, knowing what the
+        // circuit is. They share all their geometry, so a difference
+        // between them is a difference in judgement and nothing else.
+        "build" | "ai" => {
+            let seeded = seed_outline(design, &cx.model, board_floor)?;
+            let mut greedy = eda_ops::build::Greedy;
+            let mut ai = eda_ops::ai::Ai::new();
+            let chooser: &mut dyn eda_ops::build::Chooser =
+                if placer == "ai" { &mut ai } else { &mut greedy };
+            let (d, report) = eda_ops::build::build(seeded, &cx.model, sv.place_snap_um, sv.place_spacing_um, chooser)?;
+            eprintln!(
+                "place {}: {} of {} parts in {} steps, {} rip(s), {} gate failure(s)",
+                report.chooser, report.placed, report.total, report.steps, report.ripped, report.failures
+            );
+            d
+        }
+        other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress|build|ai)")]),
     };
     save_design(&cx.args.out, &placed)?;
     let mut checks = check_placement(&placed, &cx.model);
