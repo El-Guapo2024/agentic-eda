@@ -36,16 +36,43 @@ pub struct Option_ {
     pub side: Dir,
 }
 
-/// Decides the next step from the legal ones.
+/// Decides which part goes down next.
 ///
-/// Implementors see the board and the candidate list; they do not see or
-/// return coordinates.
+/// That is the whole job. *Where* the part then lands -- which placed
+/// neighbour it hangs off and on which side -- is settled by
+/// [`best_pose`] from the geometry, identically every run.
+///
+/// The division is deliberate and was measured. On questions about what
+/// a circuit needs the evaluation model is reliable and knows when it is
+/// unsure; on questions about distance it is barely better than chance
+/// and is *more* confident when wrong. So it is asked what, never where.
 pub trait Chooser {
-    /// Pick one of `options`, or `None` to give up on this frontier.
-    fn choose(&mut self, board: &Board, options: &[Option_]) -> Result<Option<usize>, Vec<CheckResult>>;
+    /// Pick a part from `frontier`, or `None` to stop.
+    fn choose_part(&mut self, board: &Board, frontier: &[String]) -> Result<Option<String>, Vec<CheckResult>>;
 
     /// Name for logs and result.json.
     fn name(&self) -> &'static str;
+}
+
+/// The best legal pose for one part: fewest failing gates, shortest
+/// wirelength to break the ties.
+///
+/// Ties are the common case early on, when almost nothing can fail yet,
+/// so the wirelength term is what actually does the work.
+pub fn best_pose(board: &Board, part: &str) -> std::option::Option<(Option_, usize, i64)> {
+    let mut best: std::option::Option<(Option_, usize, i64)> = None;
+    for o in options_for(board, part) {
+        let mut trial = board.fork();
+        if trial.apply(&Cmd::Place { part: o.part.clone(), anchor: o.anchor.clone(), side: o.side }).is_err() {
+            continue; // no room that side; not a failure, just not this one
+        }
+        let fails = trial.failures();
+        let wl = hpwl_of(trial.design(), board.model());
+        if best.as_ref().map_or(true, |(_, bf, bw)| (fails, wl) < (*bf, *bw)) {
+            best = Some((o, fails, wl));
+        }
+    }
+    best
 }
 
 /// Picks by gate outcome, with wirelength as the tie-break.
@@ -59,27 +86,16 @@ impl Chooser for Greedy {
         "greedy"
     }
 
-    /// Try each option, keep the one that leaves the fewest failing
-    /// gates, breaking ties on total half-perimeter wirelength.
-    ///
-    /// Ties are common and the tie-break is what does the work: early on
-    /// almost nothing fails, so "fewest failures" cannot separate the
-    /// candidates and the shorter net has to.
-    fn choose(&mut self, board: &Board, options: &[Option_]) -> Result<Option<usize>, Vec<CheckResult>> {
-        let mut best: std::option::Option<(usize, usize, i64)> = None;
-        for (i, o) in options.iter().enumerate() {
-            let mut trial = board.fork();
-            let cmd = Cmd::Place { part: o.part.clone(), anchor: o.anchor.clone(), side: o.side };
-            if trial.apply(&cmd).is_err() {
-                continue; // no room that side; not a failure, just not this one
-            }
-            let fails = trial.failures();
-            let wl = hpwl_of(trial.design(), board.model());
-            if best.map_or(true, |(_, bf, bw)| (fails, wl) < (bf, bw)) {
-                best = Some((i, fails, wl));
+    /// Take whichever frontier part places best right now.
+    fn choose_part(&mut self, board: &Board, frontier: &[String]) -> Result<Option<String>, Vec<CheckResult>> {
+        let mut best: std::option::Option<(String, usize, i64)> = None;
+        for part in frontier {
+            let Some((_, fails, wl)) = best_pose(board, part) else { continue };
+            if best.as_ref().map_or(true, |(_, bf, bw)| (fails, wl) < (*bf, *bw)) {
+                best = Some((part.clone(), fails, wl));
             }
         }
-        Ok(best.map(|(i, _, _)| i))
+        Ok(best.map(|(p, _, _)| p))
     }
 }
 
@@ -175,19 +191,28 @@ pub fn build(
             }
         }
 
+        // One part per step, and the chooser picks *which* one.
+        //
+        // This used to take the whole frontier and place every part in
+        // it before looking at the board again -- nineteen parts on one
+        // pass of L4 -- with the order decided alphabetically and the
+        // chooser consulted only about the side. That is not building a
+        // board a step at a time; it is batch placement with a stale
+        // frontier, and it left the most consequential decision, what to
+        // place next, to the sort order of the refdes.
         let before = b.placed().len();
-        for part in frontier {
-            let options = options_for(&b, &part);
-            if options.is_empty() {
-                continue;
-            }
-            if let Some(i) = chooser.choose(&b, &options)? {
-                let o = &options[i];
-                let cmd = Cmd::Place { part: o.part.clone(), anchor: o.anchor.clone(), side: o.side };
-                // The chooser already proved this one applies.
-                b.apply(&cmd)?;
-                steps += 1;
-            }
+        match chooser.choose_part(&b, &frontier)? {
+            Some(part) => match best_pose(&b, &part) {
+                Some((o, _, _)) => {
+                    b.apply(&Cmd::Place { part: o.part, anchor: o.anchor, side: o.side })?;
+                    steps += 1;
+                }
+                // The chooser named a part that will not go down
+                // anywhere. Not fatal -- more neighbours next pass may
+                // open a side -- but it counts as a stall.
+                None => stalled_passes += 1,
+            },
+            None => stalled_passes += 1,
         }
 
         if b.placed().len() == before {
@@ -372,7 +397,7 @@ fn busiest(model: &ConstraintModel, placed: &BTreeSet<String>) -> Option<String>
 }
 
 /// Every legal (anchor, side) for this part.
-fn options_for(b: &Board, part: &str) -> Vec<Option_> {
+pub(crate) fn options_for(b: &Board, part: &str) -> Vec<Option_> {
     let placed = b.placed();
     let mut out = Vec::new();
     for anchor in b.neighbours_of(part) {

@@ -1,11 +1,14 @@
-//! A chooser that asks the evaluation model where a part belongs.
+//! A chooser that asks the evaluation model which part goes next.
+//!
+//! One question, and only one: of the parts that could go down now,
+//! which one should. Where it then lands is the placer's business.
 //!
 //! What it is asked, and what it is never asked, follows what it was
 //! measured to be good at. It sees what the circuit *is* -- that U5 is a
-//! buck converter, that this net is the RF supply -- and it picks a
-//! neighbour and a side. It is never shown a coordinate and never asked
-//! to compare two distances, because on that it scored 12 of 23 with
-//! confidence that went *up* when it was wrong.
+//! buck converter, that this net is the RF supply. It is never shown a
+//! coordinate and never asked to compare two distances, because on that
+//! it scored 12 of 23 with confidence that went *up* when it was
+//! wrong.
 //!
 //! Given circuit context instead, on the same six candidate parts with
 //! only the description of the IC changed, it picked the input capacitor
@@ -18,12 +21,12 @@
 //! A choice that will not apply is discarded and the next one tried, so
 //! a wrong answer costs a step, never a broken board.
 
-use crate::build::{Chooser, Option_};
-use crate::{Board, Cmd};
+use crate::build::Chooser;
+use crate::Board;
 use eda_model::{CheckResult, ConstraintModel};
 use std::collections::BTreeMap;
 
-/// Asks Jev which neighbour and side, with the circuit described.
+/// Asks Jev which part to place next, with the circuit described.
 pub struct Ai {
     /// Cache keyed by the question, so a rerun of the same board does
     /// not pay the network again -- and, more importantly, so a build is
@@ -92,56 +95,56 @@ impl Chooser for Ai {
         "ai"
     }
 
-    fn choose(&mut self, board: &Board, options: &[Option_]) -> Result<Option<usize>, Vec<CheckResult>> {
-        // Only offer what actually applies. Asking the model to choose
-        // among poses that collide wastes the question and invites a
-        // wrong answer we would then have to discard.
-        let viable: Vec<usize> = options
-            .iter()
-            .enumerate()
-            .filter(|(_, o)| {
-                let mut t = board.fork();
-                t.apply(&Cmd::Place { part: o.part.clone(), anchor: o.anchor.clone(), side: o.side }).is_ok()
-            })
-            .map(|(i, _)| i)
-            .collect();
+    /// Ask which part should go down next.
+    ///
+    /// Only that. Where it then lands is settled by the geometry, so the
+    /// model is never shown a coordinate and never asked to compare two
+    /// distances -- the one thing it was measured to be unreliable at,
+    /// and unreliable without knowing it.
+    fn choose_part(&mut self, board: &Board, frontier: &[String]) -> Result<Option<String>, Vec<CheckResult>> {
+        // Only offer parts that can actually go down somewhere. Asking
+        // about one with no legal pose wastes the question and invites
+        // an answer we would have to discard.
+        let viable: Vec<&String> = frontier.iter().filter(|p| crate::build::best_pose(board, p).is_some()).collect();
         match viable.len() {
             0 => return Ok(None),
             // No judgement to exercise; do not pay for a round trip.
-            1 => return Ok(Some(viable[0])),
+            1 => return Ok(Some(viable[0].clone())),
             _ => {}
         }
 
         let model = board.model();
-        let part = &options[viable[0]].part;
+        let placed = board.placed();
         let criteria: BTreeMap<String, String> = viable
             .iter()
-            .map(|&i| {
-                let o = &options[i];
-                let nets = shared_nets(model, &o.part, &o.anchor);
-                let via = if nets.is_empty() {
-                    "a placement rule".to_string()
-                } else {
-                    format!("net{} {}", if nets.len() > 1 { "s" } else { "" }, nets.join(", "))
-                };
+            .map(|p| {
+                // What it is, and what placed part it would join. Those
+                // are the circuit facts the decision turns on.
+                let anchors: Vec<String> = board
+                    .neighbours_of(p)
+                    .into_iter()
+                    .filter(|n| placed.contains(n))
+                    .map(|n| {
+                        let nets = shared_nets(model, p, &n);
+                        if nets.is_empty() { n.clone() } else { format!("{n} via {}", nets.join("/")) }
+                    })
+                    .collect();
                 (
-                    format!("{}_{}", o.anchor, o.side.as_str()),
-                    format!("on the {} side of {}, connected by {via}", o.side.as_str(), describe(model, &o.anchor)),
+                    (*p).clone(),
+                    format!("{} -- would sit next to {}", describe(model, p), anchors.join("; ")),
                 )
             })
             .collect();
 
         let state = serde_json::json!({
-            "task": "component placement on a printed circuit board",
-            "part_to_place": describe(model, part),
-            "its_nets": model.nets.iter()
-                .filter(|n| n.pins.iter().any(|p| p.split('.').next() == Some(part.as_str())))
-                .map(|n| n.name.clone()).collect::<Vec<_>>(),
-            "already_placed": board.placed().len(),
+            "task": "choosing the order to place components on a printed circuit board",
+            "principle": "a part whose position is critical to how the circuit works should be placed \
+                          while there is still room to put it in the right spot; parts whose position \
+                          barely matters can wait",
+            "already_placed": placed.len(),
+            "still_to_place": model.parts.len() - placed.len(),
         });
 
-        // The cache key is the question, not the board: the same part
-        // with the same candidates deserves the same answer.
         let key = serde_json::to_string(&(&state, &criteria)).unwrap_or_default();
         let pick = if let Some(hit) = self.cache.get(&key) {
             self.cached += 1;
@@ -149,40 +152,36 @@ impl Chooser for Ai {
         } else {
             let mut qs = BTreeMap::new();
             qs.insert(
-                "where".to_string(),
+                "next".to_string(),
                 eda_jev::Question::Choice {
-                    instructions: format!(
-                        "Place {} next. Which neighbour should it sit beside, and on which side, for the best layout? \
-                         Think about what the part is for: bypass and input capacitors belong hard against the pin they \
-                         serve, sensitive nodes belong away from switching ones.",
-                        describe(model, part)
-                    ),
+                    instructions: "Which of these parts should be placed next? Choose the one whose \
+                                   placement matters most to the circuit working -- decoupling and input \
+                                   capacitors, crystals, sensitive references and high-current paths \
+                                   before parts whose exact position is unimportant."
+                        .to_string(),
                     criteria: criteria.clone(),
                 },
             );
             let answers = eda_jev::ask(&state, &qs)?;
             self.asked += 1;
             let c = answers
-                .get("where")
+                .get("next")
                 .and_then(|a| a.choice.clone())
-                .ok_or_else(|| vec![CheckResult::fail("ai_no_choice", part, "the model returned no choice for this step")])?;
+                .ok_or_else(|| vec![CheckResult::fail("ai_no_choice", "frontier", "the model returned no choice for this step")])?;
             self.cache.insert(key, c.clone());
             c
         };
 
-        // Map the answer back. An id we did not offer is a hard failure:
-        // silently falling back to the first option would make a bad
-        // model indistinguishable from a good one.
-        for &i in &viable {
-            let o = &options[i];
-            if format!("{}_{}", o.anchor, o.side.as_str()) == pick {
-                return Ok(Some(i));
-            }
+        // An answer we did not offer is a hard failure. Quietly falling
+        // back to the first option would make a bad model
+        // indistinguishable from a good one.
+        if let Some(p) = viable.iter().find(|p| ***p == pick) {
+            return Ok(Some((*p).clone()));
         }
         Err(vec![CheckResult::fail(
             "ai_bad_choice",
-            part,
-            format!("the model answered {pick:?}, which was not one of the {} options offered", viable.len()),
+            "frontier",
+            format!("the model answered {pick:?}, which was not one of the {} parts offered", viable.len()),
         )])
     }
 }
