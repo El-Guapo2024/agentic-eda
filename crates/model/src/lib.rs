@@ -394,6 +394,15 @@ impl Default for RoutingTuning {
 #[serde(deny_unknown_fields, default)]
 pub struct SolverSettings {
     /// `anneal` (default) or `cypress`.
+    /// Which placer runs. Defaults to `build`, the gradual constructive
+    /// placer: one part at a time, gates checked after each, so a
+    /// failure is attributable to the step that caused it.
+    ///
+    /// `anneal` currently clears more of the ladder, but it clears it by
+    /// shuffling a whole board until the score improves, which makes a
+    /// remaining failure a property of the run rather than of any
+    /// decision. Defaulting to `build` keeps the open failures in front
+    /// of us instead of behind a placer that happens to pass.
     pub placer: String,
     /// Anneal placer: keep-apart margin around courtyards (routing channel
     /// space), moves per part, placement snap grid, all µm / counts.
@@ -423,7 +432,7 @@ pub struct SolverSettings {
 }
 impl Default for SolverSettings {
     fn default() -> Self {
-        SolverSettings { placer: "anneal".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3, floorplan: false }
+        SolverSettings { placer: "build".into(), place_spacing_um: 600, place_moves_per_part: 4000, place_snap_um: 100, cypress_proximity_weight: 50.0, fit_board_utilization: 0.25, place_attempts: 3, floorplan: false }
     }
 }
 
