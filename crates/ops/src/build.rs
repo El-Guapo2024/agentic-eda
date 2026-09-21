@@ -59,6 +59,42 @@ pub trait Chooser {
 ///
 /// Ties are the common case early on, when almost nothing can fail yet,
 /// so the wirelength term is what actually does the work.
+/// The best pose for a part, preferring anchors inside its own block.
+///
+/// `best_pose` is free to anchor to anything already on the board, which
+/// quietly defeats block placement: on L2, C8 belongs to {C8, J7, R8}
+/// but also shares AIN1_FILT with U2, and U2's block is placed first.
+/// Anchoring C8 to U2 mid-board scored better on wirelength than
+/// anchoring it inside its own block, so C8 went to the centre while J7
+/// and R8 sat at the edge -- 37 mm apart under a 2 mm proximity rule.
+///
+/// Membership has to actually constrain the search, not just order it.
+/// In-block anchors are tried first; the whole board is used only when
+/// the block offers no workable anchor at all, so a block that genuinely
+/// must reach outside still can.
+fn best_pose_within(
+    board: &Board,
+    part: &str,
+    members: &BTreeSet<String>,
+) -> std::option::Option<(Option_, usize, i64)> {
+    let mut best: std::option::Option<(Option_, usize, i64)> = None;
+    for o in options_for(board, part) {
+        if !members.contains(&o.anchor) {
+            continue;
+        }
+        let mut trial = board.fork();
+        if trial.apply(&Cmd::Place { part: o.part.clone(), anchor: o.anchor.clone(), side: o.side }).is_err() {
+            continue;
+        }
+        let fails = trial.failures();
+        let wl = hpwl_of(trial.design(), board.model());
+        if best.as_ref().map_or(true, |(_, bf, bw)| (fails, wl) < (*bf, *bw)) {
+            best = Some((o, fails, wl));
+        }
+    }
+    best.or_else(|| best_pose(board, part))
+}
+
 pub fn best_pose(board: &Board, part: &str) -> std::option::Option<(Option_, usize, i64)> {
     let mut best: std::option::Option<(Option_, usize, i64)> = None;
     for o in options_for(board, part) {
@@ -180,6 +216,9 @@ pub fn build(
     }
 
     for (name, members) in &order {
+        if std::env::var("EDA_BUILD_TRACE").is_ok() {
+            eprintln!("TRACE block {name}: {:?}", members);
+        }
         if let Err(e) = place_block(&mut b, model, members, chooser, &mut steps, step_budget) {
             // A block that will not go down is worth naming: it is a
             // statement about that part of the circuit, not about the
@@ -396,15 +435,38 @@ fn place_block(
             )]);
         }
 
-        let frontier = b.frontier_within(members);
+        let mut frontier = b.frontier_within(members);
+        // Prefer members that can hang off the block itself.
+        //
+        // Blocks are chains as often as stars: L2's mod_C8 is
+        // J7 -- R8 -- C8, and anchoring is net-based, so C8 shares no net
+        // with J7. Taken first, C8's only placed neighbour was U2 from an
+        // earlier block, so it was anchored mid-board while R8 attached to
+        // J7 at the edge -- 37 mm apart under a 2 mm rule. Waiting one step
+        // lets R8 land first and gives C8 an anchor inside its own block.
+        //
+        // This orders, it never excludes: if no member can be placed from
+        // inside, the outside-anchored ones are still offered, so a block
+        // that must reach out still progresses.
+        let inside: Vec<String> = frontier
+            .iter()
+            .filter(|p| b.neighbours_of(p).iter().any(|a| members.contains(a) && b.placed().contains(a)))
+            .cloned()
+            .collect();
+        if !inside.is_empty() {
+            frontier = inside;
+        }
         let chosen = if frontier.is_empty() {
             None
         } else {
             chooser.choose_part(b, &frontier)?
         };
 
-        match chosen.and_then(|p| best_pose(b, &p).map(|(o, _, _)| o)) {
+        match chosen.and_then(|p| best_pose_within(b, &p, members).map(|(o, _, _)| o)) {
             Some(o) => {
+                if std::env::var("EDA_BUILD_TRACE").is_ok() {
+                    eprintln!("TRACE place {} anchor={} side={:?}", o.part, o.anchor, o.side);
+                }
                 b.apply(&Cmd::Place { part: o.part, anchor: o.anchor, side: o.side })?;
                 *steps += 1;
             }
@@ -413,6 +475,9 @@ fn place_block(
                 // start the block somewhere of its own.
                 let seed_part = seed_of(model, &remaining);
                 if let Some(part) = seed_part {
+                    if std::env::var("EDA_BUILD_TRACE").is_ok() {
+                        eprintln!("TRACE seed {part}");
+                    }
                     seed_one(b, model, &part)?;
                     *steps += 1;
                 } else {
@@ -423,13 +488,27 @@ fn place_block(
     }
 }
 
-/// The part to start a block from: its best-connected member.
+/// The part to start a block from: its least negotiable member.
+///
+/// A connector outranks a better-connected part. Its position is fixed
+/// by the outside world -- it has to reach the board edge -- while
+/// everything around it can move, so it is the one member the rest of
+/// the block must be arranged *around*.
+///
+/// Seeding by connectivity alone tore blocks in half. On L2, `mod_C8` is
+/// {C8, J7, R8}: C8 has the most nets, so it was seeded mid-board, J7
+/// could not legally anchor to it (an edge connector has no valid
+/// central pose), and the block fell through to a second seed that put
+/// J7 on the edge and grew R8 off *that*. C8 and R8 ended 37 mm apart
+/// with a 2 mm proximity rule between them. Seeding the connector first
+/// makes the rest of the block grow from the fixed point instead.
 fn seed_of(model: &ConstraintModel, remaining: &[&String]) -> std::option::Option<String> {
     remaining
         .iter()
         .max_by_key(|r| {
+            let conn = model.part(r).is_some_and(eda_model::footprint::is_edge_connector);
             let n = model.nets.iter().filter(|net| net.pins.iter().any(|p| p.split('.').next() == Some(r.as_str()))).count();
-            (n, std::cmp::Reverse((**r).clone()))
+            (conn, n, std::cmp::Reverse((**r).clone()))
         })
         .map(|r| (*r).clone())
 }
