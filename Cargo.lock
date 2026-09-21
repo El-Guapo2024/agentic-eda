@@ -493,6 +493,7 @@ dependencies = [
  "blake3",
  "eda",
  "eda-fab",
+ "eda-jev",
  "eda-judge",
  "eda-model",
  "serde_json",
@@ -534,6 +535,7 @@ dependencies = [
  "eda-model",
  "eda-render",
  "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -625,6 +627,17 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror",
+]
+
+[[package]]
+name = "eda-ops"
+version = "0.1.0"
+dependencies = [
+ "eda-gates",
+ "eda-model",
+ "serde",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
