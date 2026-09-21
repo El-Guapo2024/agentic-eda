@@ -646,15 +646,27 @@ fn seed(b: &mut Board, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> 
         // 40mm edge and left it hanging over the outline.
         let mut order = vec![edge];
         order.extend(edges.iter().copied().filter(|e| *e != edge));
+        // Its own slot first, then along the edge.
+        //
+        // Trying a single fraction on every edge asks the same question
+        // four times: if 0.25 is taken, 0.25 is taken everywhere. That
+        // left J18 and J8 on L4 reported as fitting "no board edge" when
+        // the edges were nearly empty -- it was the *spot* that was
+        // occupied, not the edge. Sweeping the edge turns a collision
+        // into a step sideways instead of a lost connector.
+        let mut sweep = vec![fraction];
+        sweep.extend([0.5, 0.25, 0.75, 0.1, 0.9, 0.35, 0.65].iter().copied().filter(|f| (*f - fraction).abs() > 1e-9));
         let mut last: std::option::Option<Vec<CheckResult>> = None;
         let mut landed = false;
-        for e in order {
-            match b.apply(&Cmd::PlaceEdge { part: (*c).to_string(), edge: e, fraction }) {
-                Ok(()) => {
-                    landed = true;
-                    break;
+        'edges: for e in order {
+            for f in &sweep {
+                match b.apply(&Cmd::PlaceEdge { part: (*c).to_string(), edge: e, fraction: *f }) {
+                    Ok(()) => {
+                        landed = true;
+                        break 'edges;
+                    }
+                    Err(err) => last = Some(err),
                 }
-                Err(err) => last = Some(err),
             }
         }
         // Not fatal -- the frontier loop will place it against a
@@ -663,8 +675,10 @@ fn seed(b: &mut Board, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> 
         // clue why.
         if !landed {
             eprintln!(
-                "build: {c} fits no board edge ({}); it will be placed against a neighbour and will fail placement_edge_connector",
-                last.and_then(|e| e.first().and_then(|x| x.hint.clone())).unwrap_or_default()
+                "build: {c} fits nowhere on any board edge after trying {} position(s) on each of {} edge(s)                  (last refusal: {}); it will be placed against a neighbour and will fail                  placement_edge_connector",
+                sweep.len(),
+                edges.len(),
+                last.and_then(|e| e.first().and_then(|x| x.hint.clone())).unwrap_or_else(|| "no reason given".into())
             );
         }
     }
