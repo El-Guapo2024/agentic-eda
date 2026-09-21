@@ -152,16 +152,53 @@ pub fn build(
 
     seed(&mut b, model)?;
 
+    // Blocks first, parts second -- the way a board is actually laid
+    // out. `partition` derives the functional units from the proximity
+    // rules and the netlist: on L4 that is 18 blocks holding 93 of 100
+    // parts, and they read like the circuit (a regulator with its
+    // inductor and capacitors, an MCU with all its support, an LED
+    // driver with its whole array).
+    //
+    // Each block is finished before the next begins. Without that the
+    // loop only ever asks "what is adjacent to something already
+    // placed", which says nothing about belonging to the same circuit,
+    // and a regulator's inductor drifts away from its own capacitors.
+    // Every step places or rips exactly one part, so a build needing
+    // more than this is cycling rather than converging.
+    let step_budget = total * 20 + 100;
+    let (modules, free) = eda_model::floorplan::partition(model);
+    let mut order: Vec<(String, BTreeSet<String>)> =
+        modules.iter().map(|m| (m.name.clone(), m.refs.iter().cloned().collect())).collect();
+    // Biggest block first: it is usually the hub everything else hangs
+    // off, and a board built outward from the largest unit wastes less
+    // room than one grown from a corner. Name breaks ties so a build is
+    // the same every run.
+    order.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    // Parts in no block go last, once their neighbours exist.
+    if !free.is_empty() {
+        order.push(("unassigned".to_string(), free.into_iter().collect()));
+    }
+
+    for (name, members) in &order {
+        if let Err(e) = place_block(&mut b, model, members, chooser, &mut steps, step_budget) {
+            // A block that will not go down is worth naming: it is a
+            // statement about that part of the circuit, not about the
+            // board as a whole.
+            eprintln!("build: block {name} did not complete ({})", e.first().and_then(|c| c.hint.clone()).unwrap_or_default());
+        }
+    }
+
     // Each pass takes the whole current frontier. A part that no
     // candidate could place is left for the next pass, when more of its
     // neighbours are down and it has more anchors to hang off.
-    // A hard bound on work. Ripping a part and placing it again returns
-    // the count to where it started, so "did this pass place anything"
-    // cannot detect that kind of cycle -- the first build of L1 span for
-    // twelve minutes on a board that takes the annealer seven seconds.
-    // Every step either places or rips exactly one part, so a build that
-    // needs more than this many is not converging.
-    let step_budget = total * 20 + 100;
+    // Anything the block pass could not reach -- a part whose block
+    // stalled, or one the netlist leaves disconnected -- is finished
+    // here by the original part-at-a-time loop.
+    //
+    // The budget also guards against a cycle the placed-count cannot
+    // see: ripping a part and placing it again returns the count to
+    // where it started, and the first build of L1 span for twelve
+    // minutes on a board the annealer does in seven seconds.
     let mut stalled_passes = 0;
     while b.placed().len() < total {
         if steps > step_budget {
@@ -245,7 +282,18 @@ pub fn build(
 
     let placed = b.placed().len();
     let mut design = b.into_design();
-    shrink_to_parts(&mut design, model);
+    // Trimming is an optimisation, not a requirement, so it is allowed
+    // to be refused. Cutting the outline changes where refdes labels
+    // sit (they flip to stay on the board), which changes keepouts,
+    // which can push a part that was comfortably inside back over the
+    // new edge -- nine `placement_within_outline` failures on L4 came
+    // from trusting the trim. Keep it only if the gates agree.
+    let before_trim = failures_of(&design, model).len();
+    let mut trimmed = design.clone();
+    shrink_to_parts(&mut trimmed, model);
+    if failures_of(&trimmed, model).len() <= before_trim {
+        design = trimmed;
+    }
 
     let failures = failures_of(&design, model).len();
     let report = Report { chooser: chooser.name(), placed, total, ripped, failures, steps };
@@ -312,6 +360,102 @@ fn shrink_to_parts(design: &mut Design, model: &ConstraintModel) {
         eda_model::ir::Point { x: x1, y: y1 },
         eda_model::ir::Point { x: x0, y: y1 },
     ];
+}
+
+
+/// Place one functional block, one part at a time.
+///
+/// The block's parts are taken in the chooser's order, each anchored to
+/// something already on the board -- preferring, by construction, the
+/// block's own parts, since those are placed first and are what the
+/// frontier offers.
+///
+/// If nothing in the block is reachable yet, one of its parts is seeded:
+/// a connector to an edge it fits, otherwise the block's best-connected
+/// part into open board. That first part is what ties the block to the
+/// rest of the layout.
+fn place_block(
+    b: &mut Board,
+    model: &ConstraintModel,
+    members: &BTreeSet<String>,
+    chooser: &mut dyn Chooser,
+    steps: &mut usize,
+    budget: usize,
+) -> Result<(), Vec<CheckResult>> {
+    loop {
+        let placed = b.placed();
+        let remaining: Vec<&String> = members.iter().filter(|m| !placed.contains(*m)).collect();
+        if remaining.is_empty() {
+            return Ok(());
+        }
+        if *steps > budget {
+            return Err(vec![CheckResult::fail(
+                "build_no_progress",
+                remaining[0].clone(),
+                format!("step budget spent with {} part(s) of this block unplaced", remaining.len()),
+            )]);
+        }
+
+        let frontier = b.frontier_within(members);
+        let chosen = if frontier.is_empty() {
+            None
+        } else {
+            chooser.choose_part(b, &frontier)?
+        };
+
+        match chosen.and_then(|p| best_pose(b, &p).map(|(o, _, _)| o)) {
+            Some(o) => {
+                b.apply(&Cmd::Place { part: o.part, anchor: o.anchor, side: o.side })?;
+                *steps += 1;
+            }
+            None => {
+                // Nothing in this block can hang off what is placed, so
+                // start the block somewhere of its own.
+                let seed_part = seed_of(model, &remaining);
+                if let Some(part) = seed_part {
+                    seed_one(b, model, &part)?;
+                    *steps += 1;
+                } else {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+/// The part to start a block from: its best-connected member.
+fn seed_of(model: &ConstraintModel, remaining: &[&String]) -> std::option::Option<String> {
+    remaining
+        .iter()
+        .max_by_key(|r| {
+            let n = model.nets.iter().filter(|net| net.pins.iter().any(|p| p.split('.').next() == Some(r.as_str()))).count();
+            (n, std::cmp::Reverse((**r).clone()))
+        })
+        .map(|r| (*r).clone())
+}
+
+/// Put one part down with no anchor: an edge if it is a connector and
+/// fits one, otherwise open board.
+fn seed_one(b: &mut Board, model: &ConstraintModel, part: &str) -> Result<(), Vec<CheckResult>> {
+    let is_conn = model.part(part).is_some_and(eda_model::footprint::is_edge_connector);
+    if is_conn {
+        for edge in [Dir::West, Dir::North, Dir::East, Dir::South] {
+            for f in [0.5, 0.25, 0.75, 0.1, 0.9] {
+                if b.apply(&Cmd::PlaceEdge { part: part.to_string(), edge, fraction: f }).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    // Try the regions in a fixed order so the result is reproducible.
+    let mut last = None;
+    for region in Region::ALL {
+        match b.apply(&Cmd::PlaceRegion { part: part.to_string(), region }) {
+            Ok(()) => return Ok(()),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| vec![CheckResult::fail("build_no_room", part, "nowhere on the board to start this block")]))
 }
 
 fn unplaced(b: &Board, model: &ConstraintModel) -> Vec<String> {

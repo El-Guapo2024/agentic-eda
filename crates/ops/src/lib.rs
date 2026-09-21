@@ -266,6 +266,18 @@ impl<'a> Board<'a> {
         out
     }
 
+    /// The frontier, restricted to a set of parts.
+    ///
+    /// Used to finish one functional block before starting the next. A
+    /// block placed as a unit stays together; a board built by taking
+    /// whatever part happens to be adjacent lets a regulator's inductor
+    /// drift away from its own capacitors, because "adjacent to
+    /// something already down" says nothing about belonging to the same
+    /// circuit.
+    pub fn frontier_within(&self, allowed: &BTreeSet<String>) -> Vec<String> {
+        self.frontier().into_iter().filter(|p| allowed.contains(p)).collect()
+    }
+
     /// Parts sharing a small net or a proximity rule with `r`.
     ///
     /// Power and ground are excluded by the net-size cut: a 40-pin GND
@@ -447,8 +459,8 @@ impl<'a> Board<'a> {
                 let at = Point { x: snap(base.0 + sx * off, self.snap), y: snap(base.1 + sy * off, self.snap) };
                 let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
-                if cr.0 < bb.0 || cr.1 < bb.1 || cr.2 > bb.2 || cr.3 > bb.3 {
-                    continue;
+                if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
+                    continue; // a corner on the boundary is not inside it
                 }
                 let Ok(kr) = self.keepout_at(part, &fp) else { continue };
                 if self.collides(part, kr) {
@@ -492,8 +504,8 @@ impl<'a> Board<'a> {
                 let at = Point { x: snap(centre.0 + ox, self.snap), y: snap(centre.1 + oy, self.snap) };
                 let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
-                if cr.0 < bb.0 || cr.1 < bb.1 || cr.2 > bb.2 || cr.3 > bb.3 {
-                    continue;
+                if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
+                    continue; // a corner on the boundary is not inside it
                 }
                 let Ok(kr) = self.keepout_at(part, &fp) else { continue };
                 if self.collides(part, kr) {
@@ -539,11 +551,22 @@ impl<'a> Board<'a> {
             let usable = (hi - half) - (lo + half);
             lo + half + (usable as f64 * fraction) as Um
         };
+        // Sit one snap step inside the edge, not exactly on it.
+        //
+        // `placement_within_outline` tests the courtyard's corners with
+        // a point-in-polygon, and a corner lying exactly on the boundary
+        // is not inside it. Placed flush, a connector's courtyard ends
+        // at x == the board's right edge and fails, which is what put
+        // seven of L3's ten failures there. The annealer never hits this
+        // because legalisation nudges everything inward by a snap. One
+        // step is far inside the 1500µm an edge connector is allowed to
+        // sit from its edge, so this costs nothing.
+        let inset = self.snap.max(1);
         let at = match edge {
-            Dir::North => Point { x: along(bb.0, bb.2, half_w), y: bb.1 + half_h },
-            Dir::South => Point { x: along(bb.0, bb.2, half_w), y: bb.3 - half_h },
-            Dir::West => Point { x: bb.0 + half_w, y: along(bb.1, bb.3, half_h) },
-            Dir::East => Point { x: bb.2 - half_w, y: along(bb.1, bb.3, half_h) },
+            Dir::North => Point { x: along(bb.0, bb.2, half_w), y: bb.1 + half_h + inset },
+            Dir::South => Point { x: along(bb.0, bb.2, half_w), y: bb.3 - half_h - inset },
+            Dir::West => Point { x: bb.0 + half_w + inset, y: along(bb.1, bb.3, half_h) },
+            Dir::East => Point { x: bb.2 - half_w - inset, y: along(bb.1, bb.3, half_h) },
         };
         let at = Point { x: snap(at.x, self.snap), y: snap(at.y, self.snap) };
         let fp = FootprintInstance { id: part.into(), at, rot, side: Side::Top, label: LabelSide::Above };

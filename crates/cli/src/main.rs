@@ -405,6 +405,9 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
                 "place {}: {} of {} parts in {} steps, {} rip(s), {} gate failure(s)",
                 report.chooser, report.placed, report.total, report.steps, report.ripped, report.failures
             );
+            if placer == "ai" {
+                eprintln!("place ai: {} part(s) scored in {} request(s)", ai.scored, ai.requests);
+            }
             d
         }
         other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress|build|ai)")]),
