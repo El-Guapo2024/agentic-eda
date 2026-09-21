@@ -493,6 +493,7 @@ dependencies = [
  "blake3",
  "eda",
  "eda-fab",
+ "eda-gates",
  "eda-jev",
  "eda-judge",
  "eda-model",

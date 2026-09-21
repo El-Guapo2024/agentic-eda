@@ -325,8 +325,26 @@ fn seed_outline(design: &Design, model: &ConstraintModel, board_floor: f64) -> R
         return Ok(design.clone());
     }
     let mut d = design.clone();
+    // Size the board for the parts before placing, in both directions.
+    //
+    // A declared outline states the shape and origin; it is not
+    // necessarily the right size. Placing into one that is too large
+    // spreads connectors to all four edges, after which nothing can be
+    // trimmed -- L2 stayed at its declared 80x55 where the annealer
+    // reached 65x45, and both failed placement_board_use for being
+    // mostly empty. One too small leaves the placer nowhere to work.
+    //
+    // The target is just past the gate's floor rather than the full
+    // utilisation: board_use fails below fit_target * 0.5, and a
+    // constructive placer packs less tightly than an annealer, so
+    // fitting to the full target leaves its hub part with no room.
+    let want_density = model.solver.fit_board_utilization.max(0.25)
+        * eda_gates::pcb::BOARD_USE_MIN_DENSITY_FRACTION
+        * 1.3;
     let outline = match model.board.outline.clone() {
-        Some(o) if o.len() >= 3 => o,
+        Some(o) if o.len() >= 3 => {
+            eda_model::board::sized_for_parts(model, &o, want_density).unwrap_or(o)
+        }
         _ => {
             // No declared outline: size one from the part areas the same
             // way the annealer's fitting pass does, so the two placers

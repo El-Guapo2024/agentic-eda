@@ -138,3 +138,69 @@ pub fn fit_outline(design: &Design, model: &ConstraintModel, util: f64, scale_fl
     out
 }
 
+
+/// The area every part's courtyard needs, before anything is placed.
+///
+/// [`keepout_area`] reads the *placed* footprints, so it answers zero for
+/// a board that has not been laid out yet -- which makes it useless for
+/// deciding how big that board should be. Trying to size a board with it
+/// collapsed every outline to the scale floor, because an empty
+/// placement genuinely has no area.
+///
+/// This asks the model instead: each part resolves to a footprint, and a
+/// footprint knows its courtyard about the origin whether or not it has
+/// a position. Rotation is ignored -- a part's area does not change when
+/// it turns, and which way each part will face is not known yet.
+pub fn intrinsic_part_area(model: &ConstraintModel) -> f64 {
+    model
+        .parts
+        .iter()
+        .filter_map(|p| model.footprint_of(p))
+        .map(|fp| {
+            let (hw, hh) = fp.courtyard_half();
+            ((hw * 2) as f64) * ((hh * 2) as f64)
+        })
+        .sum()
+}
+
+/// A board sized for the parts it must hold, at `density`, keeping the
+/// aspect ratio of `like`.
+///
+/// Sizes in both directions: a board too large for its contents fails
+/// `placement_board_use` for being mostly empty, and one too small
+/// leaves the placer with nowhere to put anything. Rounded up to whole
+/// millimetres, anchored at `like`'s origin.
+///
+/// `None` when there is nothing to size for, or `like` is not a
+/// rectangle -- a shaped outline is a deliberate decision and is left
+/// alone.
+pub fn sized_for_parts(model: &ConstraintModel, like: &[Point], density: f64) -> Option<Vec<Point>> {
+    if density <= 0.0 || like.len() != 4 {
+        return None;
+    }
+    let (x0, y0) = (like.iter().map(|p| p.x).min()?, like.iter().map(|p| p.y).min()?);
+    let (x1, y1) = (like.iter().map(|p| p.x).max()?, like.iter().map(|p| p.y).max()?);
+    if !like.iter().all(|p| (p.x == x0 || p.x == x1) && (p.y == y0 || p.y == y1)) {
+        return None;
+    }
+    let (w, h) = ((x1 - x0) as f64, (y1 - y0) as f64);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let want = intrinsic_part_area(model) / density;
+    if want <= 0.0 {
+        return None;
+    }
+    let scale = (want / (w * h)).sqrt();
+    let nw = ((w * scale / 1000.0).ceil() * 1000.0) as i64;
+    let nh = ((h * scale / 1000.0).ceil() * 1000.0) as i64;
+    if nw <= 0 || nh <= 0 {
+        return None;
+    }
+    Some(vec![
+        Point { x: x0, y: y0 },
+        Point { x: x0 + nw, y: y0 },
+        Point { x: x0 + nw, y: y0 + nh },
+        Point { x: x0, y: y0 + nh },
+    ])
+}
