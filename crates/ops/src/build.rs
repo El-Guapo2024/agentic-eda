@@ -456,18 +456,60 @@ fn place_block(
         if !inside.is_empty() {
             frontier = inside;
         }
-        let chosen = if frontier.is_empty() {
-            None
-        } else {
-            chooser.choose_part(b, &frontier)?
+        // Immediate feedback, acted on rather than recorded.
+        //
+        // The gates already ran after every part; the loop just ignored
+        // what they said. `best_pose` returns the pose with the *fewest*
+        // failures, and the step committed it even when that count was
+        // above zero -- so a failure was baked in and the rest of the
+        // board was built on top of it. That is how J12 ended 37 mm from
+        // an edge on L4 and simply stayed there.
+        //
+        // A part may now only go down if it does not make the board
+        // worse. If the chosen part has no such pose it is deferred and
+        // another is tried, because a part that is unplaceable now often
+        // places cleanly once its neighbour is down.
+        //
+        // If the whole frontier is stuck, the best available pose is
+        // taken anyway: refusing outright would deadlock a block whose
+        // only way forward is through a failure, and a board that stops
+        // half-placed tells us less than one that finishes dirty.
+        let baseline = b.failures();
+        let mut deferred: BTreeSet<String> = BTreeSet::new();
+        let pose = loop {
+            let open: Vec<String> = frontier.iter().filter(|p| !deferred.contains(*p)).cloned().collect();
+            if open.is_empty() {
+                // Nothing clean anywhere; fall back to the least-bad pose.
+                break frontier
+                    .iter()
+                    .filter_map(|p| best_pose_within(b, p, members))
+                    .min_by_key(|(_, f, w)| (*f, *w))
+                    .map(|(o, _, _)| Cmd::Place { part: o.part, anchor: o.anchor, side: o.side });
+            }
+            let Some(p) = chooser.choose_part(b, &open)? else { break None };
+            // A connector belongs on an edge wherever it is placed, not
+            // only when it happens to seed its block.
+            if model.part(&p).is_some_and(eda_model::footprint::is_edge_connector) {
+                if let Some(cmd) = best_edge_pose(b, &p, baseline) {
+                    break Some(cmd);
+                }
+            }
+            match best_pose_within(b, &p, members) {
+                Some((o, fails, _)) if fails <= baseline => {
+                    break Some(Cmd::Place { part: o.part, anchor: o.anchor, side: o.side })
+                }
+                _ => {
+                    deferred.insert(p);
+                }
+            }
         };
 
-        match chosen.and_then(|p| best_pose_within(b, &p, members).map(|(o, _, _)| o)) {
-            Some(o) => {
+        match pose {
+            Some(cmd) => {
                 if std::env::var("EDA_BUILD_TRACE").is_ok() {
-                    eprintln!("TRACE place {} anchor={} side={:?}", o.part, o.anchor, o.side);
+                    eprintln!("TRACE {cmd:?}");
                 }
-                b.apply(&Cmd::Place { part: o.part, anchor: o.anchor, side: o.side })?;
+                b.apply(&cmd)?;
                 *steps += 1;
             }
             None => {
@@ -515,6 +557,38 @@ fn seed_of(model: &ConstraintModel, remaining: &[&String]) -> std::option::Optio
 
 /// Put one part down with no anchor: an edge if it is a connector and
 /// fits one, otherwise open board.
+/// The best edge pose for a connector, if any is no worse than `baseline`.
+///
+/// `options_for` only ever offers place-beside-an-anchor, so until this
+/// existed a connector reached through the frontier had no edge pose
+/// available to it at all -- `Cmd::PlaceEdge` lived only in `seed_one`.
+/// A connector that was not its block's seed could therefore only be
+/// hung off an interior part, which fails `placement_edge_connector` by
+/// construction. On L4 that put J12 37.9 mm and J18 42.9 mm from the
+/// nearest edge against a 1.5 mm limit.
+///
+/// Edges and fractions are tried in a fixed order so a build stays
+/// reproducible, and every candidate is measured on a fork rather than
+/// assumed: an edge that collides or overhangs is simply not offered.
+fn best_edge_pose(b: &Board, part: &str, baseline: usize) -> std::option::Option<Cmd> {
+    let mut best: std::option::Option<(Cmd, usize, i64)> = None;
+    for edge in [Dir::West, Dir::North, Dir::East, Dir::South] {
+        for f in [0.5, 0.25, 0.75, 0.1, 0.9] {
+            let cmd = Cmd::PlaceEdge { part: part.to_string(), edge, fraction: f };
+            let mut trial = b.fork();
+            if trial.apply(&cmd).is_err() {
+                continue;
+            }
+            let fails = trial.failures();
+            let wl = hpwl_of(trial.design(), b.model());
+            if best.as_ref().map_or(true, |(_, bf, bw)| (fails, wl) < (*bf, *bw)) {
+                best = Some((cmd, fails, wl));
+            }
+        }
+    }
+    best.filter(|(_, f, _)| *f <= baseline).map(|(c, _, _)| c)
+}
+
 fn seed_one(b: &mut Board, model: &ConstraintModel, part: &str) -> Result<(), Vec<CheckResult>> {
     let is_conn = model.part(part).is_some_and(eda_model::footprint::is_edge_connector);
     if is_conn {
