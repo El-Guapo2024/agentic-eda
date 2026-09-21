@@ -676,3 +676,4 @@ mod tests;
 
 pub mod build;
 pub mod ai;
+pub mod flash;

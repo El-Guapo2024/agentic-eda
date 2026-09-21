@@ -60,7 +60,7 @@ fn parse_args() -> Result<Args, String> {
             "--design" => design = Some(PathBuf::from(it.next().ok_or("--design needs a path")?)),
             "--pcb-cli" => use_pcb_cli = true,
             "--pl" => pl = Some(PathBuf::from(it.next().ok_or("--pl needs a path")?)),
-            "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress|build|ai")?,
+            "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress|build|ai|flash")?,
             "--judge" => judge = true,
             "--fab" => fab = true,
             s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
@@ -71,7 +71,7 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress|build|ai] [--judge] [--fab] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress|build|ai|flash] [--judge] [--fab] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -394,12 +394,16 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
         // evaluation model which neighbour and side, knowing what the
         // circuit is. They share all their geometry, so a difference
         // between them is a difference in judgement and nothing else.
-        "build" | "ai" => {
+        "build" | "ai" | "flash" => {
             let seeded = seed_outline(design, &cx.model, board_floor)?;
             let mut greedy = eda_ops::build::Greedy;
             let mut ai = eda_ops::ai::Ai::new();
-            let chooser: &mut dyn eda_ops::build::Chooser =
-                if placer == "ai" { &mut ai } else { &mut greedy };
+            let mut flash = eda_ops::flash::Flash::new();
+            let chooser: &mut dyn eda_ops::build::Chooser = match placer.as_str() {
+                "ai" => &mut ai,
+                "flash" => &mut flash,
+                _ => &mut greedy,
+            };
             let (d, report) = eda_ops::build::build(seeded, &cx.model, sv.place_snap_um, sv.place_spacing_um, chooser)?;
             eprintln!(
                 "place {}: {} of {} parts in {} steps, {} rip(s), {} gate failure(s)",
@@ -408,9 +412,12 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
             if placer == "ai" {
                 eprintln!("place ai: {} part(s) scored in {} request(s)", ai.scored, ai.requests);
             }
+            if placer == "flash" {
+                eprintln!("place flash: {} part(s) scored in {} request(s)", flash.scored, flash.requests);
+            }
             d
         }
-        other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress|build|ai)")]),
+        other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress|build|ai|flash)")]),
     };
     save_design(&cx.args.out, &placed)?;
     let mut checks = check_placement(&placed, &cx.model);
