@@ -8,6 +8,7 @@ name = "eda"
 path = "src/main.rs"
 
 [dependencies]
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 blake3 = { workspace = true }

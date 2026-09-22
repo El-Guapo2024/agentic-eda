@@ -497,6 +497,7 @@ dependencies = [
  "eda-judge",
  "eda-model",
  "eda-ops",
+ "serde",
  "serde_json",
  "serde_yaml",
 ]

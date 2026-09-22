@@ -149,6 +149,14 @@ pub enum Cmd {
     /// board starts: the main IC lands, everything else hangs off it.
     PlaceRegion { part: String, region: Region },
     /// Shift a placed part by whole snap steps.
+    /// Put a part at an explicit board position, µm.
+    ///
+    /// The other place verbs say *where* symbolically -- a region, an
+    /// edge, beside a neighbour -- which is how a layout engineer
+    /// speaks and cannot be off by a rounding error. This one is for
+    /// when the position is actually known: a part being restored, a
+    /// board being replayed, or a caller that has already decided.
+    PlaceAt { part: String, x: Um, y: Um },
     Nudge { part: String, dir: Dir, steps: u32 },
     /// Turn a placed part by quarter turns.
     Rotate { part: String, quarter_turns: u8 },
@@ -167,6 +175,7 @@ impl Cmd {
             Cmd::Place { part, anchor, .. } => vec![part, anchor],
             Cmd::PlaceEdge { part, .. }
             | Cmd::PlaceRegion { part, .. }
+            | Cmd::PlaceAt { part, .. }
             | Cmd::Nudge { part, .. }
             | Cmd::Rotate { part, .. }
             | Cmd::Rip { part } => vec![part],
@@ -321,6 +330,7 @@ impl<'a> Board<'a> {
             Cmd::Place { part, anchor, side } => self.place_beside(part, anchor, *side),
             Cmd::PlaceEdge { part, edge, fraction } => self.place_on_edge(part, *edge, *fraction),
             Cmd::PlaceRegion { part, region } => self.place_in_region(part, *region),
+            Cmd::PlaceAt { part, x, y } => self.place_at(part, *x, *y),
             Cmd::Nudge { part, dir, steps } => self.nudge(part, *dir, *steps),
             Cmd::Rotate { part, quarter_turns } => self.rotate(part, *quarter_turns),
             Cmd::Swap { a, b } => self.swap(a, b),
@@ -599,6 +609,39 @@ impl<'a> Board<'a> {
             )]);
         }
         self.design.placement.as_mut().unwrap().footprints.push(fp);
+        self.sort_footprints();
+        Ok(())
+    }
+
+    /// Place a part at a given point, refusing it if it will not fit.
+    ///
+    /// Unlike the symbolic verbs this does not search: a caller naming a
+    /// position is taken at their word, and a position that collides or
+    /// leaves the outline is refused rather than quietly slid somewhere
+    /// nearby. A command that silently does something other than what it
+    /// says cannot be learned from.
+    fn place_at(&mut self, part: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+        self.require_unplaced(part)?;
+        let bb = self.board_bbox();
+        let at = Point { x: snap(x, self.snap), y: snap(y, self.snap) };
+        let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
+        let cr = self.courtyard_at(part, &fp)?;
+        if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
+            return Err(vec![CheckResult::fail(
+                "ops_outside_board",
+                part,
+                "that position puts the part's courtyard on or past the board edge",
+            )]);
+        }
+        let kr = self.keepout_at(part, &fp)?;
+        if self.collides(part, kr) {
+            return Err(vec![CheckResult::fail(
+                "ops_occupied",
+                part,
+                "another part's keepout already covers that position",
+            )]);
+        }
+        self.design.placement.as_mut().expect("board has a placement").footprints.push(fp);
         self.sort_footprints();
         Ok(())
     }

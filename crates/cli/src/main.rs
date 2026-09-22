@@ -15,6 +15,8 @@
 //! eda import-pl <intent> --design design.json --pl x.gp.pl [-o out]  # Bookshelf placement (Cypress) -> design.json
 //! ```
 
+mod board;
+
 use eda::prelude::*;
 use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, to_circuit_json, PlaceOptions, Placer};
 use eda::ExportMeta;
@@ -1066,6 +1068,37 @@ fn run_judge(cx: &mut Ctx, d: &Design, stage: eda_judge::Stage) -> Result<(), Ve
 }
 
 fn main() -> ExitCode {
+    // `eda board ...` is its own surface: a board held in a directory
+    // and advanced one command at a time, rather than a pipeline stage.
+    // It is dispatched before the usual argument parsing because its
+    // verbs and flags are its own.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("board") {
+        let r = board::run(&argv[1..], |model| {
+            let empty = Design {
+                schema: 1,
+                provenance: eda_model::ir::Provenance {
+                    engine_version: env!("CARGO_PKG_VERSION").into(),
+                    intent_hash: String::new(),
+                    seed: 0,
+                    stage_hashes: vec![],
+                },
+                schematic: None,
+                placement: None,
+                routing: None,
+            };
+            seed_outline(&empty, model, 0.0)
+        });
+        return match r {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(fails) => {
+                for f in &fails {
+                    eprintln!("FAIL {} @ {}: {}", f.check, f.location.as_deref().unwrap_or("-"), f.hint.as_deref().unwrap_or(""));
+                }
+                ExitCode::FAILURE
+            }
+        };
+    }
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {

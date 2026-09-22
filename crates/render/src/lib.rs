@@ -350,19 +350,29 @@ impl<'a> SymbolBox<'a> {
 
     /// Local-space (box top-left = 0,0) corners, before the symbol's own
     /// translate/rotate/mirror transform.
+    /// Box corners in local millimetres.
+    ///
+    /// `width`/`height` are µm, like every other stored dimension; the
+    /// drawing divides them at emit time. Bounds have to divide too, or
+    /// the sheet measures a thousand times bigger than it draws.
     fn local_corners(&self) -> [(f64, f64); 4] {
-        let (w, h) = (self.width as f64, self.height as f64);
+        let (w, h) = (self.width as f64 / 1000.0, self.height as f64 / 1000.0);
         [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
     }
 
-    /// Absolute-um bounding corners (box corners + pin stub tips),
+    /// Absolute-**mm** bounding corners (box corners + pin stub tips),
     /// accounting for rotation/mirroring, for viewBox computation.
+    ///
+    /// Was µm, while `compute_bounds` fed it alongside wire points and
+    /// text boxes that are both mm. The µm numbers dominated, so the
+    /// viewBox spanned 133359 units for 133mm of content and the sheet
+    /// rendered as a speck in the corner of an empty canvas.
     fn abs_bounds_points(&self) -> Vec<(f64, f64)> {
         let mut pts: Vec<(f64, f64)> = self.local_corners().to_vec();
         for p in &self.ports {
             let (lx, ly) = local_port_point(p, self.width, self.height);
             let (sx, sy) = stub_tip(p, lx, ly);
-            pts.push((sx, sy));
+            pts.push((sx / 1000.0, sy / 1000.0));
         }
         pts.into_iter().map(|(x, y)| self.to_abs(x, y)).collect()
     }
@@ -372,7 +382,12 @@ impl<'a> SymbolBox<'a> {
         let theta = (self.sym.rot as f64 / 1000.0) * std::f64::consts::PI / 180.0;
         let rx = lx * theta.cos() - ly * theta.sin();
         let ry = lx * theta.sin() + ly * theta.cos();
-        (self.sym.at.x as f64 + rx, self.sym.at.y as f64 + ry)
+        // Millimetres, like every other coordinate here. Adding the
+        // symbol's µm origin to a mm offset inflated the sheet bounds
+        // ~1000x, so the viewBox spanned 133359 units for 133mm of
+        // content and the whole drawing rendered as a speck in the
+        // corner. Every other use of `sym.at` on this type divides.
+        (self.sym.at.x as f64 / 1000.0 + rx, self.sym.at.y as f64 / 1000.0 + ry)
     }
 
     /// Ref (and, if present, value) text bounding boxes in absolute mm,
