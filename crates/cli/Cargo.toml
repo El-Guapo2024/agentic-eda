@@ -14,7 +14,6 @@ blake3 = { workspace = true }
 eda = { path = "../eda" }
 eda-model = { path = "../model" }
 eda-gates = { path = "../gates" }
-eda-jev = { path = "../jev" }
 eda-ops = { path = "../ops" }
 eda-judge = { path = "../judge" }
 eda-fab = { path = "../fab" }

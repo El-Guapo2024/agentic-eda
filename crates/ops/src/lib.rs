@@ -675,5 +675,7 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 mod tests;
 
 pub mod build;
-pub mod ai;
+pub mod repair;
+pub mod view;
+pub mod episode;
 pub mod flash;

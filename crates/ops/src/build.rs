@@ -319,6 +319,17 @@ pub fn build(
         }
     }
 
+    // Everything is down; now move what is wrong.
+    //
+    // Placement alone can only decline to put a part somewhere -- it can
+    // never move one that has already landed, so a violation between two
+    // placed parts was permanent however small. This is the first pass
+    // that issues Nudge at all.
+    let closed = crate::repair::repair(&mut b, model, 400);
+    if closed > 0 && std::env::var("EDA_BUILD_TRACE").is_ok() {
+        eprintln!("TRACE repair closed {closed} failure(s)");
+    }
+
     let placed = b.placed().len();
     let mut design = b.into_design();
     // Trimming is an optimisation, not a requirement, so it is allowed
@@ -332,6 +343,17 @@ pub fn build(
     shrink_to_parts(&mut trimmed, model);
     if failures_of(&trimmed, model).len() <= before_trim {
         design = trimmed;
+    }
+
+    // The board as a language-action model would see it, written beside
+    // the design so a decision layer -- or a training run -- has the
+    // observation that goes with this result.
+    if let Ok(path) = std::env::var("EDA_VIEW") {
+        let v = crate::view::view(&Board::new(design.clone(), model, snap, spacing), model)?;
+        std::fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| {
+            vec![CheckResult::fail("view_encode", "EDA_VIEW", format!("the view could not be encoded: {e}"))]
+        })?)
+        .map_err(|e| vec![CheckResult::fail("view_write", &path, format!("the view could not be written: {e}"))])?;
     }
 
     let failures = failures_of(&design, model).len();
@@ -509,8 +531,15 @@ fn place_block(
                 if std::env::var("EDA_BUILD_TRACE").is_ok() {
                     eprintln!("TRACE {cmd:?}");
                 }
+                // The state the decision was made from, captured before
+                // the command lands: logging the result instead would
+                // teach a model to predict the past.
+                let snapshot = crate::episode::sink().map(|_| (b.fork(), b.failures()));
                 b.apply(&cmd)?;
                 *steps += 1;
+                if let Some((was, before)) = snapshot {
+                    crate::episode::record(&was, model, &cmd, before, b.failures(), *steps);
+                }
             }
             None => {
                 // Nothing in this block can hang off what is placed, so

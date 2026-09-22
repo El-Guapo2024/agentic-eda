@@ -494,7 +494,6 @@ dependencies = [
  "eda",
  "eda-fab",
  "eda-gates",
- "eda-jev",
  "eda-judge",
  "eda-model",
  "eda-ops",
@@ -564,16 +563,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eda-jev"
-version = "0.1.0"
-dependencies = [
- "eda-model",
- "serde",
- "serde_json",
- "ureq",
-]
-
-[[package]]
 name = "eda-judge"
 version = "0.1.0"
 dependencies = [
@@ -636,7 +625,6 @@ name = "eda-ops"
 version = "0.1.0"
 dependencies = [
  "eda-gates",
- "eda-jev",
  "eda-model",
  "serde",
  "serde_json",

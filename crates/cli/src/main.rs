@@ -60,7 +60,7 @@ fn parse_args() -> Result<Args, String> {
             "--design" => design = Some(PathBuf::from(it.next().ok_or("--design needs a path")?)),
             "--pcb-cli" => use_pcb_cli = true,
             "--pl" => pl = Some(PathBuf::from(it.next().ok_or("--pl needs a path")?)),
-            "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress|build|ai|flash")?,
+            "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress|build|flash")?,
             "--judge" => judge = true,
             "--fab" => fab = true,
             s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
@@ -71,7 +71,7 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress|build|ai|flash] [--judge] [--fab] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress|build|flash] [--judge] [--fab] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -412,13 +412,11 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
         // evaluation model which neighbour and side, knowing what the
         // circuit is. They share all their geometry, so a difference
         // between them is a difference in judgement and nothing else.
-        "build" | "ai" | "flash" => {
+        "build" | "flash" => {
             let seeded = seed_outline(design, &cx.model, board_floor)?;
             let mut greedy = eda_ops::build::Greedy;
-            let mut ai = eda_ops::ai::Ai::new();
             let mut flash = eda_ops::flash::Flash::new();
             let chooser: &mut dyn eda_ops::build::Chooser = match placer.as_str() {
-                "ai" => &mut ai,
                 "flash" => &mut flash,
                 _ => &mut greedy,
             };
@@ -427,15 +425,12 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
                 "place {}: {} of {} parts in {} steps, {} rip(s), {} gate failure(s)",
                 report.chooser, report.placed, report.total, report.steps, report.ripped, report.failures
             );
-            if placer == "ai" {
-                eprintln!("place ai: {} part(s) scored in {} request(s)", ai.scored, ai.requests);
-            }
             if placer == "flash" {
                 eprintln!("place flash: {} part(s) scored in {} request(s)", flash.scored, flash.requests);
             }
             d
         }
-        other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress|build|ai|flash)")]),
+        other => return Err(vec![CheckResult::fail("cli", other, "unknown placer (anneal|cypress|build|flash)")]),
     };
     save_design(&cx.args.out, &placed)?;
     let mut checks = check_placement(&placed, &cx.model);
@@ -919,19 +914,6 @@ fn run(args: Args) -> Result<(), Vec<CheckResult>> {
     })
     .ok();
     let mut cx = Ctx { args, model, log, ihash, report: Report { started: Some(Instant::now()), ..Default::default() } };
-
-    // If a Jev key is configured, this run may take advice from the
-    // evaluation model, so the model's competence is re-measured before
-    // anything is placed. The wire format moved under us once already
-    // and the service behind a model id can change without the id
-    // changing; a run that silently took advice from a degraded model
-    // would be indistinguishable from a good one. No key means no
-    // advice and nothing to check.
-    let cal = eda_jev::check_calibration();
-    if !cal.is_empty() && !print_checks("jev calibration", &cal) {
-        write_result(&cx, &Err(cal.clone()));
-        return Err(cal);
-    }
 
     let lint_checks = lint(&cx.model);
     if !print_checks("lint", &lint_checks) {
