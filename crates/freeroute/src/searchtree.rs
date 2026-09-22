@@ -215,6 +215,27 @@ impl<T> ShapeTree<T> {
         found
     }
 
+    // Raw traversal, for algorithms that walk the tree with a query shape
+    // that changes as they go (room completion shrinks its bound after
+    // every obstacle), which `overlaps` cannot express.
+
+    pub(crate) fn root_node(&self) -> Option<usize> {
+        self.root
+    }
+
+    pub(crate) fn node_bounds(&self, n: usize) -> IntOctagon {
+        self.nodes[n].bounds
+    }
+
+    /// `Ok(leaf)` for a leaf, `Err((first, second))` for an inner node.
+    pub(crate) fn node_step(&self, n: usize) -> Result<LeafId, (usize, usize)> {
+        match self.nodes[n].kind {
+            Kind::Leaf { .. } => Ok(LeafId(n)),
+            Kind::Inner { first, second } => Err((first, second)),
+            Kind::Free => panic!("ShapeTree: free slot {n} reached by traversal"),
+        }
+    }
+
     /// Checks the structural invariants: every inner node's bounds contain
     /// both children's, parent links are symmetric, and the leaf count
     /// matches. For tests.

@@ -976,6 +976,24 @@ impl IntOctagon {
     return result;
     }
 
+    /// Which side of border line `no` the point (x, y) lies on:
+    /// negative inside, positive outside, zero on the line.
+    /// FreeRouting's `IntOctagon.sideOfBorderLine`, returning the raw sign.
+    pub fn side_of_border_line(&self, x: i64, y: i64, no: usize) -> i64 {
+        let v = match no {
+            0 => self.bottom_y - y,
+            1 => x - y - self.lower_right_diag_x,
+            2 => x - self.right_x,
+            3 => x + y - self.upper_right_diag_x,
+            4 => y - self.top_y,
+            5 => self.upper_left_diag_x + y - x,
+            6 => self.left_x - x,
+            7 => self.lower_left_diag_x - x - y,
+            _ => panic!("IntOctagon::side_of_border_line: {no} out of range 0..8"),
+        };
+        v.signum()
+    }
+
     pub fn left_x_at(&self, y: i64) -> i64 {
         self.left_x.max(self.upper_left_diag_x + y).max(self.lower_left_diag_x - y)
     }
