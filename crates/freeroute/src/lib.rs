@@ -14,3 +14,4 @@
 //! Licence: GPL-3.0, inherited from FreeRouting. See Cargo.toml.
 
 pub mod geometry;
+pub mod searchtree;
