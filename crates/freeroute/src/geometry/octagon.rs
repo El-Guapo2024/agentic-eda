@@ -371,6 +371,611 @@ impl IntOctagon {
             && self.upper_left_diag_x.max(other.upper_left_diag_x) < self.lower_right_diag_x.min(other.lower_right_diag_x)
     }
 
+    /// `d` minus this octagon, as 8 convex pieces: 4 boxes and 4 octagons
+    /// with a corner cut off. FreeRouting's `IntOctagon.cutoutFrom(IntBox)`.
+    ///
+    /// This is how free space is carved around an obstacle. Ported by a
+    /// mechanical rewrite of the Java (names and syntax only, logic
+    /// untouched) because it is 200 lines of near-identical blocks where a
+    /// swapped field would be invisible to a reader. Pieces may be empty.
+    /// If the overlap is only at the border, `d` comes back whole.
+    #[allow(unused_mut, unused_assignments)]
+    pub fn cutout_from_box(&self, d: IntBox) -> Vec<IntOctagon> {
+    let c = self.intersection(&d.to_octagon());
+
+    if self.is_empty() || c.dimension() < self.dimension() {
+      let mut result = vec![IntOctagon::EMPTY; 1];
+      result[0] = d.to_octagon();
+      return result;
+    }
+
+    let mut boxes = [IntBox::new(0, 0, 0, 0); 4];
+
+    boxes[0] =
+        IntBox::new(d.ll.x, c.lower_left_diag_x - c.left_x, c.left_x, c.left_x - c.upper_left_diag_x);
+
+    boxes[1] =
+        IntBox::new(
+            c.right_x, c.right_x - c.lower_right_diag_x, d.ur.x, c.upper_right_diag_x - c.right_x);
+
+    boxes[2] =
+        IntBox::new(
+            c.lower_left_diag_x - c.bottom_y, d.ll.y, c.lower_right_diag_x + c.bottom_y, c.bottom_y);
+
+    boxes[3] =
+        IntBox::new(c.upper_left_diag_x + c.top_y, c.top_y, c.upper_right_diag_x - c.top_y, d.ur.y);
+
+    let mut octagons = [IntOctagon::EMPTY; 4];
+
+    let mut current_oct =
+        IntOctagon::new(
+            d.ll.x,
+            boxes[0].ur.y,
+            boxes[3].ll.x,
+            d.ur.y,
+            -CRIT,
+            c.upper_left_diag_x,
+            -CRIT,
+            CRIT);
+    octagons[0] = current_oct.normalize();
+
+    current_oct =
+        IntOctagon::new(
+            d.ll.x,
+            d.ll.y,
+            boxes[2].ll.x,
+            boxes[0].ll.y,
+            -CRIT,
+            CRIT,
+            -CRIT,
+            c.lower_left_diag_x);
+    octagons[1] = current_oct.normalize();
+
+    current_oct =
+        IntOctagon::new(
+            boxes[2].ur.x,
+            d.ll.y,
+            d.ur.x,
+            boxes[1].ll.y,
+            c.lower_right_diag_x,
+            CRIT,
+            -CRIT,
+            CRIT);
+    octagons[2] = current_oct.normalize();
+
+    current_oct =
+        IntOctagon::new(
+            boxes[3].ur.x,
+            boxes[1].ur.y,
+            d.ur.x,
+            d.ur.y,
+            -CRIT,
+            CRIT,
+            c.upper_right_diag_x,
+            CRIT);
+    octagons[3] = current_oct.normalize();
+
+    let mut b = boxes[0];
+    let mut o = octagons[0];
+    if b.ur.x - b.ll.x > o.top_y - o.bottom_y {
+
+      boxes[0] = IntBox::new(b.ll.x, b.ll.y, b.ur.x, o.top_y);
+      current_oct =
+          IntOctagon::new(
+              b.ur.x,
+              o.bottom_y,
+              o.right_x,
+              o.top_y,
+              o.upper_left_diag_x,
+              o.lower_right_diag_x,
+              o.lower_left_diag_x,
+              o.upper_right_diag_x);
+      octagons[0] = current_oct.normalize();
+    }
+
+    b = boxes[3];
+    o = octagons[0];
+    if b.ur.y - b.ll.y > o.right_x - o.left_x {
+
+      boxes[3] = IntBox::new(o.left_x, b.ll.y, b.ur.x, b.ur.y);
+      current_oct =
+          IntOctagon::new(
+              o.left_x,
+              o.bottom_y,
+              o.right_x,
+              b.ll.y,
+              o.upper_left_diag_x,
+              o.lower_right_diag_x,
+              o.lower_left_diag_x,
+              o.upper_right_diag_x);
+      octagons[0] = current_oct.normalize();
+    }
+    b = boxes[3];
+    o = octagons[3];
+    if b.ur.y - b.ll.y > o.right_x - o.left_x {
+
+      boxes[3] = IntBox::new(b.ll.x, b.ll.y, o.right_x, b.ur.y);
+      current_oct =
+          IntOctagon::new(
+              o.left_x,
+              o.bottom_y,
+              o.right_x,
+              o.top_y,
+              o.upper_left_diag_x,
+              o.lower_right_diag_x,
+              o.lower_left_diag_x,
+              o.upper_right_diag_x);
+      octagons[3] = current_oct.normalize();
+    }
+    b = boxes[1];
+    o = octagons[3];
+    if b.ur.x - b.ll.x > o.top_y - o.bottom_y {
+
+      boxes[1] = IntBox::new(b.ll.x, b.ll.y, b.ur.x, o.top_y);
+      current_oct =
+          IntOctagon::new(
+              o.left_x,
+              o.bottom_y,
+              b.ll.x,
+              o.top_y,
+              o.upper_left_diag_x,
+              o.lower_right_diag_x,
+              o.lower_left_diag_x,
+              o.upper_right_diag_x);
+      octagons[3] = current_oct.normalize();
+    }
+    b = boxes[1];
+    o = octagons[2];
+    if b.ur.x - b.ll.x > o.top_y - o.bottom_y {
+
+      boxes[1] = IntBox::new(b.ll.x, o.bottom_y, b.ur.x, b.ur.y);
+      current_oct =
+          IntOctagon::new(
+              o.left_x,
+              o.bottom_y,
+              b.ll.x,
+              o.top_y,
+              o.upper_left_diag_x,
+              o.lower_right_diag_x,
+              o.lower_left_diag_x,
+              o.upper_right_diag_x);
+      octagons[2] = current_oct.normalize();
+    }
+    b = boxes[2];
+    o = octagons[2];
+    if b.ur.y - b.ll.y > o.right_x - o.left_x {
+
+      boxes[2] = IntBox::new(b.ll.x, b.ll.y, o.right_x, b.ur.y);
+      current_oct =
+          IntOctagon::new(
+              o.left_x,
+              b.ur.y,
+              o.right_x,
+              o.top_y,
+              o.upper_left_diag_x,
+              o.lower_right_diag_x,
+              o.lower_left_diag_x,
+              o.upper_right_diag_x);
+      octagons[2] = current_oct.normalize();
+    }
+    b = boxes[2];
+    o = octagons[1];
+    if b.ur.y - b.ll.y > o.right_x - o.left_x {
+
+      boxes[2] = IntBox::new(o.left_x, b.ll.y, b.ur.x, b.ur.y);
+      current_oct =
+          IntOctagon::new(
+              o.left_x,
+              b.ur.y,
+              o.right_x,
+              o.top_y,
+              o.upper_left_diag_x,
+              o.lower_right_diag_x,
+              o.lower_left_diag_x,
+              o.upper_right_diag_x);
+      octagons[1] = current_oct.normalize();
+    }
+    b = boxes[0];
+    o = octagons[1];
+    if b.ur.x - b.ll.x > o.top_y - o.bottom_y {
+      boxes[0] = IntBox::new(b.ll.x, o.bottom_y, b.ur.x, b.ur.y);
+      current_oct =
+          IntOctagon::new(
+              b.ur.x,
+              o.bottom_y,
+              o.right_x,
+              o.top_y,
+              o.upper_left_diag_x,
+              o.lower_right_diag_x,
+              o.lower_left_diag_x,
+              o.upper_right_diag_x);
+      octagons[1] = current_oct.normalize();
+    }
+
+    let mut result = vec![IntOctagon::EMPTY; 8];
+
+    for i in 0..4 {
+      result[i] = boxes[i].to_octagon();
+    }
+
+    result[4..8].copy_from_slice(&octagons);
+    return result;
+    }
+
+    /// `d` minus this octagon, as 8 convex pieces without sharp angles.
+    /// FreeRouting's `IntOctagon.cutoutFrom(IntOctagon)`, rewritten the same
+    /// mechanical way. Pieces may be empty.
+    #[allow(unused_mut, unused_assignments)]
+    pub fn cutout_from(&self, d: IntOctagon) -> Vec<IntOctagon> {
+    let c = self.intersection(&d);
+
+    if self.is_empty() || c.dimension() < self.dimension() {
+      let mut result = vec![IntOctagon::EMPTY; 1];
+      result[0] = d;
+      return result;
+    }
+
+    let mut result = vec![IntOctagon::EMPTY; 8];
+
+    let mut tmp = c.lower_left_diag_x - c.left_x;
+
+    result[0] =
+        IntOctagon::new(
+            d.left_x,
+            tmp,
+            c.left_x,
+            c.left_x - c.upper_left_diag_x,
+            d.upper_left_diag_x,
+            d.lower_right_diag_x,
+            d.lower_left_diag_x,
+            d.upper_right_diag_x);
+
+    let mut tmp2 = c.lower_left_diag_x - c.bottom_y;
+
+    result[1] =
+        IntOctagon::new(
+            d.left_x,
+            d.bottom_y,
+            tmp2,
+            tmp,
+            d.upper_left_diag_x,
+            d.lower_right_diag_x,
+            d.lower_left_diag_x,
+            c.lower_left_diag_x);
+
+    tmp = c.lower_right_diag_x + c.bottom_y;
+
+    result[2] =
+        IntOctagon::new(
+            tmp2,
+            d.bottom_y,
+            tmp,
+            c.bottom_y,
+            d.upper_left_diag_x,
+            d.lower_right_diag_x,
+            d.lower_left_diag_x,
+            d.upper_right_diag_x);
+
+    tmp2 = c.right_x - c.lower_right_diag_x;
+
+    result[3] =
+        IntOctagon::new(
+            tmp,
+            d.bottom_y,
+            d.right_x,
+            tmp2,
+            c.lower_right_diag_x,
+            d.lower_right_diag_x,
+            d.lower_left_diag_x,
+            d.upper_right_diag_x);
+
+    tmp = c.upper_right_diag_x - c.right_x;
+
+    result[4] =
+        IntOctagon::new(
+            c.right_x,
+            tmp2,
+            d.right_x,
+            tmp,
+            d.upper_left_diag_x,
+            d.lower_right_diag_x,
+            d.lower_left_diag_x,
+            d.upper_right_diag_x);
+
+    tmp2 = c.upper_right_diag_x - c.top_y;
+
+    result[5] =
+        IntOctagon::new(
+            tmp2,
+            tmp,
+            d.right_x,
+            d.top_y,
+            d.upper_left_diag_x,
+            d.lower_right_diag_x,
+            c.upper_right_diag_x,
+            d.upper_right_diag_x);
+
+    tmp = c.upper_left_diag_x + c.top_y;
+
+    result[6] =
+        IntOctagon::new(
+            tmp,
+            c.top_y,
+            tmp2,
+            d.top_y,
+            d.upper_left_diag_x,
+            d.lower_right_diag_x,
+            d.lower_left_diag_x,
+            d.upper_right_diag_x);
+
+    tmp2 = c.left_x - c.upper_left_diag_x;
+
+    result[7] =
+        IntOctagon::new(
+            d.left_x,
+            tmp2,
+            tmp,
+            d.top_y,
+            d.upper_left_diag_x,
+            c.upper_left_diag_x,
+            d.lower_left_diag_x,
+            d.upper_right_diag_x);
+
+    for i in 0..8 {
+      result[i] = result[i].normalize();
+    }
+
+    let mut curr1 = result[0];
+    let mut curr2 = result[7];
+
+    if !(curr1.is_empty() || curr2.is_empty())
+        && curr1.right_x - curr1.left_x_at(curr1.top_y)
+            > curr2.upper_y_at(curr1.right_x) - curr2.bottom_y {
+      curr1 =
+          IntOctagon::new(
+              std::cmp::min(curr1.left_x, curr2.left_x),
+              curr1.bottom_y,
+              curr1.right_x,
+              curr2.top_y,
+              curr2.upper_left_diag_x,
+              curr1.lower_right_diag_x,
+              curr1.lower_left_diag_x,
+              curr2.upper_right_diag_x);
+
+      curr2 =
+          IntOctagon::new(
+              curr1.right_x,
+              curr2.bottom_y,
+              curr2.right_x,
+              curr2.top_y,
+              curr2.upper_left_diag_x,
+              curr2.lower_right_diag_x,
+              curr2.lower_left_diag_x,
+              curr2.upper_right_diag_x);
+
+      result[0] = curr1.normalize();
+      result[7] = curr2.normalize();
+    }
+    curr1 = result[7];
+    curr2 = result[6];
+    if !(curr1.is_empty() || curr2.is_empty())
+        && curr2.upper_y_at(curr1.right_x) - curr2.bottom_y
+            > curr1.right_x - curr1.left_x_at(curr2.bottom_y) {
+      curr2 =
+          IntOctagon::new(
+              curr1.left_x,
+              curr2.bottom_y,
+              curr2.right_x,
+              std::cmp::max(curr2.top_y, curr1.top_y),
+              curr1.upper_left_diag_x,
+              curr2.lower_right_diag_x,
+              curr1.lower_left_diag_x,
+              curr2.upper_right_diag_x);
+
+      curr1 =
+          IntOctagon::new(
+              curr1.left_x,
+              curr1.bottom_y,
+              curr1.right_x,
+              curr2.bottom_y,
+              curr1.upper_left_diag_x,
+              curr1.lower_right_diag_x,
+              curr1.lower_left_diag_x,
+              curr1.upper_right_diag_x);
+
+      result[7] = curr1.normalize();
+      result[6] = curr2.normalize();
+    }
+    curr1 = result[6];
+    curr2 = result[5];
+    if !(curr1.is_empty() || curr2.is_empty())
+        && curr2.upper_y_at(curr1.right_x) - curr1.bottom_y
+            > curr2.right_x_at(curr1.bottom_y) - curr2.left_x {
+      curr1 =
+          IntOctagon::new(
+              curr1.left_x,
+              curr1.bottom_y,
+              curr2.right_x,
+              std::cmp::max(curr2.top_y, curr1.top_y),
+              curr1.upper_left_diag_x,
+              curr2.lower_right_diag_x,
+              curr1.lower_left_diag_x,
+              curr2.upper_right_diag_x);
+
+      curr2 =
+          IntOctagon::new(
+              curr2.left_x,
+              curr2.bottom_y,
+              curr2.right_x,
+              curr1.bottom_y,
+              curr2.upper_left_diag_x,
+              curr2.lower_right_diag_x,
+              curr2.lower_left_diag_x,
+              curr2.upper_right_diag_x);
+
+      result[6] = curr1.normalize();
+      result[5] = curr2.normalize();
+    }
+    curr1 = result[5];
+    curr2 = result[4];
+    if !(curr1.is_empty() || curr2.is_empty())
+        && curr2.right_x_at(curr2.top_y) - curr2.left_x
+            > curr1.upper_y_at(curr2.left_x) - curr2.top_y {
+      curr2 =
+          IntOctagon::new(
+              curr2.left_x,
+              curr2.bottom_y,
+              std::cmp::max(curr2.right_x, curr1.right_x),
+              curr1.top_y,
+              curr1.upper_left_diag_x,
+              curr2.lower_right_diag_x,
+              curr2.lower_left_diag_x,
+              curr1.upper_right_diag_x);
+
+      curr1 =
+          IntOctagon::new(
+              curr1.left_x,
+              curr1.bottom_y,
+              curr2.left_x,
+              curr1.top_y,
+              curr1.upper_left_diag_x,
+              curr1.lower_right_diag_x,
+              curr1.lower_left_diag_x,
+              curr1.upper_right_diag_x);
+
+      result[5] = curr1.normalize();
+      result[4] = curr2.normalize();
+    }
+    curr1 = result[4];
+    curr2 = result[3];
+    if !(curr1.is_empty() || curr2.is_empty())
+        && curr1.right_x_at(curr1.bottom_y) - curr1.left_x
+            > curr1.bottom_y - curr2.lower_y_at(curr1.left_x) {
+      curr1 =
+          IntOctagon::new(
+              curr1.left_x,
+              curr2.bottom_y,
+              std::cmp::max(curr2.right_x, curr1.right_x),
+              curr1.top_y,
+              curr1.upper_left_diag_x,
+              curr2.lower_right_diag_x,
+              curr2.lower_left_diag_x,
+              curr1.upper_right_diag_x);
+
+      curr2 =
+          IntOctagon::new(
+              curr2.left_x,
+              curr2.bottom_y,
+              curr1.left_x,
+              curr2.top_y,
+              curr2.upper_left_diag_x,
+              curr2.lower_right_diag_x,
+              curr2.lower_left_diag_x,
+              curr2.upper_right_diag_x);
+
+      result[4] = curr1.normalize();
+      result[3] = curr2.normalize();
+    }
+
+    curr1 = result[3];
+    curr2 = result[2];
+
+    if !(curr1.is_empty() || curr2.is_empty())
+        && curr2.top_y - curr2.lower_y_at(curr2.right_x)
+            > curr1.right_x_at(curr2.top_y) - curr2.right_x {
+      curr2 =
+          IntOctagon::new(
+              curr2.left_x,
+              std::cmp::min(curr1.bottom_y, curr2.bottom_y),
+              curr1.right_x,
+              curr2.top_y,
+              curr2.upper_left_diag_x,
+              curr1.lower_right_diag_x,
+              curr2.lower_left_diag_x,
+              curr1.upper_right_diag_x);
+
+      curr1 =
+          IntOctagon::new(
+              curr1.left_x,
+              curr2.top_y,
+              curr1.right_x,
+              curr1.top_y,
+              curr1.upper_left_diag_x,
+              curr1.lower_right_diag_x,
+              curr1.lower_left_diag_x,
+              curr1.upper_right_diag_x);
+
+      result[3] = curr1.normalize();
+      result[2] = curr2.normalize();
+    }
+
+    curr1 = result[2];
+    curr2 = result[1];
+
+    if !(curr1.is_empty() || curr2.is_empty())
+        && curr1.top_y - curr1.lower_y_at(curr1.left_x)
+            > curr1.left_x - curr2.left_x_at(curr1.top_y) {
+      curr1 =
+          IntOctagon::new(
+              curr2.left_x,
+              std::cmp::min(curr1.bottom_y, curr2.bottom_y),
+              curr1.right_x,
+              curr1.top_y,
+              curr2.upper_left_diag_x,
+              curr1.lower_right_diag_x,
+              curr2.lower_left_diag_x,
+              curr1.upper_right_diag_x);
+
+      curr2 =
+          IntOctagon::new(
+              curr2.left_x,
+              curr1.top_y,
+              curr2.right_x,
+              curr2.top_y,
+              curr2.upper_left_diag_x,
+              curr2.lower_right_diag_x,
+              curr2.lower_left_diag_x,
+              curr2.upper_right_diag_x);
+
+      result[2] = curr1.normalize();
+      result[1] = curr2.normalize();
+    }
+
+    curr1 = result[1];
+    curr2 = result[0];
+
+    if !(curr1.is_empty() || curr2.is_empty())
+        && curr2.right_x - curr2.left_x_at(curr2.bottom_y)
+            > curr2.bottom_y - curr1.lower_y_at(curr2.right_x) {
+      curr2 =
+          IntOctagon::new(
+              std::cmp::min(curr2.left_x, curr1.left_x),
+              curr1.bottom_y,
+              curr2.right_x,
+              curr2.top_y,
+              curr2.upper_left_diag_x,
+              curr1.lower_right_diag_x,
+              curr1.lower_left_diag_x,
+              curr2.upper_right_diag_x);
+
+      curr1 =
+          IntOctagon::new(
+              curr2.right_x,
+              curr1.bottom_y,
+              curr1.right_x,
+              curr1.top_y,
+              curr1.upper_left_diag_x,
+              curr1.lower_right_diag_x,
+              curr1.lower_left_diag_x,
+              curr1.upper_right_diag_x);
+
+      result[1] = curr1.normalize();
+      result[0] = curr2.normalize();
+    }
+
+    return result;
+    }
+
     pub fn left_x_at(&self, y: i64) -> i64 {
         self.left_x.max(self.upper_left_diag_x + y).max(self.lower_left_diag_x - y)
     }
@@ -590,6 +1195,82 @@ mod tests {
         assert!(!e.intersects(&o));
         assert_eq!(e.union(&o), o);
         assert!(e.is_contained_in(&o));
+    }
+
+    /// Points strictly inside `o`: interior to every one of the eight
+    /// half-planes, so off every border.
+    fn interior(o: &IntOctagon) -> BTreeSet<(i64, i64)> {
+        points(o)
+            .into_iter()
+            .filter(|&(x, y)| {
+                let (d, s) = (x - y, x + y);
+                o.left_x < x
+                    && x < o.right_x
+                    && o.bottom_y < y
+                    && y < o.top_y
+                    && o.upper_left_diag_x < d
+                    && d < o.lower_right_diag_x
+                    && o.lower_left_diag_x < s
+                    && s < o.upper_right_diag_x
+            })
+            .collect()
+    }
+
+    /// Checks the three things a cutout must be: it covers what is left of
+    /// `outer`, it never reaches into the hole, and it stays inside `outer`.
+    fn check_cutout(outer: &IntOctagon, hole: &IntOctagon, pieces: &[IntOctagon]) {
+        let outer_pts = points(outer);
+        let cut = hole.intersection(outer);
+        let hole_in = interior(&cut);
+        let covered: BTreeSet<_> = pieces.iter().flat_map(|p| points(p)).collect();
+        for pt in outer_pts.difference(&hole_in) {
+            assert!(covered.contains(pt), "{pt:?} of {outer:?} minus {hole:?} not covered by {pieces:?}");
+        }
+        for pt in &hole_in {
+            assert!(!covered.contains(pt), "piece reaches {pt:?} inside the hole {hole:?}");
+        }
+        for pt in &covered {
+            assert!(outer_pts.contains(pt), "piece escapes {outer:?} at {pt:?}");
+        }
+    }
+
+    #[test]
+    fn cutout_from_an_octagon_covers_exactly_what_is_left() {
+        let s: Vec<_> = samples().into_iter().map(|o| o.normalize()).filter(|o| !o.is_empty()).collect();
+        let mut checked = 0;
+        for pair in s.chunks(2) {
+            if pair.len() < 2 {
+                continue;
+            }
+            let (outer, hole) = (pair[0], pair[1]);
+            check_cutout(&outer, &hole, &hole.cutout_from(outer));
+            checked += 1;
+        }
+        assert!(checked > 100, "only {checked} pairs exercised");
+    }
+
+    #[test]
+    fn cutout_from_a_box_covers_exactly_what_is_left() {
+        let s: Vec<_> = samples().into_iter().map(|o| o.normalize()).filter(|o| !o.is_empty()).collect();
+        for pair in s.chunks(2) {
+            if pair.len() < 2 {
+                continue;
+            }
+            let bb = pair[0].bounding_box();
+            let hole = pair[1];
+            check_cutout(&bb.to_octagon(), &hole, &hole.cutout_from_box(bb));
+        }
+    }
+
+    /// The case the whole routine exists for: an obstacle strictly inside a
+    /// free-space room leaves a ring, and none of the ring is lost.
+    #[test]
+    fn cutout_of_a_centred_obstacle_leaves_a_ring() {
+        let room = IntBox::new(-10, -10, 10, 10);
+        let obstacle = IntOctagon::new(-3, -3, 3, 3, -4, 4, -4, 4).normalize();
+        let pieces = obstacle.cutout_from_box(room);
+        assert_eq!(pieces.len(), 8);
+        check_cutout(&room.to_octagon(), &obstacle, &pieces);
     }
 
     #[test]
