@@ -1,0 +1,602 @@
+//! `IntOctagon`, ported from FreeRouting's `IntOctagon.java`.
+//!
+//! The workhorse shape of the whole router: free space, obstacles and
+//! clearance regions are all kept as octagons whose edges run at 0, 45 and
+//! 90 degrees. An octagon is the set of integer points satisfying eight
+//! inequalities:
+//!
+//! ```text
+//!   left_x              <= x     <= right_x
+//!   bottom_y            <= y     <= top_y
+//!   upper_left_diag_x   <= x - y <= lower_right_diag_x
+//!   lower_left_diag_x   <= x + y <= upper_right_diag_x
+//! ```
+//!
+//! The diagonal bounds are named, as in the Java, by where each border line
+//! crosses the x axis. That reading is what the tests use as an oracle: any
+//! operation can be checked by counting the integer points that satisfy the
+//! inequalities, with no Java runtime involved.
+//!
+//! One deliberate difference: Java marks the empty octagon by *identity*
+//! (`this == EMPTY`). Rust compares values, so emptiness is a flag here --
+//! otherwise an octagon that merely happened to carry the same numbers as
+//! the sentinel would be mistaken for it.
+
+use super::{IntBox, IntPoint};
+
+/// FreeRouting's `Limits.CRIT_INT`, the bound its empty sentinel uses.
+const CRIT: i64 = 33_554_432;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IntOctagon {
+    pub left_x: i64,
+    pub bottom_y: i64,
+    pub right_x: i64,
+    pub top_y: i64,
+    /// Lower bound of `x - y`.
+    pub upper_left_diag_x: i64,
+    /// Upper bound of `x - y`.
+    pub lower_right_diag_x: i64,
+    /// Lower bound of `x + y`.
+    pub lower_left_diag_x: i64,
+    /// Upper bound of `x + y`.
+    pub upper_right_diag_x: i64,
+    empty: bool,
+}
+
+impl IntOctagon {
+    /// The empty octagon. Its bounds are Java's sentinel values, kept so a
+    /// ported caller that reads them sees what FreeRouting would.
+    pub const EMPTY: IntOctagon = IntOctagon {
+        left_x: CRIT,
+        bottom_y: CRIT,
+        right_x: -CRIT,
+        top_y: -CRIT,
+        upper_left_diag_x: CRIT,
+        lower_right_diag_x: -CRIT,
+        lower_left_diag_x: CRIT,
+        upper_right_diag_x: -CRIT,
+        empty: true,
+    };
+
+    /// Argument order follows the Java constructor exactly, so a ported
+    /// call site can be copied without reordering.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        left_x: i64,
+        bottom_y: i64,
+        right_x: i64,
+        top_y: i64,
+        upper_left_diag_x: i64,
+        lower_right_diag_x: i64,
+        lower_left_diag_x: i64,
+        upper_right_diag_x: i64,
+    ) -> Self {
+        IntOctagon {
+            left_x,
+            bottom_y,
+            right_x,
+            top_y,
+            upper_left_diag_x,
+            lower_right_diag_x,
+            lower_left_diag_x,
+            upper_right_diag_x,
+            empty: false,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.empty
+    }
+
+    /// -1 empty, 0 a point, 1 a segment, 2 an area.
+    pub fn dimension(&self) -> i32 {
+        if self.empty {
+            return -1;
+        }
+        if self.right_x > self.left_x
+            && self.top_y > self.bottom_y
+            && self.lower_right_diag_x > self.upper_left_diag_x
+            && self.upper_right_diag_x > self.lower_left_diag_x
+        {
+            2
+        } else if self.right_x == self.left_x && self.top_y == self.bottom_y {
+            0
+        } else {
+            1
+        }
+    }
+
+    pub fn bounding_box(&self) -> IntBox {
+        IntBox::new(self.left_x, self.bottom_y, self.right_x, self.top_y)
+    }
+
+    /// Corner `no` in 0..8, counter-clockwise from the lower-left end of
+    /// the bottom edge. Only meaningful on a normalized octagon.
+    pub fn corner(&self, no: usize) -> IntPoint {
+        let (x, y) = match no {
+            0 => (self.lower_left_diag_x - self.bottom_y, self.bottom_y),
+            1 => (self.lower_right_diag_x + self.bottom_y, self.bottom_y),
+            2 => (self.right_x, self.right_x - self.lower_right_diag_x),
+            3 => (self.right_x, self.upper_right_diag_x - self.right_x),
+            4 => (self.upper_right_diag_x - self.top_y, self.top_y),
+            5 => (self.upper_left_diag_x + self.top_y, self.top_y),
+            6 => (self.left_x, self.left_x - self.upper_left_diag_x),
+            7 => (self.left_x, self.lower_left_diag_x - self.left_x),
+            _ => panic!("IntOctagon::corner: {no} out of range 0..8"),
+        };
+        IntPoint::new(x, y)
+    }
+
+    /// Area by the shoelace formula over the eight corners, exactly as the
+    /// Java expands it (to avoid allocating points).
+    pub fn area(&self) -> f64 {
+        let (lx, by, rx, ty) = (self.left_x as f64, self.bottom_y as f64, self.right_x as f64, self.top_y as f64);
+        let (ulx, lrx, llx, urx) = (
+            self.upper_left_diag_x as f64,
+            self.lower_right_diag_x as f64,
+            self.lower_left_diag_x as f64,
+            self.upper_right_diag_x as f64,
+        );
+        let mut r = (llx - by) * (by - llx + lx);
+        r += (lrx + by) * (rx - lrx - by);
+        r += rx * (urx - 2.0 * rx - by + ty + lrx);
+        r += (urx - ty) * (ty - urx + rx);
+        r += (ulx + ty) * (lx - ulx - ty);
+        r += lx * (llx - 2.0 * lx - ty + by + ulx);
+        0.5 * r.abs()
+    }
+
+    pub fn translate_by(&self, dx: i64, dy: i64) -> IntOctagon {
+        if self.empty || (dx == 0 && dy == 0) {
+            return *self;
+        }
+        IntOctagon::new(
+            self.left_x + dx,
+            self.bottom_y + dy,
+            self.right_x + dx,
+            self.top_y + dy,
+            self.upper_left_diag_x + dx - dy,
+            self.lower_right_diag_x + dx - dy,
+            self.lower_left_diag_x + dx + dy,
+            self.upper_right_diag_x + dx + dy,
+        )
+    }
+
+    /// Grow (or shrink, for negative `distance`) by a clearance. Diagonal
+    /// bounds move by `sqrt(2) * distance` because they are measured along
+    /// the x axis, not perpendicular to the edge.
+    pub fn offset(&self, distance: f64) -> IntOctagon {
+        let width = distance.round() as i64;
+        if width == 0 || self.empty {
+            return *self;
+        }
+        let dia = (std::f64::consts::SQRT_2 * distance).round() as i64;
+        IntOctagon::new(
+            self.left_x - width,
+            self.bottom_y - width,
+            self.right_x + width,
+            self.top_y + width,
+            self.upper_left_diag_x - dia,
+            self.lower_right_diag_x + dia,
+            self.lower_left_diag_x - dia,
+            self.upper_right_diag_x + dia,
+        )
+        .normalize()
+    }
+
+    /// Contains a real point. Like the Java, inexact right at the border
+    /// because the point is floating.
+    pub fn contains_point(&self, x: f64, y: f64) -> bool {
+        if self.empty {
+            return false;
+        }
+        if (self.left_x as f64) > x || (self.bottom_y as f64) > y || (self.right_x as f64) < x || (self.top_y as f64) < y {
+            return false;
+        }
+        let d = x - y;
+        let s = x + y;
+        (self.upper_left_diag_x as f64) <= d
+            && (self.lower_right_diag_x as f64) >= d
+            && (self.lower_left_diag_x as f64) <= s
+            && (self.upper_right_diag_x as f64) >= s
+    }
+
+    /// The smallest octagon containing both. Not normalized, as in Java.
+    pub fn union(&self, other: &IntOctagon) -> IntOctagon {
+        if self.empty {
+            return *other;
+        }
+        if other.empty {
+            return *self;
+        }
+        IntOctagon::new(
+            self.left_x.min(other.left_x),
+            self.bottom_y.min(other.bottom_y),
+            self.right_x.max(other.right_x),
+            self.top_y.max(other.top_y),
+            self.upper_left_diag_x.min(other.upper_left_diag_x),
+            self.lower_right_diag_x.max(other.lower_right_diag_x),
+            self.lower_left_diag_x.min(other.lower_left_diag_x),
+            self.upper_right_diag_x.max(other.upper_right_diag_x),
+        )
+    }
+
+    pub fn intersection(&self, other: &IntOctagon) -> IntOctagon {
+        if self.empty || other.empty {
+            return IntOctagon::EMPTY;
+        }
+        IntOctagon::new(
+            self.left_x.max(other.left_x),
+            self.bottom_y.max(other.bottom_y),
+            self.right_x.min(other.right_x),
+            self.top_y.min(other.top_y),
+            self.upper_left_diag_x.max(other.upper_left_diag_x),
+            self.lower_right_diag_x.min(other.lower_right_diag_x),
+            self.lower_left_diag_x.max(other.lower_left_diag_x),
+            self.upper_right_diag_x.min(other.upper_right_diag_x),
+        )
+        .normalize()
+    }
+
+    /// Tighten every bound that another pair of bounds makes redundant, or
+    /// return `EMPTY` if the inequalities admit no point.
+    ///
+    /// Ported line for line, including the order of the tightenings: each
+    /// step reads bounds an earlier step may have moved, so reordering them
+    /// would give a different (still valid, but not FreeRouting's) answer
+    /// and break the differential comparison against the Java.
+    pub fn normalize(&self) -> IntOctagon {
+        if self.empty {
+            return *self;
+        }
+        if self.left_x > self.right_x
+            || self.bottom_y > self.top_y
+            || self.lower_left_diag_x > self.upper_right_diag_x
+            || self.upper_left_diag_x > self.lower_right_diag_x
+        {
+            return IntOctagon::EMPTY;
+        }
+        let mut lx = self.left_x;
+        let mut rx = self.right_x;
+        let mut ly = self.bottom_y;
+        let mut uy = self.top_y;
+        let mut llx = self.lower_left_diag_x;
+        let mut ulx = self.upper_left_diag_x;
+        let mut lrx = self.lower_right_diag_x;
+        let mut urx = self.upper_right_diag_x;
+
+        if lx < llx - uy {
+            lx = llx - uy;
+        }
+        if lx < ulx + ly {
+            lx = ulx + ly;
+        }
+        if rx > urx - ly {
+            rx = urx - ly;
+        }
+        if rx > lrx + uy {
+            rx = lrx + uy;
+        }
+        if ly < lx - lrx {
+            ly = lx - lrx;
+        }
+        if ly < llx - rx {
+            ly = llx - rx;
+        }
+        if uy > urx - lx {
+            uy = urx - lx;
+        }
+        if uy > rx - ulx {
+            uy = rx - ulx;
+        }
+        if llx - lx < ly {
+            llx = lx + ly;
+        }
+        if rx - lrx < ly {
+            lrx = rx - ly;
+        }
+        if urx - rx > uy {
+            urx = uy + rx;
+        }
+        if lx - ulx > uy {
+            ulx = lx - uy;
+        }
+        // Java computes these with `/ 2.0` and Math.ceil/floor on a double;
+        // div_euclid/-div_euclid give the same integer for every i64 in
+        // range, without a round trip through floating point.
+        let diag_upper_y = ceil_half(urx - ulx);
+        if uy > diag_upper_y {
+            uy = diag_upper_y;
+        }
+        let diag_lower_y = floor_half(llx - lrx);
+        if ly < diag_lower_y {
+            ly = diag_lower_y;
+        }
+        let diag_right_x = ceil_half(urx + lrx);
+        if rx > diag_right_x {
+            rx = diag_right_x;
+        }
+        let diag_left_x = floor_half(llx + ulx);
+        if lx < diag_left_x {
+            lx = diag_left_x;
+        }
+        if lx > rx || ly > uy || llx > urx || ulx > lrx {
+            return IntOctagon::EMPTY;
+        }
+        IntOctagon::new(lx, ly, rx, uy, ulx, lrx, llx, urx)
+    }
+
+    pub fn is_normalized(&self) -> bool {
+        self.normalize() == *self
+    }
+
+    pub fn is_contained_in(&self, other: &IntOctagon) -> bool {
+        if self.empty {
+            return true;
+        }
+        if other.empty {
+            return false;
+        }
+        self.left_x >= other.left_x
+            && self.bottom_y >= other.bottom_y
+            && self.right_x <= other.right_x
+            && self.top_y <= other.top_y
+            && self.lower_left_diag_x >= other.lower_left_diag_x
+            && self.upper_left_diag_x >= other.upper_left_diag_x
+            && self.lower_right_diag_x <= other.lower_right_diag_x
+            && self.upper_right_diag_x <= other.upper_right_diag_x
+    }
+
+    /// Whether two *normalized* octagons share at least one point.
+    pub fn intersects(&self, other: &IntOctagon) -> bool {
+        if self.empty || other.empty {
+            return false;
+        }
+        self.left_x.max(other.left_x) <= self.right_x.min(other.right_x)
+            && self.bottom_y.max(other.bottom_y) <= self.top_y.min(other.top_y)
+            && self.lower_left_diag_x.max(other.lower_left_diag_x) <= self.upper_right_diag_x.min(other.upper_right_diag_x)
+            && self.upper_left_diag_x.max(other.upper_left_diag_x) <= self.lower_right_diag_x.min(other.lower_right_diag_x)
+    }
+
+    /// Whether the intersection is two-dimensional -- touching along an
+    /// edge or at a corner does not count.
+    pub fn overlaps(&self, other: &IntOctagon) -> bool {
+        if self.empty || other.empty {
+            return false;
+        }
+        self.left_x.max(other.left_x) < self.right_x.min(other.right_x)
+            && self.bottom_y.max(other.bottom_y) < self.top_y.min(other.top_y)
+            && self.lower_left_diag_x.max(other.lower_left_diag_x) < self.upper_right_diag_x.min(other.upper_right_diag_x)
+            && self.upper_left_diag_x.max(other.upper_left_diag_x) < self.lower_right_diag_x.min(other.lower_right_diag_x)
+    }
+
+    pub fn left_x_at(&self, y: i64) -> i64 {
+        self.left_x.max(self.upper_left_diag_x + y).max(self.lower_left_diag_x - y)
+    }
+
+    pub fn right_x_at(&self, y: i64) -> i64 {
+        self.right_x.min(self.upper_right_diag_x - y).min(self.lower_right_diag_x + y)
+    }
+
+    pub fn lower_y_at(&self, x: i64) -> i64 {
+        self.bottom_y.max(self.lower_left_diag_x - x).max(x - self.lower_right_diag_x)
+    }
+
+    pub fn upper_y_at(&self, x: i64) -> i64 {
+        self.top_y.min(x - self.upper_left_diag_x).min(self.upper_right_diag_x - x)
+    }
+}
+
+/// `Math.ceil(v / 2.0)` for an integer `v`.
+fn ceil_half(v: i64) -> i64 {
+    -((-v).div_euclid(2))
+}
+
+/// `Math.floor(v / 2.0)` for an integer `v`.
+fn floor_half(v: i64) -> i64 {
+    v.div_euclid(2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// The oracle: every integer point in a window that satisfies the eight
+    /// inequalities. No Java, no reuse of the code under test.
+    fn points(o: &IntOctagon) -> BTreeSet<(i64, i64)> {
+        let mut out = BTreeSet::new();
+        if o.is_empty() {
+            return out;
+        }
+        for x in -WIN..=WIN {
+            for y in -WIN..=WIN {
+                let (d, s) = (x - y, x + y);
+                if o.left_x <= x
+                    && x <= o.right_x
+                    && o.bottom_y <= y
+                    && y <= o.top_y
+                    && o.upper_left_diag_x <= d
+                    && d <= o.lower_right_diag_x
+                    && o.lower_left_diag_x <= s
+                    && s <= o.upper_right_diag_x
+                {
+                    out.insert((x, y));
+                }
+            }
+        }
+        out
+    }
+
+    const WIN: i64 = 14;
+
+    /// A deterministic spread of small octagons, including loose ones whose
+    /// bounds are redundant (what `normalize` exists to tighten) and ones
+    /// that are empty in disguise.
+    fn samples() -> Vec<IntOctagon> {
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = move |lo: i64, hi: i64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            lo + (seed % ((hi - lo + 1) as u64)) as i64
+        };
+        (0..600)
+            .map(|_| {
+                let lx = next(-6, 3);
+                let rx = lx + next(0, 8);
+                let by = next(-6, 3);
+                let ty = by + next(0, 8);
+                let ulx = next(-14, 4);
+                let lrx = ulx + next(0, 16);
+                let llx = next(-14, 4);
+                let urx = llx + next(0, 16);
+                IntOctagon::new(lx, by, rx, ty, ulx, lrx, llx, urx)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn normalize_never_changes_the_point_set() {
+        for o in samples() {
+            let n = o.normalize();
+            assert_eq!(points(&o), points(&n), "normalize changed the points of {o:?} -> {n:?}");
+        }
+    }
+
+    #[test]
+    fn normalize_is_empty_exactly_when_there_are_no_points() {
+        for o in samples() {
+            assert_eq!(o.normalize().is_empty(), points(&o).is_empty(), "{o:?}");
+        }
+    }
+
+    #[test]
+    fn normalize_is_idempotent() {
+        for o in samples() {
+            let n = o.normalize();
+            assert_eq!(n.normalize(), n, "normalizing twice moved {n:?}");
+        }
+    }
+
+    /// Corners of a normalized octagon lie on the shape to within the half
+    /// unit that normalize's outward rounding allows.
+    ///
+    /// Not "on a lattice point of the shape": where two diagonals meet at a
+    /// half-integer, FreeRouting rounds the axis bound *outward* with
+    /// Math.ceil / Math.floor rather than tightening it. The octagon
+    /// x in [2,5], y in [-2,0], x-y in [4,7], x+y in [0,3] keeps top_y = 0
+    /// though its diagonals cross at y = -0.5, so its corner 4 is (3, 0),
+    /// half a unit outside. The point set is unchanged -- that is what
+    /// normalize_never_changes_the_point_set pins -- so this is
+    /// FreeRouting's contract, and this test holds the port to it rather
+    /// than to a stricter one the Java never promised.
+    #[test]
+    fn normalized_corners_lie_on_the_shape_within_rounding() {
+        for o in samples() {
+            let n = o.normalize();
+            if n.is_empty() {
+                continue;
+            }
+            for i in 0..8 {
+                let c = n.corner(i);
+                let (x, y) = (c.x as f64, c.y as f64);
+                let grown = n.offset(1.0);
+                assert!(grown.contains_point(x, y), "corner {i} {c:?} more than a unit outside {n:?}");
+                assert!(
+                    x >= n.left_x as f64 && x <= n.right_x as f64 && y >= n.bottom_y as f64 && y <= n.top_y as f64,
+                    "corner {i} {c:?} outside the bounding box of {n:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn intersection_is_the_common_points() {
+        let s = samples();
+        for pair in s.chunks(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let want: BTreeSet<_> = points(&a).intersection(&points(&b)).copied().collect();
+            assert_eq!(points(&a.intersection(&b)), want, "{a:?} ∩ {b:?}");
+        }
+    }
+
+    #[test]
+    fn intersects_agrees_with_the_points_on_normalized_shapes() {
+        let s: Vec<_> = samples().into_iter().map(|o| o.normalize()).collect();
+        for pair in s.chunks(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let share = points(&a).intersection(&points(&b)).next().is_some();
+            assert_eq!(a.intersects(&b), share, "{a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn union_contains_both() {
+        let s = samples();
+        for pair in s.chunks(2) {
+            let (a, b) = (pair[0].normalize(), pair[1].normalize());
+            let u = a.union(&b);
+            assert!(a.is_contained_in(&u) && b.is_contained_in(&u), "{a:?} ∪ {b:?} = {u:?}");
+        }
+    }
+
+    #[test]
+    fn translation_moves_every_point() {
+        for o in samples() {
+            let moved: BTreeSet<_> = points(&o).iter().map(|&(x, y)| (x + 3, y - 2)).filter(|&(x, y)| x.abs() <= WIN && y.abs() <= WIN).collect();
+            let t: BTreeSet<_> = points(&o.translate_by(3, -2)).into_iter().filter(|&(x, y)| (x - 3).abs() <= WIN && (y + 2).abs() <= WIN).collect();
+            assert_eq!(t, moved, "{o:?}");
+        }
+    }
+
+    #[test]
+    fn a_box_as_an_octagon_is_the_same_box() {
+        let b = IntBox::new(-3, -2, 4, 5);
+        let want: BTreeSet<_> = (-3..=4).flat_map(|x| (-2..=5).map(move |y| (x, y))).collect();
+        assert_eq!(points(&b.to_octagon()), want);
+    }
+
+    #[test]
+    fn area_of_a_square_and_a_diamond() {
+        assert_eq!(IntBox::new(0, 0, 4, 4).to_octagon().area(), 16.0);
+        // |x| + |y| <= 2: a diamond of area 8.
+        let diamond = IntOctagon::new(-2, -2, 2, 2, -2, 2, -2, 2).normalize();
+        assert_eq!(diamond.area(), 8.0);
+    }
+
+    #[test]
+    fn offset_contains_the_original_and_its_clearance_ring() {
+        for o in samples() {
+            let n = o.normalize();
+            if n.is_empty() {
+                continue;
+            }
+            let g = n.offset(2.0);
+            assert!(n.is_contained_in(&g), "{n:?} not inside its offset {g:?}");
+            // Every point within 2 (Chebyshev along axes) of a corner is inside.
+            let c = n.corner(0);
+            assert!(g.contains_point((c.x - 2) as f64, c.y as f64) || g.contains_point(c.x as f64, (c.y - 2) as f64));
+        }
+    }
+
+    #[test]
+    fn empty_behaves_as_nothing() {
+        let e = IntOctagon::EMPTY;
+        let o = IntBox::new(0, 0, 3, 3).to_octagon();
+        assert_eq!(e.dimension(), -1);
+        assert!(e.intersection(&o).is_empty());
+        assert!(!e.intersects(&o));
+        assert_eq!(e.union(&o), o);
+        assert!(e.is_contained_in(&o));
+    }
+
+    #[test]
+    fn half_rounding_matches_java() {
+        for v in -9..=9i64 {
+            assert_eq!(ceil_half(v), (v as f64 / 2.0).ceil() as i64, "ceil {v}");
+            assert_eq!(floor_half(v), (v as f64 / 2.0).floor() as i64, "floor {v}");
+        }
+    }
+}

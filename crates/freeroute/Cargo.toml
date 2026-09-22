@@ -1,0 +1,11 @@
+[package]
+name = "eda-freeroute"
+version = "0.1.0"
+edition = "2021"
+# A port of FreeRouting's routing core (https://github.com/freerouting/freerouting),
+# which is GPL-3.0. Ported code is a derivative work, so this crate is
+# GPL-3.0 too, and is kept as its own crate so that licence stays
+# contained here rather than spreading through the workspace.
+license = "GPL-3.0-only"
+
+[dependencies]

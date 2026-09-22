@@ -529,6 +529,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda-freeroute"
+version = "0.1.0"
+
+[[package]]
 name = "eda-gates"
 version = "0.1.0"
 dependencies = [
