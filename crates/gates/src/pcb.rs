@@ -830,7 +830,18 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     // firing on every fine-pitch board, whose vertices are still exactly
     // on the resolution the router actually used.
     let half_grid = if rules.grid > 130 { rules.grid / 2 } else { rules.grid };
-    let on_grid = |v: eda_model::ir::Um| v.rem_euclid(rules.grid) == 0 || v.rem_euclid(half_grid) == 0;
+    // The grid starts where the router starts it: the outline's lower-left
+    // corner (eda_router::grid maps cell cx to `min_x + cx * pitch`), not
+    // the coordinate origin. Measuring from (0,0) agreed with the router
+    // only while every outline happened to start there; once the board
+    // trim moved L1's west edge to x = 1325, every vertex read 55 um off
+    // grid (1325 mod 127) on copper the router had laid exactly on its
+    // own lattice.
+    let gx = pl.outline.iter().map(|p| p.x).min().unwrap_or(0);
+    let gy = pl.outline.iter().map(|p| p.y).min().unwrap_or(0);
+    let on_grid_from = |v: eda_model::ir::Um, o: eda_model::ir::Um| {
+        (v - o).rem_euclid(rules.grid) == 0 || (v - o).rem_euclid(half_grid) == 0
+    };
     for (i, t) in rt.tracks.iter().enumerate() {
         // A net in a class must carry that class's copper, not merely the
         // board minimum: a power net routed at signal width is the failure
@@ -850,7 +861,7 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
                 outline_ok = false;
                 out.push(CheckResult::fail("routing_within_outline", format!("{}#{i}", t.net), format!("track point ({},{}) outside outline", p.x, p.y)));
             }
-            if !on_grid(p.x) || !on_grid(p.y) {
+            if !on_grid_from(p.x, gx) || !on_grid_from(p.y, gy) {
                 offgrid += 1;
             }
         }

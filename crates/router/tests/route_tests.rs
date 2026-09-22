@@ -246,18 +246,23 @@ fn assert_on_grid(design: &Design, rules: &RouteRules) {
     // (half the configured pitch) than `rules.grid` — see
     // `eda_router::route_partial`'s rationale. Accept either resolution,
     // same as the `routing_offgrid_points` gate does.
+    // Measured from the outline's lower-left corner, where the router
+    // starts its lattice -- the same origin the gate uses.
     let half = if rules.grid > 130 { rules.grid / 2 } else { rules.grid };
-    let on_grid = |v: i64| v.rem_euclid(rules.grid) == 0 || v.rem_euclid(half) == 0;
+    let outline = &design.placement.as_ref().unwrap().outline;
+    let ox = outline.iter().map(|p| p.x).min().unwrap();
+    let oy = outline.iter().map(|p| p.y).min().unwrap();
+    let on = |v: i64, o: i64| (v - o).rem_euclid(rules.grid) == 0 || (v - o).rem_euclid(half) == 0;
     let r = &design.routing.as_ref().unwrap();
     for t in &r.tracks {
         for p in &t.pts {
-            assert!(on_grid(p.x), "track point not on grid: {p:?}");
-            assert!(on_grid(p.y), "track point not on grid: {p:?}");
+            assert!(on(p.x, ox), "track point not on grid: {p:?}");
+            assert!(on(p.y, oy), "track point not on grid: {p:?}");
         }
     }
     for v in &r.vias {
-        assert!(on_grid(v.at.x));
-        assert!(on_grid(v.at.y));
+        assert!(on(v.at.x, ox));
+        assert!(on(v.at.y, oy));
     }
 }
 
@@ -641,4 +646,46 @@ fn the_iteration_cap_does_not_bind_before_the_wall_budget() {
         "iteration cap {} is low enough to bind before the wall budget",
         rules.tuning.nc_max_iters
     );
+}
+
+
+/// A board whose outline does not start at the coordinate origin.
+///
+/// Every fixture above starts its outline at (0,0), which is how a gate
+/// measuring the grid from (0,0) and a router laying it from the outline
+/// corner agreed for months. The board trim broke that on L1 (west edge at
+/// x = 1325) and every one of 224 vertices read 55 um off grid. 1325 is
+/// deliberately not a multiple of the pitch or half of it.
+fn fixture_offset_outline() -> (Design, ConstraintModel) {
+    let (ox, oy) = (1_325, 700);
+    let outline = rect(20_000, 10_000).into_iter().map(|p| Point { x: p.x + ox, y: p.y + oy }).collect();
+    let d = design(outline, vec![fp("U1", ox + 2_000, oy + 5_000), fp("U2", ox + 15_000, oy + 5_000)]);
+    let m = model(vec![part("U1", 2), part("U2", 2)], vec![
+            Net { name: "NET1".into(), pins: vec!["U1.1".into(), "U2.1".into()] },
+            Net { name: "NET2".into(), pins: vec!["U1.2".into(), "U2.2".into()] },
+        ]);
+    (d, m)
+}
+
+#[test]
+fn a_board_not_at_the_origin_routes_gate_clean() {
+    let (d, m) = fixture_offset_outline();
+    let rules = RouteRules::default();
+    let out = route(&d, &m, &rules, 1).expect("should route");
+    assert_on_grid(&out, &rules);
+    assert_gate_clean(&out, &m);
+}
+
+/// The fix must not turn the gate into one that always passes: a vertex
+/// genuinely off the router's lattice still fails, on an offset board.
+#[test]
+fn a_vertex_off_the_router_lattice_still_fails_the_gate() {
+    let (d, m) = fixture_offset_outline();
+    let mut out = route(&d, &m, &RouteRules::default(), 1).expect("should route");
+    let t = &mut out.routing.as_mut().unwrap().tracks[0];
+    t.pts[0].x += 55;
+    let failed = eda_gates::check_routing(&out, &m)
+        .into_iter()
+        .any(|c| c.check == "routing_offgrid_points" && c.status == eda_model::CheckStatus::Fail);
+    assert!(failed, "a vertex 55 um off the lattice must fail routing_offgrid_points");
 }
