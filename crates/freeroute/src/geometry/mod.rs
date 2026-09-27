@@ -5,10 +5,14 @@
 //! arithmetic identity the Java relies on while removing the overflow
 //! cliff for boards measured in micrometres.
 
+mod circle;
 mod octagon;
+mod simplex;
 
+pub use circle::Circle;
 pub(crate) use octagon::CRIT;
 pub use octagon::IntOctagon;
+pub use simplex::{Line, Simplex};
 
 /// An integer point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,6 +37,16 @@ pub struct IntBox {
 impl IntBox {
     pub const fn new(llx: i64, lly: i64, urx: i64, ury: i64) -> Self {
         IntBox { ll: IntPoint::new(llx, lly), ur: IntPoint::new(urx, ury) }
+    }
+
+    /// Grown by `dist` on every side, corners kept square; unchanged for a
+    /// zero distance or an empty box. `IntBox.offset`, for the integer
+    /// distances the search tree uses.
+    pub fn offset(&self, dist: i64) -> IntBox {
+        if dist == 0 || self.ll.x > self.ur.x || self.ll.y > self.ur.y {
+            return *self;
+        }
+        IntBox::new(self.ll.x - dist, self.ll.y - dist, self.ur.x + dist, self.ur.y + dist)
     }
 
     /// The same region as an octagon whose diagonals do not cut it.

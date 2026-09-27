@@ -17,3 +17,5 @@ pub mod geometry;
 pub mod searchtree;
 pub mod room;
 pub mod door;
+pub mod rules;
+pub mod board;

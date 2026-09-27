@@ -8,7 +8,12 @@
 //   fixture <file>
 //   board <llx> <lly> <urx> <ury>
 //   net <net_no>
-//   item <id> <shape_index> <layer> <obstacle 0|1> <octagon>   (tree insertion order)
+//   item <id> <shape_index> <layer> <obstacle 0|1> <octagon> [approx]
+//                                                              (tree insertion order)
+//   tree_class <clearance class the tree is built for>
+//   cm <class i> <class j> <layer> <clearance>                 (nonzero entries)
+//   pad <item id> <shape_index> <layer> <clearance class> <shape>
+//                                                              (pins and vias)
 //   start <layer> <x> <y>
 //   room <id> <net_dependent 0|1> <layer> <octagon>            (completion order)
 //   door <room id> <other room id> <dimension>                 (each room's doors, in order)
@@ -27,8 +32,13 @@
 // "grown" is what complete_shape returns for that room, so a divergence
 // can be placed before or after it.
 //
-// An octagon is lx ly rx uy ulx lrx llx urx, the Java field order. Run by
-// dump.sh against FreeRouting's v1.9 executable jar.
+// An item whose tree shape is not an octagon -- a trace segment, until
+// traces are ported -- is given by its bounding octagon and marked approx;
+// the room check skips such boards, as FreeRouting tests those shapes
+// exactly. A pad shape is "circle cx cy r", "box llx lly urx ury",
+// "octagon <octagon>", or "simplex <n> <ax ay bx by>..." for a convex
+// polygon's n border lines. An octagon is lx ly rx uy ulx lrx llx urx, the
+// Java field order. Run by dump.sh against FreeRouting's v1.9 jar.
 //
 // Licence: GPL-3.0, as it links FreeRouting.
 
@@ -39,6 +49,7 @@ import app.freerouting.autoroute.ExpansionRoom;
 import app.freerouting.autoroute.IncompleteFreeSpaceExpansionRoom;
 import app.freerouting.board.AngleRestriction;
 import app.freerouting.board.BoardObserverAdaptor;
+import app.freerouting.board.DrillItem;
 import app.freerouting.board.Item;
 import app.freerouting.board.ItemIdNoGenerator;
 import app.freerouting.board.Pin;
@@ -48,10 +59,14 @@ import app.freerouting.board.ShapeSearchTree;
 import app.freerouting.board.TestLevel;
 import app.freerouting.datastructures.UndoableObjects;
 import app.freerouting.designforms.specctra.DsnFile;
+import app.freerouting.geometry.planar.Circle;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntOctagon;
 import app.freerouting.geometry.planar.IntPoint;
+import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Point;
+import app.freerouting.geometry.planar.Shape;
+import app.freerouting.geometry.planar.Simplex;
 import app.freerouting.geometry.planar.TileShape;
 import app.freerouting.interactive.BoardHandlingHeadless;
 import app.freerouting.rules.Net;
@@ -123,11 +138,47 @@ public class RoomParity {
         if (shape == null) {
           continue;
         }
-        if (!(shape instanceof IntOctagon)) {
-          throw new IllegalStateException("item " + item.get_id_no() + " shape " + i + " is a " + shape.getClass().getSimpleName() + ", not an octagon");
+        IntOctagon bounds = shape.bounding_octagon();
+        if (bounds == null) {
+          continue;
         }
         out.append("item ").append(item.get_id_no()).append(' ').append(i).append(' ').append(item.shape_layer(i)).append(' ')
-            .append(item.is_trace_obstacle(net_no) ? 1 : 0).append(' ').append(octagon((IntOctagon) shape)).append('\n');
+            .append(item.is_trace_obstacle(net_no) ? 1 : 0).append(' ').append(octagon(bounds))
+            .append(shape instanceof IntOctagon ? "" : " approx").append('\n');
+      }
+    }
+
+    // The clearance rules the tree shapes were grown by.
+    out.append("tree_class ").append(tree.compensated_clearance_class_no).append('\n');
+    int classes = board.rules.clearance_matrix.get_class_count();
+    int layers = board.layer_structure.arr.length;
+    for (int i = 0; i < classes; ++i) {
+      for (int j = 0; j < classes; ++j) {
+        for (int l = 0; l < layers; ++l) {
+          int v = board.rules.clearance_matrix.get_value(i, j, l, false);
+          if (v != 0) {
+            out.append("cm ").append(i).append(' ').append(j).append(' ').append(l).append(' ').append(v).append('\n');
+          }
+        }
+      }
+    }
+    // The raw shapes of pins and vias, from which their tree shapes grow.
+    it = board.item_list.start_read_object();
+    for (;;) {
+      Item item = (Item) board.item_list.read_object(it);
+      if (item == null) {
+        break;
+      }
+      if (!(item instanceof DrillItem drill)) {
+        continue;
+      }
+      for (int i = 0; i < drill.tile_shape_count(); ++i) {
+        Shape shape = drill.get_shape(i);
+        if (shape == null) {
+          continue;
+        }
+        out.append("pad ").append(item.get_id_no()).append(' ').append(i).append(' ').append(drill.shape_layer(i)).append(' ')
+            .append(item.clearance_class_no()).append(' ').append(pad_shape(shape)).append('\n');
       }
     }
 
@@ -216,6 +267,29 @@ public class RoomParity {
     f.setAccessible(true);
     List<CompleteFreeSpaceExpansionRoom> rooms = (List<CompleteFreeSpaceExpansionRoom>) f.get(engine);
     return rooms == null ? List.of() : rooms;
+  }
+
+  private static String pad_shape(Shape shape) {
+    if (shape instanceof Circle c) {
+      return "circle " + c.center.x + " " + c.center.y + " " + c.radius;
+    }
+    if (shape instanceof IntBox b) {
+      return "box " + b.ll.x + " " + b.ll.y + " " + b.ur.x + " " + b.ur.y;
+    }
+    if (shape instanceof IntOctagon o) {
+      return "octagon " + octagon(o);
+    }
+    if (shape instanceof Simplex s) {
+      StringBuilder b = new StringBuilder("simplex ").append(s.border_line_count());
+      for (int i = 0; i < s.border_line_count(); ++i) {
+        Line l = s.border_line(i);
+        IntPoint a = (IntPoint) l.a;
+        IntPoint e = (IntPoint) l.b;
+        b.append(' ').append(a.x).append(' ').append(a.y).append(' ').append(e.x).append(' ').append(e.y);
+      }
+      return b.toString();
+    }
+    return "other " + shape.getClass().getSimpleName();
   }
 
   private static String octagon(IntOctagon o) {

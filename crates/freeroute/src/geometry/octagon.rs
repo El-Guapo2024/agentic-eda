@@ -349,6 +349,15 @@ impl IntOctagon {
             && self.upper_right_diag_x <= other.upper_right_diag_x
     }
 
+    /// Whether the diagonals only touch the corners of the bounding box,
+    /// so that the octagon is that box. `IntOctagon.is_IntBox`.
+    pub fn is_int_box(&self) -> bool {
+        self.lower_left_diag_x == self.left_x + self.bottom_y
+            && self.lower_right_diag_x == self.right_x - self.bottom_y
+            && self.upper_right_diag_x == self.right_x + self.top_y
+            && self.upper_left_diag_x == self.left_x - self.top_y
+    }
+
     /// Whether each of `other`'s corners, by the corner formulas, lies in
     /// this octagon: Java's `TileShape.contains(TileShape)`, which the room
     /// code calls, rather than [`is_contained_in`](Self::is_contained_in)'s

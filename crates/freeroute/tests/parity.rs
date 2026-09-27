@@ -13,12 +13,21 @@
 //! with `--steps` also records each completion, and is compared step by
 //! step: the first difference then names the completion where the port
 //! parts from FreeRouting, and whether growing the room already differs.
+//!
+//! The dumps also carry every pin's and via's raw pad shapes and the
+//! clearance rules, so the board model is checked too: each pad, grown as
+//! the port grows it, must come out as FreeRouting's tree shape. Boards
+//! with traces take part in that check only: their trace shapes are not
+//! octagons until traces are ported, so the room check skips them.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use eda_freeroute::board::{clearance_offset, drill_tree_shape, PadShape};
 use eda_freeroute::door::{RoomGraph, RoomId, RoomState};
-use eda_freeroute::geometry::{IntBox, IntOctagon};
+use eda_freeroute::geometry::{Circle, IntBox, IntOctagon, IntPoint, Line, Simplex};
 use eda_freeroute::room::{complete_shape, IncompleteRoom, TreeObject};
+use eda_freeroute::rules::ClearanceMatrix;
 
 #[derive(Debug, Clone)]
 struct Item {
@@ -68,7 +77,7 @@ fn replay(dump: &str) -> Option<String> {
     let mut want = Vec::new();
     for line in dump.lines() {
         let f: Vec<&str> = line.split_whitespace().collect();
-        match f[0] {
+        match f.first().copied().unwrap_or("") {
             "board" => {
                 let v: Vec<i64> = f[1..5].iter().map(|s| s.parse().unwrap()).collect();
                 board = Some(IntBox::new(v[0], v[1], v[2], v[3]));
@@ -150,20 +159,101 @@ fn replay(dump: &str) -> Option<String> {
     None
 }
 
-#[test]
-fn rooms_and_doors_match_freerouting() {
+/// A pad shape from its dump fields: kind, then numbers.
+fn pad_shape(f: &[&str]) -> Option<PadShape> {
+    let n: Vec<i64> = f[1..].iter().filter_map(|s| s.parse().ok()).collect();
+    let p = |i: usize| IntPoint::new(n[i], n[i + 1]);
+    Some(match f[0] {
+        "circle" => PadShape::Circle(Circle::new(p(0), n[2])),
+        "box" => PadShape::Box(IntBox::new(n[0], n[1], n[2], n[3])),
+        "octagon" => PadShape::Octagon(octagon(&f[1..9])),
+        "simplex" => PadShape::Polygon(Simplex::new((0..n[0] as usize).map(|i| Line::new(p(1 + 4 * i), p(3 + 4 * i))).collect())),
+        _ => return None,
+    })
+}
+
+/// Grow every pin's and via's raw shapes as the port does, and compare with
+/// FreeRouting's tree shapes: the number of pads checked, and every
+/// difference.
+fn check_pads(dump: &str) -> (usize, Vec<String>) {
+    let mut tree: HashMap<(u64, u32), String> = HashMap::new();
+    let mut entries = Vec::new();
+    let mut trace_class = 0;
+    let mut pads = Vec::new();
+    for line in dump.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        match f.first().copied().unwrap_or("") {
+            "item" => {
+                tree.insert((f[1].parse().unwrap(), f[2].parse().unwrap()), f[5..13].join(" "));
+            }
+            "tree_class" => trace_class = f[1].parse().unwrap(),
+            "cm" => entries.push([f[1], f[2], f[3], f[4]].map(|s| s.parse::<i64>().unwrap())),
+            "pad" => pads.push(f),
+            _ => {}
+        }
+    }
+    let classes = entries.iter().map(|e| e[0].max(e[1]) + 1).max().unwrap_or(0) as usize;
+    let layers = entries.iter().map(|e| e[2] + 1).max().unwrap_or(0).max(pads.iter().map(|f| f[3].parse::<i64>().unwrap() + 1).max().unwrap_or(0)) as usize;
+    let mut rules = ClearanceMatrix::new(classes, layers);
+    for e in &entries {
+        rules.set(e[0] as usize, e[1] as usize, e[2] as usize, e[3]);
+    }
+    let mut diffs = Vec::new();
+    for f in &pads {
+        let (id, index, layer, class): (u64, u32, i32, i32) = (f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap());
+        let Some(shape) = pad_shape(&f[5..]) else {
+            diffs.push(format!("pad {id}/{index}: unsupported shape {}", f[5..].join(" ")));
+            continue;
+        };
+        let got = drill_tree_shape(&shape, clearance_offset(&rules, class, trace_class, layer)).map(|o| octagon_text(&o));
+        let want = tree.get(&(id, index)).cloned();
+        if got != want {
+            diffs.push(format!("pad {id}/{index} {}:\n    FreeRouting: {want:?}\n    port:        {got:?}", f[5..].join(" ")));
+        }
+    }
+    (pads.len(), diffs)
+}
+
+fn dumps() -> Vec<PathBuf> {
     let dir = std::env::var_os("FREEROUTE_PARITY_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity"));
     let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "txt")).collect();
     files.sort();
     assert!(!files.is_empty(), "no parity dumps in {}", dir.display());
-    let mut failures = Vec::new();
-    for path in &files {
-        let dump = std::fs::read_to_string(path).unwrap();
+    files
+}
+
+#[test]
+fn rooms_and_doors_match_freerouting() {
+    let (mut compared, mut failures) = (0, Vec::new());
+    for path in dumps() {
+        let dump = std::fs::read_to_string(&path).unwrap();
+        // Trace shapes stand in as bounding octagons, which FreeRouting does
+        // not use for rooms: leave those boards to the pad check.
+        if dump.lines().any(|l| l.starts_with("item ") && l.ends_with(" approx")) {
+            continue;
+        }
+        compared += 1;
         if let Some(diff) = replay(&dump) {
             failures.push(format!("{}: {diff}", path.file_name().unwrap().to_string_lossy()));
         }
     }
-    assert!(failures.is_empty(), "{} of {} boards differ from FreeRouting:\n{}", failures.len(), files.len(), failures.join("\n"));
+    assert!(compared > 0, "no board without traces to compare rooms on");
+    assert!(failures.is_empty(), "{} of {compared} boards differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn pin_and_via_shapes_match_freerouting() {
+    let (mut checked, mut failures) = (0, Vec::new());
+    for path in dumps() {
+        let (pads, diffs) = check_pads(&std::fs::read_to_string(&path).unwrap());
+        checked += pads;
+        if !diffs.is_empty() {
+            let shown: Vec<_> = diffs.iter().take(3).cloned().collect();
+            failures.push(format!("{}: {} of {pads} pads differ, e.g.\n  {}", path.file_name().unwrap().to_string_lossy(), diffs.len(), shown.join("\n  ")));
+        }
+    }
+    assert!(checked > 0, "no pads in the dumps");
+    assert!(failures.is_empty(), "{} boards differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }
