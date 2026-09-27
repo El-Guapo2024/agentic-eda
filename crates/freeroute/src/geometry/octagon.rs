@@ -349,6 +349,20 @@ impl IntOctagon {
             && self.upper_right_diag_x <= other.upper_right_diag_x
     }
 
+    /// Whether each of `other`'s corners, by the corner formulas, lies in
+    /// this octagon: Java's `TileShape.contains(TileShape)`, which the room
+    /// code calls, rather than [`is_contained_in`](Self::is_contained_in)'s
+    /// comparison of bounds. They differ where two diagonals meet at
+    /// half-integer coordinates: integer bounds cannot sit tight there, the
+    /// formula corner lands just outside, and an octagon need not contain
+    /// its own copy.
+    pub fn contains_corners(&self, other: &IntOctagon) -> bool {
+        (0..8).all(|i| {
+            let c = other.corner(i);
+            (0..8).all(|line| self.side_of_border_line(c.x, c.y, line) <= 0)
+        })
+    }
+
     /// Whether two *normalized* octagons share at least one point.
     pub fn intersects(&self, other: &IntOctagon) -> bool {
         if self.empty || other.empty {
@@ -1290,6 +1304,24 @@ mod tests {
         let pieces = obstacle.cutout_from_box(room);
         assert_eq!(pieces.len(), 8);
         check_cutout(&room.to_octagon(), &obstacle, &pieces);
+    }
+
+    /// From a FreeRouting board: the two left diagonals meet at x =
+    /// 1404937.5, so the left bound cannot be tight, and the corner formulas
+    /// put a corner at (1404937, -1138267), just below the lower-left
+    /// diagonal. By corners the octagon does not contain its own copy; by
+    /// bounds it does. The room code needs the first answer, as FreeRouting
+    /// keeps such a room where comparing bounds would drop it.
+    #[test]
+    fn corners_can_leave_an_octagon_whose_bounds_hold_them() {
+        let o = IntOctagon::new(1404937, -1150211, 1418393, -1124811, 2543204, 2568604, 266671, 293582);
+        assert!(o.is_contained_in(&o));
+        assert!(!o.contains_corners(&o));
+        // A tight one contains itself either way, and not a larger one.
+        let b = IntBox::new(0, 0, 10, 6).to_octagon();
+        assert!(b.contains_corners(&b));
+        assert!(!b.contains_corners(&IntBox::new(0, 0, 11, 6).to_octagon()));
+        assert!(IntBox::new(0, 0, 11, 6).to_octagon().contains_corners(&b));
     }
 
     #[test]

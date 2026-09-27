@@ -123,11 +123,11 @@ pub fn complete_shape<T: TreeObject>(
             if obj.is_free_space_room() {
                 if let Some(ig) = ignore_shape {
                     let meet = cur.shape.intersection(&obstacle);
-                    if meet.is_contained_in(&ig) {
+                    if ig.contains_corners(&meet) {
                         // The overlap lies within the door just crossed:
                         // not an obstacle. Keep the room unless the door
                         // swallows it entirely.
-                        if !cur.shape.is_contained_in(&ig) {
+                        if !ig.contains_corners(&cur.shape) {
                             next.push(*cur);
                             next_bound = next_bound.union(&cur.shape);
                         }
@@ -148,8 +148,10 @@ pub fn complete_shape<T: TreeObject>(
 
     let mut result = divide_large_room(result, board);
     // A room no bigger than what it must contain would be grown again
-    // forever; drop it.
-    result.retain(|r| !r.shape.is_contained_in(&r.contained));
+    // forever; drop it. Tested by corners, as the Java does, which keeps a
+    // room equal to its contained shape if a corner of it lies at
+    // half-integer coordinates (see IntOctagon::contains_corners).
+    result.retain(|r| !r.contained.contains_corners(&r.shape));
     result
 }
 
@@ -225,8 +227,12 @@ fn restrain_shape(room: &GrownRoom, obstacle: &IntOctagon) -> Vec<GrownRoom> {
             best_line = Some(line);
         }
     }
-    if let Some(line) = best_line {
-        return vec![GrownRoom { shape: outside(obstacle, line, &shape), layer: room.layer, contained: keep }];
+    // Only if that line leaves all of it clear: a diagonal can come out
+    // half a unit short (-0.5), and then the room is split instead.
+    if best_dist >= 0.0 {
+        if let Some(line) = best_line {
+            return vec![GrownRoom { shape: outside(obstacle, line, &shape), layer: room.layer, contained: keep }];
+        }
     }
 
     // No line leaves all of it clear, so split: find a line through the
@@ -515,6 +521,22 @@ mod tests {
     }
 
     const CRIT_TEST: i64 = 1 << 30;
+
+    /// A cut must leave everything to be kept on or beyond the line. A
+    /// diagonal can come out half a unit short: here the start point lies
+    /// inside the obstacle by half a unit across its lower-right diagonal,
+    /// and FreeRouting grows no room rather than one that has lost the
+    /// point. Cutting along that diagonal anyway was a porting slip.
+    #[test]
+    fn a_line_half_a_unit_short_does_not_cut() {
+        // A 100-square with the lower-right corner cut at x - y <= 86;
+        // (90, 5) has x - y = 85.
+        let obstacle = IntOctagon::new(0, 0, 100, 100, -100, 86, 0, 200).normalize();
+        let mut t = ShapeTree::new();
+        t.insert(obstacle, Pad { id: 0, layer: 0, net: 7 });
+        let rooms = complete_shape(&t, BOARD, &IncompleteRoom { shape: None, layer: 0, contained: point(90, 5) }, 1, None, None);
+        assert!(rooms.is_empty(), "a start point inside an obstacle should get no room: {rooms:?}");
+    }
 
     /// A field of pads, rooms grown from many start points: every result is
     /// on the board, free of obstacles, and still holds its start point.
