@@ -14,6 +14,8 @@
 //   cm <class i> <class j> <layer> <clearance>                 (nonzero entries)
 //   pad <item id> <shape_index> <layer> <clearance class> <shape>
 //                                                              (pins and vias)
+//   area_section <widest an area's tree shape may be>
+//   area <item id> <layer> <clearance class> <shape>           (keepouts, pours)
 //   start <layer> <x> <y>
 //   room <id> <net_dependent 0|1> <layer> <octagon>            (completion order)
 //   door <room id> <other room id> <dimension>                 (each room's doors, in order)
@@ -37,7 +39,8 @@
 // the room check skips such boards, as FreeRouting tests those shapes
 // exactly. A pad shape is "circle cx cy r", "box llx lly urx ury",
 // "octagon <octagon>", or "simplex <n> <ax ay bx by>..." for a convex
-// polygon's n border lines. An octagon is lx ly rx uy ulx lrx llx urx, the
+// polygon's n border lines; an area is "circle cx cy r", or "other <kind>"
+// where the port cannot take it yet. An octagon is lx ly rx uy ulx lrx llx urx, the
 // Java field order. Run by dump.sh against FreeRouting's v1.9 jar.
 //
 // Licence: GPL-3.0, as it links FreeRouting.
@@ -52,6 +55,7 @@ import app.freerouting.board.BoardObserverAdaptor;
 import app.freerouting.board.DrillItem;
 import app.freerouting.board.Item;
 import app.freerouting.board.ItemIdNoGenerator;
+import app.freerouting.board.ObstacleArea;
 import app.freerouting.board.Pin;
 import app.freerouting.board.RoutingBoard;
 import app.freerouting.board.SearchTreeObject;
@@ -179,6 +183,27 @@ public class RoomParity {
         }
         out.append("pad ").append(item.get_id_no()).append(' ').append(i).append(' ').append(drill.shape_layer(i)).append(' ')
             .append(item.clearance_class_no()).append(' ').append(pad_shape(shape)).append('\n');
+      }
+    }
+    // Areas: their raw shapes, and how wide their tree shapes may be
+    // (ShapeSearchTree.calculate_tree_shapes(ObstacleArea)).
+    double area_section = 50000;
+    if (board.communication.host_cad_exists()) {
+      area_section = Math.min(500 * board.communication.get_resolution(app.freerouting.board.Unit.MIL), area_section);
+    }
+    out.append("area_section ").append(area_section).append('\n');
+    it = board.item_list.start_read_object();
+    for (;;) {
+      Item item = (Item) board.item_list.read_object(it);
+      if (item == null) {
+        break;
+      }
+      if (item instanceof ObstacleArea area && area.get_area() != null) {
+        String shape = area.get_area() instanceof Circle c
+            ? "circle " + c.center.x + " " + c.center.y + " " + c.radius
+            : "other " + area.get_area().getClass().getSimpleName();
+        out.append("area ").append(item.get_id_no()).append(' ').append(area.get_layer()).append(' ')
+            .append(item.clearance_class_no()).append(' ').append(shape).append('\n');
       }
     }
 

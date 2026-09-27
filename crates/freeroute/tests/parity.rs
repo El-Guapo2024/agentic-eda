@@ -16,14 +16,15 @@
 //!
 //! The dumps also carry every pin's and via's raw pad shapes and the
 //! clearance rules, so the board model is checked too: each pad, grown as
-//! the port grows it, must come out as FreeRouting's tree shape. Boards
+//! the port grows it, must come out as FreeRouting's tree shape; likewise
+//! each area -- keepout or copper pour -- of a shape ported so far. Boards
 //! with traces take part in that check only: their trace shapes are not
 //! octagons until traces are ported, so the room check skips them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use eda_freeroute::board::{clearance_offset, drill_tree_shape, PadShape};
+use eda_freeroute::board::{area_tree_shapes, clearance_offset, drill_tree_shape, AreaShape, PadShape};
 use eda_freeroute::door::{RoomGraph, RoomId, RoomState};
 use eda_freeroute::geometry::{Circle, IntBox, IntOctagon, IntPoint, Line, Simplex};
 use eda_freeroute::room::{complete_shape, IncompleteRoom, TreeObject};
@@ -172,32 +173,47 @@ fn pad_shape(f: &[&str]) -> Option<PadShape> {
     })
 }
 
-/// Grow every pin's and via's raw shapes as the port does, and compare with
-/// FreeRouting's tree shapes: the number of pads checked, and every
-/// difference.
-fn check_pads(dump: &str) -> (usize, Vec<String>) {
-    let mut tree: HashMap<(u64, u32), String> = HashMap::new();
-    let mut entries = Vec::new();
-    let mut trace_class = 0;
-    let mut pads = Vec::new();
+/// The clearance rules a dump records, and the trace class its tree was
+/// built for. Only nonzero entries are recorded; any class or layer beyond
+/// them has none, which is what the matrix answers outside its bounds.
+fn clearance_rules(dump: &str) -> (ClearanceMatrix, i32) {
+    let (mut entries, mut trace_class) = (Vec::new(), 0);
     for line in dump.lines() {
         let f: Vec<&str> = line.split_whitespace().collect();
         match f.first().copied().unwrap_or("") {
-            "item" => {
-                tree.insert((f[1].parse().unwrap(), f[2].parse().unwrap()), f[5..13].join(" "));
-            }
             "tree_class" => trace_class = f[1].parse().unwrap(),
             "cm" => entries.push([f[1], f[2], f[3], f[4]].map(|s| s.parse::<i64>().unwrap())),
-            "pad" => pads.push(f),
             _ => {}
         }
     }
     let classes = entries.iter().map(|e| e[0].max(e[1]) + 1).max().unwrap_or(0) as usize;
-    let layers = entries.iter().map(|e| e[2] + 1).max().unwrap_or(0).max(pads.iter().map(|f| f[3].parse::<i64>().unwrap() + 1).max().unwrap_or(0)) as usize;
+    let layers = entries.iter().map(|e| e[2] + 1).max().unwrap_or(0) as usize;
     let mut rules = ClearanceMatrix::new(classes, layers);
     for e in &entries {
         rules.set(e[0] as usize, e[1] as usize, e[2] as usize, e[3]);
     }
+    (rules, trace_class)
+}
+
+/// FreeRouting's tree shapes by item: each shape index with its octagon.
+fn tree_shapes(dump: &str) -> HashMap<u64, Vec<(u32, String)>> {
+    let mut tree: HashMap<u64, Vec<(u32, String)>> = HashMap::new();
+    for line in dump.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.first() == Some(&"item") {
+            tree.entry(f[1].parse().unwrap()).or_default().push((f[2].parse().unwrap(), f[5..13].join(" ")));
+        }
+    }
+    tree
+}
+
+/// Grow every pin's and via's raw shapes as the port does, and compare with
+/// FreeRouting's tree shapes: the number of pads checked, and every
+/// difference.
+fn check_pads(dump: &str) -> (usize, Vec<String>) {
+    let tree = tree_shapes(dump);
+    let (rules, trace_class) = clearance_rules(dump);
+    let pads: Vec<Vec<&str>> = dump.lines().map(|l| l.split_whitespace().collect::<Vec<_>>()).filter(|f| f.first() == Some(&"pad")).collect();
     let mut diffs = Vec::new();
     for f in &pads {
         let (id, index, layer, class): (u64, u32, i32, i32) = (f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4].parse().unwrap());
@@ -206,12 +222,45 @@ fn check_pads(dump: &str) -> (usize, Vec<String>) {
             continue;
         };
         let got = drill_tree_shape(&shape, clearance_offset(&rules, class, trace_class, layer)).map(|o| octagon_text(&o));
-        let want = tree.get(&(id, index)).cloned();
+        let want = tree.get(&id).and_then(|shapes| shapes.iter().find(|(i, _)| *i == index)).map(|(_, o)| o.clone());
         if got != want {
             diffs.push(format!("pad {id}/{index} {}:\n    FreeRouting: {want:?}\n    port:        {got:?}", f[5..].join(" ")));
         }
     }
     (pads.len(), diffs)
+}
+
+/// Grow every area of a shape ported so far as the port does, and compare
+/// with FreeRouting's tree shapes, all of them in order: the numbers of
+/// areas checked and not yet portable, and every difference.
+fn check_areas(dump: &str) -> (usize, usize, Vec<String>) {
+    let tree = tree_shapes(dump);
+    let (rules, trace_class) = clearance_rules(dump);
+    let mut section = 0.0;
+    let (mut checked, mut unported, mut diffs) = (0, 0, Vec::new());
+    for line in dump.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        match f.first().copied().unwrap_or("") {
+            "area_section" => section = f[1].parse().unwrap(),
+            "area" if f[4] == "circle" => {
+                let n: Vec<i64> = f[1..].iter().filter_map(|s| s.parse().ok()).collect();
+                let (id, layer, class) = (n[0] as u64, n[1] as i32, n[2] as i32);
+                let area = AreaShape::Circle(Circle::new(IntPoint::new(n[3], n[4]), n[5]));
+                let got: Vec<String> =
+                    area_tree_shapes(&area, clearance_offset(&rules, class, trace_class, layer), section).iter().map(octagon_text).collect();
+                let mut want = tree.get(&id).cloned().unwrap_or_default();
+                want.sort_by_key(|(i, _)| *i);
+                let want: Vec<String> = want.into_iter().map(|(_, o)| o).collect();
+                checked += 1;
+                if got != want {
+                    diffs.push(format!("area {id} {}:\n    FreeRouting: {want:?}\n    port:        {got:?}", f[4..].join(" ")));
+                }
+            }
+            "area" => unported += 1,
+            _ => {}
+        }
+    }
+    (checked, unported, diffs)
 }
 
 fn dumps() -> Vec<PathBuf> {
@@ -255,5 +304,20 @@ fn pin_and_via_shapes_match_freerouting() {
         }
     }
     assert!(checked > 0, "no pads in the dumps");
+    assert!(failures.is_empty(), "{} boards differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn round_area_shapes_match_freerouting() {
+    let (mut checked, mut unported, mut failures) = (0, 0, Vec::new());
+    for path in dumps() {
+        let (n, skipped, diffs) = check_areas(&std::fs::read_to_string(&path).unwrap());
+        (checked, unported) = (checked + n, unported + skipped);
+        if !diffs.is_empty() {
+            let shown: Vec<_> = diffs.iter().take(3).cloned().collect();
+            failures.push(format!("{}: {} of {n} areas differ, e.g.\n  {}", path.file_name().unwrap().to_string_lossy(), diffs.len(), shown.join("\n  ")));
+        }
+    }
+    eprintln!("round areas checked: {checked}; areas of shapes not ported yet: {unported}");
     assert!(failures.is_empty(), "{} boards differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }

@@ -1,7 +1,8 @@
 //! The board as the router sees it: each item it must keep clear of, as
 //! the shapes FreeRouting stores in its search tree for the trace clearance
 //! class being routed. Ported from the item side of `ShapeSearchTree` and
-//! `ShapeSearchTree45Degree`, item kind by item kind: pins and vias so far.
+//! `ShapeSearchTree45Degree`, item kind by item kind: pins, vias, and round
+//! areas so far.
 //!
 //! Every tree shape is an obstacle grown by the clearance it needs from
 //! that trace class, so the search itself never measures a gap.
@@ -67,6 +68,48 @@ pub fn drill_tree_shape(shape: &PadShape, offset: i64) -> Option<IntOctagon> {
     Some(octagon.offset(offset as f64))
 }
 
+/// A keepout, via keepout, component keepout or copper pour, in the shapes
+/// FreeRouting reads them as. Only circles so far: polygons need
+/// FreeRouting's splitting into convex pieces, not yet ported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AreaShape {
+    Circle(Circle),
+}
+
+/// The tree shapes of an area on its layer: split into convex pieces -- a
+/// circle is one, its bounding octagon -- each grown by `offset` and cut
+/// into sections at most `max_section` wide, keeping those with area.
+/// `ShapeSearchTree45Degree.calculate_tree_shapes(ObstacleArea)`; see
+/// [`area_section_width`] for `max_section`.
+pub fn area_tree_shapes(area: &AreaShape, offset: i64, max_section: f64) -> Vec<IntOctagon> {
+    let pieces = match area {
+        AreaShape::Circle(c) => vec![c.bounding_octagon()],
+    };
+    pieces.iter().flat_map(|p| sections(&p.offset(offset as f64), max_section)).collect()
+}
+
+/// How wide an area's tree shapes may be: 50,000 units, or 500 mils if the
+/// board came from a CAD system, whichever is less -- FreeRouting's guard
+/// against a few huge shapes on coarse KiCad boards. `resolution_per_mil`
+/// is the board's units per mil when it came from a CAD system.
+pub fn area_section_width(resolution_per_mil: Option<f64>) -> f64 {
+    let max = 50_000.0;
+    match resolution_per_mil {
+        Some(r) => (500.0 * r).min(max),
+        None => max,
+    }
+}
+
+/// `TileShape.divide_into_sections` for an octagon: its bounding box tiled
+/// into sections at most `max_width` wide, the octagon cut by each, and the
+/// pieces with area kept.
+fn sections(o: &IntOctagon, max_width: f64) -> Vec<IntOctagon> {
+    if o.is_empty() {
+        return vec![*o];
+    }
+    o.bounding_box().divide_into_sections(max_width).into_iter().map(|b| o.intersection(&b.to_octagon())).filter(|s| s.dimension() == 2).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,6 +137,34 @@ mod tests {
     fn no_offset_leaves_the_bounding_octagon() {
         let pad = PadShape::Circle(Circle::new(IntPoint::new(5, 5), 40));
         assert_eq!(drill_tree_shape(&pad, 0), pad.bounding_octagon());
+    }
+
+    #[test]
+    fn a_small_round_keepout_is_one_grown_octagon() {
+        let area = AreaShape::Circle(Circle::new(IntPoint::new(0, 0), 500));
+        let shapes = area_tree_shapes(&area, 100, area_section_width(None));
+        assert_eq!(shapes, vec![Circle::new(IntPoint::new(0, 0), 500).bounding_octagon().offset(100.0)]);
+    }
+
+    /// A keepout wider than the section width is cut into pieces that
+    /// cover it and stay within it.
+    #[test]
+    fn a_large_keepout_is_cut_into_sections() {
+        let big = Circle::new(IntPoint::new(0, 0), 60_000);
+        let shapes = area_tree_shapes(&AreaShape::Circle(big), 0, 50_000.0);
+        assert_eq!(shapes.len(), 9, "a 120,000-wide octagon in 50,000-wide sections: {shapes:?}");
+        let whole: f64 = shapes.iter().map(|s| s.area()).sum();
+        assert!((whole - big.bounding_octagon().area()).abs() < 1.0);
+        for s in &shapes {
+            assert!(s.is_contained_in(&big.bounding_octagon()));
+        }
+    }
+
+    #[test]
+    fn cad_boards_get_narrower_sections() {
+        assert_eq!(area_section_width(None), 50_000.0);
+        assert_eq!(area_section_width(Some(10.0)), 5_000.0);
+        assert_eq!(area_section_width(Some(1_000.0)), 50_000.0);
     }
 
     #[test]

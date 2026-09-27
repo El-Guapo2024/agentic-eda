@@ -171,40 +171,12 @@ fn divide_large_room(rooms: Vec<GrownRoom>, board: IntBox) -> Vec<GrownRoom> {
         return rooms;
     }
     let max_section = 0.5 * (bh.max(bw) as f64);
-    divide_into_sections(bb, max_section)
+    bb.divide_into_sections(max_section)
         .into_iter()
         .map(|b| room.shape.intersection(&b.to_octagon()))
         .filter(|s| s.dimension() == 2)
         .map(|s| GrownRoom { shape: s, layer: room.layer, contained: s.intersection(&room.contained) })
         .collect()
-}
-
-/// `IntBox.divideIntoSections`: tile a box with sections no wider than
-/// `max_width`, the last row and column absorbing the remainder.
-fn divide_into_sections(b: IntBox, max_width: f64) -> Vec<IntBox> {
-    if max_width <= 0.0 {
-        return Vec::new();
-    }
-    let len = (b.ur.x - b.ll.x) as f64;
-    let hgt = (b.ur.y - b.ll.y) as f64;
-    let xc = (len / max_width).ceil() as i64;
-    let yc = (hgt / max_width).ceil() as i64;
-    if xc <= 0 || yc <= 0 {
-        return vec![b];
-    }
-    let sx = (len / xc as f64).ceil() as i64;
-    let sy = (hgt / yc as f64).ceil() as i64;
-    let mut out = Vec::new();
-    for j in 0..yc {
-        let ly = b.ll.y + j * sy;
-        let uy = if j == yc - 1 { b.ur.y } else { ly + sy };
-        for i in 0..xc {
-            let lx = b.ll.x + i * sx;
-            let ux = if i == xc - 1 { b.ur.x } else { lx + sx };
-            out.push(IntBox::new(lx, ly, ux, uy));
-        }
-    }
-    out
 }
 
 /// Cut `room` by one edge line of `obstacle` so it no longer overlaps it,

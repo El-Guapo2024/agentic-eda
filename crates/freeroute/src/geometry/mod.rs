@@ -49,6 +49,35 @@ impl IntBox {
         IntBox::new(self.ll.x - dist, self.ll.y - dist, self.ur.x + dist, self.ur.y + dist)
     }
 
+    /// Tiled with sections no wider than `max_width`, the last row and
+    /// column absorbing the remainder. `IntBox.divide_into_sections`.
+    pub fn divide_into_sections(&self, max_width: f64) -> Vec<IntBox> {
+        let b = *self;
+        if max_width <= 0.0 {
+            return Vec::new();
+        }
+        let len = (b.ur.x - b.ll.x) as f64;
+        let hgt = (b.ur.y - b.ll.y) as f64;
+        let xc = (len / max_width).ceil() as i64;
+        let yc = (hgt / max_width).ceil() as i64;
+        if xc <= 0 || yc <= 0 {
+            return vec![b];
+        }
+        let sx = (len / xc as f64).ceil() as i64;
+        let sy = (hgt / yc as f64).ceil() as i64;
+        let mut out = Vec::new();
+        for j in 0..yc {
+            let ly = b.ll.y + j * sy;
+            let uy = if j == yc - 1 { b.ur.y } else { ly + sy };
+            for i in 0..xc {
+                let lx = b.ll.x + i * sx;
+                let ux = if i == xc - 1 { b.ur.x } else { lx + sx };
+                out.push(IntBox::new(lx, ly, ux, uy));
+            }
+        }
+        out
+    }
+
     /// The same region as an octagon whose diagonals do not cut it.
     pub fn to_octagon(&self) -> IntOctagon {
         IntOctagon::new(

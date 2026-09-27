@@ -112,6 +112,18 @@ pad 16 0 0 1 box 4800000 -4450000 4850000 -4400000
 pad 15 0 0 1 box 3600000 -1250000 3650000 -1200000
 pad 14 0 0 1 box 3000000 -2550000 3050000 -2500000
 pad 13 0 0 1 box 5600000 -3250000 5650000 -3200000
+area_section 50000.0
+area 12 0 1 other PolygonShape
+area 11 0 1 other PolygonShape
+area 10 0 1 other PolygonShape
+area 9 0 1 other PolygonShape
+area 8 0 1 other PolygonShape
+area 7 0 1 other PolygonShape
+area 6 0 1 other PolygonShape
+area 5 0 1 other PolygonShape
+area 4 0 1 other PolygonShape
+area 3 0 1 other PolygonShape
+area 2 0 1 other PolygonShape
 start 0 4825000 -4425000
 room 2 1 0 313100 -5998900 5998900 -3251000 3564100 11997800 -2937900 2747900
 room 5 0 0 5651000 -3251000 5998900 -1100 5652100 9249900 2400000 5997800
