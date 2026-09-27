@@ -264,10 +264,16 @@ fn check_areas(dump: &str) -> (usize, usize, Vec<String>) {
 }
 
 fn dumps() -> Vec<PathBuf> {
-    let dir = std::env::var_os("FREEROUTE_PARITY_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity"));
-    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "txt")).collect();
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = match std::env::var_os("FREEROUTE_PARITY_DIR").map(PathBuf::from) {
+        // Tests run in the crate's directory; a relative path is taken from
+        // the workspace root, where cargo is usually run.
+        Some(d) if d.is_relative() => manifest.join("../..").join(d),
+        Some(d) => d,
+        None => manifest.join("tests/parity"),
+    };
+    let entries = std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("parity dumps in {}: {e}", dir.display()));
+    let mut files: Vec<_> = entries.map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "txt")).collect();
     files.sort();
     assert!(!files.is_empty(), "no parity dumps in {}", dir.display());
     files
