@@ -17,16 +17,18 @@
 //! The dumps also carry every pin's and via's raw pad shapes and the
 //! clearance rules, so the board model is checked too: each pad, grown as
 //! the port grows it, must come out as FreeRouting's tree shape; likewise
-//! each area -- keepout or copper pour -- of a shape ported so far. Boards
+//! each area -- keepout or copper pour -- of a shape ported so far, and the
+//! board outline, its edges widened as traces are. Boards
 //! with traces take part in that check only: their trace shapes are not
 //! octagons until traces are ported, so the room check skips them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use eda_freeroute::board::{area_tree_shapes, clearance_offset, drill_tree_shape, AreaShape, PadShape};
+use eda_freeroute::board::{area_tree_shapes, clearance_offset, drill_tree_shape, outline_tree_shapes, AreaShape, PadShape};
 use eda_freeroute::door::{RoomGraph, RoomId, RoomState};
 use eda_freeroute::geometry::{Circle, IntBox, IntOctagon, IntPoint, Line, Simplex};
+
 use eda_freeroute::room::{complete_shape, IncompleteRoom, TreeObject};
 use eda_freeroute::rules::ClearanceMatrix;
 
@@ -263,6 +265,48 @@ fn check_areas(dump: &str) -> (usize, usize, Vec<String>) {
     (checked, unported, diffs)
 }
 
+/// Widen the board outline's edges as the port does and compare with
+/// FreeRouting's tree shapes for it, all in order. `None` if the dump has
+/// no outline, or one with a generated keepout, which is not ported yet.
+fn check_outline(dump: &str) -> Option<Result<usize, String>> {
+    let tree = tree_shapes(dump);
+    let (rules, trace_class) = clearance_rules(dump);
+    let mut header = None;
+    let mut shapes = Vec::new();
+    for line in dump.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        let n: Vec<i64> = f.iter().skip(1).filter_map(|s| s.parse().ok()).collect();
+        match f.first().copied().unwrap_or("") {
+            "outline" => header = Some(n),
+            "outline_shape" => shapes.push((0..n[0] as usize).map(|i| Line::new(IntPoint::new(n[1 + 4 * i], n[2 + 4 * i]), IntPoint::new(n[3 + 4 * i], n[4 + 4 * i]))).collect::<Vec<_>>()),
+            _ => {}
+        }
+    }
+    let h = header?;
+    let (id, half_width, class, layers, keepout) = (h[0] as u64, h[1], h[2] as i32, h[3] as usize, h[4]);
+    if keepout != 0 {
+        return None;
+    }
+    let got: Vec<String> = outline_tree_shapes(&shapes, half_width, clearance_offset(&rules, class, trace_class, 0), layers)
+        .iter()
+        .map(|o| o.map_or("none".to_string(), |o| octagon_text(&o)))
+        .collect();
+    let mut want = tree.get(&id).cloned().unwrap_or_default();
+    want.sort_by_key(|(i, _)| *i);
+    let want: Vec<String> = want.into_iter().map(|(_, o)| o).collect();
+    if got == want {
+        return Some(Ok(got.len()));
+    }
+    let first = got.iter().zip(&want).position(|(g, w)| g != w).unwrap_or(got.len().min(want.len()));
+    Some(Err(format!(
+        "{} vs {} outline shapes; first difference at {first}:\n    FreeRouting: {:?}\n    port:        {:?}",
+        want.len(),
+        got.len(),
+        want.get(first),
+        got.get(first)
+    )))
+}
+
 fn dumps() -> Vec<PathBuf> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let dir = match std::env::var_os("FREEROUTE_PARITY_DIR").map(PathBuf::from) {
@@ -326,4 +370,18 @@ fn round_area_shapes_match_freerouting() {
     }
     eprintln!("round areas checked: {checked}; areas of shapes not ported yet: {unported}");
     assert!(failures.is_empty(), "{} boards differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn outline_shapes_match_freerouting() {
+    let (mut checked, mut edges, mut skipped, mut failures) = (0, 0, 0, Vec::new());
+    for path in dumps() {
+        match check_outline(&std::fs::read_to_string(&path).unwrap()) {
+            None => skipped += 1,
+            Some(Ok(n)) => (checked, edges) = (checked + 1, edges + n),
+            Some(Err(e)) => failures.push(format!("{}: {e}", path.file_name().unwrap().to_string_lossy())),
+        }
+    }
+    eprintln!("outlines checked: {checked} ({edges} edge shapes); skipped: {skipped}");
+    assert!(failures.is_empty(), "{} outlines differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }

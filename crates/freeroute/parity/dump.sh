@@ -41,7 +41,7 @@ fi
 jar="$fr/build/libs/freerouting-1.9.0-executable.jar"
 # FreeRouting logs warnings, timestamped, to the same stream: keep only the
 # dump's own records, so a regenerated file is byte-identical.
-records='^(fixture|board|net|item|tree_class|cm|pad|area_section|area|start|step|grown|cand|made|room|door|obstacle_doors)( |$)'
+records='^(fixture|board|net|item|tree_class|cm|pad|area_section|area|outline|outline_shape|start|step|grown|cand|made|room|door|obstacle_doors)( |$)'
 # Run from the FreeRouting checkout: it writes a logs/ directory wherever it
 # runs.
 cd "$fr"

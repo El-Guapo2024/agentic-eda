@@ -22,6 +22,7 @@
 //! otherwise an octagon that merely happened to carry the same numbers as
 //! the sentinel would be mistaken for it.
 
+use super::line::java_round;
 use super::{IntBox, IntPoint};
 
 /// FreeRouting's `Limits.CRIT_INT`, the bound its empty sentinel uses, and
@@ -168,11 +169,11 @@ impl IntOctagon {
     /// bounds move by `sqrt(2) * distance` because they are measured along
     /// the x axis, not perpendicular to the edge.
     pub fn offset(&self, distance: f64) -> IntOctagon {
-        let width = distance.round() as i64;
+        let width = java_round(distance);
         if width == 0 || self.empty {
             return *self;
         }
-        let dia = (std::f64::consts::SQRT_2 * distance).round() as i64;
+        let dia = java_round(std::f64::consts::SQRT_2 * distance);
         IntOctagon::new(
             self.left_x - width,
             self.bottom_y - width,

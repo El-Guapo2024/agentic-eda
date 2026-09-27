@@ -1,13 +1,13 @@
 //! The board as the router sees it: each item it must keep clear of, as
 //! the shapes FreeRouting stores in its search tree for the trace clearance
 //! class being routed. Ported from the item side of `ShapeSearchTree` and
-//! `ShapeSearchTree45Degree`, item kind by item kind: pins, vias, and round
-//! areas so far.
+//! `ShapeSearchTree45Degree`, item kind by item kind: pins, vias, round
+//! areas, and the board outline so far.
 //!
 //! Every tree shape is an obstacle grown by the clearance it needs from
 //! that trace class, so the search itself never measures a gap.
 
-use crate::geometry::{Circle, IntBox, IntOctagon, Simplex};
+use crate::geometry::{Circle, IntBox, IntOctagon, Line, Polyline, Simplex};
 use crate::rules::ClearanceMatrix;
 
 /// A pad or via on one layer, in the shapes FreeRouting reads them as.
@@ -98,6 +98,28 @@ pub fn area_section_width(resolution_per_mil: Option<f64>) -> f64 {
         Some(r) => (500.0 * r).min(max),
         None => max,
     }
+}
+
+/// The tree shapes of the board outline, when no keepout is generated
+/// outside it -- FreeRouting's default. Each edge of each outline shape,
+/// given by its border lines, is widened by `half_width + offset` as a
+/// trace segment would be, between the lines of its two neighbours, and
+/// bounded by an octagon; the lot is repeated on every layer. `offset` is
+/// the outline's clearance on layer 0, which the Java uses for all layers.
+/// `None` for an edge FreeRouting could not widen, where the Java crashes.
+/// `ShapeSearchTree45Degree.calculate_tree_shapes(BoardOutline)`.
+pub fn outline_tree_shapes(shapes: &[Vec<Line>], half_width: i64, offset: i64, layers: usize) -> Vec<Option<IntOctagon>> {
+    let mut out = Vec::new();
+    for _ in 0..layers {
+        for border in shapes {
+            let n = border.len();
+            for i in 0..n {
+                let edge = Polyline::from_lines(&[border[(i + n - 1) % n], border[i], border[(i + 1) % n]]);
+                out.push(edge.offset_shape(half_width + offset, 0).and_then(|s| s.bounding_octagon()));
+            }
+        }
+    }
+    out
 }
 
 /// `TileShape.divide_into_sections` for an octagon: its bounding box tiled

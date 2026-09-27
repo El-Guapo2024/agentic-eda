@@ -16,6 +16,8 @@
 //                                                              (pins and vias)
 //   area_section <widest an area's tree shape may be>
 //   area <item id> <layer> <clearance class> <shape>           (keepouts, pours)
+//   outline <item id> <half width> <clearance class> <layers> <keepout 0|1>
+//   outline_shape <n> <ax ay bx by>...                         (each shape's border lines)
 //   start <layer> <x> <y>
 //   room <id> <net_dependent 0|1> <layer> <octagon>            (completion order)
 //   door <room id> <other room id> <dimension>                 (each room's doors, in order)
@@ -52,6 +54,7 @@ import app.freerouting.autoroute.ExpansionRoom;
 import app.freerouting.autoroute.IncompleteFreeSpaceExpansionRoom;
 import app.freerouting.board.AngleRestriction;
 import app.freerouting.board.BoardObserverAdaptor;
+import app.freerouting.board.BoardOutline;
 import app.freerouting.board.DrillItem;
 import app.freerouting.board.Item;
 import app.freerouting.board.ItemIdNoGenerator;
@@ -69,6 +72,7 @@ import app.freerouting.geometry.planar.IntOctagon;
 import app.freerouting.geometry.planar.IntPoint;
 import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Point;
+import app.freerouting.geometry.planar.PolylineShape;
 import app.freerouting.geometry.planar.Shape;
 import app.freerouting.geometry.planar.Simplex;
 import app.freerouting.geometry.planar.TileShape;
@@ -192,6 +196,31 @@ public class RoomParity {
       area_section = Math.min(500 * board.communication.get_resolution(app.freerouting.board.Unit.MIL), area_section);
     }
     out.append("area_section ").append(area_section).append('\n');
+    // The board outline, whose edges enter the tree widened like traces
+    // (ShapeSearchTree.calculate_tree_shapes(BoardOutline)).
+    it = board.item_list.start_read_object();
+    for (;;) {
+      Item item = (Item) board.item_list.read_object(it);
+      if (item == null) {
+        break;
+      }
+      if (item instanceof BoardOutline outline) {
+        out.append("outline ").append(item.get_id_no()).append(' ').append(outline.get_half_width()).append(' ')
+            .append(item.clearance_class_no()).append(' ').append(board.layer_structure.arr.length).append(' ')
+            .append(outline.keepout_outside_outline_generated() ? 1 : 0).append('\n');
+        for (int k = 0; k < outline.shape_count(); ++k) {
+          PolylineShape shape = outline.get_shape(k);
+          out.append("outline_shape ").append(shape.border_line_count());
+          for (int i = 0; i < shape.border_line_count(); ++i) {
+            Line l = shape.border_line(i);
+            IntPoint a = (IntPoint) l.a;
+            IntPoint e = (IntPoint) l.b;
+            out.append(' ').append(a.x).append(' ').append(a.y).append(' ').append(e.x).append(' ').append(e.y);
+          }
+          out.append('\n');
+        }
+      }
+    }
     it = board.item_list.start_read_object();
     for (;;) {
       Item item = (Item) board.item_list.read_object(it);

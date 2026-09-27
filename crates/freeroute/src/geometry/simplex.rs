@@ -1,65 +1,204 @@
-//! `Line` and `Simplex`, ported from FreeRouting. A simplex is a convex
-//! polygon kept as the half-planes of its border lines, which is how
-//! FreeRouting stores pads that are neither round nor axis-aligned boxes.
-//! Only what the search tree needs is ported so far: corners, and the
-//! bounding box and octagon.
+//! `Simplex`, ported from FreeRouting: a convex polygon kept as the
+//! half-planes of its border lines, sorted counter-clockwise. How
+//! FreeRouting stores pads that are neither round nor boxes, and every
+//! widened trace segment.
+//!
+//! A line bounds the polygon on its FreeRouting-right side (see
+//! [`Side`]): the inside of the line from `a` to `b` is where `(b - a) x
+//! (p - a) > 0`, to the left looking along it with y up.
 
-use super::{IntBox, IntOctagon, IntPoint, CRIT};
+use super::line::{Line, Point, Side};
+use super::{IntBox, IntOctagon, CRIT};
 
-/// The directed line through two integer points. FreeRouting's `Line`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Line {
-    pub a: IntPoint,
-    pub b: IntPoint,
-}
-
-impl Line {
-    pub const fn new(a: IntPoint, b: IntPoint) -> Self {
-        Line { a, b }
-    }
-
-    /// Where this line meets `other`, in floating point; `(i32::MAX,
-    /// i32::MAX)` for parallel lines. `Line.intersection_approx`, operation
-    /// for operation: bounding shapes round these values, so the rounding
-    /// has to come out the same.
-    pub fn intersection_approx(&self, other: &Line) -> (f64, f64) {
-        let (a, b, oa, ob) = (self.a, self.b, other.a, other.b);
-        let d1x = (b.x - a.x) as f64;
-        let d1y = (b.y - a.y) as f64;
-        let d2x = (ob.x - oa.x) as f64;
-        let d2y = (ob.y - oa.y) as f64;
-        let det_1 = a.x as f64 * b.y as f64 - a.y as f64 * b.x as f64;
-        let det_2 = oa.x as f64 * ob.y as f64 - oa.y as f64 * ob.x as f64;
-        let det = d2x * d1y - d2y * d1x;
-        if det == 0.0 {
-            return (i32::MAX as f64, i32::MAX as f64);
-        }
-        ((d2x * det_1 - d1x * det_2) / det, (d2y * det_1 - d1y * det_2) / det)
-    }
-}
-
-/// A convex polygon: what lies on the inner side of every border line,
-/// the lines in counter-clockwise order. FreeRouting's `Simplex`.
+/// A convex polygon: what lies inside every border line, the lines in
+/// counter-clockwise order. No lines means empty. FreeRouting's `Simplex`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Simplex {
     pub lines: Vec<Line>,
 }
 
 impl Simplex {
+    /// Lines taken as they are, already sorted and without redundancy.
     pub fn new(lines: Vec<Line>) -> Self {
-        assert!(!lines.is_empty(), "Simplex::new: no border lines");
         Simplex { lines }
     }
 
-    /// Corner `i`: where border line `i` meets the one before it, in
-    /// floating point. `Simplex.corner_approx`.
-    pub fn corner_approx(&self, i: usize) -> (f64, f64) {
-        let prev = if i == 0 { self.lines.len() - 1 } else { i - 1 };
-        self.lines[i].intersection_approx(&self.lines[prev])
+    pub fn empty() -> Self {
+        Simplex { lines: Vec::new() }
     }
 
-    /// The corners' extremes, rounded outwards. `Simplex.bounding_box`.
+    /// The polygon inside all of `lines`: sorted by direction, redundant
+    /// lines dropped. `Simplex.get_instance`.
+    pub fn from_lines(lines: &[Line]) -> Simplex {
+        if lines.is_empty() {
+            return Simplex::empty();
+        }
+        let mut sorted = lines.to_vec();
+        sorted.sort_by(|p, q| p.compare(q));
+        Simplex { lines: sorted }.remove_redundant_lines()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    fn prev(&self, i: usize) -> usize {
+        if i == 0 {
+            self.lines.len() - 1
+        } else {
+            i - 1
+        }
+    }
+
+    /// Corner `i`, exactly: where border line `i` meets the one before it.
+    /// `Simplex.corner`.
+    pub fn corner(&self, i: usize) -> Point {
+        self.lines[i].intersection(&self.lines[self.prev(i)])
+    }
+
+    /// Corner `i` in floating point. `Simplex.corner_approx`.
+    pub fn corner_approx(&self, i: usize) -> (f64, f64) {
+        self.lines[i].intersection_approx(&self.lines[self.prev(i)])
+    }
+
+    /// Whether line `i` turns left from the line before it, so that the two
+    /// meet in a corner of the polygon. `Simplex.corner_is_bounded`.
+    pub fn corner_is_bounded(&self, i: usize) -> bool {
+        if self.lines.len() == 1 {
+            return false;
+        }
+        let (p, c) = (self.lines[self.prev(i)].direction(), self.lines[i].direction());
+        p.x as i128 * c.y as i128 - p.y as i128 * c.x as i128 > 0
+    }
+
+    /// Bounded, with only horizontal and vertical sides. `Simplex.is_IntBox`.
+    pub fn is_int_box(&self) -> bool {
+        (0..self.lines.len()).all(|i| self.lines[i].is_orthogonal() && self.corner_is_bounded(i))
+    }
+
+    /// Bounded, with sides only at multiples of 45 degrees.
+    /// `Simplex.is_IntOctagon`.
+    pub fn is_int_octagon(&self) -> bool {
+        (0..self.lines.len()).all(|i| self.lines[i].is_multiple_of_45_degree() && self.corner_is_bounded(i))
+    }
+
+    /// The octagon with these sides, for a polygon that is one; normalized.
+    /// `Simplex.to_IntOctagon`.
+    pub fn to_int_octagon(&self) -> Option<IntOctagon> {
+        if !self.is_int_octagon() {
+            return None;
+        }
+        if self.is_empty() {
+            return Some(IntOctagon::EMPTY);
+        }
+        let (mut rx, mut uy, mut lrx, mut urx) = (CRIT, CRIT, CRIT, CRIT);
+        let (mut lx, mut ly, mut llx, mut ulx) = (-CRIT, -CRIT, -CRIT, -CRIT);
+        for l in &self.lines {
+            let (a, b) = (l.a, l.b);
+            if a.y == b.y {
+                if b.x >= a.x {
+                    ly = a.y;
+                }
+                if b.x <= a.x {
+                    uy = a.y;
+                }
+            }
+            if a.x == b.x {
+                if b.y >= a.y {
+                    rx = a.x;
+                }
+                if b.y <= a.y {
+                    lx = a.x;
+                }
+            }
+            if a.y < b.y {
+                if a.x < b.x {
+                    lrx = a.x - a.y;
+                } else if a.x > b.x {
+                    urx = a.x + a.y;
+                }
+            } else if a.y > b.y {
+                if a.x < b.x {
+                    llx = a.x + a.y;
+                } else if a.x > b.x {
+                    ulx = a.x - a.y;
+                }
+            }
+        }
+        Some(IntOctagon::new(lx, ly, rx, uy, ulx, lrx, llx, urx).normalize())
+    }
+
+    /// An octagon, box or empty shape where the polygon is one, else the
+    /// polygon itself. `Simplex.simplify`.
+    pub fn simplify(self) -> super::TileShape {
+        use super::TileShape;
+        if self.is_empty() {
+            TileShape::Simplex(Simplex::empty())
+        } else if self.is_int_box() {
+            TileShape::Box(self.bounding_box())
+        } else if self.is_int_octagon() {
+            TileShape::Octagon(self.to_int_octagon().expect("checked"))
+        } else {
+            TileShape::Simplex(self)
+        }
+    }
+
+    /// The polygon inside both: this one's lines then `other`'s, sorted and
+    /// reduced. The order matters where lines tie in direction.
+    /// `Simplex.intersection(Simplex)`.
+    pub fn intersection(&self, other: &Simplex) -> Simplex {
+        if self.is_empty() || other.is_empty() {
+            return Simplex::empty();
+        }
+        let mut lines = self.lines.clone();
+        lines.extend_from_slice(&other.lines);
+        lines.sort_by(|p, q| p.compare(q));
+        Simplex { lines }.remove_redundant_lines()
+    }
+
+    /// -1 empty, 0 a point, 1 a segment, 2 an area. `Simplex.dimension`.
+    pub fn dimension(&self) -> i32 {
+        let l = &self.lines;
+        match l.len() {
+            0 => -1,
+            1 => 2,
+            2 => {
+                if l[0].is_equal_or_opposite(&l[1]) {
+                    1
+                } else {
+                    2
+                }
+            }
+            3 => {
+                if l[0].is_equal_or_opposite(&l[1]) || l[0].is_equal_or_opposite(&l[2]) || l[1].is_equal_or_opposite(&l[2]) {
+                    return 1;
+                }
+                match l[0].side_of(&l[1].intersection(&l[2])) {
+                    Side::Right => 2,
+                    Side::Left => -1,
+                    Side::Collinear => 0,
+                }
+            }
+            4 => {
+                let (c02, c13) = (l[0].is_equal_or_opposite(&l[2]), l[1].is_equal_or_opposite(&l[3]));
+                if c02 && c13 {
+                    0
+                } else if c02 || c13 {
+                    1
+                } else {
+                    2
+                }
+            }
+            _ => 2,
+        }
+    }
+
+    /// The corners' extremes, rounded outwards; the Java's empty box, the
+    /// critical bound inverted, for an empty polygon. `Simplex.bounding_box`.
     pub fn bounding_box(&self) -> IntBox {
+        if self.is_empty() {
+            return IntBox::new(CRIT, CRIT, -CRIT, -CRIT);
+        }
         let (mut llx, mut lly) = (i32::MAX as f64, i32::MAX as f64);
         let (mut urx, mut ury) = (i32::MIN as f64, i32::MIN as f64);
         for i in 0..self.lines.len() {
@@ -74,8 +213,11 @@ impl Simplex {
 
     /// The corners' extremes in all eight directions, rounded outwards;
     /// `None` if any lies beyond the critical bound, where the Java returns
-    /// null. `Simplex.bounding_octagon`.
+    /// null. Empty for an empty polygon. `Simplex.bounding_octagon`.
     pub fn bounding_octagon(&self) -> Option<IntOctagon> {
+        if self.is_empty() {
+            return Some(IntOctagon::EMPTY);
+        }
         let (mut lx, mut ly, mut rx, mut uy) = (i32::MAX as f64, i32::MAX as f64, i32::MIN as f64, i32::MIN as f64);
         let (mut ulx, mut lrx, mut llx, mut urx) = (i32::MAX as f64, i32::MIN as f64, i32::MAX as f64, i32::MIN as f64);
         for i in 0..self.lines.len() {
@@ -104,10 +246,119 @@ impl Simplex {
             urx.ceil() as i64,
         ))
     }
+
+    /// Lines already in counter-clockwise order, reduced but not sorted, as
+    /// `IntOctagon.to_Simplex` builds its eight sides.
+    pub(crate) fn from_sorted_lines(lines: Vec<Line>) -> Simplex {
+        Simplex { lines }.remove_redundant_lines()
+    }
+
+    /// Drop repeated lines and lines that bound no corner; empty if the
+    /// half-planes leave nothing. `Simplex.remove_redundant_lines`, loop
+    /// for loop: which line goes first changes which remain.
+    fn remove_redundant_lines(self) -> Simplex {
+        let arr = &self.lines;
+        if arr.is_empty() {
+            return self;
+        }
+        let mut line_arr = Vec::with_capacity(arr.len());
+        line_arr.push(arr[0]);
+        let mut prev = arr[0];
+        for l in &arr[1..] {
+            if !l.fast_equals(&prev) {
+                line_arr.push(*l);
+                prev = *l;
+            }
+        }
+        let mut new_length = line_arr.len();
+        let mut sides: Vec<Option<Side>> = vec![None; new_length];
+        let mut try_again = new_length > 2;
+        let mut index_of_last_removed_line = new_length as i64;
+        while try_again {
+            try_again = false;
+            let mut prev_ind = new_length - 1;
+            let mut prev_line = line_arr[prev_ind];
+            let mut curr_line = line_arr[0];
+            let mut ind: i64 = 0;
+            while ind < new_length as i64 {
+                let i = ind as usize;
+                let mut next_ind = if i == new_length - 1 { 0 } else { i + 1 };
+                let next_line = line_arr[next_ind];
+                let mut remove_line = false;
+                let (prev_dir, next_dir) = (prev_line.direction(), next_line.direction());
+                let det = prev_dir.determinant(&next_dir);
+                if det != 0.0 {
+                    if sides[i].is_none() {
+                        sides[i] = Some(curr_line.side_of_intersection(&prev_line, &next_line));
+                    }
+                    if det > 0.0 {
+                        remove_line = sides[i] != Some(Side::Left);
+                    } else if sides[i] == Some(Side::Left) && prev_dir.determinant(&curr_line.direction()) > 0.0 {
+                        new_length = 0;
+                        break;
+                    }
+                } else if prev_line.side_of(&Point::Int(next_line.a)) == Side::Left {
+                    new_length = 0;
+                    break;
+                }
+                if remove_line {
+                    try_again = true;
+                    new_length -= 1;
+                    for k in i..new_length {
+                        line_arr[k] = line_arr[k + 1];
+                        sides[k] = sides[k + 1];
+                    }
+                    if new_length < 3 {
+                        try_again = false;
+                        break;
+                    }
+                    if i == 0 {
+                        prev_ind = new_length - 1;
+                    }
+                    sides[prev_ind] = None;
+                    next_ind = if i >= new_length { 0 } else { i };
+                    sides[next_ind] = None;
+                    ind -= 1;
+                    index_of_last_removed_line = ind;
+                } else {
+                    prev_line = curr_line;
+                    prev_ind = i;
+                }
+                curr_line = next_line;
+                if !try_again && ind >= index_of_last_removed_line {
+                    break;
+                }
+                ind += 1;
+            }
+            if new_length == 0 {
+                try_again = false;
+            }
+        }
+        if new_length == 2 && line_arr[0].is_parallel(&line_arr[1]) {
+            let first_a = Point::Int(line_arr[0].a);
+            if line_arr[0].direction().same_as(&line_arr[1].direction()) {
+                if line_arr[1].side_of(&first_a) == Side::Left {
+                    line_arr[0] = line_arr[1];
+                }
+                new_length -= 1;
+            } else if line_arr[1].side_of(&first_a) == Side::Left {
+                new_length = 0;
+            }
+        }
+        if new_length == self.lines.len() {
+            return self;
+        }
+        if new_length == 0 {
+            return Simplex::empty();
+        }
+        line_arr.truncate(new_length);
+        Simplex { lines: line_arr }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::{IntPoint, TileShape};
     use super::*;
 
     fn polygon(pts: &[(i64, i64)]) -> Simplex {
@@ -121,6 +372,7 @@ mod tests {
         // Corner i is where side i meets side i - 1: the start of side i.
         assert_eq!(s.corner_approx(0), (0.0, 0.0));
         assert_eq!(s.corner_approx(1), (10.0, 0.0));
+        assert_eq!(s.corner(1), Point::Int(IntPoint::new(10, 0)));
         assert_eq!(s.bounding_box(), IntBox::new(0, 0, 10, 10));
         assert_eq!(s.bounding_octagon(), Some(IntBox::new(0, 0, 10, 10).to_octagon()));
     }
@@ -186,5 +438,48 @@ mod tests {
     fn a_polygon_beyond_the_critical_bound_has_no_octagon() {
         let far = CRIT + 10;
         assert_eq!(polygon(&[(0, 0), (far, 0), (far, 10), (0, 10)]).bounding_octagon(), None);
+    }
+
+    /// Sorting and reduction: given in any order, with a duplicate and a
+    /// line that bounds nothing, a square comes out as its four sides.
+    #[test]
+    fn redundant_lines_are_dropped() {
+        let p = IntPoint::new;
+        let sides = [
+            Line::new(p(10, 10), p(0, 10)),
+            Line::new(p(0, 0), p(10, 0)),
+            Line::new(p(20, 0), p(30, 0)), // the bottom side again
+            Line::new(p(10, 0), p(10, 10)),
+            Line::new(p(-50, 50), p(-60, 40)), // x - y >= -100: far outside
+            Line::new(p(0, 10), p(0, 0)),
+        ];
+        let s = Simplex::from_lines(&sides);
+        assert_eq!(s.lines.len(), 4, "{s:?}");
+        assert_eq!(s.simplify(), TileShape::Box(IntBox::new(0, 0, 10, 10)));
+    }
+
+    /// Half-planes that leave nothing make the empty polygon.
+    #[test]
+    fn disjoint_half_planes_are_empty() {
+        let p = IntPoint::new;
+        // y >= 10 and y <= 0.
+        let s = Simplex::from_lines(&[Line::new(p(0, 10), p(1, 10)), Line::new(p(1, 0), p(0, 0))]);
+        assert!(s.is_empty(), "{s:?}");
+    }
+
+    /// Cutting an octagon's corner with a diagonal keeps it an octagon.
+    #[test]
+    fn a_box_cut_by_a_diagonal_is_an_octagon() {
+        let p = IntPoint::new;
+        let box_sides = polygon(&[(0, 0), (10, 0), (10, 10), (0, 10)]);
+        // Keep x + y <= 15: the line from (15, 0) up-left to (0, 15).
+        let cut = Simplex::from_lines(&[Line::new(p(15, 0), p(0, 15))]);
+        let s = box_sides.intersection(&cut);
+        let o = match s.simplify() {
+            TileShape::Octagon(o) => o,
+            other => panic!("expected an octagon, got {other:?}"),
+        };
+        assert_eq!(o.upper_right_diag_x, 15);
+        assert_eq!(o.bounding_box(), IntBox::new(0, 0, 10, 10));
     }
 }

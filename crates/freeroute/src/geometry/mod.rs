@@ -6,13 +6,19 @@
 //! cliff for boards measured in micrometres.
 
 mod circle;
+mod line;
 mod octagon;
+mod polyline;
 mod simplex;
+mod tile;
 
 pub use circle::Circle;
+pub use line::{Direction, Line, Point, RationalPoint, Side};
 pub(crate) use octagon::CRIT;
 pub use octagon::IntOctagon;
-pub use simplex::{Line, Simplex};
+pub use polyline::Polyline;
+pub use simplex::Simplex;
+pub use tile::TileShape;
 
 /// An integer point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
