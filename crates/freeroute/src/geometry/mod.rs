@@ -7,6 +7,7 @@
 
 mod octagon;
 
+pub(crate) use octagon::CRIT;
 pub use octagon::IntOctagon;
 
 /// An integer point.

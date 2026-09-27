@@ -17,12 +17,20 @@
 //! equally valid rooms, and would stop this matching FreeRouting.
 
 use crate::geometry::{IntBox, IntOctagon};
-use crate::searchtree::ShapeTree;
+use crate::searchtree::{LeafId, ShapeTree};
 
 /// What the room search needs to know about a stored shape.
 pub trait TreeObject {
-    /// Stable identity, so a caller can ask for one object to be ignored.
+    /// The object's number, FreeRouting's `get_id_no`. Orders the objects
+    /// touching a room, so it changes which doors come out. Items and rooms
+    /// are numbered separately, so it need not be unique: identity is the
+    /// tree leaf.
     fn id(&self) -> u64;
+    /// Which of the object's shapes this leaf holds, for an object stored as
+    /// several. Orders objects with the same number.
+    fn shape_index(&self) -> u32 {
+        0
+    }
     fn layer(&self) -> i32;
     /// Whether a trace of `net` must stay out of this shape. Copper of the
     /// net itself is not an obstacle to that net.
@@ -55,23 +63,26 @@ pub struct GrownRoom {
 /// Grow `room` to maximal obstacle-free octagons on its layer.
 ///
 /// `net`: the net being routed, whose own copper is not an obstacle.
-/// `ignore`: an object to treat as absent (the room being re-grown).
+/// `ignore`: a stored object to treat as absent -- the room the search came
+/// from. By leaf, as Java compares object identity.
 /// `ignore_shape`: overlaps with stored free-space rooms that fall inside
 /// this shape are not obstacles -- the door just passed through.
 ///
 /// Returns several rooms when the contained shape cannot fit in one.
+///
+/// An empty `contained` is allowed, as in the Java: the start shape comes
+/// back if no obstacle cuts it, and nothing if one does. Completing a room
+/// relies on this for the board sections that `divide_large_room` makes
+/// around a start point that lies in only one of them.
 pub fn complete_shape<T: TreeObject>(
     tree: &ShapeTree<T>,
     board: IntBox,
     room: &IncompleteRoom,
     net: i32,
-    ignore: Option<u64>,
+    ignore: Option<LeafId>,
     ignore_shape: Option<IntOctagon>,
 ) -> Vec<GrownRoom> {
     let contained = room.contained;
-    if contained.is_empty() {
-        return Vec::new();
-    }
     let Some(root) = tree.root_node() else { return Vec::new() };
     let board_oct = board.to_octagon();
     let start = match room.shape {
@@ -97,7 +108,7 @@ pub fn complete_shape<T: TreeObject>(
             }
         };
         let obj = tree.payload(leaf);
-        if !(obj.is_obstacle_for(net) && obj.layer() == room.layer && Some(obj.id()) != ignore) {
+        if !(obj.is_obstacle_for(net) && obj.layer() == room.layer && Some(leaf) != ignore) {
             continue;
         }
         let obstacle = tree.bounds(leaf);
@@ -440,10 +451,40 @@ mod tests {
 
     #[test]
     fn an_ignored_object_is_not_an_obstacle() {
-        let t = tree(&[(IntBox::new(4_000, 3_000, 6_000, 5_000), 0, 7)]);
-        let rooms = complete_shape(&t, BOARD, &IncompleteRoom { shape: None, layer: 0, contained: point(1_000, 4_000) }, 1, Some(0), None);
+        let mut t = ShapeTree::new();
+        let pad = t.insert(IntBox::new(4_000, 3_000, 6_000, 5_000).to_octagon(), Pad { id: 0, layer: 0, net: 7 });
+        let rooms = complete_shape(&t, BOARD, &IncompleteRoom { shape: None, layer: 0, contained: point(1_000, 4_000) }, 1, Some(pad), None);
         let area: f64 = rooms.iter().map(|r| r.shape.area()).sum();
         assert!((area - 80_000_000.0).abs() < 1.0, "ignored obstacle cut the room, got {area}");
+    }
+
+    /// Ignoring is by leaf, not by number: another object with the same
+    /// number is still an obstacle. Items and rooms are numbered
+    /// separately, so numbers collide in practice.
+    #[test]
+    fn ignoring_one_object_does_not_ignore_another_with_its_number() {
+        let mut t = ShapeTree::new();
+        let ignored = t.insert(IntBox::new(8_000, 6_000, 9_000, 7_000).to_octagon(), Pad { id: 5, layer: 0, net: 7 });
+        t.insert(IntBox::new(4_000, 3_000, 6_000, 5_000).to_octagon(), Pad { id: 5, layer: 0, net: 7 });
+        let rooms = complete_shape(&t, BOARD, &IncompleteRoom { shape: None, layer: 0, contained: point(1_000, 4_000) }, 1, Some(ignored), None);
+        let r = rooms.iter().find(|r| r.shape.contains_point(1_000.0, 4_000.0)).expect("room with the start point");
+        assert_eq!(r.shape.right_x, 4_000, "the unignored pad with the same number should still stop the room: {:?}", r.shape);
+    }
+
+    /// With nothing it must contain, a room survives whole where no
+    /// obstacle cuts it, and vanishes where one does. The Java has no early
+    /// return for this; completing a room needs the first half, for board
+    /// sections that miss the start point.
+    #[test]
+    fn a_room_with_nothing_to_contain_survives_only_uncut() {
+        let t = tree(&[(IntBox::new(4_000, 3_000, 6_000, 5_000), 0, 7)]);
+        let clear = IntBox::new(0, 0, 3_000, 3_000).to_octagon();
+        let rooms = complete_shape(&t, BOARD, &IncompleteRoom { shape: Some(clear), layer: 0, contained: IntOctagon::EMPTY }, 1, None, None);
+        assert_eq!(rooms.len(), 1, "uncut room should survive: {rooms:?}");
+        assert_eq!(rooms[0].shape, clear);
+        let cut = IntBox::new(3_000, 2_000, 5_000, 4_000).to_octagon();
+        let rooms = complete_shape(&t, BOARD, &IncompleteRoom { shape: Some(cut), layer: 0, contained: IntOctagon::EMPTY }, 1, None, None);
+        assert!(rooms.is_empty(), "a cut room with nothing to keep should vanish: {rooms:?}");
     }
 
     /// The cut must use an obstacle edge that actually crosses the room,

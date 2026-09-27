@@ -16,3 +16,4 @@
 pub mod geometry;
 pub mod searchtree;
 pub mod room;
+pub mod door;

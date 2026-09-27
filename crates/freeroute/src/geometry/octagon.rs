@@ -24,8 +24,9 @@
 
 use super::{IntBox, IntPoint};
 
-/// FreeRouting's `Limits.CRIT_INT`, the bound its empty sentinel uses.
-const CRIT: i64 = 33_554_432;
+/// FreeRouting's `Limits.CRIT_INT`, the bound its empty sentinel uses, and
+/// the bound a room edge is pushed out to when it is dropped.
+pub(crate) const CRIT: i64 = 33_554_432;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IntOctagon {
