@@ -63,6 +63,15 @@ impl TileShape {
 
     /// Grown by `offset` on every side: a box becomes its octagon grown, a
     /// polygon has its sharp corners cut back. `enlarge`, per form.
+    /// Whether a box can hold the shape exactly. `is_IntBox`, per form.
+    pub fn is_int_box(&self) -> bool {
+        match self {
+            TileShape::Box(_) => true,
+            TileShape::Octagon(o) => o.is_int_box(),
+            TileShape::Simplex(s) => s.is_int_box(),
+        }
+    }
+
     pub fn enlarge(&self, offset: f64) -> TileShape {
         match self {
             TileShape::Box(b) => TileShape::Octagon(b.to_octagon().offset(offset)),

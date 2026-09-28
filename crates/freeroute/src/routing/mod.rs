@@ -18,7 +18,7 @@ mod tree;
 
 pub use tree::DefaultTree;
 
-use crate::geometry::{FloatPoint, IntBox, IntOctagon, IntPoint, Point, Polyline, TileShape};
+use crate::geometry::{FloatPoint, IntBox, IntOctagon, Point, Polyline, TileShape};
 use crate::model::{AreaKind, Board, FixedState, Item, ItemKind};
 
 /// Where the board has changed since the last clean-up, per layer, as an
@@ -51,14 +51,14 @@ impl ChangedArea {
         c[7] = c[7].max(tmp);
     }
 
-    /// Layer `layer`'s octagon, rounded outwards; `None` if nothing
-    /// changed there (the Java's `IntOctagon.EMPTY`). `get_area`.
-    pub fn get_area(&self, layer: i32) -> Option<IntOctagon> {
+    /// Layer `layer`'s octagon, rounded outwards; `IntOctagon::EMPTY` if
+    /// nothing changed there. `get_area`.
+    pub fn get_area(&self, layer: i32) -> IntOctagon {
         let c = &self.arr[layer as usize];
         if c[2] < c[0] || c[3] < c[1] || c[5] < c[4] || c[7] < c[6] {
-            return None;
+            return IntOctagon::EMPTY;
         }
-        Some(IntOctagon::new(
+        IntOctagon::new(
             c[0].floor() as i64,
             c[1].floor() as i64,
             c[2].ceil() as i64,
@@ -67,7 +67,7 @@ impl ChangedArea {
             c[5].ceil() as i64,
             c[6].floor() as i64,
             c[7].ceil() as i64,
-        ))
+        )
     }
 
     pub fn set_empty(&mut self, layer: i32) {
@@ -268,10 +268,9 @@ impl RoutingBoard {
         }
     }
 
-    /// The changed area's octagon on `layer`: `None` with no changed area,
-    /// `Some(None)` where it is empty. For the Java's clip shapes, where a
-    /// missing changed area gives `null` and an empty one `EMPTY`.
-    pub fn changed_area_on(&self, layer: i32) -> Option<Option<IntOctagon>> {
+    /// The changed area's octagon on `layer`, `None` with no changed area:
+    /// the clip shape the Java takes from it, `null` without one.
+    pub fn changed_area_on(&self, layer: i32) -> Option<IntOctagon> {
         self.changed_area.as_ref().map(|c| c.get_area(layer))
     }
 
@@ -541,10 +540,17 @@ pub fn point_shape(p: &Point) -> TileShape {
     }
 }
 
-/// `Point.surrounding_octagon` of an integer point.
+/// `Point.surrounding_octagon`: the point itself for an integer point, the
+/// octagon of its floating point rounded outwards for a rational one.
 pub fn surrounding_octagon(p: &Point) -> Option<IntOctagon> {
-    let q: IntPoint = p.as_int()?;
-    Some(IntOctagon::new(q.x, q.y, q.x, q.y, q.x - q.y, q.x - q.y, q.x + q.y, q.x + q.y))
+    match p {
+        Point::Int(q) => Some(IntOctagon::new(q.x, q.y, q.x, q.y, q.x - q.y, q.x - q.y, q.x + q.y, q.x + q.y)),
+        Point::Rational(_) => {
+            let (x, y) = p.to_float();
+            let (d, s) = (x - y, x + y);
+            Some(IntOctagon::new(x.floor() as i64, y.floor() as i64, x.ceil() as i64, y.ceil() as i64, d.floor() as i64, d.ceil() as i64, s.floor() as i64, s.ceil() as i64))
+        }
+    }
 }
 
 /// Whether a pour's area holds `p`, borders included: one of its convex

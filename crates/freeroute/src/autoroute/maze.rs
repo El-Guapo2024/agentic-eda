@@ -705,7 +705,8 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
         let offset_pin_shape = pin_shape.offset(edge_to_turn_dist + trace_half_width as f64);
         let mut min_distance = f64::MAX;
         let mut nearest = None;
-        for dir in exits {
+        for exit in exits {
+            let dir = &exit.direction;
             let no = offset_pin_shape
                 .intersecting_border_line_no(center, dir)
                 .unwrap_or_else(|| panic!("Pin.nearest_trace_exit_corner: no border line for pin {} (the Java fails here)", it.id));

@@ -68,6 +68,11 @@ pub struct NetClass {
     pub trace_half_width: Vec<i64>,
     /// Its traces may not be pushed aside.
     pub shove_fixed: bool,
+    /// Its traces are pulled tight. `NetClass.get_pull_tight`.
+    pub pull_tight: bool,
+    /// Cycles through pours are left alone.
+    /// `NetClass.get_ignore_cycles_with_areas`.
+    pub ignore_cycles_with_areas: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +136,19 @@ impl Rules {
         row[(layer.max(0) as usize).min(row.len() - 1)]
     }
 
+    /// `ClearanceMatrix.max_value(layer)`: the largest value ever set on
+    /// the layer, in any class's row.
+    pub fn max_clearance_on_layer(&self, layer: i32) -> i64 {
+        let mut result = 0;
+        for row in &self.max_clearance {
+            if row.is_empty() {
+                continue;
+            }
+            result = result.max(row[(layer.max(0) as usize).min(row.len() - 1)]);
+        }
+        result
+    }
+
     pub fn padstack(&self, no: usize) -> Option<&Padstack> {
         self.padstacks.iter().find(|p| p.no == no)
     }
@@ -167,13 +185,22 @@ pub enum AreaKind {
     Conduction { is_obstacle: bool },
 }
 
+/// A direction a trace may leave a pin in, and how far from the centre
+/// the pad's edge lies that way. `Pin.TraceExitRestriction`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExitRestriction {
+    pub direction: Direction,
+    pub min_length: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ItemKind {
     /// A component pin: one pad per layer of its stack, `None` where the
     /// stack has no shape on that layer; per layer too, the half width a
-    /// trace may neck down to at it, and the directions a trace may leave
-    /// it in (none: any).
-    Pin { center: IntPoint, pads: Vec<Option<PadShape>>, neckdown: Vec<i64>, exits: Vec<Vec<Direction>> },
+    /// trace may neck down to at it, the widest extent of its pad
+    /// (`Pin.get_max_width`), and the directions a trace may leave it in
+    /// (none: any).
+    Pin { center: IntPoint, pads: Vec<Option<PadShape>>, neckdown: Vec<i64>, max_width: Vec<f64>, exits: Vec<Vec<ExitRestriction>> },
     Via { center: IntPoint, padstack: usize, pads: Vec<Option<PadShape>> },
     Trace { layer: i32, half_width: i64, polyline: Polyline },
     Area { kind: AreaKind, layer: i32, shape: AreaShape },

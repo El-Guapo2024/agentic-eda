@@ -14,7 +14,10 @@
 //! on a board, and `tests/` replays those dumps against the port.
 //!
 //! [`dump::read_board`] reads a board as FreeRouting loaded it;
-//! [`autoroute::maze::MazeSearch`] searches a connection on it.
+//! [`autoroute::maze::MazeSearch`] searches a connection on it;
+//! [`routing::insert::insert_found_connection`] puts the connection found
+//! on a [`routing::RoutingBoard`], and [`routing::pull_tight::PullTight`]
+//! tidies what changed.
 //!
 //! Licence: GPL-3.0, inherited from FreeRouting. See Cargo.toml.
 

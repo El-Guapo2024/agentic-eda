@@ -261,4 +261,64 @@ impl Line {
     pub fn perpendicular_through(&self, a: IntPoint) -> Line {
         Line::through(a, self.direction().turn_45_degree(2))
     }
+
+    /// The square direction from `p` towards this line: the quarter turn
+    /// whose unit step from `p` crosses the line, else the one ending
+    /// nearer the foot of the perpendicular. `None` if `p` is on the line.
+    /// `Line.perpendicular_direction(Point)`, which differs from the
+    /// point's own [`perpendicular_direction_from`](Self::perpendicular_direction_from).
+    pub fn perpendicular_direction(&self, p: IntPoint) -> Option<super::line::Direction> {
+        let line_side = self.side_of(&Point::Int(p));
+        if line_side == Side::Collinear {
+            return None;
+        }
+        let dir1 = self.direction().turn_45_degree(2);
+        let dir2 = self.direction().turn_45_degree(6);
+        let check_1 = IntPoint::new(p.x + dir1.x, p.y + dir1.y);
+        if self.side_of(&Point::Int(check_1)) != line_side {
+            return Some(dir1);
+        }
+        let check_2 = IntPoint::new(p.x + dir2.x, p.y + dir2.y);
+        if self.side_of(&Point::Int(check_2)) != line_side {
+            return Some(dir2);
+        }
+        let nearest = FloatPoint::from_int(p).projection_approx(self);
+        if nearest.distance_square(&FloatPoint::from_int(check_1)) <= nearest.distance_square(&FloatPoint::from_int(check_2)) {
+            Some(dir1)
+        } else {
+            Some(dir2)
+        }
+    }
+}
+
+impl Polyline {
+    /// The perpendicular from `p` onto the nearest segment it falls within,
+    /// as a segment from `p`; `None` if there is none or `p` is on the
+    /// polyline. `Polyline.projection_line`.
+    pub fn projection_line(&self, p: IntPoint) -> Option<LineSegment> {
+        let from_point = FloatPoint::from_int(p);
+        let mut min_distance = f64::MAX;
+        let mut result_line = None;
+        let mut nearest_line = None;
+        for i in 1..self.lines.len().saturating_sub(1) {
+            let projection = from_point.projection_approx(&self.lines[i]);
+            let distance = projection.distance(&from_point);
+            if distance < min_distance {
+                let Some(towards) = self.lines[i].perpendicular_direction(p) else { continue };
+                let curr_result_line = Line::through(p, towards);
+                let prev_side = curr_result_line.side_of(&self.corner(i - 1));
+                let next_side = curr_result_line.side_of(&self.corner(i));
+                if prev_side == next_side && prev_side != Side::Collinear {
+                    // The foot lies outside the segment.
+                    continue;
+                }
+                nearest_line = Some(self.lines[i]);
+                min_distance = distance;
+                result_line = Some(curr_result_line);
+            }
+        }
+        let nearest_line = nearest_line?;
+        let start_line = Line::through(p, nearest_line.direction());
+        Some(LineSegment::new(start_line, result_line.expect("set with the nearest line"), nearest_line))
+    }
 }

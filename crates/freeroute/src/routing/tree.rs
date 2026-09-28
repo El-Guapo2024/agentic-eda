@@ -48,12 +48,13 @@ impl DefaultTree {
         self.shapes[item] = all;
     }
 
-    /// Take item `item`'s shapes out. `SearchTreeManager.remove`.
+    /// Take item `item`'s shapes out. `SearchTreeManager.remove`. Its
+    /// shapes are kept, as a removed Java item keeps its own, and answer
+    /// [`get_shape`](Self::get_shape) still.
     pub fn remove(&mut self, item: usize) {
         for leaf in std::mem::take(&mut self.leaves[item]).into_iter().flatten() {
             self.tree.remove(leaf);
         }
-        self.shapes[item].clear();
     }
 
     /// `Item.tree_shape_count` in this tree.

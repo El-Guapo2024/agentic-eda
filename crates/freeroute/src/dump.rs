@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use crate::board::{AreaShape, PadShape};
 use crate::geometry::{Circle, Direction, IntBox, IntOctagon, IntPoint, Line, PolygonShape, Polyline, PolylineArea, PolylineShape, Simplex, TileShape};
-use crate::model::{AreaKind, AutorouteSettings, Board, FixedState, Item, ItemKind, Layer, Net, NetClass, Padstack, Rules, ViaInfo};
+use crate::model::{AreaKind, AutorouteSettings, Board, ExitRestriction, FixedState, Item, ItemKind, Layer, Net, NetClass, Padstack, Rules, ViaInfo};
 use crate::rules::ClearanceMatrix;
 
 /// The words of one record, read in turn.
@@ -152,8 +152,8 @@ struct Parts {
     area: Option<(i32, AreaShape)>,
     conduction_obstacle: Option<bool>,
     outline: Option<(i64, bool, Vec<Vec<Line>>)>,
-    neckdown: Vec<(i32, i64)>,
-    exits: Vec<(i32, Direction)>,
+    neckdown: Vec<(i32, i64, f64)>,
+    exits: Vec<(i32, ExitRestriction)>,
 }
 
 /// Read the board from a dump. Fails on a record it cannot make sense of,
@@ -217,11 +217,15 @@ pub fn read_board(text: &str) -> Result<Board, String> {
             "id_generator" => id_max = w.int()? as u32,
             "pin_neckdown" => {
                 let n = w.ints(3)?;
-                parts.entry(n[0] as u32).or_default().neckdown.push((n[1] as i32, n[2]));
+                // Older dumps have no pad width.
+                let max_width = w.rest().first().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                parts.entry(n[0] as u32).or_default().neckdown.push((n[1] as i32, n[2], max_width));
             }
             "pin_exit" => {
                 let n = w.ints(4)?;
-                parts.entry(n[0] as u32).or_default().exits.push((n[1] as i32, Direction::of(n[2], n[3])));
+                // Older dumps have no length: the pad edge is then unknown.
+                let min_length = w.rest().first().and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                parts.entry(n[0] as u32).or_default().exits.push((n[1] as i32, ExitRestriction { direction: Direction::of(n[2], n[3]), min_length }));
             }
             "classes" => classes = w.int()? as usize,
             "cm" => {
@@ -251,10 +255,19 @@ pub fn read_board(text: &str) -> Result<Board, String> {
                 let l = layers.len();
                 let active = w.ints(l)?.into_iter().map(|v| v != 0).collect();
                 let half = w.ints(l)?;
-                let shove_fixed = w.rest().first().is_some_and(|s| *s == "1");
+                let flags = w.rest();
+                let flag = |i: usize, default: bool| flags.get(i).map_or(default, |s| *s == "1");
                 net_classes.insert(
                     n[0] as usize,
-                    NetClass { trace_clearance_class: n[1] as i32, via_rule: n[2] as usize, active_layers: active, trace_half_width: half, shove_fixed },
+                    NetClass {
+                        trace_clearance_class: n[1] as i32,
+                        via_rule: n[2] as usize,
+                        active_layers: active,
+                        trace_half_width: half,
+                        shove_fixed: flag(0, false),
+                        pull_tight: flag(1, true),
+                        ignore_cycles_with_areas: flag(2, false),
+                    },
                 );
             }
             "net" => {
@@ -375,14 +388,16 @@ pub fn read_board(text: &str) -> Result<Board, String> {
             "pin" => {
                 let n = (last_layer - first_layer + 1).max(0) as usize;
                 let mut neckdown = vec![1; n];
-                for &(l, v) in &p.neckdown {
+                let mut max_width = vec![0.0; n];
+                for &(l, v, w) in &p.neckdown {
                     neckdown[(l - first_layer) as usize] = v;
+                    max_width[(l - first_layer) as usize] = w;
                 }
                 let mut exits = vec![Vec::new(); n];
                 for &(l, d) in &p.exits {
                     exits[(l - first_layer) as usize].push(d);
                 }
-                ItemKind::Pin { center: p.center.ok_or(format!("pin {id} has no center"))?, pads: pads(), neckdown, exits }
+                ItemKind::Pin { center: p.center.ok_or(format!("pin {id} has no center"))?, pads: pads(), neckdown, max_width, exits }
             }
             "via" => ItemKind::Via {
                 center: p.center.ok_or(format!("via {id} has no center"))?,

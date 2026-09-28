@@ -27,15 +27,15 @@
 //   viainfo <index> <padstack no> <clearance class> <attach_smd 0|1>
 //   viarule <index> <via info indices>...
 //   netclass <index> <trace clearance class> <via rule index> <active 0|1 per layer> <half width per layer>...
-//            <shove_fixed 0|1>
+//            <shove_fixed 0|1> <pull_tight 0|1> <ignore_cycles_with_areas 0|1>
 //   net <no> <net class index> <contains_plane 0|1>
 //   settings <vias_allowed> <via_costs> <plane_via_costs> <start_ripup_costs> <with_fanout> <automatic_neckdown>
 //   layer_costs <layer> <active 0|1> <horizontal> <vertical> <preferred direction costs>
 //   it <id> <kind> <first layer> <last layer> <clearance class> <fixed state> <component> <nets>...
 //   center <id> <x> <y>                           (pins and vias)
 //   via_padstack <id> <padstack no>
-//   pin_neckdown <id> <layer> <half width>        (Pin.get_trace_neckdown_halfwidth)
-//   pin_exit <id> <layer> <dx> <dy>               (Pin.get_trace_exit_restrictions, in order)
+//   pin_neckdown <id> <layer> <half width> <pad max width>        (Pin.get_trace_neckdown_halfwidth)
+//   pin_exit <id> <layer> <dx> <dy> <min length>  (Pin.get_trace_exit_restrictions, in order)
 //   conduction <id> <is_obstacle 0|1>
 //   pad, trace, area, area_piece, outline, outline_shape  (as RoomParity writes them)
 //   item, exact                                   (the autoroute tree, as RoomParity)
@@ -54,6 +54,9 @@
 //   ins_trace <id> <layer> <half width> <class> <fixed> <net> <n> <ax ay bx by>...
 //   ins_via <id> <x> <y> <padstack> <class> <fixed> <net>
 //   optimized <id max>, opt_trace, opt_via       (after BatchAutorouter's opt_changed_area)
+//
+// With DEBUG_PINS=<id>,... it also writes, before the clean-up, each listed pin's
+// exit restrictions as debug_exit records, which maze_dump.sh leaves out.
 //
 // A door is "door <room> <room> <dimension>", "target <item id> <entry> <room>",
 // "drill <x> <y> <first layer> <last layer>" or "page <llx> <lly> <urx> <ury>";
@@ -237,7 +240,8 @@ public class MazeParity {
       for (int l = 0; l < layers; ++l) {
         out.append(' ').append(nc.get_trace_half_width(l));
       }
-      out.append(' ').append(nc.is_shove_fixed() ? 1 : 0).append('\n');
+      out.append(' ').append(nc.is_shove_fixed() ? 1 : 0).append(' ').append(nc.get_pull_tight() ? 1 : 0)
+          .append(' ').append(nc.get_ignore_cycles_with_areas() ? 1 : 0).append('\n');
     }
     for (int n = 1; n <= board.rules.nets.max_net_no(); ++n) {
       Net net = board.rules.nets.get(n);
@@ -294,11 +298,11 @@ public class MazeParity {
       if (item instanceof Pin pin) {
         for (int l = pin.first_layer(); l <= pin.last_layer(); ++l) {
           out.append("pin_neckdown ").append(item.get_id_no()).append(' ').append(l).append(' ')
-              .append(pin.get_trace_neckdown_halfwidth(l)).append('\n');
+              .append(pin.get_trace_neckdown_halfwidth(l)).append(' ').append(pin.get_max_width(l)).append('\n');
           for (Pin.TraceExitRestriction r : pin.get_trace_exit_restrictions(l)) {
             app.freerouting.geometry.planar.IntVector v = (app.freerouting.geometry.planar.IntVector) r.direction.get_vector();
             out.append("pin_exit ").append(item.get_id_no()).append(' ').append(l).append(' ').append(v.x).append(' ').append(v.y)
-                .append('\n');
+                .append(' ').append(r.min_length).append('\n');
           }
         }
       }
@@ -502,6 +506,18 @@ public class MazeParity {
         located_out.append("inserted ").append(inserted == null ? 0 : 1).append(' ')
             .append(board.communication.id_no_generator.max_generated_no()).append('\n');
         routes(board, "ins", located_out);
+        if (System.getenv("DEBUG_PINS") != null) {
+          for (String sid : System.getenv("DEBUG_PINS").split(",")) {
+            Item dbg_item = board.get_item(Integer.parseInt(sid.trim()));
+            if (dbg_item instanceof Pin pin) {
+              for (int l = pin.first_layer(); l <= pin.last_layer(); ++l) {
+                for (Pin.TraceExitRestriction r : pin.get_trace_exit_restrictions(l)) {
+                  located_out.append("debug_exit ").append(sid).append(' ').append(l).append(' ').append(r.direction).append(' ').append(r.min_length).append('\n');
+                }
+              }
+            }
+          }
+        }
         if (inserted != null) {
           board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, 1000);
           located_out.append("optimized ").append(board.communication.id_no_generator.max_generated_no()).append('\n');

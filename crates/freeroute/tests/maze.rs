@@ -406,7 +406,11 @@ fn maze_search_matches_freerouting() {
         let dump = std::fs::read_to_string(&path).unwrap();
         let outcome = std::panic::catch_unwind(|| search::replay(&dump));
         match outcome {
-            Ok(None) => {}
+            Ok(None) => {
+                if std::env::var_os("MAZE_VERBOSE").is_some() {
+                    eprintln!("no search: {name}");
+                }
+            }
             Ok(Some(Ok(n))) => {
                 searched += 1;
                 steps += n;
@@ -483,4 +487,131 @@ fn print_rooms() {
             .collect();
         println!("xroom {} {} {} | {}", name(r), room.layer, octagon_text(&o), doors.join(" | "));
     }
+}
+
+/// The dump's located connection, as the maze test checks the port finds.
+fn dumped_located(dump: &str, board: &Board) -> Option<eda_freeroute::autoroute::locate::Located> {
+    use eda_freeroute::autoroute::locate::{Located, LocatedTrace};
+    let head = dump.lines().find(|l| l.starts_with("located "))?;
+    let n: Vec<i64> = head.split_whitespace().skip(1).map(|s| s.parse().unwrap()).collect();
+    let index = |id: i64| board.items.iter().position(|i| i.id as i64 == id).unwrap();
+    let traces = dump
+        .lines()
+        .filter(|l| l.starts_with("located_trace "))
+        .map(|l| {
+            let v: Vec<i64> = l.split_whitespace().skip(1).map(|s| s.parse().unwrap()).collect();
+            let corners = v[2..].chunks(2).map(|c| eda_freeroute::geometry::IntPoint::new(c[0], c[1])).collect();
+            LocatedTrace { layer: v[0] as i32, corners }
+        })
+        .collect();
+    Some(Located { start_item: index(n[0]), start_layer: n[1] as i32, target_item: index(n[2]), target_layer: n[3] as i32, traces })
+}
+
+/// Every trace and via on the board in its order, as the dump writes them.
+fn routes(rb: &eda_freeroute::routing::RoutingBoard, tag: &str) -> Vec<String> {
+    use eda_freeroute::model::ItemKind;
+    let mut out = Vec::new();
+    for i in rb.items_in_order() {
+        let it = rb.item(i);
+        let net = it.nets.first().copied().unwrap_or(0);
+        match &it.kind {
+            ItemKind::Trace { layer, half_width, polyline } => {
+                let lines: Vec<String> = polyline.lines.iter().map(|l| format!("{} {} {} {}", l.a.x, l.a.y, l.b.x, l.b.y)).collect();
+                out.push(format!("{tag}_trace {} {layer} {half_width} {} {} {net} {} {}", it.id, it.clearance_class, it.fixed as u32, polyline.lines.len(), lines.join(" ")));
+            }
+            ItemKind::Via { center, padstack, .. } => {
+                out.push(format!("{tag}_via {} {} {} {padstack} {} {} {net}", it.id, center.x, center.y, it.clearance_class, it.fixed as u32));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Insert the dump's located connection as FreeRouting did, then tidy the
+/// changed area as the batch autorouter does; the first record that
+/// differs, or none.
+fn replay_insertion(dump: &str) -> Option<Result<(), String>> {
+    use eda_freeroute::autoroute::Control;
+    use eda_freeroute::routing::pull_tight::PullTight;
+    use eda_freeroute::routing::RoutingBoard;
+    let inserted = dump.lines().find(|l| l.starts_with("inserted "))?;
+    let (net, _) = route(dump)?;
+    let board = read_board(dump).unwrap();
+    let located = dumped_located(dump, &board)?;
+    let ctrl = Control::for_batch(&board, net, 1);
+    let mut rb = RoutingBoard::new(board);
+    let compare = |want: Vec<&str>, got: Vec<String>, what: &str| -> Result<(), String> {
+        if std::env::var_os("INSERTION_VERBOSE").is_some() {
+            eprintln!("-- {what}, FreeRouting:\n{}\n-- port:\n{}", want.join("\n"), got.join("\n"));
+        }
+        for (i, g) in got.iter().enumerate() {
+            let w = want.get(i).copied().unwrap_or("(nothing)");
+            if w != g {
+                return Err(format!("{what} differs at record {i}\n  FreeRouting: {w}\n  port:        {g}"));
+            }
+        }
+        if want.len() != got.len() {
+            return Err(format!("{what}: FreeRouting has {} records, the port {}", want.len(), got.len()));
+        }
+        Ok(())
+    };
+    let id_max = dump.lines().find(|l| l.starts_with("id_max ")).map(|l| l.to_string());
+    if let Some(w) = id_max {
+        let g = format!("id_max {}", rb.id_max());
+        if w != g {
+            return Some(Err(format!("item numbers differ before inserting\n  FreeRouting: {w}\n  port:        {g}")));
+        }
+    }
+    rb.start_marking_changed_area();
+    let ok = eda_freeroute::routing::insert::insert_found_connection(&mut rb, &located, &ctrl);
+    let mut got = vec![format!("inserted {} {}", u8::from(ok), rb.id_max())];
+    got.extend(routes(&rb, "ins"));
+    let want: Vec<&str> = std::iter::once(inserted).chain(dump.lines().filter(|l| l.starts_with("ins_"))).collect();
+    if let Err(e) = compare(want, got, "the inserted connection") {
+        return Some(Err(e));
+    }
+    if ok {
+        let mut algo = PullTight::new(&[], None, rb.board.rules.pull_tight_accuracy, None, 0);
+        algo.opt_changed_area(&mut rb, true);
+        rb.changed_area = None;
+        let mut got = vec![format!("optimized {}", rb.id_max())];
+        got.extend(routes(&rb, "opt"));
+        let want: Vec<&str> = dump.lines().filter(|l| l.starts_with("optimized ") || l.starts_with("opt_")).collect();
+        if let Err(e) = compare(want, got, "the tidied connection") {
+            return Some(Err(e));
+        }
+    }
+    Some(Ok(()))
+}
+
+/// The found connection goes onto the board as FreeRouting puts it there,
+/// and comes out of the batch autorouter's clean-up the same. Boards that
+/// reach a part not ported yet -- the port stops there, naming it -- are
+/// listed but do not fail the test; any other stop or difference does.
+#[test]
+fn insertion_matches_freerouting() {
+    let (mut checked, mut unported, mut failures) = (0, Vec::new(), Vec::new());
+    for path in dumps() {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let dump = std::fs::read_to_string(&path).unwrap();
+        match std::panic::catch_unwind(|| replay_insertion(&dump)) {
+            Ok(None) => {}
+            Ok(Some(Ok(()))) => checked += 1,
+            Ok(Some(Err(e))) => failures.push(format!("{name}: {e}")),
+            Err(p) => {
+                let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                if msg.starts_with("not implemented") {
+                    unported.push(format!("{name}: {msg}"));
+                } else {
+                    failures.push(format!("{name}: stopped: {msg}"));
+                }
+            }
+        }
+    }
+    eprintln!("insertions matched: {checked}; stopped at parts not ported yet: {}", unported.len());
+    for u in &unported {
+        eprintln!("  {u}");
+    }
+    assert!(failures.is_empty(), "{} insertions differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }
