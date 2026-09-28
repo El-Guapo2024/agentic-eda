@@ -563,7 +563,7 @@ public class MazeParity {
           }
         }
         if (inserted != null) {
-          board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, 1000);
+          board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, Integer.MAX_VALUE);
           located_out.append("optimized ").append(board.communication.id_no_generator.max_generated_no()).append('\n');
           routes(board, "opt", located_out);
         }
@@ -755,12 +755,15 @@ public class MazeParity {
         located_out.append(' ').append(i.get_id_no());
       }
       located_out.append('\n');
-      double max_ms = Math.min(100000 * Math.pow(2, pass_no - 1), Integer.MAX_VALUE);
-      AutorouteEngine engine = board.init_autoroute(net, ctrl.trace_clearance_class_no, null, new TimeLimit((int) max_ms), false);
+      // BatchAutorouter limits a search to 100 s times 2^(pass - 1), and the
+      // clean-up to 1 s: under load that cuts FreeRouting short, so the
+      // dumps would depend on the machine. The harness gives both all the
+      // time they need; the port has no limits.
+      AutorouteEngine engine = board.init_autoroute(net, ctrl.trace_clearance_class_no, null, new TimeLimit(Integer.MAX_VALUE), false);
       located_out.append(tree_fingerprint(engine.autoroute_search_tree)).append('\n');
       String result = autoroute_connection(board, engine, start, dest, ctrl, ripped, ripped_costs, located_out);
       if (result.equals("ROUTED")) {
-        board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, 1000);
+        board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, Integer.MAX_VALUE);
       }
       return result;
     } catch (Exception e) {
