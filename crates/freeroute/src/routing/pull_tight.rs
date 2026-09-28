@@ -839,7 +839,7 @@ impl RoutingBoard {
         if !shape.is_contained_in_box(&self.board.bounds) {
             return false;
         }
-        for (i, _) in self.overlapping_entries_with_clearance(shape, layer, &[], cl_class) {
+        for (i, k) in self.overlapping_entries_with_clearance(shape, layer, &[], cl_class) {
             let item = &self.board.items[i];
             if let Some(pins) = contact_pins {
                 if pins.contains(&i) {
@@ -858,8 +858,21 @@ impl RoutingBoard {
             }
             if is_obstacle && self.is_trace(i) {
                 if let Some(pins) = contact_pins {
-                    if pins.iter().any(|&p| self.board.items[p].nets.len() > 1 && self.board.items[p].shares_net(item)) {
-                        unimplemented!("traces of another net at a tie pin (check_trace_shape) are not ported yet");
+                    // A trace of another net at a tie pin is passed over
+                    // where it meets the piece inside the pin.
+                    let mut intersection: Option<TileShape> = None;
+                    for &p in pins {
+                        let pin = &self.board.items[p];
+                        if pin.nets.len() <= 1 || !pin.shares_net(item) {
+                            continue;
+                        }
+                        let meet = intersection.get_or_insert_with(|| shape.intersection(&self.tile_shape(i, k as usize).expect("the trace's shape")));
+                        let pin_shape = self.tile_shape(p, (layer - pin.first_layer) as usize).expect("the pin's shape on the layer");
+                        // TileShape.contains_approx.
+                        if (0..meet.border_line_count()).all(|c| pin_shape.contains_float(&meet.corner_approx(c))) {
+                            is_obstacle = false;
+                            break;
+                        }
                     }
                 }
             }
