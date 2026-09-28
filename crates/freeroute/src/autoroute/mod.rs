@@ -4,6 +4,7 @@
 pub mod control;
 pub mod distance;
 pub mod engine;
+pub mod locate;
 pub mod maze;
 pub mod shove;
 

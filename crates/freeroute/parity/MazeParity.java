@@ -44,6 +44,8 @@
 //        <next room> <shape entry ax ay bx by> <room_ripped 0|1> <already_checked 0|1>
 //   result <door> <section> | result none | maze none
 //   path <door> <section>                         (backtrack from the result)
+//   located <start item> <start layer> <target item> <target layer> | located none
+//   located_trace <layer> <n> <x y>...            (LocateFoundConnectionAlgo's traces, in order)
 //
 // A door is "door <room> <room> <dimension>", "target <item id> <entry> <room>",
 // "drill <x> <y> <first layer> <last layer>" or "page <llx> <lly> <urx> <ury>";
@@ -59,6 +61,7 @@ import app.freerouting.autoroute.ExpandableObject;
 import app.freerouting.autoroute.ExpansionDoor;
 import app.freerouting.autoroute.ExpansionDrill;
 import app.freerouting.autoroute.ExpansionRoom;
+import app.freerouting.autoroute.LocateFoundConnectionAlgo;
 import app.freerouting.autoroute.MazeSearchAlgo;
 import app.freerouting.autoroute.MazeSearchElement;
 import app.freerouting.autoroute.ObstacleExpansionRoom;
@@ -453,6 +456,30 @@ public class MazeParity {
       }
     }
     ExpandableObject dest = (ExpandableObject) field(maze, "destination_door");
+    if (dest != null) {
+      // The found connection as traces: LocateFoundConnectionAlgo, which
+      // also reallocates door sections, so it runs after the path is read.
+      StringBuilder located_out = new StringBuilder();
+      MazeSearchAlgo.Result found = maze.find_connection();
+      LocateFoundConnectionAlgo located = LocateFoundConnectionAlgo.get_instance(
+          found, ctrl, tree, board.rules.get_trace_angle_restriction(), new TreeSet<>(), new java.util.HashMap<>(), board.get_test_level());
+      if (located == null || located.start_item == null) {
+        located_out.append("located none\n");
+      } else {
+        located_out.append("located ").append(located.start_item.get_id_no()).append(' ').append(located.start_layer).append(' ')
+            .append(located.target_item == null ? "none" : String.valueOf(located.target_item.get_id_no())).append(' ')
+            .append(located.target_layer).append('\n');
+        for (Object ri : located.connection_items) {
+          IntPoint[] corners = (IntPoint[]) field(ri, "corners");
+          located_out.append("located_trace ").append(field(ri, "layer")).append(' ').append(corners.length);
+          for (IntPoint c : corners) {
+            located_out.append(' ').append(c.x).append(' ').append(c.y);
+          }
+          located_out.append('\n');
+        }
+      }
+      locate_records = located_out.toString();
+    }
     if (dest == null) {
       out.append("result none\n");
     } else {
@@ -467,8 +494,12 @@ public class MazeParity {
         curr_section = info.section_no_of_backtrack_door;
       }
     }
+    out.append(locate_records);
     System.out.print(out);
   }
+
+  /** The located connection's records, written after the path. */
+  private static String locate_records = "";
 
   private static String kind(Item item) {
     if (item instanceof Pin) {

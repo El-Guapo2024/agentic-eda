@@ -368,6 +368,30 @@ mod search {
                 let el = maze.engine.element(d, section);
                 (curr, section) = (el.backtrack_door, el.section_no_of_backtrack_door);
             }
+            // The found path as traces.
+            let located = eda_freeroute::autoroute::locate::locate(maze.engine, &ctrl, &f);
+            let mut lines = Vec::new();
+            match located {
+                None => lines.push("located none".to_string()),
+                Some(l) => {
+                    let item_id = |i: usize| board.items[i].id;
+                    lines.push(format!("located {} {} {} {}", item_id(l.start_item), l.start_layer, item_id(l.target_item), l.target_layer));
+                    for t in &l.traces {
+                        let corners: Vec<String> = t.corners.iter().map(|p| format!("{} {}", p.x, p.y)).collect();
+                        lines.push(format!("located_trace {} {} {}", t.layer, t.corners.len(), corners.join(" ")));
+                    }
+                }
+            }
+            let want_located: Vec<&str> = dump.lines().filter(|l| l.starts_with("located")).collect();
+            for (i, line) in lines.iter().enumerate() {
+                let w = want_located.get(i).copied().unwrap_or("(nothing)");
+                if w != line {
+                    return Some(Err(format!("located connection differs\n  FreeRouting: {w}\n  port:        {line}")));
+                }
+            }
+            if want_located.len() != lines.len() {
+                return Some(Err(format!("FreeRouting located {} records, the port {}", want_located.len(), lines.len())));
+            }
         }
         Some(Ok(n))
     }
