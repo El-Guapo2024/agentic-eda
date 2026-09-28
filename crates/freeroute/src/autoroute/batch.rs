@@ -277,3 +277,16 @@ pub fn autoroute_item(rb: &mut RoutingBoard, item: usize, net: i32, pass_no: i32
     out.result = RouteResult::Routed;
     out
 }
+
+/// The clean-up ending a pass: every net's tails removed, and the changed
+/// area pulled tight. `BatchAutorouter.remove_tails`, as `autoroute_pass`
+/// ends with it.
+pub fn remove_pass_tails(rb: &mut RoutingBoard) {
+    let stop = if rb.board.settings.with_fanout { StopConnection::FanoutVia } else { StopConnection::None };
+    let trace_costs = rb.board.settings.trace_costs.clone();
+    rb.start_marking_changed_area();
+    rb.remove_trace_tails(-1, stop);
+    let mut algo = PullTight::new(&[], None, rb.board.rules.pull_tight_accuracy, None, 0);
+    algo.opt_changed_area(rb, Some(trace_costs.as_slice()));
+    rb.changed_area = None;
+}

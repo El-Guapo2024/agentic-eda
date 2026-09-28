@@ -63,6 +63,10 @@
 //   conn_start <ids>..., conn_dest <ids>...        (the search's start and destination items)
 //   conn_tree <leaves> <hash>                       (the autoroute tree's layout before the search)
 //
+// With MAZE_PASSES=<p> as well, up to p passes; each pass after its connections removes the
+// tails, as autoroute_pass does, which is recorded as
+//   tails <id max>, then conn_del/conn_add as for a connection.
+//
 // With MAZE_PASS_SKIP=<k>, the pass routes k connections first; the board is dumped as they left
 // it, and its next connection is searched and dumped as the first one is otherwise.
 //   conn_located <start item> <start layer> <target item> <target layer>, conn_located_trace ...  (as located)
@@ -596,14 +600,11 @@ public class MazeParity {
   private static void pass(RoutingBoard board, BoardHandlingHeadless handling, int p_max, StringBuilder out) throws Exception {
     AutorouteSettings settings = handling.get_settings().autoroute_settings;
     AutorouteControl.ExpansionCostFactor[] trace_costs = settings.get_trace_cost_arr();
-    int pass_no = settings.get_start_pass_no();
-    // The items to route, as autoroute_pass collects them.
-    List<Item> list = pass_list(board);
-    out.append("pass ").append(pass_no).append(' ').append(list.size());
-    for (Item item : list) {
-      out.append(' ').append(item.get_id_no());
-    }
-    out.append('\n');
+    int start_pass_no = settings.get_start_pass_no();
+    // With MAZE_PASSES=<p>, up to p passes, as autoroute_passes runs them
+    // (its stops for repeated or stagnating boards left out).
+    String passes_env = System.getenv("MAZE_PASSES");
+    int max_passes = passes_env == null ? 1 : Integer.parseInt(passes_env);
     java.util.Map<Integer, String> before = route_records(board);
     // With DEBUG_IDS=<k>, every item number connection k draws goes to
     // stderr with where it was drawn from.
@@ -616,55 +617,83 @@ public class MazeParity {
       f.set(board.communication, id_log);
     }
     int n = 0;
-    outer:
-    for (Item item : list) {
-      for (int i = 0; i < item.net_count(); ++i) {
-        if (n >= p_max) {
-          break outer;
-        }
-        int net = item.get_net_no(i);
-        board.start_marking_changed_area();
-        SortedSet<Item> ripped = new TreeSet<>();
-        java.util.Map<Item, Integer> ripped_costs = new java.util.LinkedHashMap<>();
-        StringBuilder located_out = new StringBuilder();
-        if (id_log != null) {
-          id_log.active = n == Integer.parseInt(debug_ids);
-        }
-        String result = autoroute_item(board, handling, trace_costs, item, net, ripped, ripped_costs, pass_no, located_out);
-        if (id_log != null && id_log.active) {
-          // The traces whose ends break their pins' exit rules, now.
-          for (Item t : board.get_items()) {
-            if (t instanceof PolylineTrace) {
-              PolylineTrace pt = (PolylineTrace) t;
-              for (boolean at_start : new boolean[] {true, false}) {
-                if (!pt.check_connection_to_pin(at_start)) {
-                  System.err.println("BADPIN " + pt.get_id_no() + " " + at_start);
+    for (int pass_no = start_pass_no; pass_no < start_pass_no + max_passes && n < p_max; ++pass_no) {
+      // The items to route, as autoroute_pass collects them.
+      List<Item> list = pass_list(board);
+      out.append("pass ").append(pass_no).append(' ').append(list.size());
+      for (Item item : list) {
+        out.append(' ').append(item.get_id_no());
+      }
+      out.append('\n');
+      if (list.isEmpty()) {
+        break;
+      }
+      outer:
+      for (Item item : list) {
+        for (int i = 0; i < item.net_count(); ++i) {
+          if (n >= p_max) {
+            break outer;
+          }
+          int net = item.get_net_no(i);
+          board.start_marking_changed_area();
+          SortedSet<Item> ripped = new TreeSet<>();
+          java.util.Map<Item, Integer> ripped_costs = new java.util.LinkedHashMap<>();
+          StringBuilder located_out = new StringBuilder();
+          if (id_log != null) {
+            id_log.active = n == Integer.parseInt(debug_ids);
+          }
+          String result = autoroute_item(board, handling, trace_costs, item, net, ripped, ripped_costs, pass_no, located_out);
+          if (id_log != null && id_log.active) {
+            // The traces whose ends break their pins' exit rules, now.
+            for (Item t : board.get_items()) {
+              if (t instanceof PolylineTrace) {
+                PolylineTrace pt = (PolylineTrace) t;
+                for (boolean at_start : new boolean[] {true, false}) {
+                  if (!pt.check_connection_to_pin(at_start)) {
+                    System.err.println("BADPIN " + pt.get_id_no() + " " + at_start);
+                  }
                 }
               }
             }
           }
-        }
-        out.append("conn ").append(n).append(' ').append(item.get_id_no()).append(' ').append(net).append(' ').append(result)
-            .append(' ').append(board.communication.id_no_generator.max_generated_no());
-        for (Item r : ripped) {
-          out.append(' ').append(r.get_id_no());
-        }
-        out.append('\n').append(located_out);
-        java.util.Map<Integer, String> after = route_records(board);
-        for (java.util.Map.Entry<Integer, String> e : before.entrySet()) {
-          if (!e.getValue().equals(after.get(e.getKey()))) {
-            out.append("conn_del ").append(e.getKey()).append('\n');
+          out.append("conn ").append(n).append(' ').append(item.get_id_no()).append(' ').append(net).append(' ').append(result)
+              .append(' ').append(board.communication.id_no_generator.max_generated_no());
+          for (Item r : ripped) {
+            out.append(' ').append(r.get_id_no());
           }
+          out.append('\n').append(located_out);
+          before = changes(board, before, out);
+          ++n;
         }
-        for (java.util.Map.Entry<Integer, String> e : after.entrySet()) {
-          if (!e.getValue().equals(before.get(e.getKey()))) {
-            out.append("conn_add ").append(e.getValue()).append('\n');
-          }
-        }
-        before = after;
-        ++n;
+      }
+      if (n >= p_max) {
+        break;
+      }
+      // autoroute_pass ends a pass removing tails, with the clean-up after.
+      Item.StopConnectionOption stop =
+          settings.get_with_fanout() ? Item.StopConnectionOption.FANOUT_VIA : Item.StopConnectionOption.NONE;
+      board.start_marking_changed_area();
+      board.remove_trace_tails(-1, stop);
+      board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), trace_costs, null, Integer.MAX_VALUE);
+      out.append("tails ").append(board.communication.id_no_generator.max_generated_no()).append('\n');
+      before = changes(board, before, out);
+    }
+  }
+
+  /** conn_del and conn_add records for the traces and vias changed since p_before; the board's now. */
+  private static java.util.Map<Integer, String> changes(RoutingBoard board, java.util.Map<Integer, String> p_before, StringBuilder out) {
+    java.util.Map<Integer, String> after = route_records(board);
+    for (java.util.Map.Entry<Integer, String> e : p_before.entrySet()) {
+      if (!e.getValue().equals(after.get(e.getKey()))) {
+        out.append("conn_del ").append(e.getKey()).append('\n');
       }
     }
+    for (java.util.Map.Entry<Integer, String> e : after.entrySet()) {
+      if (!e.getValue().equals(p_before.get(e.getKey()))) {
+        out.append("conn_add ").append(e.getValue()).append('\n');
+      }
+    }
+    return after;
   }
 
   /**

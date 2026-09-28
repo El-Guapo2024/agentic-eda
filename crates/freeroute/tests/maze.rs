@@ -634,17 +634,11 @@ fn pass_dumps() -> Vec<PathBuf> {
 /// Replay the dump's first pass connection by connection; the number of
 /// connections that agree, and the first difference if one does not.
 fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
-    use eda_freeroute::autoroute::batch::{autoroute_item, pass_items};
+    use eda_freeroute::autoroute::batch::{autoroute_item, pass_items, remove_pass_tails};
     use eda_freeroute::routing::RoutingBoard;
-    let pass = dump.lines().find(|l| l.starts_with("pass "))?;
+    dump.lines().find(|l| l.starts_with("pass "))?;
     let board = read_board(dump).unwrap();
     let mut rb = RoutingBoard::new(board);
-    let pass_no: i32 = pass.split_whitespace().nth(1).unwrap().parse().unwrap();
-    let items = pass_items(&rb);
-    let got = format!("pass {pass_no} {} {}", items.len(), items.iter().map(|&i| rb.item(i).id.to_string()).collect::<Vec<_>>().join(" "));
-    if got.trim_end() != pass {
-        return Some((0, Some(format!("the items to route differ\n  FreeRouting: {pass}\n  port:        {got}"))));
-    }
     let records = |rb: &RoutingBoard| -> std::collections::BTreeMap<u32, String> {
         let mut m = std::collections::BTreeMap::new();
         for r in routes(rb, "r") {
@@ -653,76 +647,102 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
         }
         m
     };
-    let lines: Vec<&str> = dump.lines().filter(|l| l.starts_with("conn")).collect();
-    // Dumps from before the harness wrote the tree's layout have none.
-    let has_trees = lines.iter().any(|l| l.starts_with("conn_tree "));
-    let mut before = records(&rb);
-    let mut k = 0;
-    let mut matched = 0;
-    while k < lines.len() {
-        let head = lines[k];
-        let f: Vec<&str> = head.split_whitespace().collect();
-        let (item_id, net): (u32, i32) = (f[2].parse().unwrap(), f[3].parse().unwrap());
-        // The item may have left the board since the pass listed it -- a fixed
-        // trace split, say -- and FreeRouting routes the object still.
-        let item = rb.board.items.iter().position(|i| i.id == item_id).expect("the item to route");
-        if let Ok(file) = std::env::var("CONN_TREE_FULL") {
-            // The tree as this connection's search will find it, to diff
-            // against FreeRouting's (MazeParity.java writes the same way).
-            use std::io::Write;
-            let class = eda_freeroute::autoroute::control::Control::for_batch(&rb.board, net, pass_no).trace_clearance_class;
-            let listing = rb.autoroute_tree_listing(class);
-            std::fs::OpenOptions::new().create(true).append(true).open(file).unwrap().write_all(listing.as_bytes()).unwrap();
-        }
-        let routed = autoroute_item(&mut rb, item, net, pass_no);
-        let id = |rb: &RoutingBoard, i: usize| rb.item(i).id;
-        let mut got = vec![format!("conn {} {item_id} {net} {} {}{}", f[1], routed.result.name(), rb.id_max(), routed.ripped.iter().map(|&r| format!(" {}", id(&rb, r))).collect::<String>())];
-        if !routed.start.is_empty() || !routed.dest.is_empty() {
-            got.push(format!("conn_start{}", routed.start.iter().map(|&i| format!(" {}", id(&rb, i))).collect::<String>()));
-            got.push(format!("conn_dest{}", routed.dest.iter().map(|&i| format!(" {}", id(&rb, i))).collect::<String>()));
-        }
-        if let (Some((leaves, hash)), true) = (routed.tree, has_trees) {
-            got.push(format!("conn_tree {leaves} {hash}"));
-        }
-        if let Some(l) = &routed.located {
-            got.push(format!("conn_located {} {} {} {}", id(&rb, l.start_item), l.start_layer, id(&rb, l.target_item), l.target_layer));
-            for t in &l.traces {
-                let corners: Vec<String> = t.corners.iter().map(|p| format!("{} {}", p.x, p.y)).collect();
-                got.push(format!("conn_located_trace {} {} {}", t.layer, t.corners.len(), corners.join(" ")));
-            }
-        }
-        let after = records(&rb);
-        for (id, r) in &before {
+    // What changed since `before`, as the harness writes it.
+    let changes = |before: &std::collections::BTreeMap<u32, String>, after: &std::collections::BTreeMap<u32, String>, got: &mut Vec<String>| {
+        for (id, r) in before {
             if after.get(id) != Some(r) {
                 got.push(format!("conn_del {id}"));
             }
         }
-        for (id, r) in &after {
+        for (id, r) in after {
             if before.get(id) != Some(r) {
                 got.push(format!("conn_add {r}"));
             }
         }
+    };
+    let is_step = |l: &str| l.starts_with("conn ") || l.starts_with("pass ") || l.starts_with("tails ");
+    let lines: Vec<&str> = dump.lines().filter(|l| l.starts_with("conn") || l.starts_with("pass ") || l.starts_with("tails ")).collect();
+    // Dumps from before the harness wrote the tree's layout have none.
+    let has_trees = lines.iter().any(|l| l.starts_with("conn_tree "));
+    let mut before = records(&rb);
+    let mut pass_no = 0;
+    let mut k = 0;
+    let mut matched = 0;
+    while k < lines.len() {
+        let head = lines[k];
+        let mut got: Vec<String>;
+        if head.starts_with("pass ") {
+            // The items the pass routes.
+            pass_no = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+            let items = pass_items(&rb);
+            let got = format!("pass {pass_no} {} {}", items.len(), items.iter().map(|&i| rb.item(i).id.to_string()).collect::<Vec<_>>().join(" "));
+            if got.trim_end() != head {
+                return Some((matched, Some(format!("the items of pass {pass_no} differ\n  FreeRouting: {head}\n  port:        {got}"))));
+            }
+            k += 1;
+            continue;
+        } else if head.starts_with("tails ") {
+            // The clean-up ending the pass.
+            remove_pass_tails(&mut rb);
+            got = vec![format!("tails {}", rb.id_max())];
+        } else {
+            let f: Vec<&str> = head.split_whitespace().collect();
+            let (item_id, net): (u32, i32) = (f[2].parse().unwrap(), f[3].parse().unwrap());
+            // The item may have left the board since the pass listed it -- a
+            // fixed trace split, say -- and FreeRouting routes the object still.
+            let item = rb.board.items.iter().position(|i| i.id == item_id).expect("the item to route");
+            if let Ok(file) = std::env::var("CONN_TREE_FULL") {
+                // The tree as this connection's search will find it, to diff
+                // against FreeRouting's (MazeParity.java writes the same way).
+                use std::io::Write;
+                let class = eda_freeroute::autoroute::control::Control::for_batch(&rb.board, net, pass_no).trace_clearance_class;
+                let listing = rb.autoroute_tree_listing(class);
+                std::fs::OpenOptions::new().create(true).append(true).open(file).unwrap().write_all(listing.as_bytes()).unwrap();
+            }
+            let routed = autoroute_item(&mut rb, item, net, pass_no);
+            let id = |rb: &RoutingBoard, i: usize| rb.item(i).id;
+            got = vec![format!("conn {} {item_id} {net} {} {}{}", f[1], routed.result.name(), rb.id_max(), routed.ripped.iter().map(|&r| format!(" {}", id(&rb, r))).collect::<String>())];
+            if !routed.start.is_empty() || !routed.dest.is_empty() {
+                got.push(format!("conn_start{}", routed.start.iter().map(|&i| format!(" {}", id(&rb, i))).collect::<String>()));
+                got.push(format!("conn_dest{}", routed.dest.iter().map(|&i| format!(" {}", id(&rb, i))).collect::<String>()));
+            }
+            if let (Some((leaves, hash)), true) = (routed.tree, has_trees) {
+                got.push(format!("conn_tree {leaves} {hash}"));
+            }
+            if let Some(l) = &routed.located {
+                got.push(format!("conn_located {} {} {} {}", id(&rb, l.start_item), l.start_layer, id(&rb, l.target_item), l.target_layer));
+                for t in &l.traces {
+                    let corners: Vec<String> = t.corners.iter().map(|p| format!("{} {}", p.x, p.y)).collect();
+                    got.push(format!("conn_located_trace {} {} {}", t.layer, t.corners.len(), corners.join(" ")));
+                }
+            }
+        }
+        let after = records(&rb);
+        changes(&before, &after, &mut got);
         before = after;
         let mut want = vec![head];
         k += 1;
-        while k < lines.len() && !lines[k].starts_with("conn ") {
+        while k < lines.len() && !is_step(lines[k]) {
             want.push(lines[k]);
             k += 1;
         }
+        let what = if head.starts_with("tails ") { format!("the clean-up after pass {pass_no}") } else { format!("connection {matched}") };
         for (i, g) in got.iter().enumerate() {
             let w = want.get(i).copied().unwrap_or("(nothing)");
             if w != g {
                 if std::env::var_os("PASS_VERBOSE").is_some() {
-                    // Both connections' records in full, to diff.
+                    // Both steps' records in full, to diff.
                     eprintln!("== FreeRouting\n{}\n== port\n{}", want.join("\n"), got.join("\n"));
                 }
-                return Some((matched, Some(format!("connection {matched} differs\n  FreeRouting: {w}\n  port:        {g}"))));
+                return Some((matched, Some(format!("{what} differs\n  FreeRouting: {w}\n  port:        {g}"))));
             }
         }
         if want.len() != got.len() {
-            return Some((matched, Some(format!("connection {matched}: FreeRouting has {} records, the port {}\n  FreeRouting: {}", want.len(), got.len(), want.get(got.len()).copied().unwrap_or("")))));
+            return Some((matched, Some(format!("{what}: FreeRouting has {} records, the port {}\n  FreeRouting: {}", want.len(), got.len(), want.get(got.len()).copied().unwrap_or("")))));
         }
-        matched += 1;
+        if !head.starts_with("tails ") {
+            matched += 1;
+        }
     }
     Some((matched, None))
 }
