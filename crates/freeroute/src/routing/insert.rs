@@ -104,7 +104,7 @@ impl RoutingBoard {
                 last_shape_no = i;
                 break;
             }
-            if !self.shove_insert(shape, Some(from_side), layer, nets, cl_class, limits.max_recursion_depth, limits.max_via_recursion_depth, limits.max_spring_over_recursion_depth) {
+            if !self.shove_insert(shape, Some(from_side), layer, nets, cl_class, &[], limits.max_recursion_depth, limits.max_via_recursion_depth, limits.max_spring_over_recursion_depth) {
                 return Reached::Failed;
             }
         }
@@ -136,7 +136,7 @@ impl RoutingBoard {
             if !self.shove_check(&last_trace_shape, Some(from_side), None, layer, nets, cl_class, limits.max_recursion_depth, limits.max_via_recursion_depth, limits.max_spring_over_recursion_depth) {
                 return Reached::From;
             }
-            if !self.shove_insert(&last_trace_shape, Some(from_side), layer, nets, cl_class, limits.max_recursion_depth, limits.max_via_recursion_depth, limits.max_spring_over_recursion_depth) {
+            if !self.shove_insert(&last_trace_shape, Some(from_side), layer, nets, cl_class, &[], limits.max_recursion_depth, limits.max_via_recursion_depth, limits.max_spring_over_recursion_depth) {
                 return Reached::Failed;
             }
         }

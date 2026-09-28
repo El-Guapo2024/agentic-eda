@@ -211,7 +211,7 @@ impl RoutingBoard {
         let Some(from_side) = via_from_side(&FloatPoint::from_int(location), &tile_shape, &room, check_radius) else {
             return DrillCheck::NotDrillable;
         };
-        self.check_forced_pad(&tile_shape, Some(from_side), layer, nets, cl_class, attach_smd_allowed, max_recursion_depth, max_via_recursion_depth, &[])
+        self.check_forced_pad(&tile_shape, Some(from_side), layer, nets, cl_class, attach_smd_allowed, max_recursion_depth, max_via_recursion_depth, &[], false)
     }
 
     /// Whether a pad `shape` fits on `layer`, pushing aside what can be
@@ -229,6 +229,7 @@ impl RoutingBoard {
         max_recursion_depth: i32,
         max_via_recursion_depth: i32,
         ignore: &[usize],
+        check_only_front: bool,
     ) -> DrillCheck {
         let board = &self.board;
         if !shape.is_contained_in_box(&board.bounds) {
@@ -256,8 +257,23 @@ impl RoutingBoard {
         if max_recursion_depth <= 0 || entries.max_stack_level > 1 {
             return DrillCheck::NotDrillable;
         }
-        if entries.next_substitute_trace_piece(self).is_some() {
-            unimplemented!("pushing a trace aside for a new via (ForcedPadAlgo with substitute traces) is not ported yet");
+        if matches!(shape, TileShape::Box(_)) {
+            unimplemented!("pushing traces aside in 90-degree mode is not ported");
+        }
+        // The pieces pushed round the pad must fit in turn; moving a drill
+        // item checks only those in front of it, for speed.
+        let from_side_no = from_side.map_or(-1, |f| f.no);
+        while let Some(piece) = entries.next_substitute_trace_piece(self) {
+            for i in 0..piece.polyline.lines.len() - 2 {
+                let curr_line = piece.polyline.lines[i + 1];
+                if check_only_front && !in_front_of_pad(&curr_line, shape, from_side_no, piece.half_width, true) {
+                    continue;
+                }
+                let (curr_shape, curr_from_side) = self.substitute_shape_and_from_side(&piece, i, true);
+                if !self.shove_check(&curr_shape, curr_from_side, Some(curr_line.direction()), layer, &piece.nets, piece.cl_class, max_recursion_depth - 1, max_via_recursion_depth, 0) {
+                    return DrillCheck::NotDrillable;
+                }
+            }
         }
         result
     }
@@ -526,6 +542,7 @@ impl RoutingBoard {
         layer: i32,
         nets: &[i32],
         cl_class: i32,
+        ignore: &[usize],
         max_recursion_depth: i32,
         max_via_recursion_depth: i32,
         max_spring_over_recursion_depth: i32,
@@ -536,13 +553,13 @@ impl RoutingBoard {
         if !shape.is_contained_in_box(&self.board.bounds) {
             return false;
         }
-        if !self.shove_vias_aside(shape, from_side, layer, nets, cl_class, &[], max_via_recursion_depth, true) {
+        if !self.shove_vias_aside(shape, from_side, layer, nets, cl_class, ignore, max_via_recursion_depth, true) {
             return false;
         }
         let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
         let mut obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
-        let ignore = self.ignore_items_at_tie_pins(shape, layer, nets);
-        obstacles.retain(|i| !ignore.contains(i));
+        let at_tie_pins = self.ignore_items_at_tie_pins(shape, layer, nets);
+        obstacles.retain(|i| !at_tie_pins.contains(i));
         let obstacles_shovable = entries.store_items(self, &obstacles, false, true);
         if !entries.shove_vias.is_empty() {
             return false;
@@ -558,11 +575,31 @@ impl RoutingBoard {
         }
         let tails_exist_before = self.contains_trace_tails(&obstacles, nets);
         self.cutout_traces(&obstacles, shape, nets, cl_class);
-        if matches!(shape, TileShape::Box(_)) {
+        self.insert_substitute_pieces(&mut entries, layer, ignore, tails_exist_before, max_recursion_depth, max_via_recursion_depth, max_spring_over_recursion_depth, false)
+    }
+
+    /// Lay each piece of trace the entries give round their shape, the
+    /// cut-out traces' replacement: sprung over what it can be, pushing in
+    /// turn what is in its way, then on the board with the number it drew,
+    /// normalized in the changed area, and any tail a push left behind
+    /// removed. False if a piece could not go in. The loop of
+    /// `ShoveTraceAlgo.insert` and `ForcedPadAlgo.forced_pad`; the latter
+    /// normalizes everywhere without a changed area, the former throws.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn insert_substitute_pieces(
+        &mut self,
+        entries: &mut ShapeTraceEntries,
+        layer: i32,
+        ignore: &[usize],
+        tails_exist_before: bool,
+        max_recursion_depth: i32,
+        max_via_recursion_depth: i32,
+        max_spring_over_recursion_depth: i32,
+        normalize_without_area: bool,
+    ) -> bool {
+        if matches!(entries.shape, TileShape::Box(_)) {
             unimplemented!("pushing traces aside in 90-degree mode is not ported");
         }
-        // Lay each piece round the shape, pushing in turn what is in its
-        // way, then put it on the board and tidy it.
         let mut spring_depth = max_spring_over_recursion_depth;
         while let Some(mut piece) = entries.next_substitute_trace_piece(self) {
             if piece.polyline.first_corner().java_equals(&piece.polyline.last_corner()) {
@@ -581,7 +618,7 @@ impl RoutingBoard {
             }
             for i in 0..piece.polyline.lines.len() - 2 {
                 let (shape, from_side) = self.substitute_shape_and_from_side(&piece, i, false);
-                if !self.shove_insert(&shape, from_side, layer, &piece.nets, piece.cl_class, max_recursion_depth - 1, max_via_recursion_depth, spring_depth) {
+                if !self.shove_insert(&shape, from_side, layer, &piece.nets, piece.cl_class, ignore, max_recursion_depth - 1, max_via_recursion_depth, spring_depth) {
                     return false;
                 }
             }
@@ -599,10 +636,15 @@ impl RoutingBoard {
                 component: 0,
                 nets: piece.nets.clone(),
             });
-            // The Java normalizes in the changed area, and would throw, and
-            // pass over the throw, without one.
-            if let Some(clip) = self.changed_area_on(layer) {
-                let _ = self.normalize(item, Some(&clip));
+            match self.changed_area_on(layer) {
+                Some(clip) => {
+                    let _ = self.normalize(item, Some(&clip));
+                }
+                None if normalize_without_area => {
+                    let _ = self.normalize(item, None);
+                }
+                // The Java throws, and passes over the throw.
+                None => {}
             }
             if !tails_exist_before {
                 for corner in &end_corners {
@@ -621,13 +663,13 @@ impl RoutingBoard {
 
     /// Whether a trace among `items` not of `nets` ends at nothing.
     /// `BasicBoard.contains_trace_tails`.
-    fn contains_trace_tails(&self, items: &[usize], nets: &[i32]) -> bool {
+    pub(crate) fn contains_trace_tails(&self, items: &[usize], nets: &[i32]) -> bool {
         items.iter().any(|&i| self.is_trace(i) && !nets_equal(&self.board.items[i].nets, nets) && self.is_tail(i))
     }
 
     /// Cut the traces of other nets among `items` out of `shape`, grown by
     /// each one's half width and clearance. `ShapeTraceEntries.cutout_traces`.
-    fn cutout_traces(&mut self, items: &[usize], shape: &TileShape, own_nets: &[i32], cl_class: i32) {
+    pub(crate) fn cutout_traces(&mut self, items: &[usize], shape: &TileShape, own_nets: &[i32], cl_class: i32) {
         for &i in items {
             if self.is_trace(i) && !self.board.items[i].shares_net_no(own_nets) {
                 self.cutout_trace(i, shape, cl_class);
@@ -706,12 +748,15 @@ impl RoutingBoard {
         true
     }
 
-    /// The trace pieces a pad of `shape` would push round it, for
-    /// `ForcedPadAlgo.forced_pad`: `None` if something cannot be pushed or
-    /// a via is in the way.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn stored_pad_entries(&self, shape: &TileShape, from_side: Option<FromSide>, layer: i32, nets: &[i32], cl_class: i32, obstacles: &[usize], copper_sharing_allowed: bool) -> Option<i32> {
-        let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
+    /// Entries for a pad of `shape` to push into, for `ForcedPadAlgo.forced_pad`.
+    pub(crate) fn pad_entries<'a>(&self, shape: &'a TileShape, from_side: Option<FromSide>, layer: i32, nets: &'a [i32], cl_class: i32) -> ShapeTraceEntries<'a> {
+        ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side)
+    }
+
+    /// Store the obstacles to a pad in its entries: the number of trace
+    /// pieces it would push round it, `None` if something cannot be pushed
+    /// or a via is in the way.
+    pub(crate) fn store_pad_entries(&self, entries: &mut ShapeTraceEntries, obstacles: &[usize], copper_sharing_allowed: bool) -> Option<i32> {
         if !(entries.store_items(self, obstacles, true, copper_sharing_allowed) && entries.shove_vias.is_empty()) {
             return None;
         }
@@ -1021,7 +1066,7 @@ struct EntryPoint {
 /// The traces crossing a shape to be pushed into, sorted round its border,
 /// and the vias in it: what a push would have to move.
 /// `ShapeTraceEntries`, its linked list kept as indices into `nodes`.
-struct ShapeTraceEntries<'a> {
+pub(crate) struct ShapeTraceEntries<'a> {
     shape: &'a TileShape,
     layer: i32,
     own_nets: &'a [i32],
@@ -1442,6 +1487,70 @@ impl<'a> ShapeTraceEntries<'a> {
             let id = rb.skip_id();
             return Some(SubstituteTrace { id, polyline, layer: self.layer, half_width, nets: item.nets.clone(), cl_class: item.clearance_class });
         }
+    }
+}
+
+/// Whether `line` lies in front of the octagon pad pushed from side
+/// `from_side`, `width` away, or beside it with `with_sides`: only those
+/// pieces a moving drill item meets. Other pads count as in front.
+/// `ForcedPadAlgo.in_front_of_pad`, the Java's slip in side 0 kept.
+fn in_front_of_pad(line: &Line, pad_shape: &TileShape, from_side: i32, width: i64, with_sides: bool) -> bool {
+    let is_octagon = match pad_shape {
+        TileShape::Box(_) | TileShape::Octagon(_) => true,
+        TileShape::Simplex(s) => s.is_int_octagon(),
+    };
+    if !is_octagon {
+        return true;
+    }
+    let o = pad_shape.bounding_octagon().expect("an octagon is bounded");
+    let (a, b) = (line.a, line.b);
+    let (lx, ly, rx, uy) = (o.left_x, o.bottom_y, o.right_x, o.top_y);
+    let (ulx, lrx, llx, urx) = (o.upper_left_diag_x, o.lower_right_diag_x, o.lower_left_diag_x, o.upper_right_diag_x);
+    let diag = width as f64 * 2f64.sqrt();
+    let w = width;
+    let min_x = a.x.min(b.x);
+    let max_x = a.x.max(b.x);
+    let min_y = a.y.min(b.y);
+    let max_y = a.y.max(b.y);
+    let (min_d, max_d) = ((a.x - a.y).min(b.x - b.y) as f64, (a.x - a.y).max(b.x - b.y) as f64);
+    let (min_s, max_s) = ((a.x + a.y).min(b.x + b.y) as f64, (a.x + a.y).max(b.x + b.y) as f64);
+    let (ulx, lrx, llx, urx) = (ulx as f64, lrx as f64, llx as f64, urx as f64);
+    match from_side {
+        0 => {
+            // (a.x + a.y) against (b.x + b.x): FreeRouting's slip.
+            let slip_min_s = (a.x + a.y).min(b.x + b.x) as f64;
+            let r = min_y >= uy + w || max_d <= ulx - diag || slip_min_s >= urx + diag;
+            r || with_sides && (max_x <= lx - w && min_d <= ulx - diag || min_x >= rx + w && min_s >= urx + diag)
+        }
+        1 => {
+            let r = min_y >= uy + w || max_d <= ulx - diag || max_x <= lx - w;
+            r || with_sides && (min_x <= lx - w && max_s <= llx - diag || max_y >= uy + w && min_s >= urx + diag)
+        }
+        2 => {
+            let r = max_x <= lx - w || max_d <= ulx - diag || max_s <= llx - diag;
+            r || with_sides && (max_y <= ly - w && min_s <= llx - diag || min_y >= uy + w && min_d <= ulx - diag)
+        }
+        3 => {
+            let r = max_x <= lx - w || max_y <= ly - w || max_s <= llx - diag;
+            r || with_sides && (min_y <= ly - w && min_d >= lrx + diag || min_x <= lx - w && max_d <= ulx - diag)
+        }
+        4 => {
+            let r = max_y <= ly - w || max_s <= llx - diag || min_d >= lrx + diag;
+            r || with_sides && (min_x >= rx + w && max_d >= lrx + diag || max_x <= lx - w && min_s <= llx - diag)
+        }
+        5 => {
+            let r = max_y <= ly - w || min_x >= rx + w || min_d >= lrx + diag;
+            r || with_sides && (max_x >= rx + w && min_s >= urx + diag || min_y <= ly - w && max_s <= llx - diag)
+        }
+        6 => {
+            let r = min_x >= rx + w || min_s >= urx + diag || min_d >= lrx + diag;
+            r || with_sides && (max_y <= ly - w && max_d >= lrx + diag || min_y >= uy + w && max_s >= urx + diag)
+        }
+        7 => {
+            let r = min_y >= uy + w || min_s >= urx + diag || min_x >= rx + w;
+            r || with_sides && (max_y >= uy + w && max_d <= ulx - diag || max_x >= rx + w && min_d >= lrx + diag)
+        }
+        _ => true,
     }
 }
 

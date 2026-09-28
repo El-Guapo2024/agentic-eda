@@ -92,7 +92,7 @@ impl RoutingBoard {
         let offset = self.min_trace_half_width;
         for (layer, tile) in self.via_pad_octagons(via_info, location) {
             let from_side = self.pad_from_side(&tile, location, layer, offset, vi.clearance_class);
-            if self.check_forced_pad(&tile, Some(from_side), layer, nets, vi.clearance_class, vi.attach_smd_allowed, max_recursion_depth, max_via_recursion_depth, &[]) == DrillCheck::NotDrillable {
+            if self.check_forced_pad(&tile, Some(from_side), layer, nets, vi.clearance_class, vi.attach_smd_allowed, max_recursion_depth, max_via_recursion_depth, &[], false) == DrillCheck::NotDrillable {
                 return false;
             }
         }
@@ -156,18 +156,17 @@ impl RoutingBoard {
         }
         let mut obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
         obstacles.retain(|i| !ignore.contains(i));
-        let pieces = self.stored_pad_entries(shape, Some(from_side), layer, nets, cl_class, &obstacles, copper_sharing_allowed);
-        let Some(trace_piece_count) = pieces else { return false };
+        let mut entries = self.pad_entries(shape, Some(from_side), layer, nets, cl_class);
+        let Some(trace_piece_count) = self.store_pad_entries(&mut entries, &obstacles, copper_sharing_allowed) else { return false };
         if trace_piece_count == 0 {
             return true;
         }
         if max_recursion_depth <= 0 {
             return false;
         }
-        if obstacles.iter().any(|&i| self.is_trace(i) && !self.board.items[i].shares_net_no(nets)) {
-            unimplemented!("cutting a trace of another net out of a pad's shape (ForcedPadAlgo.forced_pad) is not ported yet");
-        }
-        true
+        let tails_exist_before = self.contains_trace_tails(&obstacles, nets);
+        self.cutout_traces(&obstacles, shape, nets, cl_class);
+        self.insert_substitute_pieces(&mut entries, layer, ignore, tails_exist_before, max_recursion_depth, max_via_recursion_depth, 0, true)
     }
 
     /// Whether the drill item could move by `(dx, dy)`, pushing aside what
@@ -191,7 +190,7 @@ impl RoutingBoard {
             let Some(curr_shape) = self.tree.get_shape(item, (layer - it.first_layer) as u32) else { continue };
             let tile = TileShape::Octagon(curr_shape.translate_by(dx, dy).bounding_octagon().expect("a bounded pad"));
             let from_side = FromSide::of_point(center, &tile);
-            if self.check_forced_pad(&tile, Some(from_side), layer, &it.nets, it.clearance_class, attach_allowed, max_recursion_depth, max_via_recursion_depth, &ignore) == DrillCheck::NotDrillable {
+            if self.check_forced_pad(&tile, Some(from_side), layer, &it.nets, it.clearance_class, attach_allowed, max_recursion_depth, max_via_recursion_depth, &ignore, true) == DrillCheck::NotDrillable {
                 return false;
             }
         }
