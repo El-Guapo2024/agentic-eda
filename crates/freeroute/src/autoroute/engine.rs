@@ -32,6 +32,8 @@ pub struct TreeItem {
     pub exact: Option<TileShape>,
     /// See [`TreeObject::trace_end_line`].
     pub end_line: Option<Line>,
+    pub is_trace: bool,
+    pub nets: Vec<i32>,
 }
 
 impl TreeObject for TreeItem {
@@ -58,6 +60,12 @@ impl TreeObject for TreeItem {
     }
     fn trace_end_line(&self) -> Option<Line> {
         self.end_line
+    }
+    fn is_trace(&self) -> bool {
+        self.is_trace
+    }
+    fn shares_net_with(&self, other: &Self) -> bool {
+        self.nets.iter().any(|n| other.nets.contains(n))
     }
 }
 
@@ -308,6 +316,8 @@ impl<'b> Engine<'b> {
                     routable: item.is_routable(),
                     exact,
                     end_line,
+                    is_trace: matches!(item.kind, ItemKind::Trace { .. }),
+                    nets: item.nets.clone(),
                 };
                 graph.insert_item(bounds, entry);
                 shapes.insert((i, k as u32), shape);
@@ -402,10 +412,6 @@ impl<'b> Engine<'b> {
 
     /// `AutorouteEngine.complete_neighbour_rooms`.
     pub fn complete_neighbour_rooms(&mut self, room: RoomId) {
-        if self.graph.room(room).is_obstacle_room() {
-            // Obstacle rooms get their doors only when completed for ripup.
-            return;
-        }
         self.graph.complete_neighbour_rooms(room);
     }
 

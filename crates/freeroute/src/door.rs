@@ -95,6 +95,34 @@ impl<T: TreeObject> TreeObject for Entry<T> {
             Entry::Room { .. } => None,
         }
     }
+
+    fn is_routable(&self) -> bool {
+        match self {
+            Entry::Item(t) => t.is_routable(),
+            Entry::Room { .. } => false,
+        }
+    }
+
+    fn trace_end_line(&self) -> Option<Line> {
+        match self {
+            Entry::Item(t) => t.trace_end_line(),
+            Entry::Room { .. } => None,
+        }
+    }
+
+    fn is_trace(&self) -> bool {
+        match self {
+            Entry::Item(t) => t.is_trace(),
+            Entry::Room { .. } => false,
+        }
+    }
+
+    fn shares_net_with(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Entry::Item(a), Entry::Item(b)) => a.shares_net_with(b),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +250,9 @@ pub struct RoomGraph<T> {
     /// Each routable item entry's obstacle room, made when first needed:
     /// `ItemAutorouteInfo.get_expansion_room`.
     obstacle_rooms: HashMap<LeafId, RoomId>,
+    /// Obstacle rooms whose doors have been calculated:
+    /// `ObstacleExpansionRoom.all_doors_calculated`.
+    obstacle_doors_calculated: std::collections::HashSet<RoomId>,
 }
 
 impl<T: TreeObject> RoomGraph<T> {
@@ -236,6 +267,7 @@ impl<T: TreeObject> RoomGraph<T> {
             complete: Vec::new(),
             room_count: 0,
             obstacle_rooms: HashMap::new(),
+            obstacle_doors_calculated: std::collections::HashSet::new(),
         }
     }
 
@@ -398,7 +430,8 @@ impl<T: TreeObject> RoomGraph<T> {
         result
     }
 
-    /// Complete every incomplete room behind a door of `room`.
+    /// Complete every incomplete room behind a door of `room`, and
+    /// calculate the doors of every obstacle room behind one.
     /// `AutorouteEngine.complete_neighbour_rooms`.
     pub fn complete_neighbour_rooms(&mut self, room: RoomId) {
         let mut i = 0;
@@ -411,8 +444,247 @@ impl<T: TreeObject> RoomGraph<T> {
                 // That changed this room's doors: start over, as the Java
                 // restarts its iterator.
                 i = 0;
+            } else if self.room(other).is_obstacle_room() && !self.obstacle_doors_calculated.contains(&other) {
+                self.calculate_obstacle_doors(other);
+                self.obstacle_doors_calculated.insert(other);
             }
         }
+    }
+
+    /// The doors of an obstacle room: to the rooms and routable items it
+    /// touches, overlap doors to the obstacle rooms of routable items of its
+    /// net it overlaps, and new incomplete rooms along its free sides.
+    /// `Sorted45DegreeRoomNeighbours.calculate`, for an
+    /// `ObstacleExpansionRoom`. Like the Java it takes a room number it
+    /// never uses.
+    fn calculate_obstacle_doors(&mut self, room: RoomId) {
+        self.room_count += 1;
+        let (tile, layer) = {
+            let r = self.room(room);
+            (r.tile.clone().expect("an obstacle room has a shape"), r.layer)
+        };
+        let shape = tile.bounding_octagon().expect("an obstacle within the critical bound");
+        let mut n = Neighbours { completed: room, shape, layer, sorted: BTreeSet::new(), edge_touched: [false; 8] };
+        // ShapeSearchTree.overlapping_tree_entries with the obstacle's own
+        // shape: exactly, unless both are octagons.
+        let is_octagon = matches!(tile, TileShape::Octagon(_));
+        let mut entries: Vec<LeafId> = self
+            .tree
+            .overlaps(&shape)
+            .into_iter()
+            .filter(|&l| {
+                let p = self.tree.payload(l);
+                if p.layer() != layer {
+                    return false;
+                }
+                let entry_shape = p.exact_shape().cloned().unwrap_or(TileShape::Octagon(self.tree.bounds(l)));
+                (is_octagon && matches!(entry_shape, TileShape::Octagon(_))) || entry_shape.intersects(&tile)
+            })
+            .collect();
+        entries.sort_by_key(|&l| {
+            let p = self.tree.payload(l);
+            (p.id(), p.shape_index(), matches!(p, Entry::Item(_)))
+        });
+        for leaf in entries {
+            let (id, neighbour_room, routable) = {
+                let p = self.tree.payload(leaf);
+                let r = match p {
+                    Entry::Room { room, .. } => Some(*room),
+                    Entry::Item(_) => None,
+                };
+                (p.id(), r, p.is_routable())
+            };
+            let intersection = shape.intersection(&self.tree.bounds(leaf));
+            let dimension = intersection.dimension();
+            if dimension > 1 {
+                // Only obstacle rooms overlap: join those of the same net.
+                if neighbour_room.is_none() && routable {
+                    let other = self.obstacle_room(leaf);
+                    self.create_overlap_door(room, other);
+                }
+                continue;
+            }
+            if dimension < 0 {
+                continue;
+            }
+            if let Some(nb) = Neighbour::new(&shape, intersection, id, &mut n.edge_touched) {
+                n.sorted.insert(nb);
+            }
+            if dimension > 0 {
+                let other = match neighbour_room {
+                    Some(r) => Some(r),
+                    None if routable => Some(self.obstacle_room(leaf)),
+                    None => None,
+                };
+                if let Some(other) = other {
+                    if self.insert_door_ok(room, other, &intersection) {
+                        let other_tile = self.room(other).tile_shape().expect("a neighbour with a shape");
+                        let dimension = tile.intersection(&other_tile).dimension();
+                        self.add_door(room, other, dimension);
+                    }
+                }
+            }
+        }
+        // An obstacle room is never regrown (try_remove_edge_line).
+        if n.sorted.is_empty() {
+            self.edge_incomplete_rooms_of_obstacle(&n, 0, 7);
+        } else {
+            self.calculate_new_incomplete_rooms(&n);
+        }
+    }
+
+    /// An overlap door between two obstacle rooms: of routable items of a
+    /// common net, and for one trace only between consecutive segments.
+    /// `ObstacleExpansionRoom.create_overlap_door`.
+    fn create_overlap_door(&mut self, room: RoomId, other: RoomId) {
+        if self.door_exists(room, other) {
+            return;
+        }
+        let item_of = |r: RoomId| match self.room(r).state {
+            RoomState::Obstacle { item, .. } => item,
+            _ => unreachable!("an obstacle room"),
+        };
+        let (a, b) = (self.tree.payload(item_of(room)), self.tree.payload(item_of(other)));
+        if !(a.is_routable() && b.is_routable()) || !a.shares_net_with(b) {
+            return;
+        }
+        if a.id() == b.id() {
+            if !a.is_trace() {
+                return;
+            }
+            let (i, j) = (a.shape_index(), b.shape_index());
+            if i != j + 1 && i + 1 != j {
+                return;
+            }
+        }
+        self.add_door(room, other, 2);
+    }
+
+    /// New incomplete rooms along the free sides `from` to `to` of an
+    /// obstacle room, each running out to the board beyond that side.
+    /// `calculate_edge_incomplete_rooms_of_obstacle_expansion_room`.
+    fn edge_incomplete_rooms_of_obstacle(&mut self, n: &Neighbours, from: usize, to: usize) {
+        let board = Oct::of(&self.board.to_octagon());
+        let r = Oct::of(&n.shape);
+        let mut curr_corner = n.shape.corner(from);
+        let mut side = from;
+        loop {
+            let next = (side + 1) % 8;
+            let next_corner = n.shape.corner(next);
+            if curr_corner != next_corner {
+                let mut o = board;
+                match side {
+                    0 => o.uy = r.ly,
+                    1 => o.ulx = r.lrx,
+                    2 => o.lx = r.rx,
+                    3 => o.llx = r.urx,
+                    4 => o.ly = r.uy,
+                    5 => o.lrx = r.ulx,
+                    6 => o.rx = r.lx,
+                    _ => o.urx = r.llx,
+                }
+                self.insert_incomplete_room(n, o.octagon());
+            }
+            if side == to {
+                break;
+            }
+            // The Java compares each side's first corner with the corner of
+            // the side it started from, which it never moves on.
+            let _ = &mut curr_corner;
+            side = next;
+        }
+    }
+
+    /// New incomplete rooms between two neighbours of an obstacle room: at
+    /// the end of `prev`'s touch, at the start of `next`'s, and along the
+    /// free sides between. `same` when they are one neighbour, the room's
+    /// only one. `calculate_new_incomplete_rooms_for_obstacle_expansion_room`.
+    fn obstacle_rooms_between(&mut self, n: &Neighbours, prev: &Neighbour, next: &Neighbour, same: bool) {
+        let (from_side, to_side) = (prev.last_side, next.first_side);
+        if from_side == to_side && !same {
+            return;
+        }
+        let board = Oct::of(&self.board.to_octagon());
+        let r = Oct::of(&n.shape);
+        let (p, q) = (Oct::of(&prev.intersection), Oct::of(&next.intersection));
+        let mut o = board;
+        match from_side {
+            0 => {
+                o.uy = r.ly;
+                o.ulx = p.lrx;
+            }
+            1 => {
+                o.ulx = r.lrx;
+                o.lx = p.rx;
+            }
+            2 => {
+                o.lx = r.rx;
+                o.llx = p.urx;
+            }
+            3 => {
+                o.llx = r.urx;
+                o.ly = p.uy;
+            }
+            4 => {
+                o.ly = r.uy;
+                o.lrx = p.ulx;
+            }
+            5 => {
+                o.lrx = r.ulx;
+                o.rx = p.lx;
+            }
+            6 => {
+                o.rx = r.lx;
+                o.urx = p.llx;
+            }
+            _ => {
+                o.urx = r.llx;
+                o.uy = p.ly;
+            }
+        }
+        self.insert_incomplete_room(n, o.octagon());
+        let mut o = board;
+        match to_side {
+            0 => {
+                o.uy = r.ly;
+                o.urx = q.llx;
+            }
+            1 => {
+                o.ulx = r.lrx;
+                o.uy = q.ly;
+            }
+            2 => {
+                o.lx = r.rx;
+                o.ulx = q.lrx;
+            }
+            3 => {
+                o.llx = r.urx;
+                o.lx = q.rx;
+            }
+            4 => {
+                o.ly = r.uy;
+                o.llx = q.urx;
+            }
+            5 => {
+                o.lrx = r.ulx;
+                o.ly = q.uy;
+            }
+            6 => {
+                o.rx = r.lx;
+                o.lrx = q.ulx;
+            }
+            _ => {
+                o.urx = r.llx;
+                o.rx = q.lx;
+            }
+        }
+        self.insert_incomplete_room(n, o.octagon());
+        let curr_from = (from_side + 1) % 8;
+        if curr_from == to_side {
+            return;
+        }
+        let curr_to = (to_side + 7) % 8;
+        self.edge_incomplete_rooms_of_obstacle(n, curr_from, curr_to);
     }
 
     /// Calculate the doors of a grown room and store it; a room that came
@@ -689,8 +961,30 @@ impl<T: TreeObject> RoomGraph<T> {
     fn calculate_new_incomplete_rooms(&mut self, n: &Neighbours) {
         let board = Oct::of(&self.board.to_octagon());
         let Some(mut prev) = n.sorted.last().copied() else { return };
+        let obstacle = self.room(n.completed).is_obstacle_room();
+        if obstacle && n.sorted.len() == 1 {
+            self.obstacle_rooms_between(n, &prev, &prev, true);
+            return;
+        }
         for &next in &n.sorted {
-            if !next.intersection.intersects(&prev.intersection) {
+            let insert = if obstacle && n.sorted.len() == 2 {
+                // Two neighbours: is the side between them open?
+                let meet = next.intersection.intersection(&prev.intersection);
+                if meet.is_empty() {
+                    true
+                } else if meet.dimension() >= 1 {
+                    false
+                } else if prev.last_side == next.first_side {
+                    false
+                } else {
+                    prev.last_side != (next.first_side + 1) % 8
+                }
+            } else {
+                !next.intersection.intersects(&prev.intersection)
+            };
+            if insert && obstacle && next.first_side != prev.last_side {
+                self.obstacle_rooms_between(n, &prev, &next, false);
+            } else if insert {
                 // The Java's names: p and q are the previous and next
                 // neighbour's touch, o the new room, which starts as the
                 // board and is cut down case by case.

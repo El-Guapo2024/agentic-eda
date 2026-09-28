@@ -396,3 +396,65 @@ fn maze_search_matches_freerouting() {
     eprintln!("searches matched: {searched} ({steps} steps)");
     assert!(failures.is_empty(), "{} searches differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }
+
+/// Debugging aid: the port's rooms after `MAZE_STEPS` steps of the search
+/// in `MAZE_DUMP`, as `MAZE_ROOMS=1 MazeParity.java` prints FreeRouting's.
+#[test]
+#[ignore]
+fn print_rooms() {
+    use eda_freeroute::autoroute::engine::Engine;
+    use eda_freeroute::autoroute::maze::MazeSearch;
+    use eda_freeroute::autoroute::Control;
+    use eda_freeroute::door::RoomState;
+    let path = std::env::var("MAZE_DUMP").expect("MAZE_DUMP");
+    let steps: usize = std::env::var("MAZE_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    let dump = std::fs::read_to_string(path).unwrap();
+    let (net, _) = route(&dump).unwrap();
+    let board = read_board(&dump).unwrap();
+    let ids = |key: &str| -> Vec<usize> {
+        let line = dump.lines().find(|l| l.starts_with(key)).unwrap_or("");
+        line.split_whitespace().skip(1).map(|s| board.items.iter().position(|i| i.id == s.parse::<u32>().unwrap()).unwrap()).collect()
+    };
+    let ctrl = Control::for_batch(&board, net, 1);
+    let mut engine = Engine::new(&board, net, ctrl.trace_clearance_class);
+    let mut maze = MazeSearch::new(&mut engine, &ctrl, &ids("start_item"), &ids("dest_item")).expect("a start");
+    for _ in 0..steps {
+        if !maze.occupy_next_element() {
+            break;
+        }
+    }
+    let e = &*maze.engine;
+    let name = |r| {
+        let room = e.graph.room(r);
+        match room.state {
+            RoomState::Complete { id_no, .. } => format!("r{id_no}"),
+            RoomState::Obstacle { id_no, .. } => format!("o{}.{}", id_no >> 10, id_no & 1023),
+            RoomState::Incomplete { .. } => "inc".to_string(),
+        }
+    };
+    if let Ok(id) = std::env::var("MAZE_ITEM") {
+        let id: u64 = id.parse().unwrap();
+        let tree = e.graph.tree();
+        for l in tree.overlaps(&eda_freeroute::geometry::IntOctagon::new(-(1 << 24), -(1 << 24), 1 << 24, 1 << 24, -(1 << 25), 1 << 25, -(1 << 25), 1 << 25)) {
+            if let eda_freeroute::door::Entry::Item(t) = tree.payload(l) {
+                if t.id as u64 == id {
+                    println!("entry {} {} layer {} obstacle {} routable {} exact {:?}", t.id, t.shape_index, t.layer, t.trace_obstacle, t.routable, t.exact.is_some());
+                }
+            }
+        }
+    }
+    for &r in e.graph.complete_rooms() {
+        let room = e.graph.room(r);
+        let o = room.shape.unwrap();
+        let doors: Vec<String> = e
+            .graph
+            .doors_of(r)
+            .iter()
+            .map(|&d| {
+                let door = e.graph.door(d);
+                format!("door {} {} {}", name(door.first), name(door.second), door.dimension)
+            })
+            .collect();
+        println!("xroom {} {} {} | {}", name(r), room.layer, octagon_text(&o), doors.join(" | "));
+    }
+}

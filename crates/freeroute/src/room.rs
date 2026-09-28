@@ -56,6 +56,15 @@ pub trait TreeObject {
     fn trace_end_line(&self) -> Option<crate::geometry::Line> {
         None
     }
+    /// A trace, whose consecutive segments' obstacle rooms get overlap
+    /// doors.
+    fn is_trace(&self) -> bool {
+        false
+    }
+    /// Whether the two items share a net. `Item.shares_net`.
+    fn shares_net_with(&self, _other: &Self) -> bool {
+        false
+    }
 }
 
 /// A room whose shape is known but whose doors are not yet computed.
