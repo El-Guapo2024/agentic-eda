@@ -40,9 +40,33 @@ fn is_multiple_of_45_degree(dx: i64, dy: i64) -> bool {
     dx == 0 || dy == 0 || dx.abs() == dy.abs()
 }
 
-/// `IntVector.scalar_product`.
-fn scalar_product(a: (i64, i64), b: (i64, i64)) -> f64 {
-    a.0 as f64 * b.0 as f64 + a.1 as f64 * b.1 as f64
+/// The sign of `a * b - c * d`, exactly, as a side: positive left. The
+/// products of rational coordinates can pass 128 bits, so they are taken
+/// in 256.
+fn side_of_det(a: i128, b: i128, c: i128, d: i128) -> Side {
+    /// `a * b` as its sign and its magnitude's high and low halves.
+    fn product(a: i128, b: i128) -> (bool, u128, u128) {
+        const M: u128 = u64::MAX as u128;
+        let (x, y) = (a.unsigned_abs(), b.unsigned_abs());
+        let (x1, x0, y1, y0) = (x >> 64, x & M, y >> 64, y & M);
+        let (p00, p01, p10, p11) = (x0 * y0, x0 * y1, x1 * y0, x1 * y1);
+        let mid = (p00 >> 64) + (p01 & M) + (p10 & M);
+        let lo = (p00 & M) | (mid << 64);
+        let hi = p11 + (p01 >> 64) + (p10 >> 64) + (mid >> 64);
+        ((a < 0) != (b < 0) && (hi, lo) != (0, 0), hi, lo)
+    }
+    let (p, q) = (product(a, b), product(c, d));
+    let order = match (p.0, q.0) {
+        (false, true) => std::cmp::Ordering::Greater,
+        (true, false) => std::cmp::Ordering::Less,
+        (false, false) => (p.1, p.2).cmp(&(q.1, q.2)),
+        (true, true) => (q.1, q.2).cmp(&(p.1, p.2)),
+    };
+    match order {
+        std::cmp::Ordering::Greater => Side::Left,
+        std::cmp::Ordering::Less => Side::Right,
+        std::cmp::Ordering::Equal => Side::Collinear,
+    }
 }
 
 impl RoutingBoard {
@@ -485,14 +509,33 @@ impl RoutingBoard {
     /// traces.
     fn reposition_via_legs(&self, via: usize, first: &Leg, second: &Leg) -> Option<IntPoint> {
         let via_location = self.board.items[via].center().expect("a via");
-        let (Some(first_from), Some(second_from)) = (first.from_corner.as_int(), second.from_corner.as_int()) else {
-            unimplemented!("a via joining traces with corners off the grid (OptViaAlgo.reposition_via) is not ported yet");
+        // The corners from the via, exactly: numerators over a positive
+        // denominator, 1 for a corner on the grid. `Point.difference_by`.
+        let delta = |p: &Point| -> (i128, i128, i128) {
+            match p {
+                Point::Int(q) => ((q.x - via_location.x) as i128, (q.y - via_location.y) as i128, 1),
+                Point::Rational(r) => {
+                    let (x, y, z) = (r.x - via_location.x as i128 * r.z, r.y - via_location.y as i128 * r.z, r.z);
+                    if z < 0 {
+                        (-x, -y, -z)
+                    } else {
+                        (x, y, z)
+                    }
+                }
+            }
         };
-        let first_delta = (first_from.x - via_location.x, first_from.y - via_location.y);
-        let second_delta = (second_from.x - via_location.x, second_from.y - via_location.y);
-        let scalar = scalar_product(first_delta, second_delta);
+        let (first_delta, second_delta) = (delta(&first.from_corner), delta(&second.from_corner));
+        // `Vector.scalar_product`: exact for two grid vectors, else of
+        // their floating point approximations.
+        let scalar = if matches!((&first.from_corner, &second.from_corner), (Point::Int(_), Point::Int(_))) {
+            first_delta.0 as f64 * second_delta.0 as f64 + first_delta.1 as f64 * second_delta.1 as f64
+        } else {
+            let approx = |d: (i128, i128, i128)| (d.0 as f64 / d.2 as f64, d.1 as f64 / d.2 as f64);
+            let (a, b) = (approx(first_delta), approx(second_delta));
+            a.0 * b.0 + a.1 * b.1
+        };
         let float_via = FloatPoint::from_int(via_location);
-        let (float_first, float_second) = (FloatPoint::from_int(first_from), FloatPoint::from_int(second_from));
+        let (float_first, float_second) = (FloatPoint::from_point(&first.from_corner), FloatPoint::from_point(&second.from_corner));
         let first_distance = float_via.distance(&float_first);
         let second_distance = float_via.distance(&float_second);
         let (rounded_first, rounded_second) = (float_first.round(), float_second.round());
@@ -500,7 +543,9 @@ impl RoutingBoard {
         let second_trace = (second.half_width, second.layer, second.cl);
         let towards = |to: IntPoint, leg: (i64, i32, i32)| self.reposition_via_towards(via, to, leg.0, leg.1, leg.2);
         // The traces overlapping first.
-        if via_location.side_of(first_from, second_from) == Side::Collinear && scalar > 0.0 {
+        // Point.side_of, exactly: the via's side of the line from the first
+        // corner to the second is the sign of first x second, from the via.
+        if side_of_det(first_delta.0, second_delta.1, first_delta.1, second_delta.0) == Side::Collinear && scalar > 0.0 {
             if second_distance < first_distance {
                 return towards(rounded_second, first_trace);
             }
@@ -547,6 +592,7 @@ impl RoutingBoard {
             (first_delta, first, second, float_first, rounded_first),
             (second_delta, second, first, float_second, rounded_second),
         ] {
+            // Vector.is_orthogonal.
             if delta.0 == 0 || delta.1 == 0 {
                 continue;
             }

@@ -207,6 +207,9 @@ pub struct Routed {
 /// `BatchAutorouter.autoroute_item` with `AutorouteEngine.autoroute_connection`.
 pub fn autoroute_item(rb: &mut RoutingBoard, item: usize, net: i32, pass_no: i32) -> Routed {
     let mut out = Routed { result: RouteResult::NotRouted, ripped: Vec::new(), start: Vec::new(), dest: Vec::new(), located: None, tree: None };
+    // autoroute_pass marks what changes from here on, ripping up included;
+    // an area a failed connection left is kept for the next.
+    rb.start_marking_changed_area();
     let contains_plane = rb.board.rules.net(net).is_some_and(|n| n.contains_plane);
     // FreeRouting throws making the control, which autoroute_pass catches.
     let Some(ctrl) = Control::try_for_batch(&rb.board, net, pass_no) else {

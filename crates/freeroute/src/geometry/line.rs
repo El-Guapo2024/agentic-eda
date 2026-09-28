@@ -559,6 +559,39 @@ impl IntPoint {
         Point::Rational(RationalPoint { x: proj_x, y: proj_y, z: denominator })
     }
 
+    /// The foot of the perpendicular from a point off the grid onto `line`,
+    /// as FreeRouting has it for a `RationalPoint`: its y term added where
+    /// the integer version subtracts it, and the point's denominator left
+    /// out of the result's. Checked, as its products can pass 128 bits.
+    /// `RationalPoint.perpendicular_projection`.
+    pub fn rational_perpendicular_projection(r: &RationalPoint, line: &Line) -> Point {
+        let (vx, vy) = ((line.b.x - line.a.x) as i128, (line.b.y - line.a.y) as i128);
+        let (vxvx, vyvy, vxvy) = (vx * vx, vy * vy, vx * vy);
+        let mut denominator = vxvx + vyvy;
+        let det = line.a.x as i128 * line.b.y as i128 - line.a.y as i128 * line.b.x as i128;
+        let wide = || -> Option<(i128, i128)> {
+            let x = vxvx.checked_mul(r.x)?.checked_add(vxvy.checked_mul(r.y)?)?.checked_add(det.checked_mul(vy)?.checked_mul(r.z)?)?;
+            let y = vxvy.checked_mul(r.x)?.checked_add(vyvy.checked_mul(r.y)?)?.checked_add(det.checked_mul(vx)?.checked_mul(r.z)?)?;
+            Some((x, y))
+        };
+        let Some((mut proj_x, mut proj_y)) = wide() else {
+            unimplemented!("a projection of a point off the grid past 128 bits (BigInteger in the Java) is not ported");
+        };
+        if denominator != 0 {
+            if denominator < 0 {
+                (denominator, proj_x, proj_y) = (-denominator, -proj_x, -proj_y);
+            }
+            if proj_x.rem_euclid(denominator) == 0 && proj_y.rem_euclid(denominator) == 0 {
+                (proj_x, proj_y) = (proj_x / denominator, proj_y / denominator);
+                if proj_x.abs() <= CRIT as i128 && proj_y.abs() <= CRIT as i128 {
+                    return Point::Int(IntPoint::new(proj_x as i64, proj_y as i64));
+                }
+                denominator = 1;
+            }
+        }
+        Point::Rational(RationalPoint { x: proj_x, y: proj_y, z: denominator })
+    }
+
     /// A corner between this point and `to` making both legs horizontal,
     /// vertical or diagonal, turning left if `left_turn`; `None` where the
     /// line between is at a multiple of 45 degrees already.

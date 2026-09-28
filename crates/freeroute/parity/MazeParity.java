@@ -605,6 +605,16 @@ public class MazeParity {
     }
     out.append('\n');
     java.util.Map<Integer, String> before = route_records(board);
+    // With DEBUG_IDS=<k>, every item number connection k draws goes to
+    // stderr with where it was drawn from.
+    String debug_ids = System.getenv("DEBUG_IDS");
+    LoggingIdGenerator id_log = null;
+    if (debug_ids != null) {
+      Field f = board.communication.getClass().getField("id_no_generator");
+      f.setAccessible(true);
+      id_log = new LoggingIdGenerator(board.communication.id_no_generator);
+      f.set(board.communication, id_log);
+    }
     int n = 0;
     outer:
     for (Item item : list) {
@@ -617,7 +627,23 @@ public class MazeParity {
         SortedSet<Item> ripped = new TreeSet<>();
         java.util.Map<Item, Integer> ripped_costs = new java.util.LinkedHashMap<>();
         StringBuilder located_out = new StringBuilder();
+        if (id_log != null) {
+          id_log.active = n == Integer.parseInt(debug_ids);
+        }
         String result = autoroute_item(board, handling, trace_costs, item, net, ripped, ripped_costs, pass_no, located_out);
+        if (id_log != null && id_log.active) {
+          // The traces whose ends break their pins' exit rules, now.
+          for (Item t : board.get_items()) {
+            if (t instanceof PolylineTrace) {
+              PolylineTrace pt = (PolylineTrace) t;
+              for (boolean at_start : new boolean[] {true, false}) {
+                if (!pt.check_connection_to_pin(at_start)) {
+                  System.err.println("BADPIN " + pt.get_id_no() + " " + at_start);
+                }
+              }
+            }
+          }
+        }
         out.append("conn ").append(n).append(' ').append(item.get_id_no()).append(' ').append(net).append(' ').append(result)
             .append(' ').append(board.communication.id_no_generator.max_generated_no());
         for (Item r : ripped) {
@@ -970,6 +996,35 @@ public class MazeParity {
       java.nio.file.Files.writeString(java.nio.file.Path.of(full_file), full, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
     }
     return "conn_tree " + leaves + " " + Long.toUnsignedString(hash);
+  }
+
+  /** An item number generator that logs each number drawn while active, with its callers. */
+  static class LoggingIdGenerator implements app.freerouting.datastructures.IdNoGenerator {
+    final app.freerouting.datastructures.IdNoGenerator inner;
+    boolean active;
+
+    LoggingIdGenerator(app.freerouting.datastructures.IdNoGenerator p_inner) {
+      inner = p_inner;
+    }
+
+    @Override
+    public int new_no() {
+      int no = inner.new_no();
+      if (active) {
+        StringBuilder b = new StringBuilder("ID ").append(no);
+        StackTraceElement[] st = Thread.currentThread().getStackTrace();
+        for (int i = 2; i < Math.min(st.length, 16); ++i) {
+          b.append(" < ").append(st[i].getClassName().replaceAll(".*\\.", "")).append('.').append(st[i].getMethodName()).append(':').append(st[i].getLineNumber());
+        }
+        System.err.println(b);
+      }
+      return no;
+    }
+
+    @Override
+    public int max_generated_no() {
+      return inner.max_generated_no();
+    }
   }
 
   private static Object field(Object o, String name) throws Exception {

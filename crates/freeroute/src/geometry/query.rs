@@ -82,10 +82,20 @@ impl TileShape {
     /// the foot of a perpendicular onto a side where that falls within it.
     /// `TileShape.nearest_border_point`.
     pub fn nearest_border_point(&self, from: IntPoint) -> Point {
+        self.nearest_border_point_of(&Point::Int(from))
+    }
+
+    /// [`nearest_border_point`](Self::nearest_border_point) from any point,
+    /// projected as the point's kind projects.
+    pub fn nearest_border_point_of(&self, from: &Point) -> Point {
         let n = self.border_line_count();
-        let from_f = FloatPoint::from_int(from);
+        let from_f = FloatPoint::from_point(from);
+        let project = |line: &Line| match from {
+            Point::Int(p) => p.perpendicular_projection(line),
+            Point::Rational(r) => IntPoint::rational_perpendicular_projection(r, line),
+        };
         if n == 1 {
-            return from.perpendicular_projection(&self.border_line(0));
+            return project(&self.border_line(0));
         }
         let mut min_dist = f64::MAX;
         let mut min_ind = 0;
@@ -99,7 +109,7 @@ impl TileShape {
         let mut nearest = self.corner(min_ind);
         let (mut prev, mut curr) = (n - 2, n - 1);
         for next in 0..n {
-            let projection = from.perpendicular_projection(&self.border_line(curr));
+            let projection = project(&self.border_line(curr));
             if (!self.corner_is_bounded(curr) || self.border_line(prev).side_of(&projection) == Side::Right)
                 && (!self.corner_is_bounded(next) || self.border_line(next).side_of(&projection) == Side::Right)
             {

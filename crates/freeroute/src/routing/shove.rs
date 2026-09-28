@@ -1303,8 +1303,7 @@ impl<'a> ShapeTraceEntries<'a> {
                 if contact_count == 1 && store_end_corner {
                     // The trace ends inside: it enters where its end is
                     // nearest the border, by its first or last line.
-                    let corner = end_corner.as_int().expect("a trace of another net ends at an integer corner");
-                    let projection = offset_shape.nearest_border_point(corner);
+                    let projection = offset_shape.nearest_border_point_of(&end_corner);
                     if let Some(side) = offset_shape.contains_on_border_line_no(&projection) {
                         let line_no = if i == 0 { 0 } else { polyline.lines.len() - 1 };
                         let (x, y) = projection.to_float();

@@ -712,6 +712,10 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
         for (i, g) in got.iter().enumerate() {
             let w = want.get(i).copied().unwrap_or("(nothing)");
             if w != g {
+                if std::env::var_os("PASS_VERBOSE").is_some() {
+                    // Both connections' records in full, to diff.
+                    eprintln!("== FreeRouting\n{}\n== port\n{}", want.join("\n"), got.join("\n"));
+                }
                 return Some((matched, Some(format!("connection {matched} differs\n  FreeRouting: {w}\n  port:        {g}"))));
             }
         }
