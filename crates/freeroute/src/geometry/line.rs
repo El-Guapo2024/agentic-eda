@@ -82,7 +82,11 @@ impl Direction {
     /// The direction of the step `(dx, dy)`, divided by the greatest common
     /// divisor of its components. `IntVector.to_normalized_direction`.
     pub fn of(dx: i64, dy: i64) -> Direction {
-        let g = gcd(dx.abs(), dy.abs());
+        // Axis and diagonal steps, most of a board's, need no division.
+        if dx == 0 || dy == 0 || dx.abs() == dy.abs() {
+            return Direction { x: dx.signum(), y: dy.signum() };
+        }
+        let g = gcd(dx.unsigned_abs(), dy.unsigned_abs()) as i64;
         if g > 1 {
             Direction { x: dx / g, y: dy / g }
         } else {
@@ -114,13 +118,54 @@ impl Direction {
     pub fn is_multiple_of_45_degree(&self) -> bool {
         self.is_orthogonal() || self.x.abs() == self.y.abs()
     }
+
+    /// Turned counter-clockwise by `factor` times 45 degrees, not reduced
+    /// again. `IntDirection.turn_45_degree`.
+    pub fn turn_45_degree(&self, factor: i32) -> Direction {
+        let (x, y) = (self.x, self.y);
+        let (x, y) = match factor % 8 {
+            0 => (x, y),
+            1 => (x - y, x + y),
+            2 => (-y, x),
+            3 => (-x - y, x - y),
+            4 => (-x, -y),
+            5 => (y - x, -x - y),
+            6 => (y, -x),
+            7 => (x + y, y - x),
+            _ => (0, 0),
+        };
+        Direction { x, y }
+    }
+
+    /// `IntDirection.opposite`.
+    pub fn opposite(&self) -> Direction {
+        Direction { x: -self.x, y: -self.y }
+    }
+
+    /// The scalar product of the two direction vectors, in floating point.
+    /// `IntVector.scalar_product`.
+    pub fn scalar_product(&self, other: &Direction) -> f64 {
+        self.x as f64 * other.x as f64 + self.y as f64 * other.y as f64
+    }
 }
 
-fn gcd(mut a: i64, mut b: i64) -> i64 {
-    while b != 0 {
-        (a, b) = (b, a % b);
+/// Binary GCD, as the Java's `BigIntAux.binaryGcd`; 0 for two zeros.
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    if a == 0 || b == 0 {
+        return a | b;
     }
-    a
+    let shift = (a | b).trailing_zeros();
+    a >>= a.trailing_zeros();
+    loop {
+        b >>= b.trailing_zeros();
+        if a > b {
+            (a, b) = (b, a);
+        }
+        b -= a;
+        if b == 0 {
+            return a << shift;
+        }
+    }
 }
 
 /// A point with rational coordinates `x / z`, `y / z`, `z > 0`: where two
@@ -379,6 +424,61 @@ impl Line {
     pub fn is_multiple_of_45_degree(&self) -> bool {
         self.direction().is_multiple_of_45_degree()
     }
+
+    /// How far `p` is from the line: positive where the line passes to its
+    /// left -- FreeRouting's left, as for [`side_of`](Self::side_of).
+    /// `Line.signed_distance`.
+    pub fn signed_distance(&self, (x, y): (f64, f64)) -> f64 {
+        let dx = (self.b.x - self.a.x) as f64;
+        let dy = (self.b.y - self.a.y) as f64;
+        let det = dy * (x - self.a.x as f64) - dx * (y - self.a.y as f64);
+        det / (dx * dx + dy * dy).sqrt()
+    }
+
+    /// The line's y at `x`; 0 for a vertical line.
+    /// `Line.function_value_approx`.
+    pub fn function_value_approx(&self, x: f64) -> f64 {
+        let (p1x, p1y, p2x, p2y) = (self.a.x as f64, self.a.y as f64, self.b.x as f64, self.b.y as f64);
+        let dx = p2x - p1x;
+        if dx == 0.0 {
+            return 0.0;
+        }
+        let dy = p2y - p1y;
+        let det = p1x * p2y - p2x * p1y;
+        (dy * x - det) / dx
+    }
+
+    /// The line's x at `y`; 0 for a horizontal line.
+    /// `Line.function_in_y_value_approx`.
+    pub fn function_in_y_value_approx(&self, y: f64) -> f64 {
+        let (p1x, p1y, p2x, p2y) = (self.a.x as f64, self.a.y as f64, self.b.x as f64, self.b.y as f64);
+        let dy = p2y - p1y;
+        if dy == 0.0 {
+            return 0.0;
+        }
+        let dx = p2x - p1x;
+        let det = p1x * p2y - p2x * p1y;
+        (dx * y + det) / dy
+    }
+
+    /// The direction from `p` square onto the line: the line's direction
+    /// turned a quarter towards it. `None` if `p` is on the line.
+    /// `Point.perpendicular_direction(Line)`.
+    pub fn perpendicular_direction_from(&self, p: IntPoint) -> Option<Direction> {
+        match self.side_of(&Point::Int(p)).negate() {
+            Side::Collinear => None,
+            Side::Right => Some(self.direction().turn_45_degree(2)),
+            Side::Left => Some(self.direction().turn_45_degree(6)),
+        }
+    }
+}
+
+impl IntPoint {
+    /// Which side of the line from `p_1` to `p_2` this point is on, by
+    /// FreeRouting's naming. `Point.side_of(Point, Point)`.
+    pub fn side_of(&self, p_1: IntPoint, p_2: IntPoint) -> Side {
+        Line::new(p_1, p_2).side_of(&Point::Int(*self)).negate()
+    }
 }
 
 #[cfg(test)]
@@ -401,6 +501,27 @@ mod tests {
     fn directions_are_reduced() {
         assert_eq!(Direction::of(6, -4), Direction { x: 3, y: -2 });
         assert_eq!(Direction::of(0, -7), Direction::DOWN);
+        assert_eq!(Direction::of(-5, -5), Direction { x: -1, y: -1 });
+        assert_eq!(Direction::of(0, 0), Direction { x: 0, y: 0 });
+        assert_eq!(Direction::of(-48, 18), Direction { x: -8, y: 3 });
+        assert_eq!(Direction::of(7, 3), Direction { x: 7, y: 3 });
+    }
+
+    /// The binary GCD agrees with Euclid's.
+    #[test]
+    fn gcd_matches_euclid() {
+        let euclid = |mut a: u64, mut b: u64| {
+            while b != 0 {
+                (a, b) = (b, a % b);
+            }
+            a
+        };
+        for a in 0..60 {
+            for b in 0..60 {
+                assert_eq!(gcd(a, b), euclid(a, b), "gcd({a}, {b})");
+            }
+        }
+        assert_eq!(gcd(1 << 40, 3 << 38), 1 << 38);
     }
 
     /// FreeRouting's left is what lies to the right of the line, y up.

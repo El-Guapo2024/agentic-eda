@@ -1,0 +1,1409 @@
+(pcb "S:\SProjects\KiBugs\dsn\fomu-hardware-master\archive\evt\pcb\tomu-fpga8.dsn"
+  (parser
+    (string_quote ")
+    (space_in_quoted_tokens on)
+    (host_cad "KiCad's Pcbnew")
+    (host_version "10.99.0-2122-gdb32996fe2-dirty")
+  )
+  (resolution um 10)
+  (unit um)
+  (structure
+    (layer F.Cu
+      (type signal)
+      (property
+        (index 0)
+      )
+    )
+    (layer B.Cu
+      (type signal)
+      (property
+        (index 1)
+      )
+    )
+    (boundary
+      (path pcb 0  98600 -38000  106000 -30600  107600 -30600  114400 -37400
+            114400 -39000  107000 -46400  115000 -54400  115000 -80000  25000 -80000
+            25000 -30000  90600 -30000  98600 -38000)
+    )
+    (keepout "" (polygon B.Cu 0  99000 -36000  109500 -46500  120000 -36000  109500 -25500
+            99000 -36000))
+    (via "Via[0-1]_685.8:330.2_um")
+    (rule
+      (width 152.4)
+      (clearance 152.4)
+      (clearance 38.1 (type smd_smd))
+    )
+  )
+  (placement
+    (component "tomu-fpga:USB-B"
+      (place U9 105605.887 -39294.365 front 135 (PN "USB-B"))
+    )
+    (component "tomu-fpga:SPST-NO-Button"
+      (place SW3 88000 -37000 front 180 (PN 6))
+      (place SW4 78000 -37000 front 180 (PN 5))
+    )
+    (component "tomu-fpga:SPST-NO-Button::1"
+      (place SW1 32000 -60000 front -90 (PN Reset))
+    )
+    (component "tomu-fpga:SOT-23-5_HandSoldering"
+      (place U3 87000 -72000 front 180 (PN "LDO-SOT23-2.5V"))
+    )
+    (component "tomu-fpga:SOT-23-5_HandSoldering::1"
+      (place U1 52350 -59950 front -90 (PN "LDO-SOT23-1.2V"))
+      (place U2 58000 -53000 front -90 (PN "LDO-SOT23-3.3V"))
+    )
+    (component "tomu-fpga:SOIC-8"
+      (place U4 43000 -67000 front -90 (PN "SPI Flash"))
+    )
+    (component "tomu-fpga:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
+      (place R2 87025 -77000 front 180 (PN "0805, 1.5k, 1/16W, 1%"))
+      (place C3 88975 -75000 front 180 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place C5 74250 -67750 front 180 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place C6 74250 -69750 front 180 (PN "0805, 10nF, 10V, X5R, 20%"))
+      (place C7 74250 -71750 front 180 (PN "0805, 100nF, 10V, X5R, 20%"))
+      (place C4 45000 -63000 front 180 (PN "0805, 100nF, 10V, X5R, 20%"))
+    )
+    (component "tomu-fpga:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder::1"
+      (place R1 35250 -52500 front 0 (PN "0805, 10k, 1/16W"))
+      (place R4 35225 -50500 front 0 (PN "0805, 10k, 1/16W (DNP)"))
+      (place C28 84000 -53000 front 0 (PN "0805, 100nF, 10V, X5R, 20%"))
+      (place C21 79000 -71000 front 0 (PN "0805, 100nF, 10V, X5R, 20%"))
+      (place C24 84000 -49000 front 0 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place C25 79000 -69000 front 0 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place C26 84000 -51000 front 0 (PN "0805, 10nF, 10V, X5R, 20%"))
+      (place C27 79000 -67000 front 0 (PN "0805, 10nF, 10V, X5R, 20%"))
+      (place C10 84950 -75000 front 0 (PN "0805, 1uF, 10V, X5R, 20%"))
+    )
+    (component "tomu-fpga:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder::2"
+      (place R10 85000 -60000 front 90 (PN "0805, 100ohm, 1/16W, 1%"))
+      (place C15 67000 -55000 front 90 (PN "0805, 100nF, 10V, X5R, 20%"))
+      (place C18 62000 -61600 front 90 (PN "0805, 10nF, 10V, X5R, 20%"))
+      (place C22 89000 -62025 front 90 (PN "0805, 10uF, 10V, X5R, 20%"))
+      (place C16 91000 -66000 front 90 (PN "0805, 1uF, 10V, X5R, 20% (DNP)"))
+      (place C14 65000 -55000 front 90 (PN "0805, 10nF, 10V, X5R, 20%"))
+      (place R3 41750 -60800 front 90 (PN "0805, 10k, 1/16W"))
+      (place C20 64000 -61600 front 90 (PN "0805, 100nF, 10V, X5R, 20%"))
+      (place C9 61000 -55000 front 90 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place C17 60000 -61600 front 90 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place C8 55400 -61625 front 90 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place C13 63000 -55000 front 90 (PN "0805, 1uF, 10V, X5R, 20%"))
+    )
+    (component "tomu-fpga:QFN-48-1EP_7x7mm_P0.5mm_EP5.6x5.6mm"
+      (place U5 74000 -60000 front 0 (PN "ICE40UP5K-SG48I"))
+    )
+    (component "tomu-fpga:PinHeader_2x20_P2.54mm_Vertical"
+      (place J1 75000 -75000 front -90 (PN "2x20 pin 0.1'' female header"))
+    )
+    (component "tomu-fpga:MEMS-20005625B"
+      (place U6 71600 -52000 front -90 (PN "MEMS Oscillator (DNP)"))
+    )
+    (component "tomu-fpga:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
+      (place D1 83000 -77000 front 180 (PN "Power LED"))
+    )
+    (component "tomu-fpga:LED-RGB-5DS-UHD1110-FKA"
+      (place U10 76600 -53000 front 180 (PN "RGB-LED"))
+    )
+    (component "tomu-fpga:C_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
+      (place C1 55400 -57575 front -90 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place C11 72400 -49200 front -90 (PN "0805, 100nF, 10V, X5R, 20%"))
+      (place C19 91000 -62025 front -90 (PN "0805, 1uF, 10V, X5R, 20% (DNP)"))
+      (place C23 87000 -62000 front -90 (PN "0805, 100nF, 10V, X5R, 20%"))
+      (place C2 61000 -51000 front -90 (PN "0805, 1uF, 10V, X5R, 20%"))
+      (place R13 38750 -60820 front -90 (PN "0805, 10k, 1/16W (DNP)"))
+    )
+    (component "tomu-fpga:XTAL-2520"
+      (place U7 74000 -52400 front 180 (PN "Crystal Oscillator"))
+    )
+    (component "tomu-fpga:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder::3"
+      (place R9 99800 -46200 front 45 (PN "0805, 1.5k, 1/16W, 1%"))
+      (place R8 98275.216 -44724.784 front 45 (PN "0805, 1.5k, 1/16W, 1%"))
+      (place R11 96824.784 -43275.216 front 45 (PN "0805, 22ohm, 1/16W, 1%"))
+      (place R12 101200 -47600 front 45 (PN "0805, 22ohm, 1/16W, 1%"))
+    )
+    (component "tomu-fpga:SOT-23-5_HandSoldering::2"
+      (place U8 94000 -64000 front 90 (PN "LDO-SOT23-1.2V (DNP)"))
+    )
+    (component "tomu-fpga:TVM-5V"
+      (place D7 100500 -42500 front -45 (PN D_Small))
+      (place D8 103000 -45000 front -45 (PN D_Small))
+    )
+    (component "tomu-fpga:TVM-5V::1"
+      (place D5 47800 -47800 front -90 (PN D_Small))
+      (place D2 40000 -47700 front -90 (PN D_Small))
+      (place D4 45100 -47700 front -90 (PN D_Small))
+      (place D3 42600 -47700 front -90 (PN D_Small))
+    )
+    (component "tomu-fpga:TVM-12V"
+      (place D6 97000 -38750 front 135 (PN D_Small))
+    )
+    (component "tomu-fpga:Pin_Header_Straight_1x06_Pitch2.54mm"
+      (place J2 37000 -44500 front 90 (PN PMODb))
+      (place J3 95730 -75380 front 90 (PN PMODa))
+    )
+    (component "tomu-fpga:Touchpads"
+      (place SW2 49000 -36000 front 0 (PN "Captouch Pads"))
+    )
+  )
+  (library
+    (image "tomu-fpga:USB-B"
+      (outline (polygon signal 0  -5795 -7995  -5795 3795  5795 3795  5795 -7995))
+      (pin Rect[T]Pad_1375.000000x1300.000000_um (rotate 180) 1 2800 -6700)
+      (pin Rect[T]Pad_2750.000000x9500.000000_um (rotate 180) 1@1 3500 -1300)
+      (pin Trapz[T]Pad_1375.000000x1300.000000_p0.000000xp1374.000000_um (rotate 180) 1@2 3500 -6700)
+      (pin Rect[T]Pad_1750.000000x6410.000000_um (rotate 180) 2 1000 -3000)
+      (pin Rect[T]Pad_1750.000000x6410.000000_um (rotate 180) 3 -1000 -3000)
+      (pin Rect[T]Pad_2750.000000x9500.000000_um (rotate 180) 4 -3500 -1300)
+      (pin Trapz[T]Pad_1375.000000x1300.000000_p0.000000xp1374.000000_um (rotate 180) 4@1 -3500 -6700)
+      (pin Rect[T]Pad_1375.000000x1300.000000_um (rotate 180) 4@2 -2810 -6700)
+    )
+    (image "tomu-fpga:SPST-NO-Button"
+      (outline (polygon signal 0  -4595 3095  4595 3095  4595 -2995  -4595 -2995))
+      (outline (path signal 200  -4300 -1000  -4300 1100))
+      (outline (path signal 200  -1000 2800  700 2800))
+      (outline (path signal 200  -1000 -2700  700 -2700))
+      (outline (path signal 200  4300 -1000  4300 1100))
+      (pin Rect[T]Pad_1600.000000x1000.000000_um 1 -3200 1900)
+      (pin Rect[T]Pad_1600.000000x1000.000000_um 2 3200 1900)
+      (pin Rect[T]Pad_1600.000000x1000.000000_um 3 -3200 -1900)
+      (pin Rect[T]Pad_1600.000000x1000.000000_um 4 3200 -1900)
+    )
+    (image "tomu-fpga:SPST-NO-Button::1"
+      (outline (polygon signal 0  4595 3095  4595 -2995  -4595 -2995  -4595 3095))
+      (outline (path signal 200  -4300 -1000  -4300 1100))
+      (outline (path signal 200  -1000 2800  700 2800))
+      (outline (path signal 200  -1000 -2700  700 -2700))
+      (outline (path signal 200  4300 -1000  4300 1100))
+      (pin Rect[T]Pad_1600.000000x1000.000000_um 1 -3200 1900)
+      (pin Rect[T]Pad_1600.000000x1000.000000_um 2 3200 1900)
+      (pin Rect[T]Pad_1600.000000x1000.000000_um 3 -3200 -1900)
+      (pin Rect[T]Pad_1600.000000x1000.000000_um 4 3200 -1900)
+    )
+    (image "tomu-fpga:SOT-23-5_HandSoldering"
+      (outline (polygon signal 0  -2375 1795  2375 1795  2375 -1795  -2375 -1795))
+      (outline (path signal 120  -900 -1610  900 -1610))
+      (outline (path signal 120  900 1610  -1550 1610))
+      (outline (path signal 200  -2878.08 925  -2861.72 980.728  -2817.82 1018.76  -2760.33 1027.03
+            -2707.5 1002.9  -2676.1 954.04  -2676.1 895.96  -2707.5 847.099
+            -2760.33 822.971  -2817.82 831.237  -2861.72 869.272  -2878.08 925))
+      (outline (path signal 100  -900 900  -900 -1550))
+      (outline (path signal 100  -900 900  -250 1550))
+      (outline (path signal 100  900 1550  -250 1550))
+      (outline (path signal 100  900 1550  900 -1550))
+      (outline (path signal 100  900 -1550  -900 -1550))
+      (pin Rect[T]Pad_1560.000000x650.000000_um 1 -1350 950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 2 -1350 0)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 3 -1350 -950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 4 1350 -950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 5 1350 950)
+    )
+    (image "tomu-fpga:SOT-23-5_HandSoldering::1"
+      (outline (polygon signal 0  2375 1795  2375 -1795  -2375 -1795  -2375 1795))
+      (outline (path signal 120  -900 -1610  900 -1610))
+      (outline (path signal 120  900 1610  -1550 1610))
+      (outline (path signal 200  -2775 1028.08  -2719.27 1011.72  -2681.24 967.82  -2672.97 910.33
+            -2697.1 857.498  -2745.96 826.097  -2804.04 826.097  -2852.9 857.498
+            -2877.03 910.33  -2868.76 967.82  -2830.73 1011.72  -2775 1028.08))
+      (outline (path signal 100  -900 900  -900 -1550))
+      (outline (path signal 100  -900 900  -250 1550))
+      (outline (path signal 100  900 1550  -250 1550))
+      (outline (path signal 100  900 1550  900 -1550))
+      (outline (path signal 100  900 -1550  -900 -1550))
+      (pin Rect[T]Pad_1560.000000x650.000000_um 1 -1350 950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 2 -1350 0)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 3 -1350 -950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 4 1350 -950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 5 1350 950)
+    )
+    (image "tomu-fpga:SOIC-8"
+      (outline (polygon signal 0  2895 3895  2895 -3995  -2895 -3995  -2895 3895))
+      (outline (path signal 150  -2705 2700  2700 2700))
+      (outline (path signal 150  -2700 -1800  -2700 2700))
+      (outline (path signal 150  -1905 -2600  -2705 -1800))
+      (outline (path signal 150  2700 2700  2700 -2600))
+      (outline (path signal 150  2700 -2600  -1905 -2600))
+      (outline (path signal 400  -1950 -5322.52  -1886.26 -5339.6  -1839.6 -5386.26  -1822.53 -5450
+            -1839.6 -5513.74  -1886.26 -5560.4  -1950 -5577.48  -2013.74 -5560.4
+            -2060.4 -5513.74  -2077.47 -5450  -2060.4 -5386.26  -2013.74 -5339.6
+            -1950 -5322.52))
+      (pin Rect[T]Pad_600.000000x2000.000000_um 1 -1905 -3500)
+      (pin Rect[T]Pad_600.000000x2000.000000_um 2 -635 -3500)
+      (pin Rect[T]Pad_600.000000x2000.000000_um 3 635 -3500)
+      (pin Rect[T]Pad_600.000000x2000.000000_um 4 1900 -3500)
+      (pin Rect[T]Pad_600.000000x2000.000000_um 5 1900 3600)
+      (pin Rect[T]Pad_600.000000x2000.000000_um 6 600 3600)
+      (pin Rect[T]Pad_600.000000x2000.000000_um 7 -635 3600)
+      (pin Rect[T]Pad_600.000000x2000.000000_um 8 -1905 3600)
+    )
+    (image "tomu-fpga:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
+      (outline (polygon signal 0  -1845 945  1845 945  1845 -945  -1845 -945))
+      (outline (path signal 120  -261.252 710  261.252 710))
+      (outline (path signal 120  -261.252 -710  261.252 -710))
+      (outline (path signal 100  -1000 600  1000 600))
+      (outline (path signal 100  -1000 -600  -1000 600))
+      (outline (path signal 100  1000 600  1000 -600))
+      (outline (path signal 100  1000 -600  -1000 -600))
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 1 -1025 0)
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 2 1025 0)
+    )
+    (image "tomu-fpga:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder::1"
+      (outline (polygon signal 0  1845 -945  -1845 -945  -1845 945  1845 945))
+      (outline (path signal 120  -261.252 710  261.252 710))
+      (outline (path signal 120  -261.252 -710  261.252 -710))
+      (outline (path signal 100  -1000 600  1000 600))
+      (outline (path signal 100  -1000 -600  -1000 600))
+      (outline (path signal 100  1000 600  1000 -600))
+      (outline (path signal 100  1000 -600  -1000 -600))
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 1 -1025 0)
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 2 1025 0)
+    )
+    (image "tomu-fpga:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder::2"
+      (outline (polygon signal 0  -1845 -945  -1845 945  1845 945  1845 -945))
+      (outline (path signal 120  -261.252 710  261.252 710))
+      (outline (path signal 120  -261.252 -710  261.252 -710))
+      (outline (path signal 100  -1000 600  1000 600))
+      (outline (path signal 100  -1000 -600  -1000 600))
+      (outline (path signal 100  1000 600  1000 -600))
+      (outline (path signal 100  1000 -600  -1000 -600))
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 1 -1025 0)
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 2 1025 0)
+    )
+    (image "tomu-fpga:QFN-48-1EP_7x7mm_P0.5mm_EP5.6x5.6mm"
+      (outline (polygon signal 0  4115 -4115  -4115 -4115  -4115 4115  4115 4115))
+      (outline (path signal 120  -3610 -3610  -3610 -3135))
+      (outline (path signal 120  -3135 3610  -3610 3610))
+      (outline (path signal 120  -3135 -3610  -3610 -3610))
+      (outline (path signal 120  3135 3610  3610 3610))
+      (outline (path signal 120  3135 -3610  3610 -3610))
+      (outline (path signal 120  3610 3610  3610 3135))
+      (outline (path signal 120  3610 -3610  3610 -3135))
+      (outline (path signal 400  -4513.2 2775  -4530.94 2714.55  -4578.56 2673.3  -4640.91 2664.34
+            -4698.22 2690.51  -4732.27 2743.5  -4732.27 2806.5  -4698.22 2859.49
+            -4640.91 2885.66  -4578.56 2876.7  -4530.94 2835.45  -4513.2 2775))
+      (outline (path signal 100  -3500 2500  -2500 3500))
+      (outline (path signal 100  -3500 -3500  -3500 2500))
+      (outline (path signal 100  -2500 3500  3500 3500))
+      (outline (path signal 100  3500 3500  3500 -3500))
+      (outline (path signal 100  3500 -3500  -3500 -3500))
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 1 -3437.5 2750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 2 -3437.5 2250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 3 -3437.5 1750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 4 -3437.5 1250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 5 -3437.5 750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 6 -3437.5 250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 7 -3437.5 -250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 8 -3437.5 -750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 9 -3437.5 -1250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 10 -3437.5 -1750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 11 -3437.5 -2250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 12 -3437.5 -2750)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 13 -2750 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 14 -2250 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 15 -1750 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 16 -1250 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 17 -750 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 18 -250 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 19 250 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 20 750 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 21 1250 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 22 1750 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 23 2250 -3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 24 2750 -3437.5)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 25 3437.5 -2750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 26 3437.5 -2250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 27 3437.5 -1750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 28 3437.5 -1250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 29 3437.5 -750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 30 3437.5 -250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 31 3437.5 250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 32 3437.5 750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 33 3437.5 1250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 34 3437.5 1750)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 35 3437.5 2250)
+      (pin RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0 36 3437.5 2750)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 37 2750 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 38 2250 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 39 1750 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 40 1250 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 41 750 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 42 250 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 43 -250 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 44 -750 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 45 -1250 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 46 -1750 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 47 -2250 3437.5)
+      (pin RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0 48 -2750 3437.5)
+      (pin RoundRect[T]Pad_5600.000000x5600.000000_250.952000_um_0.000000_0 49 0 0)
+    )
+    (image "tomu-fpga:PinHeader_2x20_P2.54mm_Vertical"
+      (outline (polygon signal 0  4345 1795  4345 -50045  -1795 -50045  -1795 1795))
+      (outline (path signal 120  -1330 1330  0 1330))
+      (outline (path signal 120  -1330 0  -1330 1330))
+      (outline (path signal 120  -1330 -1270  -1330 -49590))
+      (outline (path signal 120  -1330 -1270  1270 -1270))
+      (outline (path signal 120  -1330 -49590  3870 -49590))
+      (outline (path signal 120  1270 1330  3870 1330))
+      (outline (path signal 120  1270 -1270  1270 1330))
+      (outline (path signal 120  3870 1330  3870 -49590))
+      (outline (path signal 100  -1270 0  0 1270))
+      (outline (path signal 100  -1270 -49530  -1270 0))
+      (outline (path signal 100  0 1270  3810 1270))
+      (outline (path signal 100  3810 1270  3810 -49530))
+      (outline (path signal 100  3810 -49530  -1270 -49530))
+      (pin Rect[A]Pad_1700.000000x1700.000000_um 1 0 0)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 2 2540 0)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 3 0 -2540)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 4 2540 -2540)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 5 0 -5080)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 6 2540 -5080)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 7 0 -7620)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 8 2540 -7620)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 9 0 -10160)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 10 2540 -10160)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 11 0 -12700)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 12 2540 -12700)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 13 0 -15240)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 14 2540 -15240)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 15 0 -17780)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 16 2540 -17780)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 17 0 -20320)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 18 2540 -20320)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 19 0 -22860)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 20 2540 -22860)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 21 0 -25400)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 22 2540 -25400)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 23 0 -27940)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 24 2540 -27940)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 25 0 -30480)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 26 2540 -30480)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 27 0 -33020)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 28 2540 -33020)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 29 0 -35560)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 30 2540 -35560)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 31 0 -38100)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 32 2540 -38100)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 33 0 -40640)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 34 2540 -40640)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 35 0 -43180)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 36 2540 -43180)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 37 0 -45720)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 38 2540 -45720)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 39 0 -48260)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 40 2540 -48260)
+    )
+    (image "tomu-fpga:MEMS-20005625B"
+      (outline (polygon signal 0  995 695  995 -695  -895 -695  -895 695))
+      (outline (path signal 150  -1100 -300  -1045.94 -315.875  -1009.04 -358.458  -1001.02 -414.231
+            -1024.42 -465.486  -1071.83 -495.949  -1128.17 -495.949  -1175.58 -465.486
+            -1198.98 -414.231  -1190.96 -358.458  -1154.06 -315.875  -1100 -300))
+      (pin Rect[T]Pad_130.000000x370.000000_um 1 -705 -310)
+      (pin Trapz[T]Pad_130.000000x130.000000_p0.000000xp129.000000_um (rotate 180) 1@1 -641 -560)
+      (pin Rect[T]Pad_300.000000x500.000000_um 1@2 -490 -375)
+      (pin Rect[T]Pad_350.000000x500.000000_um 2 600 -375)
+      (pin Rect[T]Pad_350.000000x500.000000_um 3 600 375)
+      (pin Rect[T]Pad_350.000000x500.000000_um 4 -600 375)
+    )
+    (image "tomu-fpga:LED_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
+      (outline (polygon signal 0  -1845 945  1845 945  1845 -945  -1845 -945))
+      (outline (path signal 120  -1860 960  -1860 -960))
+      (outline (path signal 120  -1860 -960  1000 -960))
+      (outline (path signal 120  1000 960  -1860 960))
+      (outline (path signal 150  -2300 0  -2284.12 54.064  -2241.54 90.963  -2185.77 98.982
+            -2134.51 75.575  -2104.05 28.173  -2104.05 -28.173  -2134.51 -75.575
+            -2185.77 -98.982  -2241.54 -90.963  -2284.12 -54.064  -2300 0))
+      (outline (path signal 100  -1000 300  -1000 -600))
+      (outline (path signal 100  -1000 -600  1000 -600))
+      (outline (path signal 100  -700 600  -1000 300))
+      (outline (path signal 100  1000 600  -700 600))
+      (outline (path signal 100  1000 -600  1000 600))
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 1 -1025 0)
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 2 1025 0)
+    )
+    (image "tomu-fpga:LED-RGB-5DS-UHD1110-FKA"
+      (outline (polygon signal 0  -595 595  595 595  595 -595  -595 -595))
+      (outline (path signal 150  -900 300  -884.125 354.064  -841.542 390.963  -785.769 398.982
+            -734.514 375.575  -704.051 328.173  -704.051 271.827  -734.514 224.425
+            -785.769 201.018  -841.542 209.037  -884.125 245.936  -900 300))
+      (pin Rect[T]Pad_400.000000x400.000000_um 1 -300 300)
+      (pin Rect[T]Pad_400.000000x400.000000_um 2 300 300)
+      (pin Rect[T]Pad_400.000000x400.000000_um 3 -300 -300)
+      (pin Rect[T]Pad_400.000000x400.000000_um 4 300 -300)
+    )
+    (image "tomu-fpga:C_0805_2012Metric_Pad1.15x1.40mm_HandSolder"
+      (outline (polygon signal 0  1845 945  1845 -945  -1845 -945  -1845 945))
+      (outline (path signal 120  -261.252 710  261.252 710))
+      (outline (path signal 120  -261.252 -710  261.252 -710))
+      (outline (path signal 100  -1000 600  1000 600))
+      (outline (path signal 100  -1000 -600  -1000 600))
+      (outline (path signal 100  1000 600  1000 -600))
+      (outline (path signal 100  1000 -600  -1000 -600))
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 1 -1025 0)
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 2 1025 0)
+    )
+    (image "tomu-fpga:XTAL-2520"
+      (outline (polygon signal 0  -1495 1295  1495 1295  1495 -1295  -1495 -1295))
+      (outline (path signal 300  -1966.42 -1250  -1950.22 -1184.28  -1905.34 -1133.61  -1842.05 -1109.61
+            -1774.85 -1117.77  -1719.14 -1156.22  -1687.69 -1216.16  -1687.69 -1283.84
+            -1719.14 -1343.78  -1774.85 -1382.23  -1842.05 -1390.39  -1905.34 -1366.39
+            -1950.22 -1315.72  -1966.42 -1250))
+      (pin Rect[T]Pad_900.000000x800.000000_um (rotate 180) 1 -925 -725)
+      (pin Rect[T]Pad_900.000000x800.000000_um (rotate 180) 2 925 -725)
+      (pin Rect[T]Pad_900.000000x800.000000_um (rotate 180) 3 925 725)
+      (pin Rect[T]Pad_900.000000x800.000000_um (rotate 180) 4 -925 725)
+    )
+    (image "tomu-fpga:R_0805_2012Metric_Pad1.15x1.40mm_HandSolder::3"
+      (outline (polygon signal 0  1845 -944.999  -1845 -944.999  -1845 944.999  1845 944.999))
+      (outline (path signal 120  -261.252 710  261.252 710))
+      (outline (path signal 120  -261.252 -710  261.252 -710))
+      (outline (path signal 100  -1000 600  1000 600))
+      (outline (path signal 100  -1000 -600  -1000 600))
+      (outline (path signal 100  1000 600  1000 -600))
+      (outline (path signal 100  1000 -600  -1000 -600))
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 1 -1025 0)
+      (pin RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0 2 1025 0)
+    )
+    (image "tomu-fpga:SOT-23-5_HandSoldering::2"
+      (outline (polygon signal 0  -2375 -1795  -2375 1795  2375 1795  2375 -1795))
+      (outline (path signal 120  -900 -1610  900 -1610))
+      (outline (path signal 120  900 1610  -1550 1610))
+      (outline (path signal 200  -2775 821.922  -2830.73 838.285  -2868.76 882.18  -2877.03 939.67
+            -2852.9 992.502  -2804.04 1023.9  -2745.96 1023.9  -2697.1 992.502
+            -2672.97 939.67  -2681.24 882.18  -2719.27 838.285  -2775 821.922))
+      (outline (path signal 100  -900 900  -900 -1550))
+      (outline (path signal 100  -900 900  -250 1550))
+      (outline (path signal 100  900 1550  -250 1550))
+      (outline (path signal 100  900 1550  900 -1550))
+      (outline (path signal 100  900 -1550  -900 -1550))
+      (pin Rect[T]Pad_1560.000000x650.000000_um 1 -1350 950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 2 -1350 0)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 3 -1350 -950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 4 1350 -950)
+      (pin Rect[T]Pad_1560.000000x650.000000_um 5 1350 950)
+    )
+    (image "tomu-fpga:TVM-5V"
+      (outline (polygon signal 0  1495 794.999  1495 -794.999  -1495 -794.999  -1495 794.999))
+      (pin RoundRect[T]Pad_700.000000x1300.000000_175.666000_um_0.000000_0 1 -1000 0)
+      (pin RoundRect[T]Pad_700.000000x1300.000000_175.666000_um_0.000000_0 2 1000 0)
+    )
+    (image "tomu-fpga:TVM-5V::1"
+      (outline (polygon signal 0  1495 795  1495 -795  -1495 -795  -1495 795))
+      (pin RoundRect[T]Pad_700.000000x1300.000000_175.666000_um_0.000000_0 1 -1000 0)
+      (pin RoundRect[T]Pad_700.000000x1300.000000_175.666000_um_0.000000_0 2 1000 0)
+    )
+    (image "tomu-fpga:TVM-12V"
+      (outline (polygon signal 0  -1895 -794.999  -1895 794.999  1895 794.999  1895 -794.999))
+      (pin RoundRect[T]Pad_1200.000000x1200.000000_301.142000_um_0.000000_0 1 -1050 0)
+      (pin RoundRect[T]Pad_1200.000000x1200.000000_301.142000_um_0.000000_0 2 1050 0)
+    )
+    (image "tomu-fpga:Pin_Header_Straight_1x06_Pitch2.54mm"
+      (outline (polygon signal 0  -1795 -14495  -1795 1795  1795 1795  1795 -14495))
+      (outline (path signal 120  -1330 1330  0 1330))
+      (outline (path signal 120  -1330 0  -1330 1330))
+      (outline (path signal 120  -1330 -1270  -1330 -14030))
+      (outline (path signal 120  -1330 -1270  1330 -1270))
+      (outline (path signal 120  -1330 -14030  1330 -14030))
+      (outline (path signal 120  1330 -1270  1330 -14030))
+      (outline (path signal 100  -1270 635  -635 1270))
+      (outline (path signal 100  -1270 -13970  -1270 635))
+      (outline (path signal 100  -635 1270  1270 1270))
+      (outline (path signal 100  1270 1270  1270 -13970))
+      (outline (path signal 100  1270 -13970  -1270 -13970))
+      (pin Rect[A]Pad_1700.000000x1700.000000_um 1 0 0)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 2 0 -2540)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 3 0 -5080)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 4 0 -7620)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 5 0 -10160)
+      (pin Oval[A]Pad_1700.000000x1700.000000_um 6 0 -12700)
+    )
+    (image "tomu-fpga:Touchpads"
+      (pin Rect[T]Pad_10000.000000x10000.000000_um (rotate 180) 1 -18000 0)
+      (pin Rect[T]Pad_10000.000000x10000.000000_um (rotate 180) 2 -6000 0)
+      (pin Rect[T]Pad_10000.000000x10000.000000_um (rotate 180) 3 6000 0)
+      (pin Rect[T]Pad_10000.000000x10000.000000_um (rotate 180) 4 18000 0)
+    )
+    (padstack Oval[A]Pad_1700.000000x1700.000000_um
+      (shape (path F.Cu 1700  0 0  0 0))
+      (shape (path B.Cu 1700  0 0  0 0))
+      (attach off)
+    )
+    (padstack RoundRect[T]Pad_250.000000x875.000000_62.738000_um_0.000000_0
+      (shape (polygon F.Cu 0  -125.238 375  -120.462 399.009  -106.862 419.362  -86.509 432.962
+            -62.5 437.738  62.5 437.738  86.509 432.962  106.862 419.362
+            120.462 399.009  125.238 375  125.238 -375  120.462 -399.009
+            106.862 -419.362  86.509 -432.962  62.5 -437.738  -62.5 -437.738
+            -86.509 -432.962  -106.862 -419.362  -120.462 -399.009  -125.238 -375
+            -125.238 375))
+      (attach off)
+    )
+    (padstack Trapz[T]Pad_130.000000x130.000000_p0.000000xp129.000000_um
+      (shape (polygon F.Cu 0  -129.5 -65  -0.5 65  0.5 65  129.5 -65))
+      (attach off)
+    )
+    (padstack Trapz[T]Pad_1375.000000x1300.000000_p0.000000xp1374.000000_um
+      (shape (polygon F.Cu 0  -1374.5 -650  -0.5 650  0.5 650  1374.5 -650))
+      (attach off)
+    )
+    (padstack RoundRect[T]Pad_5600.000000x5600.000000_250.952000_um_0.000000_0
+      (shape (polygon F.Cu 0  -2800.95 2550  -2781.85 2646.03  -2727.45 2727.45  -2646.03 2781.85
+            -2550 2800.95  2550 2800.95  2646.03 2781.85  2727.45 2727.45
+            2781.85 2646.03  2800.95 2550  2800.95 -2550  2781.85 -2646.03
+            2727.45 -2727.45  2646.03 -2781.85  2550 -2800.95  -2550 -2800.95
+            -2646.03 -2781.85  -2727.45 -2727.45  -2781.85 -2646.03  -2800.95 -2550
+            -2800.95 2550))
+      (attach off)
+    )
+    (padstack RoundRect[T]Pad_700.000000x1300.000000_175.666000_um_0.000000_0
+      (shape (polygon F.Cu 0  -350.666 475  -337.294 542.224  -299.215 599.215  -242.224 637.294
+            -175 650.666  175 650.666  242.224 637.294  299.215 599.215
+            337.294 542.224  350.666 475  350.666 -475  337.294 -542.224
+            299.215 -599.215  242.224 -637.294  175 -650.666  -175 -650.666
+            -242.224 -637.294  -299.215 -599.215  -337.294 -542.224  -350.666 -475
+            -350.666 475))
+      (attach off)
+    )
+    (padstack RoundRect[T]Pad_875.000000x250.000000_62.738000_um_0.000000_0
+      (shape (polygon F.Cu 0  -437.738 62.5  -432.962 86.509  -419.362 106.862  -399.009 120.462
+            -375 125.238  375 125.238  399.009 120.462  419.362 106.862
+            432.962 86.509  437.738 62.5  437.738 -62.5  432.962 -86.509
+            419.362 -106.862  399.009 -120.462  375 -125.238  -375 -125.238
+            -399.009 -120.462  -419.362 -106.862  -432.962 -86.509  -437.738 -62.5
+            -437.738 62.5))
+      (attach off)
+    )
+    (padstack RoundRect[T]Pad_1150.000000x1400.000000_250.951000_um_0.000000_0
+      (shape (polygon F.Cu 0  -575.951 450  -556.848 546.035  -502.449 627.449  -421.035 681.848
+            -324.999 700.95  325 700.951  421.035 681.848  502.449 627.449
+            556.848 546.035  575.95 449.999  575.951 -450  556.848 -546.035
+            502.449 -627.449  421.035 -681.848  324.999 -700.95  -325 -700.951
+            -421.035 -681.848  -502.449 -627.449  -556.848 -546.035  -575.95 -449.999
+            -575.951 450))
+      (attach off)
+    )
+    (padstack RoundRect[T]Pad_1200.000000x1200.000000_301.142000_um_0.000000_0
+      (shape (polygon F.Cu 0  -601.142 300  -593.143 368.947  -548.441 470.186  -470.186 548.441
+            -368.947 593.143  -300 601.142  300 601.142  368.947 593.143
+            470.186 548.441  548.441 470.186  593.143 368.947  601.142 300
+            601.142 -300  593.143 -368.947  548.441 -470.186  470.186 -548.441
+            368.947 -593.143  300 -601.142  -300 -601.142  -368.947 -593.143
+            -470.186 -548.441  -548.441 -470.186  -593.143 -368.947  -601.142 -300
+            -601.142 300))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_2750.000000x9500.000000_um
+      (shape (rect F.Cu -1375 -4750 1375 4750))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_300.000000x500.000000_um
+      (shape (rect F.Cu -150 -250 150 250))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_350.000000x500.000000_um
+      (shape (rect F.Cu -175 -250 175 250))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_400.000000x400.000000_um
+      (shape (rect F.Cu -200 -200 200 200))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_600.000000x2000.000000_um
+      (shape (rect F.Cu -300 -1000 300 1000))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_900.000000x800.000000_um
+      (shape (rect F.Cu -450 -400 450 400))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_10000.000000x10000.000000_um
+      (shape (rect F.Cu -5000 -5000 5000 5000))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_130.000000x370.000000_um
+      (shape (rect F.Cu -65 -185 65 185))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_1375.000000x1300.000000_um
+      (shape (rect F.Cu -687.5 -650 687.5 650))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_1560.000000x650.000000_um
+      (shape (rect F.Cu -780 -325 780 325))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_1600.000000x1000.000000_um
+      (shape (rect F.Cu -800 -500 800 500))
+      (attach off)
+    )
+    (padstack Rect[A]Pad_1700.000000x1700.000000_um
+      (shape (rect F.Cu -850 -850 850 850))
+      (shape (rect B.Cu -850 -850 850 850))
+      (attach off)
+    )
+    (padstack Rect[T]Pad_1750.000000x6410.000000_um
+      (shape (rect F.Cu -875 -3205 875 3205))
+      (attach off)
+    )
+    (padstack "Via[0-1]_685.8:330.2_um"
+      (shape (circle F.Cu 685.8))
+      (shape (circle B.Cu 685.8))
+      (attach off)
+    )
+  )
+  (network
+    (net +5V
+      (pins U9-1 U9-1@1 U9-1@2 U3-1 U1-1 U1-3 J1-2 J1-4 C1-1 C3-1 C16-1 C2-1 U2-1
+        U8-1 U8-3 D6-1)
+    )
+    (net "Net-(D7-Pad1)"
+      (pins U9-2 D7-1 R8-2 R11-2)
+    )
+    (net "Net-(D8-Pad1)"
+      (pins U9-3 R9-2 D8-1 R12-2)
+    )
+    (net GND
+      (pins U9-4 U9-4@1 U9-4@2 SW3-3 SW3-4 SW1-3 SW1-4 SW4-3 SW4-4 U3-2 U1-2 U4-4
+        R2-1 U5-49 J1-6 J1-9 J1-14 J1-20 J1-25 J1-30 J1-34 J1-39 U6-2 C28-2 C1-2 C3-2
+        C5-2 C6-2 C7-2 C11-1 C15-2 C18-2 C19-2 C21-2 C22-1 C23-2 C24-2 C25-2 C26-2
+        C27-2 C16-2 C4-2 C10-2 C14-2 C2-2 U7-2 R13-1 C20-2 C9-2 C17-2 C8-2 C13-2 U2-2
+        U8-2 D7-2 D5-2 D2-2 D6-2 D4-2 D8-2 J2-5 D3-2 J3-5)
+    )
+    (net "Net-(SW3-Pad1)"
+      (pins SW3-1 SW3-2 U5-38)
+    )
+    (net /CRESET
+      (pins SW1-1 SW1-2 R1-1 U5-8 J1-13)
+    )
+    (net "Net-(SW4-Pad1)"
+      (pins SW4-1 SW4-2 U5-42)
+    )
+    (net +3V3
+      (pins U3-3 U4-8 R1-2 R4-1 U5-1 U5-22 U5-33 U6-1 U6-1@1 U6-1@2 U6-4 U10-4 C28-1
+        C5-1 C6-1 C7-1 C11-2 C15-1 C24-1 C26-1 C4-1 C14-1 U7-4 R3-2 C9-1 C13-1 U2-5
+        J2-6 J3-6)
+    )
+    (net "Net-(U3-Pad4)"
+      (pins U3-4)
+    )
+    (net +2V5
+      (pins U3-5 U5-24 D1-2 C21-1 C25-1 C27-1 C10-1)
+    )
+    (net "Net-(U1-Pad4)"
+      (pins U1-4)
+    )
+    (net +1V2
+      (pins U1-5 R10-2 U5-5 U5-30 C18-1 C20-1 C17-1 C8-1 U2-3)
+    )
+    (net /SPI_CS
+      (pins U4-1 U5-16 J1-24 R3-1 R13-2)
+    )
+    (net /SPI_MISO
+      (pins U4-2 U5-17 J1-21)
+    )
+    (net /SPI_IO2
+      (pins U4-3 U5-18 J1-18)
+    )
+    (net /SPI_MOSI
+      (pins U4-5 U5-14 J1-19)
+    )
+    (net /SPI_CLK
+      (pins U4-6 U5-15 J1-23)
+    )
+    (net /SPI_IO3
+      (pins U4-7 U5-19 J1-22)
+    )
+    (net "Net-(D1-Pad1)"
+      (pins R2-2 D1-1)
+    )
+    (net /CDONE
+      (pins R4-2 U5-7 J1-11)
+    )
+    (net /VCCPLL
+      (pins R10-1 U5-29 C19-1 C22-2 C23-1 U8-5)
+    )
+    (net "Net-(U5-Pad2)"
+      (pins U5-2)
+    )
+    (net "Net-(U5-Pad3)"
+      (pins U5-3)
+    )
+    (net "Net-(U5-Pad4)"
+      (pins U5-4)
+    )
+    (net "Net-(U5-Pad6)"
+      (pins U5-6)
+    )
+    (net /DBG_6
+      (pins U5-9 J1-26)
+    )
+    (net /DBG_5
+      (pins U5-10 J1-15)
+    )
+    (net /DBG_3
+      (pins U5-11 J1-7)
+    )
+    (net /DBG_2
+      (pins U5-12 J1-5)
+    )
+    (net /UART_RX
+      (pins U5-13 J1-10)
+    )
+    (net /DBG_1
+      (pins U5-20 J1-3)
+    )
+    (net /UART_TX
+      (pins U5-21 J1-8)
+    )
+    (net /PMODa_4
+      (pins U5-23 J3-4)
+    )
+    (net /DBG_4
+      (pins U5-25 J1-12)
+    )
+    (net /PMODa_3
+      (pins U5-26 J3-3)
+    )
+    (net /PMODa_2
+      (pins U5-27 J3-2)
+    )
+    (net /PMODa_1
+      (pins U5-28 J3-1)
+    )
+    (net "Net-(U5-Pad31)"
+      (pins U5-31)
+    )
+    (net "Net-(U5-Pad32)"
+      (pins U5-32)
+    )
+    (net /ICE_USBP
+      (pins U5-34 R12-1)
+    )
+    (net /PU_CTRL_USBP
+      (pins U5-35 R9-1)
+    )
+    (net /PU_CTRL_USBN
+      (pins U5-36 R8-1)
+    )
+    (net /ICE_USBN
+      (pins U5-37 R11-1)
+    )
+    (net /LED_R
+      (pins U5-39 U10-3)
+    )
+    (net /LED_B
+      (pins U5-40 U10-1)
+    )
+    (net /LED_G
+      (pins U5-41 U10-2)
+    )
+    (net "Net-(U5-Pad43)"
+      (pins U5-43)
+    )
+    (net /OSC_IN
+      (pins U5-44 U6-3 U7-3)
+    )
+    (net /PMODb_4
+      (pins U5-45 D5-1 J2-4 SW2-4)
+    )
+    (net /PMODb_3
+      (pins U5-46 D4-1 J2-3 SW2-3)
+    )
+    (net /PMODb_2
+      (pins U5-47 J2-2 D3-1 SW2-2)
+    )
+    (net /PMODb_1
+      (pins U5-48 D2-1 J2-1 SW2-1)
+    )
+    (net "Net-(J1-Pad1)"
+      (pins J1-1)
+    )
+    (net "Net-(J1-Pad16)"
+      (pins J1-16)
+    )
+    (net "Net-(J1-Pad17)"
+      (pins J1-17)
+    )
+    (net "Net-(J1-Pad27)"
+      (pins J1-27)
+    )
+    (net "Net-(J1-Pad28)"
+      (pins J1-28)
+    )
+    (net "Net-(J1-Pad29)"
+      (pins J1-29)
+    )
+    (net "Net-(J1-Pad31)"
+      (pins J1-31)
+    )
+    (net "Net-(J1-Pad32)"
+      (pins J1-32)
+    )
+    (net "Net-(J1-Pad33)"
+      (pins J1-33)
+    )
+    (net "Net-(J1-Pad35)"
+      (pins J1-35)
+    )
+    (net "Net-(J1-Pad36)"
+      (pins J1-36)
+    )
+    (net "Net-(J1-Pad37)"
+      (pins J1-37)
+    )
+    (net "Net-(J1-Pad38)"
+      (pins J1-38)
+    )
+    (net "Net-(J1-Pad40)"
+      (pins J1-40)
+    )
+    (net "Net-(U7-Pad1)"
+      (pins U7-1)
+    )
+    (net "Net-(U2-Pad4)"
+      (pins U2-4)
+    )
+    (net "Net-(U8-Pad4)"
+      (pins U8-4)
+    )
+    (class kicad_default +1V2 +2V5 +3V3 +5V /CDONE /CRESET /DBG_1 /DBG_2 /DBG_3
+      /DBG_4 /DBG_5 /DBG_6 /ICE_USBN /ICE_USBP /LED_B /LED_G /LED_R /OSC_IN
+      /PMODa_1 /PMODa_2 /PMODa_3 /PMODa_4 /PMODb_1 /PMODb_2 /PMODb_3 /PMODb_4
+      /PU_CTRL_USBN /PU_CTRL_USBP /SPI_CLK /SPI_CS /SPI_IO2 /SPI_IO3 /SPI_MISO
+      /SPI_MOSI /UART_RX /UART_TX /VCCPLL GND "Net-(D1-Pad1)" "Net-(D7-Pad1)"
+      "Net-(D8-Pad1)" "Net-(J1-Pad1)" "Net-(J1-Pad16)" "Net-(J1-Pad17)" "Net-(J1-Pad27)"
+      "Net-(J1-Pad28)" "Net-(J1-Pad29)" "Net-(J1-Pad31)" "Net-(J1-Pad32)"
+      "Net-(J1-Pad33)" "Net-(J1-Pad35)" "Net-(J1-Pad36)" "Net-(J1-Pad37)"
+      "Net-(J1-Pad38)" "Net-(J1-Pad40)" "Net-(SW3-Pad1)" "Net-(SW4-Pad1)"
+      "Net-(U1-Pad4)" "Net-(U2-Pad4)" "Net-(U3-Pad4)" "Net-(U5-Pad2)" "Net-(U5-Pad3)"
+      "Net-(U5-Pad31)" "Net-(U5-Pad32)" "Net-(U5-Pad4)" "Net-(U5-Pad43)" "Net-(U5-Pad6)"
+      "Net-(U7-Pad1)" "Net-(U8-Pad4)"
+      (circuit
+        (use_via "Via[0-1]_685.8:330.2_um")
+      )
+      (rule
+        (width 152.4)
+        (clearance 152.4)
+      )
+    )
+  )
+  (wiring
+    (wire (polygon F.Cu 0  104749 -43262.3  104790 -43289.8  107198 -45698.3  107226 -45739.5
+            107235 -45788.1  107226 -45836.7  107198 -45877.9  106863 -46213.3
+            106844 -46229.1  106835 -46234.9  106784 -46310.6  106767 -46400
+            106784 -46489.4  106835 -46565.1  106844 -46570.9  106863 -46586.7
+            109498 -49222.1  109526 -49263.3  109535 -49311.9  109526 -49360.5
+            109498 -49401.7  107790 -51110.2  107749 -51137.7  107700 -51147.4
+            107651 -51137.7  107610 -51110.2  102290 -45789.8  102262 -45748.6
+            102253 -45700  102262 -45651.4  102290 -45610.2  104610 -43289.8
+            104651 -43262.3  104700 -43252.6  104749 -43262.3)(net GND)(type protect))
+    (wire (polygon F.Cu 0  89171.6 -42009.7  89212.8 -42037.2  89240.3 -42078.4  89250 -42127
+            89250 -47179.6  89240.3 -47228.2  89212.8 -47269.4  89019.4 -47462.8
+            88978.2 -47490.3  88929.6 -47500  86127 -47500  86078.4 -47490.3
+            86037.2 -47462.8  86009.7 -47421.6  86000 -47373  86000 -42127
+            86009.7 -42078.4  86037.2 -42037.2  86078.4 -42009.7  86127 -42000
+            89123 -42000  89171.6 -42009.7)(net GND)(type protect))
+    (wire (polygon F.Cu 0  63021.6 -48209.7  63062.8 -48237.2  63090.3 -48278.4  63100 -48327
+            63100 -51497  63090.3 -51545.6  63062.8 -51586.8  63021.6 -51614.4
+            62973 -51624  62924.4 -51614.4  62902.4 -51602.6  62716.2 -51478.1
+            62500 -51435.1  62332 -51468.6  62307.2 -51471  61845 -51471
+            61796.4 -51461.3  61755.2 -51433.8  61739.4 -51414.6  61737.8 -51412.2
+            61605.8 -51324  61437.5 -51290.5  60562.5 -51290.5  60394.2 -51324
+            60262.2 -51412.2  60174 -51544.2  60140.5 -51712.5  60140.5 -52260.6
+            60130.8 -52309.2  60103.3 -52350.4  60062.5 -52391.2  60021.3 -52418.7
+            59972.7 -52428.4  58611.5 -52428.4  58562.9 -52418.7  58521.7 -52391.2
+            58494.2 -52350  58484.5 -52301.4  58484.5 -50882.5  58470.1 -50809.9
+            58425.4 -50743.1  58406.4 -50697.3  58404 -50672.5  58404 -50647.6
+            58406.4 -50622.8  58411.9 -50595.3  58380.6 -50437.7  58318.3 -50344.5
+            58307.9 -50319.3  58306.6 -50319.8  58221.3 -50113.8  58081.5 -49974
+            57898.8 -49898.4  57701.2 -49898.4  57518.5 -49974  57378.7 -50113.8
+            57303.1 -50296.5  57303.1 -50494.1  57320 -50534.9  57329.6 -50583.5
+            57320 -50632.1  57292.5 -50673.3  57251.2 -50700.8  57202.7 -50710.5
+            56737.5 -50710.5  56664.9 -50724.9  56614 -50759  56579.9 -50809.9
+            56565.5 -50882.5  56565.5 -52417.5  56579.9 -52490.1  56614 -52541
+            56664.9 -52575.1  56736.7 -52589.4  56782.5 -52608.3  56817.6 -52643.4
+            56823.6 -52657.9  56884 -52748.4  56892.9 -52754.3  56912.1 -52770
+            57335.7 -53193.7  57363.3 -53234.9  57372.9 -53283.5  57363.3 -53332.1
+            57335.7 -53373.3  57294.5 -53400.8  57245.9 -53410.5  56737.5 -53410.5
+            56664.9 -53424.9  56614 -53459  56579.9 -53509.9  56565.5 -53582.5
+            56565.5 -55117.5  56579.9 -55190.1  56614 -55241  56664.9 -55275.1
+            56737.5 -55289.5  57246.4 -55289.5  57295 -55299.2  57336.2 -55326.7
+            57363.7 -55367.9  57373.4 -55416.5  57373.4 -56548.4  57363.7 -56597
+            57336.2 -56638.2  56445.5 -57529  56404.3 -57556.5  56355.7 -57566.2
+            54738.8 -57566.2  54714 -57563.8  54703.6 -57561.7  54613.8 -57579.5
+            54546.5 -57624.5  54546.5 -57624.5  54537.6 -57630.4  54531.8 -57639.2
+            54516 -57658.5  53886 -58288.4  53866.8 -58304.2  53857.9 -58310.1
+            53807.1 -58386.3  53791.3 -58465.7  53791.3 -58465.7  53789.2 -58476.1
+            53791.3 -58486.5  53793.7 -58511.3  53793.7 -59495.7  53784 -59544.3
+            53756.5 -59585.5  53533.2 -59808.8  53492 -59836.3  53443.4 -59846
+            52857.8 -59846  52809.2 -59836.3  52768 -59808.8  52740.5 -59767.6
+            52730.8 -59719  52733.2 -59694.2  52763.5 -59542.2  52782.4 -59496.4
+            52820.1 -59440.1  52834.5 -59367.5  52834.5 -57832.5  52820.1 -57759.9
+            52775.4 -57693.1  52756.4 -57647.3  52754 -57622.5  52754 -57501.3
+            52763.7 -57452.7  52791.2 -57411.5  52921.3 -57281.5  52996.9 -57098.8
+            52996.9 -56901.2  52921.3 -56718.5  52781.5 -56578.7  52598.8 -56503.1
+            52401.2 -56503.1  52218.5 -56578.7  52078.7 -56718.5  52003.1 -56901.2
+            52003.1 -56903.5  51993.4 -56952.1  51981.7 -56974  51969.4 -56992.4
+            51946 -57110.2  51946 -57622.5  51936.3 -57671.1  51924.6 -57693.1
+            51879.9 -57759.9  51865.5 -57832.5  51865.5 -59380  51865.2 -59380
+            51865.2 -59415.5  51846.2 -59461.3  51811.2 -59496.3  51789.2 -59508
+            51618.5 -59578.7  51478.7 -59718.5  51436.1 -59821.6  51408.5 -59862.8
+            51367.3 -59890.3  51318.7 -59900  51027 -59900  50978.4 -59890.3
+            50937.2 -59862.8  50909.7 -59821.6  50900 -59773  50900 -56252.6
+            50909.7 -56204  50937.2 -56162.8  52691.2 -54408.8  52697.7 -54399
+            52700 -54387.5  52700 -52552.6  52709.7 -52504  52737.2 -52462.8
+            56962.8 -48237.2  57004 -48209.7  57052.6 -48200  62973 -48200
+            63021.6 -48209.7)(net +5V)(type protect))
+    (wire (polygon F.Cu 0  76827.4 -62900.6  76871.1 -62924  76888.7 -62941.6  76908.9 -62966.1
+            76941.8 -62993.1  76979.4 -63013.2  77020.1 -63025.6  77068.7 -63030.4
+            77806.3 -63030.4  77854.9 -63025.6  77895.6 -63013.2  77929.3 -62995.2
+            77976.8 -62980.8  77989.2 -62980.2  78902 -62980.2  78950.6 -62989.9
+            78991.8 -63017.4  79462.8 -63488.4  79490.3 -63529.6  79500 -63578.2
+            79500 -66133  79490.3 -66181.6  79462.8 -66222.8  79453.6 -66231.2
+            79413.8 -66263.8  79363.5 -66325.1  79326.1 -66395.1  79303 -66471
+            79294.6 -66556.2  79294.6 -67443.8  79303 -67529  79326.1 -67604.9
+            79363.5 -67674.9  79413.8 -67736.2  79424.6 -67745  79456 -67783.3
+            79470.4 -67830.8  79471 -67843.2  79471 -68156.8  79461.3 -68205.4
+            79433.8 -68246.6  79424.6 -68255  79413.8 -68263.8  79363.5 -68325.1
+            79326.1 -68395.1  79303 -68471  79294.6 -68556.2  79294.6 -69443.8
+            79303 -69529  79326.1 -69604.9  79363.5 -69674.9  79413.8 -69736.2
+            79424.6 -69745  79456 -69783.3  79470.4 -69830.8  79471 -69843.2
+            79471 -70156.8  79461.3 -70205.4  79433.8 -70246.6  79424.6 -70255
+            79413.8 -70263.8  79363.5 -70325.1  79326.1 -70395.1  79303 -70471
+            79294.6 -70556.2  79294.6 -71443.8  79303 -71529  79326.1 -71604.9
+            79363.5 -71674.9  79413.8 -71736.2  79475.1 -71786.5  79545.1 -71823.9
+            79621 -71847  79706.2 -71855.4  80343.8 -71855.4  80429 -71847
+            80504.9 -71823.9  80574.9 -71786.5  80579.4 -71782.8  80623.1 -71759.5
+            80659.9 -71754  81127.2 -71754  81208.6 -71746  81313 -71714.3
+            81409.3 -71662.9  81493.6 -71593.6  81562.9 -71509.3  81614.3 -71413
+            81646 -71308.6  81656.7 -71200  81646 -71091.4  81614.3 -70987
+            81562.9 -70890.7  81493.6 -70806.4  81409.3 -70737.1  81398.2 -70731.2
+            81313 -70685.7  81208.6 -70654  81127.2 -70646  80879.3 -70646
+            80830.7 -70636.3  80789.5 -70608.8  80762 -70567.6  80752.9 -70531.4
+            80747 -70471  80723.9 -70395.1  80686.5 -70325.1  80636.2 -70263.8
+            80625.4 -70255  80594 -70216.7  80579.6 -70169.2  80579 -70156.8
+            80579 -70127  80588.7 -70078.4  80616.2 -70037.2  80657.4 -70009.7
+            80706 -70000  87373 -70000  87421.6 -70009.7  87462.8 -70037.2
+            87490.3 -70078.4  87500 -70127  87500 -70523.2  87490.3 -70571.8
+            87467.9 -70605.4  87468.5 -70605.9  87463.1 -70612.5  87462.8 -70613
+            87462.5 -70613.2  87441.3 -70639  87427 -70665.8  87418.2 -70694.8
+            87414.6 -70731.2  87414.6 -71368.8  87418.2 -71405.2  87427 -71434.2
+            87443.6 -71465.1  87457.9 -71512.6  87453.1 -71561.9  87443.6 -71584.9
+            87427 -71615.8  87418.2 -71644.8  87414.6 -71681.2  87414.6 -72219
+            87405 -72267.6  87377.4 -72308.8  87336.2 -72336.3  87287.6 -72346
+            87012.5 -72346  86942 -72360  86892.9 -72392.9  86860 -72442
+            86846 -72512.5  86846 -74225.4  86836.3 -74274  86808.8 -74315.2
+            86767.6 -74342.8  86719 -74352.4  86670.4 -74342.8  86629.2 -74315.2
+            86620.8 -74306  86586.2 -74263.8  86524.9 -74213.5  86454.9 -74176.1
+            86379 -74153  86293.8 -74144.6  85955.7 -74144.6  85907.1 -74135
+            85865.9 -74107.4  85688.6 -73930.1  85661.1 -73888.9  85652 -73852.8
+            85646 -73791.4  85614.3 -73687  85562.9 -73590.7  85493.6 -73506.4
+            85409.3 -73437.1  85313 -73385.7  85208.6 -73354  85100 -73343.3
+            84991.4 -73354  84887 -73385.7  84790.7 -73437.1  84706.4 -73506.4
+            84637.1 -73590.7  84585.7 -73687  84554 -73791.4  84546 -73872.8
+            84546 -74091.5  84545.4 -74104  84543.3 -74125  84554 -74233.6
+            84585.7 -74338  84637.1 -74434.3  84706.4 -74518.6  84722.7 -74532
+            84731.9 -74540.4  85207.4 -75015.9  85235 -75057.1  85244.6 -75105.7
+            85244.6 -75443.8  85253 -75529  85276.1 -75604.9  85313.5 -75674.9
+            85363.8 -75736.2  85425.1 -75786.5  85495.1 -75823.9  85571 -75847
+            85656.2 -75855.4  86293.8 -75855.4  86379 -75847  86454.9 -75823.9
+            86524.9 -75786.5  86586.2 -75736.2  86620.8 -75694  86659.1 -75662.6
+            86706.6 -75648.2  86755.9 -75653  86799.6 -75676.4  86831 -75714.7
+            86845.4 -75762.1  86846 -75774.6  86846 -76195  86836.3 -76243.6
+            86808.8 -76284.8  86767.6 -76312.3  86719 -76322  86670.4 -76312.3
+            86629.2 -76284.8  86620.8 -76275.5  86611.2 -76263.8  86549.9 -76213.5
+            86479.9 -76176.1  86404 -76153  86318.8 -76144.6  85681.2 -76144.6
+            85596 -76153  85520.1 -76176.1  85450.1 -76213.5  85388.8 -76263.8
+            85338.5 -76325.1  85309.7 -76378.9  85278.3 -76417.2  85234.6 -76440.5
+            85197.7 -76446  84827.3 -76446  84778.7 -76436.3  84737.5 -76408.8
+            84715.3 -76378.9  84686.5 -76325.1  84636.2 -76263.8  84574.9 -76213.5
+            84504.9 -76176.1  84429 -76153  84343.8 -76144.6  83706.2 -76144.6
+            83621 -76153  83545.1 -76176.1  83475.1 -76213.5  83413.8 -76263.8
+            83363.5 -76325.1  83326.1 -76395.1  83303 -76471  83294.6 -76556.2
+            83294.6 -77443.8  83303 -77529  83327.8 -77610.7  83332.7 -77660.1
+            83318.3 -77707.5  83286.9 -77745.8  83243.2 -77769.1  83206.3 -77774.6
+            80318 -77774.6  80269.4 -77764.9  80228.2 -77737.4  76517.4 -74026.7
+            76489.9 -73985.5  76480.2 -73936.9  76480.2 -63989.2  76489.9 -63940.6
+            76495.2 -63929.3  76513.2 -63895.6  76525.6 -63854.9  76530.4 -63806.3
+            76530.4 -63071.1  76540 -63022.5  76567.6 -62981.3  76608.8 -62953.7
+            76620.5 -62949.5  76704.9 -62923.9  76730.7 -62910.1  76778.1 -62895.8
+            76827.4 -62900.6)(net +2V5)(type protect)
+      (window (polygon F.Cu 0  84714.6 -71368.8  84718.2 -71405.2  84727 -71434.2  84741.3 -71461
+            84760.6 -71484.4  84784 -71503.7  84810.8 -71518  84839.8 -71526.8
+            84876.2 -71530.4  86423.8 -71530.4  86460.2 -71526.8  86489.2 -71518
+            86516 -71503.7  86539.4 -71484.4  86558.7 -71461  86573 -71434.2
+            86581.8 -71405.2  86585.4 -71368.8  86585.4 -70731.2  86581.8 -70694.8
+            86573 -70665.8  86558.7 -70639  86539.4 -70615.6  86516 -70596.3
+            86489.2 -70582  86460.2 -70573.2  86423.8 -70569.6  84876.2 -70569.6
+            84839.8 -70573.2  84810.8 -70582  84784 -70596.3  84760.6 -70615.6
+            84741.3 -70639  84727 -70665.8  84718.2 -70694.8  84714.6 -70731.2
+            84714.6 -71368.8))
+    )
+    (wire (polygon F.Cu 0  107501 -30838.7  107542 -30866.2  109345 -32669  109373 -32710.2
+            109382 -32758.8  109373 -32807.4  109345 -32848.6  109344 -32849.7
+            108787 -33392.6  108746 -33419.6  108697 -33428.6  108686 -33428
+            108668 -33426.2  108637 -33429.2  108608 -33438  108582 -33452.3
+            108553 -33475.5  104030 -37999.2  104006 -38027.5  103986 -38065.3
+            103984 -38064.4  103972 -38088.2  103962 -38098.5  101504 -40495.6
+            101501 -40500  101504 -40504.4  101985 -40998.8  102012 -41040.4
+            102021 -41089.1  102010 -41137.6  101983 -41177.1  101635 -41525.5
+            101594 -41553  101545 -41562.7  100684 -41562.7  100636 -41553
+            100594 -41525.5  100567 -41484.3  100563 -41472.6  100557 -41454.6
+            100527 -41397.6  100482 -41342.8  100243 -41104.1  100188 -41059.1
+            100131 -41028.6  100069 -41009.9  100005 -41003.5  99940.7 -41009.9
+            99878.8 -41028.6  99821.8 -41059.1  99767 -41104.1  99104.1 -41767
+            99059.1 -41821.8  99028.6 -41878.8  99009.9 -41940.7  99003.5 -42005
+            99009.9 -42069.4  99028.6 -42131.2  99059.1 -42188.2  99104.1 -42243
+            99342.8 -42481.7  99397.6 -42526.7  99454.6 -42557.2  99472.6 -42562.6
+            99516.3 -42586  99547.7 -42624.3  99562.1 -42671.7  99562.7 -42684.1
+            99562.7 -43059.1  99553 -43107.8  99525.5 -43149  99443.5 -43231
+            99402.3 -43258.5  99353.7 -43268.2  99305.1 -43258.5  99263.9 -43231
+            99202.6 -43169.8  99136.5 -43115.5  99066.5 -43078.1  98990.6 -43055
+            98911.6 -43047.2  98832.7 -43055  98756.7 -43078.1  98677.7 -43120.3
+            98630.3 -43134.7  98581 -43129.8  98537.3 -43106.5  98528 -43098.1
+            98451.8 -43021.8  98424.2 -42980.6  98414.6 -42932  98424.2 -42883.4
+            98429.6 -42872.2  98471.5 -42793.7  98494.5 -42717.8  98502.3 -42638.8
+            98494.5 -42559.9  98471.5 -42483.9  98434.1 -42414  98379.8 -42347.8
+            97752.2 -41720.2  97686 -41665.9  97616.1 -41628.5  97540.1 -41605.5
+            97461.2 -41597.7  97382.2 -41605.5  97306.3 -41628.5  97236.3 -41665.9
+            97170.1 -41720.2  96719.3 -42171  96665 -42237.2  96627.6 -42307.2
+            96604.6 -42383.1  96596.8 -42462  96604.6 -42541  96627.6 -42616.9
+            96665 -42686.9  96719.3 -42753.1  97346.9 -43380.7  97413.1 -43435
+            97483.1 -43472.4  97559 -43495.4  97638 -43503.2  97716.9 -43495.4
+            97792.8 -43472.4  97872.4 -43429.8  97919.9 -43415.4  97969.2 -43420.3
+            98012.9 -43443.7  98022.1 -43452  98098.1 -43528  98125.6 -43569.2
+            98135.3 -43617.8  98125.6 -43666.4  98120.3 -43677.7  98078.1 -43756.7
+            98055 -43832.7  98047.2 -43911.6  98055 -43990.6  98078.1 -44066.5
+            98115.5 -44136.5  98169.8 -44202.6  98797.4 -44830.2  98863.5 -44884.5
+            98933.5 -44921.9  99009.4 -44945  99088.4 -44952.8  99167.3 -44945
+            99243.3 -44921.9  99313.2 -44884.5  99379.4 -44830.2  99830.2 -44379.4
+            99884.5 -44313.2  99921.9 -44243.3  99945 -44167.3  99952.8 -44088.4
+            99945 -44009.4  99921.9 -43933.5  99884.5 -43863.5  99830.2 -43797.3
+            99769 -43736.1  99741.5 -43694.9  99731.8 -43646.3  99741.5 -43597.7
+            99769 -43556.5  99943.3 -43382.3  99952.5 -43373.9  99956.5 -43370.7
+            99985.2 -43335.6  100007 -43295.6  100020 -43252.2  100024 -43207.1
+            100024 -43202  100023 -43189.6  100023 -42330  100033 -42281.4
+            100060 -42240.2  100240 -42060.3  100281 -42032.8  100330 -42023.1
+            101655 -42023.1  101703 -42032.8  101744 -42060.3  101772 -42101.5
+            101782 -42150.1  101772 -42198.7  101744 -42239.9  101596 -42388.5
+            101555 -42416  101506 -42425.7  101494 -42425.1  101419 -42417.7
+            101355 -42424.1  101293 -42442.8  101236 -42473.3  101181 -42518.3
+            100518 -43181.2  100473 -43236  100443 -43293.1  100424 -43354.9
+            100418 -43419.2  100424 -43483.6  100443 -43545.4  100473 -43602.4
+            100518 -43657.2  100757 -43895.9  100812 -43940.9  100869 -43971.4
+            100931 -43990.1  100995 -43996.5  101059 -43990.1  101121 -43971.4
+            101178 -43940.9  101233 -43895.9  101896 -43233  101941 -43178.2
+            101971 -43121.2  101990 -43059.3  101996 -42995  101989 -42920.6
+            101994 -42871.3  102017 -42827.6  102026 -42818.4  102162 -42682.5
+            102203 -42655  102251 -42645.3  102300 -42655  102355 -42677.8
+            102451 -42696.9  102549 -42696.9  102645 -42677.8  102735 -42640.3
+            102817 -42586  102886 -42516.8  102940 -42435.4  102978 -42344.9
+            102984 -42313.1  103003 -42267.3  103038 -42232.3  103084 -42213.3
+            103133 -42213.3  103179 -42232.3  103200 -42249.4  103512 -42571
+            103539 -42612.6  103548 -42661.3  103538 -42709.8  103511 -42749.3
+            102762 -43498.2  102721 -43525.7  102672 -43535.4  102635 -43529.9
+            102569 -43509.9  102505 -43503.5  102441 -43509.9  102379 -43528.6
+            102322 -43559.1  102267 -43604.1  101604 -44267  101559 -44321.8
+            101529 -44378.8  101510 -44440.7  101504 -44505  101510 -44569.3
+            101530 -44635.4  101535 -44684.7  101520 -44732.1  101498 -44762.1
+            101261 -44999.1  101220 -45026.6  101171 -45036.3  101123 -45026.6
+            101082 -44999.1  100727 -44645  100661 -44590.7  100591 -44553.3
+            100515 -44530.2  100436 -44522.5  100357 -44530.2  100282 -44553.3
+            100212 -44590.7  100145 -44645  99694.6 -45095.8  99640.2 -45162
+            99602.8 -45231.9  99579.8 -45307.9  99572 -45386.8  99579.8 -45465.8
+            99602.8 -45541.7  99640.2 -45611.7  99694.6 -45677.9  100322 -46305.4
+            100388 -46359.8  100458 -46397.2  100534 -46420.2  100613 -46428
+            100692 -46420.2  100771 -46396.4  100820 -46391.5  100867 -46405.9
+            100897 -46428.1  100972 -46502.7  100999 -46543.9  101009 -46592.5
+            101004 -46629.3  100980 -46707.9  100972 -46786.8  100980 -46865.8
+            101003 -46941.7  101040 -47011.7  101095 -47077.9  101722 -47705.4
+            101788 -47759.8  101858 -47797.2  101934 -47820.2  102013 -47828
+            102092 -47820.2  102168 -47797.2  102238 -47759.8  102304 -47705.4
+            102755 -47254.6  102809 -47188.5  102847 -47118.5  102870 -47042.6
+            102878 -46963.6  102872 -46908.3  102877 -46859  102900 -46815.3
+            102939 -46783.9  102986 -46769.5  103035 -46774.3  103079 -46797.7
+            103088 -46806.1  107582 -51300.1  107642 -51340  107700 -51351.5
+            107758 -51340  107818 -51300.1  109607 -49510.6  109648 -49483.1
+            109697 -49473.4  109746 -49483.1  109787 -49510.6  114734 -54457.7
+            114761 -54498.9  114771 -54547.5  114771 -79644  114761 -79692.6
+            114734 -79733.8  114693 -79761.3  114644 -79771  71377 -79771
+            71328.4 -79761.3  71287.2 -79733.8  71259.7 -79692.6  71250 -79644
+            71250 -76657.2  71259.7 -76608.6  71287.2 -76567.4  71328.4 -76539.9
+            71377 -76530.2  77157.1 -76530.2  77205.7 -76539.9  77246.9 -76567.4
+            77274.4 -76608.6  77289.7 -76645.4  77344 -76726.8  77413.2 -76796
+            77494.6 -76850.3  77585.1 -76887.8  77681.1 -76906.9  77778.9 -76906.9
+            77874.9 -76887.8  77965.4 -76850.3  78046.8 -76796  78116 -76726.8
+            78170.3 -76645.4  78189.8 -76598.5  78217.3 -76557.3  78258.5 -76529.7
+            78307.1 -76520.1  78355.7 -76529.7  78396.9 -76557.3  79994.8 -78155.2
+            80003.2 -78164.4  80006.4 -78168.4  80041.5 -78197.1  80081.5 -78218.5
+            80124.9 -78231.7  80170 -78236.1  80175.1 -78235.6  80187.5 -78235
+            93477.7 -78235  93490.1 -78235.6  93495.2 -78236.1  93500.3 -78235.6
+            93500.3 -78235.6  93540.3 -78231.7  93583.7 -78218.5  93623.7 -78197.1
+            93658.8 -78168.4  93662 -78164.4  93670.4 -78155.2  94758.2 -77067.4
+            94799.4 -77039.9  94848 -77030.2  101912 -77030.2  101925 -77030.8
+            101930 -77031.3  101935 -77030.8  101935 -77030.8  101975 -77026.9
+            102019 -77013.7  102059 -76992.3  102094 -76963.6  102097 -76959.6
+            102105 -76950.4  102754 -76301.9  102795 -76274.4  102843 -76264.7
+            102892 -76274.4  102903 -76279.7  102964 -76312.1  103153 -76369.5
+            103301 -76384  103399 -76384  103547 -76369.5  103736 -76312.1
+            103910 -76218.8  104063 -76093.4  104189 -75940.5  104282 -75766.1
+            104339 -75576.8  104359 -75380  104339 -75183.2  104282 -74993.9
+            104189 -74819.5  104063 -74666.6  103910 -74541.2  103736 -74447.9
+            103547 -74390.5  103399 -74376  103301 -74376  103153 -74390.5
+            102964 -74447.9  102790 -74541.2  102637 -74666.6  102511 -74819.5
+            102418 -74993.9  102361 -75183.2  102341 -75380  102361 -75576.8
+            102418 -75766.1  102450 -75826.7  102465 -75874.1  102460 -75923.4
+            102436 -75967.1  102428 -75976.3  101872 -76532.6  101831 -76560.1
+            101782 -76569.8  101203 -76569.8  101154 -76560.1  101113 -76532.6
+            101085 -76491.4  101076 -76442.8  101085 -76394.2  101113 -76353
+            101154 -76325.5  101166 -76321.3  101196 -76312.1  101370 -76218.8
+            101523 -76093.4  101649 -75940.5  101742 -75766.1  101799 -75576.8
+            101819 -75380  101799 -75183.2  101742 -74993.9  101649 -74819.5
+            101523 -74666.6  101370 -74541.2  101196 -74447.9  101130 -74428
+            101087 -74404.6  101055 -74366.3  101041 -74318.9  101040 -74306.5
+            101040 -74195.5  101041 -74183  101041 -74177.9  101041 -74172.8
+            101041 -74172.8  101037 -74132.8  101024 -74089.4  101002 -74049.4
+            100977 -74018.3  100977 -74018.3  100974 -74014.4  100970 -74011.1
+            100960 -74002.7  98557.3 -71599.6  98548.9 -71590.4  98545.6 -71586.4
+            98510.6 -71557.7  98470.6 -71536.3  98427.2 -71523.1  98387.2 -71519.2
+            98387.2 -71519.2  98382.1 -71518.7  98377 -71519.2  98364.5 -71519.8
+            95811.7 -71519.8  95763.1 -71510.1  95721.9 -71482.6  95706.1 -71463.4
+            95686 -71433.2  95616.8 -71364  95535.4 -71309.7  95444.9 -71272.2
+            95348.9 -71253.1  95251.1 -71253.1  95155.1 -71272.2  95064.6 -71309.7
+            94983.2 -71364  94914 -71433.2  94859.7 -71514.6  94822.2 -71605.1
+            94803.1 -71701.1  94803.1 -71798.9  94822.2 -71894.9  94859.7 -71985.4
+            94914 -72066.8  94983.2 -72136  95064.6 -72190.3  95155.1 -72227.8
+            95251.1 -72246.9  95348.9 -72246.9  95444.9 -72227.8  95535.4 -72190.3
+            95616.8 -72136  95686 -72066.8  95706.1 -72036.6  95741.1 -72001.6
+            95786.9 -71982.6  95811.7 -71980.2  98234.1 -71980.2  98282.7 -71989.9
+            98323.9 -72017.4  99031 -72724.4  99058.5 -72765.6  99068.2 -72814.2
+            99058.5 -72862.8  99031 -72904  98989.8 -72931.6  98941.2 -72941.2
+            98892.6 -72931.6  98869.9 -72922.2  98773.9 -72903.1  98676.1 -72903.1
+            98580.1 -72922.2  98489.6 -72959.7  98408.2 -73014  98339 -73083.2
+            98318.9 -73113.4  98283.9 -73148.4  98238.1 -73167.4  98213.3 -73169.8
+            96725.1 -73169.8  96712.7 -73169.2  96707.6 -73168.7  96662.5 -73173.1
+            96619.1 -73186.3  96579.1 -73207.7  96544 -73236.4  96540.8 -73240.4
+            96532.4 -73249.6  95579.6 -74202.4  95570.4 -74210.8  95566.4 -74214
+            95563.2 -74218  95563.2 -74218  95563.2 -74218  95537.7 -74249.1
+            95510.4 -74300.1  95509.6 -74299.7  95494.3 -74328.2  95456 -74359.6
+            95408.6 -74374  95396.1 -74374.6  94886.2 -74374.6  94849.8 -74378.2
+            94820.8 -74387  94794 -74401.3  94770.6 -74420.6  94751.3 -74444
+            94737 -74470.8  94728.2 -74499.8  94724.6 -74536.2  94724.6 -76223.8
+            94728.2 -76260.2  94737 -76289.2  94751.3 -76316  94770.6 -76339.4
+            94775.4 -76343.4  94806.9 -76381.7  94821.3 -76429.1  94816.4 -76478.4
+            94793 -76522.1  94754.7 -76553.6  94707.3 -76568  94694.9 -76569.2
+            94694.9 -76569.2  94654.9 -76573.1  94611.5 -76586.3  94571.5 -76607.7
+            94536.4 -76636.4  94533.2 -76640.4  94524.8 -76649.6  94148.3 -77026.1
+            94107.1 -77053.6  94058.5 -77063.3  94009.9 -77053.6  93968.7 -77026.1
+            93941.2 -76984.9  93934 -76961.1  93927.8 -76930.1  93890.3 -76839.6
+            93836 -76758.2  93766.8 -76689  93736.6 -76668.9  93701.6 -76633.9
+            93682.6 -76588.1  93680.2 -76563.3  93680.2 -71489.5  93689.9 -71440.9
+            93717.4 -71399.7  93758.6 -71372.1  93835.4 -71340.3  93916.8 -71286
+            93986 -71216.8  94040.3 -71135.4  94077.8 -71044.9  94096.9 -70948.9
+            94096.9 -70851.1  94077.8 -70755.1  94040.3 -70664.6  93986 -70583.2
+            93916.8 -70514  93835.4 -70459.7  93744.9 -70422.2  93648.9 -70403.1
+            93551.1 -70403.1  93455.1 -70422.2  93364.6 -70459.7  93283.2 -70514
+            93214 -70583.2  93159.7 -70664.6  93122.2 -70755.1  93103.1 -70851.1
+            93103.1 -70948.9  93122.2 -71044.9  93159.7 -71135.4  93198.4 -71193.4
+            93217.4 -71239.1  93219.8 -71263.9  93219.8 -76563.3  93210.1 -76611.9
+            93182.6 -76653.1  93163.4 -76668.9  93133.2 -76689  93064 -76758.2
+            93009.7 -76839.6  92972.2 -76930.1  92953.1 -77026.1  92953.1 -77123.9
+            92972.2 -77219.9  93009.7 -77310.4  93064 -77391.8  93133.2 -77461
+            93214.6 -77515.3  93250.7 -77530.3  93291.9 -77557.8  93319.4 -77599
+            93329.1 -77647.6  93319.4 -77696.2  93291.9 -77737.4  93250.7 -77764.9
+            93202.1 -77774.6  89711.1 -77774.6  89662.5 -77764.9  89621.3 -77737.4
+            89593.8 -77696.2  89584.1 -77647.6  89593.8 -77599  89621.3 -77557.8
+            89662.5 -77530.3  89674.2 -77526.1  89713 -77514.3  89809.3 -77462.9
+            89893.6 -77393.6  89962.9 -77309.3  90014.3 -77213  90046 -77108.6
+            90056.7 -77000  90046 -76891.4  90014.3 -76787  89962.9 -76690.7
+            89893.6 -76606.4  89809.3 -76537.1  89713 -76485.7  89608.6 -76454
+            89527.2 -76446  88852.3 -76446  88803.7 -76436.3  88762.5 -76408.8
+            88740.3 -76378.9  88711.5 -76325.1  88661.2 -76263.8  88650.4 -76255
+            88619 -76216.7  88604.6 -76169.2  88604 -76156.8  88604 -75720.8
+            88613.7 -75672.2  88619 -75660.9  88648.9 -75604.9  88672 -75529
+            88680.4 -75443.8  88680.4 -74556.2  88672 -74471  88648.9 -74395.1
+            88611.5 -74325.1  88561.2 -74263.8  88499.9 -74213.5  88429.9 -74176.1
+            88354 -74153  88268.8 -74144.6  87631.2 -74144.6  87546 -74153
+            87470.1 -74176.1  87400.1 -74213.5  87338.8 -74263.8  87288.5 -74325.1
+            87259.7 -74378.9  87228.3 -74417.2  87184.6 -74440.5  87147.7 -74446
+            87127 -74446  87078.4 -74436.3  87037.2 -74408.8  87009.7 -74367.6
+            87000 -74319  87000 -72627  87009.7 -72578.4  87037.2 -72537.2
+            87078.4 -72509.7  87127 -72500  88078.4 -72500  88127 -72509.7
+            88136.5 -72514.2  88241.4 -72546  88322.8 -72554  89927.2 -72554
+            90008.6 -72546  90113 -72514.3  90209.3 -72462.9  90293.6 -72393.6
+            90362.9 -72309.3  90414.3 -72213  90446 -72108.6  90456.7 -72000
+            90446 -71891.4  90414.3 -71787  90362.9 -71690.7  90293.6 -71606.4
+            90209.3 -71537.1  90113 -71485.7  90008.6 -71454  89927.2 -71446
+            89627 -71446  89578.4 -71436.3  89537.2 -71408.8  89509.7 -71367.6
+            89500 -71319  89500 -66427  89509.7 -66378.4  89537.2 -66337.2
+            89578.4 -66309.7  89627 -66300  92493.8 -66300  92499.4 -66299.4
+            92500 -66293.8  92500 -64511.8  92509.7 -64463.2  92537.2 -64422
+            92622 -64337.2  92663.2 -64309.7  92711.8 -64300  93432.8 -64300
+            93481.4 -64309.7  93522.6 -64337.2  93550.1 -64378.4  93559.8 -64427
+            93550.1 -64475.6  93544.8 -64486.9  93532 -64510.8  93523.2 -64539.8
+            93519.6 -64576.2  93519.6 -65041.6  93510 -65090.2  93504.6 -65101.5
+            93485.7 -65137  93454 -65241.4  93446 -65322.8  93446 -67027.2
+            93454 -67108.6  93485.7 -67213  93537.1 -67309.3  93606.4 -67393.6
+            93690.7 -67462.9  93787 -67514.3  93891.4 -67546  94000 -67556.7
+            94108.6 -67546  94213 -67514.3  94309.3 -67462.9  94393.6 -67393.6
+            94462.9 -67309.3  94514.3 -67213  94546 -67108.6  94554 -67027.2
+            94554 -65322.8  94546 -65241.4  94514.3 -65137  94495.4 -65101.5
+            94481 -65054.1  94480.4 -65041.6  94480.4 -64576.2  94476.8 -64539.8
+            94468 -64510.8  94455.2 -64486.9  94440.8 -64439.4  94445.7 -64390.1
+            94469 -64346.4  94507.3 -64315  94554.7 -64300.6  94567.2 -64300
+            96976.1 -64300  97024.7 -64309.7  97065.9 -64337.2  97282.2 -64553.5
+            97309.7 -64594.7  97316.9 -64618.6  97322.2 -64644.9  97359.7 -64735.4
+            97414 -64816.8  97483.2 -64886  97564.6 -64940.3  97655.1 -64977.8
+            97751.1 -64996.9  97848.9 -64996.9  97944.9 -64977.8  98035.4 -64940.3
+            98116.8 -64886  98186 -64816.8  98240.3 -64735.4  98277.8 -64644.9
+            98296.9 -64548.9  98296.9 -64451.1  98277.8 -64355.1  98240.3 -64264.6
+            98186 -64183.2  98116.8 -64114  98035.4 -64059.7  97944.9 -64022.2
+            97918.6 -64016.9  97872.8 -63998  97853.5 -63982.2  96604.1 -62732.8
+            96595.7 -62723.5  96587.1 -62712.9  96576.5 -62704.3  96567.2 -62695.9
+            96191.2 -62319.9  96163.7 -62278.7  96154 -62230.1  96154 -61480.2
+            96148.2 -61420.8  96125.1 -61344.6  96087.5 -61274.5  96036.1 -61211.7
+            96020.7 -61196.3  95964.5 -61127.8  95953.9 -61119.2  95944.6 -61110.8
+            94304.1 -59470.3  94295.7 -59461  94287.1 -59450.4  94225.5 -59400
+            94155.4 -59362.4  94079.2 -59339.3  94013.6 -59332.9  94013.6 -59332.9
+            94013.6 -59332.9  94000 -59331.5  93986.4 -59332.9  93973.9 -59333.5
+            93324.4 -59333.5  93275.8 -59323.8  93234.6 -59296.3  93232.5 -59294.1
+            88035 -53836.8  88008.5 -53794.9  88000 -53749.2  88000 -51151.1
+            88000 -48752.6  88009.7 -48704  88037.2 -48662.8  98439.3 -38260.7
+            98480.5 -38233.2  98529.1 -38223.5  98542.6 -38225.5  98542.7 -38224.5
+            98600 -38230.1  98644.9 -38225.7  98688.1 -38212.6  98727.8 -38191.3
+            98762.7 -38162.7  98765.9 -38158.8  98774.3 -38149.6  106058 -30866.2
+            106099 -30838.7  106147 -30829  107453 -30829  107501 -30838.7)(net +5V)(type protect)
+      (window (polygon F.Cu 0  104901 -75576.8  104958 -75766.1  105051 -75940.5  105177 -76093.4
+            105330 -76218.8  105504 -76312.1  105693 -76369.5  105841 -76384
+            105939 -76384  106087 -76369.5  106276 -76312.1  106450 -76218.8
+            106603 -76093.4  106729 -75940.5  106822 -75766.1  106879 -75576.8
+            106899 -75380  106879 -75183.2  106822 -74993.9  106729 -74819.5
+            106603 -74666.6  106450 -74541.2  106276 -74447.9  106087 -74390.5
+            105939 -74376  105841 -74376  105693 -74390.5  105504 -74447.9
+            105330 -74541.2  105177 -74666.6  105051 -74819.5  104958 -74993.9
+            104901 -75183.2  104881 -75380  104901 -75576.8))
+      (window (polygon F.Cu 0  107441 -75576.8  107498 -75766.1  107591 -75940.5  107717 -76093.4
+            107870 -76218.8  108044 -76312.1  108233 -76369.5  108381 -76384
+            108479 -76384  108627 -76369.5  108816 -76312.1  108990 -76218.8
+            109143 -76093.4  109269 -75940.5  109362 -75766.1  109419 -75576.8
+            109439 -75380  109419 -75183.2  109362 -74993.9  109269 -74819.5
+            109143 -74666.6  108990 -74541.2  108816 -74447.9  108627 -74390.5
+            108479 -74376  108381 -74376  108233 -74390.5  108044 -74447.9
+            107870 -74541.2  107717 -74666.6  107591 -74819.5  107498 -74993.9
+            107441 -75183.2  107421 -75380  107441 -75576.8))
+      (window (polygon F.Cu 0  90303.1 -51248.9  90322.2 -51344.9  90359.7 -51435.4  90414 -51516.8
+            90483.2 -51586  90564.6 -51640.3  90655.1 -51677.8  90751.1 -51696.9
+            90848.9 -51696.9  90944.9 -51677.8  91024.4 -51644.9  91073 -51635.2
+            91121.6 -51644.9  91162.8 -51672.4  91190.3 -51713.6  91197.5 -51737.5
+            91218.1 -51840.8  91255.5 -51931.3  91309.9 -52012.6  91379.1 -52081.9
+            91460.5 -52136.2  91550.9 -52173.7  91646.9 -52192.8  91744.8 -52192.8
+            91780.3 -52185.7  91829.9 -52185.7  91875.7 -52204.7  91894.9 -52220.5
+            91996.3 -52321.9  92004.7 -52331.1  92007.9 -52335.1  92043 -52363.8
+            92083 -52385.2  92126.4 -52398.4  92171.5 -52402.8  92176.6 -52402.3
+            92189 -52401.7  93260.5 -52401.7  93273 -52402.3  93278.1 -52402.8
+            93283.2 -52402.3  93283.2 -52402.3  93323.2 -52398.4  93366.6 -52385.2
+            93406.6 -52363.8  93441.6 -52335.1  93444.9 -52331.1  93453.2 -52321.9
+            97182.9 -48592.2  97224.1 -48564.7  97272.7 -48555  99619.9 -48555
+            99668.5 -48564.7  99709.7 -48592.2  100273 -49155  100339 -49209.3
+            100409 -49246.7  100485 -49269.8  100564 -49277.5  100643 -49269.8
+            100718 -49246.7  100788 -49209.3  100855 -49155  101305 -48704.2
+            101360 -48638  101397 -48568.1  101420 -48492.1  101428 -48413.2
+            101420 -48334.2  101397 -48258.3  101360 -48188.3  101305 -48122.1
+            100678 -47494.6  100612 -47440.2  100542 -47402.8  100466 -47379.8
+            100387 -47372  100308 -47379.8  100232 -47402.8  100162 -47440.2
+            100096 -47494.6  99645 -47945.4  99590.7 -48011.5  99582.2 -48027.5
+            99550.7 -48065.8  99507 -48089.1  99470.2 -48094.6  99357.6 -48094.6
+            99309 -48084.9  99267.8 -48057.4  99240.3 -48016.2  99230.6 -47967.6
+            99240.3 -47919  99267.8 -47877.8  99309 -47850.3  99317.8 -47847.1
+            99388.5 -47809.3  99454.6 -47755  99905.4 -47304.2  99959.8 -47238
+            99997.2 -47168.1  100020 -47092.1  100028 -47013.2  100020 -46934.2
+            99997.2 -46858.3  99959.8 -46788.3  99905.4 -46722.1  99277.9 -46094.6
+            99211.7 -46040.2  99141.7 -46002.8  99065.8 -45979.8  98986.8 -45972
+            98907.9 -45979.8  98831.9 -46002.8  98762 -46040.2  98695.8 -46094.6
+            98245 -46545.4  98190.7 -46611.5  98182.2 -46627.5  98150.7 -46665.8
+            98107 -46689.1  98070.2 -46694.6  97292.8 -46694.6  97280.3 -46694
+            97275.2 -46693.5  97270.1 -46694  97270.1 -46694  97230.1 -46697.9
+            97186.7 -46711.1  97146.7 -46732.5  97111.7 -46761.2  97108.4 -46765.2
+            97100 -46774.4  92799 -51075.4  92757.8 -51102.9  92709.2 -51112.6
+            92684.5 -51110.2  92648.9 -51103.1  92551.1 -51103.1  92517.8 -51109.7
+            92468.2 -51109.7  92422.4 -51090.8  92387.4 -51055.7  92368.4 -51009.9
+            92368.4 -50960.4  92387.4 -50914.6  92440.3 -50835.4  92477.8 -50744.9
+            92496.9 -50648.9  92496.9 -50551.1  92489.8 -50515.5  92489.8 -50466
+            92508.8 -50420.2  92524.6 -50401  96907 -46018.6  96948.2 -45991.1
+            96996.8 -45981.4  97045.4 -45991.1  97086.6 -46018.6  97347.8 -46279.8
+            97414 -46334.1  97483.9 -46371.5  97559.9 -46394.5  97638.8 -46402.3
+            97717.8 -46394.5  97793.7 -46371.5  97863.7 -46334.1  97929.9 -46279.8
+            98380.7 -45829  98435 -45762.8  98472.4 -45692.8  98495.4 -45616.9
+            98503.2 -45538  98495.4 -45459  98472.4 -45383.1  98435 -45313.1
+            98380.7 -45246.9  97753.1 -44619.3  97686.9 -44565  97616.9 -44527.6
+            97541 -44504.6  97462 -44496.8  97383.1 -44504.6  97307.2 -44527.6
+            97237.2 -44565  97171 -44619.3  96720.2 -45070.1  96665.9 -45136.3
+            96628.5 -45206.3  96605.5 -45282.2  96597.7 -45361.2  96605.5 -45440.1
+            96628.5 -45516.1  96629.3 -45517.6  96643.7 -45565.1  96638.9 -45614.4
+            96615.5 -45658.1  96607.1 -45667.3  95201.3 -47073.2  95160.1 -47100.7
+            95111.5 -47110.4  95062.9 -47100.7  95021.7 -47073.2  94994.1 -47032
+            94985.1 -46995.9  94985 -46995  94984.4 -46982.5  94984.4 -45193.8
+            94994 -45145.2  95021.6 -45104  95506.5 -44619  95547.7 -44591.5
+            95596.3 -44581.8  95644.9 -44591.5  95686.1 -44619  95897.4 -44830.2
+            95963.5 -44884.5  96033.5 -44921.9  96109.4 -44945  96188.4 -44952.8
+            96267.3 -44945  96343.3 -44921.9  96413.2 -44884.5  96479.4 -44830.2
+            96930.2 -44379.4  96984.5 -44313.2  97021.9 -44243.3  97045 -44167.3
+            97052.8 -44088.4  97045 -44009.4  97021.9 -43933.5  96984.5 -43863.5
+            96930.2 -43797.3  96302.6 -43169.8  96236.5 -43115.5  96166.5 -43078.1
+            96090.6 -43055  96011.6 -43047.2  95932.7 -43055  95856.7 -43078.1
+            95786.7 -43115.5  95720.6 -43169.8  95269.8 -43620.6  95215.5 -43686.7
+            95178.1 -43756.7  95155 -43832.7  95147.2 -43911.6  95155 -43990.6
+            95178.1 -44066.5  95213.7 -44133.2  95228.1 -44180.7  95223.3 -44230
+            95199.9 -44273.7  95191.5 -44282.9  94603.8 -44870.6  94594.6 -44879
+            94590.6 -44882.3  94587.4 -44886.2  94587.4 -44886.2  94587.4 -44886.2
+            94561.8 -44917.3  94540.5 -44957.3  94527.3 -45000.7  94522.9 -45045.8
+            94523.4 -45050.9  94524 -45063.4  94524 -46852  94514.3 -46900.6
+            94486.8 -46941.8  94077.7 -47351  94036.5 -47378.5  93987.9 -47388.2
+            93939.3 -47378.5  93898.1 -47351  93678.8 -47131.6  93675.8 -47128.1
+            93655.2 -47108.1  93654 -47106.8  93646.5 -47099.4  93638.4 -47092.9
+            93637 -47091.8  93614.7 -47073.5  93610.9 -47071  93593.7 -47057.3
+            93586.9 -47051.5  93579.5 -47044.6  93564.4 -47035.4  93561.4 -47033.5
+            93546.5 -47023.9  93537.1 -47020.2  93529 -47016.6  93491 -46998.3
+            93483.1 -46994.2  93474.3 -46989.2  93457.6 -46983.6  93454.2 -46982.4
+            93437.6 -46976.3  93427.6 -46974.8  93418.9 -46973.1  93377.8 -46963.7
+            93369.2 -46961.4  93359.5 -46958.5  93341.9 -46956.8  93338.3 -46956.4
+            93320.8 -46954.1  93310.7 -46954.8  93301.8 -46955.2  93259.7 -46955.2
+            93250.8 -46954.8  93240.7 -46954.1  93223.2 -46956.4  93219.6 -46956.8
+            93202 -46958.5  93192.3 -46961.4  93183.7 -46963.7  93142.7 -46973.1
+            93133.9 -46974.8  93123.9 -46976.3  93107.3 -46982.4  93104 -46983.6
+            93087.2 -46989.2  93078.4 -46994.2  93070.5 -46998.3  93032.6 -47016.6
+            93024.4 -47020.2  93015 -47023.9  93000.1 -47033.6  92997.1 -47035.4
+            92982.1 -47044.6  92974.6 -47051.5  92967.8 -47057.3  92934.9 -47083.6
+            92927.7 -47088.9  92919.4 -47094.6  92907.1 -47107.3  92904.6 -47109.8
+            92891.9 -47122.1  92886.1 -47130.4  92880.8 -47137.6  92854.6 -47170.5
+            92848.8 -47177.3  92841.9 -47184.8  92832.7 -47199.9  92830.8 -47202.9
+            92821.2 -47217.7  92817.5 -47227.1  92813.9 -47235.2  92795.6 -47273.2
+            92791.5 -47281.1  92786.5 -47289.9  92780.9 -47306.7  92779.7 -47310
+            92773.6 -47326.6  92772.1 -47336.6  92770.4 -47345.4  92761 -47386.4
+            92758.7 -47395  92755.8 -47404.8  92754 -47422.3  92753.6 -47425.9
+            92751.4 -47443.4  92752.1 -47453.5  92752.4 -47462.4  92752.4 -47504.5
+            92752.1 -47513.4  92751.4 -47523.5  92753.6 -47541  92754 -47544.6
+            92755.8 -47562.2  92758.7 -47571.9  92761 -47580.5  92770.4 -47621.6
+            92772.1 -47630.3  92773.6 -47640.3  92779.7 -47656.9  92780.9 -47660.3
+            92786.5 -47677  92791.5 -47685.8  92795.6 -47693.7  92813.9 -47731.7
+            92817.5 -47739.8  92821.2 -47749.2  92830.8 -47764.1  92832.7 -47767.1
+            92841.9 -47782.2  92848.8 -47789.6  92854.6 -47796.4  92868.3 -47813.6
+            92870.8 -47817.4  92889.1 -47839.7  92890.2 -47841.1  92896.7 -47849.2
+            92904.1 -47856.6  92905.3 -47857.9  92925.4 -47878.5  92928.9 -47881.5
+            93268.2 -48220.7  93295.7 -48261.9  93305.4 -48310.5  93295.7 -48359.1
+            93268.2 -48400.3  93227 -48427.9  93178.4 -48437.5  93162.4 -48436.5
+            93159.8 -48436.2  93149.7 -48436.9  93140.8 -48437.2  93137.9 -48437.2
+            93129 -48436.9  93118.9 -48436.2  93101.4 -48438.4  93097.8 -48438.8
+            93080.2 -48440.5  93070.5 -48443.5  93061.9 -48445.8  93059 -48446.4
+            93050.3 -48448.1  93040.3 -48449.6  93023.7 -48455.7  93020.3 -48456.9
+            93003.6 -48462.5  92994.8 -48467.5  92986.9 -48471.7  92984.2 -48472.9
+            92976.1 -48476.5  92966.7 -48480.3  92951.8 -48489.9  92948.8 -48491.8
+            92933.7 -48501  92929.6 -48504.8  92924.2 -48509.4  92906.9 -48523.7
+            92905.5 -48524.8  92897.3 -48531.3  92889.9 -48538.7  92888.7 -48540
+            92868 -48560  92865.1 -48563.5  92741.9 -48686.7  91103.8 -50324.8
+            91094.6 -50333.2  91090.6 -50336.4  91087.4 -50340.4  91087.4 -50340.4
+            91087.4 -50340.4  91061.8 -50371.5  91040.5 -50411.5  91027.3 -50454.9
+            91022.9 -50500  91023.4 -50505.1  91024 -50517.5  91024 -50583.2
+            91014.3 -50631.8  90986.8 -50673  90945.6 -50700.5  90897 -50710.2
+            90872.2 -50707.7  90848.9 -50703.1  90751.1 -50703.1  90655.1 -50722.2
+            90564.6 -50759.7  90483.2 -50814  90414 -50883.2  90359.7 -50964.6
+            90322.2 -51055.1  90303.1 -51151.1  90303.1 -51248.9))
+    )
+  )
+)

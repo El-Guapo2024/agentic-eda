@@ -8,6 +8,7 @@
 mod circle;
 mod line;
 mod octagon;
+mod polygon;
 mod polyline;
 mod simplex;
 mod tile;
@@ -16,6 +17,7 @@ pub use circle::Circle;
 pub use line::{Direction, Line, Point, RationalPoint, Side};
 pub(crate) use octagon::CRIT;
 pub use octagon::IntOctagon;
+pub use polygon::{PolygonShape, PolylineArea, PolylineShape};
 pub use polyline::Polyline;
 pub use simplex::Simplex;
 pub use tile::TileShape;
@@ -56,7 +58,8 @@ impl IntBox {
     }
 
     /// Tiled with sections no wider than `max_width`, the last row and
-    /// column absorbing the remainder. `IntBox.divide_into_sections`.
+    /// column absorbing the remainder; none for a box without area.
+    /// `IntBox.divide_into_sections`.
     pub fn divide_into_sections(&self, max_width: f64) -> Vec<IntBox> {
         let b = *self;
         if max_width <= 0.0 {
@@ -67,7 +70,9 @@ impl IntBox {
         let xc = (len / max_width).ceil() as i64;
         let yc = (hgt / max_width).ceil() as i64;
         if xc <= 0 || yc <= 0 {
-            return vec![b];
+            // No sections in a line or a point; the Java crashes on an
+            // empty box, whose counts go negative.
+            return Vec::new();
         }
         let sx = (len / xc as f64).ceil() as i64;
         let sy = (hgt / yc as f64).ceil() as i64;
@@ -82,6 +87,24 @@ impl IntBox {
             }
         }
         out
+    }
+
+    /// `IntBox.is_empty`.
+    pub fn is_empty(&self) -> bool {
+        self.ll.x > self.ur.x || self.ll.y > self.ur.y
+    }
+
+    /// -1 empty, 0 a point, 1 a segment, 2 an area. `IntBox.dimension`.
+    pub fn dimension(&self) -> i32 {
+        if self.is_empty() {
+            -1
+        } else if self.ll == self.ur {
+            0
+        } else if self.ur.x == self.ll.x || self.ll.y == self.ur.y {
+            1
+        } else {
+            2
+        }
     }
 
     /// The same region as an octagon whose diagonals do not cut it.

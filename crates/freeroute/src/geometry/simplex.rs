@@ -7,8 +7,8 @@
 //! [`Side`]): the inside of the line from `a` to `b` is where `(b - a) x
 //! (p - a) > 0`, to the left looking along it with y up.
 
-use super::line::{Line, Point, Side};
-use super::{IntBox, IntOctagon, CRIT};
+use super::line::{java_round, Direction, Line, Point, Side};
+use super::{IntBox, IntOctagon, IntPoint, CRIT};
 
 /// A convex polygon: what lies inside every border line, the lines in
 /// counter-clockwise order. No lines means empty. FreeRouting's `Simplex`.
@@ -150,7 +150,8 @@ impl Simplex {
         if self.is_empty() || other.is_empty() {
             return Simplex::empty();
         }
-        let mut lines = self.lines.clone();
+        let mut lines = Vec::with_capacity(self.lines.len() + other.lines.len());
+        lines.extend_from_slice(&self.lines);
         lines.extend_from_slice(&other.lines);
         lines.sort_by(|p, q| p.compare(q));
         Simplex { lines }.remove_redundant_lines()
@@ -247,6 +248,180 @@ impl Simplex {
         ))
     }
 
+    /// Every border line moved `width` outwards, the lines kept in order;
+    /// reduced only when moved inwards. `Simplex.offset`.
+    pub fn offset(&self, width: f64) -> Simplex {
+        if width == 0.0 {
+            return self.clone();
+        }
+        let moved = Simplex { lines: self.lines.iter().map(|l| l.translate(-width)).collect() };
+        if width < 0.0 {
+            moved.remove_redundant_lines()
+        } else {
+            moved
+        }
+    }
+
+    /// Grown by `offset` on every side, its sharp corners cut back by its
+    /// bounding octagon grown as much. Empty where the polygon has no
+    /// bounding octagon. `Simplex.enlarge`.
+    pub fn enlarge(&self, offset: f64) -> Simplex {
+        if offset == 0.0 {
+            return self.clone();
+        }
+        let grown = self.offset(offset);
+        let Some(bounds) = self.bounding_octagon() else {
+            return Simplex::empty();
+        };
+        grown.intersection(&bounds.offset(offset).to_simplex())
+    }
+
+    /// `outer` less this polygon, in convex pieces: division lines run from
+    /// each corner of the part of this polygon inside `outer` square to the
+    /// nearest side of `outer`, and each piece lies between two corners'
+    /// lines. Pieces may be empty or flat. `outer` whole where there is
+    /// nothing to cut, or a corner finds no side; `None` where this polygon
+    /// has no area, as the Java's null. `Simplex.cutout_from(Simplex)`.
+    ///
+    /// The Java also merges a previous division line into some pieces, but
+    /// never sets one -- its last statement writes the loop's own variable
+    /// -- so no piece takes it, here as there.
+    pub fn cutout_from(&self, outer: &Simplex) -> Option<Vec<Simplex>> {
+        if self.dimension() < 2 {
+            return None;
+        }
+        let inner = self.intersection(outer);
+        if inner.dimension() < 2 {
+            return Some(vec![outer.clone()]);
+        }
+        let n = inner.lines.len();
+        let mut division = Vec::with_capacity(n);
+        for i in 0..n {
+            match inner.calc_division_lines(i, outer) {
+                Some(lines) => division.push(lines),
+                None => return Some(vec![outer.clone()]),
+            }
+        }
+        let mut check_cross_first_line = false;
+        let first_division_line = division[0][0];
+        let first_direction = first_division_line.direction();
+        let mut result = Vec::new();
+        for i in 0..n {
+            let next_division_line = if i == n - 1 { division[0][0] } else { division[i + 1][0] };
+            let curr = &division[i];
+            if curr.len() == 2 {
+                // The wedge between the corner's two division lines.
+                let curr_dir = curr[0].direction();
+                if !check_cross_first_line {
+                    check_cross_first_line = i > 0 && curr_dir.determinant(&first_direction) > 0.0;
+                }
+                let merge_first = check_cross_first_line && curr[1].direction().determinant(&first_direction) < 0.0;
+                let mut piece = vec![curr[1].opposite(), curr[0]];
+                if merge_first {
+                    piece.push(first_division_line.opposite());
+                }
+                result.push(Simplex::new(piece).intersection(outer));
+            }
+            // The piece along side i: between the next corner's first
+            // division line, the side, and this corner's last line.
+            let merge_next = next_division_line.b != next_division_line.a;
+            let last_curr = curr[curr.len() - 1];
+            let last_curr_dir = last_curr.direction();
+            let merge_last_curr = last_curr.b != last_curr.a;
+            if !check_cross_first_line {
+                check_cross_first_line = i > 0
+                    && last_curr_dir.determinant(&first_direction) > 0.0
+                    && last_curr_dir.scalar_product(&first_direction) < 0.0;
+            }
+            let merge_first = check_cross_first_line && next_division_line.direction().determinant(&first_direction) < 0.0;
+            let mut piece = vec![inner.lines[i].opposite()];
+            if merge_next {
+                piece.push(next_division_line.opposite());
+            }
+            if merge_last_curr {
+                piece.push(last_curr);
+            }
+            if merge_first {
+                piece.push(first_division_line.opposite());
+            }
+            result.push(Simplex::new(piece).intersection(outer));
+        }
+        Some(result)
+    }
+
+    /// The division lines from corner `no`, where border line `no` meets
+    /// the one before, to the sides of `outer`: one line square to the
+    /// nearest side the corner can see, or two, to a second side, where one
+    /// would leave the corner's far side uncovered. Only the line before,
+    /// where the corner is off the grid; a line of no length at the corner
+    /// where it lies on a side of `outer`. `None` where no side will do.
+    /// `Simplex.calc_division_lines`.
+    fn calc_division_lines(&self, no: usize, outer: &Simplex) -> Option<Vec<Line>> {
+        let curr_inner_line = self.lines[no];
+        let prev_inner_line = self.lines[self.prev(no)];
+        let (ix, iy) = curr_inner_line.intersection_approx(&prev_inner_line);
+        if ix >= i32::MAX as f64 {
+            return None;
+        }
+        let inner_corner = IntPoint::new(java_round(ix), java_round(iy));
+        const TOLERANCE: f64 = 0.0001;
+        let is_exact = (inner_corner.x as f64 - ix).abs() < TOLERANCE && (inner_corner.y as f64 - iy).abs() < TOLERANCE;
+        if !is_exact {
+            return Some(vec![prev_inner_line]);
+        }
+        let corner = (inner_corner.x as f64, inner_corner.y as f64);
+        let on_a_side = || Some(vec![Line::new(inner_corner, inner_corner)]);
+        let prev_inner_dir = prev_inner_line.direction().opposite();
+        let next_inner_dir = curr_inner_line.direction();
+        let m = outer.lines.len();
+        let mut projection_dirs = None;
+        let mut min_distance = i32::MAX as f64;
+        let mut outer_line_no = 0;
+        for _ in 0..m {
+            let outer_line = outer.lines[outer_line_no];
+            let Some(curr_projection_dir) = outer_line.perpendicular_direction_from(inner_corner) else {
+                return on_a_side();
+            };
+            if prev_inner_dir.determinant(&curr_projection_dir) >= 0.0 {
+                let mut curr_distance = outer_line.signed_distance(corner).abs();
+                let mut curr_second_projection_dir = curr_projection_dir;
+                if curr_projection_dir.determinant(&next_inner_dir) < 0.0 {
+                    // The square line cuts into the corner's far side:
+                    // go on round `outer` to a side past it.
+                    let mut second_projection_visible = false;
+                    let mut tmp_outer_line_no = outer_line_no;
+                    while !second_projection_visible {
+                        tmp_outer_line_no = if tmp_outer_line_no == m - 1 { 0 } else { tmp_outer_line_no + 1 };
+                        let Some(dir) = outer.lines[tmp_outer_line_no].perpendicular_direction_from(inner_corner) else {
+                            return on_a_side();
+                        };
+                        curr_second_projection_dir = dir;
+                        if curr_projection_dir.determinant(&curr_second_projection_dir) < 0.0 {
+                            curr_distance = i32::MAX as f64;
+                            break;
+                        }
+                        second_projection_visible = curr_second_projection_dir.determinant(&next_inner_dir) >= 0.0;
+                    }
+                    curr_distance += outer.lines[tmp_outer_line_no].signed_distance(corner).abs();
+                }
+                if curr_distance < min_distance {
+                    min_distance = curr_distance;
+                    projection_dirs = Some((curr_projection_dir, curr_second_projection_dir));
+                }
+            }
+            outer_line_no = if outer_line_no == m - 1 { 0 } else { outer_line_no + 1 };
+        }
+        if min_distance == i32::MAX as f64 {
+            return None;
+        }
+        let (first, second) = projection_dirs.expect("set with the distance");
+        if first.same_as(&second) {
+            Some(vec![Line::through(inner_corner, first)])
+        } else {
+            Some(vec![Line::through(inner_corner, first), Line::through(inner_corner, second)])
+        }
+    }
+
     /// Lines already in counter-clockwise order, reduced but not sorted, as
     /// `IntOctagon.to_Simplex` builds its eight sides.
     pub(crate) fn from_sorted_lines(lines: Vec<Line>) -> Simplex {
@@ -257,21 +432,34 @@ impl Simplex {
     /// half-planes leave nothing. `Simplex.remove_redundant_lines`, loop
     /// for loop: which line goes first changes which remain.
     fn remove_redundant_lines(self) -> Simplex {
-        let arr = &self.lines;
-        if arr.is_empty() {
+        let original_length = self.lines.len();
+        if original_length == 0 {
             return self;
         }
-        let mut line_arr = Vec::with_capacity(arr.len());
-        line_arr.push(arr[0]);
-        let mut prev = arr[0];
-        for l in &arr[1..] {
-            if !l.fast_equals(&prev) {
-                line_arr.push(*l);
-                prev = *l;
+        // Repeats of the line before dropped, in place.
+        let mut line_arr = self.lines;
+        let mut new_length = 1;
+        for i in 1..original_length {
+            if !line_arr[i].fast_equals(&line_arr[new_length - 1]) {
+                line_arr[new_length] = line_arr[i];
+                new_length += 1;
             }
         }
-        let mut new_length = line_arr.len();
-        let mut sides: Vec<Option<Side>> = vec![None; new_length];
+        // Each line's direction, kept as the Java's lines keep theirs once
+        // computed, and the side its neighbours meet on, once known. On the
+        // stack for the usual handful of lines: this runs for every
+        // intersection, and allocating was most of its cost.
+        let mut stack = [(Direction { x: 0, y: 0 }, None::<Side>); 32];
+        let mut heap;
+        let meta: &mut [(Direction, Option<Side>)] = if new_length <= stack.len() {
+            &mut stack[..new_length]
+        } else {
+            heap = vec![(Direction { x: 0, y: 0 }, None); new_length];
+            &mut heap
+        };
+        for (m, l) in meta.iter_mut().zip(&line_arr) {
+            m.0 = l.direction();
+        }
         let mut try_again = new_length > 2;
         let mut index_of_last_removed_line = new_length as i64;
         while try_again {
@@ -285,15 +473,15 @@ impl Simplex {
                 let mut next_ind = if i == new_length - 1 { 0 } else { i + 1 };
                 let next_line = line_arr[next_ind];
                 let mut remove_line = false;
-                let (prev_dir, next_dir) = (prev_line.direction(), next_line.direction());
+                let (prev_dir, next_dir) = (meta[prev_ind].0, meta[next_ind].0);
                 let det = prev_dir.determinant(&next_dir);
                 if det != 0.0 {
-                    if sides[i].is_none() {
-                        sides[i] = Some(curr_line.side_of_intersection(&prev_line, &next_line));
+                    if meta[i].1.is_none() {
+                        meta[i].1 = Some(curr_line.side_of_intersection(&prev_line, &next_line));
                     }
                     if det > 0.0 {
-                        remove_line = sides[i] != Some(Side::Left);
-                    } else if sides[i] == Some(Side::Left) && prev_dir.determinant(&curr_line.direction()) > 0.0 {
+                        remove_line = meta[i].1 != Some(Side::Left);
+                    } else if meta[i].1 == Some(Side::Left) && prev_dir.determinant(&meta[i].0) > 0.0 {
                         new_length = 0;
                         break;
                     }
@@ -306,7 +494,7 @@ impl Simplex {
                     new_length -= 1;
                     for k in i..new_length {
                         line_arr[k] = line_arr[k + 1];
-                        sides[k] = sides[k + 1];
+                        meta[k] = meta[k + 1];
                     }
                     if new_length < 3 {
                         try_again = false;
@@ -315,9 +503,9 @@ impl Simplex {
                     if i == 0 {
                         prev_ind = new_length - 1;
                     }
-                    sides[prev_ind] = None;
+                    meta[prev_ind].1 = None;
                     next_ind = if i >= new_length { 0 } else { i };
-                    sides[next_ind] = None;
+                    meta[next_ind].1 = None;
                     ind -= 1;
                     index_of_last_removed_line = ind;
                 } else {
@@ -344,9 +532,6 @@ impl Simplex {
             } else if line_arr[1].side_of(&first_a) == Side::Left {
                 new_length = 0;
             }
-        }
-        if new_length == self.lines.len() {
-            return self;
         }
         if new_length == 0 {
             return Simplex::empty();

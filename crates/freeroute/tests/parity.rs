@@ -1,9 +1,10 @@
 //! Rooms and doors checked against FreeRouting v1.9 itself.
 //!
 //! Each file in `tests/parity/` was written by `parity/RoomParity.java`
-//! running the real FreeRouting on one of its example boards: the board's
-//! shapes in the order its search tree stores them, a start point, and every
-//! room and door FreeRouting made filling that net's free space from there.
+//! running the real FreeRouting on one of its example boards, or on one of
+//! our own in `parity/fixtures/`: the board's shapes in the order its search
+//! tree stores them, a start point, and every room and door FreeRouting made
+//! filling that net's free space from there.
 //! This rebuilds the same tree, runs the same fill, and requires the same
 //! rooms in the same order, each with the same doors in the same order.
 //!
@@ -17,7 +18,8 @@
 //! The dumps also carry every pin's and via's raw pad shapes and the
 //! clearance rules, so the board model is checked too: each pad, grown as
 //! the port grows it, must come out as FreeRouting's tree shape; likewise
-//! each area -- keepout or copper pour -- of a shape ported so far, and the
+//! each area -- keepout or copper pour, round, polygonal or with holes --
+//! split into the same convex pieces line for line, then grown; and the
 //! board outline, its edges widened as traces are, and each trace, shape
 //! for shape and line for line. Rooms
 //! are checked on boards with traces too: a polygon trace shape is stored
@@ -26,9 +28,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use eda_freeroute::board::{area_tree_shapes, clearance_offset, drill_tree_shape, outline_tree_shapes, trace_tree_shapes, AreaShape, PadShape};
+use eda_freeroute::board::{clearance_offset, drill_tree_shape, outline_tree_shapes, piece_tree_shapes, trace_tree_shapes, AreaShape, PadShape};
 use eda_freeroute::door::{RoomGraph, RoomId, RoomState};
-use eda_freeroute::geometry::{Circle, IntBox, IntOctagon, IntPoint, Line, Polyline, Simplex, TileShape};
+use eda_freeroute::geometry::{
+    Circle, IntBox, IntOctagon, IntPoint, Line, PolygonShape, Polyline, PolylineArea, PolylineShape, Simplex, TileShape,
+};
 use eda_freeroute::room::{complete_shape, IncompleteRoom, TreeObject};
 use eda_freeroute::rules::ClearanceMatrix;
 
@@ -241,37 +245,176 @@ fn check_pads(dump: &str) -> (usize, Vec<String>) {
     (pads.len(), diffs)
 }
 
-/// Grow every area of a shape ported so far as the port does, and compare
-/// with FreeRouting's tree shapes, all of them in order: the numbers of
-/// areas checked and not yet portable, and every difference.
-fn check_areas(dump: &str) -> (usize, usize, Vec<String>) {
+/// Dump words read in turn.
+struct Words<'a> {
+    words: Vec<&'a str>,
+    next: usize,
+}
+
+impl<'a> Words<'a> {
+    fn word(&mut self) -> &'a str {
+        self.next += 1;
+        self.words[self.next - 1]
+    }
+
+    fn nums(&mut self, n: usize) -> Vec<i64> {
+        (0..n).map(|_| self.word().parse().unwrap()).collect()
+    }
+
+    /// A convex shape of the given kind: "box", "octagon" or "simplex".
+    fn tile(&mut self, kind: &str) -> Option<TileShape> {
+        Some(match kind {
+            "box" => {
+                let n = self.nums(4);
+                TileShape::Box(IntBox::new(n[0], n[1], n[2], n[3]))
+            }
+            "octagon" => {
+                let n = self.nums(8);
+                TileShape::Octagon(IntOctagon::new(n[0], n[1], n[2], n[3], n[4], n[5], n[6], n[7]))
+            }
+            "simplex" => {
+                let k = self.nums(1)[0];
+                let mut n = vec![k];
+                n.extend(self.nums(4 * k as usize));
+                TileShape::Simplex(Simplex::new(lines_from(&n)))
+            }
+            _ => return None,
+        })
+    }
+
+    /// A polygon by the corners FreeRouting keeps, taken as they are: its
+    /// constructor has already cleaned them, and doing so again need not
+    /// leave them unchanged.
+    fn polygon(&mut self) -> PolygonShape {
+        let k = self.nums(1)[0] as usize;
+        let n = self.nums(2 * k);
+        PolygonShape { corners: (0..k).map(|i| IntPoint::new(n[2 * i], n[2 * i + 1])).collect() }
+    }
+
+    fn part(&mut self) -> Option<PolylineShape> {
+        match self.word() {
+            "polygon" => Some(PolylineShape::Polygon(self.polygon())),
+            kind => self.tile(kind).map(PolylineShape::Tile),
+        }
+    }
+
+    /// An area record's shape; `None` for a kind the port cannot read.
+    fn area(&mut self) -> Option<AreaShape> {
+        match self.word() {
+            "circle" => {
+                let n = self.nums(3);
+                Some(AreaShape::Circle(Circle::new(IntPoint::new(n[0], n[1]), n[2])))
+            }
+            "polygon" => Some(AreaShape::Polygon(self.polygon())),
+            "holes" => {
+                let k = self.nums(1)[0] as usize;
+                let border = self.part()?;
+                let holes = (0..k).map(|_| self.part()).collect::<Option<Vec<_>>>()?;
+                Some(AreaShape::WithHoles(PolylineArea { border, holes }))
+            }
+            kind => self.tile(kind).map(AreaShape::Tile),
+        }
+    }
+}
+
+/// A convex shape as the dump writes it.
+fn shape_text(shape: &TileShape) -> String {
+    match shape {
+        TileShape::Box(b) => format!("box {} {} {} {}", b.ll.x, b.ll.y, b.ur.x, b.ur.y),
+        TileShape::Octagon(o) => format!("octagon {}", octagon_text(o)),
+        TileShape::Simplex(s) => {
+            let lines: Vec<String> = s.lines.iter().map(|l| format!("{} {} {} {}", l.a.x, l.a.y, l.b.x, l.b.y)).collect();
+            format!("simplex {} {}", s.lines.len(), lines.join(" ")).trim_end().to_string()
+        }
+    }
+}
+
+/// What checking a dump's areas found.
+#[derive(Default)]
+struct AreaCheck {
+    areas: usize,
+    pieces: usize,
+    /// Polygons built from untidy corners.
+    polygons: usize,
+    unported: usize,
+    diffs: Vec<String>,
+}
+
+/// Split every area into convex pieces as the port does and compare them
+/// with FreeRouting's, exactly and in order; then grow them into tree
+/// shapes and compare those, all in order. Also build each polygon from
+/// the untidy corners the dump gives, as FreeRouting did.
+fn check_areas(dump: &str) -> AreaCheck {
     let tree = tree_shapes(dump);
     let (rules, trace_class) = clearance_rules(dump);
+    let mut want_pieces: HashMap<u64, Vec<String>> = HashMap::new();
+    for line in dump.lines() {
+        if let Some((id, shape)) = line.strip_prefix("area_piece ").and_then(|r| r.split_once(' ')) {
+            want_pieces.entry(id.parse().unwrap()).or_default().push(shape.to_string());
+        }
+    }
     let mut section = 0.0;
-    let (mut checked, mut unported, mut diffs) = (0, 0, Vec::new());
+    let mut check = AreaCheck::default();
     for line in dump.lines() {
         let f: Vec<&str> = line.split_whitespace().collect();
         match f.first().copied().unwrap_or("") {
             "area_section" => section = f[1].parse().unwrap(),
-            "area" if f[4] == "circle" => {
-                let n: Vec<i64> = f[1..].iter().filter_map(|s| s.parse().ok()).collect();
-                let (id, layer, class) = (n[0] as u64, n[1] as i32, n[2] as i32);
-                let area = AreaShape::Circle(Circle::new(IntPoint::new(n[3], n[4]), n[5]));
-                let got: Vec<String> =
-                    area_tree_shapes(&area, clearance_offset(&rules, class, trace_class, layer), section).iter().map(octagon_text).collect();
+            "polygon_made" => {
+                // polygon_made <id> polygon <given> -> polygon <made>
+                let mut w = Words { words: f[3..].to_vec(), next: 0 };
+                let given = w.polygon().corners;
+                w.next += 2;
+                let want = w.polygon().corners;
+                check.polygons += 1;
+                let got = PolygonShape::new(&given).corners;
+                if got != want {
+                    check.diffs.push(format!("polygon of area {} from {given:?}:\n    FreeRouting: {want:?}\n    port:        {got:?}", f[1]));
+                }
+            }
+            "area" => {
+                let (id, layer, class): (u64, i32, i32) = (f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap());
+                let Some(area) = (Words { words: f[4..].to_vec(), next: 0 }).area() else {
+                    check.unported += 1;
+                    continue;
+                };
+                check.areas += 1;
+                let split = area.split_to_convex();
+                let pieces: Vec<String> = match &split {
+                    Some(pieces) => pieces.iter().map(shape_text).collect(),
+                    None => vec!["none".to_string()],
+                };
+                let want = want_pieces.get(&id).cloned().unwrap_or_default();
+                check.pieces += want.len();
+                if pieces != want {
+                    let k = pieces.iter().zip(&want).position(|(p, w)| p != w).unwrap_or(pieces.len().min(want.len()));
+                    check.diffs.push(format!(
+                        "area {id} ({}): {} pieces, FreeRouting {}; first difference, piece {k}:\n    FreeRouting: {:?}\n    port:        {:?}",
+                        f[4],
+                        pieces.len(),
+                        want.len(),
+                        want.get(k),
+                        pieces.get(k)
+                    ));
+                    continue;
+                }
+                // FreeRouting stores no tree shape where there is no
+                // bounding octagon, and the dump skips those.
+                let got: Vec<String> = piece_tree_shapes(&split.unwrap_or_default(), clearance_offset(&rules, class, trace_class, layer), section)
+                    .iter()
+                    .flatten()
+                    .map(octagon_text)
+                    .collect();
                 let mut want = tree.get(&id).cloned().unwrap_or_default();
                 want.sort_by_key(|(i, _)| *i);
                 let want: Vec<String> = want.into_iter().map(|(_, o)| o).collect();
-                checked += 1;
                 if got != want {
-                    diffs.push(format!("area {id} {}:\n    FreeRouting: {want:?}\n    port:        {got:?}", f[4..].join(" ")));
+                    check.diffs.push(format!("area {id} {}:\n    FreeRouting: {want:?}\n    port:        {got:?}", f[4..].join(" ")));
                 }
             }
-            "area" => unported += 1,
             _ => {}
         }
     }
-    (checked, unported, diffs)
+    check
 }
 
 /// Widen the board outline's edges as the port does and compare with
@@ -420,17 +563,30 @@ fn pin_and_via_shapes_match_freerouting() {
 }
 
 #[test]
-fn round_area_shapes_match_freerouting() {
-    let (mut checked, mut unported, mut failures) = (0, 0, Vec::new());
+fn area_shapes_match_freerouting() {
+    let (mut total, mut failures) = (AreaCheck::default(), Vec::new());
     for path in dumps() {
-        let (n, skipped, diffs) = check_areas(&std::fs::read_to_string(&path).unwrap());
-        (checked, unported) = (checked + n, unported + skipped);
-        if !diffs.is_empty() {
-            let shown: Vec<_> = diffs.iter().take(3).cloned().collect();
-            failures.push(format!("{}: {} of {n} areas differ, e.g.\n  {}", path.file_name().unwrap().to_string_lossy(), diffs.len(), shown.join("\n  ")));
+        let check = check_areas(&std::fs::read_to_string(&path).unwrap());
+        total.areas += check.areas;
+        total.pieces += check.pieces;
+        total.polygons += check.polygons;
+        total.unported += check.unported;
+        if !check.diffs.is_empty() {
+            let shown: Vec<_> = check.diffs.iter().take(3).cloned().collect();
+            failures.push(format!(
+                "{}: {} of {} areas differ, e.g.\n  {}",
+                path.file_name().unwrap().to_string_lossy(),
+                check.diffs.len(),
+                check.areas,
+                shown.join("\n  ")
+            ));
         }
     }
-    eprintln!("round areas checked: {checked}; areas of shapes not ported yet: {unported}");
+    eprintln!(
+        "areas checked: {} ({} convex pieces; {} polygons built from untidy corners); of shapes the port cannot read: {}",
+        total.areas, total.pieces, total.polygons, total.unported
+    );
+    assert_eq!(total.unported, 0, "areas of shapes the port cannot read");
     assert!(failures.is_empty(), "{} boards differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }
 

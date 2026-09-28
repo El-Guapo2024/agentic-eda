@@ -16,7 +16,10 @@
 //   pad <item id> <shape_index> <layer> <clearance class> <shape>
 //                                                              (pins and vias)
 //   area_section <widest an area's tree shape may be>
-//   area <item id> <layer> <clearance class> <shape>           (keepouts, pours)
+//   area <item id> <layer> <clearance class> <area>            (keepouts, pours)
+//   area_piece <item id> <shape>|none                          (its convex pieces, in order)
+//   polygon_made <item id> <polygon> -> <polygon>              (PolygonShape(Point[]), given
+//                                                              an area's polygon untidily)
 //   outline <item id> <half width> <clearance class> <layers> <keepout 0|1>
 //   outline_shape <n> <ax ay bx by>...                         (each shape's border lines)
 //   trace <id> <layer> <half width> <clearance class> <n> <ax ay bx by>...
@@ -44,8 +47,10 @@
 // bound, so it is marked approx, and the room check skips such boards, as
 // FreeRouting tests polygons exactly there. A shape is "circle cx cy r", "box llx lly urx ury",
 // "octagon <octagon>", or "simplex <n> <ax ay bx by>..." for a convex
-// polygon's n border lines; an area is "circle cx cy r", or "other <kind>"
-// where the port cannot take it yet. An octagon is lx ly rx uy ulx lrx llx urx, the
+// polygon's n border lines. An area is "circle cx cy r", "polygon <n> <x y>..."
+// by the corners FreeRouting keeps, one of the shapes above, or
+// "holes <k> <border> <hole>..." where each part is a polygon or a shape;
+// "none" pieces mean the split failed. An octagon is lx ly rx uy ulx lrx llx urx, the
 // Java field order. Run by dump.sh against FreeRouting's v1.9 jar.
 //
 // Licence: GPL-3.0, as it links FreeRouting.
@@ -70,12 +75,15 @@ import app.freerouting.board.ShapeSearchTree;
 import app.freerouting.board.TestLevel;
 import app.freerouting.datastructures.UndoableObjects;
 import app.freerouting.designforms.specctra.DsnFile;
+import app.freerouting.geometry.planar.Area;
 import app.freerouting.geometry.planar.Circle;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntOctagon;
 import app.freerouting.geometry.planar.IntPoint;
 import app.freerouting.geometry.planar.Line;
 import app.freerouting.geometry.planar.Point;
+import app.freerouting.geometry.planar.PolygonShape;
+import app.freerouting.geometry.planar.PolylineArea;
 import app.freerouting.geometry.planar.PolylineShape;
 import app.freerouting.geometry.planar.Shape;
 import app.freerouting.geometry.planar.Simplex;
@@ -246,11 +254,39 @@ public class RoomParity {
         break;
       }
       if (item instanceof ObstacleArea area && area.get_area() != null) {
-        String shape = area.get_area() instanceof Circle c
-            ? "circle " + c.center.x + " " + c.center.y + " " + c.radius
-            : "other " + area.get_area().getClass().getSimpleName();
         out.append("area ").append(item.get_id_no()).append(' ').append(area.get_layer()).append(' ')
-            .append(item.clearance_class_no()).append(' ').append(shape).append('\n');
+            .append(item.clearance_class_no()).append(' ').append(area_shape(area.get_area())).append('\n');
+        // The polygon constructor, on the area's polygons given back
+        // untidily: reversed, from another corner, closed, with a repeated
+        // corner and a corner midway along a side.
+        List<PolygonShape> polygons = new ArrayList<>();
+        if (area.get_area() instanceof PolygonShape p) {
+          polygons.add(p);
+        } else if (area.get_area() instanceof PolylineArea pa) {
+          for (PolylineShape part : pa.get_holes()) {
+            if (part instanceof PolygonShape p) {
+              polygons.add(p);
+            }
+          }
+          if (pa.get_border() instanceof PolygonShape p) {
+            polygons.add(0, p);
+          }
+        }
+        for (PolygonShape p : polygons) {
+          Point[] untidy = untidy(p.corners);
+          out.append("polygon_made ").append(item.get_id_no()).append(' ').append(polygon(untidy)).append(" -> ")
+              .append(polygon(new PolygonShape(untidy).corners)).append('\n');
+        }
+        // The convex pieces the area splits into, in order: ObstacleArea
+        // splits the area it returns here, and keeps the pieces.
+        TileShape[] pieces = area.get_area().split_to_convex();
+        if (pieces == null) {
+          out.append("area_piece ").append(item.get_id_no()).append(" none\n");
+        } else {
+          for (TileShape piece : pieces) {
+            out.append("area_piece ").append(item.get_id_no()).append(' ').append(pad_shape(piece)).append('\n');
+          }
+        }
       }
     }
 
@@ -362,6 +398,65 @@ public class RoomParity {
       return b.toString();
     }
     return "other " + shape.getClass().getSimpleName();
+  }
+
+  /**
+   * An area as the port reads it: a circle, a polygon by its stored corners,
+   * a convex shape, or a border with holes, each of those a polygon or a
+   * convex shape.
+   */
+  private static String area_shape(Area area) {
+    if (area instanceof Circle c) {
+      return "circle " + c.center.x + " " + c.center.y + " " + c.radius;
+    }
+    if (area instanceof PolylineArea pa) {
+      StringBuilder b = new StringBuilder("holes ").append(pa.get_holes().length).append(' ').append(area_shape(pa.get_border()));
+      for (PolylineShape hole : pa.get_holes()) {
+        b.append(' ').append(area_shape(hole));
+      }
+      return b.toString();
+    }
+    if (area instanceof PolygonShape p) {
+      return polygon(p.corners);
+    }
+    if (area instanceof Shape s) {
+      return pad_shape(s);
+    }
+    return "other " + area.getClass().getSimpleName();
+  }
+
+  private static String polygon(Point[] corners) {
+    StringBuilder b = new StringBuilder("polygon ").append(corners.length);
+    for (Point corner : corners) {
+      IntPoint q = (IntPoint) corner;
+      b.append(' ').append(q.x).append(' ').append(q.y);
+    }
+    return b.toString();
+  }
+
+  /**
+   * Corners as a board file might give them: clockwise from a third of the
+   * way round, the midpoint of the first side where it falls on the grid,
+   * the corner after that twice, and the first repeated at the end.
+   */
+  private static Point[] untidy(Point[] corners) {
+    int n = corners.length;
+    List<Point> out = new ArrayList<>();
+    for (int i = 0; i < n; ++i) {
+      out.add(corners[((n / 3 - i) % n + n) % n]);
+    }
+    if (n >= 2) {
+      IntPoint a = (IntPoint) out.get(0);
+      IntPoint b = (IntPoint) out.get(1);
+      if ((a.x + b.x) % 2 == 0 && (a.y + b.y) % 2 == 0) {
+        out.add(1, new IntPoint((a.x + b.x) / 2, (a.y + b.y) / 2));
+      }
+      if (out.size() > 2) {
+        out.add(2, out.get(2));
+      }
+      out.add(out.get(0));
+    }
+    return out.toArray(new Point[0]);
   }
 
   private static String octagon(IntOctagon o) {

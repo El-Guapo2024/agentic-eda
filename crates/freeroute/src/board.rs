@@ -2,12 +2,12 @@
 //! the shapes FreeRouting stores in its search tree for the trace clearance
 //! class being routed. Ported from the item side of `ShapeSearchTree` and
 //! `ShapeSearchTree45Degree`, item kind by item kind: pins, vias, traces,
-//! round areas, and the board outline so far.
+//! areas, and the board outline.
 //!
 //! Every tree shape is an obstacle grown by the clearance it needs from
 //! that trace class, so the search itself never measures a gap.
 
-use crate::geometry::{Circle, IntBox, IntOctagon, Line, Polyline, Simplex, TileShape};
+use crate::geometry::{Circle, IntBox, IntOctagon, Line, PolygonShape, Polyline, PolylineArea, Simplex, TileShape};
 use crate::rules::ClearanceMatrix;
 
 /// A pad or via on one layer, in the shapes FreeRouting reads them as.
@@ -69,23 +69,54 @@ pub fn drill_tree_shape(shape: &PadShape, offset: i64) -> Option<IntOctagon> {
 }
 
 /// A keepout, via keepout, component keepout or copper pour, in the shapes
-/// FreeRouting reads them as. Only circles so far: polygons need
-/// FreeRouting's splitting into convex pieces, not yet ported.
+/// FreeRouting reads them as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AreaShape {
     Circle(Circle),
+    /// A polygon, convex or not.
+    Polygon(PolygonShape),
+    /// A shape convex already: a box, an octagon or a convex polygon.
+    Tile(TileShape),
+    /// A border with holes.
+    WithHoles(PolylineArea),
 }
 
-/// The tree shapes of an area on its layer: split into convex pieces -- a
-/// circle is one, its bounding octagon -- each grown by `offset` and cut
-/// into sections at most `max_section` wide, keeping those with area.
+impl AreaShape {
+    /// The area in convex pieces, as FreeRouting splits it: a circle is
+    /// its bounding octagon. `None` where the split fails.
+    /// `Area.split_to_convex`.
+    pub fn split_to_convex(&self) -> Option<Vec<TileShape>> {
+        match self {
+            AreaShape::Circle(c) => Some(vec![TileShape::Octagon(c.bounding_octagon())]),
+            AreaShape::Polygon(p) => p.split_to_convex(),
+            AreaShape::Tile(t) => Some(vec![t.clone()]),
+            AreaShape::WithHoles(a) => a.split_to_convex(),
+        }
+    }
+}
+
+/// The tree shapes of an area on its layer: its convex pieces, each grown
+/// by `offset`, cut into sections at most `max_section` wide keeping those
+/// with area, and stored under their bounding octagons. None where the
+/// split fails, as in the Java; `None` for a section beyond the critical
+/// bound, where the Java has no shape.
 /// `ShapeSearchTree45Degree.calculate_tree_shapes(ObstacleArea)`; see
 /// [`area_section_width`] for `max_section`.
-pub fn area_tree_shapes(area: &AreaShape, offset: i64, max_section: f64) -> Vec<IntOctagon> {
-    let pieces = match area {
-        AreaShape::Circle(c) => vec![c.bounding_octagon()],
-    };
-    pieces.iter().flat_map(|p| sections(&p.offset(offset as f64), max_section)).collect()
+pub fn area_tree_shapes(area: &AreaShape, offset: i64, max_section: f64) -> Vec<Option<IntOctagon>> {
+    match area.split_to_convex() {
+        Some(pieces) => piece_tree_shapes(&pieces, offset, max_section),
+        None => Vec::new(),
+    }
+}
+
+/// [`area_tree_shapes`] from an area's convex pieces, already split: the
+/// split is the costly part, and an area's pieces never change.
+pub fn piece_tree_shapes(pieces: &[TileShape], offset: i64, max_section: f64) -> Vec<Option<IntOctagon>> {
+    pieces
+        .iter()
+        .flat_map(|p| p.enlarge(offset as f64).divide_into_sections(max_section))
+        .map(|s| s.bounding_octagon())
+        .collect()
 }
 
 /// How wide an area's tree shapes may be: 50,000 units, or 500 mils if the
@@ -132,16 +163,6 @@ pub fn trace_tree_shapes(polyline: &Polyline, half_width: i64, offset: i64) -> V
     (0..segments).map(|i| polyline.offset_shape(half_width + offset, i)).collect()
 }
 
-/// `TileShape.divide_into_sections` for an octagon: its bounding box tiled
-/// into sections at most `max_width` wide, the octagon cut by each, and the
-/// pieces with area kept.
-fn sections(o: &IntOctagon, max_width: f64) -> Vec<IntOctagon> {
-    if o.is_empty() {
-        return vec![*o];
-    }
-    o.bounding_box().divide_into_sections(max_width).into_iter().map(|b| o.intersection(&b.to_octagon())).filter(|s| s.dimension() == 2).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,7 +196,7 @@ mod tests {
     fn a_small_round_keepout_is_one_grown_octagon() {
         let area = AreaShape::Circle(Circle::new(IntPoint::new(0, 0), 500));
         let shapes = area_tree_shapes(&area, 100, area_section_width(None));
-        assert_eq!(shapes, vec![Circle::new(IntPoint::new(0, 0), 500).bounding_octagon().offset(100.0)]);
+        assert_eq!(shapes, vec![Some(Circle::new(IntPoint::new(0, 0), 500).bounding_octagon().offset(100.0))]);
     }
 
     /// A keepout wider than the section width is cut into pieces that
@@ -183,7 +204,7 @@ mod tests {
     #[test]
     fn a_large_keepout_is_cut_into_sections() {
         let big = Circle::new(IntPoint::new(0, 0), 60_000);
-        let shapes = area_tree_shapes(&AreaShape::Circle(big), 0, 50_000.0);
+        let shapes: Vec<IntOctagon> = area_tree_shapes(&AreaShape::Circle(big), 0, 50_000.0).into_iter().flatten().collect();
         assert_eq!(shapes.len(), 9, "a 120,000-wide octagon in 50,000-wide sections: {shapes:?}");
         let whole: f64 = shapes.iter().map(|s| s.area()).sum();
         assert!((whole - big.bounding_octagon().area()).abs() < 1.0);

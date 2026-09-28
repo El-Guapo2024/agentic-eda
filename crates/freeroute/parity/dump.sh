@@ -2,7 +2,8 @@
 # Regenerate the parity dumps in ../tests/parity from FreeRouting v1.9 itself.
 #
 #   dump.sh                    regenerate every board already in tests/parity
-#   dump.sh <board>...         dump these fixtures (names without .dsn)
+#   dump.sh <board>...         dump these fixtures (names without .dsn): from
+#                              parity/fixtures if there, else FreeRouting's
 #   dump.sh --steps <board>    also record each completion, to find where a
 #                              board diverges (see RoomParity.java)
 #   dump.sh --all <dir>        dump every fixture FreeRouting can route into
@@ -41,7 +42,7 @@ fi
 jar="$fr/build/libs/freerouting-1.9.0-executable.jar"
 # FreeRouting logs warnings, timestamped, to the same stream: keep only the
 # dump's own records, so a regenerated file is byte-identical.
-records='^(fixture|board|net|item|exact|tree_class|cm|pad|area_section|area|outline|outline_shape|trace|start|step|grown|cand|made|room|door|obstacle_doors)( |$)'
+records='^(fixture|board|net|item|exact|tree_class|cm|pad|area_section|area|area_piece|polygon_made|outline|outline_shape|trace|start|step|grown|cand|made|room|door|obstacle_doors)( |$)'
 # Run from the FreeRouting checkout: it writes a logs/ directory wherever it
 # runs.
 cd "$fr"
@@ -59,5 +60,7 @@ if [ -n "$all" ]; then
   exit 0
 fi
 for board in "$@"; do
-  "$JAVA_HOME/bin/java" -cp "$jar" "$here/RoomParity.java" "$fr/fixtures/$board.dsn" $steps | grep -E "$records" > "$out/$board.txt"
+  dsn="$here/fixtures/$board.dsn"
+  [ -f "$dsn" ] || dsn="$fr/fixtures/$board.dsn"
+  "$JAVA_HOME/bin/java" -cp "$jar" "$here/RoomParity.java" "$dsn" $steps | grep -E "$records" > "$out/$board.txt"
 done

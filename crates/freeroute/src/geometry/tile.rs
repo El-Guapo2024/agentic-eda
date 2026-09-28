@@ -26,12 +26,110 @@ impl TileShape {
         Simplex::from_lines(lines).simplify()
     }
 
+    /// The convex polygon with these corners, counter-clockwise, in its
+    /// simplest form: a line through each corner and the next.
+    /// `TileShape.get_instance(Point[])`.
+    pub fn from_corners(corners: &[IntPoint]) -> TileShape {
+        let n = corners.len();
+        let lines: Vec<Line> = (0..n).map(|j| Line::new(corners[j], corners[(j + 1) % n])).collect();
+        TileShape::from_lines(&lines)
+    }
+
     pub fn is_empty(&self) -> bool {
         match self {
-            TileShape::Box(b) => b.ll.x > b.ur.x || b.ll.y > b.ur.y,
+            TileShape::Box(b) => b.is_empty(),
             TileShape::Octagon(o) => o.is_empty(),
             TileShape::Simplex(s) => s.is_empty(),
         }
+    }
+
+    /// -1 empty, 0 a point, 1 a segment, 2 an area.
+    pub fn dimension(&self) -> i32 {
+        match self {
+            TileShape::Box(b) => b.dimension(),
+            TileShape::Octagon(o) => o.dimension(),
+            TileShape::Simplex(s) => s.dimension(),
+        }
+    }
+
+    /// `bounding_box`, per form.
+    pub fn bounding_box(&self) -> IntBox {
+        match self {
+            TileShape::Box(b) => *b,
+            TileShape::Octagon(o) => o.bounding_box(),
+            TileShape::Simplex(s) => s.bounding_box(),
+        }
+    }
+
+    /// Grown by `offset` on every side: a box becomes its octagon grown, a
+    /// polygon has its sharp corners cut back. `enlarge`, per form.
+    pub fn enlarge(&self, offset: f64) -> TileShape {
+        match self {
+            TileShape::Box(b) => TileShape::Octagon(b.to_octagon().offset(offset)),
+            TileShape::Octagon(o) => TileShape::Octagon(o.offset(offset)),
+            TileShape::Simplex(s) => TileShape::Simplex(s.enlarge(offset)),
+        }
+    }
+
+    /// Cut into sections at most `max_width` wide by tiling the bounding
+    /// box, keeping the pieces with area; an empty shape stays whole.
+    /// `TileShape.divide_into_sections`, and a box's own override, which
+    /// returns the tiles unfiltered.
+    pub fn divide_into_sections(&self, max_width: f64) -> Vec<TileShape> {
+        if let TileShape::Box(b) = self {
+            return b.divide_into_sections(max_width).into_iter().map(TileShape::Box).collect();
+        }
+        if self.is_empty() {
+            return vec![self.clone()];
+        }
+        self.bounding_box()
+            .divide_into_sections(max_width)
+            .into_iter()
+            .map(|b| self.intersection_with_simplify(&TileShape::Box(b)))
+            .filter(|s| s.dimension() == 2)
+            .collect()
+    }
+
+    /// This shape less `hole`, in convex pieces, some of them perhaps empty
+    /// or flat. A box's pieces are simplified, the others' not. `None` where
+    /// the hole is a polygon without area, as the Java's null.
+    /// `TileShape.cutout`, through its double dispatch to the hole's
+    /// `cutout_from`.
+    pub fn cutout(&self, hole: &TileShape) -> Option<Vec<TileShape>> {
+        match self {
+            TileShape::Box(d) => Some(hole.cutout_from_box(d)?.into_iter().map(TileShape::simplify).collect()),
+            TileShape::Octagon(d) => hole.cutout_from_octagon(d),
+            TileShape::Simplex(d) => hole.cutout_from_simplex(d),
+        }
+    }
+
+    /// `d` less this shape. `cutout_from(IntBox)`, per form.
+    fn cutout_from_box(&self, d: &IntBox) -> Option<Vec<TileShape>> {
+        Some(match self {
+            TileShape::Box(h) => h.cutout_from(d).into_iter().map(TileShape::Box).collect(),
+            TileShape::Octagon(h) => h.cutout_from_box(*d).into_iter().map(TileShape::Octagon).collect(),
+            TileShape::Simplex(h) => h.cutout_from(&d.to_simplex())?.into_iter().map(TileShape::Simplex).collect(),
+        })
+    }
+
+    /// `d` less this shape. `cutout_from(IntOctagon)`, per form.
+    fn cutout_from_octagon(&self, d: &IntOctagon) -> Option<Vec<TileShape>> {
+        Some(match self {
+            TileShape::Box(h) => h.to_octagon().cutout_from(*d).into_iter().map(TileShape::Octagon).collect(),
+            TileShape::Octagon(h) => h.cutout_from(*d).into_iter().map(TileShape::Octagon).collect(),
+            TileShape::Simplex(h) => h.cutout_from(&d.to_simplex())?.into_iter().map(TileShape::Simplex).collect(),
+        })
+    }
+
+    /// `d` less this shape. `cutout_from(Simplex)`, per form: always as
+    /// polygons.
+    fn cutout_from_simplex(&self, d: &Simplex) -> Option<Vec<TileShape>> {
+        let pieces = match self {
+            TileShape::Box(h) => h.to_simplex().cutout_from(d)?,
+            TileShape::Octagon(h) => h.to_simplex().cutout_from(d)?,
+            TileShape::Simplex(h) => h.cutout_from(d)?,
+        };
+        Some(pieces.into_iter().map(TileShape::Simplex).collect())
     }
 
     /// `bounding_octagon`, per form; `None` for a polygon beyond the
@@ -121,9 +219,42 @@ impl IntBox {
         IntBox::new(self.ll.x.max(other.ll.x), self.ll.y.max(other.ll.y), self.ur.x.min(other.ur.x), self.ur.y.min(other.ur.y))
     }
 
+    /// `d` less this box, as four boxes round the part they share, some
+    /// perhaps empty; each corner goes to the box along the longer side.
+    /// `d` whole where they share no area. `IntBox.cutout_from(IntBox)`.
+    pub fn cutout_from(&self, d: &IntBox) -> Vec<IntBox> {
+        let c = self.intersection(d);
+        if self.is_empty() || c.dimension() < self.dimension() {
+            return vec![*d];
+        }
+        let mut r = [
+            IntBox::new(d.ll.x, d.ll.y, c.ur.x, c.ll.y),
+            IntBox::new(d.ll.x, c.ll.y, c.ll.x, d.ur.y),
+            IntBox::new(c.ur.x, d.ll.y, d.ur.x, c.ur.y),
+            IntBox::new(c.ll.x, c.ur.y, d.ur.x, d.ur.y),
+        ];
+        if c.ll.x - d.ll.x > c.ll.y - d.ll.y {
+            r[0].ll.x = c.ll.x;
+            r[1].ll.y = d.ll.y;
+        }
+        if d.ur.y - c.ur.y > c.ll.x - d.ll.x {
+            r[1].ur.y = c.ur.y;
+            r[3].ll.x = d.ll.x;
+        }
+        if d.ur.x - c.ur.x > d.ur.y - c.ur.y {
+            r[2].ur.y = d.ur.y;
+            r[3].ur.x = c.ur.x;
+        }
+        if c.ll.y - d.ll.y > d.ur.x - c.ur.x {
+            r[0].ur.x = d.ur.x;
+            r[2].ll.y = c.ll.y;
+        }
+        r.to_vec()
+    }
+
     /// Its four sides as a polygon, not reduced. `IntBox.to_Simplex`.
     pub fn to_simplex(&self) -> Simplex {
-        if self.ll.x > self.ur.x || self.ll.y > self.ur.y {
+        if self.is_empty() {
             return Simplex::empty();
         }
         Simplex::new(vec![
