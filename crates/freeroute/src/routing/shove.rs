@@ -1175,7 +1175,7 @@ impl<'a> ShapeTraceEntries<'a> {
                 }
                 let contacts = if i == 0 { rb.start_contacts(trace) } else { rb.end_contacts(trace) };
                 let mut contact_count = 0;
-                let store_end_corner = true;
+                let mut store_end_corner = true;
                 for &c in &contacts {
                     let contact = &rb.board.items[c];
                     if !contact.is_routable() {
@@ -1187,13 +1187,41 @@ impl<'a> ShapeTraceEntries<'a> {
                                 return false;
                             }
                         }
-                        ItemKind::Via { .. } => unimplemented!("a trace of another net ending at a via inside a pushed shape is not ported yet"),
+                        ItemKind::Via { .. } => {
+                            // The via must be at least as wide as the trace,
+                            // clearances counted; as wide, and the corner on
+                            // the border, it need not move.
+                            let via_shape = rb.tile_shape(c, (self.layer - contact.first_layer) as usize).expect("a via's shape on the layer");
+                            let gravity = via_shape.centre_of_gravity();
+                            let smallest_radius = via_shape.nearest_border_points_approx(&gravity, 1).first().map_or(f64::MAX, |p| p.distance(&gravity));
+                            let compensated_half_width = half_width + rb.plain_compensation(item.clearance_class, trace_layer);
+                            let mut via_trace_diff = smallest_radius - compensated_half_width as f64;
+                            let via_clearance = rb.clearance_value(contact.clearance_class, self.cl_class, self.layer);
+                            let trace_clearance = rb.clearance_value(item.clearance_class, self.cl_class, self.layer);
+                            if trace_clearance > via_clearance {
+                                via_trace_diff += (via_clearance - trace_clearance) as f64;
+                            }
+                            if via_trace_diff < 0.0 {
+                                return false;
+                            }
+                            if via_trace_diff == 0.0 && !offset_shape.contains_inside(&end_corner) {
+                                store_end_corner = false;
+                            }
+                        }
                         _ => {}
                     }
                     contact_count += 1;
                 }
                 if contact_count == 1 && store_end_corner {
-                    unimplemented!("a trace of another net ending inside a pushed shape (nearest_border_point) is not ported yet");
+                    // The trace ends inside: it enters where its end is
+                    // nearest the border, by its first or last line.
+                    let corner = end_corner.as_int().expect("a trace of another net ends at an integer corner");
+                    let projection = offset_shape.nearest_border_point(corner);
+                    if let Some(side) = offset_shape.contains_on_border_line_no(&projection) {
+                        let line_no = if i == 0 { 0 } else { polyline.lines.len() - 1 };
+                        let (x, y) = projection.to_float();
+                        self.insert_entry_point(trace, line_no, side, FloatPoint::new(x, y));
+                    }
                 } else if contact_count == 0 && offset_shape.contains_inside(&end_corner) {
                     self.shape_contains_trace_tails = true;
                 }
