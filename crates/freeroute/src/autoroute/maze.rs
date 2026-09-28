@@ -14,14 +14,48 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
+use crate::board::clearance_offset;
 use crate::door::{RoomId, RoomState};
-use crate::geometry::{FloatLine, FloatPoint, Polyline, TileShape};
-use crate::model::ItemKind;
+use crate::geometry::{FloatLine, FloatPoint, Line, Polyline, TileShape};
+use crate::model::{FixedState, ItemKind};
 
 use super::control::Control;
 use super::distance::DestinationDistance;
 use super::engine::{Adjustment, Engine, Expandable, TRACE_WIDTH_TOLERANCE};
+use super::shove_trace::check_shove_trace_line;
 use crate::routing::shove::DrillCheck;
+
+/// What check_ripup gives for an item whose room the search just came
+/// from. `MazeSearchAlgo.ALREADY_RIPPED_COSTS`.
+const ALREADY_RIPPED_COSTS: i32 = 1;
+
+/// How much more ripping a trace costs where it leads from an SMD pin, or
+/// a shove-fixed pin exit, to a via: a fanout. 1 where it does not.
+/// `MazeSearchAlgo.calc_fanout_via_ripup_cost_factor`.
+fn fanout_via_ripup_cost_factor(rb: &crate::routing::RoutingBoard, trace: usize) -> f64 {
+    const FANOUT_COST_CONST: f64 = 20_000.0;
+    for at_start in [true, false] {
+        let contacts = if at_start { rb.start_contacts(trace) } else { rb.end_contacts(trace) };
+        if contacts.len() != 1 {
+            continue;
+        }
+        let contact = rb.item(contacts[0]);
+        let protect_fanout_via = match &contact.kind {
+            ItemKind::Pin { .. } => contact.first_layer == contact.last_layer,
+            // A shove-fixed exit stub of an SMD pin.
+            ItemKind::Trace { polyline, .. } => contact.fixed == FixedState::ShoveFixed && polyline.corner_count() == 2,
+            _ => false,
+        };
+        if protect_fanout_via {
+            let (polyline, _, half_width) = rb.trace(trace);
+            let mut factor = half_width as f64 / polyline.length_approx();
+            factor *= factor;
+            factor *= FANOUT_COST_CONST;
+            return factor.max(1.0);
+        }
+    }
+    1.0
+}
 
 /// One queued expansion. `MazeListElement`.
 #[derive(Debug, Clone)]
@@ -316,9 +350,10 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
             }
         }
         let room = self.engine.graph.room(next_room);
+        let is_obstacle = room.is_obstacle_room();
         let mut next_room_is_thick = true;
-        if room.is_obstacle_room() {
-            unimplemented!("entering an obstacle's room (ripup, push and shove) is not ported yet");
+        if is_obstacle {
+            next_room_is_thick = self.room_shape_is_thick(next_room);
         } else {
             let shape = TileShape::Octagon(room.shape.expect("a completed room"));
             if shape.min_width() < 2.0 * half_width {
@@ -339,18 +374,39 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
         if !layer_active {
             return true;
         }
-        let ripup_costs = 0;
-        if !element.already_checked && curr_door_is_small {
-            // Entering a thick room through a small door is only allowed
-            // coming from a ripped item, which needs an obstacle room.
-            let from_obstacle = match element.door {
-                Expandable::Door(d) => self.engine.graph.door(d).other(next_room).is_some_and(|r| self.engine.graph.room(r).is_obstacle_room()),
-                _ => false,
-            };
-            if next_room_is_thick && from_obstacle {
-                unimplemented!("leaving a ripped item through a small door is not ported yet");
+        let mut ripup_costs = 0;
+        if !is_obstacle {
+            // A thick room is entered through a small door only from an
+            // item ripped up.
+            if !element.already_checked && curr_door_is_small && !(next_room_is_thick && self.check_leaving_ripped_item(element)) {
+                return something_expanded;
             }
-            return something_expanded;
+        } else if !element.already_checked {
+            let (obstacle, _) = self.engine.obstacle_item(next_room).expect("an obstacle room");
+            let mut room_rippable = false;
+            if self.ctrl.ripup_allowed {
+                ripup_costs = self.check_ripup(element, obstacle, curr_door_is_small);
+                room_rippable = ripup_costs >= 0;
+            }
+            let is_trace = matches!(self.engine.board.items[obstacle].kind, ItemKind::Trace { .. });
+            if ripup_costs != ALREADY_RIPPED_COSTS
+                && next_room_is_thick
+                && !curr_door_is_small
+                && self.ctrl.max_shove_trace_recursion_depth > 0
+                && is_trace
+                && !self.shove_trace_room(element, next_room)
+            {
+                if ripup_costs > 0 {
+                    // Occupying by ripup waits, so the room may still be
+                    // pushed aside from another section of the door.
+                    let e = element;
+                    self.add(e.door, e.section, e.backtrack_door, e.backtrack_section, e.expansion_value + ripup_costs as f64, e.sorting_value + ripup_costs as f64, e.next_room, e.shape_entry, true, e.adjustment, true, ripup_costs);
+                }
+                return something_expanded;
+            }
+            if !room_rippable {
+                return true;
+            }
         }
         let doors: Vec<_> = self.engine.graph.doors_of(next_room).to_vec();
         for d in doors {
@@ -369,9 +425,191 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
                     self.expand_to_drill_page(page, element);
                     something_expanded = true;
                 }
+            } else if is_obstacle {
+                // Through a via in the way, as a drill of its own.
+                let (obstacle, _) = self.engine.obstacle_item(next_room).expect("an obstacle room");
+                if matches!(self.engine.board.items[obstacle].kind, ItemKind::Via { .. }) {
+                    let drill = self.engine.via_drill(obstacle);
+                    self.expand_to_drill(drill, element, ripup_costs);
+                }
             }
         }
         something_expanded
+    }
+
+    /// Whether the item of an obstacle room is at least as wide as a trace
+    /// of the net: a trace by its half width and clearance, a via by its
+    /// shape. `MazeSearchAlgo.room_shape_is_thick`.
+    fn room_shape_is_thick(&self, room: RoomId) -> bool {
+        let (item, _) = self.engine.obstacle_item(room).expect("an obstacle room");
+        let layer = self.engine.graph.room(room).layer;
+        let it = &self.engine.board.items[item];
+        let obstacle_half_width = match &it.kind {
+            ItemKind::Trace { half_width, .. } => (*half_width + clearance_offset(&self.engine.board.rules.clearance, it.clearance_class, self.ctrl.trace_clearance_class, layer)) as f64,
+            ItemKind::Via { .. } => 0.5 * self.engine.tree_shape(item, (layer - it.first_layer) as u32).expect("a via's shape on the layer").max_width(),
+            _ => 0.0,
+        };
+        obstacle_half_width >= self.ctrl.compensated_trace_half_width[layer as usize] as f64
+    }
+
+    /// What ripping up `obstacle`, entered through the element's door,
+    /// costs: from the ripup costs, the obstacle's width, how far its
+    /// connection detours and whether it leads to a fanout via;
+    /// [`ALREADY_RIPPED_COSTS`] if the room came from is the same item's,
+    /// -1 if it may not be ripped. `MazeSearchAlgo.check_ripup`.
+    fn check_ripup(&mut self, element: &ListElement, obstacle: usize, door_is_small: bool) -> i32 {
+        let rb = self.engine.rb;
+        if !rb.item(obstacle).is_routable() {
+            return -1;
+        }
+        // Through a small door only where the door's border segment is
+        // narrower than the trace.
+        if door_is_small && !self.enter_through_small_door(element, obstacle) {
+            return -1;
+        }
+        let next_room = element.next_room.expect("checked");
+        let previous_item = self.engine.other_room(element.door, next_room).and_then(|r| self.engine.obstacle_item(r)).map(|(i, _)| i);
+        if element.adjustment != Adjustment::None {
+            // The room was pushed aside; the ripped trace may start at a fork.
+            if previous_item.is_some_and(|p| p != obstacle && rb.item(p).shares_net(rb.item(obstacle))) {
+                return -1;
+            }
+        } else if previous_item == Some(obstacle) {
+            return ALREADY_RIPPED_COSTS;
+        }
+        let mut fanout_via_cost_factor = 1.0;
+        let mut cost_factor = 1.0;
+        match &rb.item(obstacle).kind {
+            ItemKind::Trace { half_width, .. } => {
+                cost_factor = *half_width as f64;
+                if !self.ctrl.remove_unconnected_vias {
+                    // Keep the traces between SMD pins and fanout vias.
+                    fanout_via_cost_factor = fanout_via_ripup_cost_factor(rb, obstacle);
+                }
+            }
+            ItemKind::Via { .. } => {
+                let mut look_if_fanout_via = !self.ctrl.remove_unconnected_vias;
+                let mut contact_count = 0;
+                for c in rb.normal_contacts(obstacle) {
+                    let contact = rb.item(c);
+                    let ItemKind::Trace { half_width, .. } = contact.kind else { return -1 };
+                    if contact.is_user_fixed() {
+                        return -1;
+                    }
+                    contact_count += 1;
+                    cost_factor = f64::max(cost_factor, half_width as f64);
+                    if look_if_fanout_via && !self.ctrl.is_fanout {
+                        let factor = fanout_via_ripup_cost_factor(rb, c);
+                        if factor > 1.0 {
+                            fanout_via_cost_factor = factor;
+                            look_if_fanout_via = false;
+                        }
+                    }
+                }
+                if fanout_via_cost_factor <= 1.0 {
+                    // Not a fanout via.
+                    cost_factor *= 0.5 * (contact_count - 1).max(0) as f64;
+                }
+            }
+            _ => {}
+        }
+        let mut ripup_cost = self.ctrl.ripup_costs as f64 * cost_factor;
+        let mut detour = 1.0;
+        if fanout_via_cost_factor <= 1.0 && !self.ctrl.is_fanout {
+            if let Some(connection) = self.engine.connection(obstacle) {
+                detour = connection.detour(rb);
+            }
+        }
+        if self.ctrl.ripup_pass_no >= 4 && self.ctrl.ripup_pass_no % 3 != 0 {
+            unimplemented!("the random ripup costs of later passes are not ported yet");
+        }
+        ripup_cost /= detour;
+        ripup_cost *= fanout_via_cost_factor;
+        // (int) in Java, which saturates as `as` does.
+        (ripup_cost as i32).max(1).min(i32::MAX / 100)
+    }
+
+    /// Whether the room behind the element's one-dimensional door may be
+    /// entered though the door is small: nothing but `ignore` and what
+    /// touches it may be within a trace's width of the door's middle.
+    /// `MazeSearchAlgo.enter_through_small_door`.
+    fn enter_through_small_door(&self, element: &ListElement, ignore: usize) -> bool {
+        if self.engine.dimension_of(element.door) != 1 {
+            return false;
+        }
+        let door_shape = self.engine.shape_of(element.door);
+        // Its first border line of some length.
+        let mut door_line = None;
+        let mut prev_corner = door_shape.corner_approx(0);
+        for i in 1..door_shape.border_line_count() {
+            let next_corner = door_shape.corner_approx(i);
+            if next_corner.distance_square(&prev_corner) > 1.0 {
+                door_line = Some(door_shape.border_line(i - 1));
+                break;
+            }
+            prev_corner = next_corner;
+        }
+        let Some(door_line) = door_line else { return false };
+        let door_center = door_shape.centre_of_gravity().round();
+        let layer = self.engine.graph.room(element.next_room.expect("checked")).layer;
+        let check_radius = self.ctrl.compensated_trace_half_width[layer as usize] + TRACE_WIDTH_TOLERANCE as i64;
+        // A segment square to the door through its middle, 2 check radii long.
+        let lines = [door_line.translate(check_radius as f64), Line::through(door_center, door_line.direction().turn_45_degree(2)), door_line.translate(-check_radius as f64)];
+        let Some(check_shape) = Polyline::from_lines(&lines).offset_shape(check_radius, 0) else { return false };
+        let rb = self.engine.rb;
+        for item in self.engine.overlapping_tree_items(&check_shape, layer, self.ctrl.net_no) {
+            if item == ignore {
+                continue;
+            }
+            if !rb.item(item).shares_net(rb.item(ignore)) || !rb.normal_contacts(item).contains(&ignore) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Whether the thick room behind the element's small door may be
+    /// entered from the item ripped up on its other side.
+    /// `MazeSearchAlgo.check_leaving_ripped_item`.
+    fn check_leaving_ripped_item(&self, element: &ListElement) -> bool {
+        if !matches!(element.door, Expandable::Door(_)) {
+            return false;
+        }
+        let Some(from_room) = self.engine.other_room(element.door, element.next_room.expect("checked")) else { return false };
+        let Some((item, _)) = self.engine.obstacle_item(from_room) else { return false };
+        if !self.engine.board.items[item].is_routable() {
+            return false;
+        }
+        self.enter_through_small_door(element, item)
+    }
+
+    /// Push the trace of the obstacle room aside, left and right, and
+    /// expand the door sections of its room that makes reachable. False if
+    /// neither push got anywhere; occupying the element may then wait for
+    /// a push from another section. Inner sections of a door are not
+    /// pushed from. `MazeSearchAlgo.shove_trace_room`.
+    fn shove_trace_room(&mut self, element: &ListElement, room: RoomId) -> bool {
+        let count = self.engine.element_count(element.door);
+        if element.section != 0 && element.section + 1 != count {
+            return true;
+        }
+        let mut result = false;
+        // FreeRouting names the list of the push to the right "left", and
+        // marks a link door reached by it LEFT; so it stays here.
+        for (shove_to_the_left, excluded, link_adjustment) in [(false, Adjustment::Right, Adjustment::Left), (true, Adjustment::Left, Adjustment::Right)] {
+            if element.adjustment == excluded {
+                continue;
+            }
+            let mut sections = Vec::new();
+            if check_shove_trace_line(self.engine, self.ctrl, element, room, shove_to_the_left, &mut sections) {
+                result = true;
+            }
+            for s in sections {
+                let adjustment = if self.engine.graph.door(s.door).dimension == 2 { link_adjustment } else { Adjustment::None };
+                self.expand_to_door_section(Expandable::Door(s.door), s.section, Some(s.line), element, 0, adjustment);
+            }
+        }
+        result
     }
 
     /// Queue the room's target doors. True if one was queued.
@@ -511,7 +749,7 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
         let from_room = from.next_room.expect("checked");
         let layer = self.engine.graph.room(from_room).layer;
         let trace_half_width = self.ctrl.compensated_trace_half_width[layer as usize];
-        let room_shape = TileShape::Octagon(self.engine.graph.room(from_room).shape.expect("a completed room"));
+        let room_shape = self.engine.graph.room(from_room).tile_shape().expect("a complete room has a shape");
         if room_shape.min_width() < 2.0 * trace_half_width as f64 {
             // A thin room: only drills meeting the door it was entered by.
             let Some(back) = from.backtrack_door else { return };
@@ -583,59 +821,76 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
         let from_layer = first + element.section as i32;
         let mut smd_attached_on_component_side = false;
         let mut smd_attached_on_solder_side = false;
-        if self.engine.graph.room(self.engine.drills[d].rooms[element.section]).is_obstacle_room() {
-            unimplemented!("ripping up an existing via is not ported yet");
-        }
-        let room_ripped = false;
-        let via_lower_limit = first.max(c.via_lower_bound);
-        let via_upper_limit = last.min(c.via_upper_bound);
-        let location = self.engine.drills[d].location;
-        let check = |engine: &Engine, layer: i32| {
-            let room = engine.drills[d].rooms[(layer - first) as usize];
-            let shape = engine.graph.room(room).tile_shape().expect("a room");
-            engine.rb.check_via_layer(c.via_radius[layer as usize], c.via_clearance_class, c.attach_smd_allowed, &shape, location, layer, &[c.net_no], c.max_shove_trace_recursion_depth, 0)
-        };
-        let via_lower_bound;
-        let mut layer = from_layer;
-        loop {
-            let result = check(self.engine, layer);
-            if result == DrillCheck::NotDrillable {
-                via_lower_bound = layer + 1;
-                break;
-            } else if result == DrillCheck::DrillableWithAttachSmd {
-                if layer == 0 {
-                    smd_attached_on_component_side = true;
-                } else if layer == c.layer_count as i32 - 1 {
+        let from_room = self.engine.drills[d].rooms[element.section];
+        let (via_lower_bound, via_upper_bound, room_ripped);
+        if self.engine.graph.room(from_room).is_obstacle_room() {
+            // Through an existing via, ripping it up: one of the rule's,
+            // of the via class, spanning its padstack's layers.
+            if !c.ripup_allowed {
+                return;
+            }
+            let Some((obstacle, _)) = self.engine.obstacle_item(from_room) else { return };
+            let board = self.engine.board;
+            let it = &board.items[obstacle];
+            let ItemKind::Via { padstack, .. } = it.kind else { return };
+            let in_rule = board.rules.via_rules[c.via_rule].iter().any(|&v| board.rules.via_infos[v].padstack == padstack);
+            if !in_rule || it.clearance_class != c.via_clearance_class {
+                return;
+            }
+            let ps = board.rules.padstack(padstack).expect("a via's padstack");
+            via_lower_bound = ps.from_layer;
+            via_upper_bound = ps.to_layer;
+            room_ripped = true;
+        } else {
+            room_ripped = false;
+            let via_lower_limit = first.max(c.via_lower_bound);
+            let via_upper_limit = last.min(c.via_upper_bound);
+            let location = self.engine.drills[d].location;
+            let check = |engine: &Engine, layer: i32| {
+                let room = engine.drills[d].rooms[(layer - first) as usize];
+                let shape = engine.graph.room(room).tile_shape().expect("a room");
+                engine.rb.check_via_layer(c.via_radius[layer as usize], c.via_clearance_class, c.attach_smd_allowed, &shape, location, layer, &[c.net_no], c.max_shove_trace_recursion_depth, 0)
+            };
+            let mut layer = from_layer;
+            loop {
+                let result = check(self.engine, layer);
+                if result == DrillCheck::NotDrillable {
+                    via_lower_bound = layer + 1;
+                    break;
+                } else if result == DrillCheck::DrillableWithAttachSmd {
+                    if layer == 0 {
+                        smd_attached_on_component_side = true;
+                    } else if layer == c.layer_count as i32 - 1 {
+                        smd_attached_on_solder_side = true;
+                    }
+                }
+                if layer <= via_lower_limit {
+                    via_lower_bound = via_lower_limit;
+                    break;
+                }
+                layer -= 1;
+            }
+            if via_lower_bound > first {
+                return;
+            }
+            layer = from_layer + 1;
+            loop {
+                if layer > via_upper_limit {
+                    via_upper_bound = via_upper_limit;
+                    break;
+                }
+                let result = check(self.engine, layer);
+                if result == DrillCheck::NotDrillable {
+                    via_upper_bound = layer - 1;
+                    break;
+                } else if result == DrillCheck::DrillableWithAttachSmd && layer == c.layer_count as i32 - 1 {
                     smd_attached_on_solder_side = true;
                 }
+                layer += 1;
             }
-            if layer <= via_lower_limit {
-                via_lower_bound = via_lower_limit;
-                break;
+            if via_upper_bound < last {
+                return;
             }
-            layer -= 1;
-        }
-        if via_lower_bound > first {
-            return;
-        }
-        let via_upper_bound;
-        layer = from_layer + 1;
-        loop {
-            if layer > via_upper_limit {
-                via_upper_bound = via_upper_limit;
-                break;
-            }
-            let result = check(self.engine, layer);
-            if result == DrillCheck::NotDrillable {
-                via_upper_bound = layer - 1;
-                break;
-            } else if result == DrillCheck::DrillableWithAttachSmd && layer == c.layer_count as i32 - 1 {
-                smd_attached_on_solder_side = true;
-            }
-            layer += 1;
-        }
-        if via_upper_bound < last {
-            return;
         }
         for to_layer in via_lower_bound..=via_upper_bound {
             if to_layer == from_layer {

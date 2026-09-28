@@ -37,19 +37,26 @@ pub struct Located {
     pub target_item: usize,
     pub target_layer: i32,
     pub traces: Vec<LocatedTrace>,
+    /// The items the path runs through, to be ripped up, by number
+    /// descending.
+    pub ripped: Vec<usize>,
 }
 
-/// The doors of a found path, from the destination back to the start.
-/// `LocateFoundConnectionAlgo.backtrack`, without collecting ripped items,
-/// as ripping up is not ported.
-pub fn backtrack(engine: &Engine, found: &Found) -> Vec<BacktrackElement> {
+/// The doors of a found path, from the destination back to the start,
+/// and the items it runs through where they are to be ripped up, by
+/// number descending. `LocateFoundConnectionAlgo.backtrack`.
+pub fn backtrack(engine: &Engine, found: &Found) -> (Vec<BacktrackElement>, Vec<usize>) {
     let mut result = Vec::new();
+    let mut ripped = Vec::new();
     let mut door = found.door;
     let mut element = engine.element(door, found.section).clone();
     let mut next_room = match door {
         Expandable::Target(t) => Some(engine.targets[t].room),
         Expandable::Drill(d) => {
             let drill = &engine.drills[d];
+            if element.room_ripped {
+                ripped.extend(drill.rooms.iter().filter_map(|&r| engine.obstacle_item(r)).map(|(i, _)| i));
+            }
             // The Java indexes by first_layer plus the section.
             Some(drill.rooms[(drill.first_layer as usize) + found.section])
         }
@@ -61,7 +68,7 @@ pub fn backtrack(engine: &Engine, found: &Found) -> Vec<BacktrackElement> {
         let Some(back) = element.backtrack_door else { break };
         door = back;
         let mut section = element.section_no_of_backtrack_door;
-        let count = element_count(engine, door);
+        let count = engine.element_count(door);
         if section >= count {
             section = count - 1;
         }
@@ -71,19 +78,16 @@ pub fn backtrack(engine: &Engine, found: &Found) -> Vec<BacktrackElement> {
         };
         element = engine.element(door, section).clone();
         current = BacktrackElement { door, section, next_room };
+        if element.room_ripped {
+            if let Some((item, _)) = next_room.and_then(|r| engine.obstacle_item(r)) {
+                ripped.push(item);
+            }
+        }
     }
-    result
+    engine.rb.sort_items(&mut ripped);
+    (result, ripped)
 }
 
-/// `ExpandableObject.maze_search_element_count`.
-fn element_count(engine: &Engine, e: Expandable) -> usize {
-    match e {
-        Expandable::Door(d) => engine.door_sections(d).len(),
-        Expandable::Target(_) => 1,
-        Expandable::Page(p) => engine.pages.pages[p].elements.len(),
-        Expandable::Drill(d) => engine.drills[d].elements.len(),
-    }
-}
 
 /// The working state of `LocateFoundConnectionAlgo`.
 struct Locate<'a, 'e, 'b> {
@@ -101,7 +105,7 @@ struct Locate<'a, 'e, 'b> {
 /// Turn a found path into traces. `None` where the path does not start
 /// from a target door, as the Java warns. `LocateFoundConnectionAlgo45Degree`.
 pub fn locate(engine: &mut Engine, ctrl: &Control, found: &Found) -> Option<Located> {
-    let backtrack = backtrack(engine, found);
+    let (backtrack, ripped) = backtrack(engine, found);
     let start_info = *backtrack.last()?;
     let Expandable::Target(start_door) = start_info.door else { return None };
     let (start_item, start_entry) = (engine.targets[start_door].item, engine.targets[start_door].tree_entry_no);
@@ -158,7 +162,7 @@ pub fn locate(engine: &mut Engine, ctrl: &Control, found: &Found) -> Option<Loca
         l.current_to_door_index = l.current_from_door_index + 1;
         traces.push(l.calculate_next_trace(layer_changed));
     }
-    Some(Located { start_item, start_layer, target_item, target_layer, traces })
+    Some(Located { start_item, start_layer, target_item, target_layer, traces, ripped })
 }
 
 /// Where the traces start: the centre of the destination's connection

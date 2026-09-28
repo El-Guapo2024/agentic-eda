@@ -220,15 +220,60 @@ impl Point {
 }
 
 /// The directed line through two integer points. FreeRouting's `Line`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Lines compare by their points. Each also carries the identity of the
+/// Java object it stands for: a line made anew gets a fresh one and a copy
+/// keeps it, as a copied Java reference does. `PolylineTrace.change`
+/// compares lines by identity to decide which tree entries a changed trace
+/// keeps; see [`Line::is_same_object`].
+#[derive(Clone, Copy)]
 pub struct Line {
     pub a: IntPoint,
     pub b: IntPoint,
+    id: u64,
+}
+
+thread_local! {
+    /// The identity the next line made gets.
+    static NEXT_LINE_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+impl PartialEq for Line {
+    fn eq(&self, other: &Self) -> bool {
+        self.a == other.a && self.b == other.b
+    }
+}
+
+impl Eq for Line {}
+
+impl std::hash::Hash for Line {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.a.hash(state);
+        self.b.hash(state);
+    }
+}
+
+impl std::fmt::Debug for Line {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Line").field("a", &self.a).field("b", &self.b).finish()
+    }
 }
 
 impl Line {
-    pub const fn new(a: IntPoint, b: IntPoint) -> Self {
-        Line { a, b }
+    /// A new line, a new object in the Java.
+    pub fn new(a: IntPoint, b: IntPoint) -> Self {
+        let id = NEXT_LINE_ID.with(|n| {
+            let id = n.get();
+            n.set(id + 1);
+            id
+        });
+        Line { a, b, id }
+    }
+
+    /// Whether this is the very line `other` is -- the same Java object,
+    /// copied -- not only an equal one.
+    pub fn is_same_object(&self, other: &Line) -> bool {
+        self.id == other.id
     }
 
     /// The line through `a` in direction `dir`. `Line.get_instance(Point,

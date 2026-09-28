@@ -504,7 +504,7 @@ fn dumped_located(dump: &str, board: &Board) -> Option<eda_freeroute::autoroute:
             LocatedTrace { layer: v[0] as i32, corners }
         })
         .collect();
-    Some(Located { start_item: index(n[0]), start_layer: n[1] as i32, target_item: index(n[2]), target_layer: n[3] as i32, traces })
+    Some(Located { start_item: index(n[0]), start_layer: n[1] as i32, target_item: index(n[2]), target_layer: n[3] as i32, traces, ripped: Vec::new() })
 }
 
 /// Every trace and via on the board in its order, as the dump writes them.

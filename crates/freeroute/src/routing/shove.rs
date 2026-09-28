@@ -11,7 +11,7 @@
 //! message naming the missing piece. Traces of the net being routed are
 //! passed over as in the Java.
 
-use crate::geometry::{Circle, Cutout, Direction, FloatPoint, IntBox, IntPoint, Line, LineSegment, Polyline, TileShape};
+use crate::geometry::{Circle, Cutout, Direction, FloatPoint, IntBox, IntPoint, Line, LineSegment, Polyline, Side, Simplex, TileShape};
 use crate::model::{AreaKind, ItemKind};
 
 use super::{nets_equal, RoutingBoard};
@@ -63,6 +63,53 @@ impl FromSide {
         }
         result
     }
+}
+
+impl FromSide {
+    /// The side of `shape` a push along `segment` comes from: the border
+    /// line the segment's line crosses nearer its start, turned two sides
+    /// on, left or right as the push goes; `no` -1 if none is crossed.
+    /// `CalcFromSide(LineSegment, TileShape, boolean)`.
+    pub fn of_segment(segment: &LineSegment, shape: &TileShape, shove_to_the_left: bool) -> FromSide {
+        let start_corner = segment.start_point_approx();
+        let end_corner = segment.end_point_approx();
+        let count = shape.border_line_count();
+        let check_line = segment.middle;
+        let first_corner = shape.corner_approx(0);
+        let mut prev_side = check_line.side_of_float((first_corner.x, first_corner.y), 0.0);
+        let mut front_side_no = None;
+        for i in 1..=count {
+            let next_corner = if i == count { first_corner } else { shape.corner_approx(i) };
+            let next_side = check_line.side_of_float((next_corner.x, next_corner.y), 0.0);
+            if prev_side != next_side {
+                let (x, y) = shape.border_line(i - 1).intersection_approx(&check_line);
+                let crossing = FloatPoint::new(x, y);
+                if crossing.distance_square(&start_corner) < crossing.distance_square(&end_corner) {
+                    front_side_no = Some(i - 1);
+                    break;
+                }
+            }
+            prev_side = next_side;
+        }
+        let Some(front) = front_side_no else {
+            return FromSide { no: -1, border_intersection: None };
+        };
+        let no = if shove_to_the_left { (front + 2) % count } else { (front + count - 2) % count };
+        let border_intersection = shape.corner_approx(no).middle_point(&shape.corner_approx((no + 1) % count));
+        FromSide { no: no as i32, border_intersection: Some(border_intersection) }
+    }
+}
+
+/// A piece of trace a push would lay round the shape pushed into, in
+/// place of the piece inside: not on the board. `ShapeTraceEntries`
+/// makes a `PolylineTrace` of it, which draws an item number.
+#[derive(Debug, Clone)]
+pub(crate) struct SubstituteTrace {
+    pub polyline: Polyline,
+    pub layer: i32,
+    pub half_width: i64,
+    pub nets: Vec<i32>,
+    pub cl_class: i32,
 }
 
 /// What spring-over made of a polyline.
@@ -250,13 +297,13 @@ impl RoutingBoard {
         &self,
         shape: &TileShape,
         from_side: Option<FromSide>,
-        _dir: Option<Direction>,
+        dir: Option<Direction>,
         layer: i32,
         nets: &[i32],
         cl_class: i32,
         max_recursion_depth: i32,
         max_via_recursion_depth: i32,
-        _max_spring_over_recursion_depth: i32,
+        max_spring_over_recursion_depth: i32,
     ) -> bool {
         if shape.is_empty() {
             return true;
@@ -290,10 +337,180 @@ impl RoutingBoard {
         if max_recursion_depth <= 0 {
             return false;
         }
-        if entries.next_substitute_trace_piece().is_some() {
-            unimplemented!("pushing a trace aside (ShapeTraceEntries substitute traces) is not ported yet");
+        // Each piece a push would lay round the shape must fit in turn,
+        // sprung over what it can be, its segments facing the push checked
+        // the same way.
+        let mut spring_depth = max_spring_over_recursion_depth;
+        while let Some(mut piece) = entries.next_substitute_trace_piece() {
+            if spring_depth > 0 {
+                let compensated_half_width = piece.half_width + self.plain_compensation(piece.cl_class, layer);
+                match self.spring_over(&piece.polyline, compensated_half_width, layer, &piece.nets, piece.cl_class, false, spring_depth, None) {
+                    Spring::Fail => return false,
+                    Spring::Same => {}
+                    Spring::New(polyline) => {
+                        spring_depth -= 1;
+                        piece.polyline = polyline;
+                    }
+                }
+            }
+            for i in 0..piece.polyline.lines.len().saturating_sub(2) {
+                let curr_dir = piece.polyline.lines[i + 1].direction();
+                if dir.is_none_or(|d| d == curr_dir) {
+                    let (shape, from_side) = self.substitute_shape_and_from_side(&piece, i, true);
+                    if !self.shove_check(&shape, from_side, Some(curr_dir), layer, &piece.nets, piece.cl_class, max_recursion_depth - 1, max_via_recursion_depth, spring_depth) {
+                        return false;
+                    }
+                }
+            }
         }
         true
+    }
+
+    /// `ShapeSearchTree.clearance_compensation_value` of the plain tree,
+    /// which compensates for no class.
+    fn plain_compensation(&self, cl_class: i32, layer: i32) -> i64 {
+        crate::board::clearance_offset(&self.board.rules.clearance, cl_class, 0, layer)
+    }
+
+    /// The shape of a substitute trace's segment `index` in the plain
+    /// tree, cut off where the trace's first or last line is near so it
+    /// grows no dog ears, and the side a push through it comes from; left
+    /// open in a shove check where no line was cut off.
+    /// `CalcShapeAndFromSide`, not orthogonal.
+    fn substitute_shape_and_from_side(&self, piece: &SubstituteTrace, index: usize, in_shove_check: bool) -> (TileShape, Option<FromSide>) {
+        let lines = &piece.polyline;
+        let compensated_half_width = piece.half_width + self.plain_compensation(piece.cl_class, piece.layer);
+        let tree_shape = lines.offset_shape(compensated_half_width, index).expect("a segment has a shape");
+        let mut curr = match &tree_shape {
+            TileShape::Box(b) => b.to_simplex(),
+            TileShape::Octagon(o) => o.to_simplex(),
+            TileShape::Simplex(s) => s.clone(),
+        };
+        let len = lines.lines.len();
+        let cut_line = |line: Line, inside: FloatPoint| if line.side_of_float((inside.x, inside.y), 0.0) == Side::Left { line.opposite() } else { line };
+        let end_cutline = (index == len - 3 || lines.corner_float(len - 2).distance(&lines.corner_float(index + 1)) < compensated_half_width as f64)
+            .then(|| cut_line(lines.lines[len - 1], lines.corner_float(len - 3)));
+        let mut cut_off_at_end = false;
+        if let Some(cut) = end_cutline {
+            let tmp = Simplex::from_lines(&[cut]).intersection(&curr);
+            if !tmp.is_empty() {
+                curr = tmp;
+                cut_off_at_end = true;
+            }
+        }
+        let start_cutline = (index == 0 || lines.corner_float(0).distance(&lines.corner_float(index)) < compensated_half_width as f64).then(|| cut_line(lines.lines[0], lines.corner_float(1)));
+        let mut cut_off_at_start = false;
+        if let Some(cut) = start_cutline {
+            let tmp = Simplex::from_lines(&[cut]).intersection(&curr);
+            if !tmp.is_empty() {
+                curr = tmp;
+                cut_off_at_start = true;
+            }
+        }
+        let index_of = |line: &Line| curr.lines.iter().position(|l| l == line);
+        let mut found = None;
+        if cut_off_at_start {
+            let cut = start_cutline.expect("cut off at the start");
+            found = index_of(&cut).map(|no| (no, cut));
+        }
+        if found.is_none() && cut_off_at_end {
+            let cut = end_cutline.expect("cut off at the end");
+            found = index_of(&cut).map(|no| (no, cut));
+        }
+        let mut from_side = found.map(|(no, cut)| {
+            let (x, y) = cut.intersection_approx(&curr.lines[no]);
+            FromSide { no: no as i32, border_intersection: Some(FloatPoint::new(x, y)) }
+        });
+        let shape = TileShape::Simplex(curr);
+        if from_side.is_none() && !in_shove_check {
+            from_side = Some(FromSide::of_polyline(lines, index as i64, &shape));
+        }
+        (shape, from_side)
+    }
+
+    /// How far a trace segment can be pushed along `segment`, to the left
+    /// or right of it, pushing aside the traces in the way: `i32::MAX` if
+    /// nothing limits it, 0 if it cannot be pushed at all.
+    /// `ShoveTraceAlgo.check(RoutingBoard, LineSegment, ...)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn shove_check_segment(&self, segment: &LineSegment, shove_to_the_left: bool, layer: i32, nets: &[i32], half_width: i64, cl_class: i32, max_recursion_depth: i32, max_via_recursion_depth: i32) -> f64 {
+        let polyline = segment.to_polyline();
+        if polyline.lines.len() != 3 {
+            return 0.0;
+        }
+        let Some(trace_shape) = polyline.offset_shape(half_width, 0) else { return 0.0 };
+        if trace_shape.is_empty() || !trace_shape.is_contained_in_box(&self.board.bounds) {
+            return 0.0;
+        }
+        let from_side = FromSide::of_segment(segment, &trace_shape, shove_to_the_left);
+        let mut entries = ShapeTraceEntries::new(self, &trace_shape, layer, nets, cl_class, Some(from_side));
+        let obstacles = self.overlapping_items_with_clearance(&trace_shape, layer, &[], cl_class);
+        if !entries.store_items(&obstacles, false, true) || entries.shape_contains_trace_tails {
+            return 0.0;
+        }
+        let trace_piece_count = entries.trace_piece_count;
+        if entries.max_stack_level > 1 {
+            return 0.0;
+        }
+        let start_corner = segment.start_point_approx();
+        let end_corner = segment.end_point_approx();
+        let segment_length = end_corner.distance(&start_corner);
+        let cm = &self.board.rules.clearance;
+        let mut result = i32::MAX as f64;
+        for &via in &entries.shove_vias {
+            let item = &self.board.items[via];
+            if item.shares_net_no(nets) {
+                continue;
+            }
+            if max_via_recursion_depth > 0 {
+                unimplemented!("pushing a via aside for a pushed trace (MoveDrillItemAlgo.try_shove_via_points) is not ported yet");
+            }
+            // The via stays: the push goes as far as its projection less
+            // its radius and the clearance.
+            let ItemKind::Via { center, .. } = item.kind else { unreachable!("a via") };
+            let projection = start_corner.scalar_product(&end_corner, &FloatPoint::from_int(center)) / segment_length;
+            let via_box = self.tree.shape(via, (layer - item.first_layer) as u32).bounding_box();
+            let via_radius = 0.5 * box_max_width(&via_box);
+            let ok_length = projection - via_radius - half_width as f64 - cm.get_with_margin(cl_class, item.clearance_class, layer) as f64;
+            if ok_length <= 0.0 {
+                return 0.0;
+            }
+            result = result.min(ok_length);
+        }
+        if trace_piece_count == 0 {
+            return result;
+        }
+        if max_recursion_depth <= 0 {
+            return 0.0;
+        }
+        let line_direction = segment.middle.direction();
+        while let Some(piece) = entries.next_substitute_trace_piece() {
+            for i in 0..piece.polyline.lines.len().saturating_sub(2) {
+                let mut curr_segment = LineSegment::of(&piece.polyline, i + 1);
+                if shove_to_the_left {
+                    // Swapped, to get the right length where it is shorter
+                    // than the whole segment.
+                    curr_segment = curr_segment.opposite();
+                }
+                if curr_segment.middle.direction() != line_direction {
+                    continue;
+                }
+                let shove_ok_length = self.shove_check_segment(&curr_segment, shove_to_the_left, layer, &piece.nets, piece.half_width, piece.cl_class, max_recursion_depth - 1, max_via_recursion_depth);
+                if shove_ok_length < i32::MAX as f64 {
+                    if shove_ok_length <= 0.0 {
+                        return 0.0;
+                    }
+                    let projection = start_corner.scalar_product(&end_corner, &curr_segment.start_point_approx()).min(start_corner.scalar_product(&end_corner, &curr_segment.end_point_approx())) / segment_length;
+                    let ok_length = shove_ok_length + projection - half_width as f64 - piece.half_width as f64 - cm.get_with_margin(cl_class, piece.cl_class, layer) as f64;
+                    if ok_length <= 0.0 {
+                        return 0.0;
+                    }
+                    result = result.min(ok_length);
+                }
+                break;
+            }
+        }
+        result
     }
 
     /// Put in a trace piece of shape `shape`, pushing what is in the way
@@ -1072,15 +1289,41 @@ impl<'a> ShapeTraceEntries<'a> {
         Some((first, last))
     }
 
-    /// The next piece of trace to be pushed round the shape, as the
-    /// entries it runs between. `next_substitute_trace_piece`, short of
-    /// making the trace, which only the pushing of other nets' traces
-    /// needs.
-    fn next_substitute_trace_piece(&mut self) -> Option<(usize, usize)> {
-        let _ = (self.layer, self.shape_contains_trace_tails);
-        let (first, last) = self.pop_piece()?;
-        let _ = (self.nodes[first].trace_line_no, self.nodes[last].trace_line_no);
-        Some((first, last))
+    /// The next piece of trace to be pushed round the shape: from the
+    /// trace's line where it enters, along the shape grown by the trace's
+    /// half width and clearance, to its line where it leaves. Pieces that
+    /// come out empty are passed over. `next_substitute_trace_piece`.
+    fn next_substitute_trace_piece(&mut self) -> Option<SubstituteTrace> {
+        loop {
+            let (first, last) = self.pop_piece()?;
+            let rb = self.rb;
+            let trace = self.nodes[first].trace;
+            let item = &rb.board.items[trace];
+            let (_, _, half_width) = rb.trace(trace);
+            // Grown in two steps, for symmetry.
+            let cl_offset = rb.clearance_value(item.clearance_class, self.cl_class, self.layer) as f64 + OFFSET_ADD;
+            let offset_shape = self.shape.offset(half_width as f64).offset(cl_offset);
+            let edge_count = self.shape.border_line_count();
+            let edge_diff = self.nodes[last].edge_no as i64 - self.nodes[first].edge_no as i64;
+            let len = usize::try_from(edge_diff + 3).expect("a piece of at least no lines");
+            let mut lines: Vec<Option<Line>> = vec![None; len];
+            if len > 0 {
+                lines[0] = Some(rb.trace(trace).0.lines[self.nodes[first].trace_line_no]);
+                lines[len - 1] = Some(rb.trace(self.nodes[last].trace).0.lines[self.nodes[last].trace_line_no]);
+            }
+            let mut curr_edge = self.nodes[first].edge_no % edge_count;
+            for line in lines.iter_mut().take(len.saturating_sub(1)).skip(1) {
+                *line = Some(offset_shape.border_line(curr_edge));
+                curr_edge = if curr_edge == edge_count - 1 { 0 } else { curr_edge + 1 };
+            }
+            let lines: Vec<Line> = lines.into_iter().map(|l| l.expect("every line set")).collect();
+            let polyline = Polyline::from_lines(&lines);
+            if polyline.is_empty() {
+                continue;
+            }
+            rb.skip_id();
+            return Some(SubstituteTrace { polyline, layer: self.layer, half_width, nets: item.nets.clone(), cl_class: item.clearance_class });
+        }
     }
 }
 

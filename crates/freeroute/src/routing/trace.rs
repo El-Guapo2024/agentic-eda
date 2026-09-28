@@ -363,10 +363,10 @@ impl RoutingBoard {
 
     /// Give the trace a new polyline, then normalize it within the changed
     /// area; the autoroute trees keep the leaves of the shapes at either
-    /// end whose lines are unchanged. Nothing changes if the lines agree as
-    /// far as the shorter polyline goes, from either end. `PolylineTrace.change`,
-    /// which compares lines by identity; they compare by value here, which
-    /// differs only for a line made anew just as it was.
+    /// end whose lines are the old ones. Nothing changes if the lines are
+    /// the old ones as far as the shorter polyline goes, from either end.
+    /// `PolylineTrace.change`, which compares lines by identity, as
+    /// [`Line::is_same_object`] does.
     pub fn change(&mut self, item: usize, polyline: Polyline) {
         if !self.is_on_board(item) {
             self.put_polyline(item, polyline);
@@ -374,8 +374,8 @@ impl RoutingBoard {
         }
         let (old, new) = (&self.trace(item).0.lines, &polyline.lines);
         let last_index = old.len().min(new.len());
-        let Some(first_different) = (0..last_index).find(|&i| new[i] != old[i]) else { return };
-        let Some(last_different) = (1..=last_index).find(|&i| new[new.len() - i] != old[old.len() - i]).map(|i| new.len() - i) else { return };
+        let Some(first_different) = (0..last_index).find(|&i| !new[i].is_same_object(&old[i])) else { return };
+        let Some(last_different) = (1..=last_index).find(|&i| !new[new.len() - i].is_same_object(&old[old.len() - i])).map(|i| new.len() - i) else { return };
         let keep_start = first_different.saturating_sub(2);
         let keep_end = (new.len() as i64 - last_different as i64 - 3).max(0) as usize;
         self.change_polyline_entries(item, polyline, keep_start, keep_end);

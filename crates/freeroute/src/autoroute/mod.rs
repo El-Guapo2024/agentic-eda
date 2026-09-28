@@ -8,6 +8,7 @@ pub mod distance;
 pub mod engine;
 pub mod locate;
 pub mod maze;
+pub mod shove_trace;
 
 pub use control::{Control, ViaMask};
 pub use distance::DestinationDistance;

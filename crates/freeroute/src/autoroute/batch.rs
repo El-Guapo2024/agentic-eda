@@ -244,11 +244,26 @@ pub fn autoroute_item(rb: &mut RoutingBoard, item: usize, net: i32, pass_no: i32
         return out;
     };
     out.located = Some(located.clone());
+    out.ripped = located.ripped.clone();
     if !ctrl.layer_active[located.start_layer as usize] || !ctrl.layer_active[located.target_layer as usize] {
         return out;
     }
-    // Ripping up is not ported: the search stops before it would enter an
-    // item's room, so nothing is ripped here.
+    // Rip up the connections of the items the path runs through, then the
+    // tails that leaves on their nets.
+    let stop = if ctrl.remove_unconnected_vias { StopConnection::None } else { StopConnection::FanoutVia };
+    let mut ripped_connections = Vec::new();
+    let mut changed_nets: Vec<i32> = Vec::new();
+    for &r in &located.ripped {
+        ripped_connections.extend(rb.connection_items(r, stop));
+        changed_nets.extend(&rb.item(r).nets);
+    }
+    rb.sort_items(&mut ripped_connections);
+    changed_nets.sort_unstable();
+    changed_nets.dedup();
+    rb.remove_items(&ripped_connections, false);
+    for net in changed_nets {
+        rb.remove_trace_tails(net, stop);
+    }
     if !insert_found_connection(rb, &located, &ctrl) {
         out.result = RouteResult::InsertError;
         return out;

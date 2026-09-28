@@ -565,6 +565,16 @@ impl<'b> Engine<'b> {
         }
     }
 
+    /// How many sections it has: `ExpandableObject.maze_search_element_count`.
+    pub fn element_count(&self, e: Expandable) -> usize {
+        match e {
+            Expandable::Door(d) => self.door_sections(d).len(),
+            Expandable::Target(_) => 1,
+            Expandable::Page(p) => self.pages.pages[p].elements.len(),
+            Expandable::Drill(d) => self.drills[d].elements.len(),
+        }
+    }
+
     /// `ExpandableObject.get_dimension`.
     pub fn dimension_of(&self, e: Expandable) -> i32 {
         match e {
