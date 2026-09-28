@@ -10,6 +10,7 @@
 //   net <net_no>
 //   item <id> <shape_index> <layer> <obstacle 0|1> <octagon> [approx]
 //                                                              (tree insertion order)
+//   exact <id> <shape_index> <shape>                           (a tree shape that is not an octagon)
 //   tree_class <clearance class the tree is built for>
 //   cm <class i> <class j> <layer> <clearance>                 (nonzero entries)
 //   pad <item id> <shape_index> <layer> <clearance class> <shape>
@@ -18,6 +19,8 @@
 //   area <item id> <layer> <clearance class> <shape>           (keepouts, pours)
 //   outline <item id> <half width> <clearance class> <layers> <keepout 0|1>
 //   outline_shape <n> <ax ay bx by>...                         (each shape's border lines)
+//   trace <id> <layer> <half width> <clearance class> <n> <ax ay bx by>...
+//                                                              (its polyline's lines)
 //   start <layer> <x> <y>
 //   room <id> <net_dependent 0|1> <layer> <octagon>            (completion order)
 //   door <room id> <other room id> <dimension>                 (each room's doors, in order)
@@ -36,10 +39,10 @@
 // "grown" is what complete_shape returns for that room, so a divergence
 // can be placed before or after it.
 //
-// An item whose tree shape is not an octagon -- a trace segment, until
-// traces are ported -- is given by its bounding octagon and marked approx;
-// the room check skips such boards, as FreeRouting tests those shapes
-// exactly. A pad shape is "circle cx cy r", "box llx lly urx ury",
+// An item's tree shape is given by its bounding octagon; where it is a box
+// or a polygon, an exact record follows. A polygon's octagon is only its
+// bound, so it is marked approx, and the room check skips such boards, as
+// FreeRouting tests polygons exactly there. A shape is "circle cx cy r", "box llx lly urx ury",
 // "octagon <octagon>", or "simplex <n> <ax ay bx by>..." for a convex
 // polygon's n border lines; an area is "circle cx cy r", or "other <kind>"
 // where the port cannot take it yet. An octagon is lx ly rx uy ulx lrx llx urx, the
@@ -60,6 +63,7 @@ import app.freerouting.board.Item;
 import app.freerouting.board.ItemIdNoGenerator;
 import app.freerouting.board.ObstacleArea;
 import app.freerouting.board.Pin;
+import app.freerouting.board.PolylineTrace;
 import app.freerouting.board.RoutingBoard;
 import app.freerouting.board.SearchTreeObject;
 import app.freerouting.board.ShapeSearchTree;
@@ -152,7 +156,10 @@ public class RoomParity {
         }
         out.append("item ").append(item.get_id_no()).append(' ').append(i).append(' ').append(item.shape_layer(i)).append(' ')
             .append(item.is_trace_obstacle(net_no) ? 1 : 0).append(' ').append(octagon(bounds))
-            .append(shape instanceof IntOctagon ? "" : " approx").append('\n');
+            .append(shape instanceof IntOctagon || shape instanceof IntBox ? "" : " approx").append('\n');
+        if (!(shape instanceof IntOctagon)) {
+          out.append("exact ").append(item.get_id_no()).append(' ').append(i).append(' ').append(pad_shape(shape)).append('\n');
+        }
       }
     }
 
@@ -203,6 +210,17 @@ public class RoomParity {
       Item item = (Item) board.item_list.read_object(it);
       if (item == null) {
         break;
+      }
+      if (item instanceof PolylineTrace trace) {
+        Line[] lines = trace.polyline().arr;
+        out.append("trace ").append(item.get_id_no()).append(' ').append(trace.get_layer()).append(' ').append(trace.get_half_width())
+            .append(' ').append(item.clearance_class_no()).append(' ').append(lines.length);
+        for (Line l : lines) {
+          IntPoint a = (IntPoint) l.a;
+          IntPoint e = (IntPoint) l.b;
+          out.append(' ').append(a.x).append(' ').append(a.y).append(' ').append(e.x).append(' ').append(e.y);
+        }
+        out.append('\n');
       }
       if (item instanceof BoardOutline outline) {
         out.append("outline ").append(item.get_id_no()).append(' ').append(outline.get_half_width()).append(' ')

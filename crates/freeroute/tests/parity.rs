@@ -18,17 +18,17 @@
 //! clearance rules, so the board model is checked too: each pad, grown as
 //! the port grows it, must come out as FreeRouting's tree shape; likewise
 //! each area -- keepout or copper pour -- of a shape ported so far, and the
-//! board outline, its edges widened as traces are. Boards
+//! board outline, its edges widened as traces are, and each trace, shape
+//! for shape and line for line. Boards
 //! with traces take part in that check only: their trace shapes are not
 //! octagons until traces are ported, so the room check skips them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use eda_freeroute::board::{area_tree_shapes, clearance_offset, drill_tree_shape, outline_tree_shapes, AreaShape, PadShape};
+use eda_freeroute::board::{area_tree_shapes, clearance_offset, drill_tree_shape, outline_tree_shapes, trace_tree_shapes, AreaShape, PadShape};
 use eda_freeroute::door::{RoomGraph, RoomId, RoomState};
-use eda_freeroute::geometry::{Circle, IntBox, IntOctagon, IntPoint, Line, Simplex};
-
+use eda_freeroute::geometry::{Circle, IntBox, IntOctagon, IntPoint, Line, Polyline, Simplex, TileShape};
 use eda_freeroute::room::{complete_shape, IncompleteRoom, TreeObject};
 use eda_freeroute::rules::ClearanceMatrix;
 
@@ -307,6 +307,64 @@ fn check_outline(dump: &str) -> Option<Result<usize, String>> {
     )))
 }
 
+/// Lines from dump numbers: a count, then `ax ay bx by` per line.
+fn lines_from(n: &[i64]) -> Vec<Line> {
+    (0..n[0] as usize).map(|i| Line::new(IntPoint::new(n[1 + 4 * i], n[2 + 4 * i]), IntPoint::new(n[3 + 4 * i], n[4 + 4 * i]))).collect()
+}
+
+/// FreeRouting's exact tree shapes: an octagon from its item record, or the
+/// box or polygon an exact record gives.
+fn exact_shapes(dump: &str) -> HashMap<(u64, u32), TileShape> {
+    let mut shapes = HashMap::new();
+    for line in dump.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        let n: Vec<i64> = f.iter().skip(1).filter_map(|s| s.parse().ok()).collect();
+        match f.first().copied().unwrap_or("") {
+            "item" => {
+                shapes.insert((n[0] as u64, n[1] as u32), TileShape::Octagon(octagon(&f[5..13])));
+            }
+            "exact" => {
+                let shape = match f[3] {
+                    "box" => TileShape::Box(IntBox::new(n[2], n[3], n[4], n[5])),
+                    "simplex" => TileShape::Simplex(Simplex::new(lines_from(&n[2..]))),
+                    kind => panic!("unexpected exact shape {kind}"),
+                };
+                shapes.insert((n[0] as u64, n[1] as u32), shape);
+            }
+            _ => {}
+        }
+    }
+    shapes
+}
+
+/// Widen every trace as the port does and compare each segment's shape
+/// with FreeRouting's exactly: the numbers of traces and segments checked,
+/// and every difference.
+fn check_traces(dump: &str) -> (usize, usize, Vec<String>) {
+    let want = exact_shapes(dump);
+    let (rules, trace_class) = clearance_rules(dump);
+    let (mut traces, mut segments, mut diffs) = (0, 0, Vec::new());
+    for line in dump.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.first() != Some(&"trace") {
+            continue;
+        }
+        let n: Vec<i64> = f[1..].iter().map(|s| s.parse().unwrap()).collect();
+        let (id, layer, half_width, class) = (n[0] as u64, n[1] as i32, n[2], n[3] as i32);
+        let polyline = Polyline { lines: lines_from(&n[4..]) };
+        let got = trace_tree_shapes(&polyline, half_width, clearance_offset(&rules, class, trace_class, layer));
+        traces += 1;
+        for (i, g) in got.iter().enumerate() {
+            segments += 1;
+            let w = want.get(&(id, i as u32));
+            if g.as_ref() != w {
+                diffs.push(format!("trace {id} segment {i}:\n    FreeRouting: {w:?}\n    port:        {g:?}"));
+            }
+        }
+    }
+    (traces, segments, diffs)
+}
+
 fn dumps() -> Vec<PathBuf> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let dir = match std::env::var_os("FREEROUTE_PARITY_DIR").map(PathBuf::from) {
@@ -384,4 +442,19 @@ fn outline_shapes_match_freerouting() {
     }
     eprintln!("outlines checked: {checked} ({edges} edge shapes); skipped: {skipped}");
     assert!(failures.is_empty(), "{} outlines differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn trace_shapes_match_freerouting() {
+    let (mut traces, mut segments, mut failures) = (0, 0, Vec::new());
+    for path in dumps() {
+        let (t, n, diffs) = check_traces(&std::fs::read_to_string(&path).unwrap());
+        (traces, segments) = (traces + t, segments + n);
+        if !diffs.is_empty() {
+            let shown: Vec<_> = diffs.iter().take(2).cloned().collect();
+            failures.push(format!("{}: {} of {n} segments differ, e.g.\n  {}", path.file_name().unwrap().to_string_lossy(), diffs.len(), shown.join("\n  ")));
+        }
+    }
+    eprintln!("traces checked: {traces} ({segments} segments)");
+    assert!(failures.is_empty(), "{} boards differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }

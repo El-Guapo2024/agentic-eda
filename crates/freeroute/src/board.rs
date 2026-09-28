@@ -1,13 +1,13 @@
 //! The board as the router sees it: each item it must keep clear of, as
 //! the shapes FreeRouting stores in its search tree for the trace clearance
 //! class being routed. Ported from the item side of `ShapeSearchTree` and
-//! `ShapeSearchTree45Degree`, item kind by item kind: pins, vias, round
-//! areas, and the board outline so far.
+//! `ShapeSearchTree45Degree`, item kind by item kind: pins, vias, traces,
+//! round areas, and the board outline so far.
 //!
 //! Every tree shape is an obstacle grown by the clearance it needs from
 //! that trace class, so the search itself never measures a gap.
 
-use crate::geometry::{Circle, IntBox, IntOctagon, Line, Polyline, Simplex};
+use crate::geometry::{Circle, IntBox, IntOctagon, Line, Polyline, Simplex, TileShape};
 use crate::rules::ClearanceMatrix;
 
 /// A pad or via on one layer, in the shapes FreeRouting reads them as.
@@ -120,6 +120,16 @@ pub fn outline_tree_shapes(shapes: &[Vec<Line>], half_width: i64, offset: i64, l
         }
     }
     out
+}
+
+/// The tree shapes of a trace: each segment of its polyline widened by its
+/// half width plus `offset`, its clearance on its layer. Unlike pads and
+/// areas, a trace keeps its exact shape -- a box, an octagon, or a polygon
+/// for a segment at another angle. `None` for a segment FreeRouting could
+/// not widen. `ShapeSearchTree.calculate_tree_shapes(PolylineTrace)`.
+pub fn trace_tree_shapes(polyline: &Polyline, half_width: i64, offset: i64) -> Vec<Option<TileShape>> {
+    let segments = polyline.lines.len().saturating_sub(2);
+    (0..segments).map(|i| polyline.offset_shape(half_width + offset, i)).collect()
 }
 
 /// `TileShape.divide_into_sections` for an octagon: its bounding box tiled
