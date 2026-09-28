@@ -8,7 +8,68 @@
 //! that trace class, so the search itself never measures a gap.
 
 use crate::geometry::{Circle, IntBox, IntOctagon, Line, PolygonShape, Polyline, PolylineArea, Simplex, TileShape};
+use crate::model::{Board, Item, ItemKind};
 use crate::rules::ClearanceMatrix;
+
+/// FreeRouting's two kinds of search tree in 45-degree mode: the autoroute
+/// trees (`ShapeSearchTree45Degree`), one per trace clearance class, which
+/// store pads, areas and the outline under bounding octagons; and the
+/// default tree (plain `ShapeSearchTree`), which keeps exact shapes and is
+/// what the push and via checks search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TreeKind {
+    FortyFive,
+    Plain,
+}
+
+/// An item's shapes in a tree of `kind` compensated for trace clearance
+/// class `class`, by shape index; `None` where FreeRouting has none -- no pad
+/// on a layer, or a shape beyond the critical bound. `Item.get_tree_shapes`,
+/// through `calculate_tree_shapes` per item kind.
+pub fn tree_shapes(board: &Board, item: &Item, kind: TreeKind, class: i32) -> Vec<Option<TileShape>> {
+    let rules = &board.rules.clearance;
+    let offset = |layer: i32| clearance_offset(rules, item.clearance_class, class, layer);
+    match &item.kind {
+        ItemKind::Pin { pads, .. } | ItemKind::Via { pads, .. } => pads
+            .iter()
+            .enumerate()
+            .map(|(i, pad)| {
+                let pad = pad.as_ref()?;
+                let o = offset(item.first_layer + i as i32);
+                match kind {
+                    TreeKind::FortyFive => drill_tree_shape(pad, o).map(TileShape::Octagon),
+                    // bounding_octagon().enlarge(offset): no square corners
+                    // kept here.
+                    TreeKind::Plain => pad.bounding_octagon().map(|b| TileShape::Octagon(b.offset(o as f64))),
+                }
+            })
+            .collect(),
+        ItemKind::Trace { layer, half_width, polyline } => trace_tree_shapes(polyline, *half_width, offset(*layer)),
+        ItemKind::Area { layer, shape, .. } => {
+            let Some(pieces) = shape.split_to_convex() else {
+                return Vec::new();
+            };
+            match kind {
+                TreeKind::FortyFive => piece_tree_shapes(&pieces, offset(*layer), board.area_section).into_iter().map(|o| o.map(TileShape::Octagon)).collect(),
+                TreeKind::Plain => pieces
+                    .iter()
+                    .flat_map(|p| p.enlarge(offset(*layer) as f64).divide_into_sections(board.area_section))
+                    .map(Some)
+                    .collect(),
+            }
+        }
+        ItemKind::Outline { half_width, shapes, keepout_outside } => {
+            assert!(!keepout_outside, "a generated keepout outside the outline is not ported");
+            // The outline's clearance on layer 0 serves every layer.
+            let o = offset(0);
+            match kind {
+                TreeKind::FortyFive => outline_tree_shapes(shapes, *half_width, o, board.layer_count()).into_iter().map(|s| s.map(TileShape::Octagon)).collect(),
+                TreeKind::Plain => outline_edge_shapes(shapes, *half_width + o, board.layer_count()),
+            }
+        }
+        ItemKind::ComponentOutline => Vec::new(),
+    }
+}
 
 /// A pad or via on one layer, in the shapes FreeRouting reads them as.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +208,25 @@ pub fn outline_tree_shapes(shapes: &[Vec<Line>], half_width: i64, offset: i64, l
             for i in 0..n {
                 let edge = Polyline::from_lines(&[border[(i + n - 1) % n], border[i], border[(i + 1) % n]]);
                 out.push(edge.offset_shape(half_width + offset, 0).and_then(|s| s.bounding_octagon()));
+            }
+        }
+    }
+    out
+}
+
+/// Each edge of each outline shape widened by `half_width` as a trace
+/// segment would be, between the lines of its two neighbours, the lot
+/// repeated on every layer; exact, as the plain tree keeps them. `None` for
+/// an edge FreeRouting could not widen.
+/// `ShapeSearchTree.calculate_tree_shapes(BoardOutline)`.
+fn outline_edge_shapes(shapes: &[Vec<Line>], half_width: i64, layers: usize) -> Vec<Option<TileShape>> {
+    let mut out = Vec::new();
+    for _ in 0..layers {
+        for border in shapes {
+            let n = border.len();
+            for i in 0..n {
+                let edge = Polyline::from_lines(&[border[(i + n - 1) % n], border[i], border[(i + 1) % n]]);
+                out.push(edge.offset_shape(half_width, 0));
             }
         }
     }

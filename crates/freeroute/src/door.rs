@@ -28,9 +28,9 @@
 //! out.
 
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-use crate::geometry::{IntBox, IntOctagon, TileShape, CRIT};
+use crate::geometry::{IntBox, IntOctagon, Line, TileShape, CRIT};
 use crate::room::{complete_shape, GrownRoom, IncompleteRoom, TreeObject};
 use crate::searchtree::{LeafId, ShapeTree};
 
@@ -111,19 +111,36 @@ pub enum RoomState {
         /// doors are being calculated, before it is stored.
         leaf: Option<LeafId>,
         /// The room touches copper of the net being routed, so it is only
-        /// valid for that net. FreeRouting also makes a target door there,
-        /// which needs the board model and is not ported yet.
+        /// valid for that net; see [`Room::targets`].
         net_dependent: bool,
+    },
+    /// The room an item is to the search: entered to rip the item up or
+    /// push it aside (`ObstacleExpansionRoom`). Its shape is the item's tree
+    /// shape, in [`Room::tile`].
+    Obstacle {
+        /// The item's entry in the tree.
+        item: LeafId,
+        /// `(item id << 10) | shape index`, in Java `int` arithmetic.
+        id_no: i64,
     },
 }
 
 #[derive(Debug, Clone)]
 pub struct Room {
-    /// `None` only for an incomplete room that starts from the whole board.
+    /// `None` only for an incomplete room that starts from the whole board,
+    /// and for an obstacle room, whose shape is `tile`.
     pub shape: Option<IntOctagon>,
     pub layer: i32,
     pub state: RoomState,
     doors: Vec<DoorId>,
+    /// For a completed room: the entries of items no trace of the net must
+    /// avoid that touch it -- the net's own copper among them -- in the
+    /// order they were found. FreeRouting's
+    /// `CompleteFreeSpaceExpansionRoom.calculate_target_doors` looks at
+    /// each for a target door.
+    pub targets: Vec<LeafId>,
+    /// For an obstacle room: its item's tree shape.
+    pub tile: Option<TileShape>,
 }
 
 impl Room {
@@ -132,8 +149,35 @@ impl Room {
         &self.doors
     }
 
+    /// A completed free-space room or an obstacle room: anything but an
+    /// incomplete room (`CompleteExpansionRoom`).
     pub fn is_complete(&self) -> bool {
-        matches!(self.state, RoomState::Complete { .. })
+        !matches!(self.state, RoomState::Incomplete { .. })
+    }
+
+    pub fn is_obstacle_room(&self) -> bool {
+        matches!(self.state, RoomState::Obstacle { .. })
+    }
+
+    /// The room's shape, whatever its kind: its octagon, or an obstacle
+    /// room's item shape. `None` only for an incomplete room over the whole
+    /// board.
+    pub fn tile_shape(&self) -> Option<TileShape> {
+        match (&self.tile, self.shape) {
+            (Some(t), _) => Some(t.clone()),
+            (None, Some(o)) => Some(TileShape::Octagon(o)),
+            (None, None) => None,
+        }
+    }
+
+    /// FreeRouting's room number: `get_id_no` of a completed room or an
+    /// obstacle room.
+    pub fn id_no(&self) -> Option<i64> {
+        match self.state {
+            RoomState::Complete { id_no, .. } => Some(id_no as i64),
+            RoomState::Obstacle { id_no, .. } => Some(id_no),
+            RoomState::Incomplete { .. } => None,
+        }
     }
 }
 
@@ -175,6 +219,9 @@ pub struct RoomGraph<T> {
     complete: Vec<RoomId>,
     /// `expansion_room_instance_count`: the last room number handed out.
     room_count: u64,
+    /// Each routable item entry's obstacle room, made when first needed:
+    /// `ItemAutorouteInfo.get_expansion_room`.
+    obstacle_rooms: HashMap<LeafId, RoomId>,
 }
 
 impl<T: TreeObject> RoomGraph<T> {
@@ -188,6 +235,7 @@ impl<T: TreeObject> RoomGraph<T> {
             incomplete: Vec::new(),
             complete: Vec::new(),
             room_count: 0,
+            obstacle_rooms: HashMap::new(),
         }
     }
 
@@ -220,11 +268,48 @@ impl<T: TreeObject> RoomGraph<T> {
         self.doors[id.0].as_ref().unwrap_or_else(|| panic!("RoomGraph::door: {id:?} was removed"))
     }
 
-    /// Where a door's two rooms meet: a stretch of edge, or their overlap.
-    /// `ExpansionDoor.get_shape`.
+    /// Where a door's two free-space rooms meet: a stretch of edge, or
+    /// their overlap. `ExpansionDoor.get_shape`.
     pub fn door_shape(&self, id: DoorId) -> IntOctagon {
         let d = self.door(id);
         self.shape_of(d.first).intersection(&self.shape_of(d.second))
+    }
+
+    /// Where a door's two rooms meet, obstacle rooms included: the first
+    /// room's shape cut by the second's. `ExpansionDoor.get_shape`.
+    pub fn door_tile_shape(&self, id: DoorId) -> TileShape {
+        let d = self.door(id);
+        let first = self.room(d.first).tile_shape().expect("a room with a door has a shape");
+        let second = self.room(d.second).tile_shape().expect("a room with a door has a shape");
+        first.intersection(&second)
+    }
+
+    /// The room behind a door from `room`.
+    pub fn doors_of(&self, room: RoomId) -> &[DoorId] {
+        &self.room(room).doors
+    }
+
+    /// The obstacle room for a routable item's entry, made the first time
+    /// it is asked for. `ItemAutorouteInfo.get_expansion_room`.
+    pub fn obstacle_room(&mut self, leaf: LeafId) -> RoomId {
+        if let Some(&r) = self.obstacle_rooms.get(&leaf) {
+            return r;
+        }
+        let p = self.tree.payload(leaf);
+        let (id, index, layer) = (p.id(), p.shape_index(), p.layer());
+        let tile = p.exact_shape().cloned().unwrap_or(TileShape::Octagon(self.tree.bounds(leaf)));
+        let id_no = ((id as i32).wrapping_shl(10) | index as i32) as i64;
+        let room = RoomId(self.rooms.len());
+        self.rooms.push(Some(Room {
+            shape: None,
+            layer,
+            state: RoomState::Obstacle { item: leaf, id_no },
+            doors: Vec::new(),
+            targets: Vec::new(),
+            tile: Some(tile),
+        }));
+        self.obstacle_rooms.insert(leaf, room);
+        room
     }
 
     /// A room's shape, for a room known to have one: every room with a door
@@ -246,7 +331,14 @@ impl<T: TreeObject> RoomGraph<T> {
     /// starts from the whole board.
     pub fn add_incomplete_room(&mut self, shape: Option<IntOctagon>, layer: i32, contained: IntOctagon) -> RoomId {
         let id = RoomId(self.rooms.len());
-        self.rooms.push(Some(Room { shape, layer, state: RoomState::Incomplete { contained }, doors: Vec::new() }));
+        self.rooms.push(Some(Room {
+            shape,
+            layer,
+            state: RoomState::Incomplete { contained },
+            doors: Vec::new(),
+            targets: Vec::new(),
+            tile: None,
+        }));
         self.incomplete.push(id);
         id
     }
@@ -323,17 +415,17 @@ impl<T: TreeObject> RoomGraph<T> {
         }
     }
 
-    /// Calculate the doors of a grown room and store it.
-    /// `AutorouteEngine.add_complete_room`.
+    /// Calculate the doors of a grown room and store it; a room that came
+    /// out flat is not stored. `AutorouteEngine.add_complete_room`.
+    ///
+    /// As in the Java, a flat room still takes a room number, and keeps the
+    /// doors calculated for it -- its neighbours still list them -- though
+    /// it is in neither the tree nor the list of completed rooms.
     fn add_complete_room(&mut self, mut grown: GrownRoom) -> Option<RoomId> {
-        // The Java calculates the doors first and checks the dimension
-        // after, which leaves a discarded room's doors attached to its
-        // neighbours. The shape only grows while doors are calculated, so
-        // checking first discards the same rooms without that.
-        if grown.shape.dimension() != 2 {
+        let room = self.calculate_doors(&mut grown);
+        if self.shape_of(room).dimension() != 2 {
             return None;
         }
-        let room = self.calculate_doors(&mut grown);
         let (shape, layer) = (self.shape_of(room), self.room(room).layer);
         let RoomState::Complete { id_no, .. } = self.room(room).state else {
             unreachable!("calculate_doors makes a complete room");
@@ -378,6 +470,45 @@ impl<T: TreeObject> RoomGraph<T> {
         }
     }
 
+    /// Whether a door may join `room` and `other` where they meet in
+    /// `meet`: one per pair; and into the obstacle room of a trace's end
+    /// segment only along that segment.
+    /// `SortedRoomNeighbours.insert_door_ok`, for a free-space room and a
+    /// neighbour.
+    fn insert_door_ok(&self, room: RoomId, other: RoomId, meet: &IntOctagon) -> bool {
+        if self.door_exists(room, other) {
+            return false;
+        }
+        let end_line = |r: RoomId| match self.room(r).state {
+            RoomState::Obstacle { item, .. } => Some(self.tree.payload(item).trace_end_line()),
+            _ => None,
+        };
+        let (first, second) = (end_line(room), end_line(other));
+        if first.is_none() && second.is_none() {
+            return true;
+        }
+        // The door's first side of any length.
+        let door = TileShape::Octagon(*meet);
+        let mut door_line = None;
+        let mut prev = door.corner(0);
+        for i in 1..door.border_line_count() {
+            let curr = door.corner(i);
+            if curr != prev {
+                door_line = Some(door.border_line(i - 1));
+                break;
+            }
+            prev = curr;
+        }
+        let ok = |end: Option<Option<Line>>| match end {
+            None => true,
+            // SortedRoomNeighbours warns and refuses without a door line.
+            Some(_) if door_line.is_none() => false,
+            Some(Some(line)) => line.is_parallel(&door_line.expect("checked")),
+            Some(None) => true,
+        };
+        ok(first) && ok(second)
+    }
+
     fn door_exists(&self, room: RoomId, other: RoomId) -> bool {
         self.room(room).doors.iter().any(|&d| {
             let door = self.door(d);
@@ -417,6 +548,8 @@ impl<T: TreeObject> RoomGraph<T> {
             layer: from.layer,
             state: RoomState::Complete { id_no: self.room_count, leaf: None, net_dependent: false },
             doors: Vec::new(),
+            targets: Vec::new(),
+            tile: None,
         }));
         let shape = from.shape;
         let mut n = Neighbours { completed, shape, layer: from.layer, sorted: BTreeSet::new(), edge_touched: [false; 8] };
@@ -440,20 +573,23 @@ impl<T: TreeObject> RoomGraph<T> {
             (p.id(), p.shape_index(), matches!(p, Entry::Item(_)))
         });
         for leaf in entries {
-            let (obstacle, id, neighbour_room) = {
+            let (obstacle, id, neighbour_room, routable) = {
                 let p = self.tree.payload(leaf);
                 let room = match p {
                     Entry::Room { room, .. } => Some(*room),
                     Entry::Item(_) => None,
                 };
-                (p.is_obstacle_for(self.net), p.id(), room)
+                (p.is_obstacle_for(self.net), p.id(), room, p.is_routable())
             };
             if !obstacle {
-                // Copper of the net being routed: FreeRouting makes a target
-                // door here. It does not bound the room.
-                if let RoomState::Complete { net_dependent, .. } = &mut self.room_mut(completed).state {
+                // Something no trace of the net avoids -- its own copper, or
+                // a via keepout: it does not bound the room, but its own
+                // copper may be a target (calculate_target_doors).
+                let r = self.room_mut(completed);
+                if let RoomState::Complete { net_dependent, .. } = &mut r.state {
                     *net_dependent = true;
                 }
+                r.targets.push(leaf);
                 continue;
             }
             let intersection = shape.intersection(&self.tree.bounds(leaf));
@@ -469,12 +605,22 @@ impl<T: TreeObject> RoomGraph<T> {
                 n.sorted.insert(nb);
             }
             if dimension > 0 {
-                // An item would get an obstacle expansion room here, for
-                // ripup and push; not ported yet.
-                if let Some(other) = neighbour_room {
-                    // SortedRoomNeighbours.insert_door_ok, for two free-space
-                    // rooms: one door per pair.
-                    if !self.door_exists(completed, other) {
+                // A routable item is entered through its obstacle room, for
+                // ripup and pushing aside.
+                let other = match neighbour_room {
+                    Some(r) => Some(r),
+                    None if routable => Some(self.obstacle_room(leaf)),
+                    None => None,
+                };
+                if let Some(other) = other {
+                    if self.insert_door_ok(completed, other, &intersection) {
+                        // new ExpansionDoor(room, neighbour): the dimension
+                        // of the rooms' own shapes' meeting, which for an
+                        // obstacle room is its item's exact shape.
+                        let dimension = match &self.room(other).tile {
+                            Some(tile) => TileShape::Octagon(shape).intersection(tile).dimension(),
+                            None => dimension,
+                        };
                         self.add_door(completed, other, dimension);
                     }
                 }
@@ -707,7 +853,7 @@ impl<T: TreeObject> RoomGraph<T> {
                     return Err(format!("{id:?} is listed {listed} times by {r:?}"));
                 }
             }
-            let (Some(a), Some(b)) = (self.room(door.first).shape, self.room(door.second).shape) else {
+            let (Some(a), Some(b)) = (self.room(door.first).tile_shape(), self.room(door.second).tile_shape()) else {
                 return Err(format!("{id:?} has a room without a shape"));
             };
             let overlap = a.intersection(&b).dimension();
@@ -715,11 +861,14 @@ impl<T: TreeObject> RoomGraph<T> {
                 return Err(format!("{id:?} has dimension {} but its rooms meet in dimension {overlap}", door.dimension));
             }
         }
-        let mut live = 0;
+        let (mut live, mut unstored, mut obstacle) = (0, 0, 0);
         for (i, room) in self.rooms.iter().enumerate() {
             let Some(room) = room else { continue };
             let id = RoomId(i);
             live += 1;
+            if room.is_obstacle_room() {
+                obstacle += 1;
+            }
             let mut others = Vec::new();
             for &d in &room.doors {
                 match self.doors[d.0] {
@@ -735,7 +884,15 @@ impl<T: TreeObject> RoomGraph<T> {
                 return Err(format!("{id:?} has two doors to {:?}", w[0]));
             }
             if let RoomState::Complete { id_no, leaf, .. } = room.state {
-                let Some(leaf) = leaf else { return Err(format!("complete {id:?} is not stored")) };
+                let Some(leaf) = leaf else {
+                    // A room that came out flat: numbered and with doors, but
+                    // never stored.
+                    if self.complete.contains(&id) || room.shape.is_some_and(|s| s.dimension() == 2) {
+                        return Err(format!("complete {id:?} is not stored"));
+                    }
+                    unstored += 1;
+                    continue;
+                };
                 match self.tree.payload(leaf) {
                     Entry::Room { room: r, id_no: n, .. } if *r == id && *n == id_no => {}
                     _ => return Err(format!("{leaf:?} does not hold {id:?}")),
@@ -748,13 +905,14 @@ impl<T: TreeObject> RoomGraph<T> {
         for (list, complete) in [(&self.incomplete, false), (&self.complete, true)] {
             for &r in list {
                 match &self.rooms[r.0] {
-                    Some(room) if room.is_complete() == complete => {}
+                    Some(room) if room.is_complete() == complete && !room.is_obstacle_room() => {}
                     _ => return Err(format!("{r:?} is on the wrong list or removed")),
                 }
             }
         }
-        if live != self.incomplete.len() + self.complete.len() {
-            return Err(format!("{live} live rooms, but the lists hold {}", self.incomplete.len() + self.complete.len()));
+        let listed = self.incomplete.len() + self.complete.len();
+        if live != listed + unstored + obstacle {
+            return Err(format!("{live} live rooms, but the lists hold {listed}, with {unstored} flat and {obstacle} obstacle rooms"));
         }
         Ok(())
     }

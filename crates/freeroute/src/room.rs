@@ -44,6 +44,18 @@ pub trait TreeObject {
     fn exact_shape(&self) -> Option<&TileShape> {
         None
     }
+    /// An unfixed trace or via of some net, which the autorouter may rip up
+    /// or push aside: rooms touching it get a door into an obstacle room for
+    /// it. `Item.is_routable`.
+    fn is_routable(&self) -> bool {
+        false
+    }
+    /// For the first or last segment of a trace, that segment's line: doors
+    /// into its obstacle room must run parallel to it.
+    /// `SortedRoomNeighbours.insert_door_ok(ObstacleExpansionRoom, Line)`.
+    fn trace_end_line(&self) -> Option<crate::geometry::Line> {
+        None
+    }
 }
 
 /// A room whose shape is known but whose doors are not yet computed.

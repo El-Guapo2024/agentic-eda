@@ -9,7 +9,12 @@
 //!
 //! Ported phase by phase, each checked before the next is built on it:
 //! geometry kernel -> spatial index -> board model -> room maze search ->
-//! push-and-shove -> optimiser.
+//! push-and-shove -> optimiser. Each is checked against FreeRouting v1.9
+//! itself: `parity/` holds Java harnesses that dump what FreeRouting does
+//! on a board, and `tests/` replays those dumps against the port.
+//!
+//! [`dump::read_board`] reads a board as FreeRouting loaded it;
+//! [`autoroute::maze::MazeSearch`] searches a connection on it.
 //!
 //! Licence: GPL-3.0, inherited from FreeRouting. See Cargo.toml.
 
@@ -18,4 +23,7 @@ pub mod searchtree;
 pub mod room;
 pub mod door;
 pub mod rules;
+pub mod model;
 pub mod board;
+pub mod dump;
+pub mod autoroute;

@@ -119,6 +119,7 @@ fn replay(dump: &str) -> Option<String> {
     let id_no = |g: &RoomGraph<Item>, r: RoomId| match g.room(r).state {
         RoomState::Complete { id_no, .. } => id_no,
         RoomState::Incomplete { .. } => panic!("incomplete room left after the fill"),
+        RoomState::Obstacle { .. } => panic!("no obstacle rooms without routable items"),
     };
     let mut got = Vec::new();
     let mut step = 0;
