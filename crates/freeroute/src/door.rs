@@ -30,7 +30,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
-use crate::geometry::{IntBox, IntOctagon, CRIT};
+use crate::geometry::{IntBox, IntOctagon, TileShape, CRIT};
 use crate::room::{complete_shape, GrownRoom, IncompleteRoom, TreeObject};
 use crate::searchtree::{LeafId, ShapeTree};
 
@@ -86,6 +86,13 @@ impl<T: TreeObject> TreeObject for Entry<T> {
         match self {
             Entry::Item(t) => t.is_free_space_room(),
             Entry::Room { .. } => true,
+        }
+    }
+
+    fn exact_shape(&self) -> Option<&TileShape> {
+        match self {
+            Entry::Item(t) => t.exact_shape(),
+            Entry::Room { .. } => None,
         }
     }
 }
@@ -414,10 +421,20 @@ impl<T: TreeObject> RoomGraph<T> {
         let shape = from.shape;
         let mut n = Neighbours { completed, shape, layer: from.layer, sorted: BTreeSet::new(), edge_touched: [false; 8] };
 
-        // The Java collects these in the tree's own order -- rooms before
-        // items -- then stable-sorts by number and shape index.
-        let mut entries: Vec<LeafId> =
-            self.tree.overlaps(&shape).into_iter().filter(|&l| self.tree.payload(l).layer() == from.layer).collect();
+        // ShapeSearchTree.overlapping_tree_entries: what the tree finds on
+        // the room's layer, a shape that is not an octagon only if it
+        // really touches the room. The Java collects these in the tree's
+        // own order -- rooms before items -- then stable-sorts by number
+        // and shape index.
+        let mut entries: Vec<LeafId> = self
+            .tree
+            .overlaps(&shape)
+            .into_iter()
+            .filter(|&l| {
+                let p = self.tree.payload(l);
+                p.layer() == from.layer && p.exact_shape().is_none_or(|s| s.intersects_octagon(&shape))
+            })
+            .collect();
         entries.sort_by_key(|&l| {
             let p = self.tree.payload(l);
             (p.id(), p.shape_index(), matches!(p, Entry::Item(_)))

@@ -19,9 +19,9 @@
 //! the port grows it, must come out as FreeRouting's tree shape; likewise
 //! each area -- keepout or copper pour -- of a shape ported so far, and the
 //! board outline, its edges widened as traces are, and each trace, shape
-//! for shape and line for line. Boards
-//! with traces take part in that check only: their trace shapes are not
-//! octagons until traces are ported, so the room check skips them.
+//! for shape and line for line. Rooms
+//! are checked on boards with traces too: a polygon trace shape is stored
+//! under its bounding octagon, and tested exactly where FreeRouting tests it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +39,8 @@ struct Item {
     layer: i32,
     /// Recorded for the net the dump was made for.
     obstacle: bool,
+    /// Where the tree shape is a polygon, not the octagon it is stored under.
+    exact: Option<TileShape>,
 }
 
 impl TreeObject for Item {
@@ -57,6 +59,9 @@ impl TreeObject for Item {
     fn is_free_space_room(&self) -> bool {
         false
     }
+    fn exact_shape(&self) -> Option<&TileShape> {
+        self.exact.as_ref()
+    }
 }
 
 fn octagon(f: &[&str]) -> IntOctagon {
@@ -74,6 +79,8 @@ fn octagon_text(o: &IntOctagon) -> String {
 /// Replay one dump; the first line where the port and FreeRouting differ,
 /// or `None` if they agree throughout.
 fn replay(dump: &str) -> Option<String> {
+    let polygons: HashMap<(u64, u32), TileShape> =
+        exact_shapes(dump).into_iter().filter(|(_, s)| matches!(s, TileShape::Simplex(_))).collect();
     let mut board = None;
     let mut net = 0;
     let mut graph: Option<RoomGraph<Item>> = None;
@@ -90,7 +97,9 @@ fn replay(dump: &str) -> Option<String> {
                 graph = Some(RoomGraph::new(board.expect("board before net"), net));
             }
             "item" => {
-                let item = Item { id: f[1].parse().unwrap(), shape_index: f[2].parse().unwrap(), layer: f[3].parse().unwrap(), obstacle: f[4] == "1" };
+                let (id, shape_index) = (f[1].parse().unwrap(), f[2].parse().unwrap());
+                let exact = polygons.get(&(id, shape_index)).cloned();
+                let item = Item { id, shape_index, layer: f[3].parse().unwrap(), obstacle: f[4] == "1", exact };
                 graph.as_mut().expect("net before items").insert_item(octagon(&f[5..13]), item);
             }
             "start" => {
@@ -386,11 +395,6 @@ fn rooms_and_doors_match_freerouting() {
     let (mut compared, mut failures) = (0, Vec::new());
     for path in dumps() {
         let dump = std::fs::read_to_string(&path).unwrap();
-        // Trace shapes stand in as bounding octagons, which FreeRouting does
-        // not use for rooms: leave those boards to the pad check.
-        if dump.lines().any(|l| l.starts_with("item ") && l.ends_with(" approx")) {
-            continue;
-        }
         compared += 1;
         if let Some(diff) = replay(&dump) {
             failures.push(format!("{}: {diff}", path.file_name().unwrap().to_string_lossy()));

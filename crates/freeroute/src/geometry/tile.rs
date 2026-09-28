@@ -65,6 +65,18 @@ impl TileShape {
         }
     }
 
+    /// Whether this shape and octagon `o` share a point, touching included.
+    /// A polygon asks whether its intersection with the octagon's sides is
+    /// empty; a box tests as its octagon. `intersects`, through the Java's
+    /// double dispatch.
+    pub fn intersects_octagon(&self, o: &IntOctagon) -> bool {
+        match self {
+            TileShape::Box(b) => o.intersects(&b.to_octagon()),
+            TileShape::Octagon(own) => o.intersects(own),
+            TileShape::Simplex(s) => !s.intersection(&o.to_simplex()).is_empty(),
+        }
+    }
+
     /// `intersection` then `simplify`. `TileShape.intersection_with_simplify`.
     pub fn intersection_with_simplify(&self, other: &TileShape) -> TileShape {
         self.intersection(other).simplify()

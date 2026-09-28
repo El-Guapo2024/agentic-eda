@@ -16,7 +16,7 @@
 //! obstacle, which prunes later ones. A different order yields different,
 //! equally valid rooms, and would stop this matching FreeRouting.
 
-use crate::geometry::{IntBox, IntOctagon};
+use crate::geometry::{IntBox, IntOctagon, TileShape};
 use crate::searchtree::{LeafId, ShapeTree};
 
 /// What the room search needs to know about a stored shape.
@@ -38,6 +38,12 @@ pub trait TreeObject {
     /// A room that has already been completed and stored. Such rooms get
     /// the ignore-shape exemption below.
     fn is_free_space_room(&self) -> bool;
+    /// The shape itself, where it is not the octagon it is stored under --
+    /// a trace segment at an odd angle. Growing rooms uses that octagon, as
+    /// FreeRouting does; finding a room's neighbours tests the shape.
+    fn exact_shape(&self) -> Option<&TileShape> {
+        None
+    }
 }
 
 /// A room whose shape is known but whose doors are not yet computed.
