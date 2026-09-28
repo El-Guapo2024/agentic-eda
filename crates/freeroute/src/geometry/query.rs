@@ -63,6 +63,73 @@ impl TileShape {
         }
     }
 
+    /// The border line `p` lies on, the last such, if it lies on the
+    /// border; `None` if it is inside or outside.
+    /// `TileShape.contains_on_border_line_no`.
+    pub fn contains_on_border_line_no(&self, p: &Point) -> Option<usize> {
+        let mut containing = None;
+        for i in 0..self.border_line_count() {
+            match self.border_line(i).side_of(p) {
+                Side::Left => return None,
+                Side::Collinear => containing = Some(i),
+                Side::Right => {}
+            }
+        }
+        containing
+    }
+
+    /// The nearest point of the border to `from`: the nearest corner, or
+    /// the foot of a perpendicular onto a side where that falls within it.
+    /// `TileShape.nearest_border_point`.
+    pub fn nearest_border_point(&self, from: IntPoint) -> Point {
+        let n = self.border_line_count();
+        let from_f = FloatPoint::from_int(from);
+        if n == 1 {
+            return from.perpendicular_projection(&self.border_line(0));
+        }
+        let mut min_dist = f64::MAX;
+        let mut min_ind = 0;
+        for i in 0..n {
+            let d = self.corner_approx(i).distance_square(&from_f);
+            if d < min_dist {
+                min_dist = d;
+                min_ind = i;
+            }
+        }
+        let mut nearest = self.corner(min_ind);
+        let (mut prev, mut curr) = (n - 2, n - 1);
+        for next in 0..n {
+            let projection = from.perpendicular_projection(&self.border_line(curr));
+            if (!self.corner_is_bounded(curr) || self.border_line(prev).side_of(&projection) == Side::Right)
+                && (!self.corner_is_bounded(next) || self.border_line(next).side_of(&projection) == Side::Right)
+            {
+                let d = FloatPoint::from_point(&projection).distance_square(&from_f);
+                if d < min_dist {
+                    min_dist = d;
+                    nearest = projection;
+                }
+            }
+            prev = curr;
+            curr = next;
+        }
+        nearest
+    }
+
+    /// Moved by `(dx, dy)`. `translate_by`, per form; a polygon's lines
+    /// move as they are.
+    pub fn translate_by(&self, dx: i64, dy: i64) -> TileShape {
+        if dx == 0 && dy == 0 {
+            return self.clone();
+        }
+        match self {
+            TileShape::Box(b) => TileShape::Box(IntBox::new(b.ll.x + dx, b.ll.y + dy, b.ur.x + dx, b.ur.y + dy)),
+            TileShape::Octagon(o) => TileShape::Octagon(o.translate_by(dx, dy)),
+            TileShape::Simplex(s) => TileShape::Simplex(Simplex {
+                lines: s.lines.iter().map(|l| Line::new(IntPoint::new(l.a.x + dx, l.a.y + dy), IntPoint::new(l.b.x + dx, l.b.y + dy))).collect(),
+            }),
+        }
+    }
+
     /// Whether `p` lies strictly on the outer side of some border line.
     /// `TileShape.is_outside`.
     pub fn is_outside(&self, p: &Point) -> bool {

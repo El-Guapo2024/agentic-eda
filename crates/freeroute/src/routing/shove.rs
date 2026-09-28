@@ -161,7 +161,7 @@ impl RoutingBoard {
         let Some(from_side) = via_from_side(&FloatPoint::from_int(location), &tile_shape, &room, check_radius) else {
             return DrillCheck::NotDrillable;
         };
-        self.check_forced_pad(&tile_shape, Some(from_side), layer, nets, cl_class, attach_smd_allowed, max_recursion_depth, max_via_recursion_depth)
+        self.check_forced_pad(&tile_shape, Some(from_side), layer, nets, cl_class, attach_smd_allowed, max_recursion_depth, max_via_recursion_depth, &[])
     }
 
     /// Whether a pad `shape` fits on `layer`, pushing aside what can be
@@ -178,12 +178,14 @@ impl RoutingBoard {
         copper_sharing_allowed: bool,
         max_recursion_depth: i32,
         max_via_recursion_depth: i32,
+        ignore: &[usize],
     ) -> DrillCheck {
         let board = &self.board;
         if !shape.is_contained_in_box(&board.bounds) {
             return DrillCheck::NotDrillable;
         }
-        let obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
+        let mut obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
+        obstacles.retain(|i| !ignore.contains(i));
         let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
         if !entries.store_items(&obstacles, true, copper_sharing_allowed) {
             return DrillCheck::NotDrillable;
@@ -314,7 +316,7 @@ impl RoutingBoard {
         if !shape.is_contained_in_box(&self.board.bounds) {
             return false;
         }
-        if !self.shove_vias(shape, from_side, layer, nets, cl_class, max_via_recursion_depth) {
+        if !self.shove_vias_aside(shape, from_side, layer, nets, cl_class, &[], max_via_recursion_depth, true) {
             return false;
         }
         let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
@@ -345,12 +347,14 @@ impl RoutingBoard {
 
     /// `MoveDrillItemAlgo.shove_vias`, for when nothing needs pushing: the
     /// vias of other nets in the way are pushed aside, which is not ported.
-    fn shove_vias(&self, shape: &TileShape, from_side: Option<FromSide>, layer: i32, nets: &[i32], cl_class: i32, max_via_recursion_depth: i32) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn shove_vias_aside(&self, shape: &TileShape, from_side: Option<FromSide>, layer: i32, nets: &[i32], cl_class: i32, ignore: &[usize], max_via_recursion_depth: i32, copper_sharing_allowed: bool) -> bool {
         let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
         let obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
-        if !entries.store_items(&obstacles, false, true) {
+        if !entries.store_items(&obstacles, false, copper_sharing_allowed) {
             return true;
         }
+        entries.shove_vias.retain(|v| !ignore.contains(v));
         for &via in &entries.shove_vias {
             if self.board.items[via].shares_net_no(nets) {
                 continue;
@@ -361,6 +365,18 @@ impl RoutingBoard {
             unimplemented!("pushing a via aside (MoveDrillItemAlgo.shove_vias) is not ported yet");
         }
         true
+    }
+
+    /// The trace pieces a pad of `shape` would push round it, for
+    /// `ForcedPadAlgo.forced_pad`: `None` if something cannot be pushed or
+    /// a via is in the way.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn stored_pad_entries(&self, shape: &TileShape, from_side: Option<FromSide>, layer: i32, nets: &[i32], cl_class: i32, obstacles: &[usize], copper_sharing_allowed: bool) -> Option<i32> {
+        let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
+        if !(entries.store_items(obstacles, true, copper_sharing_allowed) && entries.shove_vias.is_empty()) {
+            return None;
+        }
+        Some(entries.trace_piece_count)
     }
 
     /// What touches a pin of the net on `layer` within `shape`: exempt from

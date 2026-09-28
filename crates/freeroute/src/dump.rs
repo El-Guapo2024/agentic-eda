@@ -148,6 +148,7 @@ struct Parts {
     center: Option<IntPoint>,
     pads: BTreeMap<usize, PadShape>,
     padstack: Option<usize>,
+    attach_allowed: bool,
     trace: Option<(i32, i64, Vec<Line>)>,
     area: Option<(i32, AreaShape)>,
     conduction_obstacle: Option<bool>,
@@ -239,7 +240,18 @@ pub fn read_board(text: &str) -> Result<Board, String> {
             "padstack" => {
                 let n = w.ints(3)?;
                 let max_width = w.rest().iter().map(|s| s.parse::<f64>().map(|v| (v >= 0.0).then_some(v))).collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
-                padstacks.push(Padstack { no: n[0] as usize, from_layer: n[1] as i32, to_layer: n[2] as i32, max_width });
+                let shapes = vec![None; max_width.len()];
+                padstacks.push(Padstack { no: n[0] as usize, from_layer: n[1] as i32, to_layer: n[2] as i32, max_width, shapes });
+            }
+            "padstack_shape" => {
+                let n = w.ints(2)?;
+                let shape = w.pad()?;
+                let ps = padstacks.iter_mut().find(|p: &&mut Padstack| p.no == n[0] as usize).ok_or(format!("padstack_shape of unknown padstack {}", n[0]))?;
+                let l = n[1] as usize;
+                if ps.shapes.len() <= l {
+                    ps.shapes.resize(l + 1, None);
+                }
+                ps.shapes[l] = Some(shape);
             }
             "viainfo" => {
                 let n = w.ints(4)?;
@@ -302,7 +314,11 @@ pub fn read_board(text: &str) -> Result<Board, String> {
             }
             "via_padstack" => {
                 let n = w.ints(2)?;
-                parts.entry(n[0] as u32).or_default().padstack = Some(n[1] as usize);
+                // Older dumps have no attach flag.
+                let attach = w.rest().first().is_some_and(|s| *s == "1");
+                let part = parts.entry(n[0] as u32).or_default();
+                part.padstack = Some(n[1] as usize);
+                part.attach_allowed = attach;
             }
             "trace" => {
                 let n = w.ints(5)?;
@@ -403,6 +419,7 @@ pub fn read_board(text: &str) -> Result<Board, String> {
                 center: p.center.ok_or(format!("via {id} has no center"))?,
                 padstack: p.padstack.ok_or(format!("via {id} has no padstack"))?,
                 pads: pads(),
+                attach_allowed: p.attach_allowed,
             },
             "trace" => {
                 let (layer, half_width, lines) = p.trace.clone().ok_or(format!("trace {id} has no polyline"))?;

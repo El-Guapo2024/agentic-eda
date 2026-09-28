@@ -103,8 +103,9 @@ impl PullTight {
     }
 
     /// Pull tight the traces in the changed area, layer by layer, until
-    /// nothing changes; the changed area is used up. `opt_changed_area`.
-    pub fn opt_changed_area(&mut self, rb: &mut RoutingBoard, with_via_costs: bool) {
+    /// nothing changes, and move its vias where the trace costs say; the
+    /// changed area is used up. `opt_changed_area`.
+    pub fn opt_changed_area(&mut self, rb: &mut RoutingBoard, trace_costs: Option<&[(f64, f64)]>) {
         if rb.changed_area.is_none() {
             return;
         }
@@ -133,8 +134,10 @@ impl PullTight {
                                 break;
                             }
                         }
-                        ItemKind::Via { .. } if with_via_costs => {
-                            unimplemented!("optimizing a via's location (OptViaAlgo.opt_via_location) is not ported yet");
+                        ItemKind::Via { .. } if trace_costs.is_some() => {
+                            if rb.opt_via_location(item, trace_costs, self.min_translate_dist, 10) {
+                                something_changed = true;
+                            }
                         }
                         _ => {}
                     }

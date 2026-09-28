@@ -82,6 +82,19 @@ pub enum PadShape {
 }
 
 impl PadShape {
+    /// Moved by `(dx, dy)`. `translate_by`, per form.
+    pub fn translate(&self, dx: i64, dy: i64) -> PadShape {
+        match self {
+            PadShape::Circle(c) => PadShape::Circle(Circle::new(IntPoint::new(c.center.x + dx, c.center.y + dy), c.radius)),
+            PadShape::Box(b) => PadShape::Box(IntBox::new(b.ll.x + dx, b.ll.y + dy, b.ur.x + dx, b.ur.y + dy)),
+            PadShape::Octagon(o) => PadShape::Octagon(o.translate_by(dx, dy)),
+            PadShape::Polygon(s) => match TileShape::Simplex(s.clone()).translate_by(dx, dy) {
+                TileShape::Simplex(t) => PadShape::Polygon(t),
+                _ => unreachable!(),
+            },
+        }
+    }
+
     /// `Shape.bounding_octagon`, per kind. `None` for a polygon beyond the
     /// critical bound.
     pub fn bounding_octagon(&self) -> Option<IntOctagon> {

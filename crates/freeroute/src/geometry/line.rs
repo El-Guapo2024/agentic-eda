@@ -492,6 +492,56 @@ impl Line {
 }
 
 impl IntPoint {
+    /// The foot of the perpendicular from this point onto `line`, exactly:
+    /// an integer point where it falls on the grid, else rational.
+    /// `IntPoint.perpendicular_projection(Line)`.
+    pub fn perpendicular_projection(&self, line: &Line) -> Point {
+        let (vx, vy) = ((line.b.x - line.a.x) as i128, (line.b.y - line.a.y) as i128);
+        let (vxvx, vyvy, vxvy) = (vx * vx, vy * vy, vx * vy);
+        let mut denominator = vxvx + vyvy;
+        let det = line.a.x as i128 * line.b.y as i128 - line.a.y as i128 * line.b.x as i128;
+        let (px, py) = (self.x as i128, self.y as i128);
+        let mut proj_x = vxvx * px + vxvy * py + det * vy;
+        let mut proj_y = vxvy * px + vyvy * py - det * vx;
+        if denominator != 0 {
+            if denominator < 0 {
+                (denominator, proj_x, proj_y) = (-denominator, -proj_x, -proj_y);
+            }
+            if proj_x.rem_euclid(denominator) == 0 && proj_y.rem_euclid(denominator) == 0 {
+                return Point::Int(IntPoint::new((proj_x / denominator) as i64, (proj_y / denominator) as i64));
+            }
+        }
+        Point::Rational(RationalPoint { x: proj_x, y: proj_y, z: denominator })
+    }
+
+    /// A corner between this point and `to` making both legs horizontal,
+    /// vertical or diagonal, turning left if `left_turn`; `None` where the
+    /// line between is at a multiple of 45 degrees already.
+    /// `IntPoint.fortyfive_degree_corner`.
+    pub fn fortyfive_degree_corner(&self, to: IntPoint, left_turn: bool) -> Option<IntPoint> {
+        let (dx, dy) = (to.x - self.x, to.y - self.y);
+        let p = IntPoint::new;
+        Some(if dy > 0 && dy < dx {
+            if left_turn { p(to.x - dy, self.y) } else { p(self.x + dy, to.y) }
+        } else if dx > 0 && dy > dx {
+            if left_turn { p(to.x, self.y + dx) } else { p(self.x, to.y - dx) }
+        } else if dx < 0 && dy > -dx {
+            if left_turn { p(self.x, to.y + dx) } else { p(to.x, self.y - dx) }
+        } else if dy > 0 && dy < -dx {
+            if left_turn { p(self.x - dy, to.y) } else { p(to.x + dy, self.y) }
+        } else if dy < 0 && dy > dx {
+            if left_turn { p(to.x - dy, self.y) } else { p(self.x + dy, to.y) }
+        } else if dx < 0 && dy < dx {
+            if left_turn { p(to.x, self.y + dx) } else { p(self.x, to.y - dx) }
+        } else if dx > 0 && dy < -dx {
+            if left_turn { p(self.x, to.y + dx) } else { p(to.x, self.y - dx) }
+        } else if dy < 0 && dy > -dx {
+            if left_turn { p(self.x - dy, to.y) } else { p(to.x + dy, self.y) }
+        } else {
+            return None;
+        })
+    }
+
     /// Which side of the line from `p_1` to `p_2` this point is on, by
     /// FreeRouting's naming. `Point.side_of(Point, Point)`.
     pub fn side_of(&self, p_1: IntPoint, p_2: IntPoint) -> Side {

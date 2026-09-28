@@ -573,7 +573,7 @@ fn replay_insertion(dump: &str) -> Option<Result<(), String>> {
     }
     if ok {
         let mut algo = PullTight::new(&[], None, rb.board.rules.pull_tight_accuracy, None, 0);
-        algo.opt_changed_area(&mut rb, true);
+        algo.opt_changed_area(&mut rb, Some(ctrl.trace_costs.as_slice()));
         rb.changed_area = None;
         let mut got = vec![format!("optimized {}", rb.id_max())];
         got.extend(routes(&rb, "opt"));

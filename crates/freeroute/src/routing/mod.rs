@@ -15,6 +15,7 @@ pub mod pull_tight;
 pub mod shove;
 pub mod trace;
 mod tree;
+pub mod via;
 
 pub use tree::DefaultTree;
 
@@ -100,6 +101,8 @@ pub const MAX_LEGAL_NET_NO: i32 = 9_999_999;
 pub enum Pick {
     Traces,
     Pins,
+    Vias,
+    Conduction,
     All,
 }
 
@@ -316,6 +319,8 @@ impl RoutingBoard {
         v.retain(|&i| match pick {
             Pick::Traces => self.is_trace(i),
             Pick::Pins => matches!(self.board.items[i].kind, ItemKind::Pin { .. }),
+            Pick::Vias => matches!(self.board.items[i].kind, ItemKind::Via { .. }),
+            Pick::Conduction => matches!(self.board.items[i].kind, ItemKind::Area { kind: AreaKind::Conduction { .. }, .. }),
             Pick::All => true,
         });
         v

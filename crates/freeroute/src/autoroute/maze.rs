@@ -110,7 +110,8 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
         let board = self.engine.board;
         // reduce_trace_shapes_at_tie_pins: trims the traces of other nets on
         // pins of several nets, so do nothing without traces.
-        let has_traces = board.items.iter().any(|i| matches!(i.kind, ItemKind::Trace { .. }));
+        let rb = self.engine.rb;
+        let has_traces = board.items.iter().enumerate().any(|(k, i)| rb.is_on_board(k) && matches!(i.kind, ItemKind::Trace { .. }));
         for &i in start_items.iter().chain(dest_items) {
             let item = &board.items[i];
             if has_traces && matches!(item.kind, ItemKind::Pin { .. }) && item.nets.len() > 1 {

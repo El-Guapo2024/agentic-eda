@@ -24,6 +24,7 @@
 //   cm <i> <j> <layer> <value>                    (nonzero; get_value(i, j) without margin)
 //   cmax <i> <layer> <value>                      (ClearanceMatrix.max_value, nonzero)
 //   padstack <no> <from layer> <to layer> <max width per layer, -1 for none>...
+//   padstack_shape <no> <layer> <shape>          (Padstack.get_shape, about the origin)
 //   viainfo <index> <padstack no> <clearance class> <attach_smd 0|1>
 //   viarule <index> <via info indices>...
 //   netclass <index> <trace clearance class> <via rule index> <active 0|1 per layer> <half width per layer>...
@@ -33,7 +34,7 @@
 //   layer_costs <layer> <active 0|1> <horizontal> <vertical> <preferred direction costs>
 //   it <id> <kind> <first layer> <last layer> <clearance class> <fixed state> <component> <nets>...
 //   center <id> <x> <y>                           (pins and vias)
-//   via_padstack <id> <padstack no>
+//   via_padstack <id> <padstack no> <attach_allowed 0|1>
 //   pin_neckdown <id> <layer> <half width> <pad max width>        (Pin.get_trace_neckdown_halfwidth)
 //   pin_exit <id> <layer> <dx> <dy> <min length>  (Pin.get_trace_exit_restrictions, in order)
 //   conduction <id> <is_obstacle 0|1>
@@ -54,6 +55,13 @@
 //   ins_trace <id> <layer> <half width> <class> <fixed> <net> <n> <ax ay bx by>...
 //   ins_via <id> <x> <y> <padstack> <class> <fixed> <net>
 //   optimized <id max>, opt_trace, opt_via       (after BatchAutorouter's opt_changed_area)
+//
+// With MAZE_PASS=<n>, the board is followed instead by the first autoroute pass, up to n
+// connections, each routed as BatchAutorouter.autoroute_item routes it:
+//   pass <pass no> <n> <item ids>...                (the items autoroute_pass will route, in order)
+//   conn <k> <item> <net> <result> <id max> <ripped item ids>...
+//   conn_del <id>                                   (a trace or via gone or changed)
+//   conn_add r_trace ... | r_via ...                (a trace or via new or changed, as ins_*)
 //
 // With DEBUG_PINS=<id>,... it also writes, before the clean-up, each listed pin's
 // exit restrictions as debug_exit records, which maze_dump.sh leaves out.
@@ -212,6 +220,12 @@ public class MazeParity {
         out.append(' ').append(s == null ? "-1" : Double.toString(s.max_width()));
       }
       out.append('\n');
+      for (int l = 0; l < layers; ++l) {
+        ConvexShape s = ps.get_shape(l);
+        if (s != null) {
+          out.append("padstack_shape ").append(ps.no).append(' ').append(l).append(' ').append(pad_shape(s)).append('\n');
+        }
+      }
     }
     List<ViaInfo> via_infos = new ArrayList<>();
     for (int i = 0; i < board.rules.via_infos.count(); ++i) {
@@ -293,7 +307,8 @@ public class MazeParity {
         }
       }
       if (item instanceof Via via) {
-        out.append("via_padstack ").append(item.get_id_no()).append(' ').append(via.get_padstack().no).append('\n');
+        out.append("via_padstack ").append(item.get_id_no()).append(' ').append(via.get_padstack().no).append(' ')
+            .append(((Boolean) field(via, "attach_allowed")) ? 1 : 0).append('\n');
       }
       if (item instanceof Pin pin) {
         for (int l = pin.first_layer(); l <= pin.last_layer(); ++l) {
@@ -335,6 +350,12 @@ public class MazeParity {
           out.append('\n');
         }
       }
+    }
+
+    if (System.getenv("MAZE_PASS") != null) {
+      pass(board, handling, Integer.parseInt(System.getenv("MAZE_PASS")), out);
+      System.out.print(out);
+      return;
     }
 
     // The connection BatchAutorouter.autoroute_pass routes first.
@@ -542,6 +563,134 @@ public class MazeParity {
     }
     out.append(locate_records);
     System.out.print(out);
+  }
+
+  /**
+   * BatchAutorouter.autoroute_pass's first pass, connection by connection, up to p_max
+   * connections: autoroute_item as it runs, with FreeRouting's own autoroute_connection doing
+   * the routing. After each connection, what it did and the traces and vias it changed.
+   */
+  private static void pass(RoutingBoard board, BoardHandlingHeadless handling, int p_max, StringBuilder out) throws Exception {
+    AutorouteSettings settings = handling.get_settings().autoroute_settings;
+    AutorouteControl.ExpansionCostFactor[] trace_costs = settings.get_trace_cost_arr();
+    int pass_no = settings.get_start_pass_no();
+    // The items to route, as autoroute_pass collects them.
+    List<Item> list = new ArrayList<>();
+    Set<Item> handled = new TreeSet<>();
+    Iterator<UndoableObjects.UndoableObjectNode> it = board.item_list.start_read_object();
+    for (;;) {
+      Item item = (Item) board.item_list.read_object(it);
+      if (item == null) {
+        break;
+      }
+      if (!(item instanceof Connectable) || item.is_routable() || handled.contains(item)) {
+        continue;
+      }
+      for (int i = 0; i < item.net_count(); ++i) {
+        int net = item.get_net_no(i);
+        Set<Item> connected = item.get_connected_set(net);
+        for (Item c : connected) {
+          if (c.net_count() <= 1) {
+            handled.add(c);
+          }
+        }
+        if (connected.size() < board.connectable_item_count(net) && !item.has_ignored_nets()) {
+          list.add(item);
+        }
+      }
+    }
+    out.append("pass ").append(pass_no).append(' ').append(list.size());
+    for (Item item : list) {
+      out.append(' ').append(item.get_id_no());
+    }
+    out.append('\n');
+    java.util.Map<Integer, String> before = route_records(board);
+    int n = 0;
+    outer:
+    for (Item item : list) {
+      for (int i = 0; i < item.net_count(); ++i) {
+        if (n >= p_max) {
+          break outer;
+        }
+        int net = item.get_net_no(i);
+        board.start_marking_changed_area();
+        SortedSet<Item> ripped = new TreeSet<>();
+        java.util.Map<Item, Integer> ripped_costs = new java.util.LinkedHashMap<>();
+        String result = autoroute_item(board, handling, trace_costs, item, net, ripped, ripped_costs, pass_no);
+        out.append("conn ").append(n).append(' ').append(item.get_id_no()).append(' ').append(net).append(' ').append(result)
+            .append(' ').append(board.communication.id_no_generator.max_generated_no());
+        for (Item r : ripped) {
+          out.append(' ').append(r.get_id_no());
+        }
+        out.append('\n');
+        java.util.Map<Integer, String> after = route_records(board);
+        for (java.util.Map.Entry<Integer, String> e : before.entrySet()) {
+          if (!e.getValue().equals(after.get(e.getKey()))) {
+            out.append("conn_del ").append(e.getKey()).append('\n');
+          }
+        }
+        for (java.util.Map.Entry<Integer, String> e : after.entrySet()) {
+          if (!e.getValue().equals(before.get(e.getKey()))) {
+            out.append("conn_add ").append(e.getValue()).append('\n');
+          }
+        }
+        before = after;
+        ++n;
+      }
+    }
+  }
+
+  /** BatchAutorouter.autoroute_item, with no stoppable thread. */
+  private static String autoroute_item(RoutingBoard board, BoardHandlingHeadless handling, AutorouteControl.ExpansionCostFactor[] trace_costs,
+      Item item, int net, SortedSet<Item> ripped, java.util.Map<Item, Integer> ripped_costs, int pass_no) {
+    try {
+      AutorouteSettings settings = handling.get_settings().autoroute_settings;
+      Net route_net = board.rules.nets.get(net);
+      boolean contains_plane = route_net != null && route_net.contains_plane();
+      int via_costs = contains_plane ? settings.get_plane_via_costs() : settings.get_via_costs();
+      AutorouteControl ctrl = new AutorouteControl(board, net, handling.get_settings(), via_costs, trace_costs);
+      ctrl.ripup_allowed = true;
+      ctrl.ripup_costs = settings.get_start_ripup_costs() * pass_no;
+      ctrl.remove_unconnected_vias = !settings.get_with_fanout();
+      Set<Item> unconnected = item.get_unconnected_set(net);
+      if (unconnected.isEmpty()) {
+        return "ALREADY_CONNECTED";
+      }
+      Set<Item> connected = item.get_connected_set(net);
+      if (contains_plane) {
+        for (Item c : connected) {
+          if (c instanceof ConductionArea) {
+            return "ALREADY_CONNECTED";
+          }
+        }
+      }
+      Set<Item> start = contains_plane ? connected : unconnected;
+      Set<Item> dest = contains_plane ? unconnected : connected;
+      double max_ms = Math.min(100000 * Math.pow(2, pass_no - 1), Integer.MAX_VALUE);
+      AutorouteEngine engine = board.init_autoroute(net, ctrl.trace_clearance_class_no, null, new TimeLimit((int) max_ms), false);
+      AutorouteEngine.AutorouteResult result = engine.autoroute_connection(start, dest, ctrl, ripped, ripped_costs);
+      if (result == AutorouteEngine.AutorouteResult.ROUTED) {
+        board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, 1000);
+      }
+      return result.toString();
+    } catch (Exception e) {
+      return "NOT_ROUTED";
+    }
+  }
+
+  /** Every trace and via on the board as route records, by item number. */
+  private static java.util.Map<Integer, String> route_records(RoutingBoard board) {
+    StringBuilder b = new StringBuilder();
+    routes(board, "r", b);
+    java.util.Map<Integer, String> result = new java.util.TreeMap<>();
+    for (String l : b.toString().split("\n")) {
+      if (l.isEmpty()) {
+        continue;
+      }
+      String[] f = l.split(" ", 3);
+      result.put(Integer.parseInt(f[1]), l);
+    }
+    return result;
   }
 
   /** Every trace and via on the board, in the board's order. */

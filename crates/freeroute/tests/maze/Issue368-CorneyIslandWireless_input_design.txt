@@ -36,9 +36,14 @@ cm 3 3 1 2000
 cmax 3 0 2000
 cmax 3 1 2000
 padstack 1 0 0 35708.89244992065 -1
+padstack_shape 1 0 octagon -12750 -12500 12750 12500 -20250 25250 -25250 25250
 padstack 2 0 0 25500.0 -1
+padstack_shape 2 0 box -12750 -12500 12750 12500
 padstack 3 0 0 12000.0 -1
+padstack_shape 3 0 box -4500 -6000 4500 6000
 padstack 4 0 1 6000.0 6000.0
+padstack_shape 4 0 circle 0 0 3000
+padstack_shape 4 1 circle 0 0 3000
 viainfo 0 4 1 0
 viainfo 1 4 3 0
 viarule 0 0

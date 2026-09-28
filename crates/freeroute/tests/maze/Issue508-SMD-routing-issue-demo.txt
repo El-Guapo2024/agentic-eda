@@ -24,8 +24,12 @@ cm 2 2 1 500
 cmax 2 0 2000
 cmax 2 1 2000
 padstack 1 0 0 8000.0 -1
+padstack_shape 1 0 box -4000 -1000 4000 1000
 padstack 2 0 0 11000.0 -1
+padstack_shape 2 0 box -5500 -5000 5500 5000
 padstack 3 0 1 6000.0 6000.0
+padstack_shape 3 0 circle 0 0 3000
+padstack_shape 3 1 circle 0 0 3000
 viainfo 0 3 1 0
 viarule 0 0
 viarule 1 0

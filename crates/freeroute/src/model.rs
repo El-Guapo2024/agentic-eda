@@ -47,6 +47,9 @@ pub struct Padstack {
     pub to_layer: i32,
     /// `get_shape(layer).max_width()`, `None` where the stack has no shape.
     pub max_width: Vec<Option<f64>>,
+    /// `get_shape(layer)` per board layer, about the origin; `None` where
+    /// the stack has no shape.
+    pub shapes: Vec<Option<PadShape>>,
 }
 
 /// A via the router may place. FreeRouting's `ViaInfo`.
@@ -201,7 +204,9 @@ pub enum ItemKind {
     /// (`Pin.get_max_width`), and the directions a trace may leave it in
     /// (none: any).
     Pin { center: IntPoint, pads: Vec<Option<PadShape>>, neckdown: Vec<i64>, max_width: Vec<f64>, exits: Vec<Vec<ExitRestriction>> },
-    Via { center: IntPoint, padstack: usize, pads: Vec<Option<PadShape>> },
+    /// A via: its stack's pads moved to its centre, one per layer of the
+    /// stack; whether it may overlap SMD pins of its net.
+    Via { center: IntPoint, padstack: usize, pads: Vec<Option<PadShape>>, attach_allowed: bool },
     Trace { layer: i32, half_width: i64, polyline: Polyline },
     Area { kind: AreaKind, layer: i32, shape: AreaShape },
     /// The board outline; with its keepout outside when that was generated.

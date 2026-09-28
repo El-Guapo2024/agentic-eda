@@ -314,12 +314,28 @@ impl RoutingBoard {
 
 impl InsertConnection<'_> {
     /// A via from `from_layer` to `to_layer` at `location`, if the layers
-    /// differ. `InsertFoundConnectionAlgo.insert_via`.
-    fn insert_via(&mut self, _rb: &mut RoutingBoard, _location: IntPoint, from_layer: i32, to_layer: i32) -> bool {
+    /// differ: the first of the rule's vias spanning both that fits.
+    /// `InsertFoundConnectionAlgo.insert_via`.
+    fn insert_via(&mut self, rb: &mut RoutingBoard, location: IntPoint, from_layer: i32, to_layer: i32) -> bool {
         if from_layer == to_layer {
             return true;
         }
-        unimplemented!("inserting a via (ForcedViaAlgo.check and insert) is not ported yet");
+        let (from_layer, to_layer) = (from_layer.min(to_layer), from_layer.max(to_layer));
+        let ctrl = self.ctrl;
+        let nets = [ctrl.net_no];
+        let mut chosen = None;
+        for &vi in &rb.board.rules.via_rules[ctrl.via_rule] {
+            let ps = rb.board.rules.padstack(rb.board.rules.via_infos[vi].padstack).expect("a via padstack");
+            if ps.from_layer > from_layer || ps.to_layer < to_layer {
+                continue;
+            }
+            if rb.forced_via_check(vi, location, &nets, ctrl.max_shove_trace_recursion_depth, ctrl.max_shove_via_recursion_depth) {
+                chosen = Some(vi);
+                break;
+            }
+        }
+        let Some(vi) = chosen else { return false };
+        rb.forced_via_insert(vi, location, &nets, ctrl.trace_clearance_class, &ctrl.trace_half_width, ctrl.max_shove_trace_recursion_depth, ctrl.max_shove_via_recursion_depth)
     }
 
     /// Insert one trace of the connection segment by segment, necking down
