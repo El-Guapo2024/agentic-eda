@@ -545,7 +545,7 @@ impl<T: TreeObject> RoomGraph<T> {
             _ => unreachable!("an obstacle room"),
         };
         let (a, b) = (self.tree.payload(item_of(room)), self.tree.payload(item_of(other)));
-        if !(a.is_routable() && b.is_routable()) || !a.shares_net_with(b) {
+        if !(a.is_routable() && b.is_routable() && a.shares_net_with(b)) {
             return;
         }
         if a.id() == b.id() {
@@ -972,9 +972,8 @@ impl<T: TreeObject> RoomGraph<T> {
                 let meet = next.intersection.intersection(&prev.intersection);
                 if meet.is_empty() {
                     true
-                } else if meet.dimension() >= 1 {
-                    false
-                } else if prev.last_side == next.first_side {
+                } else if meet.dimension() >= 1 || prev.last_side == next.first_side {
+                    // They touch, or meet at a corner along one side.
                     false
                 } else {
                     prev.last_side != (next.first_side + 1) % 8
