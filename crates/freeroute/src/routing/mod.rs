@@ -14,10 +14,14 @@ pub mod insert;
 pub mod pull_tight;
 pub mod shove;
 pub mod trace;
-mod tree;
+pub(crate) mod tree;
 pub mod via;
 
-pub use tree::DefaultTree;
+pub use tree::{AutorouteTree, DefaultTree};
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::geometry::{FloatPoint, IntBox, IntOctagon, Point, Polyline, TileShape};
 use crate::model::{AreaKind, Board, FixedState, Item, ItemKind};
@@ -76,14 +80,21 @@ impl ChangedArea {
     }
 }
 
-/// The board being routed. FreeRouting's `RoutingBoard`, with the plain
-/// search tree of its `SearchTreeManager`.
+/// The board being routed. FreeRouting's `RoutingBoard`, with the search
+/// trees of its `SearchTreeManager`.
 pub struct RoutingBoard {
     pub board: Board,
     pub tree: DefaultTree,
+    /// The autoroute trees made so far, by clearance class, each `None`
+    /// while a search holds it.
+    autoroute_trees: RefCell<Vec<(i32, Option<AutorouteTree>)>>,
+    /// Each area's convex pieces once split, by item index: FreeRouting
+    /// keeps them with the area, and splitting a pour again for every
+    /// contact asked about is slow.
+    area_pieces: RefCell<HashMap<usize, Rc<Vec<TileShape>>>>,
     on_board: Vec<bool>,
     /// `ItemIdNoGenerator.max_generated_no`.
-    id_max: u32,
+    id_max: Cell<u32>,
     pub changed_area: Option<ChangedArea>,
     /// `BasicBoard.min_trace_half_width` and `max_trace_half_width`: the
     /// narrowest and widest trace inserted so far, starting from 10000 and
@@ -113,7 +124,78 @@ impl RoutingBoard {
         let id_max = board.id_max.max(board.items.iter().map(|i| i.id).max().unwrap_or(0));
         let min_trace_half_width = board.rules.min_trace_half_width;
         let max_trace_half_width = board.rules.board_max_trace_half_width;
-        RoutingBoard { board, tree, on_board, id_max, changed_area: None, min_trace_half_width, max_trace_half_width }
+        RoutingBoard { board, tree, autoroute_trees: RefCell::new(Vec::new()), area_pieces: RefCell::new(HashMap::new()), on_board, id_max: Cell::new(id_max), changed_area: None, min_trace_half_width, max_trace_half_width }
+    }
+
+    /// The autoroute tree for traces of clearance class `class`, made from
+    /// the board the first time it is asked for, for a search to hold until
+    /// it hands it back. `SearchTreeManager.get_autoroute_tree`. `None`
+    /// where FreeRouting throws making it: the tree stays as far as it got.
+    pub(crate) fn take_autoroute_tree(&self, class: i32) -> Option<AutorouteTree> {
+        let mut trees = self.autoroute_trees.borrow_mut();
+        if let Some((_, t)) = trees.iter_mut().find(|(c, _)| *c == class) {
+            return Some(t.take().expect("the autoroute tree is held by another search"));
+        }
+        drop(trees);
+        let built = AutorouteTree::build(&self.board, &self.items_in_order(), class);
+        let mut trees = self.autoroute_trees.borrow_mut();
+        match built {
+            Ok(tree) => {
+                trees.push((class, None));
+                Some(tree)
+            }
+            Err(partial) => {
+                trees.push((class, Some(partial)));
+                None
+            }
+        }
+    }
+
+    /// Hand back a tree [`take_autoroute_tree`](Self::take_autoroute_tree)
+    /// gave out.
+    pub(crate) fn give_back_autoroute_tree(&self, tree: AutorouteTree) {
+        let mut trees = self.autoroute_trees.borrow_mut();
+        let slot = trees.iter_mut().find(|(c, _)| *c == tree.class).expect("a tree given out");
+        slot.1 = Some(tree);
+    }
+
+    /// The autoroute trees, but those a search holds, which cannot change
+    /// meanwhile: the board is borrowed.
+    fn autoroute_trees(&mut self) -> impl Iterator<Item = &mut AutorouteTree> {
+        self.autoroute_trees.get_mut().iter_mut().filter_map(|(_, t)| t.as_mut())
+    }
+
+    /// Enter the item into every search tree. `SearchTreeManager.insert`.
+    fn trees_insert(&mut self, item: usize) {
+        self.tree.insert(&self.board, item);
+        let board = &self.board;
+        for t in self.autoroute_trees.get_mut().iter_mut().filter_map(|(_, t)| t.as_mut()) {
+            t.insert(board, item);
+        }
+    }
+
+    /// Take the item out of every search tree. `SearchTreeManager.remove`.
+    fn trees_remove(&mut self, item: usize) {
+        self.tree.remove(item);
+        for t in self.autoroute_trees() {
+            t.remove(item);
+        }
+    }
+
+    /// The autoroute tree for class `class`, made if there is none yet, a
+    /// node a line: see [`AutorouteTree::fingerprint`].
+    pub fn autoroute_tree_listing(&self, class: i32) -> String {
+        let Some(tree) = self.take_autoroute_tree(class) else { return String::from("tree (not made)\n") };
+        let listing = tree.fingerprint(true).2.expect("asked for in full");
+        self.give_back_autoroute_tree(tree);
+        listing
+    }
+
+    /// The layout of each autoroute tree not held by a search, by class:
+    /// see [`ShapeTree::fingerprint`](crate::searchtree::ShapeTree::fingerprint).
+    pub fn autoroute_tree_fingerprints(&self) -> Vec<(i32, usize, u64)> {
+        let trees = self.autoroute_trees.borrow();
+        trees.iter().filter_map(|(c, t)| t.as_ref().map(|t| (*c, t.fingerprint(false)))).map(|(c, (n, h, _))| (c, n, h)).collect()
     }
 
     pub fn is_on_board(&self, item: usize) -> bool {
@@ -126,7 +208,7 @@ impl RoutingBoard {
 
     /// `max_generated_no` of the item number generator.
     pub fn id_max(&self) -> u32 {
-        self.id_max
+        self.id_max.get()
     }
 
     /// The index of the item numbered `id` on the board.
@@ -151,22 +233,24 @@ impl RoutingBoard {
     /// Put a new item on the board, numbered next. `insert_item`, with the
     /// number drawn as the Java's item constructors draw it.
     pub fn insert_new(&mut self, mut item: Item) -> usize {
-        self.id_max += 1;
-        item.id = self.id_max;
+        item.id = self.skip_id();
         self.insert_numbered(item)
     }
 
     /// Draw the next item number without putting anything on the board, as
-    /// the Java does constructing an item it then discards.
-    pub fn skip_id(&mut self) {
-        self.id_max += 1;
+    /// the Java does constructing an item it then discards -- checks too,
+    /// which make trial traces, so this takes the board shared.
+    pub fn skip_id(&self) -> u32 {
+        let id = self.id_max.get() + 1;
+        self.id_max.set(id);
+        id
     }
 
     fn insert_numbered(&mut self, item: Item) -> usize {
         self.board.items.push(item);
         self.on_board.push(true);
         let i = self.board.items.len() - 1;
-        self.tree.insert(&self.board, i);
+        self.trees_insert(i);
         i
     }
 
@@ -175,7 +259,7 @@ impl RoutingBoard {
         if !self.on_board[item] {
             return;
         }
-        self.tree.remove(item);
+        self.trees_remove(item);
         self.on_board[item] = false;
     }
 
@@ -247,13 +331,51 @@ impl RoutingBoard {
     pub(crate) fn set_polyline(&mut self, item: usize, polyline: Polyline) {
         let on = self.on_board[item];
         if on {
-            self.tree.remove(item);
+            self.trees_remove(item);
         }
+        self.put_polyline(item, polyline);
+        if on {
+            self.trees_insert(item);
+        }
+    }
+
+    /// Replace a trace's polyline, leaving the trees to the caller.
+    fn put_polyline(&mut self, item: usize, polyline: Polyline) {
         if let ItemKind::Trace { polyline: p, .. } = &mut self.board.items[item].kind {
             *p = polyline;
         }
-        if on {
-            self.tree.insert(&self.board, item);
+    }
+
+    /// Replace a trace's polyline, the autoroute trees renewing only the
+    /// shapes from `keep_start` to `keep_end` before the end.
+    /// `SearchTreeManager.change_entries`; the default tree, whose layout
+    /// never shows, has the trace entered afresh.
+    pub(crate) fn change_polyline_entries(&mut self, item: usize, polyline: Polyline, keep_start: usize, keep_end: usize) {
+        self.tree.remove(item);
+        self.put_polyline(item, polyline);
+        self.tree.insert(&self.board, item);
+        let board = &self.board;
+        for t in self.autoroute_trees.get_mut().iter_mut().filter_map(|(_, t)| t.as_mut()) {
+            t.change_entries(board, item, keep_start, keep_end);
+        }
+    }
+
+    /// Give trace `to` the polyline joining trace `from` to it, `in_front`
+    /// or at its end, the autoroute trees moving `from`'s leaves over;
+    /// `change_order` if `from` runs the other way. `from` is left with no
+    /// leaves there, to be removed. `SearchTreeManager.merge_entries_in_front`
+    /// and `merge_entries_at_end`.
+    pub(crate) fn merge_polyline_entries(&mut self, from: usize, to: usize, joined: Polyline, in_front: bool, change_order: bool) {
+        self.tree.remove(to);
+        self.put_polyline(to, joined);
+        self.tree.insert(&self.board, to);
+        let board = &self.board;
+        for t in self.autoroute_trees.get_mut().iter_mut().filter_map(|(_, t)| t.as_mut()) {
+            if in_front {
+                t.merge_in_front(board, from, to, change_order);
+            } else {
+                t.merge_at_end(board, from, to, change_order);
+            }
         }
     }
 
@@ -361,7 +483,7 @@ impl RoutingBoard {
         match &other.kind {
             ItemKind::Trace { polyline, .. } => p.java_equals(&polyline.first_corner()) || p.java_equals(&polyline.last_corner()),
             ItemKind::Pin { center, .. } | ItemKind::Via { center, .. } => p.java_equals(&Point::Int(*center)),
-            ItemKind::Area { kind: AreaKind::Conduction { .. }, shape, .. } => area_contains(shape, p),
+            ItemKind::Area { kind: AreaKind::Conduction { .. }, .. } => self.area_pieces(i).iter().any(|s| s.contains_point(p)),
             _ => false,
         }
     }
@@ -400,10 +522,10 @@ impl RoutingBoard {
                 }
                 result
             }
-            ItemKind::Area { kind: AreaKind::Conduction { .. }, layer, shape } => {
+            ItemKind::Area { kind: AreaKind::Conduction { .. }, layer, .. } => {
                 let mut result = Vec::new();
-                for piece in shape.split_to_convex().unwrap_or_default() {
-                    for i in self.overlapping_objects(&piece, *layer) {
+                for piece in self.area_pieces(item).iter() {
+                    for i in self.overlapping_objects(piece, *layer) {
                         let other = &self.board.items[i];
                         if i == item || !other.shares_net(this) || !shares_layer(other, this) {
                             continue;
@@ -450,11 +572,25 @@ impl RoutingBoard {
         result
     }
 
+    /// An area's convex pieces, none where the split fails; split once.
+    /// `Area.split_to_convex`.
+    pub fn area_pieces(&self, item: usize) -> Rc<Vec<TileShape>> {
+        if let Some(p) = self.area_pieces.borrow().get(&item) {
+            return p.clone();
+        }
+        let ItemKind::Area { shape, .. } = &self.board.items[item].kind else {
+            panic!("item {} is not an area", self.board.items[item].id)
+        };
+        let pieces = Rc::new(shape.split_to_convex().unwrap_or_default());
+        self.area_pieces.borrow_mut().insert(item, pieces.clone());
+        pieces
+    }
+
     /// `Item.tile_shape_count`: a pad per layer of the stack, a shape per
     /// segment of a trace, the convex pieces of an area.
     pub fn tile_shape_count(&self, item: usize) -> usize {
         match &self.board.items[item].kind {
-            ItemKind::Area { shape, .. } => shape.split_to_convex().map(|v| v.len()).unwrap_or(0),
+            ItemKind::Area { .. } => self.area_pieces(item).len(),
             _ => self.tree.shape_count(item),
         }
     }
@@ -463,7 +599,7 @@ impl RoutingBoard {
     /// piece.
     pub fn tile_shape(&self, item: usize, index: usize) -> Option<TileShape> {
         match &self.board.items[item].kind {
-            ItemKind::Area { shape, .. } => shape.split_to_convex().and_then(|v| v.get(index).cloned()),
+            ItemKind::Area { .. } => self.area_pieces(item).get(index).cloned(),
             _ => self.tree.get_shape(item, index as u32).cloned(),
         }
     }
@@ -556,10 +692,4 @@ pub fn surrounding_octagon(p: &Point) -> Option<IntOctagon> {
             Some(IntOctagon::new(x.floor() as i64, y.floor() as i64, x.ceil() as i64, y.ceil() as i64, d.floor() as i64, d.ceil() as i64, s.floor() as i64, s.ceil() as i64))
         }
     }
-}
-
-/// Whether a pour's area holds `p`, borders included: one of its convex
-/// pieces does.
-fn area_contains(shape: &crate::board::AreaShape, p: &Point) -> bool {
-    shape.split_to_convex().unwrap_or_default().iter().any(|s| s.contains_point(p))
 }

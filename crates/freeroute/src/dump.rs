@@ -273,7 +273,7 @@ pub fn read_board(text: &str) -> Result<Board, String> {
                     n[0] as usize,
                     NetClass {
                         trace_clearance_class: n[1] as i32,
-                        via_rule: n[2] as usize,
+                        via_rule: usize::try_from(n[2]).ok(),
                         active_layers: active,
                         trace_half_width: half,
                         shove_fixed: flag(0, false),

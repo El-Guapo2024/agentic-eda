@@ -13,7 +13,7 @@ use crate::routing::RoutingBoard;
 
 use super::control::Control;
 use super::engine::Engine;
-use super::locate::locate;
+use super::locate::{locate, Located};
 use super::maze::MazeSearch;
 
 /// How routing an item came out. `AutorouteEngine.AutorouteResult`.
@@ -185,47 +185,77 @@ pub fn pass_items(rb: &RoutingBoard) -> Vec<usize> {
     list
 }
 
+/// What routing one item did.
+#[derive(Debug, Clone)]
+pub struct Routed {
+    pub result: RouteResult,
+    /// The items the path ran through, ripped up.
+    pub ripped: Vec<usize>,
+    /// The search's start and destination items, where it searched.
+    pub start: Vec<usize>,
+    pub dest: Vec<usize>,
+    /// The connection found, as traces.
+    pub located: Option<Located>,
+    /// The autoroute tree's leaf count and layout hash when the search
+    /// started: see [`crate::routing::AutorouteTree::fingerprint`].
+    pub tree: Option<(usize, u64)>,
+}
+
 /// Route `item` on `net` in pass `pass_no`: search a path from what it is
 /// not yet connected to towards what it is, turn it into traces, rip up
-/// what it runs through, insert it, and tidy the changed area. The result,
-/// and the items ripped up. `BatchAutorouter.autoroute_item` with
-/// `AutorouteEngine.autoroute_connection`.
-pub fn autoroute_item(rb: &mut RoutingBoard, item: usize, net: i32, pass_no: i32) -> (RouteResult, Vec<usize>) {
+/// what it runs through, insert it, and tidy the changed area.
+/// `BatchAutorouter.autoroute_item` with `AutorouteEngine.autoroute_connection`.
+pub fn autoroute_item(rb: &mut RoutingBoard, item: usize, net: i32, pass_no: i32) -> Routed {
+    let mut out = Routed { result: RouteResult::NotRouted, ripped: Vec::new(), start: Vec::new(), dest: Vec::new(), located: None, tree: None };
     let contains_plane = rb.board.rules.net(net).is_some_and(|n| n.contains_plane);
-    let ctrl = Control::for_batch(&rb.board, net, pass_no);
+    // FreeRouting throws making the control, which autoroute_pass catches.
+    let Some(ctrl) = Control::try_for_batch(&rb.board, net, pass_no) else {
+        return out;
+    };
     let unconnected = rb.unconnected_set(item, net);
     if unconnected.is_empty() {
-        return (RouteResult::AlreadyConnected, Vec::new());
+        out.result = RouteResult::AlreadyConnected;
+        return out;
     }
     let connected = rb.connected_set(item, net);
     if contains_plane && connected.iter().any(|&c| matches!(rb.board.items[c].kind, ItemKind::Area { kind: AreaKind::Conduction { .. }, .. })) {
-        return (RouteResult::AlreadyConnected, Vec::new());
+        out.result = RouteResult::AlreadyConnected;
+        return out;
     }
     let (start, dest) = if contains_plane { (connected, unconnected) } else { (unconnected, connected) };
+    out.start = start.clone();
+    out.dest = dest.clone();
     let located = {
-        let mut engine = Engine::new(rb, net, ctrl.trace_clearance_class);
+        // FreeRouting throws making the tree: autoroute_pass catches it.
+        let Some(mut engine) = Engine::try_new(rb, net, ctrl.trace_clearance_class) else {
+            return out;
+        };
+        let (leaves, hash, _) = engine.tree_fingerprint(false);
+        out.tree = Some((leaves, hash));
         let Some(mut maze) = MazeSearch::new(&mut engine, &ctrl, &start, &dest) else {
-            return (RouteResult::NotRouted, Vec::new());
+            return out;
         };
         let Some(found) = maze.find_connection() else {
-            return (RouteResult::NotRouted, Vec::new());
+            return out;
         };
         locate(maze.engine, &ctrl, &found)
     };
     let Some(located) = located else {
-        return (RouteResult::NotRouted, Vec::new());
+        return out;
     };
+    out.located = Some(located.clone());
     if !ctrl.layer_active[located.start_layer as usize] || !ctrl.layer_active[located.target_layer as usize] {
-        return (RouteResult::NotRouted, Vec::new());
+        return out;
     }
     // Ripping up is not ported: the search stops before it would enter an
     // item's room, so nothing is ripped here.
-    let ripped: Vec<usize> = Vec::new();
     if !insert_found_connection(rb, &located, &ctrl) {
-        return (RouteResult::InsertError, ripped);
+        out.result = RouteResult::InsertError;
+        return out;
     }
     let mut algo = PullTight::new(&[], None, rb.board.rules.pull_tight_accuracy, None, 0);
     algo.opt_changed_area(rb, Some(ctrl.trace_costs.as_slice()));
     rb.changed_area = None;
-    (RouteResult::Routed, ripped)
+    out.result = RouteResult::Routed;
+    out
 }

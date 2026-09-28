@@ -90,6 +90,13 @@ impl<T> ShapeTree<T> {
         }
     }
 
+    pub fn payload_mut(&mut self, leaf: LeafId) -> &mut T {
+        match &mut self.nodes[leaf.0].kind {
+            Kind::Leaf { payload } => payload,
+            _ => panic!("ShapeTree::payload_mut: {leaf:?} is not a live leaf"),
+        }
+    }
+
     pub fn bounds(&self, leaf: LeafId) -> IntOctagon {
         self.nodes[leaf.0].bounds
     }
@@ -234,6 +241,47 @@ impl<T> ShapeTree<T> {
             Kind::Inner { first, second } => Err((first, second)),
             Kind::Free => panic!("ShapeTree: free slot {n} reached by traversal"),
         }
+    }
+
+    /// The tree's layout as the parity harness hashes it: its nodes in
+    /// pre-order, first child before second -- an inner node as `I` and
+    /// its bounds, a leaf as `L`, what `name` makes of its payload, and its
+    /// bounds -- each token followed by a space, through 64-bit FNV-1a.
+    /// The leaf count and the hash, and the tokens a node a line if
+    /// `full`.
+    pub fn fingerprint(&self, name: impl Fn(&T) -> String, full: bool) -> (usize, u64, Option<String>) {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut leaves = 0;
+        let mut text = full.then(|| String::from("tree\n"));
+        let mut stack: Vec<usize> = self.root.into_iter().collect();
+        while let Some(n) = stack.pop() {
+            let mut tokens = match &self.nodes[n].kind {
+                Kind::Leaf { payload } => {
+                    leaves += 1;
+                    format!("L {} ", name(payload))
+                }
+                Kind::Inner { first, second } => {
+                    stack.push(*second);
+                    stack.push(*first);
+                    String::from("I ")
+                }
+                Kind::Free => unreachable!("a free slot is linked into the tree"),
+            };
+            let b = self.nodes[n].bounds;
+            for v in [b.left_x, b.bottom_y, b.right_x, b.top_y, b.upper_left_diag_x, b.lower_right_diag_x, b.lower_left_diag_x, b.upper_right_diag_x] {
+                tokens.push_str(&v.to_string());
+                tokens.push(' ');
+            }
+            for c in tokens.bytes() {
+                hash ^= c as u64;
+                hash = hash.wrapping_mul(0x0100_0000_01b3);
+            }
+            if let Some(t) = &mut text {
+                t.push_str(&tokens);
+                t.push('\n');
+            }
+        }
+        (leaves, hash, text)
     }
 
     /// Checks the structural invariants: every inner node's bounds contain

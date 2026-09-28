@@ -6,9 +6,11 @@
 //! The Java's tree answers every query as a sorted set, so its layout never
 //! shows; only the entries do.
 
+use crate::autoroute::engine::TreeItem;
 use crate::board::{tree_shapes, TreeKind};
+use crate::door::Entry;
 use crate::geometry::{IntOctagon, TileShape};
-use crate::model::Board;
+use crate::model::{Board, ItemKind};
 use crate::searchtree::{LeafId, ShapeTree};
 
 pub struct DefaultTree {
@@ -101,5 +103,223 @@ impl DefaultTree {
                 (is_45_degree && matches!(s, TileShape::Octagon(_))) || s.intersects(shape)
             })
             .collect()
+    }
+}
+
+/// A tree the maze search grows its rooms in: every item's shapes, grown
+/// by the clearance to one class, and, during a search, the rooms. Made
+/// the first time a search for the class asks for it and then kept, as
+/// FreeRouting keeps it, updated as items come, go and change -- with the
+/// Java's own leaf operations, in its order, as room completion walks the
+/// tree's nodes and so sees its layout, which only the order of the
+/// updates decides. A compensated tree of `SearchTreeManager`.
+#[derive(Debug, Clone)]
+pub struct AutorouteTree {
+    pub class: i32,
+    pub tree: ShapeTree<Entry<TreeItem>>,
+    /// Per item index: its leaves, `None` where it has no shape.
+    pub leaves: Vec<Vec<Option<LeafId>>>,
+    /// Per item index: its tree shapes, counting those FreeRouting has none
+    /// for; kept when the item goes, as for the default tree.
+    pub shapes: Vec<Vec<Option<TileShape>>>,
+}
+
+impl AutorouteTree {
+    /// The tree of `items`, inserted in that order: the board's.
+    /// `SearchTreeManager.get_autoroute_tree`. `Err` with the items before
+    /// the one whose shapes FreeRouting throws working out: its tree, made
+    /// and kept before it is filled, stays so.
+    #[allow(clippy::result_large_err)]
+    pub fn build(board: &Board, items: &[usize], class: i32) -> Result<Self, Self> {
+        let mut t = AutorouteTree { class, tree: ShapeTree::new(), leaves: Vec::new(), shapes: Vec::new() };
+        for &i in items {
+            if shapes_throw(board, i) {
+                return Err(t);
+            }
+            t.insert(board, i);
+        }
+        Ok(t)
+    }
+
+    fn grow(&mut self, item: usize) {
+        if self.shapes.len() <= item {
+            self.shapes.resize(item + 1, Vec::new());
+            self.leaves.resize(item + 1, Vec::new());
+        }
+    }
+
+    fn calculate(&self, board: &Board, item: usize) -> Vec<Option<TileShape>> {
+        tree_shapes(board, &board.items[item], TreeKind::FortyFive, self.class)
+    }
+
+    /// Store shape `k` of `count` of the item, if it has one.
+    /// `ShapeTree.insert(Storable, int)`.
+    fn insert_leaf(&mut self, board: &Board, item: usize, k: usize, count: usize, shape: Option<&TileShape>) -> Option<LeafId> {
+        let shape = shape?;
+        let bounds = shape.bounding_octagon()?;
+        Some(self.tree.insert(bounds, Entry::Item(TreeItem::of(board, item, k, count, shape))))
+    }
+
+    fn remove_leaf(&mut self, leaf: Option<LeafId>) {
+        if let Some(leaf) = leaf {
+            self.tree.remove(leaf);
+        }
+    }
+
+    /// Renew the entries of the item's leaves from the board and its
+    /// shapes: leaves moved over from another trace, or to another index,
+    /// say so, as the Java's entries hold the item itself.
+    fn refresh(&mut self, board: &Board, item: usize) {
+        let count = self.shapes[item].len();
+        for k in 0..self.leaves[item].len() {
+            if let Some(leaf) = self.leaves[item][k] {
+                let shape = self.shapes[item][k].as_ref().expect("a leaf has a shape");
+                *self.tree.payload_mut(leaf) = Entry::Item(TreeItem::of(board, item, k, count, shape));
+            }
+        }
+    }
+
+    /// See [`ShapeTree::fingerprint`]: a leaf is named by its item's number
+    /// and its shape index, a room as `R 0`.
+    pub fn fingerprint(&self, full: bool) -> (usize, u64, Option<String>) {
+        self.tree.fingerprint(entry_name, full)
+    }
+
+    /// Enter the item's shapes, in order. `ShapeTree.insert(Storable)`.
+    pub fn insert(&mut self, board: &Board, item: usize) {
+        assert!(!shapes_throw(board, item), "FreeRouting throws entering item {} into an autoroute tree: a pad beyond the critical bound", board.items[item].id);
+        self.grow(item);
+        let shapes = self.calculate(board, item);
+        let count = shapes.len();
+        let leaves = (0..count).map(|k| self.insert_leaf(board, item, k, count, shapes[k].as_ref())).collect();
+        self.leaves[item] = leaves;
+        self.shapes[item] = shapes;
+    }
+
+    /// Take the item's leaves out, in order. `ShapeTree.remove(Leaf[])`.
+    pub fn remove(&mut self, item: usize) {
+        if item < self.leaves.len() {
+            for leaf in std::mem::take(&mut self.leaves[item]) {
+                self.remove_leaf(leaf);
+            }
+        }
+    }
+
+    /// The trace's polyline, on the board, has changed but for its first
+    /// `keep_start` and last `keep_end` shapes: those keep their leaves
+    /// (the last renumbered), the rest are renewed.
+    /// `ShapeSearchTree.change_entries`.
+    pub fn change_entries(&mut self, board: &Board, item: usize, keep_start: usize, keep_end: usize) {
+        let calculated = self.calculate(board, item);
+        let old_leaves = std::mem::take(&mut self.leaves[item]);
+        let old_shapes = std::mem::take(&mut self.shapes[item]);
+        let (old_count, new_count) = (old_leaves.len(), calculated.len());
+        assert!(keep_start + keep_end <= new_count.min(old_count), "change_entries: keeping {keep_start} + {keep_end} of {old_count} -> {new_count} shapes");
+        for &leaf in &old_leaves[keep_start..old_count - keep_end] {
+            self.remove_leaf(leaf);
+        }
+        let mut leaves = vec![None; new_count];
+        let mut shapes = calculated;
+        leaves[..keep_start].copy_from_slice(&old_leaves[..keep_start]);
+        shapes[..keep_start].clone_from_slice(&old_shapes[..keep_start]);
+        for j in 0..keep_end {
+            let (new_index, old_index) = (new_count - keep_end + j, old_count - keep_end + j);
+            leaves[new_index] = old_leaves[old_index];
+            shapes[new_index] = old_shapes[old_index].clone();
+        }
+        for (i, leaf) in leaves.iter_mut().enumerate().take(new_count - keep_end).skip(keep_start) {
+            *leaf = self.insert_leaf(board, item, i, new_count, shapes[i].as_ref());
+        }
+        self.leaves[item] = leaves;
+        self.shapes[item] = shapes;
+        self.refresh(board, item);
+    }
+
+    /// Trace `from` has been joined in front of trace `to`, whose polyline
+    /// on the board is now the joined one; `change_order` if `from` ran
+    /// the other way. `from`'s leaves but the one at the join move over, in
+    /// front of `to`'s but its first, and the shapes where they meet are
+    /// new. `ShapeSearchTree.merge_entries_in_front`.
+    pub fn merge_in_front(&mut self, board: &Board, from: usize, to: usize, change_order: bool) {
+        let calculated = self.calculate(board, to);
+        let from_leaves = std::mem::take(&mut self.leaves[from]);
+        let from_shapes = self.shapes[from].clone();
+        let to_leaves = std::mem::take(&mut self.leaves[to]);
+        let to_shapes = std::mem::take(&mut self.shapes[to]);
+        let from_count_minus_1 = from_leaves.len() - 1;
+        self.remove_leaf(from_leaves[if change_order { 0 } else { from_count_minus_1 }]);
+        self.remove_leaf(to_leaves[0]);
+        let new_count = calculated.len();
+        let link_count = new_count + 2 - from_leaves.len() - to_leaves.len();
+        let mut leaves = vec![None; new_count];
+        let mut shapes = calculated;
+        for i in 0..from_count_minus_1 {
+            let from_no = if change_order { from_count_minus_1 - i } else { i };
+            leaves[i] = from_leaves[from_no];
+            shapes[i] = from_shapes[from_no].clone();
+        }
+        for i in 1..to_leaves.len() {
+            let k = from_count_minus_1 + link_count + i - 1;
+            leaves[k] = to_leaves[i];
+            shapes[k] = to_shapes[i].clone();
+        }
+        for k in from_count_minus_1..from_count_minus_1 + link_count {
+            leaves[k] = self.insert_leaf(board, to, k, new_count, shapes[k].as_ref());
+        }
+        self.leaves[to] = leaves;
+        self.shapes[to] = shapes;
+        self.refresh(board, to);
+    }
+
+    /// Trace `from` has been joined at the end of trace `to`, whose
+    /// polyline on the board is now the joined one; `change_order` if
+    /// `from` ran the other way. `to`'s leaves but its last stay, `from`'s
+    /// but the one at the join move over behind them, and the shapes where
+    /// they meet are new. `ShapeSearchTree.merge_entries_at_end`.
+    pub fn merge_at_end(&mut self, board: &Board, from: usize, to: usize, change_order: bool) {
+        let calculated = self.calculate(board, to);
+        let from_leaves = std::mem::take(&mut self.leaves[from]);
+        let from_shapes = self.shapes[from].clone();
+        let to_leaves = std::mem::take(&mut self.leaves[to]);
+        let to_shapes = std::mem::take(&mut self.shapes[to]);
+        let to_count_minus_1 = to_leaves.len() - 1;
+        self.remove_leaf(to_leaves[to_count_minus_1]);
+        self.remove_leaf(from_leaves[if change_order { from_leaves.len() - 1 } else { 0 }]);
+        let new_count = calculated.len();
+        let link_count = new_count + 2 - from_leaves.len() - to_leaves.len();
+        let mut leaves = vec![None; new_count];
+        let mut shapes = calculated;
+        leaves[..to_count_minus_1].copy_from_slice(&to_leaves[..to_count_minus_1]);
+        shapes[..to_count_minus_1].clone_from_slice(&to_shapes[..to_count_minus_1]);
+        for i in 1..from_leaves.len() {
+            let k = to_count_minus_1 + link_count + i - 1;
+            let from_no = if change_order { from_leaves.len() - i - 1 } else { i };
+            leaves[k] = from_leaves[from_no];
+            shapes[k] = from_shapes[from_no].clone();
+        }
+        for k in to_count_minus_1..to_count_minus_1 + link_count {
+            leaves[k] = self.insert_leaf(board, to, k, new_count, shapes[k].as_ref());
+        }
+        self.leaves[to] = leaves;
+        self.shapes[to] = shapes;
+        self.refresh(board, to);
+    }
+}
+
+/// Whether FreeRouting throws working out the item's shapes in a
+/// 45-degree tree: a pad with no bounding octagon, beyond the critical
+/// bound. `ShapeSearchTree45Degree.calculate_tree_shapes(DrillItem)`.
+fn shapes_throw(board: &Board, item: usize) -> bool {
+    match &board.items[item].kind {
+        ItemKind::Pin { pads, .. } | ItemKind::Via { pads, .. } => pads.iter().flatten().any(|p| p.bounding_octagon().is_none()),
+        _ => false,
+    }
+}
+
+/// How [`AutorouteTree::fingerprint`] names a leaf.
+pub fn entry_name(entry: &Entry<TreeItem>) -> String {
+    match entry {
+        Entry::Item(t) => format!("{} {}", t.id, t.shape_index),
+        Entry::Room { .. } => "R 0".to_string(),
     }
 }

@@ -65,6 +65,19 @@ impl LineSegment {
         FloatPoint::new(x, y)
     }
 
+    /// The same stretch run the other way. `opposite`.
+    pub fn opposite(&self) -> LineSegment {
+        LineSegment::new(self.end.opposite(), self.middle.opposite(), self.start.opposite())
+    }
+
+    /// The segment cut to about `new_length` from its start, square to it.
+    /// `change_length_approx`.
+    pub fn change_length_approx(&self, new_length: f64) -> LineSegment {
+        let new_end_point = self.start_point_approx().change_length(&self.end_point_approx(), new_length);
+        let perpendicular = self.middle.direction().turn_45_degree(2);
+        LineSegment::new(self.start, self.middle, Line::through(new_end_point.round(), perpendicular))
+    }
+
     /// The three lines as a polyline, which merges them if parallel.
     /// `to_polyline`.
     pub fn to_polyline(&self) -> Polyline {

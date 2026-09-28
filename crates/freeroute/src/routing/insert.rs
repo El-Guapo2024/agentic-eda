@@ -93,11 +93,13 @@ impl RoutingBoard {
         if combined.lines.len() < 3 {
             return Reached::From;
         }
-        let start_shape_no = combined.lines.len() - new_polyline.lines.len();
+        // Joining can merge lines, leaving the combined polyline the shorter:
+        // the Java's int arithmetic, clamped where it clamps.
+        let start_shape_no = (combined.lines.len() as i64 - new_polyline.lines.len() as i64).max(0) as usize;
         let trace_shapes = combined.offset_shapes(compensated_half_width, start_shape_no, combined.lines.len() - 1);
         let mut last_shape_no = trace_shapes.len();
         for (i, shape) in trace_shapes.iter().enumerate() {
-            let from_side = FromSide::of_polyline(&combined, combined.corner_count() - trace_shapes.len() - 1 + i, shape);
+            let from_side = FromSide::of_polyline(&combined, combined.corner_count() as i64 - trace_shapes.len() as i64 - 1 + i as i64, shape);
             if with_check && !self.shove_check(shape, Some(from_side), None, layer, nets, cl_class, limits.max_recursion_depth, limits.max_via_recursion_depth, limits.max_spring_over_recursion_depth) {
                 last_shape_no = i;
                 break;
@@ -118,7 +120,7 @@ impl RoutingBoard {
                 // Too many steps to sample.
                 return Reached::From;
             }
-            let mut shape_index = combined.corner_count() - trace_shapes.len() - 1 + last_shape_no;
+            let mut shape_index = combined.corner_count() as i64 - trace_shapes.len() as i64 - 1 + last_shape_no as i64;
             if last_segment_length > sample_width as f64 {
                 new_polyline = new_polyline.shorten(new_polyline.lines.len() - (trace_shapes.len() - last_shape_no - 1), sample_width as f64);
                 let Some(curr_last_corner) = new_polyline.last_corner().as_int() else { return Reached::From };
@@ -127,8 +129,8 @@ impl RoutingBoard {
                 if combined.lines.len() < 3 {
                     return new_corner;
                 }
-                shape_index = combined.lines.len() - 3;
-                last_trace_shape = combined.offset_shape(compensated_half_width, shape_index).expect("a last segment");
+                shape_index = combined.lines.len() as i64 - 3;
+                last_trace_shape = combined.offset_shape(compensated_half_width, shape_index as usize).expect("a last segment");
             }
             let from_side = FromSide::of_polyline(&combined, shape_index, &last_trace_shape);
             if !self.shove_check(&last_trace_shape, Some(from_side), None, layer, nets, cl_class, limits.max_recursion_depth, limits.max_via_recursion_depth, limits.max_spring_over_recursion_depth) {
@@ -196,7 +198,13 @@ impl RoutingBoard {
             return 0.0;
         }
         let polyline = Polyline::from_two_points(from, to);
-        let segment = LineSegment::of(&polyline, 1);
+        self.check_trace_line_segment(&LineSegment::of(&polyline, 1), layer, nets, half_width, cl_class, only_not_shovable)
+    }
+
+    /// [`check_trace_segment`](Self::check_trace_segment) along a line
+    /// segment. `RoutingBoard.check_trace_segment(LineSegment, ...)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_trace_line_segment(&self, segment: &LineSegment, layer: i32, nets: &[i32], half_width: i64, cl_class: i32, only_not_shovable: bool) -> f64 {
         let check = segment.to_polyline();
         if check.lines.len() != 3 {
             return 0.0;

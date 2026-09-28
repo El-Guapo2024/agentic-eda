@@ -65,8 +65,9 @@ pub struct ViaInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetClass {
     pub trace_clearance_class: i32,
-    /// Index into [`Rules::via_rules`].
-    pub via_rule: usize,
+    /// Index into [`Rules::via_rules`]; `None` where the class has none,
+    /// on which FreeRouting throws making an `AutorouteControl`.
+    pub via_rule: Option<usize>,
     pub active_layers: Vec<bool>,
     pub trace_half_width: Vec<i64>,
     /// Its traces may not be pushed aside.

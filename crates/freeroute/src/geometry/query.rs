@@ -315,6 +315,58 @@ impl TileShape {
         }
     }
 
+    /// The width across the shape where it is widest: a box's or
+    /// octagon's longest side span, a polygon's two largest distances from
+    /// its centre to a side. `max_width`.
+    pub fn max_width(&self) -> f64 {
+        match self {
+            TileShape::Box(b) => ((b.ur.x - b.ll.x).max(b.ur.y - b.ll.y)) as f64,
+            TileShape::Octagon(o) => {
+                let w1 = ((o.right_x - o.left_x).max(o.top_y - o.bottom_y)) as f64;
+                let w2 = ((o.upper_right_diag_x - o.lower_left_diag_x).max(o.lower_right_diag_x - o.upper_left_diag_x)) as f64;
+                w1.max(w2 / std::f64::consts::SQRT_2)
+            }
+            TileShape::Simplex(s) => {
+                if !simplex_is_bounded(s) {
+                    return i32::MAX as f64;
+                }
+                let gravity = self.centre_of_gravity();
+                let (mut d1, mut d2) = (i32::MIN as f64, i32::MIN as f64);
+                for l in &s.lines {
+                    let d = l.signed_distance((gravity.x, gravity.y)).abs();
+                    if d > d1 {
+                        d2 = d1;
+                        d1 = d;
+                    } else if d > d2 {
+                        d2 = d;
+                    }
+                }
+                d1 + d2
+            }
+        }
+    }
+
+    /// The corners furthest left and furthest right as seen from `from`,
+    /// as `a` and `b`; `None` for an empty shape.
+    /// `PolylineShape.polar_line_segment`.
+    pub fn polar_line_segment(&self, from: &FloatPoint) -> Option<FloatLine> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut left_most = self.corner_approx(0);
+        let mut right_most = left_most;
+        for i in 1..self.border_line_count() {
+            let corner = self.corner_approx(i);
+            if corner.side_of(from, &right_most) == Side::Right {
+                right_most = corner;
+            }
+            if corner.side_of(from, &left_most) == Side::Left {
+                left_most = corner;
+            }
+        }
+        Some(FloatLine::new(left_most, right_most))
+    }
+
     /// The border line the ray from `from` in direction `dir` leaves the
     /// shape through; `None` if `from` is outside.
     /// `TileShape.intersecting_border_line_no`.

@@ -468,7 +468,7 @@ fn print_rooms() {
         for l in tree.overlaps(&eda_freeroute::geometry::IntOctagon::new(-(1 << 24), -(1 << 24), 1 << 24, 1 << 24, -(1 << 25), 1 << 25, -(1 << 25), 1 << 25)) {
             if let eda_freeroute::door::Entry::Item(t) = tree.payload(l) {
                 if t.id as u64 == id {
-                    println!("entry {} {} layer {} obstacle {} routable {} exact {:?}", t.id, t.shape_index, t.layer, t.trace_obstacle, t.routable, t.exact.is_some());
+                    println!("entry {} {} layer {} obstacle {} routable {} exact {:?}", t.id, t.shape_index, t.layer, t.obstacle && !t.nets.contains(&net), t.routable, t.exact.is_some());
                 }
             }
         }
@@ -654,6 +654,8 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
         m
     };
     let lines: Vec<&str> = dump.lines().filter(|l| l.starts_with("conn")).collect();
+    // Dumps from before the harness wrote the tree's layout have none.
+    let has_trees = lines.iter().any(|l| l.starts_with("conn_tree "));
     let mut before = records(&rb);
     let mut k = 0;
     let mut matched = 0;
@@ -661,9 +663,34 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
         let head = lines[k];
         let f: Vec<&str> = head.split_whitespace().collect();
         let (item_id, net): (u32, i32) = (f[2].parse().unwrap(), f[3].parse().unwrap());
-        let item = rb.index_of(item_id).expect("the item to route");
-        let (result, ripped) = autoroute_item(&mut rb, item, net, pass_no);
-        let mut got = vec![format!("conn {} {item_id} {net} {} {}{}", f[1], result.name(), rb.id_max(), ripped.iter().map(|&r| format!(" {}", rb.item(r).id)).collect::<String>())];
+        // The item may have left the board since the pass listed it -- a fixed
+        // trace split, say -- and FreeRouting routes the object still.
+        let item = rb.board.items.iter().position(|i| i.id == item_id).expect("the item to route");
+        if let Ok(file) = std::env::var("CONN_TREE_FULL") {
+            // The tree as this connection's search will find it, to diff
+            // against FreeRouting's (MazeParity.java writes the same way).
+            use std::io::Write;
+            let class = eda_freeroute::autoroute::control::Control::for_batch(&rb.board, net, pass_no).trace_clearance_class;
+            let listing = rb.autoroute_tree_listing(class);
+            std::fs::OpenOptions::new().create(true).append(true).open(file).unwrap().write_all(listing.as_bytes()).unwrap();
+        }
+        let routed = autoroute_item(&mut rb, item, net, pass_no);
+        let id = |rb: &RoutingBoard, i: usize| rb.item(i).id;
+        let mut got = vec![format!("conn {} {item_id} {net} {} {}{}", f[1], routed.result.name(), rb.id_max(), routed.ripped.iter().map(|&r| format!(" {}", id(&rb, r))).collect::<String>())];
+        if !routed.start.is_empty() || !routed.dest.is_empty() {
+            got.push(format!("conn_start{}", routed.start.iter().map(|&i| format!(" {}", id(&rb, i))).collect::<String>()));
+            got.push(format!("conn_dest{}", routed.dest.iter().map(|&i| format!(" {}", id(&rb, i))).collect::<String>()));
+        }
+        if let (Some((leaves, hash)), true) = (routed.tree, has_trees) {
+            got.push(format!("conn_tree {leaves} {hash}"));
+        }
+        if let Some(l) = &routed.located {
+            got.push(format!("conn_located {} {} {} {}", id(&rb, l.start_item), l.start_layer, id(&rb, l.target_item), l.target_layer));
+            for t in &l.traces {
+                let corners: Vec<String> = t.corners.iter().map(|p| format!("{} {}", p.x, p.y)).collect();
+                got.push(format!("conn_located_trace {} {} {}", t.layer, t.corners.len(), corners.join(" ")));
+            }
+        }
         let after = records(&rb);
         for (id, r) in &before {
             if after.get(id) != Some(r) {

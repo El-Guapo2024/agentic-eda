@@ -56,15 +56,23 @@ pub struct Control {
 impl Control {
     /// The control for routing net `net_no` with via costs `via_costs`:
     /// `AutorouteControl(board, net, settings, via_costs, trace_costs)`.
+    /// Panics where FreeRouting throws: see [`Control::try_new`].
     pub fn new(board: &Board, net_no: i32, via_costs: i32, trace_costs: Vec<(f64, f64)>) -> Control {
+        Control::try_new(board, net_no, via_costs, trace_costs).expect("FreeRouting throws: the net's class has no via rule")
+    }
+
+    /// [`Control::new`], `None` where FreeRouting throws: the net's class
+    /// has no via rule, or the board none for a net without a class.
+    pub fn try_new(board: &Board, net_no: i32, via_costs: i32, trace_costs: Vec<(f64, f64)>) -> Option<Control> {
         let s = &board.settings;
         let rules = &board.rules;
         let layer_count = board.layer_count();
         let mut layer_active = s.layer_active.clone();
         let net_class = rules.net_class(net_no);
         let (trace_clearance_class, via_rule) = match net_class {
-            Some(c) => (c.trace_clearance_class, c.via_rule),
-            None => (1, 0),
+            Some(c) => (c.trace_clearance_class, c.via_rule?),
+            // via_rules.firstElement()
+            None => (1, (!rules.via_rules.is_empty()).then_some(0)?),
         };
         // BoardRules.get_trace_half_width(net, layer): the net's class, net
         // 1's for the null net.
@@ -101,7 +109,7 @@ impl Control {
             max_via_radius = max_via_radius.max(via_radius[j]);
         }
         let min_normal_via_cost = via_costs as f64 * max_via_radius.max(1.0);
-        Control {
+        Some(Control {
             net_no,
             layer_count,
             trace_costs,
@@ -131,7 +139,7 @@ impl Control {
             max_shove_via_recursion_depth: 5,
             max_spring_over_recursion_depth: 5,
             pull_tight_accuracy: 500,
-        }
+        })
     }
 
     /// The control the batch autorouter builds for a connection of
@@ -139,13 +147,18 @@ impl Control {
     /// plane, ripup allowed at the start costs times the pass.
     /// `BatchAutorouter.autoroute_item`.
     pub fn for_batch(board: &Board, net_no: i32, pass_no: i32) -> Control {
+        Control::try_for_batch(board, net_no, pass_no).expect("FreeRouting throws: the net's class has no via rule")
+    }
+
+    /// [`Control::for_batch`], `None` where FreeRouting throws.
+    pub fn try_for_batch(board: &Board, net_no: i32, pass_no: i32) -> Option<Control> {
         let s = &board.settings;
         let contains_plane = board.rules.net(net_no).is_some_and(|n| n.contains_plane);
         let via_costs = if contains_plane { s.plane_via_costs } else { s.via_costs };
-        let mut c = Control::new(board, net_no, via_costs, s.trace_costs.clone());
+        let mut c = Control::try_new(board, net_no, via_costs, s.trace_costs.clone())?;
         c.ripup_allowed = true;
         c.ripup_costs = s.start_ripup_costs * pass_no;
         c.remove_unconnected_vias = !s.with_fanout;
-        c
+        Some(c)
     }
 }

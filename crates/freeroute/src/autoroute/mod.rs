@@ -2,6 +2,7 @@
 //! what drives it. Ported from `app.freerouting.autoroute`.
 
 pub mod batch;
+pub mod connection;
 pub mod control;
 pub mod distance;
 pub mod engine;

@@ -88,7 +88,10 @@ impl RoutingBoard {
             new_lines.pop();
         }
         new_lines.extend_from_slice(&this_lines[1..]);
-        self.finish_combine(item, other, Polyline::from_lines(&new_lines), &start_corner);
+        // Joining in front of this trace, the other one starts it; it runs
+        // the other way if it starts where this one does.
+        let change_order = self.first_corner(other).java_equals(&start_corner);
+        self.finish_combine(item, other, &new_lines, &start_corner, true, change_order);
         true
     }
 
@@ -104,13 +107,23 @@ impl RoutingBoard {
             new_lines.pop();
         }
         new_lines.extend_from_slice(&other_lines[1..]);
-        self.finish_combine(item, other, Polyline::from_lines(&new_lines), &end_corner);
+        let change_order = self.last_corner(other).java_equals(&end_corner);
+        self.finish_combine(item, other, &new_lines, &end_corner, false, change_order);
         true
     }
 
-    fn finish_combine(&mut self, item: usize, other: usize, joined: Polyline, corner: &Point) {
+    /// Give the trace the joined lines and remove the other. The autoroute
+    /// trees keep the leaves of both but where they meet -- unless lines
+    /// fell out of the joined polyline, parallel where they meet, when the
+    /// trace is entered afresh.
+    fn finish_combine(&mut self, item: usize, other: usize, new_lines: &[Line], corner: &Point, in_front: bool, change_order: bool) {
+        let joined = Polyline::from_lines(new_lines);
         let short = joined.lines.len() < 3;
-        self.set_polyline(item, joined);
+        if joined.lines.len() != new_lines.len() {
+            self.set_polyline(item, joined);
+        } else {
+            self.merge_polyline_entries(other, item, joined, in_front, change_order);
+        }
         if short {
             self.remove_item(item);
         }
@@ -349,17 +362,23 @@ impl RoutingBoard {
     }
 
     /// Give the trace a new polyline, then normalize it within the changed
-    /// area. `PolylineTrace.change`, which compares lines by identity to
-    /// skip an unchanged polyline; the polylines handed it here are never
-    /// the old one's lines.
+    /// area; the autoroute trees keep the leaves of the shapes at either
+    /// end whose lines are unchanged. Nothing changes if the lines agree as
+    /// far as the shorter polyline goes, from either end. `PolylineTrace.change`,
+    /// which compares lines by identity; they compare by value here, which
+    /// differs only for a line made anew just as it was.
     pub fn change(&mut self, item: usize, polyline: Polyline) {
         if !self.is_on_board(item) {
-            if let ItemKind::Trace { polyline: p, .. } = &mut self.board.items[item].kind {
-                *p = polyline;
-            }
+            self.put_polyline(item, polyline);
             return;
         }
-        self.set_polyline(item, polyline);
+        let (old, new) = (&self.trace(item).0.lines, &polyline.lines);
+        let last_index = old.len().min(new.len());
+        let Some(first_different) = (0..last_index).find(|&i| new[i] != old[i]) else { return };
+        let Some(last_different) = (1..=last_index).find(|&i| new[new.len() - i] != old[old.len() - i]).map(|i| new.len() - i) else { return };
+        let keep_start = first_different.saturating_sub(2);
+        let keep_end = (new.len() as i64 - last_different as i64 - 3).max(0) as usize;
+        self.change_polyline_entries(item, polyline, keep_start, keep_end);
         let (_, layer, _) = self.trace(item);
         let clip = self.changed_area_on(layer);
         let _ = self.normalize(item, clip.as_ref());
@@ -432,7 +451,7 @@ impl RoutingBoard {
 
     /// The point two items connect at, if there is exactly one.
     /// `Item.normal_contact_point`, through its double dispatch.
-    fn normal_contact_point(&self, a: usize, b: usize) -> Option<Point> {
+    pub(crate) fn normal_contact_point(&self, a: usize, b: usize) -> Option<Point> {
         let (ia, ib) = (&self.board.items[a], &self.board.items[b]);
         match (&ia.kind, &ib.kind) {
             (ItemKind::Trace { layer: la, polyline: pa, .. }, ItemKind::Trace { layer: lb, polyline: pb, .. }) => {
@@ -466,7 +485,7 @@ impl RoutingBoard {
     }
 
     /// `Item.first_common_layer`, `-1` for none.
-    fn first_common_layer(&self, a: usize, b: usize) -> i32 {
+    pub(crate) fn first_common_layer(&self, a: usize, b: usize) -> i32 {
         let (ia, ib) = (&self.board.items[a], &self.board.items[b]);
         let first = ia.first_layer.max(ib.first_layer);
         if first > ia.last_layer.min(ib.last_layer) {

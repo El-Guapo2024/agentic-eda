@@ -240,7 +240,7 @@ impl RoutingBoard {
             }
         }
         infos.sort_by(|a, b| b.0.cmp(&a.0));
-        self.tree.remove(item);
+        self.trees_remove(item);
         match &mut self.board.items[item].kind {
             ItemKind::Via { center, pads, .. } | ItemKind::Pin { center, pads, .. } => {
                 *center = IntPoint::new(center.x + dx, center.y + dy);
@@ -250,8 +250,7 @@ impl RoutingBoard {
             }
             _ => unreachable!("only drill items move"),
         }
-        let board = &self.board;
-        self.tree.insert(board, item);
+        self.trees_insert(item);
         let new_center = IntPoint::new(old_center.x + dx, old_center.y + dy);
         let mut points = vec![old_center];
         if let Some(add) = old_center.fortyfive_degree_corner(new_center, true) {

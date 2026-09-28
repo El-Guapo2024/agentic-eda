@@ -60,6 +60,12 @@
 // connections, each routed as BatchAutorouter.autoroute_item routes it:
 //   pass <pass no> <n> <item ids>...                (the items autoroute_pass will route, in order)
 //   conn <k> <item> <net> <result> <id max> <ripped item ids>...
+//   conn_start <ids>..., conn_dest <ids>...        (the search's start and destination items)
+//   conn_tree <leaves> <hash>                       (the autoroute tree's layout before the search)
+//
+// With MAZE_PASS_SKIP=<k>, the pass routes k connections first; the board is dumped as they left
+// it, and its next connection is searched and dumped as the first one is otherwise.
+//   conn_located <start item> <start layer> <target item> <target layer>, conn_located_trace ...  (as located)
 //   conn_del <id>                                   (a trace or via gone or changed)
 //   conn_add r_trace ... | r_via ...                (a trace or via new or changed, as ins_*)
 //
@@ -168,6 +174,20 @@ public class MazeParity {
     Method reinsert = SearchTreeManager.class.getDeclaredMethod("reinsert_tree_items");
     reinsert.setAccessible(true);
     reinsert.invoke(board.search_tree_manager);
+
+    // With MAZE_PASS_SKIP=<k>, the first autoroute pass routes k connections first; the board is
+    // dumped as they left it, and the pass's next connection is the one searched.
+    Item skip_item = null;
+    int skip_net = 0;
+    if (System.getenv("MAZE_PASS_SKIP") != null) {
+      Object[] next = pass_prefix(board, handling, Integer.parseInt(System.getenv("MAZE_PASS_SKIP")));
+      if (next == null) {
+        System.out.print("route none\n");
+        return;
+      }
+      skip_item = (Item) next[0];
+      skip_net = (Integer) next[1];
+    }
 
     StringBuilder out = new StringBuilder();
     out.append("fixture ").append(new File(args[0]).getName()).append('\n');
@@ -382,12 +402,15 @@ public class MazeParity {
         }
       }
     }
+    if (skip_item != null) {
+      first = skip_item;
+    }
     if (first == null) {
       out.append("route none\n");
       System.out.print(out);
       return;
     }
-    int net_no = first.get_net_no(0);
+    int net_no = skip_item != null ? skip_net : first.get_net_no(0);
     Net route_net = board.rules.nets.get(net_no);
     boolean contains_plane = route_net != null && route_net.contains_plane();
     int via_costs = contains_plane ? settings.get_plane_via_costs() : settings.get_via_costs();
@@ -575,6 +598,75 @@ public class MazeParity {
     AutorouteControl.ExpansionCostFactor[] trace_costs = settings.get_trace_cost_arr();
     int pass_no = settings.get_start_pass_no();
     // The items to route, as autoroute_pass collects them.
+    List<Item> list = pass_list(board);
+    out.append("pass ").append(pass_no).append(' ').append(list.size());
+    for (Item item : list) {
+      out.append(' ').append(item.get_id_no());
+    }
+    out.append('\n');
+    java.util.Map<Integer, String> before = route_records(board);
+    int n = 0;
+    outer:
+    for (Item item : list) {
+      for (int i = 0; i < item.net_count(); ++i) {
+        if (n >= p_max) {
+          break outer;
+        }
+        int net = item.get_net_no(i);
+        board.start_marking_changed_area();
+        SortedSet<Item> ripped = new TreeSet<>();
+        java.util.Map<Item, Integer> ripped_costs = new java.util.LinkedHashMap<>();
+        StringBuilder located_out = new StringBuilder();
+        String result = autoroute_item(board, handling, trace_costs, item, net, ripped, ripped_costs, pass_no, located_out);
+        out.append("conn ").append(n).append(' ').append(item.get_id_no()).append(' ').append(net).append(' ').append(result)
+            .append(' ').append(board.communication.id_no_generator.max_generated_no());
+        for (Item r : ripped) {
+          out.append(' ').append(r.get_id_no());
+        }
+        out.append('\n').append(located_out);
+        java.util.Map<Integer, String> after = route_records(board);
+        for (java.util.Map.Entry<Integer, String> e : before.entrySet()) {
+          if (!e.getValue().equals(after.get(e.getKey()))) {
+            out.append("conn_del ").append(e.getKey()).append('\n');
+          }
+        }
+        for (java.util.Map.Entry<Integer, String> e : after.entrySet()) {
+          if (!e.getValue().equals(before.get(e.getKey()))) {
+            out.append("conn_add ").append(e.getValue()).append('\n');
+          }
+        }
+        before = after;
+        ++n;
+      }
+    }
+  }
+
+  /**
+   * Route the first p_count connections of the first autoroute pass, as pass() does, and return
+   * the item and net of the next; null if the pass has no more.
+   */
+  private static Object[] pass_prefix(RoutingBoard board, BoardHandlingHeadless handling, int p_count) throws Exception {
+    AutorouteSettings settings = handling.get_settings().autoroute_settings;
+    AutorouteControl.ExpansionCostFactor[] trace_costs = settings.get_trace_cost_arr();
+    int pass_no = settings.get_start_pass_no();
+    List<Item> list = pass_list(board);
+    int n = 0;
+    for (Item item : list) {
+      for (int i = 0; i < item.net_count(); ++i) {
+        int net = item.get_net_no(i);
+        if (n == p_count) {
+          return new Object[] {item, net};
+        }
+        board.start_marking_changed_area();
+        autoroute_item(board, handling, trace_costs, item, net, new TreeSet<>(), new java.util.LinkedHashMap<>(), pass_no, new StringBuilder());
+        ++n;
+      }
+    }
+    return null;
+  }
+
+  /** The items autoroute_pass routes, in its order. */
+  private static List<Item> pass_list(RoutingBoard board) {
     List<Item> list = new ArrayList<>();
     Set<Item> handled = new TreeSet<>();
     Iterator<UndoableObjects.UndoableObjectNode> it = board.item_list.start_read_object();
@@ -599,50 +691,12 @@ public class MazeParity {
         }
       }
     }
-    out.append("pass ").append(pass_no).append(' ').append(list.size());
-    for (Item item : list) {
-      out.append(' ').append(item.get_id_no());
-    }
-    out.append('\n');
-    java.util.Map<Integer, String> before = route_records(board);
-    int n = 0;
-    outer:
-    for (Item item : list) {
-      for (int i = 0; i < item.net_count(); ++i) {
-        if (n >= p_max) {
-          break outer;
-        }
-        int net = item.get_net_no(i);
-        board.start_marking_changed_area();
-        SortedSet<Item> ripped = new TreeSet<>();
-        java.util.Map<Item, Integer> ripped_costs = new java.util.LinkedHashMap<>();
-        String result = autoroute_item(board, handling, trace_costs, item, net, ripped, ripped_costs, pass_no);
-        out.append("conn ").append(n).append(' ').append(item.get_id_no()).append(' ').append(net).append(' ').append(result)
-            .append(' ').append(board.communication.id_no_generator.max_generated_no());
-        for (Item r : ripped) {
-          out.append(' ').append(r.get_id_no());
-        }
-        out.append('\n');
-        java.util.Map<Integer, String> after = route_records(board);
-        for (java.util.Map.Entry<Integer, String> e : before.entrySet()) {
-          if (!e.getValue().equals(after.get(e.getKey()))) {
-            out.append("conn_del ").append(e.getKey()).append('\n');
-          }
-        }
-        for (java.util.Map.Entry<Integer, String> e : after.entrySet()) {
-          if (!e.getValue().equals(before.get(e.getKey()))) {
-            out.append("conn_add ").append(e.getValue()).append('\n');
-          }
-        }
-        before = after;
-        ++n;
-      }
-    }
+    return list;
   }
 
   /** BatchAutorouter.autoroute_item, with no stoppable thread. */
   private static String autoroute_item(RoutingBoard board, BoardHandlingHeadless handling, AutorouteControl.ExpansionCostFactor[] trace_costs,
-      Item item, int net, SortedSet<Item> ripped, java.util.Map<Item, Integer> ripped_costs, int pass_no) {
+      Item item, int net, SortedSet<Item> ripped, java.util.Map<Item, Integer> ripped_costs, int pass_no, StringBuilder located_out) {
     try {
       AutorouteSettings settings = handling.get_settings().autoroute_settings;
       Net route_net = board.rules.nets.get(net);
@@ -666,16 +720,99 @@ public class MazeParity {
       }
       Set<Item> start = contains_plane ? connected : unconnected;
       Set<Item> dest = contains_plane ? unconnected : connected;
+      located_out.append("conn_start");
+      for (Item i : start) {
+        located_out.append(' ').append(i.get_id_no());
+      }
+      located_out.append("\nconn_dest");
+      for (Item i : dest) {
+        located_out.append(' ').append(i.get_id_no());
+      }
+      located_out.append('\n');
       double max_ms = Math.min(100000 * Math.pow(2, pass_no - 1), Integer.MAX_VALUE);
       AutorouteEngine engine = board.init_autoroute(net, ctrl.trace_clearance_class_no, null, new TimeLimit((int) max_ms), false);
-      AutorouteEngine.AutorouteResult result = engine.autoroute_connection(start, dest, ctrl, ripped, ripped_costs);
-      if (result == AutorouteEngine.AutorouteResult.ROUTED) {
+      located_out.append(tree_fingerprint(engine.autoroute_search_tree)).append('\n');
+      String result = autoroute_connection(board, engine, start, dest, ctrl, ripped, ripped_costs, located_out);
+      if (result.equals("ROUTED")) {
         board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, 1000);
       }
-      return result.toString();
+      return result;
     } catch (Exception e) {
+      // As BatchAutorouter.autoroute_pass catches it; on stderr, which maze_dump.sh drops.
+      e.printStackTrace();
       return "NOT_ROUTED";
     }
+  }
+
+  /**
+   * AutorouteEngine.autoroute_connection, with the engine's database not kept, as the batch
+   * autorouter has it; the located connection is written to p_located_out.
+   */
+  private static String autoroute_connection(RoutingBoard board, AutorouteEngine engine, Set<Item> start, Set<Item> dest,
+      AutorouteControl ctrl, SortedSet<Item> ripped, java.util.Map<Item, Integer> ripped_costs, StringBuilder p_located_out) throws Exception {
+    MazeSearchAlgo maze;
+    try {
+      maze = MazeSearchAlgo.get_instance(start, dest, engine, ctrl);
+    } catch (Exception e) {
+      maze = null;
+    }
+    MazeSearchAlgo.Result found = null;
+    if (maze != null) {
+      try {
+        found = maze.find_connection();
+      } catch (Exception e) {
+        found = null;
+      }
+    }
+    LocateFoundConnectionAlgo located = null;
+    if (found != null) {
+      try {
+        located = LocateFoundConnectionAlgo.get_instance(found, ctrl, engine.autoroute_search_tree,
+            board.rules.get_trace_angle_restriction(), ripped, ripped_costs, board.get_test_level());
+      } catch (Exception e) {
+        located = null;
+      }
+    }
+    engine.clear();
+    if (located == null) {
+      return "NOT_ROUTED";
+    }
+    p_located_out.append("conn_located ").append(located.start_item == null ? "none" : String.valueOf(located.start_item.get_id_no()))
+        .append(' ').append(located.start_layer).append(' ')
+        .append(located.target_item == null ? "none" : String.valueOf(located.target_item.get_id_no())).append(' ')
+        .append(located.target_layer).append('\n');
+    if (located.connection_items != null) {
+      for (Object ri : located.connection_items) {
+        IntPoint[] corners = (IntPoint[]) field(ri, "corners");
+        p_located_out.append("conn_located_trace ").append(field(ri, "layer")).append(' ').append(corners.length);
+        for (IntPoint c : corners) {
+          p_located_out.append(' ').append(c.x).append(' ').append(c.y);
+        }
+        p_located_out.append('\n');
+      }
+    }
+    if (!ctrl.layer_active[located.start_layer] || !ctrl.layer_active[located.target_layer]) {
+      return "NOT_ROUTED";
+    }
+    if (located.connection_items == null) {
+      return "ALREADY_CONNECTED";
+    }
+    SortedSet<Item> ripped_connections = new TreeSet<>();
+    Set<Integer> changed_nets = new TreeSet<>();
+    Item.StopConnectionOption stop = ctrl.remove_unconnected_vias ? Item.StopConnectionOption.NONE : Item.StopConnectionOption.FANOUT_VIA;
+    for (Item r : ripped) {
+      ripped_connections.addAll(r.get_connection_items(stop));
+      for (int i = 0; i < r.net_count(); ++i) {
+        changed_nets.add(r.get_net_no(i));
+      }
+    }
+    board.remove_items(ripped_connections, false);
+    for (int n : changed_nets) {
+      board.remove_trace_tails(n, stop);
+    }
+    app.freerouting.autoroute.InsertFoundConnectionAlgo inserted =
+        app.freerouting.autoroute.InsertFoundConnectionAlgo.get_instance(located, board, ctrl);
+    return inserted == null ? "INSERT_ERROR" : "ROUTED";
   }
 
   /** Every trace and via on the board as route records, by item number. */
@@ -785,6 +922,54 @@ public class MazeParity {
       return "o" + o.get_item().get_id_no() + "." + o.get_index_in_item();
     }
     return "inc";
+  }
+
+  /**
+   * "conn_tree <leaves> <hash>": the layout of an autoroute tree, its nodes in pre-order (first
+   * child before second) -- an inner node as I and its bounds, a leaf as L, its item's number, its
+   * shape index and its bounds -- hashed with 64-bit FNV-1a over those tokens, each followed by a
+   * space. With CONN_TREE_FULL=<file>, the tokens are also appended to that file, a node a line.
+   */
+  private static String tree_fingerprint(ShapeSearchTree p_tree) throws Exception {
+    long hash = 0xcbf29ce484222325L;
+    int leaves = 0;
+    String full_file = System.getenv("CONN_TREE_FULL");
+    StringBuilder full = full_file == null ? null : new StringBuilder("tree\n");
+    java.util.ArrayDeque<Object> stack = new java.util.ArrayDeque<>();
+    Object root = field(p_tree, "root");
+    if (root != null) {
+      stack.push(root);
+    }
+    while (!stack.isEmpty()) {
+      Object node = stack.pop();
+      Object bounds = field(node, "bounding_shape");
+      IntOctagon o = bounds instanceof IntBox ? ((IntBox) bounds).to_IntOctagon() : (IntOctagon) bounds;
+      StringBuilder tokens = new StringBuilder();
+      if (node instanceof app.freerouting.datastructures.ShapeTree.Leaf) {
+        app.freerouting.datastructures.ShapeTree.Leaf leaf = (app.freerouting.datastructures.ShapeTree.Leaf) node;
+        String id = leaf.object instanceof Item ? String.valueOf(((Item) leaf.object).get_id_no()) : "R";
+        tokens.append("L ").append(id).append(' ').append(leaf.shape_index_in_object).append(' ');
+        ++leaves;
+      } else {
+        app.freerouting.datastructures.ShapeTree.InnerNode inner = (app.freerouting.datastructures.ShapeTree.InnerNode) node;
+        tokens.append("I ");
+        stack.push(inner.second_child);
+        stack.push(inner.first_child);
+      }
+      tokens.append(o.lx).append(' ').append(o.ly).append(' ').append(o.rx).append(' ').append(o.uy).append(' ')
+          .append(o.ulx).append(' ').append(o.lrx).append(' ').append(o.llx).append(' ').append(o.urx).append(' ');
+      for (int i = 0; i < tokens.length(); ++i) {
+        hash ^= tokens.charAt(i);
+        hash *= 0x100000001b3L;
+      }
+      if (full != null) {
+        full.append(tokens).append('\n');
+      }
+    }
+    if (full != null) {
+      java.nio.file.Files.writeString(java.nio.file.Path.of(full_file), full, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+    }
+    return "conn_tree " + leaves + " " + Long.toUnsignedString(hash);
   }
 
   private static Object field(Object o, String name) throws Exception {

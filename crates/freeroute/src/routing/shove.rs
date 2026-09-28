@@ -37,10 +37,10 @@ impl FromSide {
     /// or the last one before it that crosses the border, crosses; failing
     /// that, the border line whose crossing with the first segment's line
     /// is nearest the first corner. `CalcFromSide(Polyline, int, TileShape)`.
-    pub fn of_polyline(polyline: &Polyline, no: usize, shape: &TileShape) -> FromSide {
+    pub fn of_polyline(polyline: &Polyline, no: i64, shape: &TileShape) -> FromSide {
         let mut curr_no = no;
         while curr_no > 0 {
-            let segment = LineSegment::of(polyline, curr_no);
+            let segment = LineSegment::of(polyline, curr_no as usize);
             let intersections = segment.border_intersections(shape);
             if let Some(&side) = intersections.first() {
                 let (x, y) = segment.middle.intersection_approx(&shape.border_line(side));
@@ -234,7 +234,7 @@ impl RoutingBoard {
             return true;
         }
         for (i, shape) in polyline.offset_shapes(half_width, 0, n - 1).into_iter().enumerate() {
-            let from_side = FromSide::of_polyline(polyline, i + 1, &shape);
+            let from_side = FromSide::of_polyline(polyline, i as i64 + 1, &shape);
             if !self.shove_check(&shape, Some(from_side), None, layer, nets, cl_class, max_recursion_depth, max_via_recursion_depth, max_spring_over_recursion_depth) {
                 return false;
             }

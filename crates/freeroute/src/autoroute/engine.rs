@@ -5,12 +5,14 @@
 //! `DrillPage`, `DrillPageArray` and `ExpansionDrill`.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
-use crate::board::{tree_shapes, TreeKind};
+use super::connection::Connection;
 use crate::door::{DoorId, Entry, RoomGraph, RoomId, RoomState};
 use crate::geometry::{FloatLine, FloatPoint, IntBox, IntOctagon, IntPoint, Line, Point, PolylineArea, PolylineShape, Side, TileShape, CRIT};
 use crate::model::{Board, ItemKind};
-use crate::routing::RoutingBoard;
+use crate::routing::tree::entry_name;
+use crate::routing::{AutorouteTree, RoutingBoard};
 use crate::room::TreeObject;
 
 /// Added to a trace's half width wherever door widths are judged.
@@ -25,8 +27,10 @@ pub struct TreeItem {
     pub id: u32,
     pub shape_index: u32,
     pub layer: i32,
-    /// `is_trace_obstacle` for the net being routed.
-    pub trace_obstacle: bool,
+    /// Whether it is a trace obstacle to the nets it is not of: false for
+    /// keepouts that only keep out vias or components, and for pours that
+    /// are no obstacle. See [`crate::model::Item::is_trace_obstacle`].
+    pub obstacle: bool,
     pub routable: bool,
     /// The tree shape where it is not an octagon.
     pub exact: Option<TileShape>,
@@ -46,8 +50,10 @@ impl TreeObject for TreeItem {
     fn layer(&self) -> i32 {
         self.layer
     }
-    fn is_obstacle_for(&self, _net: i32) -> bool {
-        self.trace_obstacle
+    /// `is_trace_obstacle`: net-dependent, as the tree outlives the
+    /// search for one net.
+    fn is_obstacle_for(&self, net: i32) -> bool {
+        self.obstacle && !(net > 0 && self.nets.contains(&net))
     }
     fn is_free_space_room(&self) -> bool {
         false
@@ -66,6 +72,30 @@ impl TreeObject for TreeItem {
     }
     fn shares_net_with(&self, other: &Self) -> bool {
         self.nets.iter().any(|n| other.nets.contains(n))
+    }
+}
+
+impl TreeItem {
+    /// The entry of item `item`'s tree shape `k` of `count`.
+    pub(crate) fn of(board: &Board, item: usize, k: usize, count: usize, shape: &TileShape) -> TreeItem {
+        let it = &board.items[item];
+        let end_line = match &it.kind {
+            ItemKind::Trace { polyline, .. } if k == 0 || k + 1 == count => Some(polyline.lines[k + 1]),
+            _ => None,
+        };
+        TreeItem {
+            item,
+            id: it.id,
+            shape_index: k as u32,
+            layer: it.shape_layer(k, board.layer_count(), count),
+            // No net is contained in net -1.
+            obstacle: it.is_trace_obstacle(-1),
+            routable: it.is_routable(),
+            exact: if matches!(shape, TileShape::Octagon(_)) { None } else { Some(shape.clone()) },
+            end_line,
+            is_trace: matches!(it.kind, ItemKind::Trace { .. }),
+            nets: it.nets.clone(),
+        }
     }
 }
 
@@ -216,57 +246,34 @@ pub struct Engine<'b> {
     sections: HashMap<DoorId, Vec<SearchElement>>,
     /// `ItemAutorouteInfo.start_info`, by item index.
     pub start_info: HashMap<usize, bool>,
-    /// Each item's autoroute tree shapes, by item index and shape index.
-    tree_shapes: HashMap<(usize, u32), TileShape>,
-    /// How many shapes each item has in the autoroute tree, counting those
-    /// FreeRouting has none for: `Item.tree_shape_count`.
-    tree_counts: Vec<usize>,
+    /// The board's autoroute tree for the class, but for the tree itself,
+    /// which the graph holds meanwhile: the items' leaves and shapes.
+    autoroute_tree: Option<AutorouteTree>,
+    /// Each routable item's connection once asked for, shared by the
+    /// items in it: `ItemAutorouteInfo.precalculated_connection`.
+    connections: HashMap<usize, Rc<Connection>>,
+    /// Each via's drill once asked for: `Via.autoroute_drill_info`.
+    via_drills: HashMap<usize, usize>,
 }
 
 impl<'b> Engine<'b> {
     /// A fresh engine for routing `net` with traces of clearance class
-    /// `trace_class`: the autoroute tree built from the board, items in
-    /// board order, and the drill pages. `AutorouteEngine(board, class,
-    /// false)` then `init_connection(net)`.
+    /// `trace_class`: the board's autoroute tree for the class, and the
+    /// drill pages. `AutorouteEngine(board, class, false)` then
+    /// `init_connection(net)`. Dropping it gives the tree back to the
+    /// board, as `AutorouteEngine.clear` leaves it. Panics where
+    /// FreeRouting throws making the tree; see [`Engine::try_new`].
     pub fn new(rb: &'b RoutingBoard, net: i32, trace_class: i32) -> Self {
+        Engine::try_new(rb, net, trace_class).expect("FreeRouting throws making the autoroute tree")
+    }
+
+    /// [`Engine::new`], `None` where FreeRouting throws making the tree.
+    pub fn try_new(rb: &'b RoutingBoard, net: i32, trace_class: i32) -> Option<Self> {
         let board = &rb.board;
-        let mut graph = RoomGraph::new(board.bounds, net);
-        let mut shapes = HashMap::new();
-        let mut tree_counts = Vec::with_capacity(board.items.len());
-        for (i, item) in board.items.iter().enumerate() {
-            if !rb.is_on_board(i) {
-                tree_counts.push(0);
-                continue;
-            }
-            let tree = tree_shapes(board, item, TreeKind::FortyFive, trace_class);
-            let count = tree.len();
-            tree_counts.push(count);
-            for (k, shape) in tree.into_iter().enumerate() {
-                let Some(shape) = shape else { continue };
-                let Some(bounds) = shape.bounding_octagon() else { continue };
-                let end_line = match &item.kind {
-                    ItemKind::Trace { polyline, .. } if k == 0 || k + 1 == count => Some(polyline.lines[k + 1]),
-                    _ => None,
-                };
-                let exact = if matches!(shape, TileShape::Octagon(_)) { None } else { Some(shape.clone()) };
-                let entry = TreeItem {
-                    item: i,
-                    id: item.id,
-                    shape_index: k as u32,
-                    layer: item.shape_layer(k, board.layer_count(), count),
-                    trace_obstacle: item.is_trace_obstacle(net),
-                    routable: item.is_routable(),
-                    exact,
-                    end_line,
-                    is_trace: matches!(item.kind, ItemKind::Trace { .. }),
-                    nets: item.nets.clone(),
-                };
-                graph.insert_item(bounds, entry);
-                shapes.insert((i, k as u32), shape);
-            }
-        }
+        let mut autoroute_tree = rb.take_autoroute_tree(trace_class)?;
+        let graph = RoomGraph::with_tree(std::mem::take(&mut autoroute_tree.tree), board.bounds, net);
         let max_page_width = ((5.0 * board.rules.default_via_diameter) as i64).max(10_000);
-        Engine {
+        Some(Engine {
             rb,
             board,
             net,
@@ -278,19 +285,123 @@ impl<'b> Engine<'b> {
             drills: Vec::new(),
             sections: HashMap::new(),
             start_info: HashMap::new(),
-            tree_shapes: shapes,
-            tree_counts,
+            autoroute_tree: Some(autoroute_tree),
+            connections: HashMap::new(),
+            via_drills: HashMap::new(),
+        })
+    }
+
+    /// The connection a routable item belongs to, worked out once for all
+    /// its items. `Connection.get`.
+    pub fn connection(&mut self, item: usize) -> Option<Rc<Connection>> {
+        if !self.board.items[item].is_routable() {
+            return None;
+        }
+        if let Some(c) = self.connections.get(&item) {
+            return Some(c.clone());
+        }
+        let c = Rc::new(Connection::of(self.rb, item)?);
+        for &i in &c.items {
+            self.connections.insert(i, c.clone());
+        }
+        Some(c)
+    }
+
+    /// The item an obstacle room is made of, and which of its shapes;
+    /// `None` for any other room. `ObstacleExpansionRoom.get_item` and
+    /// `get_index_in_item`.
+    pub fn obstacle_item(&self, room: RoomId) -> Option<(usize, u32)> {
+        let RoomState::Obstacle { item: leaf, .. } = self.graph.room(room).state else { return None };
+        match self.graph.tree().payload(leaf) {
+            Entry::Item(t) => Some((t.item, t.shape_index)),
+            Entry::Room { .. } => None,
         }
     }
 
-    /// `Item.tree_shape_count` in the autoroute tree.
-    pub fn tree_shape_count(&self, item: usize) -> usize {
-        self.tree_counts[item]
+    /// A via's drill, through the via's own obstacle rooms, made the first
+    /// time it is asked for. `Via.get_autoroute_drill_info`.
+    pub fn via_drill(&mut self, via: usize) -> usize {
+        if let Some(&d) = self.via_drills.get(&via) {
+            return d;
+        }
+        let it = &self.board.items[via];
+        let ItemKind::Via { center, .. } = it.kind else { panic!("item {} is not a via", it.id) };
+        let (first_layer, last_layer) = (it.first_layer, it.last_layer);
+        let layer_count = (last_layer - first_layer + 1) as usize;
+        let rooms = (0..layer_count)
+            .map(|i| {
+                let leaf = self.tree_parts().leaves[via][i].expect("a via has a tree entry on each of its layers");
+                self.graph.obstacle_room(leaf)
+            })
+            .collect();
+        self.drills.push(Drill {
+            shape: TileShape::Box(IntBox::new(center.x, center.y, center.x, center.y)),
+            location: center,
+            first_layer,
+            last_layer,
+            rooms,
+            elements: vec![SearchElement::default(); layer_count],
+        });
+        let d = self.drills.len() - 1;
+        self.via_drills.insert(via, d);
+        d
     }
 
-    /// An item's shape in the autoroute tree.
+    /// The items whose autoroute tree shapes on `layer` touch `shape`, but
+    /// those of net `net`, by number descending: the items of
+    /// `ShapeSearchTree.overlapping_objects` with the net ignored.
+    pub fn overlapping_tree_items(&self, shape: &TileShape, layer: i32, net: i32) -> Vec<usize> {
+        let Some(bounds) = shape.bounding_octagon() else { return Vec::new() };
+        let is_45_degree = matches!(shape, TileShape::Octagon(_));
+        let tree = self.graph.tree();
+        let mut result: Vec<usize> = Vec::new();
+        for leaf in tree.overlaps(&bounds) {
+            let Entry::Item(t) = tree.payload(leaf) else { continue };
+            if layer >= 0 && t.layer != layer {
+                continue;
+            }
+            // Item.is_obstacle(net): not of the net.
+            if net > 0 && t.nets.contains(&net) {
+                continue;
+            }
+            let touches = match &t.exact {
+                None => is_45_degree || TileShape::Octagon(tree.bounds(leaf)).intersects(shape),
+                Some(exact) => exact.intersects(shape),
+            };
+            if touches {
+                result.push(t.item);
+            }
+        }
+        self.rb.sort_items(&mut result);
+        result
+    }
+
+    /// The autoroute tree's layout: see [`AutorouteTree::fingerprint`].
+    pub fn tree_fingerprint(&self, full: bool) -> (usize, u64, Option<String>) {
+        self.graph.tree().fingerprint(entry_name, full)
+    }
+
+    fn tree_parts(&self) -> &AutorouteTree {
+        self.autoroute_tree.as_ref().expect("the engine holds the tree until dropped")
+    }
+
+    /// `Item.tree_shape_count` in the autoroute tree, counting the shapes
+    /// FreeRouting has none for; none for an item off the board.
+    pub fn tree_shape_count(&self, item: usize) -> usize {
+        if !self.rb.is_on_board(item) {
+            return 0;
+        }
+        self.tree_parts().shapes.get(item).map_or(0, Vec::len)
+    }
+
+    /// An item's shape in the autoroute tree, if it is stored there.
     pub fn tree_shape(&self, item: usize, index: u32) -> Option<&TileShape> {
-        self.tree_shapes.get(&(item, index))
+        if !self.rb.is_on_board(item) {
+            return None;
+        }
+        let parts = self.tree_parts();
+        parts.leaves.get(item)?.get(index as usize)?.as_ref()?;
+        parts.shapes.get(item)?.get(index as usize)?.as_ref()
     }
 
     /// Where a trace of the net connects to item `item`'s entry `index`: a
@@ -617,6 +728,16 @@ impl<'b> Engine<'b> {
             .collect();
         rooms.sort_by(|a, b| b.0.cmp(&a.0));
         rooms.into_iter().map(|(_, r)| r).collect()
+    }
+}
+
+impl Drop for Engine<'_> {
+    /// Take the rooms out of the tree and give it back to the board.
+    fn drop(&mut self) {
+        if let Some(mut tree) = self.autoroute_tree.take() {
+            tree.tree = self.graph.clear();
+            self.rb.give_back_autoroute_tree(tree);
+        }
     }
 }
 

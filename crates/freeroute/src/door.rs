@@ -271,6 +271,24 @@ impl<T: TreeObject> RoomGraph<T> {
         }
     }
 
+    /// A graph over a tree already holding the board's objects.
+    pub fn with_tree(tree: ShapeTree<Entry<T>>, board: IntBox, net: i32) -> Self {
+        RoomGraph { tree, ..RoomGraph::new(board, net) }
+    }
+
+    /// Take the completed rooms out of the tree, in the order they were
+    /// completed, and hand back the tree with the board's objects alone.
+    /// `AutorouteEngine.clear`.
+    pub fn clear(&mut self) -> ShapeTree<Entry<T>> {
+        for &room in &self.complete {
+            if let Some(Room { state: RoomState::Complete { leaf: Some(leaf), .. }, .. }) = &self.rooms[room.0] {
+                self.tree.remove(*leaf);
+            }
+        }
+        self.complete.clear();
+        std::mem::take(&mut self.tree)
+    }
+
     /// Store a board object. Rooms grown afterwards see it.
     pub fn insert_item(&mut self, shape: IntOctagon, item: T) -> LeafId {
         self.tree.insert(shape, Entry::Item(item))
