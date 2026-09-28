@@ -1,6 +1,7 @@
 //! The autorouter: FreeRouting's maze search over rooms and doors, and
 //! what drives it. Ported from `app.freerouting.autoroute`.
 
+pub mod batch;
 pub mod control;
 pub mod distance;
 pub mod engine;

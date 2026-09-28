@@ -615,3 +615,119 @@ fn insertion_matches_freerouting() {
     }
     assert!(failures.is_empty(), "{} insertions differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }
+
+/// The dumps of first autoroute passes: `FREEROUTE_PASS_DIR`, else
+/// `tests/pass`.
+fn pass_dumps() -> Vec<PathBuf> {
+    let dir = match std::env::var("FREEROUTE_PASS_DIR") {
+        Ok(d) => {
+            let p = PathBuf::from(&d);
+            if p.is_absolute() { p } else { Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(p) }
+        }
+        Err(_) => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pass"),
+    };
+    let mut v: Vec<PathBuf> = std::fs::read_dir(&dir).map(|r| r.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "txt")).collect()).unwrap_or_default();
+    v.sort();
+    v
+}
+
+/// Replay the dump's first pass connection by connection; the number of
+/// connections that agree, and the first difference if one does not.
+fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
+    use eda_freeroute::autoroute::batch::{autoroute_item, pass_items};
+    use eda_freeroute::routing::RoutingBoard;
+    let pass = dump.lines().find(|l| l.starts_with("pass "))?;
+    let board = read_board(dump).unwrap();
+    let mut rb = RoutingBoard::new(board);
+    let pass_no: i32 = pass.split_whitespace().nth(1).unwrap().parse().unwrap();
+    let items = pass_items(&rb);
+    let got = format!("pass {pass_no} {} {}", items.len(), items.iter().map(|&i| rb.item(i).id.to_string()).collect::<Vec<_>>().join(" "));
+    if got.trim_end() != pass {
+        return Some((0, Some(format!("the items to route differ\n  FreeRouting: {pass}\n  port:        {got}"))));
+    }
+    let records = |rb: &RoutingBoard| -> std::collections::BTreeMap<u32, String> {
+        let mut m = std::collections::BTreeMap::new();
+        for r in routes(rb, "r") {
+            let id: u32 = r.split_whitespace().nth(1).unwrap().parse().unwrap();
+            m.insert(id, r);
+        }
+        m
+    };
+    let lines: Vec<&str> = dump.lines().filter(|l| l.starts_with("conn")).collect();
+    let mut before = records(&rb);
+    let mut k = 0;
+    let mut matched = 0;
+    while k < lines.len() {
+        let head = lines[k];
+        let f: Vec<&str> = head.split_whitespace().collect();
+        let (item_id, net): (u32, i32) = (f[2].parse().unwrap(), f[3].parse().unwrap());
+        let item = rb.index_of(item_id).expect("the item to route");
+        let (result, ripped) = autoroute_item(&mut rb, item, net, pass_no);
+        let mut got = vec![format!("conn {} {item_id} {net} {} {}{}", f[1], result.name(), rb.id_max(), ripped.iter().map(|&r| format!(" {}", rb.item(r).id)).collect::<String>())];
+        let after = records(&rb);
+        for (id, r) in &before {
+            if after.get(id) != Some(r) {
+                got.push(format!("conn_del {id}"));
+            }
+        }
+        for (id, r) in &after {
+            if before.get(id) != Some(r) {
+                got.push(format!("conn_add {r}"));
+            }
+        }
+        before = after;
+        let mut want = vec![head];
+        k += 1;
+        while k < lines.len() && !lines[k].starts_with("conn ") {
+            want.push(lines[k]);
+            k += 1;
+        }
+        for (i, g) in got.iter().enumerate() {
+            let w = want.get(i).copied().unwrap_or("(nothing)");
+            if w != g {
+                return Some((matched, Some(format!("connection {matched} differs\n  FreeRouting: {w}\n  port:        {g}"))));
+            }
+        }
+        if want.len() != got.len() {
+            return Some((matched, Some(format!("connection {matched}: FreeRouting has {} records, the port {}\n  FreeRouting: {}", want.len(), got.len(), want.get(got.len()).copied().unwrap_or("")))));
+        }
+        matched += 1;
+    }
+    Some((matched, None))
+}
+
+/// The first autoroute pass goes as FreeRouting's does, connection by
+/// connection. Boards stopping at a part not ported yet are listed but do
+/// not fail the test; any other stop or difference does.
+#[test]
+fn pass_matches_freerouting() {
+    let (mut boards, mut connections, mut unported, mut failures) = (0, 0, Vec::new(), Vec::new());
+    for path in pass_dumps() {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let dump = std::fs::read_to_string(&path).unwrap();
+        match std::panic::catch_unwind(|| replay_pass(&dump)) {
+            Ok(None) => {}
+            Ok(Some((n, None))) => {
+                boards += 1;
+                connections += n;
+            }
+            Ok(Some((n, Some(e)))) => {
+                connections += n;
+                failures.push(format!("{name}: {e}"));
+            }
+            Err(p) => {
+                let msg = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                if msg.starts_with("not implemented") {
+                    unported.push(format!("{name}: {msg}"));
+                } else {
+                    failures.push(format!("{name}: stopped: {msg}"));
+                }
+            }
+        }
+    }
+    eprintln!("passes matched: {boards} boards whole, {connections} connections; stopped at parts not ported yet: {}", unported.len());
+    for u in &unported {
+        eprintln!("  {u}");
+    }
+    assert!(failures.is_empty(), "{} passes differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
+}

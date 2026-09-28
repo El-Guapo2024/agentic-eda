@@ -76,6 +76,8 @@ pub struct NetClass {
     /// Cycles through pours are left alone.
     /// `NetClass.get_ignore_cycles_with_areas`.
     pub ignore_cycles_with_areas: bool,
+    /// The autorouter leaves its nets alone. `NetClass.is_ignored_by_autorouter`.
+    pub ignored_by_autorouter: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

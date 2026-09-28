@@ -279,6 +279,7 @@ pub fn read_board(text: &str) -> Result<Board, String> {
                         shove_fixed: flag(0, false),
                         pull_tight: flag(1, true),
                         ignore_cycles_with_areas: flag(2, false),
+                        ignored_by_autorouter: flag(3, false),
                     },
                 );
             }

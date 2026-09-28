@@ -28,7 +28,7 @@
 //   viainfo <index> <padstack no> <clearance class> <attach_smd 0|1>
 //   viarule <index> <via info indices>...
 //   netclass <index> <trace clearance class> <via rule index> <active 0|1 per layer> <half width per layer>...
-//            <shove_fixed 0|1> <pull_tight 0|1> <ignore_cycles_with_areas 0|1>
+//            <shove_fixed 0|1> <pull_tight 0|1> <ignore_cycles_with_areas 0|1> <ignored_by_autorouter 0|1>
 //   net <no> <net class index> <contains_plane 0|1>
 //   settings <vias_allowed> <via_costs> <plane_via_costs> <start_ripup_costs> <with_fanout> <automatic_neckdown>
 //   layer_costs <layer> <active 0|1> <horizontal> <vertical> <preferred direction costs>
@@ -255,7 +255,7 @@ public class MazeParity {
         out.append(' ').append(nc.get_trace_half_width(l));
       }
       out.append(' ').append(nc.is_shove_fixed() ? 1 : 0).append(' ').append(nc.get_pull_tight() ? 1 : 0)
-          .append(' ').append(nc.get_ignore_cycles_with_areas() ? 1 : 0).append('\n');
+          .append(' ').append(nc.get_ignore_cycles_with_areas() ? 1 : 0).append(' ').append(nc.is_ignored_by_autorouter ? 1 : 0).append('\n');
     }
     for (int n = 1; n <= board.rules.nets.max_net_no(); ++n) {
       Net net = board.rules.nets.get(n);
