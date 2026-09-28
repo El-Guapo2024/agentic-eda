@@ -101,6 +101,9 @@ pub struct RoutingBoard {
     /// 1000.
     pub min_trace_half_width: i64,
     pub max_trace_half_width: i64,
+    /// Whether each connection routed records the autoroute tree's layout
+    /// (`Routed::tree`), for the parity tests; it costs a walk of the tree.
+    pub fingerprint_trees: bool,
 }
 
 /// `Nets.max_legal_net_no`.
@@ -124,7 +127,7 @@ impl RoutingBoard {
         let id_max = board.id_max.max(board.items.iter().map(|i| i.id).max().unwrap_or(0));
         let min_trace_half_width = board.rules.min_trace_half_width;
         let max_trace_half_width = board.rules.board_max_trace_half_width;
-        RoutingBoard { board, tree, autoroute_trees: RefCell::new(Vec::new()), area_pieces: RefCell::new(HashMap::new()), on_board, id_max: Cell::new(id_max), changed_area: None, min_trace_half_width, max_trace_half_width }
+        RoutingBoard { board, tree, autoroute_trees: RefCell::new(Vec::new()), area_pieces: RefCell::new(HashMap::new()), on_board, id_max: Cell::new(id_max), changed_area: None, min_trace_half_width, max_trace_half_width, fingerprint_trees: false }
     }
 
     /// The autoroute tree for traces of clearance class `class`, made from

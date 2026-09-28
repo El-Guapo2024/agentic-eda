@@ -639,6 +639,7 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
     dump.lines().find(|l| l.starts_with("pass "))?;
     let board = read_board(dump).unwrap();
     let mut rb = RoutingBoard::new(board);
+    rb.fingerprint_trees = true;
     let records = |rb: &RoutingBoard| -> std::collections::BTreeMap<u32, String> {
         let mut m = std::collections::BTreeMap::new();
         for r in routes(rb, "r") {

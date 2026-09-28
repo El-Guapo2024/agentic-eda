@@ -233,8 +233,10 @@ pub fn autoroute_item(rb: &mut RoutingBoard, item: usize, net: i32, pass_no: i32
         let Some(mut engine) = Engine::try_new(rb, net, ctrl.trace_clearance_class) else {
             return out;
         };
-        let (leaves, hash, _) = engine.tree_fingerprint(false);
-        out.tree = Some((leaves, hash));
+        if rb.fingerprint_trees {
+            let (leaves, hash, _) = engine.tree_fingerprint(false);
+            out.tree = Some((leaves, hash));
+        }
         let Some(mut maze) = MazeSearch::new(&mut engine, &ctrl, &start, &dest) else {
             return out;
         };
@@ -289,4 +291,47 @@ pub fn remove_pass_tails(rb: &mut RoutingBoard) {
     let mut algo = PullTight::new(&[], None, rb.board.rules.pull_tight_accuracy, None, 0);
     algo.opt_changed_area(rb, Some(trace_costs.as_slice()));
     rb.changed_area = None;
+}
+
+/// What one pass of [`autoroute_passes`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PassSummary {
+    pub pass_no: i32,
+    /// The items it set out to route, once per unconnected net.
+    pub items: usize,
+    /// Connections routed or found connected already.
+    pub routed: usize,
+    /// Connections not routed.
+    pub not_routed: usize,
+}
+
+/// Route the board pass after pass, from `start_pass_no`, until a pass
+/// finds nothing left to route or `max_passes` have run: each routes its
+/// items with ripup costs growing with the pass number, then removes the
+/// tails and tidies. `BatchAutorouter.autoroute_passes`, less its stops for
+/// boards it has seen before or that stop improving, and with no time
+/// limits.
+pub fn autoroute_passes(rb: &mut RoutingBoard, start_pass_no: i32, max_passes: i32) -> Vec<PassSummary> {
+    let mut summaries = Vec::new();
+    for pass_no in start_pass_no..start_pass_no + max_passes {
+        let items = pass_items(rb);
+        if items.is_empty() {
+            break;
+        }
+        let mut summary = PassSummary { pass_no, items: items.len(), routed: 0, not_routed: 0 };
+        for &item in &items {
+            // The nets as the item has them now; the item may have left the
+            // board, and is routed still, as the Java routes the object.
+            let nets = rb.item(item).nets.clone();
+            for net in nets {
+                match autoroute_item(rb, item, net, pass_no).result {
+                    RouteResult::Routed | RouteResult::AlreadyConnected => summary.routed += 1,
+                    RouteResult::NotRouted | RouteResult::InsertError => summary.not_routed += 1,
+                }
+            }
+        }
+        remove_pass_tails(rb);
+        summaries.push(summary);
+    }
+    summaries
 }
