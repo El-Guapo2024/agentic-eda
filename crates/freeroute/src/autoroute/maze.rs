@@ -24,6 +24,7 @@ use super::distance::DestinationDistance;
 use super::engine::{Adjustment, Engine, Expandable, TRACE_WIDTH_TOLERANCE};
 use super::shove_trace::check_shove_trace_line;
 use crate::routing::shove::DrillCheck;
+use crate::routing::Pick;
 
 /// What check_ripup gives for an item whose room the search just came
 /// from. `MazeSearchAlgo.ALREADY_RIPPED_COSTS`.
@@ -142,14 +143,19 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
     /// `MazeSearchAlgo.init`.
     fn init(&mut self, start_items: &[usize], dest_items: &[usize]) -> bool {
         let board = self.engine.board;
-        // reduce_trace_shapes_at_tie_pins: trims the traces of other nets on
-        // pins of several nets, so do nothing without traces.
+        // On pins of several nets, the traces of other nets ending there are
+        // cut back, so they do not block the pin's centre: start items
+        // first. `reduce_trace_shapes_at_tie_pins`.
         let rb = self.engine.rb;
-        let has_traces = board.items.iter().enumerate().any(|(k, i)| rb.is_on_board(k) && matches!(i.kind, ItemKind::Trace { .. }));
         for &i in start_items.iter().chain(dest_items) {
             let item = &board.items[i];
-            if has_traces && matches!(item.kind, ItemKind::Pin { .. }) && item.nets.len() > 1 {
-                unimplemented!("reduce_trace_shapes_at_tie_pins: pins of several nets are not ported yet");
+            if !matches!(item.kind, ItemKind::Pin { .. }) || item.nets.len() <= 1 {
+                continue;
+            }
+            for c in rb.normal_contacts(i) {
+                if rb.is_trace(c) && !board.items[c].contains_net(self.ctrl.net_no) {
+                    self.engine.reduce_trace_shape_at_tie_pin(i, c);
+                }
             }
         }
         let mut destination_ok = false;
@@ -367,8 +373,15 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
                 }
             }
         }
-        if !layer_active && matches!(element.door, Expandable::Drill(_)) {
-            unimplemented!("drills onto inactive layers (split planes) are not ported yet");
+        if !layer_active {
+            if let Expandable::Drill(d) = element.door {
+                // No drill onto a pour of another net on a split plane.
+                let location = crate::geometry::Point::Int(self.engine.drills[d].location);
+                let board = self.engine.board;
+                if self.engine.rb.pick_items(&location, layer, Pick::Conduction).iter().any(|&i| !board.items[i].contains_net(self.ctrl.net_no)) {
+                    return true;
+                }
+            }
         }
         let mut something_expanded = self.expand_to_target_doors(element, next_room_is_thick, curr_door_is_small, &shape_entry_middle);
         if !layer_active {

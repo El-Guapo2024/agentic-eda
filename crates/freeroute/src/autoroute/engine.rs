@@ -291,6 +291,43 @@ impl<'b> Engine<'b> {
         })
     }
 
+    /// Cut the shape where a trace of another net ends on tie pin `pin`
+    /// down to its piece clear of the pin, nearest the trace's next corner,
+    /// so the pin's centre is not blocked; the tree keeps it so.
+    /// `ShapeSearchTree.reduce_trace_shape_at_tie_pin`.
+    pub fn reduce_trace_shape_at_tie_pin(&mut self, pin: usize, trace: usize) {
+        let rb = self.rb;
+        let (polyline, layer, _) = rb.trace(trace);
+        let pin_item = &self.board.items[pin];
+        let center = Point::Int(pin_item.center().expect("a pin"));
+        let n = polyline.corner_count();
+        let (shape_no, compare_corner) = if polyline.first_corner().java_equals(&center) {
+            (0, polyline.corner_float(1))
+        } else if polyline.last_corner().java_equals(&center) {
+            (n - 2, polyline.corner_float(n - 2))
+        } else {
+            return;
+        };
+        let parts = self.tree_parts();
+        let pin_shape = parts.shapes[pin][(layer - pin_item.first_layer) as usize].clone().expect("the pin's shape on the trace's layer");
+        let trace_shape = parts.shapes[trace][shape_no].clone().expect("the trace's shape");
+        if trace_shape.intersection(&pin_shape).dimension() < 2 {
+            return;
+        }
+        let mut new_shape = None;
+        for piece in trace_shape.cutout(&pin_shape).unwrap_or_default() {
+            if piece.dimension() == 2 && (new_shape.is_none() || piece.contains_float(&compare_corner)) {
+                new_shape = Some(piece);
+            }
+        }
+        let new_shape = new_shape.unwrap_or(TileShape::Simplex(crate::geometry::Simplex::empty()));
+        let mut parts = self.autoroute_tree.take().expect("the engine holds the tree until dropped");
+        parts.tree = std::mem::take(self.graph.tree_mut());
+        parts.change_item_shape(self.board, trace, shape_no, new_shape);
+        *self.graph.tree_mut() = std::mem::take(&mut parts.tree);
+        self.autoroute_tree = Some(parts);
+    }
+
     /// The connection a routable item belongs to, worked out once for all
     /// its items. `Connection.get`.
     pub fn connection(&mut self, item: usize) -> Option<Rc<Connection>> {

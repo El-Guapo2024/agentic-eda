@@ -12,7 +12,7 @@
 //! steps read them after a later trace has left them stale; they are kept
 //! the same way here.
 
-use crate::geometry::{Direction, FloatPoint, IntOctagon, IntPoint, Line, Point, Polyline, Side, TileShape};
+use crate::geometry::{Direction, FloatPoint, IntOctagon, IntPoint, Line, Point, Polyline, Side, TileShape, CRIT};
 use crate::model::{FixedState, ItemKind};
 
 use super::{nets_equal, surrounding_octagon, Pick, RoutingBoard};
@@ -992,19 +992,32 @@ impl RoutingBoard {
             return true;
         }
         let (end_corner, prev_end_corner) = if at_start { (polyline.first_corner(), polyline.corner(1)) } else { (polyline.last_corner(), polyline.corner(polyline.corner_count() - 2)) };
-        let (Some(e), Some(p)) = (end_corner.as_int(), prev_end_corner.as_int()) else {
-            unimplemented!("a trace ending off the grid at a pin (check_connection_to_pin) is not ported yet");
+        // Direction.get_instance(end, prev), exact for corners off the grid
+        // too; a direction too fine for an int one is no exit's.
+        let homogeneous = |p: &Point| match p {
+            Point::Int(q) => (q.x as i128, q.y as i128, 1i128),
+            Point::Rational(r) => (r.x, r.y, r.z),
         };
-        if e == p {
+        let ((ex, ey, ez), (px, py, pz)) = (homogeneous(&end_corner), homogeneous(&prev_end_corner));
+        let (mut dx, mut dy) = (px * ez - ex * pz, py * ez - ey * pz);
+        if pz * ez < 0 {
+            (dx, dy) = (-dx, -dy);
+        }
+        if dx == 0 && dy == 0 {
             return true;
         }
-        let trace_end_direction = Direction::of(p.x - e.x, p.y - e.y);
+        let g = gcd_i128(dx.unsigned_abs(), dy.unsigned_abs()) as i128;
+        (dx, dy) = (dx / g, dy / g);
+        if dx.abs() > CRIT as i128 || dy.abs() > CRIT as i128 {
+            return false;
+        }
+        let trace_end_direction = Direction::of(dx as i64, dy as i64);
         let Some(matching) = exits.iter().find(|x| x.direction.same_as(&trace_end_direction)) else { return false };
         let edge_to_turn_dist = self.board.rules.pin_edge_to_turn_dist;
         if edge_to_turn_dist < 0.0 {
             return false;
         }
-        let end_line_length = FloatPoint::from_int(e).distance(&FloatPoint::from_int(p));
+        let end_line_length = FloatPoint::from_point(&end_corner).distance(&FloatPoint::from_point(&prev_end_corner));
         let clearance = self.clearance_value(self.board.items[item].clearance_class, self.board.items[pin].clearance_class, layer);
         let add_width = edge_to_turn_dist.max(clearance as f64 + 1.0);
         let preserve_length = matching.min_length + half_width as f64 + add_width;
@@ -1177,4 +1190,12 @@ fn nearest_exit(offset_pin_shape: &TileShape, pin_center: IntPoint, exits: &[cra
     }
     let (ray, no, direction, _) = best.expect("an exit");
     (ray, no, direction)
+}
+
+/// The greatest common divisor, for exact directions.
+fn gcd_i128(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
 }

@@ -300,6 +300,17 @@ impl AutorouteTree {
         self.refresh(board, end);
     }
 
+    /// Give the item's shape `shape_no` a new shape, entered anew.
+    /// `ShapeSearchTree.change_item_shape`.
+    pub fn change_item_shape(&mut self, board: &Board, item: usize, shape_no: usize, shape: TileShape) {
+        let old = self.leaves[item][shape_no].take();
+        self.remove_leaf(old);
+        let count = self.shapes[item].len();
+        let leaf = self.insert_leaf(board, item, shape_no, count, Some(&shape));
+        self.shapes[item][shape_no] = Some(shape);
+        self.leaves[item][shape_no] = leaf;
+    }
+
     /// Trace `from` has been joined at the end of trace `to`, whose
     /// polyline on the board is now the joined one; `change_order` if
     /// `from` ran the other way. `to`'s leaves but its last stay, `from`'s

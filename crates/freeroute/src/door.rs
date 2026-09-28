@@ -298,6 +298,11 @@ impl<T: TreeObject> RoomGraph<T> {
         &self.tree
     }
 
+    /// For changing the board objects stored, before any room is.
+    pub(crate) fn tree_mut(&mut self) -> &mut ShapeTree<Entry<T>> {
+        &mut self.tree
+    }
+
     pub fn board(&self) -> IntBox {
         self.board
     }
