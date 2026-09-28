@@ -605,7 +605,11 @@ public class MazeParity {
     // (its stops for repeated or stagnating boards left out).
     String passes_env = System.getenv("MAZE_PASSES");
     int max_passes = passes_env == null ? 1 : Integer.parseInt(passes_env);
-    java.util.Map<Integer, String> before = route_records(board);
+    // With TIME_ONLY set, no records of what changed and no tree hashes,
+    // and the time the passes took on stderr: FreeRouting's speed.
+    boolean time_only = System.getenv("TIME_ONLY") != null;
+    long start_time = System.nanoTime();
+    java.util.Map<Integer, String> before = time_only ? null : route_records(board);
     // With DEBUG_IDS=<k>, every item number connection k draws goes to
     // stderr with where it was drawn from.
     String debug_ids = System.getenv("DEBUG_IDS");
@@ -662,7 +666,9 @@ public class MazeParity {
             out.append(' ').append(r.get_id_no());
           }
           out.append('\n').append(located_out);
-          before = changes(board, before, out);
+          if (!time_only) {
+            before = changes(board, before, out);
+          }
           ++n;
         }
       }
@@ -676,7 +682,12 @@ public class MazeParity {
       board.remove_trace_tails(-1, stop);
       board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), trace_costs, null, Integer.MAX_VALUE);
       out.append("tails ").append(board.communication.id_no_generator.max_generated_no()).append('\n');
-      before = changes(board, before, out);
+      if (!time_only) {
+        before = changes(board, before, out);
+      }
+    }
+    if (time_only) {
+      System.err.println("TIME " + (System.nanoTime() - start_time) / 1e9 + " s");
     }
   }
 
@@ -789,7 +800,9 @@ public class MazeParity {
       // dumps would depend on the machine. The harness gives both all the
       // time they need; the port has no limits.
       AutorouteEngine engine = board.init_autoroute(net, ctrl.trace_clearance_class_no, null, new TimeLimit(Integer.MAX_VALUE), false);
-      located_out.append(tree_fingerprint(engine.autoroute_search_tree)).append('\n');
+      if (System.getenv("TIME_ONLY") == null) {
+        located_out.append(tree_fingerprint(engine.autoroute_search_tree)).append('\n');
+      }
       String result = autoroute_connection(board, engine, start, dest, ctrl, ripped, ripped_costs, located_out);
       if (result.equals("ROUTED")) {
         board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, Integer.MAX_VALUE);
