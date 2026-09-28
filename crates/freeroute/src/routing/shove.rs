@@ -11,7 +11,7 @@
 //! message naming the missing piece. Traces of the net being routed are
 //! passed over as in the Java.
 
-use crate::geometry::{Circle, Cutout, Direction, FloatPoint, IntBox, IntPoint, Line, LineSegment, Polyline, Side, Simplex, TileShape};
+use crate::geometry::{Circle, Cutout, Direction, FloatPoint, IntBox, IntOctagon, IntPoint, Line, LineSegment, Polyline, Side, Simplex, TileShape};
 use crate::model::{AreaKind, FixedState, Item, ItemKind};
 
 use super::trace::StopConnection;
@@ -241,11 +241,19 @@ impl RoutingBoard {
         if !entries.store_items(self, &obstacles, true, copper_sharing_allowed) {
             return DrillCheck::NotDrillable;
         }
-        if !entries.shove_vias.is_empty() {
+        // Each via in the way must move to its nearest place clear of the
+        // pad, same net or not.
+        for &via in &entries.shove_vias {
             if max_via_recursion_depth <= 0 {
                 return DrillCheck::NotDrillable;
             }
-            unimplemented!("pushing a via aside for a new via (MoveDrillItemAlgo) is not ported yet");
+            let Some(&new_center) = self.try_shove_via_points(shape, layer, via, cl_class, false).first() else {
+                return DrillCheck::NotDrillable;
+            };
+            let center = self.board.items[via].center().expect("a via");
+            if !self.move_drill_check(via, new_center.x - center.x, new_center.y - center.y, max_recursion_depth, max_via_recursion_depth - 1, &[]) {
+                return DrillCheck::NotDrillable;
+            }
         }
         let mut result = DrillCheck::Drillable;
         if copper_sharing_allowed && obstacles.iter().any(|&i| matches!(board.items[i].kind, ItemKind::Pin { .. })) {
@@ -341,6 +349,9 @@ impl RoutingBoard {
         if entries.max_stack_level > 1 {
             return false;
         }
+        // Each via of another net in the way must move somewhere near clear
+        // of the shape: tried nearest first, the nearest always.
+        let shape_radius = 0.5 * box_min_width(&shape.bounding_box());
         for &via in &entries.shove_vias {
             if self.board.items[via].shares_net_no(nets) {
                 continue;
@@ -348,7 +359,9 @@ impl RoutingBoard {
             if max_via_recursion_depth <= 0 {
                 return false;
             }
-            unimplemented!("pushing a via aside for a trace (MoveDrillItemAlgo) is not ported yet");
+            if !self.via_can_move_off(shape, layer, via, cl_class, shape_radius, max_recursion_depth, max_via_recursion_depth) {
+                return false;
+            }
         }
         if trace_piece_count == 0 {
             return true;
@@ -481,12 +494,15 @@ impl RoutingBoard {
             if item.shares_net_no(nets) {
                 continue;
             }
+            let ItemKind::Via { center, .. } = item.kind else { unreachable!("a via") };
             if max_via_recursion_depth > 0 {
-                unimplemented!("pushing a via aside for a pushed trace (MoveDrillItemAlgo.try_shove_via_points) is not ported yet");
+                let Some(&new_center) = self.try_shove_via_points(&trace_shape, layer, via, cl_class, false).first() else { return 0.0 };
+                if self.move_drill_check(via, new_center.x - center.x, new_center.y - center.y, max_recursion_depth, max_via_recursion_depth - 1, &[]) {
+                    continue;
+                }
             }
             // The via stays: the push goes as far as its projection less
             // its radius and the clearance.
-            let ItemKind::Via { center, .. } = item.kind else { unreachable!("a via") };
             let projection = start_corner.scalar_product(&end_corner, &FloatPoint::from_int(center)) / segment_length;
             let via_box = self.tree.shape(via, (layer - item.first_layer) as u32).bounding_box();
             let via_radius = 0.5 * box_max_width(&via_box);
@@ -553,7 +569,7 @@ impl RoutingBoard {
         if !shape.is_contained_in_box(&self.board.bounds) {
             return false;
         }
-        if !self.shove_vias_aside(shape, from_side, layer, nets, cl_class, ignore, max_via_recursion_depth, true) {
+        if !self.shove_vias_aside(shape, from_side, layer, nets, cl_class, ignore, max_recursion_depth, max_via_recursion_depth, true) {
             return false;
         }
         let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
@@ -729,23 +745,95 @@ impl RoutingBoard {
     /// `MoveDrillItemAlgo.shove_vias`, for when nothing needs pushing: the
     /// vias of other nets in the way are pushed aside, which is not ported.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn shove_vias_aside(&self, shape: &TileShape, from_side: Option<FromSide>, layer: i32, nets: &[i32], cl_class: i32, ignore: &[usize], max_via_recursion_depth: i32, copper_sharing_allowed: bool) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn shove_vias_aside(&mut self, shape: &TileShape, from_side: Option<FromSide>, layer: i32, nets: &[i32], cl_class: i32, ignore: &[usize], max_recursion_depth: i32, max_via_recursion_depth: i32, copper_sharing_allowed: bool) -> bool {
         let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
         let obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
         if !entries.store_items(self, &obstacles, false, copper_sharing_allowed) {
             return true;
         }
-        entries.shove_vias.retain(|v| !ignore.contains(v));
-        for &via in &entries.shove_vias {
+        let mut vias = std::mem::take(&mut entries.shove_vias);
+        vias.retain(|v| !ignore.contains(v));
+        let shape_radius = 0.5 * box_min_width(&shape.bounding_box());
+        for via in vias {
             if self.board.items[via].shares_net_no(nets) {
                 continue;
             }
             if max_via_recursion_depth <= 0 {
                 return true;
             }
-            unimplemented!("pushing a via aside (MoveDrillItemAlgo.shove_vias) is not ported yet");
+            // The first place the via can go clear of the shape; it stays
+            // if there is none.
+            let Some(delta) = self.via_move_off(shape, layer, via, cl_class, shape_radius, max_recursion_depth, max_via_recursion_depth, ignore) else { continue };
+            if !self.move_drill_insert(via, delta.0, delta.1, max_recursion_depth, max_via_recursion_depth - 1) {
+                return false;
+            }
         }
         true
+    }
+
+    /// Whether the via in the way of `shape` can move to one of its places
+    /// clear of it: `ShoveTraceAlgo.check`'s via loop.
+    #[allow(clippy::too_many_arguments)]
+    fn via_can_move_off(&self, shape: &TileShape, layer: i32, via: usize, cl_class: i32, shape_radius: f64, max_recursion_depth: i32, max_via_recursion_depth: i32) -> bool {
+        self.via_move_off(shape, layer, via, cl_class, shape_radius, max_recursion_depth, max_via_recursion_depth, &[]).is_some()
+    }
+
+    /// The first of the via's places clear of `shape` it can move to: the
+    /// nearest always tried, the others only within the via's and the
+    /// shape's radii. `MoveDrillItemAlgo.shove_vias`'s search.
+    #[allow(clippy::too_many_arguments)]
+    fn via_move_off(&self, shape: &TileShape, layer: i32, via: usize, cl_class: i32, shape_radius: f64, max_recursion_depth: i32, max_via_recursion_depth: i32, ignore: &[usize]) -> Option<(i64, i64)> {
+        let it = &self.board.items[via];
+        let center = it.center().expect("a via");
+        let ItemKind::Via { pads, .. } = &it.kind else { unreachable!("a via") };
+        let pad = pads[(layer - it.first_layer) as usize].as_ref().expect("a via's pad on the layer");
+        let max_dist = 0.5 * box_max_width(&pad.bounding_box()) + shape_radius;
+        let max_dist_square = max_dist * max_dist;
+        let from = FloatPoint::from_int(center);
+        for (i, c) in self.try_shove_via_points(shape, layer, via, cl_class, true).into_iter().enumerate() {
+            if i == 0 || from.distance_square(&FloatPoint::from_int(c)) <= max_dist_square {
+                let (dx, dy) = (c.x - center.x, c.y - center.y);
+                if self.move_drill_check(via, dx, dy, max_recursion_depth, max_via_recursion_depth - 1, ignore) {
+                    return Some((dx, dy));
+                }
+            }
+        }
+        None
+    }
+
+    /// Where a via in the way of `shape` could go to clear it, nearest
+    /// first: its centre pushed out of the shape grown by its radius and
+    /// clearance for an octagon, or by the least move of its grown shape
+    /// out of the shape grown by half the clearance otherwise; four tries
+    /// with `extended`, else one. `MoveDrillItemAlgo.try_shove_via_points`.
+    pub(crate) fn try_shove_via_points(&self, shape: &TileShape, layer: i32, via: usize, cl_class: i32, extended: bool) -> Vec<IntPoint> {
+        let it = &self.board.items[via];
+        let Some(via_shape) = self.tree.get_shape(via, (layer - it.first_layer) as u32) else { return Vec::new() };
+        let is_int_octagon = match shape {
+            TileShape::Box(_) | TileShape::Octagon(_) => true,
+            TileShape::Simplex(s) => s.is_int_octagon(),
+        };
+        let clearance = self.clearance_value(cl_class, it.clearance_class, layer) as f64;
+        let center = it.center().expect("a via");
+        let try_count = if extended { 4 } else { 1 };
+        if is_int_octagon {
+            // Plus 2, an empirical tolerance for diagonal pushes.
+            let shove_distance = 0.5 * box_max_width(&via_shape.bounding_box()) + clearance + 2.0;
+            let octagon = shape.bounding_octagon().expect("an octagon is bounded").offset(shove_distance);
+            octagon_nearest_border_projections(&octagon, center, try_count)
+        } else {
+            let shove_distance = 0.5 * clearance + 2.0;
+            let offset_shape = shape.enlarge(shove_distance);
+            let via_shape = via_shape.enlarge(0.5 * clearance);
+            nearest_relative_outside_locations(&offset_shape, &via_shape, try_count)
+                .into_iter()
+                .map(|d| {
+                    let r = d.round();
+                    IntPoint::new(center.x + r.x, center.y + r.y)
+                })
+                .collect()
+        }
     }
 
     /// Entries for a pad of `shape` to push into, for `ForcedPadAlgo.forced_pad`.
@@ -1580,6 +1668,110 @@ fn in_front_of_pad(line: &Line, pad_shape: &TileShape, from_side: i32, width: i6
         }
         _ => true,
     }
+}
+
+/// The points where rays from `p` inside the octagon in the eight 45 degree
+/// directions leave it, the `count` nearest first, none if `p` is outside.
+/// `IntOctagon.nearest_border_projections`.
+fn octagon_nearest_border_projections(o: &IntOctagon, p: IntPoint, count: usize) -> Vec<IntPoint> {
+    if count == 0 || !TileShape::Octagon(*o).contains_point(&crate::geometry::Point::Int(p)) {
+        return Vec::new();
+    }
+    let count = count.min(8);
+    let mut result: Vec<Option<IntPoint>> = vec![None; count];
+    let mut min_dist = vec![f64::MAX; count];
+    let inside = FloatPoint::from_int(p);
+    // IntOctagon.border_point, direction by direction in the enum's order:
+    // right, right 45, up, up 45, left, left 45, down, down 45.
+    let (lx, ly, rx, uy) = (o.left_x, o.bottom_y, o.right_x, o.top_y);
+    let (ulx, lrx, llx, urx) = (o.upper_left_diag_x, o.lower_right_diag_x, o.lower_left_diag_x, o.upper_right_diag_x);
+    let half = |v: i64| 0.5 * v as f64;
+    let border_points = [
+        IntPoint::new(rx.min(urx - p.y).min(lrx + p.y), p.y),
+        {
+            let x = (half(p.x - p.y + urx).ceil() as i64).min(rx).min(p.x - p.y + uy);
+            IntPoint::new(x, p.y - p.x + x)
+        },
+        IntPoint::new(p.x, uy.min(p.x - ulx).min(urx - p.x)),
+        {
+            let x = (half(p.x + p.y + ulx).floor() as i64).max(lx).max(p.x + p.y - uy);
+            IntPoint::new(x, p.y + p.x - x)
+        },
+        IntPoint::new(lx.max(ulx + p.y).max(llx - p.y), p.y),
+        {
+            let x = (half(p.x - p.y + llx).floor() as i64).max(lx).max(p.x - p.y + ly);
+            IntPoint::new(x, p.y - p.x + x)
+        },
+        IntPoint::new(p.x, ly.max(llx - p.x).max(p.x - lrx)),
+        {
+            let x = (half(p.x + p.y + lrx).ceil() as i64).min(rx).min(p.x + p.y - ly);
+            IntPoint::new(x, p.y + p.x - x)
+        },
+    ];
+    for border_point in border_points {
+        let d = inside.distance_square(&FloatPoint::from_int(border_point));
+        for i in 0..count {
+            if d < min_dist[i] {
+                for k in (i + 1..count).rev() {
+                    min_dist[k] = min_dist[k - 1];
+                    result[k] = result[k - 1];
+                }
+                min_dist[i] = d;
+                result[i] = Some(border_point);
+                break;
+            }
+        }
+    }
+    result.into_iter().map(|r| r.expect("eight directions fill every place")).collect()
+}
+
+/// The least moves taking `other` out of `shape` across each of its border
+/// lines, the `count` smallest first. `TileShape.nearest_relative_outside_locations`,
+/// its shift of the larger ones kept: it copies forwards, so they all
+/// become the one displaced.
+fn nearest_relative_outside_locations(shape: &TileShape, other: &TileShape, count: usize) -> Vec<FloatPoint> {
+    let n = shape.border_line_count();
+    if count == 0 || n < 3 || !shape.intersects(other) {
+        return Vec::new();
+    }
+    let result_count = count.min(n);
+    let mut coors: Vec<Option<FloatPoint>> = vec![None; result_count];
+    let mut min_dists = vec![f64::MAX; result_count];
+    let mut curr_ind = n - 1;
+    for next_ind in 0..n {
+        let line = shape.border_line(curr_ind);
+        let mut curr_max_dist = 0.0;
+        let mut curr_translate = FloatPoint::new(0.0, 0.0);
+        for corner_no in 0..other.border_line_count() {
+            let corner = other.corner_approx(corner_no);
+            if line.side_of_float((corner.x, corner.y), 0.0) == Side::Right {
+                let projection = corner.projection_approx(&line);
+                let dist = projection.distance_square(&corner);
+                if dist > curr_max_dist {
+                    curr_max_dist = dist;
+                    curr_translate = FloatPoint::new(projection.x - corner.x, projection.y - corner.y);
+                }
+            }
+        }
+        for j in 0..result_count {
+            if curr_max_dist < min_dists[j] {
+                for k in j + 1..result_count {
+                    min_dists[k] = min_dists[k - 1];
+                    coors[k] = coors[k - 1];
+                }
+                min_dists[j] = curr_max_dist;
+                coors[j] = Some(curr_translate);
+                break;
+            }
+        }
+        curr_ind = next_ind;
+    }
+    coors.into_iter().map(|c| c.expect("every border line gives a move")).collect()
+}
+
+/// `IntBox.min_width`.
+fn box_min_width(b: &IntBox) -> f64 {
+    ((b.ur.x - b.ll.x).min(b.ur.y - b.ll.y)) as f64
 }
 
 /// `ShapeTraceEntries.c_offset_add`.

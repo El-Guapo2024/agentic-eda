@@ -151,7 +151,7 @@ impl RoutingBoard {
         if !shape.is_contained_in_box(&self.board.bounds) {
             return false;
         }
-        if !self.shove_vias_aside(shape, Some(from_side), layer, nets, cl_class, ignore, max_via_recursion_depth, false) {
+        if !self.shove_vias_aside(shape, Some(from_side), layer, nets, cl_class, ignore, max_recursion_depth, max_via_recursion_depth, false) {
             return false;
         }
         let mut obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
