@@ -12,8 +12,9 @@
 //! passed over as in the Java.
 
 use crate::geometry::{Circle, Cutout, Direction, FloatPoint, IntBox, IntPoint, Line, LineSegment, Polyline, Side, Simplex, TileShape};
-use crate::model::{AreaKind, ItemKind};
+use crate::model::{AreaKind, FixedState, Item, ItemKind};
 
+use super::trace::StopConnection;
 use super::{nets_equal, RoutingBoard};
 
 /// `ForcedPadAlgo.CheckDrillResult`.
@@ -105,6 +106,8 @@ impl FromSide {
 /// makes a `PolylineTrace` of it, which draws an item number.
 #[derive(Debug, Clone)]
 pub(crate) struct SubstituteTrace {
+    /// The number it drew.
+    pub id: u32,
     pub polyline: Polyline,
     pub layer: i32,
     pub half_width: i64,
@@ -233,8 +236,8 @@ impl RoutingBoard {
         }
         let mut obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
         obstacles.retain(|i| !ignore.contains(i));
-        let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
-        if !entries.store_items(&obstacles, true, copper_sharing_allowed) {
+        let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
+        if !entries.store_items(self, &obstacles, true, copper_sharing_allowed) {
             return DrillCheck::NotDrillable;
         }
         if !entries.shove_vias.is_empty() {
@@ -253,7 +256,7 @@ impl RoutingBoard {
         if max_recursion_depth <= 0 || entries.max_stack_level > 1 {
             return DrillCheck::NotDrillable;
         }
-        if entries.next_substitute_trace_piece().is_some() {
+        if entries.next_substitute_trace_piece(self).is_some() {
             unimplemented!("pushing a trace aside for a new via (ForcedPadAlgo with substitute traces) is not ported yet");
         }
         result
@@ -311,11 +314,11 @@ impl RoutingBoard {
         if !shape.is_contained_in_box(&self.board.bounds) {
             return false;
         }
-        let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
+        let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
         let mut obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
         let ignore = self.ignore_items_at_tie_pins(shape, layer, nets);
         obstacles.retain(|i| !ignore.contains(i));
-        if !entries.store_items(&obstacles, false, true) {
+        if !entries.store_items(self, &obstacles, false, true) {
             return false;
         }
         let trace_piece_count = entries.trace_piece_count;
@@ -341,7 +344,7 @@ impl RoutingBoard {
         // sprung over what it can be, its segments facing the push checked
         // the same way.
         let mut spring_depth = max_spring_over_recursion_depth;
-        while let Some(mut piece) = entries.next_substitute_trace_piece() {
+        while let Some(mut piece) = entries.next_substitute_trace_piece(self) {
             if spring_depth > 0 {
                 let compensated_half_width = piece.half_width + self.plain_compensation(piece.cl_class, layer);
                 match self.spring_over(&piece.polyline, compensated_half_width, layer, &piece.nets, piece.cl_class, false, spring_depth, None) {
@@ -443,9 +446,9 @@ impl RoutingBoard {
             return 0.0;
         }
         let from_side = FromSide::of_segment(segment, &trace_shape, shove_to_the_left);
-        let mut entries = ShapeTraceEntries::new(self, &trace_shape, layer, nets, cl_class, Some(from_side));
+        let mut entries = ShapeTraceEntries::new(&trace_shape, layer, nets, cl_class, Some(from_side));
         let obstacles = self.overlapping_items_with_clearance(&trace_shape, layer, &[], cl_class);
-        if !entries.store_items(&obstacles, false, true) || entries.shape_contains_trace_tails {
+        if !entries.store_items(self, &obstacles, false, true) || entries.shape_contains_trace_tails {
             return 0.0;
         }
         let trace_piece_count = entries.trace_piece_count;
@@ -484,7 +487,7 @@ impl RoutingBoard {
             return 0.0;
         }
         let line_direction = segment.middle.direction();
-        while let Some(piece) = entries.next_substitute_trace_piece() {
+        while let Some(piece) = entries.next_substitute_trace_piece(self) {
             for i in 0..piece.polyline.lines.len().saturating_sub(2) {
                 let mut curr_segment = LineSegment::of(&piece.polyline, i + 1);
                 if shove_to_the_left {
@@ -525,7 +528,7 @@ impl RoutingBoard {
         cl_class: i32,
         max_recursion_depth: i32,
         max_via_recursion_depth: i32,
-        _max_spring_over_recursion_depth: i32,
+        max_spring_over_recursion_depth: i32,
     ) -> bool {
         if shape.is_empty() {
             return true;
@@ -536,11 +539,11 @@ impl RoutingBoard {
         if !self.shove_vias_aside(shape, from_side, layer, nets, cl_class, &[], max_via_recursion_depth, true) {
             return false;
         }
-        let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
+        let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
         let mut obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
         let ignore = self.ignore_items_at_tie_pins(shape, layer, nets);
         obstacles.retain(|i| !ignore.contains(i));
-        let obstacles_shovable = entries.store_items(&obstacles, false, true);
+        let obstacles_shovable = entries.store_items(self, &obstacles, false, true);
         if !entries.shove_vias.is_empty() {
             return false;
         }
@@ -553,22 +556,141 @@ impl RoutingBoard {
         if max_recursion_depth <= 0 {
             return false;
         }
-        if obstacles.iter().any(|&i| self.is_trace(i) && !self.board.items[i].shares_net_no(nets)) {
-            unimplemented!("cutting a trace of another net out of a pushed shape (ShapeTraceEntries.cutout_traces) is not ported yet");
+        let tails_exist_before = self.contains_trace_tails(&obstacles, nets);
+        self.cutout_traces(&obstacles, shape, nets, cl_class);
+        if matches!(shape, TileShape::Box(_)) {
+            unimplemented!("pushing traces aside in 90-degree mode is not ported");
         }
-        if entries.next_substitute_trace_piece().is_some() {
-            unimplemented!("pushing a trace aside (ShapeTraceEntries substitute traces) is not ported yet");
+        // Lay each piece round the shape, pushing in turn what is in its
+        // way, then put it on the board and tidy it.
+        let mut spring_depth = max_spring_over_recursion_depth;
+        while let Some(mut piece) = entries.next_substitute_trace_piece(self) {
+            if piece.polyline.first_corner().java_equals(&piece.polyline.last_corner()) {
+                continue;
+            }
+            if spring_depth > 0 {
+                let compensated_half_width = piece.half_width + self.plain_compensation(piece.cl_class, layer);
+                match self.spring_over(&piece.polyline, compensated_half_width, layer, &piece.nets, piece.cl_class, false, spring_depth, None) {
+                    Spring::Fail => return false,
+                    Spring::Same => {}
+                    Spring::New(polyline) => {
+                        spring_depth -= 1;
+                        piece.polyline = polyline;
+                    }
+                }
+            }
+            for i in 0..piece.polyline.lines.len() - 2 {
+                let (shape, from_side) = self.substitute_shape_and_from_side(&piece, i, false);
+                if !self.shove_insert(&shape, from_side, layer, &piece.nets, piece.cl_class, max_recursion_depth - 1, max_via_recursion_depth, spring_depth) {
+                    return false;
+                }
+            }
+            for i in 0..piece.polyline.corner_count() {
+                self.join_changed_area(piece.polyline.corner_float(i), layer);
+            }
+            let end_corners = [piece.polyline.first_corner(), piece.polyline.last_corner()];
+            let item = self.insert_numbered(Item {
+                id: piece.id,
+                kind: ItemKind::Trace { layer, half_width: piece.half_width, polyline: piece.polyline },
+                first_layer: layer,
+                last_layer: layer,
+                clearance_class: piece.cl_class,
+                fixed: FixedState::Unfixed,
+                component: 0,
+                nets: piece.nets.clone(),
+            });
+            // The Java normalizes in the changed area, and would throw, and
+            // pass over the throw, without one.
+            if let Some(clip) = self.changed_area_on(layer) {
+                let _ = self.normalize(item, Some(&clip));
+            }
+            if !tails_exist_before {
+                for corner in &end_corners {
+                    if let Some(tail) = self.get_trace_tail(corner, layer, &piece.nets) {
+                        let connection = self.connection_items(tail, StopConnection::Via);
+                        self.remove_items(&connection, false);
+                        for &net in &piece.nets {
+                            self.combine_traces(net);
+                        }
+                    }
+                }
+            }
         }
         true
+    }
+
+    /// Whether a trace among `items` not of `nets` ends at nothing.
+    /// `BasicBoard.contains_trace_tails`.
+    fn contains_trace_tails(&self, items: &[usize], nets: &[i32]) -> bool {
+        items.iter().any(|&i| self.is_trace(i) && !nets_equal(&self.board.items[i].nets, nets) && self.is_tail(i))
+    }
+
+    /// Cut the traces of other nets among `items` out of `shape`, grown by
+    /// each one's half width and clearance. `ShapeTraceEntries.cutout_traces`.
+    fn cutout_traces(&mut self, items: &[usize], shape: &TileShape, own_nets: &[i32], cl_class: i32) {
+        for &i in items {
+            if self.is_trace(i) && !self.board.items[i].shares_net_no(own_nets) {
+                self.cutout_trace(i, shape, cl_class);
+            }
+        }
+    }
+
+    /// `ShapeTraceEntries.cutout_trace`.
+    fn cutout_trace(&mut self, trace: usize, shape: &TileShape, cl_class: i32) {
+        if !self.is_on_board(trace) {
+            return;
+        }
+        let (polyline, layer, half_width) = self.trace(trace);
+        let polyline = polyline.clone();
+        let it = &self.board.items[trace];
+        let (nets, class) = (it.nets.clone(), it.clearance_class);
+        // Grown in two steps, for symmetry.
+        let cl_offset = self.clearance_value(class, cl_class, layer) as f64 + OFFSET_ADD;
+        let offset_shape = shape.offset(half_width as f64).offset(cl_offset);
+        let Cutout::Pieces(pieces) = offset_shape.cutout_polyline(&polyline) else { return };
+        if pieces.len() == 2 && offset_shape.is_outside(&pieces[0].first_corner()) && offset_shape.is_outside(&pieces[1].last_corner()) {
+            let [start, end]: [Polyline; 2] = pieces.try_into().expect("two pieces");
+            self.fast_cutout_trace(trace, start, end);
+        } else {
+            self.remove_item(trace);
+            for piece in pieces {
+                self.insert_trace_without_cleaning(piece, layer, half_width, &nets, class, FixedState::Unfixed);
+            }
+        }
+    }
+
+    /// The common cut: the trace's middle out, its two ends left as new
+    /// traces keeping its tree entries. `ShapeTraceEntries.fast_cutout_trace`.
+    fn fast_cutout_trace(&mut self, trace: usize, start_piece: Polyline, end_piece: Polyline) {
+        let (_, layer, half_width) = self.trace(trace);
+        let it = &self.board.items[trace];
+        let (nets, class) = (it.nets.clone(), it.clearance_class);
+        let piece_item = |rb: &mut RoutingBoard, polyline: Polyline| {
+            let id = rb.skip_id();
+            rb.push_item(Item {
+                id,
+                kind: ItemKind::Trace { layer, half_width, polyline },
+                first_layer: layer,
+                last_layer: layer,
+                clearance_class: class,
+                fixed: FixedState::Unfixed,
+                component: 0,
+                nets: nets.clone(),
+            })
+        };
+        let start = piece_item(self, start_piece);
+        let end = piece_item(self, end_piece);
+        self.reuse_entries_after_cutout(trace, start, end);
+        self.remove_item(trace);
     }
 
     /// `MoveDrillItemAlgo.shove_vias`, for when nothing needs pushing: the
     /// vias of other nets in the way are pushed aside, which is not ported.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn shove_vias_aside(&self, shape: &TileShape, from_side: Option<FromSide>, layer: i32, nets: &[i32], cl_class: i32, ignore: &[usize], max_via_recursion_depth: i32, copper_sharing_allowed: bool) -> bool {
-        let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
+        let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
         let obstacles = self.overlapping_items_with_clearance(shape, layer, &[], cl_class);
-        if !entries.store_items(&obstacles, false, copper_sharing_allowed) {
+        if !entries.store_items(self, &obstacles, false, copper_sharing_allowed) {
             return true;
         }
         entries.shove_vias.retain(|v| !ignore.contains(v));
@@ -589,8 +711,8 @@ impl RoutingBoard {
     /// a via is in the way.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn stored_pad_entries(&self, shape: &TileShape, from_side: Option<FromSide>, layer: i32, nets: &[i32], cl_class: i32, obstacles: &[usize], copper_sharing_allowed: bool) -> Option<i32> {
-        let mut entries = ShapeTraceEntries::new(self, shape, layer, nets, cl_class, from_side);
-        if !(entries.store_items(obstacles, true, copper_sharing_allowed) && entries.shove_vias.is_empty()) {
+        let mut entries = ShapeTraceEntries::new(shape, layer, nets, cl_class, from_side);
+        if !(entries.store_items(self, obstacles, true, copper_sharing_allowed) && entries.shove_vias.is_empty()) {
             return None;
         }
         Some(entries.trace_piece_count)
@@ -900,7 +1022,6 @@ struct EntryPoint {
 /// and the vias in it: what a push would have to move.
 /// `ShapeTraceEntries`, its linked list kept as indices into `nodes`.
 struct ShapeTraceEntries<'a> {
-    rb: &'a RoutingBoard,
     shape: &'a TileShape,
     layer: i32,
     own_nets: &'a [i32],
@@ -915,9 +1036,8 @@ struct ShapeTraceEntries<'a> {
 }
 
 impl<'a> ShapeTraceEntries<'a> {
-    fn new(rb: &'a RoutingBoard, shape: &'a TileShape, layer: i32, own_nets: &'a [i32], cl_class: i32, from_side: Option<FromSide>) -> Self {
+    fn new(shape: &'a TileShape, layer: i32, own_nets: &'a [i32], cl_class: i32, from_side: Option<FromSide>) -> Self {
         ShapeTraceEntries {
-            rb,
             shape,
             layer,
             own_nets,
@@ -932,14 +1052,14 @@ impl<'a> ShapeTraceEntries<'a> {
         }
     }
 
-    fn nets(&self, node: usize) -> &[i32] {
-        &self.rb.board.items[self.nodes[node].trace].nets
+    fn nets<'r>(&self, rb: &'r RoutingBoard, node: usize) -> &'r [i32] {
+        &rb.board.items[self.nodes[node].trace].nets
     }
 
     /// Sort `items` into what could be pushed aside and what blocks: false
     /// at the first blocker. `store_items`.
-    fn store_items(&mut self, items: &[usize], is_pad_check: bool, copper_sharing_allowed: bool) -> bool {
-        let board = &self.rb.board;
+    fn store_items(&mut self, rb: &RoutingBoard, items: &[usize], is_pad_check: bool, copper_sharing_allowed: bool) -> bool {
+        let board = &rb.board;
         for &i in items {
             let item = &board.items[i];
             let area_kind = match &item.kind {
@@ -965,7 +1085,7 @@ impl<'a> ShapeTraceEntries<'a> {
                     }
                 }
                 ItemKind::Trace { .. } => {
-                    if !self.store_trace(i) {
+                    if !self.store_trace(rb, i) {
                         return false;
                     }
                 }
@@ -983,15 +1103,14 @@ impl<'a> ShapeTraceEntries<'a> {
                 }
             }
         }
-        self.search_from_side();
-        self.resort();
-        self.calculate_stack_levels()
+        self.search_from_side(rb);
+        self.resort(rb);
+        self.calculate_stack_levels(rb)
     }
 
     /// Where the trace crosses the shape grown by its half width and
     /// clearance, sorted into the list round the border. `store_trace`.
-    fn store_trace(&mut self, trace: usize) -> bool {
-        let rb = self.rb;
+    fn store_trace(&mut self, rb: &RoutingBoard, trace: usize) -> bool {
         let item = &rb.board.items[trace];
         let (polyline, trace_layer, half_width) = rb.trace(trace);
         let cl_offset = rb.clearance_value(item.clearance_class, self.cl_class, trace_layer) as f64 + OFFSET_ADD;
@@ -1063,7 +1182,7 @@ impl<'a> ShapeTraceEntries<'a> {
         }
     }
 
-    fn search_from_side(&mut self) {
+    fn search_from_side(&mut self, rb: &RoutingBoard) {
         if self.from_side.is_some_and(|f| f.no >= 0) {
             return;
         }
@@ -1071,7 +1190,7 @@ impl<'a> ShapeTraceEntries<'a> {
         let mut no = 0;
         let mut entry = None;
         while let Some(c) = curr {
-            if self.rb.board.items[self.nodes[c].trace].shares_net_no(self.own_nets) {
+            if rb.board.items[self.nodes[c].trace].shares_net_no(self.own_nets) {
                 no = self.nodes[c].edge_no as i32;
                 entry = Some(self.nodes[c].entry_approx);
                 break;
@@ -1084,7 +1203,7 @@ impl<'a> ShapeTraceEntries<'a> {
     /// Start the list in the middle of the side the push comes from, and
     /// drop the entries between the first and last of each run of the same
     /// nets, and the own net's at either end. `resort`.
-    fn resort(&mut self) {
+    fn resort(&mut self, rb: &RoutingBoard) {
         let edge_count = self.shape.border_line_count();
         let Some(mut from_side) = self.from_side else { return };
         if from_side.no < 0 || from_side.no as usize >= edge_count {
@@ -1144,15 +1263,15 @@ impl<'a> ShapeTraceEntries<'a> {
         // Drop the entries between the first and last of each run.
         let Some(anchor) = self.anchor else { return };
         let mut prev = anchor;
-        let mut prev_nets = self.nets(prev).to_vec();
+        let mut prev_nets = self.nets(rb, prev).to_vec();
         let mut curr = self.nodes[anchor].next;
         let (mut curr_nets, mut next) = match curr {
-            Some(c) => (self.nets(c).to_vec(), self.nodes[c].next),
+            Some(c) => (self.nets(rb, c).to_vec(), self.nodes[c].next),
             None => (Vec::new(), None),
         };
         let mut before_prev: Option<usize> = None;
         while let Some(n) = next {
-            let next_nets = self.nets(n).to_vec();
+            let next_nets = self.nets(rb, n).to_vec();
             if net_nos_equal(&prev_nets, &curr_nets) && net_nos_equal(&curr_nets, &next_nets) {
                 self.nodes[prev].next = Some(n);
             } else {
@@ -1175,10 +1294,10 @@ impl<'a> ShapeTraceEntries<'a> {
             }
         }
         if let Some(a) = self.anchor {
-            if nets_equal(self.nets(a), self.own_nets) {
+            if nets_equal(self.nets(rb, a), self.own_nets) {
                 self.anchor = self.nodes[a].next;
                 if let Some(a) = self.anchor {
-                    if nets_equal(self.nets(a), self.own_nets) {
+                    if nets_equal(self.nets(rb, a), self.own_nets) {
                         self.anchor = self.nodes[a].next;
                     }
                 }
@@ -1188,10 +1307,10 @@ impl<'a> ShapeTraceEntries<'a> {
 
     /// How deep each crossing trace is stacked in the push; false where the
     /// traces do not nest. `calculate_stack_levels`.
-    fn calculate_stack_levels(&mut self) -> bool {
+    fn calculate_stack_levels(&mut self, rb: &RoutingBoard) -> bool {
         let Some(anchor) = self.anchor else { return true };
         let mut curr_entry = Some(anchor);
-        let mut curr_nets = self.nets(anchor).to_vec();
+        let mut curr_nets = self.nets(rb, anchor).to_vec();
         let mut curr_level = if net_nos_equal(&curr_nets, self.own_nets) { 0 } else { 1 };
         while let Some(ce) = curr_entry {
             if self.nodes[ce].stack_level < 0 {
@@ -1209,7 +1328,7 @@ impl<'a> ShapeTraceEntries<'a> {
             let mut first_foreign_entry = None;
             while let Some(ck) = check {
                 next_index += 1;
-                if net_nos_equal(self.nets(ck), &curr_nets) {
+                if net_nos_equal(self.nets(rb, ck), &curr_nets) {
                     index_of_last_occurrence_of_set = next_index;
                     last_own_entry = Some(ck);
                     self.nodes[ck].stack_level = self.nodes[ce].stack_level;
@@ -1241,7 +1360,7 @@ impl<'a> ShapeTraceEntries<'a> {
                     }
                 }
             }
-            curr_nets = self.nets(next_entry).to_vec();
+            curr_nets = self.nets(rb, next_entry).to_vec();
             self.nodes[ce].next = Some(next_entry);
             curr_entry = Some(next_entry);
         }
@@ -1250,7 +1369,7 @@ impl<'a> ShapeTraceEntries<'a> {
 
     /// The next run of entries of the deepest level, as the trace piece to
     /// go round the shape, the own net's skipped. `pop_piece`.
-    fn pop_piece(&mut self) -> Option<(usize, usize)> {
+    fn pop_piece(&mut self, rb: &RoutingBoard) -> Option<(usize, usize)> {
         let anchor = self.anchor?;
         let mut prev_first = None;
         let mut first = Some(anchor);
@@ -1265,7 +1384,7 @@ impl<'a> ShapeTraceEntries<'a> {
         let mut last = first;
         let mut after_last = self.nodes[first].next;
         while let Some(a) = after_last {
-            if self.nodes[a].stack_level == self.max_stack_level && nets_equal(self.nets(a), self.nets(first)) {
+            if self.nodes[a].stack_level == self.max_stack_level && nets_equal(self.nets(rb, a), self.nets(rb, first)) {
                 last = a;
                 after_last = self.nodes[a].next;
             } else {
@@ -1283,8 +1402,8 @@ impl<'a> ShapeTraceEntries<'a> {
             c = self.nodes[n].next;
         }
         self.trace_piece_count -= 1;
-        if nets_equal(self.nets(first), self.own_nets) {
-            return self.pop_piece();
+        if nets_equal(self.nets(rb, first), self.own_nets) {
+            return self.pop_piece(rb);
         }
         Some((first, last))
     }
@@ -1293,10 +1412,9 @@ impl<'a> ShapeTraceEntries<'a> {
     /// trace's line where it enters, along the shape grown by the trace's
     /// half width and clearance, to its line where it leaves. Pieces that
     /// come out empty are passed over. `next_substitute_trace_piece`.
-    fn next_substitute_trace_piece(&mut self) -> Option<SubstituteTrace> {
+    fn next_substitute_trace_piece(&mut self, rb: &RoutingBoard) -> Option<SubstituteTrace> {
         loop {
-            let (first, last) = self.pop_piece()?;
-            let rb = self.rb;
+            let (first, last) = self.pop_piece(rb)?;
             let trace = self.nodes[first].trace;
             let item = &rb.board.items[trace];
             let (_, _, half_width) = rb.trace(trace);
@@ -1321,8 +1439,8 @@ impl<'a> ShapeTraceEntries<'a> {
             if polyline.is_empty() {
                 continue;
             }
-            rb.skip_id();
-            return Some(SubstituteTrace { polyline, layer: self.layer, half_width, nets: item.nets.clone(), cl_class: item.clearance_class });
+            let id = rb.skip_id();
+            return Some(SubstituteTrace { id, polyline, layer: self.layer, half_width, nets: item.nets.clone(), cl_class: item.clearance_class });
         }
     }
 }

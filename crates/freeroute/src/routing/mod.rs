@@ -247,11 +247,29 @@ impl RoutingBoard {
     }
 
     fn insert_numbered(&mut self, item: Item) -> usize {
-        self.board.items.push(item);
-        self.on_board.push(true);
-        let i = self.board.items.len() - 1;
+        let i = self.push_item(item);
         self.trees_insert(i);
         i
+    }
+
+    /// Put a numbered item on the board but into no search tree yet.
+    fn push_item(&mut self, item: Item) -> usize {
+        self.board.items.push(item);
+        self.on_board.push(true);
+        self.board.items.len() - 1
+    }
+
+    /// Traces `start` and `end`, pushed on the board, are what is left of
+    /// trace `from` with a middle piece cut out: they take over its tree
+    /// entries where they can. `SearchTreeManager.reuse_entries_after_cutout`;
+    /// the default tree, whose layout never shows, has them entered afresh.
+    fn reuse_entries_after_cutout(&mut self, from: usize, start: usize, end: usize) {
+        self.tree.insert(&self.board, start);
+        self.tree.insert(&self.board, end);
+        let board = &self.board;
+        for t in self.autoroute_trees.get_mut().iter_mut().filter_map(|(_, t)| t.as_mut()) {
+            t.reuse_after_cutout(board, from, start, end);
+        }
     }
 
     /// Take an item off the board. `remove_item`.

@@ -271,6 +271,35 @@ impl AutorouteTree {
         self.refresh(board, to);
     }
 
+    /// A middle piece of trace `from` has been cut out, leaving traces
+    /// `start` and `end`, on the board: they take over `from`'s leaves
+    /// but the one where each was cut, which is new; the leaves of the
+    /// middle stay with `from`, to go with it. The pieces' shapes are their
+    /// own. `ShapeSearchTree.reuse_entries_after_cutout`.
+    pub fn reuse_after_cutout(&mut self, board: &Board, from: usize, start: usize, end: usize) {
+        self.grow(start.max(end));
+        let start_shapes = self.calculate(board, start);
+        let end_shapes = self.calculate(board, end);
+        let (start_count, end_count) = (start_shapes.len(), end_shapes.len());
+        let mut start_leaves = vec![None; start_count];
+        for (i, leaf) in start_leaves.iter_mut().enumerate().take(start_count - 1) {
+            *leaf = self.leaves[from][i].take();
+        }
+        start_leaves[start_count - 1] = self.insert_leaf(board, start, start_count - 1, start_count, start_shapes[start_count - 1].as_ref());
+        let mut end_leaves = vec![None; end_count];
+        end_leaves[0] = self.insert_leaf(board, end, 0, end_count, end_shapes[0].as_ref());
+        let from_count = self.leaves[from].len();
+        for (i, leaf) in end_leaves.iter_mut().enumerate().skip(1) {
+            *leaf = self.leaves[from][from_count - end_count + i].take();
+        }
+        self.leaves[start] = start_leaves;
+        self.shapes[start] = start_shapes;
+        self.leaves[end] = end_leaves;
+        self.shapes[end] = end_shapes;
+        self.refresh(board, start);
+        self.refresh(board, end);
+    }
+
     /// Trace `from` has been joined at the end of trace `to`, whose
     /// polyline on the board is now the joined one; `change_order` if
     /// `from` ran the other way. `to`'s leaves but its last stay, `from`'s

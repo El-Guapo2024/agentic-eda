@@ -526,7 +526,7 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
         ripup_cost /= detour;
         ripup_cost *= fanout_via_cost_factor;
         // (int) in Java, which saturates as `as` does.
-        (ripup_cost as i32).max(1).min(i32::MAX / 100)
+        (ripup_cost as i32).clamp(1, i32::MAX / 100)
     }
 
     /// Whether the room behind the element's one-dimensional door may be

@@ -105,7 +105,7 @@ impl RoutingBoard {
 
     /// Whether a trace ends at nothing, or a via connects on one layer
     /// only. `is_tail`, per kind.
-    fn is_tail(&self, item: usize) -> bool {
+    pub(crate) fn is_tail(&self, item: usize) -> bool {
         match &self.board.items[item].kind {
             ItemKind::Trace { .. } => self.start_contacts(item).is_empty() || self.end_contacts(item).is_empty(),
             ItemKind::Via { .. } => {
