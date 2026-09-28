@@ -15,13 +15,13 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use crate::door::{RoomId, RoomState};
-use crate::geometry::{FloatLine, FloatPoint, TileShape};
+use crate::geometry::{FloatLine, FloatPoint, Polyline, TileShape};
 use crate::model::ItemKind;
 
 use super::control::Control;
 use super::distance::DestinationDistance;
 use super::engine::{Adjustment, Engine, Expandable, TRACE_WIDTH_TOLERANCE};
-use super::shove::{two_point_polyline, DrillCheck};
+use crate::routing::shove::DrillCheck;
 
 /// One queued expansion. `MazeListElement`.
 #[derive(Debug, Clone)]
@@ -399,9 +399,9 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
                 let from = shape_entry_middle.round();
                 let to = connection_point.round();
                 if from != to {
-                    let polyline = two_point_polyline(from, to);
+                    let polyline = Polyline::from_points(&[from, to]);
                     let c = self.ctrl;
-                    let ok = self.engine.check_forced_trace_polyline(
+                    let ok = self.engine.rb.check_forced_trace_polyline(
                         &polyline,
                         c.trace_half_width[layer as usize],
                         layer,
@@ -592,7 +592,7 @@ impl<'e, 'b> MazeSearch<'e, 'b> {
         let check = |engine: &Engine, layer: i32| {
             let room = engine.drills[d].rooms[(layer - first) as usize];
             let shape = engine.graph.room(room).tile_shape().expect("a room");
-            engine.check_via_layer(c.via_radius[layer as usize], c.via_clearance_class, c.attach_smd_allowed, &shape, location, layer, &[c.net_no], c.max_shove_trace_recursion_depth, 0)
+            engine.rb.check_via_layer(c.via_radius[layer as usize], c.via_clearance_class, c.attach_smd_allowed, &shape, location, layer, &[c.net_no], c.max_shove_trace_recursion_depth, 0)
         };
         let via_lower_bound;
         let mut layer = from_layer;

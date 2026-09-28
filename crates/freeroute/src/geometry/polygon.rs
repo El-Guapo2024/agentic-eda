@@ -242,7 +242,7 @@ impl PolygonShape {
 /// The corners of `Polygon(Point[])`: repeats dropped, then the first
 /// corner lying straight between its neighbours, over again until there is
 /// neither. Neither test wraps round from the last corner to the first.
-fn polygon_corners(points: &[IntPoint]) -> Vec<IntPoint> {
+pub(crate) fn polygon_corners(points: &[IntPoint]) -> Vec<IntPoint> {
     let mut corners = points.to_vec();
     loop {
         let count = corners.len();

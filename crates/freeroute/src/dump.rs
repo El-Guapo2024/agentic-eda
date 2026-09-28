@@ -166,6 +166,10 @@ pub fn read_board(text: &str) -> Result<Board, String> {
     let mut min_trace_half_width = 0;
     let mut default_via_diameter = 0.0;
     let mut pin_edge_to_turn_dist = -1.0;
+    let mut board_max_trace_half_width = 1000;
+    let mut max_trace_half_width = 100;
+    let mut pull_tight_accuracy = 500;
+    let mut id_max = 0;
     let mut classes = 0usize;
     let mut cm: Vec<(usize, usize, usize, i64)> = Vec::new();
     let mut cmax: Vec<(usize, usize, i64)> = Vec::new();
@@ -203,6 +207,14 @@ pub fn read_board(text: &str) -> Result<Board, String> {
             "min_trace_half_width" => min_trace_half_width = w.int()?,
             "default_via_diameter" => default_via_diameter = w.float()?,
             "pin_edge_to_turn_dist" => pin_edge_to_turn_dist = w.float()?,
+            "trace_half_widths" => {
+                let n = w.ints(4)?;
+                min_trace_half_width = n[0];
+                board_max_trace_half_width = n[1];
+                max_trace_half_width = n[3];
+            }
+            "pull_tight_accuracy" => pull_tight_accuracy = w.int()? as i32,
+            "id_generator" => id_max = w.int()? as u32,
             "pin_neckdown" => {
                 let n = w.ints(3)?;
                 parts.entry(n[0] as u32).or_default().neckdown.push((n[1] as i32, n[2]));
@@ -347,6 +359,9 @@ pub fn read_board(text: &str) -> Result<Board, String> {
         min_trace_half_width,
         default_via_diameter,
         pin_edge_to_turn_dist,
+        board_max_trace_half_width,
+        max_trace_half_width,
+        pull_tight_accuracy,
     };
 
     let mut items = Vec::with_capacity(heads.len());
@@ -398,7 +413,7 @@ pub fn read_board(text: &str) -> Result<Board, String> {
         items.push(Item { id, kind, first_layer, last_layer, clearance_class, fixed, component, nets });
     }
 
-    Ok(Board { bounds: bounds.ok_or("no board record")?, layers, rules, settings, items, host_cad, area_section })
+    Ok(Board { bounds: bounds.ok_or("no board record")?, layers, rules, settings, items, host_cad, area_section, id_max })
 }
 
 /// The values of a map keyed 0, 1, 2, ... in key order; an error naming the

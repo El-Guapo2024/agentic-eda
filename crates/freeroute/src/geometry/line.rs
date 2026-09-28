@@ -185,6 +185,24 @@ pub enum Point {
 }
 
 impl Point {
+    /// `Point.equals`: integer points by coordinates, rational ones by
+    /// value; an integer point never equals a rational one.
+    pub fn java_equals(&self, other: &Point) -> bool {
+        match (self, other) {
+            (Point::Int(p), Point::Int(q)) => p == q,
+            (Point::Rational(p), Point::Rational(q)) => p.x * q.z == q.x * p.z && p.y * q.z == q.y * p.z,
+            _ => false,
+        }
+    }
+
+    /// The integer point, if this is one.
+    pub fn as_int(&self) -> Option<IntPoint> {
+        match self {
+            Point::Int(p) => Some(*p),
+            Point::Rational(_) => None,
+        }
+    }
+
     /// `Point.to_float`. A rational point at infinity (`z == 0`) comes out
     /// at `f32::MAX`, as in the Java.
     pub fn to_float(&self) -> (f64, f64) {

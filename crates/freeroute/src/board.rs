@@ -7,7 +7,7 @@
 //! Every tree shape is an obstacle grown by the clearance it needs from
 //! that trace class, so the search itself never measures a gap.
 
-use crate::geometry::{Circle, IntBox, IntOctagon, Line, PolygonShape, Polyline, PolylineArea, Simplex, TileShape};
+use crate::geometry::{Circle, IntBox, IntOctagon, IntPoint, Line, PolygonShape, Polyline, PolylineArea, PolylineShape, Simplex, TileShape};
 use crate::model::{Board, Item, ItemKind};
 use crate::rules::ClearanceMatrix;
 
@@ -154,6 +154,31 @@ impl AreaShape {
             AreaShape::WithHoles(a) => a.split_to_convex(),
         }
     }
+
+    /// `Area.bounding_box`: of the border, holes aside.
+    pub fn bounding_box(&self) -> IntBox {
+        fn polyline_shape_box(s: &PolylineShape) -> IntBox {
+            match s {
+                PolylineShape::Polygon(p) => corners_box(&p.corners),
+                PolylineShape::Tile(t) => t.bounding_box(),
+            }
+        }
+        match self {
+            AreaShape::Circle(c) => IntBox::new(c.center.x - c.radius, c.center.y - c.radius, c.center.x + c.radius, c.center.y + c.radius),
+            AreaShape::Polygon(p) => corners_box(&p.corners),
+            AreaShape::Tile(t) => t.bounding_box(),
+            AreaShape::WithHoles(a) => polyline_shape_box(&a.border),
+        }
+    }
+}
+
+/// The box round integer corners.
+fn corners_box(corners: &[IntPoint]) -> IntBox {
+    let mut b = IntBox::new(i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+    for c in corners {
+        b = IntBox::new(b.ll.x.min(c.x), b.ll.y.min(c.y), b.ur.x.max(c.x), b.ur.y.max(c.y));
+    }
+    b
 }
 
 /// The tree shapes of an area on its layer: its convex pieces, each grown

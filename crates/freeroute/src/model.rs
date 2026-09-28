@@ -99,6 +99,13 @@ pub struct Rules {
     /// `BoardRules.get_pin_edge_to_turn_dist`: how far from a pin's edge a
     /// trace may first turn; negative for no exit restriction.
     pub pin_edge_to_turn_dist: f64,
+    /// `BasicBoard.get_max_trace_half_width` when the board was read.
+    pub board_max_trace_half_width: i64,
+    /// `BoardRules.get_max_trace_half_width`: the widest trace any net
+    /// class allows, 100 at least.
+    pub max_trace_half_width: i64,
+    /// The interactive settings' `trace_pull_tight_accuracy`.
+    pub pull_tight_accuracy: i32,
 }
 
 impl Rules {
@@ -318,6 +325,8 @@ pub struct Board {
     pub host_cad: bool,
     /// The widest an area's tree shape may be, as the Java worked it out.
     pub area_section: f64,
+    /// The last item number drawn, `ItemIdNoGenerator.max_generated_no`.
+    pub id_max: u32,
 }
 
 impl Board {

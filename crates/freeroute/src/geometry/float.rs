@@ -22,6 +22,31 @@ impl FloatPoint {
         FloatPoint { x: p.x as f64, y: p.y as f64 }
     }
 
+    /// `Point.to_float`.
+    pub fn from_point(p: &super::line::Point) -> Self {
+        let (x, y) = p.to_float();
+        FloatPoint { x, y }
+    }
+
+    /// The point `new_length` from this one towards `to`; `to` itself if
+    /// they coincide. `FloatPoint.change_length`.
+    pub fn change_length(&self, to: &FloatPoint, new_length: f64) -> FloatPoint {
+        let dx = to.x - self.x;
+        let dy = to.y - self.y;
+        if dx == 0.0 && dy == 0.0 {
+            return *to;
+        }
+        let length = (dx * dx + dy * dy).sqrt();
+        FloatPoint { x: self.x + (dx * new_length) / length, y: self.y + (dy * new_length) / length }
+    }
+
+    /// The foot of the perpendicular from this point onto `line`.
+    /// `FloatPoint.projection_approx`.
+    pub fn projection_approx(&self, line: &super::line::Line) -> FloatPoint {
+        let fl = FloatLine::new(FloatPoint::new(line.a.x as f64, line.a.y as f64), FloatPoint::new(line.b.x as f64, line.b.y as f64));
+        fl.perpendicular_projection(self)
+    }
+
     /// `FloatPoint.middle_point`.
     pub fn middle_point(&self, to: &FloatPoint) -> FloatPoint {
         FloatPoint::new(0.5 * (self.x + to.x), 0.5 * (self.y + to.y))

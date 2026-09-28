@@ -3,8 +3,10 @@
 //! lines only bound the ends. Traces and the board outline's edges are
 //! widened from these, segment by segment.
 
-use super::line::{Line, Point, Side};
-use super::{IntOctagon, TileShape};
+use super::float::FloatPoint;
+use super::line::{Direction, Line, Point, Side};
+use super::segment::LineSegment;
+use super::{IntBox, IntOctagon, IntPoint, TileShape};
 
 /// A path of lines, with at least three or none. FreeRouting's `Polyline`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +32,234 @@ impl Polyline {
             }
         }
         Polyline { lines }
+    }
+
+    /// `Polyline(Point[])`, through `Polygon`: repeated corners and corners
+    /// straight between their neighbours dropped, the segments joined, and
+    /// the ends closed by lines square to the first and last segment.
+    /// Empty if fewer than two corners are left.
+    pub fn from_points(points: &[IntPoint]) -> Polyline {
+        let p = super::polygon::polygon_corners(points);
+        let n = p.len();
+        if n < 2 {
+            return Polyline { lines: Vec::new() };
+        }
+        let mut lines = Vec::with_capacity(n + 1);
+        let first_dir = Direction::of(p[1].x - p[0].x, p[1].y - p[0].y);
+        lines.push(Line::through(p[0], first_dir.turn_45_degree(2)));
+        for i in 1..n {
+            lines.push(Line::new(p[i - 1], p[i]));
+        }
+        let last_dir = Direction::of(p[n - 2].x - p[n - 1].x, p[n - 2].y - p[n - 1].y);
+        lines.push(Line::through(p[n - 1], last_dir.turn_45_degree(2)));
+        Polyline { lines }
+    }
+
+    /// `Polyline(Point, Point)`: the segment from `from` to `to`, both end
+    /// lines turned the same way from it -- unlike
+    /// [`from_points`](Self::from_points), whose last end line is turned
+    /// from the segment reversed. Empty if the points coincide.
+    pub fn from_two_points(from: IntPoint, to: IntPoint) -> Polyline {
+        if from == to {
+            return Polyline { lines: Vec::new() };
+        }
+        let dir = Direction::of(to.x - from.x, to.y - from.y);
+        Polyline { lines: vec![Line::through(from, dir.turn_45_degree(2)), Line::new(from, to), Line::through(to, dir.turn_45_degree(2))] }
+    }
+
+    /// The number of lines less one. `corner_count`.
+    pub fn corner_count(&self) -> usize {
+        self.lines.len().saturating_sub(1)
+    }
+
+    /// Fewer than three lines. `is_empty`.
+    pub fn is_empty(&self) -> bool {
+        self.lines.len() < 3
+    }
+
+    pub fn first_corner(&self) -> Point {
+        self.corner(0)
+    }
+
+    pub fn last_corner(&self) -> Point {
+        self.corner(self.lines.len() - 2)
+    }
+
+    /// `corner_approx` as a [`FloatPoint`].
+    pub fn corner_float(&self, no: usize) -> FloatPoint {
+        let (x, y) = self.corner_approx(no);
+        FloatPoint::new(x, y)
+    }
+
+    /// Empty, or every corner the same point. `is_point`.
+    pub fn is_point(&self) -> bool {
+        if self.lines.len() < 3 {
+            return true;
+        }
+        let first = self.corner(0);
+        (1..self.lines.len() - 1).all(|i| self.corner(i).java_equals(&first))
+    }
+
+    /// The lines in reverse order, each turned round, through
+    /// `Polyline(Line[])`. `reverse`.
+    pub fn reverse(&self) -> Polyline {
+        let reversed: Vec<Line> = self.lines.iter().rev().map(|l| l.opposite()).collect();
+        Polyline::from_lines(&reversed)
+    }
+
+    /// The length from corner `from` to corner `to`. `length_approx(int,
+    /// int)`.
+    pub fn length_between(&self, from: usize, to: usize) -> f64 {
+        let to = to.min(self.lines.len().saturating_sub(2));
+        let mut result = 0.0;
+        for i in from..to {
+            result += self.corner_float(i + 1).distance(&self.corner_float(i));
+        }
+        result
+    }
+
+    /// `length_approx()`.
+    pub fn length_approx(&self) -> f64 {
+        if self.lines.len() < 2 {
+            return 0.0;
+        }
+        self.length_between(0, self.lines.len() - 2)
+    }
+
+    /// The box around corners `from` to `to`, rounded outwards.
+    /// `bounding_box(int, int)`.
+    pub fn bounding_box_between(&self, from: usize, to: usize) -> IntBox {
+        let to = to.min(self.lines.len() - 2);
+        let (mut llx, mut lly, mut urx, mut ury) = (i32::MAX as f64, i32::MAX as f64, i32::MIN as f64, i32::MIN as f64);
+        for i in from..=to {
+            let (x, y) = self.corner_approx(i);
+            llx = llx.min(x);
+            lly = lly.min(y);
+            urx = urx.max(x);
+            ury = ury.max(y);
+        }
+        IntBox::new(llx.floor() as i64, lly.floor() as i64, urx.ceil() as i64, ury.ceil() as i64)
+    }
+
+    /// `bounding_box()`.
+    pub fn bounding_box(&self) -> IntBox {
+        self.bounding_box_between(0, self.corner_count().saturating_sub(1))
+    }
+
+    /// This polyline and `other` joined where they share an end corner:
+    /// `other`'s lines put in front if the start is shared, after if the
+    /// end is, turned round as needed. `None` where the Java returns this
+    /// polyline itself: no shared end, or either polyline empty.
+    /// `Polyline.combine`.
+    pub fn combine(&self, other: &Polyline) -> Option<Polyline> {
+        if self.lines.len() < 3 || other.lines.len() < 3 {
+            return None;
+        }
+        let (combine_at_start, other_at_start) = if self.first_corner().java_equals(&other.first_corner()) {
+            (true, true)
+        } else if self.first_corner().java_equals(&other.last_corner()) {
+            (true, false)
+        } else if self.last_corner().java_equals(&other.first_corner()) {
+            (false, true)
+        } else if self.last_corner().java_equals(&other.last_corner()) {
+            (false, false)
+        } else {
+            return None;
+        };
+        let (a, b) = (&self.lines, &other.lines);
+        let mut lines: Vec<Line> = Vec::with_capacity(a.len() + b.len() - 2);
+        if combine_at_start {
+            if other_at_start {
+                for i in 0..b.len() - 1 {
+                    lines.push(b[b.len() - i - 1].opposite());
+                }
+            } else {
+                lines.extend_from_slice(&b[..b.len() - 1]);
+            }
+            lines.extend_from_slice(&a[1..]);
+        } else {
+            lines.extend_from_slice(&a[..a.len() - 1]);
+            if other_at_start {
+                lines.extend_from_slice(&b[1..]);
+            } else {
+                for i in 1..b.len() {
+                    lines.push(b[b.len() - i - 1].opposite());
+                }
+            }
+        }
+        Some(Polyline::from_lines(&lines))
+    }
+
+    /// The polyline cut in two at line `line_no` by `end_line`, which ends
+    /// the first piece and starts the second. `None` if the lines are
+    /// parallel, the cut only touches an end, or a piece shrinks to a
+    /// point. `Polyline.split`.
+    pub fn split(&self, line_no: usize, end_line: &Line) -> Option<[Polyline; 2]> {
+        let arr = &self.lines;
+        if line_no < 1 || line_no > arr.len() - 2 {
+            return None;
+        }
+        if arr[line_no].is_parallel(end_line) {
+            return None;
+        }
+        let new_end_corner = arr[line_no].intersection(end_line);
+        if (line_no == 1 && new_end_corner.java_equals(&self.first_corner())) || (line_no >= arr.len() - 2 && new_end_corner.java_equals(&self.last_corner())) {
+            return None;
+        }
+        let first_piece: Vec<Line> = if self.corner(line_no - 1).java_equals(&new_end_corner) {
+            arr[..line_no + 1].to_vec()
+        } else {
+            let mut v = arr[..line_no + 1].to_vec();
+            v.push(*end_line);
+            v
+        };
+        let second_piece: Vec<Line> = if self.corner(line_no).java_equals(&new_end_corner) {
+            arr[line_no..].to_vec()
+        } else {
+            let mut v = vec![*end_line];
+            v.extend_from_slice(&arr[line_no..]);
+            v
+        };
+        let result = [Polyline::from_lines(&first_piece), Polyline::from_lines(&second_piece)];
+        if result[0].is_point() || result[1].is_point() {
+            return None;
+        }
+        Some(result)
+    }
+
+    /// Lines `from` to `to` left out, through `Polyline(Line[])`; `None`
+    /// where the Java returns this polyline, for a range out of bounds.
+    /// `skip_lines`.
+    pub fn skip_lines(&self, from: usize, to: usize) -> Option<Polyline> {
+        if to > self.lines.len() - 1 || from > to {
+            return None;
+        }
+        let mut lines = self.lines[..from].to_vec();
+        lines.extend_from_slice(&self.lines[to + 1..]);
+        Some(Polyline::from_lines(&lines))
+    }
+
+    /// Whether `p` lies on one of the segments. `contains`.
+    pub fn contains(&self, p: IntPoint) -> bool {
+        (1..self.lines.len().saturating_sub(1)).any(|i| LineSegment::of(self, i).contains(p))
+    }
+
+    /// Cut down to `new_line_count` lines, the last segment shortened to
+    /// about `last_segment_length` and ending on the grid. `shorten`.
+    pub fn shorten(&self, new_line_count: usize, last_segment_length: f64) -> Polyline {
+        let last_corner = self.corner_float(new_line_count - 2);
+        let prev_last_corner = self.corner_float(new_line_count - 3);
+        let new_last_corner = prev_last_corner.change_length(&last_corner, last_segment_length).round();
+        if Point::Int(new_last_corner).java_equals(&self.corner(self.corner_count() - 2)) {
+            return self.skip_lines(new_line_count - 1, new_line_count - 1).unwrap_or_else(|| self.clone());
+        }
+        let mut lines = self.lines[..new_line_count - 2].to_vec();
+        let old = self.lines[new_line_count - 2];
+        let first_line_point = if old.a == new_last_corner { old.b } else { old.a };
+        let new_prev_last_line = Line::new(first_line_point, new_last_corner);
+        lines.push(new_prev_last_line);
+        lines.push(Line::through(new_last_corner, new_prev_last_line.direction().turn_45_degree(6)));
+        Polyline::from_lines(&lines)
     }
 
     fn clamp_corner(&self, no: usize) -> usize {

@@ -22,6 +22,7 @@ pub mod geometry;
 pub mod searchtree;
 pub mod room;
 pub mod door;
+pub mod routing;
 pub mod rules;
 pub mod model;
 pub mod board;

@@ -7,6 +7,10 @@
 //! centre line plus half its own class's clearance to itself (see
 //! [`crate::board::clearance_offset`]).
 
+/// `ClearanceMatrix.clearance_safety_margin`: added to every clearance the
+/// board's own checks look up.
+pub const CLEARANCE_SAFETY_MARGIN: i64 = 16;
+
 /// Clearances between classes, per layer. Class 0 is FreeRouting's null
 /// class, which keeps no clearance.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +54,16 @@ impl ClearanceMatrix {
             return 0;
         }
         self.values[self.index(i as usize, j as usize, layer as usize)]
+    }
+
+    /// `get_value(i, j, layer, true)`: with the safety margin, but 0 out
+    /// of range.
+    pub fn get_with_margin(&self, i: i32, j: i32, layer: i32) -> i64 {
+        let inside = |v: i32, n: usize| v >= 0 && (v as usize) < n;
+        if !(inside(i, self.classes) && inside(j, self.classes) && inside(layer, self.layers)) {
+            return 0;
+        }
+        self.values[self.index(i as usize, j as usize, layer as usize)] + CLEARANCE_SAFETY_MARGIN
     }
 
     /// Half of `class`'s clearance to itself, rounded up: the share a trace

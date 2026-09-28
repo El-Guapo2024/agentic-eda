@@ -15,6 +15,9 @@
 //   host_cad <0|1>
 //   area_section <widest an area's tree shape may be>
 //   min_trace_half_width <value>
+//   trace_half_widths <board min> <board max> <rules min> <rules max>
+//   pull_tight_accuracy <settings value>
+//   id_generator <max generated item number>
 //   default_via_diameter <value>
 //   pin_edge_to_turn_dist <value>
 //   classes <count>
@@ -46,6 +49,11 @@
 //   path <door> <section>                         (backtrack from the result)
 //   located <start item> <start layer> <target item> <target layer> | located none
 //   located_trace <layer> <n> <x y>...            (LocateFoundConnectionAlgo's traces, in order)
+//   id_max <n>                                    (the item number generator before inserting)
+//   inserted <0|1> <id max>                       (InsertFoundConnectionAlgo, then every trace and via:)
+//   ins_trace <id> <layer> <half width> <class> <fixed> <net> <n> <ax ay bx by>...
+//   ins_via <id> <x> <y> <padstack> <class> <fixed> <net>
+//   optimized <id max>, opt_trace, opt_via       (after BatchAutorouter's opt_changed_area)
 //
 // A door is "door <room> <room> <dimension>", "target <item id> <entry> <room>",
 // "drill <x> <y> <first layer> <last layer>" or "page <llx> <lly> <urx> <ury>";
@@ -166,6 +174,10 @@ public class MazeParity {
     }
     out.append("area_section ").append(area_section).append('\n');
     out.append("min_trace_half_width ").append(board.get_min_trace_half_width()).append('\n');
+    out.append("trace_half_widths ").append(board.get_min_trace_half_width()).append(' ').append(board.get_max_trace_half_width())
+        .append(' ').append(board.rules.get_min_trace_half_width()).append(' ').append(board.rules.get_max_trace_half_width()).append('\n');
+    out.append("pull_tight_accuracy ").append(handling.get_settings().get_trace_pull_tight_accuracy()).append('\n');
+    out.append("id_generator ").append(board.communication.id_no_generator.max_generated_no()).append('\n');
     out.append("default_via_diameter ").append(board.rules.get_default_via_diameter()).append('\n');
     out.append("pin_edge_to_turn_dist ").append(board.rules.get_pin_edge_to_turn_dist()).append('\n');
 
@@ -478,6 +490,24 @@ public class MazeParity {
           located_out.append('\n');
         }
       }
+      if (located != null && located.start_item != null) {
+        // The rest of AutorouteEngine.autoroute_connection, as the batch
+        // autorouter runs it: clear the engine, insert the connection;
+        // then BatchAutorouter's opt_changed_area.
+        engine.clear();
+        board.start_marking_changed_area();
+        located_out.append("id_max ").append(board.communication.id_no_generator.max_generated_no()).append('\n');
+        app.freerouting.autoroute.InsertFoundConnectionAlgo inserted =
+            app.freerouting.autoroute.InsertFoundConnectionAlgo.get_instance(located, board, ctrl);
+        located_out.append("inserted ").append(inserted == null ? 0 : 1).append(' ')
+            .append(board.communication.id_no_generator.max_generated_no()).append('\n');
+        routes(board, "ins", located_out);
+        if (inserted != null) {
+          board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), ctrl.trace_costs, null, 1000);
+          located_out.append("optimized ").append(board.communication.id_no_generator.max_generated_no()).append('\n');
+          routes(board, "opt", located_out);
+        }
+      }
       locate_records = located_out.toString();
     }
     if (dest == null) {
@@ -496,6 +526,32 @@ public class MazeParity {
     }
     out.append(locate_records);
     System.out.print(out);
+  }
+
+  /** Every trace and via on the board, in the board's order. */
+  private static void routes(RoutingBoard board, String tag, StringBuilder out) {
+    Iterator<UndoableObjects.UndoableObjectNode> it = board.item_list.start_read_object();
+    for (;;) {
+      Item item = (Item) board.item_list.read_object(it);
+      if (item == null) {
+        break;
+      }
+      if (item instanceof PolylineTrace trace) {
+        Line[] lines = trace.polyline().arr;
+        out.append(tag).append("_trace ").append(item.get_id_no()).append(' ').append(trace.get_layer()).append(' ')
+            .append(trace.get_half_width()).append(' ').append(item.clearance_class_no()).append(' ')
+            .append(item.get_fixed_state().ordinal()).append(' ').append(item.get_net_no(0)).append(' ').append(lines.length);
+        for (Line l : lines) {
+          out.append(' ').append(line(l));
+        }
+        out.append('\n');
+      } else if (item instanceof Via via) {
+        IntPoint c = (IntPoint) via.get_center();
+        out.append(tag).append("_via ").append(item.get_id_no()).append(' ').append(c.x).append(' ').append(c.y).append(' ')
+            .append(via.get_padstack().no).append(' ').append(item.clearance_class_no()).append(' ')
+            .append(item.get_fixed_state().ordinal()).append(' ').append(item.get_net_no(0)).append('\n');
+      }
+    }
   }
 
   /** The located connection's records, written after the path. */

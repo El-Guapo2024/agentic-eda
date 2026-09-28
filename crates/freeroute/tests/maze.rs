@@ -324,7 +324,8 @@ mod search {
         };
         let (start, dest) = (ids("start_item"), ids("dest_item"));
         let ctrl = Control::for_batch(&board, net, 1);
-        let mut engine = Engine::new(&board, net, ctrl.trace_clearance_class);
+        let rb = eda_freeroute::routing::RoutingBoard::new(board.clone());
+        let mut engine = Engine::new(&rb, net, ctrl.trace_clearance_class);
         let want: Vec<&str> = dump.lines().filter(|l| l.starts_with("step ") || l.starts_with("result ") || l.starts_with("path ") || l.starts_with("maze ")).collect();
         let Some(mut maze) = MazeSearch::new(&mut engine, &ctrl, &start, &dest) else {
             return Some(if want.first() == Some(&"maze none") { Ok(0) } else { Err(format!("the port found no start; FreeRouting: {:?}", want.first())) });
@@ -440,7 +441,8 @@ fn print_rooms() {
         line.split_whitespace().skip(1).map(|s| board.items.iter().position(|i| i.id == s.parse::<u32>().unwrap()).unwrap()).collect()
     };
     let ctrl = Control::for_batch(&board, net, 1);
-    let mut engine = Engine::new(&board, net, ctrl.trace_clearance_class);
+    let rb = eda_freeroute::routing::RoutingBoard::new(board.clone());
+    let mut engine = Engine::new(&rb, net, ctrl.trace_clearance_class);
     let mut maze = MazeSearch::new(&mut engine, &ctrl, &ids("start_item"), &ids("dest_item")).expect("a start");
     for _ in 0..steps {
         if !maze.occupy_next_element() {

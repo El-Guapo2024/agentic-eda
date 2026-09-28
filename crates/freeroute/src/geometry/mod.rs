@@ -6,22 +6,26 @@
 //! cliff for boards measured in micrometres.
 
 mod circle;
+mod cut;
 mod float;
 mod line;
 mod octagon;
 mod polygon;
 mod polyline;
 mod query;
+mod segment;
 mod simplex;
 mod tile;
 
 pub use circle::Circle;
+pub use cut::Cutout;
 pub use float::{FloatLine, FloatPoint};
 pub use line::{Direction, Line, Point, RationalPoint, Side};
 pub(crate) use octagon::CRIT;
 pub use octagon::IntOctagon;
 pub use polygon::{PolygonShape, PolylineArea, PolylineShape};
 pub use polyline::Polyline;
+pub use segment::{compare_x_y, LineSegment};
 pub use simplex::Simplex;
 pub use tile::TileShape;
 

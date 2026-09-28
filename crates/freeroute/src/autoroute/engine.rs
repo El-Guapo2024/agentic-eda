@@ -10,8 +10,8 @@ use crate::board::{tree_shapes, TreeKind};
 use crate::door::{DoorId, Entry, RoomGraph, RoomId, RoomState};
 use crate::geometry::{FloatLine, FloatPoint, IntBox, IntOctagon, IntPoint, Line, Point, PolylineArea, PolylineShape, Side, TileShape, CRIT};
 use crate::model::{Board, ItemKind};
+use crate::routing::RoutingBoard;
 use crate::room::TreeObject;
-use crate::searchtree::ShapeTree;
 
 /// Added to a trace's half width wherever door widths are judged.
 /// `AutorouteEngine.TRACE_WIDTH_TOLERANCE`.
@@ -201,77 +201,14 @@ impl DrillPageArray {
     }
 }
 
-/// The plain (default) search tree: every item's exact shapes, clearance
-/// uncompensated. What the via and push checks search.
-pub struct DefaultTree {
-    /// Each entry: item index, shape index, layer.
-    tree: ShapeTree<(usize, u32, i32)>,
-    shapes: HashMap<(usize, u32), TileShape>,
-}
-
-impl DefaultTree {
-    pub fn new(board: &Board) -> Self {
-        let mut tree = ShapeTree::new();
-        let mut shapes = HashMap::new();
-        for (i, item) in board.items.iter().enumerate() {
-            let all = tree_shapes(board, item, TreeKind::Plain, 0);
-            let count = all.len();
-            for (k, shape) in all.into_iter().enumerate() {
-                let Some(shape) = shape else { continue };
-                let Some(bounds) = shape.bounding_octagon() else { continue };
-                tree.insert(bounds, (i, k as u32, item.shape_layer(k, board.layer_count(), count)));
-                shapes.insert((i, k as u32), shape);
-            }
-        }
-        DefaultTree { tree, shapes }
-    }
-
-    pub fn shape(&self, item: usize, index: u32) -> &TileShape {
-        &self.shapes[&(item, index)]
-    }
-
-    /// The entries whose bounding octagons meet `bounds`, in FreeRouting's
-    /// order: by item number descending, then shape index; each with its
-    /// layer. `MinAreaTree.overlaps`.
-    pub fn candidates(&self, board: &Board, bounds: &IntOctagon) -> Vec<(usize, u32, i32)> {
-        let mut found: Vec<(usize, u32, i32)> = self.tree.overlaps(bounds).into_iter().map(|l| *self.tree.payload(l)).collect();
-        found.sort_by(|a, b| board.items[b.0].id.cmp(&board.items[a.0].id).then(a.1.cmp(&b.1)));
-        found
-    }
-
-    /// The entries touching `shape` on `layer` (every layer if negative),
-    /// skipping items no obstacle to one of `ignore_nets`, in FreeRouting's
-    /// order: by item number descending, then shape index; each with its
-    /// layer. `ShapeSearchTree.overlapping_tree_entries`.
-    pub fn overlapping_entries(&self, board: &Board, shape: &TileShape, layer: i32, ignore_nets: &[i32]) -> Vec<(usize, u32, i32)> {
-        let Some(bounds) = shape.bounding_octagon() else { return Vec::new() };
-        let found = self.candidates(board, &bounds);
-        let is_45_degree = matches!(shape, TileShape::Octagon(_));
-        found
-            .into_iter()
-            .filter(|&(i, k, l)| {
-                if layer >= 0 && l != layer {
-                    return false;
-                }
-                let item = &board.items[i];
-                if ignore_nets.iter().any(|&net| !item.is_obstacle(net)) {
-                    return false;
-                }
-                let s = self.shape(i, k);
-                (is_45_degree && matches!(s, TileShape::Octagon(_))) || s.intersects(shape)
-            })
-            .collect()
-    }
-}
-
 /// The search state for one connection. `AutorouteEngine`, with the
 /// objects it hands the maze search.
 pub struct Engine<'b> {
+    pub rb: &'b RoutingBoard,
     pub board: &'b Board,
     pub net: i32,
     pub trace_clearance_class: i32,
     pub graph: RoomGraph<TreeItem>,
-    pub default_tree: DefaultTree,
     pub pages: DrillPageArray,
     pub targets: Vec<TargetDoor>,
     room_targets: HashMap<RoomId, Vec<usize>>,
@@ -291,11 +228,16 @@ impl<'b> Engine<'b> {
     /// `trace_class`: the autoroute tree built from the board, items in
     /// board order, and the drill pages. `AutorouteEngine(board, class,
     /// false)` then `init_connection(net)`.
-    pub fn new(board: &'b Board, net: i32, trace_class: i32) -> Self {
+    pub fn new(rb: &'b RoutingBoard, net: i32, trace_class: i32) -> Self {
+        let board = &rb.board;
         let mut graph = RoomGraph::new(board.bounds, net);
         let mut shapes = HashMap::new();
         let mut tree_counts = Vec::with_capacity(board.items.len());
         for (i, item) in board.items.iter().enumerate() {
+            if !rb.is_on_board(i) {
+                tree_counts.push(0);
+                continue;
+            }
             let tree = tree_shapes(board, item, TreeKind::FortyFive, trace_class);
             let count = tree.len();
             tree_counts.push(count);
@@ -325,11 +267,11 @@ impl<'b> Engine<'b> {
         }
         let max_page_width = ((5.0 * board.rules.default_via_diameter) as i64).max(10_000);
         Engine {
+            rb,
             board,
             net,
             trace_clearance_class: trace_class,
             graph,
-            default_tree: DefaultTree::new(board),
             pages: DrillPageArray::new(board.bounds, max_page_width, board.layer_count()),
             targets: Vec::new(),
             room_targets: HashMap::new(),
@@ -567,7 +509,7 @@ impl<'b> Engine<'b> {
         self.pages.pages[page].net_no = self.net;
         let page_shape = self.pages.pages[page].shape;
         let board = self.board;
-        let overlaps = self.default_tree.overlapping_entries(board, &TileShape::Box(page_shape), -1, &[]);
+        let overlaps = self.rb.tree.overlapping_entries(board, &TileShape::Box(page_shape), -1, &[]);
         let mut cutouts = Vec::new();
         let mut prev_obstacle = TileShape::Box(IntBox::new(CRIT, CRIT, -CRIT, -CRIT));
         for (i, k, _) in overlaps {
@@ -578,7 +520,7 @@ impl<'b> Engine<'b> {
             if attach_smd && item.drill_allowed() {
                 continue;
             }
-            let obstacle = self.default_tree.shape(i, k).clone();
+            let obstacle = self.rb.tree.shape(i, k).clone();
             if !prev_obstacle.contains_shape(&obstacle) {
                 let cutout = obstacle.intersection(&TileShape::Box(page_shape));
                 if cutout.dimension() == 2 {
@@ -614,7 +556,7 @@ impl<'b> Engine<'b> {
         // board.overlapping_items: the default tree's items on the layer.
         let mut result = None;
         let mut seen = Vec::new();
-        for (i, _, _) in self.default_tree.overlapping_entries(self.board, shape, layer, &[]) {
+        for (i, _, _) in self.rb.tree.overlapping_entries(self.board, shape, layer, &[]) {
             if seen.contains(&i) {
                 continue;
             }
