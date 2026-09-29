@@ -330,7 +330,17 @@ fn write_footprint(
     };
 
     for pad in &pads {
-        let px = mm(pad.at.0);
+        // Our local frame is the part seen from the top; a bottom-side
+        // part's x is mirrored before it is rotated (footprint::to_board,
+        // which the placer, router and gates all go through). KiCad
+        // mirrors nothing when it loads a footprint -- it rotates and
+        // translates the pad's `(at x y)` whatever the layer -- so the file
+        // has to carry the mirrored x. Written as-is, every bottom-side
+        // pin landed across the part from the copper routed to it (a
+        // 0603's two pins swapped nets). The angle needs nothing: our pads
+        // are symmetric about their own axes, so mirroring one only moves
+        // it.
+        let px = mm(if fp.side == Side::Bottom { -pad.at.0 } else { pad.at.0 });
         let py = mm(pad.at.1);
         let (w, h) = pad.size;
         let wmm = mm(w);
@@ -503,5 +513,73 @@ mod tests {
         design.placement = None;
         let err = export_kicad_pcb(&design, &model, &meta()).unwrap_err();
         assert!(err.iter().any(|e| e.check == "kicad.no_placement"));
+    }
+
+    /// Pad centres, keyed "REF.PIN", as KiCad computes them when it loads
+    /// the file: the pad's `(at x y)` rotated by its footprint's angle
+    /// (KiCad's `RotatePoint`), then moved to the footprint's position. No
+    /// mirroring, whatever layer the footprint is on -- checked against
+    /// kicad-cli by `kicad_cli_drc_bottom_side_pads` in
+    /// tests/kicad_cli_drc.rs.
+    fn kicad_pad_centres(pcb: &str) -> BTreeMap<String, (f64, f64)> {
+        fn at(line: &str) -> Vec<f64> {
+            let rest = &line[line.find("(at ").unwrap() + 4..];
+            rest[..rest.find(')').unwrap()].split_whitespace().map(|v| v.parse().unwrap()).collect()
+        }
+        let mut out = BTreeMap::new();
+        let (mut origin, mut angle, mut reference) = ((0.0, 0.0), 0.0_f64, String::new());
+        for line in pcb.lines() {
+            let t = line.trim_start();
+            if line.starts_with("\t\t(at ") {
+                let v = at(line);
+                origin = (v[0], v[1]);
+                angle = v[2].to_radians();
+            } else if let Some(rest) = t.strip_prefix("(property \"Reference\" \"") {
+                reference = rest[..rest.find('"').unwrap()].to_string();
+            } else if let Some(rest) = t.strip_prefix("(pad \"") {
+                let v = at(line);
+                let (sin, cos) = angle.sin_cos();
+                let (x, y) = (v[0] * cos + v[1] * sin, -v[0] * sin + v[1] * cos);
+                out.insert(format!("{reference}.{}", &rest[..rest.find('"').unwrap()]), (origin.0 + x, origin.1 + y));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn pads_land_where_the_engine_put_them_on_either_side() {
+        // The engine mirrors a bottom-side part's local x before rotating
+        // it (footprint::to_board); KiCad does not, so the file has to
+        // carry the mirrored x. Written as-is, a bottom SOT-23's pins land
+        // on the wrong column and a bottom 0603 swaps pins 1 and 2 --
+        // nets and all -- so every track routed to them misses.
+        let (mut design, mut model) = fixture();
+        model.parts.push(part("U2", "SOT-23", vec![pin("1", PinKind::Signal), pin("2", PinKind::Signal), pin("3", PinKind::Signal)]));
+        design.placement.as_mut().unwrap().footprints.push(FootprintInstance {
+            id: "U2".into(),
+            at: Point { x: 15_000, y: 5_000 },
+            rot: 90_000,
+            side: Side::Bottom,
+            label: Default::default(),
+        });
+        let kicad = kicad_pad_centres(&export_kicad_pcb(&design, &model, &meta()).unwrap());
+        let mut checked = 0;
+        for fp in &design.placement.as_ref().unwrap().footprints {
+            let part = model.part(&fp.id).unwrap();
+            for pad in eda_model::footprint::placed_pads(&model, part, fp).unwrap() {
+                let key = format!("{}.{}", fp.id, pad.number);
+                let (x, y) = kicad[&key];
+                let (ex, ey) = (pad.center.x as f64 / 1000.0, pad.center.y as f64 / 1000.0);
+                assert!(
+                    (x - ex).abs() < 0.001 && (y - ey).abs() < 0.001,
+                    "{key} ({:?}, rot {}): KiCad puts it at ({x:.3}, {y:.3}), the engine routed to ({ex:.3}, {ey:.3})",
+                    fp.side,
+                    fp.rot
+                );
+                checked += 1;
+            }
+        }
+        // U1 top SOT-23, C1 bottom 0603, U2 bottom SOT-23.
+        assert_eq!(checked, 8);
     }
 }
