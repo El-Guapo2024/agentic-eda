@@ -616,17 +616,23 @@ fn insertion_matches_freerouting() {
     assert!(failures.is_empty(), "{} insertions differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
 }
 
-/// The dumps of first autoroute passes: `FREEROUTE_PASS_DIR`, else
-/// `tests/pass`.
+/// The dumps of autoroute passes: `FREEROUTE_PASS_DIR`, else `tests/pass`
+/// and the boards of the designs in `tests/design`.
 fn pass_dumps() -> Vec<PathBuf> {
-    let dir = match std::env::var("FREEROUTE_PASS_DIR") {
+    let txt = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "txt")).collect()).unwrap_or_default()
+    };
+    let mut v = match std::env::var("FREEROUTE_PASS_DIR") {
         Ok(d) => {
             let p = PathBuf::from(&d);
-            if p.is_absolute() { p } else { Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(p) }
+            txt(&if p.is_absolute() { p } else { Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(p) })
         }
-        Err(_) => Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pass"),
+        Err(_) => {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let designs = std::fs::read_dir(root.join("tests/design")).map(|r| r.filter_map(|e| e.ok().map(|e| e.path().join("board.txt"))).filter(|p| p.exists()).collect()).unwrap_or_default();
+            [txt(&root.join("tests/pass")), designs].concat()
+        }
     };
-    let mut v: Vec<PathBuf> = std::fs::read_dir(&dir).map(|r| r.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "txt")).collect()).unwrap_or_default();
     v.sort();
     v
 }
@@ -755,7 +761,9 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
 fn pass_matches_freerouting() {
     let (mut boards, mut connections, mut unported, mut failures) = (0, 0, Vec::new(), Vec::new());
     for path in pass_dumps() {
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        // A design's dump is named for its directory.
+        let named = if path.ends_with("board.txt") { path.parent().unwrap() } else { &path };
+        let name = named.file_name().unwrap().to_string_lossy().to_string();
         let dump = std::fs::read_to_string(&path).unwrap();
         match std::panic::catch_unwind(|| replay_pass(&dump)) {
             Ok(None) => {}

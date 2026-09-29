@@ -1,0 +1,150 @@
+fixture two_pin_nets_seed1.dsn
+board -1000 -1000 91000 91000
+layer 0 1 F.Cu
+layer 1 1 B.Cu
+host_cad 1
+area_section 50000.0
+min_trace_half_width 10000
+trace_half_widths 10000 1000 1000 1000
+pull_tight_accuracy 500
+id_generator 13
+default_via_diameter 6000.0
+pin_edge_to_turn_dist 1000.0
+classes 4
+cm 1 1 0 2020
+cm 1 1 1 2020
+cm 1 2 0 4920
+cm 1 2 1 4920
+cm 1 3 0 20
+cm 1 3 1 20
+cmax 1 0 4920
+cmax 1 1 4920
+cm 2 1 0 4920
+cm 2 1 1 4920
+cm 2 2 0 2020
+cm 2 2 1 2020
+cm 2 3 0 4920
+cm 2 3 1 4920
+cmax 2 0 4920
+cmax 2 1 4920
+cm 3 1 0 20
+cm 3 1 1 20
+cm 3 2 0 4920
+cm 3 2 1 4920
+cm 3 3 0 2020
+cm 3 3 1 2020
+cmax 3 0 4920
+cmax 3 1 4920
+padstack 1 0 0 6400.0 -1
+padstack_shape 1 0 box -2700 -3200 2700 3200
+padstack 2 0 0 9500.0 -1
+padstack_shape 2 0 box -4000 -4750 4000 4750
+padstack 3 0 0 9500.0 -1
+padstack_shape 3 0 box -4750 -4000 4750 4000
+padstack 4 0 1 6000.0 6000.0
+padstack_shape 4 0 circle 0 0 3000
+padstack_shape 4 1 circle 0 0 3000
+viainfo 0 4 1 0
+viarule 0 0
+viarule 1 0
+netclass 0 1 0 1 1 1000 1000 0 1 0 0
+netclass 1 1 1 1 1 1000 1000 0 1 0 0
+net 1 1 0
+net 2 1 0
+net 3 1 0
+settings 1 50 5 100 0 0
+layer_costs 0 1 1.0 2.0 1.0
+layer_costs 1 1 2.0 1.0 1.0
+it 13 pin 0 0 1 0 3 3
+center 13 66000 63250
+pad 13 0 0 1 box 61250 59250 70750 67250
+pin_neckdown 13 0 3999 9500.0
+pin_exit 13 0 1 0 4750.0
+pin_exit 13 0 -1 0 4750.0
+pin_exit 13 0 0 1 4000.0
+pin_exit 13 0 0 -1 4000.0
+it 12 pin 0 0 1 0 3 1
+center 12 66000 46750
+pad 12 0 0 1 box 61250 42750 70750 50750
+pin_neckdown 12 0 3999 9500.0
+pin_exit 12 0 1 0 4750.0
+pin_exit 12 0 -1 0 4750.0
+pin_exit 12 0 0 1 4000.0
+pin_exit 12 0 0 -1 4000.0
+it 11 pin 0 0 1 0 2 2
+center 11 23750 42000
+pad 11 0 0 1 box 19750 37250 27750 46750
+pin_neckdown 11 0 3999 9500.0
+pin_exit 11 0 1 0 4000.0
+pin_exit 11 0 -1 0 4000.0
+pin_exit 11 0 0 1 4750.0
+pin_exit 11 0 0 -1 4750.0
+it 10 pin 0 0 1 0 2 1
+center 10 40250 42000
+pad 10 0 0 1 box 36250 37250 44250 46750
+pin_neckdown 10 0 3999 9500.0
+pin_exit 10 0 1 0 4000.0
+pin_exit 10 0 -1 0 4000.0
+pin_exit 10 0 0 1 4750.0
+pin_exit 10 0 0 -1 4750.0
+it 9 pin 0 0 1 0 1 3
+center 9 37100 67000
+pad 9 0 0 1 box 34400 63800 39800 70200
+pin_neckdown 9 0 2699 6400.0
+pin_exit 9 0 1 0 2700.0
+pin_exit 9 0 -1 0 2700.0
+pin_exit 9 0 0 1 3200.0
+pin_exit 9 0 0 -1 3200.0
+it 8 pin 0 0 1 0 1 2
+center 8 26900 67000
+pad 8 0 0 1 box 24200 63800 29600 70200
+pin_neckdown 8 0 2699 6400.0
+pin_exit 8 0 1 0 2700.0
+pin_exit 8 0 -1 0 2700.0
+pin_exit 8 0 0 1 3200.0
+pin_exit 8 0 0 -1 3200.0
+it 7 keepout 0 0 3 3 0
+area 7 0 3 box 62400 33750 69600 39450
+it 6 keepout 0 0 3 3 0
+area 6 0 3 box 61250 50750 70750 59250
+it 5 keepout 0 0 3 3 0
+area 5 0 3 box 28400 28250 35600 33950
+it 4 keepout 0 0 3 3 0
+area 4 0 3 box 27750 37250 36250 46750
+it 3 keepout 0 0 3 3 0
+area 3 0 3 box 28400 54800 35600 60500
+it 2 keepout 0 0 3 3 0
+area 2 0 3 box 29600 63800 34400 70200
+it 1 outline 0 1 2 3 0
+outline 1 100 2 2 0
+outline_shape 4 0 0 90000 0 90000 0 90000 90000 90000 90000 0 90000 0 90000 0 0
+pass 1 6 13 12 11 10 9 8
+conn 0 13 3 ROUTED 17
+conn_start 9
+conn_dest 13
+conn_tree 20 14293953225831862703
+conn_located 9 0 13 0
+conn_located_trace 0 3 66000 63250 40850 63250 37100 67000
+conn_add r_trace 15 0 1000 1 0 3 4 66000 63250 66000 63249 66000 63250 40850 63250 42837 67000 42836 67001 37101 67000 37100 67000
+conn_add r_trace 17 0 1000 1 1 3 3 37100 67000 37100 67001 37100 67000 37101 67000 42837 0 42837 1
+conn 1 12 1 ROUTED 27
+conn_start 10
+conn_dest 12
+conn_tree 23 15292500741809406327
+conn_located 10 0 12 0
+conn_located_trace 0 9 66000 46750 64350 45100 62400 45100 62400 42769 61250 41619 60240 41619 58228 41619 40631 41619 40250 42000
+conn_add r_trace 25 0 1000 1 0 1 4 66000 46750 65999 46750 58213 46750 58212 46749 40250 42000 40249 42000 40250 42000 40251 42001
+conn_add r_trace 27 0 1000 1 1 1 3 66000 46750 66000 46749 66000 46750 65999 46750 58213 0 58213 -1
+conn 2 11 2 ROUTED 35
+conn_start 8
+conn_dest 11
+conn_tree 26 12535496460667575327
+conn_located 8 0 11 0
+conn_located_trace 0 7 23750 42000 23750 46750 23750 48762 23750 60500 23750 62512 26900 65662 26900 67000
+conn_add r_trace 33 0 1000 1 0 2 4 23750 42000 23749 42000 23750 42000 23750 63850 26900 60763 26901 60764 26900 66999 26900 67000
+conn_add r_trace 35 0 1000 1 1 2 3 26900 67000 26901 67000 26900 67000 26900 66999 0 60763 1 60763
+conn 3 10 1 ALREADY_CONNECTED 35
+conn 4 9 3 ALREADY_CONNECTED 35
+conn 5 8 2 ALREADY_CONNECTED 35
+tails 35
+pass 2 0

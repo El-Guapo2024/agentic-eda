@@ -1,0 +1,47 @@
+# Exercises: through-hole parts only (PINHEADER packages), mixed pitches.
+# Expected outcome: clean pipeline at all seeds; placement/routing must
+# handle through-hole pads (round, drilled) alongside SMD pads correctly.
+parts:
+  - reference: J1
+    value: HDR
+    package: PINHEADER-2
+    pins:
+      - { number: "1", name: VIN, kind: power }
+      - { number: "2", name: GND, kind: ground }
+  - reference: J2
+    value: HDR
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: VIN, kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: SDA, kind: signal }
+      - { number: "4", name: SCL, kind: signal }
+  - reference: J3
+    value: HDR
+    package: PINHEADER-8
+    pins:
+      - { number: "1", name: D0, kind: signal }
+      - { number: "2", name: D1, kind: signal }
+      - { number: "3", name: D2, kind: signal }
+      - { number: "4", name: D3, kind: signal }
+      - { number: "5", name: D4, kind: signal }
+      - { number: "6", name: D5, kind: signal }
+      - { number: "7", name: VIN, kind: power }
+      - { number: "8", name: GND, kind: ground }
+  - reference: R1
+    value: 4.7k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R2
+    value: 4.7k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+nets:
+  - { name: VIN, pins: [J1.1, J2.1, J3.7] }
+  - { name: GND, pins: [J1.2, J2.2, J3.8] }
+  - { name: SDA, pins: [J2.3, J3.1] }
+  - { name: SCL, pins: [J2.4, J3.2] }
+  - { name: D2, pins: [J3.3, R1.1] }
+  - { name: D2_PULLUP, pins: [R1.2, J3.4] }
+  - { name: D4, pins: [J3.5, R2.1] }
+  - { name: D4_PULLUP, pins: [R2.2, J3.6] }

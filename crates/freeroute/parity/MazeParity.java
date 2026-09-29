@@ -171,6 +171,11 @@ public class MazeParity {
     }
     RoutingBoard board = handling.get_routing_board();
     board.reduce_nets_of_route_items();
+    // With AUTOMATIC_NECKDOWN=0, traces keep their width into narrow pins:
+    // what eda-freeroute routes designs with, a DSN having no say in it.
+    if ("0".equals(System.getenv("AUTOMATIC_NECKDOWN"))) {
+      handling.get_settings().set_automatic_neckdown(false);
+    }
     // 45-degree mode throughout: every tree, the default one included, is
     // rebuilt under it, as if the board had been read in that mode.
     board.rules.set_trace_angle_restriction(AngleRestriction.FORTYFIVE_DEGREE);

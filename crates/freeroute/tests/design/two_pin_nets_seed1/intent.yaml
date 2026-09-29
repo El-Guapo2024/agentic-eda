@@ -1,0 +1,20 @@
+# Exercises: every net has exactly 2 pins (simplest possible wiring: no
+# stars, no labels-only nets). Expected outcome: clean pipeline through
+# schematic -> placement -> routing at all seeds {0,1,2}.
+parts:
+  - reference: R1
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R2
+    value: 2k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C1
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+nets:
+  - { name: N1, pins: [R1.1, R2.1] }
+  - { name: N2, pins: [R1.2, C1.1] }
+  - { name: N3, pins: [R2.2, C1.2] }

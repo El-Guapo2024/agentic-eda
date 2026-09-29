@@ -1,0 +1,32 @@
+# Exercises: NC-kind pins present on parts. NC pins must not be required to
+# be on a net (lint's source_pin_not_connected must not fire for them) and
+# must not appear in placement/routing nets. Expected outcome: clean
+# pipeline at all seeds.
+parts:
+  - reference: U1
+    mpn: AMS1117-3.3
+    value: "3.3V LDO"
+    package: SOT-223
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VOUT, kind: power }
+      - { number: "3", name: VIN, kind: power }
+      - { number: "4", name: NC, kind: nc }
+  - reference: J1
+    value: HDR
+    package: PINHEADER-6
+    pins:
+      - { number: "1", name: VIN, kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: VOUT, kind: power }
+      - { number: "4", name: NC1, kind: nc }
+      - { number: "5", name: NC2, kind: nc }
+      - { number: "6", name: NC3, kind: nc }
+  - reference: C1
+    value: 10uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+nets:
+  - { name: VIN, pins: [U1.3, J1.1, C1.1] }
+  - { name: GND, pins: [U1.1, J1.2, C1.2] }
+  - { name: VOUT, pins: [U1.2, J1.3] }

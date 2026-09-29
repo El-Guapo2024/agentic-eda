@@ -9,3 +9,9 @@ edition = "2021"
 license = "GPL-3.0-only"
 
 [dependencies]
+# The board and rules it routes, read from `design.json` and the intent.
+eda-model = { path = "../model" }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }

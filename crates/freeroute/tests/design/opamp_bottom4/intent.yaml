@@ -1,0 +1,61 @@
+# Exercises: an op-amp based filter -- SOIC-8 IC plus a mix of passives in
+# a feedback topology. Expected outcome: clean pipeline at all seeds.
+parts:
+  - reference: U1
+    mpn: LM358
+    value: OPAMP
+    package: SOIC-8
+    pins:
+      - { number: "1", name: OUT1, kind: signal }
+      - { number: "2", name: IN1-, kind: signal }
+      - { number: "3", name: IN1+, kind: signal }
+      - { number: "4", name: VEE, kind: ground }
+      - { number: "5", name: IN2+, kind: signal }
+      - { number: "6", name: IN2-, kind: signal }
+      - { number: "7", name: OUT2, kind: signal }
+      - { number: "8", name: VCC, kind: power }
+  - reference: R1
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R2
+    value: 10k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R3
+    value: 100k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C1
+    value: 10nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C2
+    value: 100nF
+    package: "0402"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C3
+    value: 1uF
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+nets:
+  - { name: VCC, pins: [U1.8, C2.1] }
+  - { name: GND, pins: [U1.4, C2.2, C3.2] }
+  - { name: IN, pins: [R1.1, C3.1] }
+  - { name: N1, pins: [R1.2, R2.1, C1.1] }
+  - { name: FB, pins: [C1.2, R3.1, U1.2] }
+  - { name: NONINV_BIAS, pins: [R2.2, U1.3] }
+  - { name: OUT, pins: [U1.1, R3.2, U1.5] }
+  # Second op-amp half wired as a unity-gain buffer on the first stage's
+  # output, exercising the IC's other four pins.
+  - { name: OUT2, pins: [U1.7, U1.6] }
+
+board:
+  layers: ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+  clearance: 175
+  track_width: 180
+  via_drill: 250
+  via_diameter: 525
+  net_classes:
+    - { name: power, nets: ["VCC"], track_width: 305 }
+    - { name: gnd, nets: ["GND"], track_width: 355 }

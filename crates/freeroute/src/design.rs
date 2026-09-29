@@ -1,0 +1,862 @@
+//! Boards from `design.json`, and routes back into it.
+//!
+//! A placed design -- its footprints' pads, its nets, its stackup and
+//! rules -- becomes the board FreeRouting builds from the Specctra DSN
+//! KiCad would write for it: micrometres at resolution 10, so a board unit
+//! is 0.1 µm. [`to_dsn`] writes that DSN, so FreeRouting itself can be
+//! asked what board it makes of a design; the parity tests hold
+//! [`board_from_design`] to its answer, field for field.
+//!
+//! Each placed footprint becomes an image of its own with its pads already
+//! in board coordinates, placed at the origin: rotation and side are the
+//! model's own transform, the one every other stage uses, and FreeRouting
+//! is left nothing to turn or mirror.
+//!
+//! The board is the one the routing gates judge, so what the router makes
+//! of it passes them: every pad is the rectangle the gates measure it by,
+//! the outline keeps copper the gates' edge clearance away, the strips
+//! between adjacent SMD pads of a part and the refdes labels are
+//! keep-outs, as the grid router has them, and traces keep their class's
+//! width into narrow pins. Every clearance carries a small margin for the
+//! rounding to whole µm on the way back.
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+
+use eda_model::footprint::{placed_pads, placed_refdes_box, PlacedPad};
+use eda_model::ir::{Design, Point as IrPoint, RoutingSection, Side, Track, Via as IrVia};
+use eda_model::{BoardRules, ConstraintModel};
+
+use crate::autoroute::batch::{autoroute_passes, PassSummary};
+use crate::board::PadShape;
+use crate::board::AreaShape;
+use crate::geometry::{Circle, Direction, FloatPoint, IntBox, IntPoint, Line, PolygonShape, TileShape};
+use crate::model::{AreaKind, AutorouteSettings, Board, ExitRestriction, FixedState, Item, ItemKind, Layer, Net, NetClass, Padstack, Rules, ViaInfo};
+use crate::routing::RoutingBoard;
+use crate::rules::ClearanceMatrix;
+
+/// Board units per micrometre.
+pub const UNITS_PER_UM: i64 = 10;
+
+/// `Limits.CRIT_INT`: FreeRouting scales down a board reaching a fifth of it.
+const CRIT_INT: i64 = 33_554_432;
+
+/// `BoardOutline.HALF_WIDTH`.
+const OUTLINE_HALF_WIDTH: i64 = 100;
+
+/// Added to every clearance, µm: routes go back to the design rounded to
+/// the µm, which moves a corner up to half a µm each way, and the routing
+/// gates allow nothing under their rule.
+const ROUNDING_MARGIN_UM: i64 = 2;
+
+/// The copper-to-edge clearance the routing gate holds a board to, µm.
+const EDGE_CLEARANCE_UM: i64 = 500;
+
+/// A pad's copper about its centre, in board units, as a DSN padstack
+/// writes it and FreeRouting keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PadForm {
+    /// `(rect ...)`, kept as an `IntBox`: every pin, as the rectangle the
+    /// routing gates measure clearance to, round or rounded corners and
+    /// all.
+    Box { half_w: i64, half_h: i64 },
+    /// `(circle ...)`, kept as a `Circle`: the via.
+    Circle { radius: i64 },
+}
+
+impl PadForm {
+    /// The shape FreeRouting keeps, about the origin.
+    fn shape(&self) -> PadShape {
+        match *self {
+            PadForm::Box { half_w, half_h } => PadShape::Box(IntBox::new(-half_w, -half_h, half_w, half_h)),
+            PadForm::Circle { radius } => PadShape::Circle(Circle::new(IntPoint::new(0, 0), radius)),
+        }
+    }
+
+    /// Part of its padstack's name.
+    fn name(&self) -> String {
+        match *self {
+            PadForm::Box { half_w, half_h } => format!("Rect_{}x{}", 2 * half_w, 2 * half_h),
+            PadForm::Circle { radius } => format!("Round_{}", 2 * radius),
+        }
+    }
+
+    /// Its DSN `shape` on `layer`.
+    fn dsn(&self, layer: &str) -> String {
+        match *self {
+            PadForm::Box { half_w, half_h } => format!("(rect {layer} {} {} {} {})", um(-half_w), um(-half_h), um(half_w), um(half_h)),
+            PadForm::Circle { radius } => format!("(circle {layer} {})", um(2 * radius)),
+        }
+    }
+}
+
+/// `Shape.max_width`, per form.
+fn max_width(shape: &PadShape) -> f64 {
+    match shape {
+        PadShape::Circle(c) => (2 * c.radius) as f64,
+        PadShape::Box(b) => TileShape::Box(*b).max_width(),
+        PadShape::Octagon(o) => TileShape::Octagon(*o).max_width(),
+        PadShape::Polygon(s) => TileShape::Simplex(s.clone()).max_width(),
+    }
+}
+
+/// Board units as DSN micrometres.
+fn um(units: i64) -> String {
+    let sign = if units < 0 { "-" } else { "" };
+    let (whole, tenths) = (units.abs() / UNITS_PER_UM, units.abs() % UNITS_PER_UM);
+    if tenths == 0 {
+        format!("{sign}{whole}")
+    } else {
+        format!("{sign}{whole}.{tenths}")
+    }
+}
+
+/// A DSN name, quoted.
+fn quoted(s: &str) -> String {
+    format!("\"{s}\"")
+}
+
+/// A pin of a placed footprint.
+struct PlanPin {
+    /// Its pad number.
+    number: String,
+    /// Its name in its image: the pad number, made unique.
+    name: String,
+    /// Centre, board units.
+    center: IntPoint,
+    /// Index into [`Plan::padstacks`].
+    padstack: usize,
+    /// Index into [`Plan::nets`].
+    net: Option<usize>,
+}
+
+struct PlanComponent {
+    reference: String,
+    pins: Vec<PlanPin>,
+}
+
+struct PlanPadstack {
+    name: String,
+    form: PadForm,
+    from_layer: usize,
+    to_layer: usize,
+}
+
+struct PlanNet {
+    name: String,
+    /// Index into [`Plan::classes`].
+    class: usize,
+}
+
+struct PlanClass {
+    name: String,
+    /// Board units.
+    half_width: i64,
+}
+
+/// A keep-out for traces and vias on one layer: a refdes label, or the
+/// strip between two SMD pads of one footprint. µm, `(x0, y0, x1, y1)`.
+struct PlanKeepout {
+    layer: usize,
+    rect: (i64, i64, i64, i64),
+}
+
+/// The strips between the facing edges of adjacent SMD pads of one
+/// footprint, µm, as the grid router blocks them: under the part's body, a
+/// track threading between its pads is what the gates send back. Pairs
+/// with a third pad between them, or further apart than `max_gap`, have
+/// none; through-hole rows are left open.
+fn pad_gap_strips(pads: &[PlacedPad], max_gap: i64) -> Vec<(i64, i64, i64, i64)> {
+    let rects: Vec<(i64, i64, i64, i64)> =
+        pads.iter().filter(|p| !p.through_hole).map(|p| (p.center.x - p.size.0 / 2, p.center.y - p.size.1 / 2, p.center.x + p.size.0 / 2, p.center.y + p.size.1 / 2)).collect();
+    let mut strips = Vec::new();
+    for i in 0..rects.len() {
+        for j in i + 1..rects.len() {
+            let (ra, rb) = (rects[i], rects[j]);
+            let (ox0, ox1) = (ra.0.max(rb.0), ra.2.min(rb.2));
+            let (oy0, oy1) = (ra.1.max(rb.1), ra.3.min(rb.3));
+            // Between the facing edges, as wide as the pads share.
+            let strip = if oy1 > oy0 && (ra.2 <= rb.0 || rb.2 <= ra.0) {
+                let (gx0, gx1) = if ra.2 <= rb.0 { (ra.2, rb.0) } else { (rb.2, ra.0) };
+                if gx1 - gx0 > max_gap {
+                    continue;
+                }
+                (gx0, oy0, gx1, oy1)
+            } else if ox1 > ox0 && (ra.3 <= rb.1 || rb.3 <= ra.1) {
+                let (gy0, gy1) = if ra.3 <= rb.1 { (ra.3, rb.1) } else { (rb.3, ra.1) };
+                if gy1 - gy0 > max_gap {
+                    continue;
+                }
+                (ox0, gy0, ox1, gy1)
+            } else {
+                continue;
+            };
+            let crosses_other = rects.iter().enumerate().any(|(k, o)| k != i && k != j && o.0 < strip.2 && o.2 > strip.0 && o.1 < strip.3 && o.3 > strip.1);
+            if !crosses_other {
+                strips.push(strip);
+            }
+        }
+    }
+    strips
+}
+
+/// The board of a design as the DSN writes it, in the order FreeRouting
+/// reads it: shared by [`to_dsn`] and [`board_from_design`], so the two
+/// cannot drift apart.
+struct Plan {
+    layers: Vec<String>,
+    /// µm, closed.
+    outline: Vec<IrPoint>,
+    /// In placement order.
+    components: Vec<PlanComponent>,
+    /// The pins' stacks by name, then the via's.
+    padstacks: Vec<PlanPadstack>,
+    /// The nets with a placed pin, in the model's order.
+    nets: Vec<PlanNet>,
+    /// The classes with a net: the default class, then the rules' own.
+    classes: Vec<PlanClass>,
+    /// In the order the DSN lists them: by footprint, its pad strips then
+    /// its label.
+    keepouts: Vec<PlanKeepout>,
+    /// Board units.
+    track_half_width: i64,
+    /// Between copper, from copper to the outline's, and from copper to a
+    /// keep-out; board units, the rounding margin in.
+    clearance: i64,
+    edge_clearance: i64,
+    keepout_clearance: i64,
+}
+
+impl Plan {
+    fn of(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> Result<Plan, String> {
+        let placement = design.placement.as_ref().ok_or("the design has no placement")?;
+        let layer_count = rules.layers.len();
+        if layer_count == 0 {
+            return Err("the board has no copper layers".into());
+        }
+        if !rules.pours.is_empty() {
+            return Err("copper pours are not supported yet".into());
+        }
+        if rules.track_width <= 0 || rules.clearance < 0 || rules.via_diameter <= 0 {
+            return Err(format!("unusable rules: track {} clearance {} via {} um", rules.track_width, rules.clearance, rules.via_diameter));
+        }
+        let mut outline = placement.outline.clone();
+        if outline.len() < 3 {
+            return Err("the board outline has fewer than 3 corners".into());
+        }
+        if outline.first() != outline.last() {
+            outline.push(outline[0]);
+        }
+        let mut pin_nets: BTreeMap<&str, &str> = BTreeMap::new();
+        for net in &model.nets {
+            for pin in &net.pins {
+                pin_nets.insert(pin.as_str(), net.name.as_str());
+            }
+        }
+        let net_index: BTreeMap<&str, usize> = model.nets.iter().enumerate().map(|(i, n)| (n.name.as_str(), i)).collect();
+        // The pads, with their stacks by key for now.
+        let mut stacks: BTreeMap<String, (PadForm, usize, usize)> = BTreeMap::new();
+        // Each pin with its stack's key; its stack's number and its net's
+        // are settled once all are known.
+        let mut placed: Vec<(String, Vec<(PlanPin, String)>)> = Vec::new();
+        let mut max_coor = outline.iter().map(|p| p.x.abs().max(p.y.abs())).max().unwrap_or(0);
+        let (bx0, by0) = (outline.iter().map(|p| p.x).min().unwrap(), outline.iter().map(|p| p.y).min().unwrap());
+        let (bx1, by1) = (outline.iter().map(|p| p.x).max().unwrap(), outline.iter().map(|p| p.y).max().unwrap());
+        let mut keepouts = Vec::new();
+        let mut keep_out = |layer: usize, (x0, y0, x1, y1): (i64, i64, i64, i64)| {
+            // Clipped to the board: the gates look at nothing beyond it.
+            let rect = (x0.max(bx0), y0.max(by0), x1.min(bx1), y1.min(by1));
+            if rect.0 < rect.2 && rect.1 < rect.3 {
+                keepouts.push(PlanKeepout { layer, rect });
+            }
+        };
+        for fp in &placement.footprints {
+            let part = model.part(&fp.id).ok_or_else(|| format!("placed footprint {} has no part in the model", fp.id))?;
+            let pads = placed_pads(model, part, fp).ok_or_else(|| format!("no footprint geometry for {}", fp.id))?;
+            let side_layer = if fp.side == Side::Top { 0 } else { layer_count - 1 };
+            for strip in pad_gap_strips(&pads, rules.tuning.between_pads_max_gap_um) {
+                keep_out(side_layer, strip);
+            }
+            if let Some(label) = placed_refdes_box(model, &placement.outline, part, fp) {
+                keep_out(side_layer, label);
+            }
+            let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+            let mut pins = Vec::new();
+            for pad in pads {
+                // Pad numbers repeat (a split thermal pad) or are empty
+                // (a mounting hole): KiCad's `@n` makes them unique.
+                let count = seen.entry(pad.number.clone()).or_insert(0);
+                let name = if *count == 0 && !pad.number.is_empty() { pad.number.clone() } else { format!("{}@{count}", pad.number) };
+                *count += 1;
+                let (from, to) = if pad.through_hole { (0, layer_count - 1) } else { (side_layer, side_layer) };
+                let form = PadForm::Box { half_w: pad.size.0 * UNITS_PER_UM / 2, half_h: pad.size.1 * UNITS_PER_UM / 2 };
+                let span = if from == to { rules.layers[from].clone() } else { format!("{}-{}", rules.layers[from], rules.layers[to]) };
+                let key = format!("{}[{span}]", form.name());
+                stacks.insert(key.clone(), (form, from, to));
+                let net = pin_nets.get(format!("{}.{}", fp.id, pad.number).as_str()).and_then(|n| net_index.get(n).copied());
+                max_coor = max_coor.max(pad.center.x.abs()).max(pad.center.y.abs());
+                let center = IntPoint::new(pad.center.x * UNITS_PER_UM, pad.center.y * UNITS_PER_UM);
+                pins.push((PlanPin { number: pad.number.clone(), name, center, padstack: 0, net }, key));
+            }
+            placed.push((fp.id.clone(), pins));
+        }
+        if 5 * max_coor * UNITS_PER_UM >= CRIT_INT {
+            return Err(format!("the board reaches {max_coor} um, past what FreeRouting holds unscaled"));
+        }
+        let mut padstacks: Vec<PlanPadstack> = stacks.iter().map(|(name, &(form, from_layer, to_layer))| PlanPadstack { name: name.clone(), form, from_layer, to_layer }).collect();
+        let stack_no: BTreeMap<&str, usize> = stacks.keys().enumerate().map(|(i, k)| (k.as_str(), i)).collect();
+        padstacks.push(PlanPadstack {
+            name: format!("Via[0-{}]_{}:{}_um", layer_count - 1, rules.via_diameter, rules.via_drill),
+            form: PadForm::Circle { radius: rules.via_diameter * UNITS_PER_UM / 2 },
+            from_layer: 0,
+            to_layer: layer_count - 1,
+        });
+        // The nets with a placed pin, and the classes with a net: the
+        // default one first, as KiCad writes it.
+        let mut used = vec![false; model.nets.len()];
+        for (_, pins) in &placed {
+            for (pin, _) in pins {
+                if let Some(n) = pin.net {
+                    used[n] = true;
+                }
+            }
+        }
+        let class_of = |name: &str| rules.net_classes.iter().position(|c| c.matches(name)).map_or(0, |i| i + 1);
+        let mut class_used = vec![false; rules.net_classes.len() + 1];
+        for (i, net) in model.nets.iter().enumerate() {
+            if used[i] {
+                class_used[class_of(&net.name)] = true;
+            }
+        }
+        let mut class_no = vec![usize::MAX; class_used.len()];
+        let mut classes = Vec::new();
+        for (c, &u) in class_used.iter().enumerate() {
+            if !u {
+                continue;
+            }
+            class_no[c] = classes.len();
+            let (name, width) = match c {
+                0 => ("kicad_default".to_string(), rules.track_width),
+                _ => (format!("class_{c}"), rules.net_classes[c - 1].track_width.unwrap_or(rules.track_width)),
+            };
+            if width <= 0 {
+                return Err(format!("net class {name} has track width {width} um"));
+            }
+            classes.push(PlanClass { name, half_width: width * UNITS_PER_UM / 2 });
+        }
+        let mut net_no = vec![usize::MAX; model.nets.len()];
+        let mut nets = Vec::new();
+        for (i, net) in model.nets.iter().enumerate() {
+            if used[i] {
+                net_no[i] = nets.len();
+                nets.push(PlanNet { name: net.name.clone(), class: class_no[class_of(&net.name)] });
+            }
+        }
+        let components = placed
+            .into_iter()
+            .map(|(reference, pins)| PlanComponent {
+                reference,
+                pins: pins.into_iter().map(|(pin, key)| PlanPin { padstack: stack_no[key.as_str()], net: pin.net.map(|n| net_no[n]), ..pin }).collect(),
+            })
+            .collect();
+        let margin = ROUNDING_MARGIN_UM * UNITS_PER_UM;
+        Ok(Plan {
+            layers: rules.layers.clone(),
+            outline,
+            components,
+            padstacks,
+            nets,
+            classes,
+            keepouts,
+            track_half_width: rules.track_width * UNITS_PER_UM / 2,
+            clearance: rules.clearance * UNITS_PER_UM + margin,
+            // The outline is copper `OUTLINE_HALF_WIDTH` wide either side
+            // of the edge.
+            edge_clearance: rules.tuning.edge_clearance_um.max(EDGE_CLEARANCE_UM) * UNITS_PER_UM - OUTLINE_HALF_WIDTH + margin,
+            keepout_clearance: margin,
+        })
+    }
+
+    fn via_padstack(&self) -> &PlanPadstack {
+        self.padstacks.last().expect("the via's stack is always there")
+    }
+}
+
+/// The design as the Specctra DSN KiCad would write for it: µm at
+/// resolution 10, one image per placed footprint, the default class and
+/// the rules' own classes. For asking FreeRouting what board it makes of
+/// the design; [`board_from_design`] builds the same board directly.
+pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> Result<String, String> {
+    let plan = Plan::of(design, model, rules)?;
+    let layer = |l: usize| quoted(&plan.layers[l]);
+    let mut out = String::new();
+    let _ = writeln!(out, "(pcb design.dsn");
+    let _ = writeln!(out, "  (parser\n    (string_quote \")\n    (space_in_quoted_tokens on)\n    (host_cad \"eda-freeroute\")\n    (host_version \"0.1\")\n  )");
+    let _ = writeln!(out, "  (resolution um 10)\n  (unit um)\n  (structure");
+    for l in 0..plan.layers.len() {
+        let _ = writeln!(out, "    (layer {}\n      (type signal)\n      (property\n        (index {l})\n      )\n    )", layer(l));
+    }
+    let _ = write!(out, "    (boundary\n      (path pcb 0");
+    for p in &plan.outline {
+        let _ = write!(out, "  {} {}", p.x, p.y);
+    }
+    let _ = writeln!(out, ")\n      (clearance_class edge)\n    )");
+    let via = plan.via_padstack();
+    let _ = writeln!(out, "    (via {})", quoted(&via.name));
+    // The clearance, then a class of its own for the outline and one for
+    // the keep-outs: `NAME_default` spaces it from everything else.
+    let _ = writeln!(
+        out,
+        "    (rule\n      (width {})\n      (clearance {})\n      (clearance {} (type edge_default))\n      (clearance {} (type keepout_default))\n    )",
+        um(2 * plan.track_half_width),
+        um(plan.clearance),
+        um(plan.edge_clearance),
+        um(plan.keepout_clearance)
+    );
+    for k in &plan.keepouts {
+        let (x0, y0, x1, y1) = k.rect;
+        let _ = writeln!(out, "    (keepout \"\" (rect {} {x0} {y0} {x1} {y1}) (clearance_class keepout))", layer(k.layer));
+    }
+    let _ = writeln!(out, "  )");
+    let _ = writeln!(out, "  (placement");
+    for c in &plan.components {
+        let _ = writeln!(out, "    (component {}\n      (place {} 0 0 front 0)\n    )", quoted(&format!("IMG_{}", c.reference)), quoted(&c.reference));
+    }
+    let _ = writeln!(out, "  )\n  (library");
+    for c in &plan.components {
+        let _ = writeln!(out, "    (image {}", quoted(&format!("IMG_{}", c.reference)));
+        for pin in &c.pins {
+            let _ = writeln!(out, "      (pin {} {} {} {})", quoted(&plan.padstacks[pin.padstack].name), quoted(&pin.name), um(pin.center.x), um(pin.center.y));
+        }
+        let _ = writeln!(out, "    )");
+    }
+    for ps in &plan.padstacks {
+        let _ = writeln!(out, "    (padstack {}", quoted(&ps.name));
+        for l in ps.from_layer..=ps.to_layer {
+            let _ = writeln!(out, "      (shape {})", ps.form.dsn(&layer(l)));
+        }
+        let _ = writeln!(out, "      (attach off)\n    )");
+    }
+    let _ = writeln!(out, "  )\n  (network");
+    for (n, net) in plan.nets.iter().enumerate() {
+        let mut pins = Vec::new();
+        for c in &plan.components {
+            for pin in c.pins.iter().filter(|p| p.net == Some(n)) {
+                // `"REF"-"PIN"`: the reader splits at the hyphen, quoted or not.
+                pins.push(format!("{}-{}", quoted(&c.reference), quoted(&pin.name)));
+            }
+        }
+        let _ = writeln!(out, "    (net {}\n      (pins {})\n    )", quoted(&net.name), pins.join(" "));
+    }
+    for (k, class) in plan.classes.iter().enumerate() {
+        let nets: Vec<String> = plan.nets.iter().filter(|n| n.class == k).map(|n| quoted(&n.name)).collect();
+        // No clearance of its own: every class keeps the board's, and so
+        // the default clearance class and via.
+        let _ = writeln!(
+            out,
+            "    (class {} {}\n      (circuit\n        (use_via {})\n      )\n      (rule\n        (width {})\n      )\n    )",
+            quoted(&class.name),
+            nets.join(" "),
+            quoted(&via.name),
+            um(2 * class.half_width)
+        );
+    }
+    let _ = writeln!(out, "  )\n  (wiring\n  )\n)");
+    Ok(out)
+}
+
+/// FreeRouting's `ClearanceMatrix` as its DSN reader fills it: values
+/// kept even, rounded up, and per class the largest value ever set in its
+/// row, odd or not.
+struct Matrix {
+    layers: usize,
+    /// `[j][i][layer]`, the Java's `row[j].column[i]`.
+    value: Vec<Vec<Vec<i64>>>,
+    row_max: Vec<Vec<i64>>,
+}
+
+impl Matrix {
+    /// `get_default_instance`: the null class and the default one.
+    fn new(layers: usize) -> Matrix {
+        let mut m = Matrix { layers, value: vec![vec![vec![0; layers]; 2]; 2], row_max: vec![vec![0; layers]; 2] };
+        m.set_default(0);
+        m
+    }
+
+    fn classes(&self) -> usize {
+        self.value.len()
+    }
+
+    /// `get_value(i, j, layer)`.
+    fn get(&self, i: usize, j: usize, layer: usize) -> i64 {
+        self.value[j][i][layer]
+    }
+
+    /// `set_value(i, j, layer, value)`.
+    fn set(&mut self, i: usize, j: usize, layer: usize, value: i64) {
+        let v = value.max(0);
+        self.value[j][i][layer] = v + v % 2;
+        self.row_max[j][layer] = self.row_max[j][layer].max(value);
+    }
+
+    /// `set_default_value`: every class but the null one, on every layer.
+    fn set_default(&mut self, value: i64) {
+        for l in 0..self.layers {
+            for i in 1..self.classes() {
+                for j in 1..self.classes() {
+                    self.set(i, j, l, value);
+                }
+            }
+        }
+    }
+
+    /// `append_class`: a class spaced from the others as the default one
+    /// is. Its number.
+    fn append_class(&mut self) -> usize {
+        let old = self.classes();
+        for row in &mut self.value {
+            row.push(vec![0; self.layers]);
+        }
+        self.value.push(vec![vec![0; self.layers]; old + 1]);
+        self.row_max.push(vec![0; self.layers]);
+        for i in 0..old {
+            for l in 0..self.layers {
+                let d = self.get(1, i, l);
+                self.set(old, i, l, d);
+                self.set(i, old, l, d);
+            }
+        }
+        for l in 0..self.layers {
+            let d = self.get(1, 1, l);
+            self.set(old, old, l, d);
+        }
+        old
+    }
+
+    /// `Structure.set_clearance_rule` for a pair `NAME_default` naming a
+    /// class not there yet: the class, spaced `clearance` from the
+    /// default one. Its number.
+    fn add_default_pair(&mut self, clearance: i64) -> usize {
+        let k = self.append_class();
+        for l in 0..self.layers {
+            self.set(k, 1, l, clearance);
+        }
+        for l in 0..self.layers {
+            self.set(1, k, l, clearance);
+        }
+        k
+    }
+}
+
+/// `Math.round` of a positive double.
+fn java_round(x: f64) -> f64 {
+    (x + 0.5).floor()
+}
+
+/// `AutorouteSettings(RoutingBoard)`: preferred directions alternating
+/// from the one across the board's longer side, the cost against it by
+/// the board's aspect.
+fn autoroute_settings(bounds: &IntBox, layer_count: usize) -> AutorouteSettings {
+    let (w, h) = ((bounds.ur.x - bounds.ll.x) as f64, (bounds.ur.y - bounds.ll.y) as f64);
+    let horizontal_add = 0.1 * java_round(10.0 * w / h);
+    let vertical_add = 0.1 * java_round(10.0 * h / w);
+    let mut horizontal = w < h;
+    let mut is_horizontal = vec![false; layer_count];
+    let mut preferred = vec![1.0; layer_count];
+    let mut against = vec![1.0; layer_count];
+    for l in 0..layer_count {
+        horizontal = !horizontal;
+        is_horizontal[l] = horizontal;
+        against[l] += if horizontal { horizontal_add } else { vertical_add };
+    }
+    if layer_count > 2 {
+        let outer = 0.2 * layer_count as f64;
+        for l in [0, layer_count - 1] {
+            preferred[l] += outer;
+            against[l] += outer;
+        }
+    }
+    AutorouteSettings {
+        vias_allowed: true,
+        via_costs: 50,
+        plane_via_costs: 5,
+        start_ripup_costs: 100,
+        with_fanout: false,
+        automatic_neckdown: true,
+        layer_active: vec![true; layer_count],
+        trace_costs: (0..layer_count).map(|l| if is_horizontal[l] { (preferred[l], against[l]) } else { (against[l], preferred[l]) }).collect(),
+        preferred_direction_costs: preferred,
+    }
+}
+
+/// The directions a trace may leave a pad of shape `shape` in, and how far
+/// it runs inside: none for a round pad; along the longer side of a long
+/// one, and every way for a squarish one -- squarer still counting for
+/// parts of three pins or fewer. `Pin.get_trace_exit_restrictions` for an
+/// unturned pad about its centre.
+fn exit_restrictions(shape: &PadShape, pin_count: usize) -> Vec<ExitRestriction> {
+    if !matches!(shape, PadShape::Box(_) | PadShape::Octagon(_)) {
+        return Vec::new();
+    }
+    let b = shape.bounding_box();
+    let (w, h) = (b.ur.x - b.ll.x, b.ur.y - b.ll.y);
+    let factor = if pin_count <= 3 { 3.0 } else { 1.5 };
+    let all_dirs = (w.max(h) as f64) < factor * w.min(h) as f64;
+    let mut result = Vec::new();
+    if all_dirs || w >= h {
+        result.push(ExitRestriction { direction: Direction::RIGHT, min_length: b.ur.x as f64 });
+        result.push(ExitRestriction { direction: Direction::LEFT, min_length: -b.ll.x as f64 });
+    }
+    if all_dirs || w <= h {
+        result.push(ExitRestriction { direction: Direction::UP, min_length: b.ur.y as f64 });
+        result.push(ExitRestriction { direction: Direction::DOWN, min_length: -b.ll.y as f64 });
+    }
+    result
+}
+
+/// The board FreeRouting reads from the DSN [`to_dsn`] writes for the
+/// design, built directly.
+pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> Result<Board, String> {
+    let plan = Plan::of(design, model, rules)?;
+    let layer_count = plan.layers.len();
+    let layers = plan.layers.iter().map(|name| Layer { name: name.clone(), is_signal: true }).collect();
+    let corners: Vec<IntPoint> = plan.outline.iter().map(|p| IntPoint::new(p.x * UNITS_PER_UM, p.y * UNITS_PER_UM)).collect();
+    let (xs, ys) = (corners.iter().map(|c| c.x), corners.iter().map(|c| c.y));
+    let bounds = IntBox::new(xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap()).offset(1000);
+
+    // The structure's rule: the clearance, then the outline's class and
+    // the keep-outs'.
+    let mut matrix = Matrix::new(layer_count);
+    matrix.set_default(plan.clearance);
+    let edge_class = matrix.add_default_pair(plan.edge_clearance) as i32;
+    let keepout_class = matrix.add_default_pair(plan.keepout_clearance) as i32;
+    let padstacks: Vec<Padstack> = plan
+        .padstacks
+        .iter()
+        .enumerate()
+        .map(|(i, ps)| {
+            let shape = ps.form.shape();
+            let on = |l: usize| (ps.from_layer..=ps.to_layer).contains(&l);
+            Padstack {
+                no: i + 1,
+                from_layer: ps.from_layer as i32,
+                to_layer: ps.to_layer as i32,
+                max_width: (0..layer_count).map(|l| on(l).then(|| max_width(&shape))).collect(),
+                shapes: (0..layer_count).map(|l| on(l).then(|| shape.clone())).collect(),
+            }
+        })
+        .collect();
+    let via_no = padstacks.len();
+    let default_class = NetClass {
+        trace_clearance_class: 1,
+        via_rule: Some(0),
+        active_layers: vec![true; layer_count],
+        trace_half_width: vec![plan.track_half_width; layer_count],
+        shove_fixed: false,
+        pull_tight: true,
+        ignore_cycles_with_areas: false,
+        ignored_by_autorouter: false,
+    };
+    // One via; every class a via rule of its own naming it.
+    let via_infos = vec![ViaInfo { padstack: via_no, clearance_class: 1, attach_smd_allowed: false }];
+    let mut via_rules = vec![vec![0]];
+    let mut net_classes = vec![default_class.clone()];
+    for class in &plan.classes {
+        via_rules.push(vec![0]);
+        net_classes.push(NetClass { via_rule: Some(via_rules.len() - 1), trace_half_width: vec![class.half_width; layer_count], ..default_class.clone() });
+    }
+    let mut clearance = ClearanceMatrix::new(matrix.classes(), layer_count);
+    for i in 0..matrix.classes() {
+        for j in 0..matrix.classes() {
+            for l in 0..layer_count {
+                let v = matrix.get(i, j, l);
+                if v != 0 {
+                    clearance.set(i, j, l, v);
+                }
+            }
+        }
+    }
+    let nets = plan.nets.iter().enumerate().map(|(n, net)| (n as i32 + 1, Net { no: n as i32 + 1, class: net.class + 1, contains_plane: false })).collect();
+    let rules_out = Rules {
+        clearance,
+        max_clearance: matrix.row_max.clone(),
+        padstacks,
+        via_infos,
+        via_rules,
+        net_classes,
+        nets,
+        // `BasicBoard`'s, with no trace on it yet.
+        min_trace_half_width: 10_000,
+        default_via_diameter: max_width(&plan.via_padstack().form.shape()),
+        pin_edge_to_turn_dist: plan.track_half_width.min(100_000) as f64,
+        board_max_trace_half_width: 1000,
+        max_trace_half_width: plan.track_half_width.max(100),
+        pull_tight_accuracy: 500,
+    };
+
+    // The outline first, the keep-outs, then the pins by component; the
+    // board lists them last in first.
+    let outline = PolygonShape::new(&corners);
+    let n = outline.corners.len();
+    let lines = (0..n).map(|i| Line::new(outline.corners[i], outline.corners[(i + 1) % n])).collect();
+    let mut items = vec![Item {
+        id: 1,
+        kind: ItemKind::Outline { half_width: OUTLINE_HALF_WIDTH, shapes: vec![lines], keepout_outside: false },
+        first_layer: 0,
+        last_layer: layer_count as i32 - 1,
+        clearance_class: edge_class,
+        fixed: FixedState::SystemFixed,
+        component: 0,
+        nets: Vec::new(),
+    }];
+    for k in &plan.keepouts {
+        let (x0, y0, x1, y1) = k.rect;
+        let u = UNITS_PER_UM;
+        items.push(Item {
+            id: items.len() as u32 + 1,
+            kind: ItemKind::Area { kind: AreaKind::Keepout, layer: k.layer as i32, shape: AreaShape::Tile(TileShape::Box(IntBox::new(x0 * u, y0 * u, x1 * u, y1 * u))) },
+            first_layer: k.layer as i32,
+            last_layer: k.layer as i32,
+            clearance_class: keepout_class,
+            fixed: FixedState::SystemFixed,
+            component: 0,
+            nets: Vec::new(),
+        });
+    }
+    for (c, component) in plan.components.iter().enumerate() {
+        for pin in &component.pins {
+            let ps = &plan.padstacks[pin.padstack];
+            let shape = ps.form.shape();
+            let b = shape.bounding_box();
+            let (w, h) = (b.ur.x - b.ll.x, b.ur.y - b.ll.y);
+            let span = ps.to_layer - ps.from_layer + 1;
+            let exits = exit_restrictions(&shape, component.pins.len());
+            items.push(Item {
+                id: items.len() as u32 + 1,
+                kind: ItemKind::Pin {
+                    center: pin.center,
+                    pads: vec![Some(shape.translate(pin.center.x, pin.center.y)); span],
+                    neckdown: vec![(0.5 * w.min(h) as f64 - 1.0).max(1.0) as i64; span],
+                    max_width: vec![w.max(h) as f64; span],
+                    exits: vec![exits; span],
+                },
+                first_layer: ps.from_layer as i32,
+                last_layer: ps.to_layer as i32,
+                // Its net class's, as the default one's: no class has a
+                // clearance of its own.
+                clearance_class: 1,
+                fixed: FixedState::Unfixed,
+                component: c as i32 + 1,
+                nets: pin.net.map(|n| vec![n as i32 + 1]).unwrap_or_default(),
+            });
+        }
+    }
+    let id_max = items.len() as u32;
+    items.reverse();
+    // Traces keep their class's width into narrow pins: the routing gates
+    // hold every track to it.
+    let settings = AutorouteSettings { automatic_neckdown: false, ..autoroute_settings(&bounds, layer_count) };
+    Ok(Board { bounds, layers, rules: rules_out, settings, items, host_cad: true, area_section: 50_000.0, id_max })
+}
+
+/// Whether `p` lies on the pad, border included.
+fn pad_contains(shape: &PadShape, p: FloatPoint) -> bool {
+    match shape {
+        PadShape::Circle(c) => {
+            let (dx, dy) = (p.x - c.center.x as f64, p.y - c.center.y as f64);
+            dx * dx + dy * dy <= (c.radius * c.radius) as f64
+        }
+        PadShape::Octagon(o) => {
+            let in_box = (o.left_x as f64..=o.right_x as f64).contains(&p.x) && (o.bottom_y as f64..=o.top_y as f64).contains(&p.y);
+            in_box && (o.upper_left_diag_x as f64..=o.lower_right_diag_x as f64).contains(&(p.x - p.y)) && (o.lower_left_diag_x as f64..=o.upper_right_diag_x as f64).contains(&(p.x + p.y))
+        }
+        PadShape::Box(_) | PadShape::Polygon(_) => {
+            let b = shape.bounding_box();
+            (b.ll.x as f64..=b.ur.x as f64).contains(&p.x) && (b.ll.y as f64..=b.ur.y as f64).contains(&p.y)
+        }
+    }
+}
+
+/// Board units as the nearest µm.
+fn to_um(p: FloatPoint) -> IrPoint {
+    let unit = UNITS_PER_UM as f64;
+    IrPoint { x: (p.x / unit).round() as i64, y: (p.y / unit).round() as i64 }
+}
+
+/// The routes on `rb`, a board [`board_from_design`] built for the design,
+/// as the design's routing section: traces as tracks and vias, in µm, with
+/// corners off the µm grid rounded onto it and necked-down widths rounded
+/// down. A track lists the pads its ends lie on. The design's zones stay.
+pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRules, rb: &RoutingBoard) -> Result<RoutingSection, String> {
+    let plan = Plan::of(design, model, rules)?;
+    // "REF.PIN" of every pin, by item number as `board_from_design` gives
+    // them: after the outline and the keep-outs.
+    let first_pin = plan.keepouts.len() as u32 + 2;
+    let mut pin_names: BTreeMap<u32, String> = BTreeMap::new();
+    for c in &plan.components {
+        for pin in &c.pins {
+            pin_names.insert(first_pin + pin_names.len() as u32, format!("{}.{}", c.reference, pin.number));
+        }
+    }
+    let pins: Vec<&Item> = rb.board.items.iter().filter(|i| matches!(i.kind, ItemKind::Pin { .. })).collect();
+    let net_name = |item: &Item| item.nets.first().and_then(|&n| plan.nets.get((n - 1) as usize)).map(|n| n.name.clone());
+    let (mut tracks, mut vias) = (Vec::new(), Vec::new());
+    for i in 0..rb.board.items.len() {
+        if !rb.is_on_board(i) {
+            continue;
+        }
+        let item = rb.item(i);
+        let Some(net) = net_name(item) else { continue };
+        match &item.kind {
+            ItemKind::Trace { layer, half_width, polyline } => {
+                let mut pts: Vec<IrPoint> = Vec::new();
+                for k in 0..polyline.corner_count() {
+                    let p = to_um(polyline.corner_float(k));
+                    if pts.last() != Some(&p) {
+                        pts.push(p);
+                    }
+                }
+                if pts.len() < 2 {
+                    continue;
+                }
+                let mut on_pins = Vec::new();
+                for end in [polyline.corner_float(0), polyline.corner_float(polyline.corner_count() - 1)] {
+                    for pin in &pins {
+                        let ItemKind::Pin { pads, .. } = &pin.kind else { continue };
+                        if !pin.nets.contains(&item.nets[0]) || *layer < pin.first_layer || *layer > pin.last_layer {
+                            continue;
+                        }
+                        let on = pads[(*layer - pin.first_layer) as usize].as_ref().is_some_and(|pad| pad_contains(pad, end));
+                        let name = &pin_names[&pin.id];
+                        if on && !on_pins.contains(name) {
+                            on_pins.push(name.clone());
+                        }
+                    }
+                }
+                tracks.push(Track { net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: 2 * half_width / UNITS_PER_UM, pts });
+            }
+            ItemKind::Via { center, .. } => vias.push(IrVia {
+                net,
+                at: to_um(FloatPoint::new(center.x as f64, center.y as f64)),
+                drill: rules.via_drill,
+                diameter: rules.via_diameter,
+                from_layer: plan.layers[item.first_layer as usize].clone(),
+                to_layer: plan.layers[item.last_layer as usize].clone(),
+            }),
+            _ => {}
+        }
+    }
+    tracks.sort_by(|a: &Track, b: &Track| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
+    vias.sort_by(|a: &IrVia, b: &IrVia| (&a.net, a.at).cmp(&(&b.net, b.at)));
+    Ok(RoutingSection { tracks, vias, zones: design.routing.as_ref().map(|r| r.zones.clone()).unwrap_or_default() })
+}
+
+/// A placed design routed as FreeRouting's batch autorouter routes it: up
+/// to `max_passes` passes over the board [`board_from_design`] builds, the
+/// routes back as the design's routing section, and what each pass did --
+/// the last one's unrouted count is what is left.
+pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules, max_passes: i32) -> Result<(RoutingSection, Vec<PassSummary>), String> {
+    let mut rb = RoutingBoard::new(board_from_design(design, model, rules)?);
+    let passes = autoroute_passes(&mut rb, 1, max_passes);
+    Ok((routing_section(design, model, rules, &rb)?, passes))
+}

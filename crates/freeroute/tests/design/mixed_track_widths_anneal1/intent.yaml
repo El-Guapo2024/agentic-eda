@@ -1,0 +1,57 @@
+# Mixed track widths: the corpus case for net classes.
+#
+# Until this board existed nothing under test routed two different track
+# widths on one board, so the grid's per-width clearance buckets were
+# green from the day they were written. They were not correct: pads were
+# stamped into bucket 0 only, at the default width, so any net wider than
+# the default saw no pad clearance anywhere and routed through pad copper.
+# Deliberately small -- the point is coverage of the width machinery, not
+# a hard routing problem.
+parts:
+  - reference: U1
+    mpn: AMS1117-3.3
+    value: "3.3V LDO"
+    package: SOT-223
+    pins:
+      - { number: "1", name: GND, kind: ground }
+      - { number: "2", name: VOUT, kind: power }
+      - { number: "3", name: VIN, kind: power }
+  - reference: C1
+    value: 10uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: C2
+    value: 22uF
+    package: "0805"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: R1
+    value: 1k
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: D1
+    value: PWR
+    package: "0603"
+    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+  - reference: J1
+    value: HDR
+    package: PINHEADER-4
+    pins:
+      - { number: "1", name: VIN, kind: power }
+      - { number: "2", name: GND, kind: ground }
+      - { number: "3", name: VOUT, kind: power }
+      - { number: "4", name: NC, kind: nc }
+nets:
+  - { name: VIN, pins: [U1.3, C1.1, J1.1] }
+  - { name: GND, pins: [U1.1, C1.2, C2.2, D1.2, J1.2] }
+  - { name: VOUT, pins: [U1.2, C2.1, R1.1, J1.3] }
+  - { name: LED_A, pins: [R1.2, D1.1] }
+placement_rules:
+  - { kind: proximity, a: U1, b: C1, max_mm: 3.0 }
+  - { kind: proximity, a: U1, b: C2, max_mm: 3.0 }
+
+board:
+  net_classes:
+    # Three distinct widths, so the grid builds three buckets and the
+    # default one is not the only one exercised.
+    - { name: power, nets: ["VIN", "VOUT"], track_width: 450 }
+    - { name: ground, nets: ["GND"], track_width: 400 }

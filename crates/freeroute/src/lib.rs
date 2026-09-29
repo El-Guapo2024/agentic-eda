@@ -13,7 +13,10 @@
 //! itself: `parity/` holds Java harnesses that dump what FreeRouting does
 //! on a board, and `tests/` replays those dumps against the port.
 //!
-//! [`dump::read_board`] reads a board as FreeRouting loaded it;
+//! [`design::route_design`] routes a placed `design.json` and hands back
+//! its routing section; [`design::board_from_design`] is the board it
+//! routes, the one FreeRouting reads from the DSN [`design::to_dsn`]
+//! writes. [`dump::read_board`] reads a board as FreeRouting loaded it;
 //! [`autoroute::maze::MazeSearch`] searches a connection on it;
 //! [`routing::insert::insert_found_connection`] puts the connection found
 //! on a [`routing::RoutingBoard`], and [`routing::pull_tight::PullTight`]
@@ -31,3 +34,4 @@ pub mod model;
 pub mod board;
 pub mod dump;
 pub mod autoroute;
+pub mod design;
