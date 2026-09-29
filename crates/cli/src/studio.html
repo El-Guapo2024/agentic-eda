@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Board Studio</title>
+<style>
+:root {
+  --bg: #0f1419; --panel: #161c24; --panel2: #1c2430; --line: #2a3441; --text: #d7dde5; --dim: #8a96a6;
+  --accent: #4aa3ff; --ok: #3fb97a; --bad: #ef5b5b; --warn: #e0a93a; --board: #0b2a1f; --edge: #d8c66a;
+  --court: #7d8fa3; --sel: #ffd84a; --air: #e8e08a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 14px; margin: 0 6px 0 0; font-weight: 600; }
+.chip { padding: 2px 8px; border-radius: 10px; background: var(--panel2); color: var(--dim); white-space: nowrap; }
+.chip b { color: var(--text); font-weight: 600; }
+.chip.bad b { color: var(--bad); } .chip.good b { color: var(--ok); }
+.spacer { flex: 1; }
+button, .toggle { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font: inherit; cursor: pointer; }
+button:hover, .toggle:hover { border-color: var(--accent); }
+button.primary { background: #1d4f86; border-color: #2d6fb6; }
+button:disabled { opacity: .5; cursor: default; }
+.toggle { display: inline-flex; align-items: center; gap: 5px; user-select: none; }
+.toggle input { margin: 0; }
+.tabs { display: flex; gap: 2px; }
+.tabs button { border-radius: 6px 6px 0 0; }
+.tabs button.on { background: var(--bg); border-bottom-color: var(--bg); color: var(--accent); }
+main { flex: 1; display: flex; min-height: 0; }
+#stage { flex: 1; position: relative; min-width: 0; }
+#pcb, #sch { position: absolute; inset: 0; width: 100%; height: 100%; }
+#pcb { cursor: grab; touch-action: none; }
+#pcb.panning { cursor: grabbing; }
+#pcb.arming { cursor: crosshair; }
+#sch { display: none; overflow: hidden; background: #fbfaf6; cursor: grab; }
+#sch img { position: absolute; left: 0; top: 0; transform-origin: 0 0; user-select: none; -webkit-user-drag: none; }
+aside { width: 300px; border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+aside section { border-bottom: 1px solid var(--line); padding: 8px 10px; }
+aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 6px; display: flex; justify-content: space-between; }
+.kv { display: grid; grid-template-columns: 70px 1fr; gap: 2px 8px; }
+.kv span:nth-child(odd) { color: var(--dim); }
+.row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.list { display: flex; flex-direction: column; gap: 3px; }
+.item { padding: 4px 6px; border-radius: 5px; background: var(--panel2); cursor: pointer; border: 1px solid transparent; }
+.item:hover { border-color: var(--line); }
+.item.armed { border-color: var(--accent); }
+.item small { color: var(--dim); display: block; }
+.prob { border-left: 3px solid var(--bad); }
+.prob.warn { border-left-color: var(--warn); }
+.act { font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.act:last-child { border: 0; }
+.who { display: inline-block; min-width: 42px; text-align: center; padding: 0 5px; border-radius: 8px; font-size: 11px; margin-right: 4px; background: #33415a; }
+.who.you { background: #1d5a3c; } .who.claude { background: #5a3d86; }
+.act code { color: var(--text); }
+.act .msg { color: var(--dim); display: block; margin-left: 50px; }
+.act.no code { color: var(--bad); }
+.empty { color: var(--dim); font-style: italic; }
+#toast { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); background: #2b1a1a; border: 1px solid var(--bad); color: #ffd6d6; padding: 8px 12px; border-radius: 8px; max-width: 80%; display: none; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+#toast.info { background: #16263a; border-color: var(--accent); color: #d6e8ff; }
+#help { position: absolute; left: 10px; bottom: 10px; color: var(--dim); font-size: 11px; background: rgba(15,20,25,.8); padding: 4px 8px; border-radius: 6px; }
+svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.part .court { fill: rgba(255,255,255,.015); stroke: var(--court); stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+.part.bottom .court { stroke: #6a8fd0; }
+.part:hover .court { stroke: #cfd8e3; }
+.part.sel .court { stroke: var(--sel); stroke-dasharray: none; stroke-width: 1.5; }
+.part.hot .court { stroke: var(--bad); stroke-dasharray: none; stroke-width: 2; }
+.part { cursor: move; }
+.pad { stroke: rgba(0,0,0,.35); vector-effect: non-scaling-stroke; }
+.pad.th { stroke: #e8d27a; stroke-width: 1; }
+.refdes { fill: #e9edf2; font-weight: 600; pointer-events: none; }
+.air { stroke: var(--air); stroke-opacity: .55; vector-effect: non-scaling-stroke; stroke-width: 1; pointer-events: none; }
+.track { fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: .9; pointer-events: none; }
+.via { fill: #c9ccd1; stroke: #555; vector-effect: non-scaling-stroke; pointer-events: none; }
+.outline { fill: var(--board); stroke: var(--edge); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.ghost { fill: rgba(74,163,255,.15); stroke: var(--accent); stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Board Studio</h1>
+  <span class="chip" id="c-placed">placed <b>–</b></span>
+  <span class="chip" id="c-fail">failures <b>–</b></span>
+  <span class="chip" id="c-route">routing <b>–</b></span>
+  <div class="tabs"><button id="t-pcb" class="on">PCB</button><button id="t-sch">Schematic</button></div>
+  <span class="spacer"></span>
+  <label class="toggle" title="Refuse any edit that adds gate failures"><input type="checkbox" id="strict" checked> strict</label>
+  <label class="toggle"><input type="checkbox" id="airw" checked> airwires</label>
+  <button id="fit" title="Fit (F)">Fit</button>
+  <button id="route" class="primary">Route</button>
+</header>
+<main>
+  <div id="stage">
+    <svg id="pcb" xmlns="http://www.w3.org/2000/svg"><g id="world"></g></svg>
+    <div id="sch"><img id="schimg" alt="schematic"></div>
+    <div id="help">drag: move · R: rotate · Del: unplace · click a part in "Unplaced", then the board: place · wheel: zoom · drag empty: pan</div>
+    <div id="toast"></div>
+  </div>
+  <aside>
+    <section id="s-sel"><h2>Selected</h2><div id="sel" class="empty">Click a part.</div></section>
+    <section><h2>Problems <span id="n-prob"></span></h2><div id="probs" class="list"></div></section>
+    <section><h2>Unplaced <span id="n-unpl"></span></h2><div id="unpl" class="list"></div></section>
+    <section><h2>Activity</h2><div id="acts"></div></section>
+  </aside>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const svg = $("pcb"), world = $("world");
+let S = null, version = null, sel = null, armed = null, hot = new Set();
+let view = { s: 0, x: 0, y: 0 };            // px per µm, then translate in px
+let userMoved = false;                       // fit to the stage until the user pans or zooms
+const LAYER = { "F.Cu": "#d4543f", "B.Cu": "#3f7fd4", "In1.Cu": "#d4b43f", "In2.Cu": "#3fd47a" };
+
+function store(k, v) { try { localStorage.setItem("studio." + k, JSON.stringify(v)); } catch (e) {} }
+function recall(k, d) { try { const v = localStorage.getItem("studio." + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } }
+$("strict").checked = recall("strict", true);
+$("airw").checked = recall("airw", true);
+$("strict").onchange = () => store("strict", $("strict").checked);
+$("airw").onchange = () => { store("airw", $("airw").checked); render(); };
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function toast(msg, kind) {
+  const t = $("toast"); t.textContent = msg; t.className = kind || ""; t.style.display = "block";
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", kind === "info" ? 2500 : 6000);
+}
+function netColor(net) {
+  if (!net) return "#6b7480";
+  const n = net.toUpperCase();
+  if (/^(GND|AGND|DGND|PGND|VSS)/.test(n)) return "#4f9a6a";
+  if (/^(VBUS|VIN|VBAT|\+?\d+V\d*|V3V3|3V3|5V|VCC|VDD|\+)/.test(n)) return "#e07a3a";
+  let h = 0; for (const c of net) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return `hsl(${h % 360} 60% 60%)`;
+}
+function applyView() { world.setAttribute("transform", `translate(${view.x} ${view.y}) scale(${view.s})`); }
+function toWorld(ev) {
+  const r = svg.getBoundingClientRect();
+  return { x: (ev.clientX - r.left - view.x) / view.s, y: (ev.clientY - r.top - view.y) / view.s };
+}
+function fit() {
+  if (!S || !S.outline) return;
+  const xs = S.outline.map(p => p[0]), ys = S.outline.map(p => p[1]);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const r = svg.getBoundingClientRect(), pad = 30;
+  if (r.width < 50 || r.height < 50) return;
+  view.s = Math.min((r.width - 2 * pad) / (x1 - x0), (r.height - 2 * pad) / (y1 - y0));
+  view.x = (r.width - (x1 - x0) * view.s) / 2 - x0 * view.s;
+  view.y = (r.height - (y1 - y0) * view.s) / 2 - y0 * view.s;
+  applyView();
+}
+
+// Minimum spanning tree over a net's pads: the airwires.
+function mst(pts) {
+  const out = [], inT = new Array(pts.length).fill(false), best = new Array(pts.length).fill(Infinity), from = new Array(pts.length).fill(-1);
+  if (!pts.length) return out;
+  best[0] = 0;
+  for (let k = 0; k < pts.length; k++) {
+    let u = -1;
+    for (let i = 0; i < pts.length; i++) if (!inT[i] && (u < 0 || best[i] < best[u])) u = i;
+    inT[u] = true;
+    if (from[u] >= 0) out.push([pts[from[u]], pts[u]]);
+    for (let v = 0; v < pts.length; v++) {
+      if (inT[v]) continue;
+      const d = Math.hypot(pts[u][0] - pts[v][0], pts[u][1] - pts[v][1]);
+      if (d < best[v]) { best[v] = d; from[v] = u; }
+    }
+  }
+  return out;
+}
+
+function render() {
+  if (!S) return;
+  world.textContent = "";
+  if (S.outline) el("polygon", { class: "outline", points: S.outline.map(p => p.join(",")).join(" ") }, world);
+  const gTracks = el("g", {}, world);
+  if (S.routing) {
+    const order = t => t.layer === "F.Cu" ? 2 : t.layer === "B.Cu" ? 0 : 1;
+    for (const t of [...S.routing.tracks].sort((a, b) => order(a) - order(b)))
+      el("polyline", { class: "track", points: t.pts.map(p => p.join(",")).join(" "), stroke: LAYER[t.layer] || "#aaa", "stroke-width": t.width }, gTracks);
+  }
+  const gParts = el("g", {}, world);
+  for (const p of S.parts) {
+    if (!p.placed || !p.courtyard) continue;
+    const c = p.courtyard;
+    const g = el("g", { class: "part" + (p.side === "bottom" ? " bottom" : "") + (sel === p.ref ? " sel" : "") + (hot.has(p.ref) ? " hot" : ""), "data-ref": p.ref }, gParts);
+    el("rect", { class: "court", x: c[0], y: c[1], width: c[2] - c[0], height: c[3] - c[1] }, g);
+    for (const q of p.pads || []) {
+      const fill = netColor(q.net);
+      if (q.round && Math.abs(q.w - q.h) < 1) el("circle", { class: "pad" + (q.th ? " th" : ""), cx: q.x, cy: q.y, r: q.w / 2, fill }, g);
+      else el("rect", { class: "pad" + (q.th ? " th" : ""), x: q.x - q.w / 2, y: q.y - q.h / 2, width: q.w, height: q.h, rx: q.round ? Math.min(q.w, q.h) / 2 : Math.min(q.w, q.h) * .15, fill }, g);
+    }
+    const fs = Math.max(500, Math.min(900, Math.min(c[2] - c[0], c[3] - c[1]) * .45));
+    const cx = (c[0] + c[2]) / 2, cy = (c[1] + c[3]) / 2;
+    let tx = cx, ty = c[1] - fs * .3, anchor = "middle";
+    if (p.label === "below") ty = c[3] + fs * .95;
+    if (p.label === "left") { tx = c[0] - fs * .3; ty = cy + fs * .35; anchor = "end"; }
+    if (p.label === "right") { tx = c[2] + fs * .3; ty = cy + fs * .35; anchor = "start"; }
+    const t = el("text", { class: "refdes", x: tx, y: ty, "font-size": fs, "text-anchor": anchor }, g);
+    t.textContent = p.ref;
+  }
+  if (S.routing) for (const v of S.routing.vias) el("circle", { class: "via", cx: v.x, cy: v.y, r: v.d / 2 }, world);
+  if ($("airw").checked && !S.routing) {
+    const nets = {};
+    for (const p of S.parts) for (const q of p.pads || []) if (q.net) (nets[q.net] = nets[q.net] || []).push([q.x, q.y]);
+    const g = el("g", {}, world);
+    for (const n in nets) for (const [a, b] of mst(nets[n])) el("line", { class: "air", x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, g);
+  }
+  applyView();
+  sidebar();
+}
+
+function partOf(ref) { return S && S.parts.find(p => p.ref === ref); }
+function refsIn(s) { return new Set((s || "").split(/[^A-Za-z0-9_]+/).filter(t => partOf(t))); }
+
+function sidebar() {
+  const placed = S.parts.filter(p => p.placed).length, fails = S.checks.filter(c => c.fail).length;
+  $("title").textContent = S.name;
+  $("c-placed").innerHTML = `placed <b>${placed}/${S.parts.length}</b>`;
+  $("c-fail").className = "chip " + (fails ? "bad" : "good");
+  $("c-fail").innerHTML = `failures <b>${fails}</b>`;
+  const r = S.routing;
+  $("c-route").innerHTML = S.job === "running" ? "routing <b>…</b>" : r ? `routing <b>${r.tracks.length} tracks, ${r.vias.length} vias</b>` : "routing <b>none</b>";
+  $("route").disabled = S.job === "running";
+
+  const p = sel && partOf(sel);
+  if (!p) { $("sel").className = "empty"; $("sel").textContent = "Click a part."; }
+  else {
+    const rules = (S.rules || []).filter(x => x.a === p.ref || x.b === p.ref)
+      .map(x => `${x.kind} ${x.a === p.ref ? x.b : x.a} ${x.max_mm != null ? "≤ " + x.max_mm : x.min_mm != null ? "≥ " + x.min_mm : ""} mm`);
+    const nets = [...new Set((p.pads || []).map(q => q.net).filter(Boolean))];
+    $("sel").className = "";
+    $("sel").innerHTML = `<div class="kv">
+      <span>part</span><span><b>${p.ref}</b> ${p.value || ""}</span>
+      <span>package</span><span>${p.package || "–"}</span>
+      ${p.mpn ? `<span>mpn</span><span>${p.mpn}</span>` : ""}
+      <span>block</span><span>${p.block || "–"}</span>
+      ${p.placed ? `<span>at</span><span>${(p.at[0] / 1000).toFixed(2)}, ${(p.at[1] / 1000).toFixed(2)} mm · ${p.rot}°${p.side === "bottom" ? " · bottom" : ""}</span>` : ""}
+      <span>nets</span><span>${nets.join(", ") || "–"}</span>
+      ${rules.length ? `<span>rules</span><span>${rules.join("<br>")}</span>` : ""}
+    </div>` + (p.placed ? `<div class="row"><button id="b-rot">Rotate (R)</button><button id="b-rip">Unplace (Del)</button></div>` : "");
+    if (p.placed) { $("b-rot").onclick = () => rotateSel(); $("b-rip").onclick = () => ripSel(); }
+  }
+
+  const probs = S.checks;
+  $("n-prob").textContent = probs.length || "";
+  $("probs").innerHTML = probs.length ? "" : `<div class="empty">None.</div>`;
+  for (const c of probs) {
+    const d = document.createElement("div");
+    d.className = "item prob" + (c.fail ? "" : " warn");
+    d.innerHTML = `<b>${c.check.replace(/_/g, " ")}</b> <span>${c.at || ""}</span><small>${c.hint || ""}</small>`;
+    d.onclick = () => { hot = refsIn((c.at || "") + " " + (c.hint || "")); render(); };
+    $("probs").appendChild(d);
+  }
+
+  const un = S.parts.filter(p => !p.placed);
+  $("n-unpl").textContent = un.length || "";
+  $("unpl").innerHTML = un.length ? "" : `<div class="empty">All placed.</div>`;
+  for (const p of un) {
+    const d = document.createElement("div");
+    d.className = "item" + (armed === p.ref ? " armed" : "");
+    d.innerHTML = `<b>${p.ref}</b> ${p.value || ""}<small>${p.package || ""}${p.block ? " · " + p.block : ""}</small>`;
+    d.onclick = () => { armed = armed === p.ref ? null : p.ref; svg.classList.toggle("arming", !!armed); sidebar(); if (armed) toast(`Click on the board to place ${p.ref}.`, "info"); };
+    $("unpl").appendChild(d);
+  }
+
+  $("acts").innerHTML = S.activity.length ? "" : `<div class="empty">Nothing yet.</div>`;
+  for (const a of S.activity) {
+    const d = document.createElement("div");
+    const who = a.by === "ui" ? "you" : a.by;
+    const t = new Date(a.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    d.className = "act" + (a.ok ? "" : " no");
+    d.innerHTML = `<span class="who ${who}">${who}</span><code>${a.cmd}</code> ${a.ok ? "✓" : "✗"}<span class="msg">${t} · ${a.message || ""}</span>`;
+    $("acts").appendChild(d);
+  }
+}
+
+async function send(cmd) {
+  const r = await fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd, strict: $("strict").checked }) });
+  const j = await r.json();
+  if (!j.ok) toast(j.message);
+  await poll(true);
+  return j.ok;
+}
+function rotateSel() { if (sel && partOf(sel)?.placed) send({ op: "rotate", part: sel, quarter_turns: 1 }); }
+function ripSel() { if (sel && partOf(sel)?.placed) { const r = sel; sel = null; send({ op: "rip", part: r }); } }
+
+// Pointer: pan the board, drag a part, or drop an armed part.
+let drag = null;
+svg.addEventListener("pointerdown", ev => {
+  const w = toWorld(ev);
+  if (armed) {
+    const part = armed; armed = null; svg.classList.remove("arming");
+    const snap = S.snap || 100;
+    send({ op: "place_at", part, x: Math.round(w.x / snap) * snap, y: Math.round(w.y / snap) * snap }).then(ok => { if (ok) sel = part; });
+    return;
+  }
+  const g = ev.target.closest && ev.target.closest(".part");
+  if (g) {
+    const ref = g.dataset.ref, p = partOf(ref);
+    sel = ref; hot = new Set();
+    drag = { kind: "part", ref, g, start: w, at: p.at, moved: false };
+    render();
+    drag.g = world.querySelector(`.part[data-ref="${ref}"]`);
+  } else {
+    drag = { kind: "pan", x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y };
+    svg.classList.add("panning");
+  }
+  svg.setPointerCapture(ev.pointerId);
+});
+svg.addEventListener("pointermove", ev => {
+  if (armed) { ghost(toWorld(ev)); return; }
+  if (!drag) return;
+  if (drag.kind === "pan") { view.x = drag.vx + ev.clientX - drag.x; view.y = drag.vy + ev.clientY - drag.y; userMoved = true; applyView(); return; }
+  const w = toWorld(ev), snap = S.snap || 100;
+  drag.dx = Math.round((w.x - drag.start.x) / snap) * snap;
+  drag.dy = Math.round((w.y - drag.start.y) / snap) * snap;
+  if (Math.abs(drag.dx) + Math.abs(drag.dy) > 0) drag.moved = true;
+  if (drag.g) drag.g.setAttribute("transform", `translate(${drag.dx} ${drag.dy})`);
+});
+svg.addEventListener("pointerup", ev => {
+  const d = drag; drag = null; svg.classList.remove("panning");
+  if (!d || d.kind !== "part") return;
+  if (d.moved) send({ op: "move_to", part: d.ref, x: d.at[0] + d.dx, y: d.at[1] + d.dy });
+  else render();
+});
+svg.addEventListener("wheel", ev => {
+  ev.preventDefault();
+  const r = svg.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const k = Math.exp(-ev.deltaY * 0.0015), s2 = Math.max(1e-4, Math.min(1, view.s * k));
+  view.x = mx - (mx - view.x) * s2 / view.s; view.y = my - (my - view.y) * s2 / view.s; view.s = s2;
+  userMoved = true;
+  applyView();
+}, { passive: false });
+function ghost(w) {
+  let g = world.querySelector(".ghost");
+  const p = partOf(armed); if (!p || !p.size) return;
+  if (!g) g = el("rect", { class: "ghost" }, world);
+  g.setAttribute("x", w.x - p.size[0] / 2); g.setAttribute("y", w.y - p.size[1] / 2);
+  g.setAttribute("width", p.size[0]); g.setAttribute("height", p.size[1]);
+}
+window.addEventListener("keydown", ev => {
+  if (ev.target.tagName === "INPUT") return;
+  if (ev.key === "r" || ev.key === "R") rotateSel();
+  else if (ev.key === "Delete" || ev.key === "Backspace") ripSel();
+  else if (ev.key === "Escape") { sel = null; armed = null; hot = new Set(); svg.classList.remove("arming"); render(); }
+  else if (ev.key === "f" || ev.key === "F") { userMoved = false; fit(); }
+});
+$("fit").onclick = () => { userMoved = false; fit(); };
+$("route").onclick = async () => {
+  const r = await fetch("/api/route", { method: "POST" }); const j = await r.json();
+  toast(j.ok ? "Routing… the tracks appear when it is done." : j.message, j.ok ? "info" : "");
+  poll(true);
+};
+
+// Schematic tab: pan and zoom an image of the drawing.
+let sv = { s: 1, x: 0, y: 0 }, sdrag = null, schLoaded = false;
+function applySch() { $("schimg").style.transform = `translate(${sv.x}px, ${sv.y}px) scale(${sv.s})`; }
+function showTab(which) {
+  $("t-pcb").classList.toggle("on", which === "pcb"); $("t-sch").classList.toggle("on", which === "sch");
+  $("pcb").style.display = which === "pcb" ? "block" : "none"; $("sch").style.display = which === "sch" ? "block" : "none";
+  $("help").style.display = which === "pcb" ? "block" : "none";
+  if (which === "sch" && !schLoaded) {
+    schLoaded = true;
+    loadSchematic();
+  }
+}
+// The drawing has only a viewBox, so it is sized here, 8 px to the unit,
+// sharp enough to zoom into, then fitted to the stage.
+async function loadSchematic() {
+  const r = await fetch("/api/schematic.svg");
+  const txt = await r.text();
+  if (!r.ok) { toast(txt || "No schematic to show for this board."); schLoaded = false; return; }
+  const vb = (/viewBox="([^"]+)"/.exec(txt) || [, "0 0 100 100"])[1].split(/[ ,]+/).map(Number);
+  const W = vb[2] * 8, H = vb[3] * 8, img = $("schimg");
+  img.style.width = W + "px"; img.style.height = H + "px";
+  img.onload = () => { const b = $("sch").getBoundingClientRect(); sv.s = Math.min(b.width / W, b.height / H) * .95; sv.x = (b.width - W * sv.s) / 2; sv.y = (b.height - H * sv.s) / 2; applySch(); };
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(txt);
+}
+$("t-pcb").onclick = () => showTab("pcb");
+$("t-sch").onclick = () => showTab("sch");
+$("sch").addEventListener("pointerdown", ev => { sdrag = { x: ev.clientX, y: ev.clientY, sx: sv.x, sy: sv.y }; $("sch").setPointerCapture(ev.pointerId); });
+$("sch").addEventListener("pointermove", ev => { if (!sdrag) return; sv.x = sdrag.sx + ev.clientX - sdrag.x; sv.y = sdrag.sy + ev.clientY - sdrag.y; applySch(); });
+$("sch").addEventListener("pointerup", () => sdrag = null);
+$("sch").addEventListener("wheel", ev => {
+  ev.preventDefault();
+  const r = $("sch").getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top;
+  const s2 = Math.max(.05, Math.min(20, sv.s * Math.exp(-ev.deltaY * .0015)));
+  sv.x = mx - (mx - sv.x) * s2 / sv.s; sv.y = my - (my - sv.y) * s2 / sv.s; sv.s = s2; applySch();
+}, { passive: false });
+
+// Follow the board: whoever changes it, the page catches up.
+async function poll(force) {
+  try {
+    const v = await (await fetch("/api/version")).json();
+    if (!force && v === version) return;
+    version = v;
+    const s = await (await fetch("/api/state")).json();
+    if (s.error) { toast(s.error); return; }
+    const first = !S;
+    S = s;
+    if (drag && drag.kind === "part") return;
+    render();
+    if (first) fit();
+  } catch (e) { /* the server restarting; try again next tick */ }
+}
+new ResizeObserver(() => { if (!userMoved) fit(); else applyView(); }).observe($("stage"));
+poll(true);
+setInterval(poll, 700);
+</script>
+</body>
+</html>

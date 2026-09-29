@@ -12,8 +12,16 @@
 //! eda board place U4 --region centre -C work
 //! eda board place C10 --near U4 --side north -C work
 //! eda board move U12 --toward J23 -C work
+//! eda board move U12 --to 42.5,18 -C work
 //! eda board check -C work
+//! eda board route -C work
+//! eda board serve -C work --port 8765
 //! ```
+//!
+//! `serve` shows the board in a browser and lets a person edit it with
+//! the same verbs: a drag is `move --to`, a key press `rotate`. Whoever
+//! issues a command -- the CLI or the page -- it goes through [`step`]
+//! and into `activity.jsonl`, so each sees what the other did.
 //!
 //! The state lives in the directory: `design.json` is the board and
 //! `board.json` remembers which intent it came from, so every command
@@ -38,13 +46,13 @@ use std::path::{Path, PathBuf};
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Meta {
+pub(crate) struct Meta {
     /// The intent this board was started from.
-    intent: String,
+    pub(crate) intent: String,
     /// Snap and spacing, kept so every command uses the same grid the
     /// board was created on.
-    snap_um: i64,
-    spacing_um: i64,
+    pub(crate) snap_um: i64,
+    pub(crate) spacing_um: i64,
 }
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
@@ -60,7 +68,7 @@ fn design_path(dir: &Path) -> PathBuf {
 }
 
 /// Load the board a directory holds.
-fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, ConstraintModel), Vec<CheckResult>> {
+pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, ConstraintModel), Vec<CheckResult>> {
     let meta: Meta = serde_json::from_str(
         &std::fs::read_to_string(meta_path(dir))
             .map_err(|e| fail("board_no_dir", &dir.display().to_string(), format!("no board here: {e}. Start one with `eda board new`.")))?,
@@ -79,7 +87,7 @@ fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, ConstraintModel), Ve
     Ok((meta, design, model))
 }
 
-fn save(dir: &Path, design: &eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
+pub(crate) fn save(dir: &Path, design: &eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
     let s = serde_json::to_string_pretty(design)
         .map_err(|e| fail("board_encode", "design.json", format!("the design could not be encoded: {e}")))?;
     std::fs::write(design_path(dir), s)
@@ -107,8 +115,19 @@ fn print_status(board: &Board, model: &ConstraintModel) -> Result<(), Vec<CheckR
     Ok(())
 }
 
-/// Apply one command and report what it cost.
-fn step(dir: &Path, cmd: Cmd, strict: bool) -> Result<(), Vec<CheckResult>> {
+/// Apply one command and report what it cost, logged as `by` did it.
+/// A placement change leaves any routing stale, so it goes.
+pub(crate) fn step(dir: &Path, cmd: Cmd, strict: bool, by: &str) -> Result<String, Vec<CheckResult>> {
+    let line = cmd_line(&cmd);
+    let r = step_quiet(dir, &cmd, strict);
+    match &r {
+        Ok(summary) => log_activity(dir, by, &line, true, summary),
+        Err(e) => log_activity(dir, by, &line, false, &reasons(e)),
+    }
+    r
+}
+
+fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckResult>> {
     let (meta, design, model) = load(dir)?;
     let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
     let before = board.failures();
@@ -117,39 +136,110 @@ fn step(dir: &Path, cmd: Cmd, strict: bool) -> Result<(), Vec<CheckResult>> {
     // A refused command is not a crash: it is an answer. The caller
     // asked whether this move is possible and the gates said no, with a
     // reason -- which is exactly the signal a decision layer needs.
-    board.apply(&cmd)?;
+    board.apply(cmd)?;
 
     let after = board.failures();
-    eda_ops::episode::record(&was, &model, &cmd, before, after, 0);
+    eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
     if strict && after > before {
+        let new: Vec<String> = board
+            .checks()
+            .iter()
+            .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
+            .filter(|c| !was.checks().iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, eda_model::CheckStatus::Fail)))
+            .map(|c| format!("{} @ {}", c.check, c.location.clone().unwrap_or_default()))
+            .collect();
         return Err(fail(
             "board_worse",
             &cmd.subjects().join(","),
-            format!("that move takes the board from {before} failure(s) to {after}; refused because --strict"),
+            format!("that move takes the board from {before} failure(s) to {after} ({}); refused because --strict", new.join("; ")),
         ));
     }
 
     let (done, placed, failures) = progress(&board, &model);
-    save(dir, board.design())?;
-    eprintln!(
-        "{}: {placed}/{} placed ({:.0}%), {failures} failure(s){}",
-        cmd_name(&cmd),
+    let mut design = board.design().clone();
+    let stale = design.routing.take().is_some();
+    save(dir, &design)?;
+    Ok(format!(
+        "{}: {placed}/{} placed ({:.0}%), {failures} failure(s){}{}",
+        cmd_name(cmd),
         model.parts.len(),
         done * 100.0,
         match after as i64 - before as i64 {
             0 => String::new(),
             d if d < 0 => format!(", {} closed", -d),
             d => format!(", {d} opened"),
-        }
-    );
-    Ok(())
+        },
+        if stale { "; routing cleared" } else { "" }
+    ))
+}
+
+/// Who the activity log says issued a CLI command: `EDA_ACTOR`, so a
+/// model driving the CLI shows up as itself, or plain "cli".
+fn actor() -> String {
+    std::env::var("EDA_ACTOR").ok().filter(|a| !a.is_empty()).unwrap_or_else(|| "cli".into())
+}
+
+/// The failures' messages, one line.
+pub(crate) fn reasons(e: &[CheckResult]) -> String {
+    e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; ")
+}
+
+/// Append what was done, by whom, to the board's `activity.jsonl`.
+pub(crate) fn log_activity(dir: &Path, by: &str, line: &str, ok: bool, message: &str) {
+    use std::io::Write;
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let entry = serde_json::json!({ "t": t as u64, "by": by, "cmd": line, "ok": ok, "message": message });
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("activity.jsonl")) {
+        let _ = writeln!(f, "{entry}");
+    }
+}
+
+/// The command as it would be typed after `eda board`.
+fn cmd_line(c: &Cmd) -> String {
+    let mm = |v: i64| format!("{:.2}", v as f64 / 1000.0);
+    match c {
+        Cmd::Place { part, anchor, side } => format!("place {part} --near {anchor} --side {}", side.as_str()),
+        Cmd::PlaceEdge { part, edge, fraction } => format!("place {part} --edge {} --along {fraction}", edge.as_str()),
+        Cmd::PlaceRegion { part, region } => format!("place {part} --region {}", region.as_str()),
+        Cmd::PlaceAt { part, x, y } => format!("place {part} --at {},{}", mm(*x), mm(*y)),
+        Cmd::MoveTo { part, x, y } => format!("move {part} --to {},{}", mm(*x), mm(*y)),
+        Cmd::Nudge { part, dir, steps } => format!("move {part} --dir {} --steps {steps}", dir.as_str()),
+        Cmd::Rotate { part, quarter_turns } => format!("rotate {part} --quarters {quarter_turns}"),
+        Cmd::Swap { a, b } => format!("swap {a} {b}"),
+        Cmd::Rip { part } => format!("rip {part}"),
+    }
+}
+
+/// Route the board as it stands and keep the routing, logged as `by`
+/// did it.
+pub(crate) fn route_board(dir: &Path, by: &str) -> Result<String, Vec<CheckResult>> {
+    let r = (|| {
+        let (_, design, model) = load(dir)?;
+        let t = std::time::Instant::now();
+        let (routed, fails) = eda::route_partial(&design, &model, &model.board);
+        let Some(routed) = routed else { return Err(fails) };
+        let summary = format!(
+            "route: {} track(s), {} via(s) in {:.1?}{}",
+            routed.routing.as_ref().map_or(0, |r| r.tracks.len()),
+            routed.routing.as_ref().map_or(0, |r| r.vias.len()),
+            t.elapsed(),
+            if fails.is_empty() { String::new() } else { format!("; {} problem(s): {}", fails.len(), reasons(&fails)) }
+        );
+        save(dir, &routed)?;
+        Ok(summary)
+    })();
+    match &r {
+        Ok(s) => log_activity(dir, by, "route", true, s),
+        Err(e) => log_activity(dir, by, "route", false, &reasons(e)),
+    }
+    r
 }
 
 fn cmd_name(c: &Cmd) -> &'static str {
     match c {
         Cmd::Place { .. } | Cmd::PlaceAt { .. } | Cmd::PlaceEdge { .. } | Cmd::PlaceRegion { .. } => "place",
-        Cmd::Nudge { .. } => "move",
+        Cmd::MoveTo { .. } | Cmd::Nudge { .. } => "move",
         Cmd::Rotate { .. } => "rotate",
         Cmd::Swap { .. } => "swap",
         Cmd::Rip { .. } => "rip",
@@ -262,32 +352,44 @@ pub fn run(
             } else {
                 return Err(fail("board_usage", "place", "say where: --region R, --edge E, --near P --side S, or --at x,y"));
             };
-            step(&dir, cmd, strict)
+            step(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "move" => {
-            let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "move", "usage: eda board move <REF> --dir north|south|east|west [--steps N]"))?;
-            let d = flag(rest, "--dir").ok_or_else(|| fail("board_usage", "move", "move needs --dir north|south|east|west"))?;
+            let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "move", "usage: eda board move <REF> (--dir north|south|east|west [--steps N] | --to x,y)"))?;
+            if let Some(to) = flag(rest, "--to") {
+                let (x, y) = to.split_once(',').ok_or_else(|| fail("board_usage", "--to", "--to takes x,y in millimetres"))?;
+                let mm = |s: &str| -> Result<i64, Vec<CheckResult>> {
+                    s.trim().parse::<f64>().map(|v| (v * 1000.0).round() as i64).map_err(|_| fail("board_usage", "--to", "x and y must be numbers, in millimetres"))
+                };
+                return step(&dir, Cmd::MoveTo { part, x: mm(x)?, y: mm(y)? }, strict, &actor()).map(|s| eprintln!("{s}"));
+            }
+            let d = flag(rest, "--dir").ok_or_else(|| fail("board_usage", "move", "move needs --dir north|south|east|west, or --to x,y"))?;
             let steps = flag(rest, "--steps").and_then(|s| s.parse().ok()).unwrap_or(1);
-            step(&dir, Cmd::Nudge { part, dir: parse_dir(&d)?, steps }, strict)
+            step(&dir, Cmd::Nudge { part, dir: parse_dir(&d)?, steps }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "rotate" => {
             let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "rotate", "usage: eda board rotate <REF> [--quarters N]"))?;
             let q = flag(rest, "--quarters").and_then(|s| s.parse().ok()).unwrap_or(1);
-            step(&dir, Cmd::Rotate { part, quarter_turns: q }, strict)
+            step(&dir, Cmd::Rotate { part, quarter_turns: q }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "swap" => {
             let a = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "swap", "usage: eda board swap <A> <B>"))?;
             let b = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "swap", "usage: eda board swap <A> <B>"))?;
-            step(&dir, Cmd::Swap { a, b }, strict)
+            step(&dir, Cmd::Swap { a, b }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "rip" => {
             let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "rip", "usage: eda board rip <REF>"))?;
-            step(&dir, Cmd::Rip { part }, strict)
+            step(&dir, Cmd::Rip { part }, strict, &actor()).map(|s| eprintln!("{s}"))
+        }
+        "route" => route_board(&dir, &actor()).map(|s| eprintln!("{s}")),
+        "serve" => {
+            let port = flag(rest, "--port").and_then(|p| p.parse().ok()).unwrap_or(8765);
+            crate::studio::serve(&dir, port)
         }
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|swap|rip> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|swap|rip|route|serve> [-C dir] [--strict]",
         )),
     }
 }

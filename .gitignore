@@ -3,3 +3,6 @@ target/
 datasets/cache/
 datasets/.venv/
 datasets/samples/
+
+# Boards worked with `eda board` (local state, not source)
+work/

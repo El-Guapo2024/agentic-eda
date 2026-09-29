@@ -16,6 +16,7 @@
 //! ```
 
 mod board;
+mod studio;
 
 use eda::prelude::*;
 use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, to_circuit_json, PlaceOptions, Placer};

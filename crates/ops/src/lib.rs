@@ -157,6 +157,10 @@ pub enum Cmd {
     /// when the position is actually known: a part being restored, a
     /// board being replayed, or a caller that has already decided.
     PlaceAt { part: String, x: Um, y: Um },
+    /// Move a placed part to a board position, µm, keeping its rotation
+    /// and side: what dragging it does. Like `Nudge`, the gates judge
+    /// where it lands.
+    MoveTo { part: String, x: Um, y: Um },
     Nudge { part: String, dir: Dir, steps: u32 },
     /// Turn a placed part by quarter turns.
     Rotate { part: String, quarter_turns: u8 },
@@ -176,6 +180,7 @@ impl Cmd {
             Cmd::PlaceEdge { part, .. }
             | Cmd::PlaceRegion { part, .. }
             | Cmd::PlaceAt { part, .. }
+            | Cmd::MoveTo { part, .. }
             | Cmd::Nudge { part, .. }
             | Cmd::Rotate { part, .. }
             | Cmd::Rip { part } => vec![part],
@@ -331,6 +336,10 @@ impl<'a> Board<'a> {
             Cmd::PlaceEdge { part, edge, fraction } => self.place_on_edge(part, *edge, *fraction),
             Cmd::PlaceRegion { part, region } => self.place_in_region(part, *region),
             Cmd::PlaceAt { part, x, y } => self.place_at(part, *x, *y),
+            Cmd::MoveTo { part, x, y } => {
+                let fp = self.require_placed(part)?;
+                self.set_pose(part, Point { x: *x, y: *y }, fp.rot)
+            }
             Cmd::Nudge { part, dir, steps } => self.nudge(part, *dir, *steps),
             Cmd::Rotate { part, quarter_turns } => self.rotate(part, *quarter_turns),
             Cmd::Swap { a, b } => self.swap(a, b),
