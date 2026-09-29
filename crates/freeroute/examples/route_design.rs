@@ -16,7 +16,8 @@ fn main() {
     let model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&args[2]).expect("read the intent")).expect("parse the intent");
     let max_passes = args.get(4).map_or(20, |a| a.parse().expect("a number of passes"));
     let start = Instant::now();
-    let routed = match eda_freeroute::design::route_design(&design, &model, &model.board, max_passes) {
+    let optimizer_passes = std::env::var("OPTIMIZER_PASSES").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
+    let routed = match eda_freeroute::design::route_design(&design, &model, &model.board, max_passes, optimizer_passes) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("{e}");
@@ -26,6 +27,7 @@ fn main() {
     for p in &routed.passes {
         println!("pass {}: {} items, {} routed, {} not routed ({} insert errors)", p.pass_no, p.items, p.routed, p.not_routed, p.insert_errors);
     }
+    println!("optimizer: {} passes, {} of {} attempts kept", routed.optimized.passes, routed.optimized.improved, routed.optimized.attempts);
     println!("{} tracks, {} vias in {:.2?}; unrouted: {:?}", routed.routing.tracks.len(), routed.routing.vias.len(), start.elapsed(), routed.unrouted);
     if let Some(out) = args.get(3) {
         design.routing = Some(routed.routing);

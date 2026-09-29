@@ -119,7 +119,7 @@ fn placement_then_routing_end_to_end() {
 
 /// The design routed by the FreeRouting port, or what it left unrouted.
 fn route(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, rules: &eda_model::BoardRules, _seed: u64) -> Result<eda_model::ir::Design, Vec<String>> {
-    let routed = eda_freeroute::design::route_design(design, model, rules, 20).map_err(|e| vec![e])?;
+    let routed = eda_freeroute::design::route_design(design, model, rules, 20, 10).map_err(|e| vec![e])?;
     if !routed.unrouted.is_empty() {
         return Err(routed.unrouted);
     }

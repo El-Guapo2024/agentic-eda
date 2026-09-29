@@ -26,6 +26,7 @@
 
 pub mod geometry;
 pub mod searchtree;
+pub mod cellgrid;
 pub mod room;
 pub mod door;
 pub mod routing;

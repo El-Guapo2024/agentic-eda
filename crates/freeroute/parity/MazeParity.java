@@ -121,6 +121,7 @@ import app.freerouting.geometry.planar.Area;
 import app.freerouting.geometry.planar.Circle;
 import app.freerouting.geometry.planar.ConvexShape;
 import app.freerouting.geometry.planar.FloatLine;
+import app.freerouting.geometry.planar.FloatPoint;
 import app.freerouting.geometry.planar.IntBox;
 import app.freerouting.geometry.planar.IntOctagon;
 import app.freerouting.geometry.planar.IntPoint;
@@ -208,6 +209,9 @@ public class MazeParity {
           .append(board.layer_structure.arr[l].name.replace(' ', '_')).append('\n');
     }
     out.append("host_cad ").append(board.communication.host_cad_exists() ? 1 : 0).append('\n');
+    // BoardHandling's user unit: board_to_dsn(1), and the unit in micrometres.
+    out.append("user_unit ").append(board.communication.coordinate_transform.board_to_dsn(1)).append(' ')
+        .append(app.freerouting.board.Unit.scale(1.0, board.communication.unit, app.freerouting.board.Unit.UM)).append('\n');
     double area_section = 50000;
     if (board.communication.host_cad_exists()) {
       area_section = Math.min(500 * board.communication.get_resolution(app.freerouting.board.Unit.MIL), area_section);
@@ -691,8 +695,317 @@ public class MazeParity {
         before = changes(board, before, out);
       }
     }
+    // With OPT_PASSES=<p>, BatchOptRoute follows the passes, up to p of its own.
+    String opt_env = System.getenv("OPT_PASSES");
+    if (opt_env != null && n < p_max) {
+      optimize(board, handling, Integer.parseInt(opt_env), out, time_only ? null : before, n);
+    }
     if (time_only) {
       System.err.println("TIME " + (System.nanoTime() - start_time) / 1e9 + " s");
+    }
+  }
+
+  // ---- BatchOptRoute, step by step ------------------------------------------------------------
+  //
+  // A replica of BatchOptRoute.optimize_board (single thread, the board not cloned), on
+  // FreeRouting's own primitives, with records of each step:
+  //   opt_pass <no> <with preferred directions 0/1>
+  //   opt_item <item id> <ripped connection ids...> | opt_item <item id> fixed
+  //   opt_ipass <no> <n> <item ids...> / conn ... / opt_tails <max id>   (its autoroute passes)
+  //   opt_final_tails <max id>
+  //   opt_result <item id> <improved 0/1> <incompletes before> <after> <vias before> <after>
+  //              <weighted length before> <after>, then conn_del / conn_add
+  //   opt_end <no> <route improved>
+
+  /** BatchOptRoute.calc_weighted_trace_length. */
+  private static double calc_weighted_trace_length(RoutingBoard p_board) {
+    double result = 0;
+    int default_clearance_class = app.freerouting.rules.BoardRules.default_clearance_class();
+    Iterator<UndoableObjects.UndoableObjectNode> it = p_board.item_list.start_read_object();
+    for (;;) {
+      UndoableObjects.Storable curr_item = p_board.item_list.read_object(it);
+      if (curr_item == null) {
+        break;
+      }
+      if (curr_item instanceof app.freerouting.board.Trace) {
+        app.freerouting.board.Trace curr_trace = (app.freerouting.board.Trace) curr_item;
+        app.freerouting.board.FixedState fixed_state = curr_trace.get_fixed_state();
+        if (fixed_state == app.freerouting.board.FixedState.UNFIXED || fixed_state == app.freerouting.board.FixedState.SHOVE_FIXED) {
+          double weighted_trace_length = curr_trace.get_length()
+              * (curr_trace.get_half_width() + p_board.clearance_value(curr_trace.clearance_class_no(), default_clearance_class, curr_trace.get_layer()));
+          if (fixed_state == app.freerouting.board.FixedState.SHOVE_FIXED) {
+            weighted_trace_length /= 2;
+          }
+          result += weighted_trace_length;
+        }
+      }
+    }
+    return result;
+  }
+
+  /** BatchOptRoute.contains_only_unfixed_traces. */
+  private static boolean contains_only_unfixed_traces(java.util.Collection<Item> p_item_list) {
+    for (Item curr_item : p_item_list) {
+      if (curr_item.is_user_fixed() || !(curr_item instanceof app.freerouting.board.Trace)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** BatchOptRoute.ReadSortedRouteItems. */
+  private static final class SortedRouteItems {
+    FloatPoint min_item_coor = new FloatPoint(Integer.MIN_VALUE, Integer.MIN_VALUE);
+    int min_item_layer = -1;
+
+    Item next(RoutingBoard routing_board) {
+      Item result = null;
+      FloatPoint curr_min_coor = new FloatPoint(Integer.MAX_VALUE, Integer.MAX_VALUE);
+      int curr_min_layer = Integer.MAX_VALUE;
+      Iterator<UndoableObjects.UndoableObjectNode> it = routing_board.item_list.start_read_object();
+      for (;;) {
+        UndoableObjects.Storable curr_item = routing_board.item_list.read_object(it);
+        if (curr_item == null) {
+          break;
+        }
+        if (curr_item instanceof Via) {
+          Via curr_via = (Via) curr_item;
+          if (!curr_via.is_user_fixed()) {
+            FloatPoint curr_via_center = curr_via.get_center().to_float();
+            int curr_via_min_layer = curr_via.first_layer();
+            if (curr_via_center.x > min_item_coor.x
+                || curr_via_center.x == min_item_coor.x
+                    && (curr_via_center.y > min_item_coor.y || curr_via_center.y == min_item_coor.y && curr_via_min_layer > min_item_layer)) {
+              if (curr_via_center.x < curr_min_coor.x
+                  || curr_via_center.x == curr_min_coor.x
+                      && (curr_via_center.y < curr_min_coor.y || curr_via_center.y == curr_min_coor.y && curr_via_min_layer < curr_min_layer)) {
+                curr_min_coor = curr_via_center;
+                curr_min_layer = curr_via_min_layer;
+                result = curr_via;
+              }
+            }
+          }
+        }
+      }
+      it = routing_board.item_list.start_read_object();
+      for (;;) {
+        UndoableObjects.Storable curr_item = routing_board.item_list.read_object(it);
+        if (curr_item == null) {
+          break;
+        }
+        if (curr_item instanceof app.freerouting.board.Trace) {
+          app.freerouting.board.Trace curr_trace = (app.freerouting.board.Trace) curr_item;
+          if (!curr_trace.is_shove_fixed()) {
+            FloatPoint first_corner = curr_trace.first_corner().to_float();
+            FloatPoint last_corner = curr_trace.last_corner().to_float();
+            FloatPoint compare_corner;
+            if (first_corner.x < last_corner.x || first_corner.x == last_corner.x && first_corner.y < last_corner.y) {
+              compare_corner = last_corner;
+            } else {
+              compare_corner = first_corner;
+            }
+            int curr_trace_layer = curr_trace.get_layer();
+            if (compare_corner.x > min_item_coor.x
+                || compare_corner.x == min_item_coor.x
+                    && (compare_corner.y > min_item_coor.y || compare_corner.y == min_item_coor.y && curr_trace_layer > min_item_layer)) {
+              if (compare_corner.x < curr_min_coor.x
+                  || compare_corner.x == curr_min_coor.x
+                      && (compare_corner.y < curr_min_coor.y || compare_corner.y == curr_min_coor.y && curr_trace_layer < curr_min_layer)) {
+                boolean is_connected_to_via = false;
+                Set<Item> trace_contacts = curr_trace.get_normal_contacts();
+                for (Item curr_contact : trace_contacts) {
+                  if (curr_contact instanceof Via && !curr_contact.is_user_fixed()) {
+                    is_connected_to_via = true;
+                    break;
+                  }
+                }
+                if (!is_connected_to_via) {
+                  curr_min_coor = compare_corner;
+                  curr_min_layer = curr_trace_layer;
+                  result = curr_trace;
+                }
+              }
+            }
+          }
+        }
+      }
+      min_item_coor = curr_min_coor;
+      min_item_layer = curr_min_layer;
+      return result;
+    }
+  }
+
+  /** BatchOptRoute.optimize_board, with no stoppable thread: up to p_max_passes passes. */
+  private static void optimize(RoutingBoard board, BoardHandlingHeadless handling, int p_max_passes, StringBuilder out,
+      java.util.Map<Integer, String> before, int conn_no) throws Exception {
+    AutorouteSettings settings = handling.get_settings().autoroute_settings;
+    // BoardHandling's user transform: the board's unit, as the DSN gave it.
+    double unit_factor = board.communication.coordinate_transform.board_to_dsn(1);
+    app.freerouting.board.CoordinateTransform user =
+        new app.freerouting.board.CoordinateTransform(1, board.communication.unit, unit_factor, board.communication.unit);
+    final float threshold = 0.00001f;
+    boolean use_increased_ripup_costs = true;
+    double route_improved = -1;
+    int curr_pass_no = 0;
+    while (((route_improved >= threshold) || (route_improved < 0)) && curr_pass_no < p_max_passes) {
+      ++curr_pass_no;
+      boolean with_preferred_directions = (curr_pass_no % 2 != 0);
+      out.append("opt_pass ").append(curr_pass_no).append(' ').append(with_preferred_directions ? 1 : 0).append('\n');
+      // opt_route_pass
+      float pass_improved = 0.0f;
+      int via_count_before = board.get_vias().size();
+      double trace_length_before = user.board_to_user(board.cumulative_trace_length());
+      SortedRouteItems sorted = new SortedRouteItems();
+      double min_cumulative_trace_length_before = calc_weighted_trace_length(board);
+      for (;;) {
+        Item p_item = sorted.next(board);
+        if (p_item == null) {
+          break;
+        }
+        // opt_route_item
+        int incomplete_count_before = new app.freerouting.interactive.RatsNest(board, Locale.ENGLISH).incomplete_count();
+        int item_via_count_before = board.get_vias().size();
+        Set<Item> ripped_items = new TreeSet<>();
+        ripped_items.add(p_item);
+        if (p_item instanceof app.freerouting.board.Trace) {
+          app.freerouting.board.Trace curr_trace = (app.freerouting.board.Trace) p_item;
+          Set<Item> curr_contact_list = curr_trace.get_start_contacts();
+          for (int i = 0; i < 2; ++i) {
+            if (contains_only_unfixed_traces(curr_contact_list)) {
+              ripped_items.addAll(curr_contact_list);
+            }
+            curr_contact_list = curr_trace.get_end_contacts();
+          }
+        }
+        Set<Item> ripped_connections = new TreeSet<>();
+        for (Item curr_item : ripped_items) {
+          ripped_connections.addAll(curr_item.get_connection_items(Item.StopConnectionOption.NONE));
+        }
+        boolean fixed = false;
+        for (Item curr_item : ripped_connections) {
+          if (curr_item.is_user_fixed()) {
+            fixed = true;
+          }
+        }
+        if (fixed) {
+          out.append("opt_item ").append(p_item.get_id_no()).append(" fixed\n");
+          continue;
+        }
+        out.append("opt_item ").append(p_item.get_id_no());
+        for (Item r : ripped_connections) {
+          out.append(' ').append(r.get_id_no());
+        }
+        out.append('\n');
+        board.generate_snapshot();
+        board.remove_items(ripped_connections, false);
+        for (int i = 0; i < p_item.net_count(); ++i) {
+          board.combine_traces(p_item.get_net_no(i));
+        }
+        int ripup_costs = settings.get_start_ripup_costs();
+        if (use_increased_ripup_costs) {
+          ripup_costs *= 10;
+        }
+        if (p_item instanceof app.freerouting.board.Trace) {
+          ripup_costs = (int) Math.round(0.6 * (double) ripup_costs);
+        }
+        // BatchAutorouter.autoroute_passes_for_optimizing_item
+        AutorouteControl.ExpansionCostFactor[] trace_costs;
+        if (with_preferred_directions) {
+          trace_costs = settings.get_trace_cost_arr();
+        } else {
+          trace_costs = new AutorouteControl.ExpansionCostFactor[board.get_layer_count()];
+          for (int i = 0; i < trace_costs.length; ++i) {
+            double curr_min_cost = settings.get_preferred_direction_trace_costs(i);
+            trace_costs[i] = new AutorouteControl.ExpansionCostFactor(curr_min_cost, curr_min_cost);
+          }
+        }
+        if (before != null) {
+          before = changes(board, before, out);
+        }
+        boolean still_unrouted_items = true;
+        int inner_pass_no = 1;
+        while (still_unrouted_items && inner_pass_no <= 6) {
+          List<Item> list = pass_list(board);
+          out.append("opt_ipass ").append(inner_pass_no).append(' ').append(list.size());
+          for (Item item : list) {
+            out.append(' ').append(item.get_id_no());
+          }
+          out.append('\n');
+          if (list.isEmpty()) {
+            still_unrouted_items = false;
+          } else {
+            for (Item item : list) {
+              for (int i = 0; i < item.net_count(); ++i) {
+                int net = item.get_net_no(i);
+                board.start_marking_changed_area();
+                SortedSet<Item> ripped = new TreeSet<>();
+                java.util.Map<Item, Integer> ripped_costs = new java.util.LinkedHashMap<>();
+                StringBuilder located_out = new StringBuilder();
+                String result = autoroute_item(board, handling, trace_costs, ripup_costs, item, net, ripped, ripped_costs, inner_pass_no, located_out);
+                out.append("conn ").append(conn_no).append(' ').append(item.get_id_no()).append(' ').append(net).append(' ').append(result)
+                    .append(' ').append(board.communication.id_no_generator.max_generated_no());
+                for (Item r : ripped) {
+                  out.append(' ').append(r.get_id_no());
+                }
+                out.append('\n').append(located_out);
+                if (before != null) {
+                  before = changes(board, before, out);
+                }
+                ++conn_no;
+              }
+            }
+            board.start_marking_changed_area();
+            board.remove_trace_tails(-1, Item.StopConnectionOption.NONE);
+            board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), trace_costs, null, Integer.MAX_VALUE);
+            out.append("opt_tails ").append(board.communication.id_no_generator.max_generated_no()).append('\n');
+            if (before != null) {
+              before = changes(board, before, out);
+            }
+          }
+          ++inner_pass_no;
+        }
+        board.start_marking_changed_area();
+        board.remove_trace_tails(-1, Item.StopConnectionOption.NONE);
+        board.opt_changed_area(new int[0], null, handling.get_settings().get_trace_pull_tight_accuracy(), trace_costs, null, Integer.MAX_VALUE);
+        out.append("opt_final_tails ").append(board.communication.id_no_generator.max_generated_no()).append('\n');
+        if (before != null) {
+          before = changes(board, before, out);
+        }
+        int incomplete_count_after = new app.freerouting.interactive.RatsNest(board, Locale.ENGLISH).incomplete_count();
+        int via_count_after = board.get_vias().size();
+        double trace_length_after = calc_weighted_trace_length(board);
+        app.freerouting.autoroute.ItemRouteResult result = new app.freerouting.autoroute.ItemRouteResult(p_item.get_id_no(), item_via_count_before,
+            via_count_after, min_cumulative_trace_length_before, trace_length_after, incomplete_count_before, incomplete_count_after);
+        boolean item_improved = result.improved();
+        out.append("opt_result ").append(p_item.get_id_no()).append(' ').append(item_improved ? 1 : 0).append(' ').append(incomplete_count_before)
+            .append(' ').append(incomplete_count_after).append(' ').append(item_via_count_before).append(' ').append(via_count_after).append(' ')
+            .append(min_cumulative_trace_length_before).append(' ').append(trace_length_after).append('\n');
+        if (item_improved) {
+          if (incomplete_count_after < incomplete_count_before
+              || (incomplete_count_after == incomplete_count_before && via_count_after < item_via_count_before)) {
+            min_cumulative_trace_length_before = trace_length_after;
+          } else {
+            min_cumulative_trace_length_before = Math.min(min_cumulative_trace_length_before, trace_length_after);
+          }
+          board.pop_snapshot();
+          int pass_via_count_after = board.get_vias().size();
+          double pass_trace_length_after = user.board_to_user(board.cumulative_trace_length());
+          pass_improved = (float) ((via_count_before != 0 && trace_length_before != 0)
+              ? 1.0 - ((((pass_via_count_after / via_count_before) + (pass_trace_length_after / trace_length_before)) / 2))
+              : 0);
+        } else {
+          board.undo(null);
+        }
+        if (before != null) {
+          before = changes(board, before, out);
+        }
+      }
+      if (use_increased_ripup_costs && (pass_improved == 0)) {
+        use_increased_ripup_costs = false;
+        pass_improved = -1;
+      }
+      route_improved = pass_improved;
+      out.append("opt_end ").append(curr_pass_no).append(' ').append(route_improved).append('\n');
     }
   }
 
@@ -768,6 +1081,14 @@ public class MazeParity {
   /** BatchAutorouter.autoroute_item, with no stoppable thread. */
   private static String autoroute_item(RoutingBoard board, BoardHandlingHeadless handling, AutorouteControl.ExpansionCostFactor[] trace_costs,
       Item item, int net, SortedSet<Item> ripped, java.util.Map<Item, Integer> ripped_costs, int pass_no, StringBuilder located_out) {
+    return autoroute_item(board, handling, trace_costs, handling.get_settings().autoroute_settings.get_start_ripup_costs(), item, net, ripped,
+        ripped_costs, pass_no, located_out);
+  }
+
+  /** autoroute_item as a BatchAutorouter made with p_start_ripup costs routes it: the optimizer's. */
+  private static String autoroute_item(RoutingBoard board, BoardHandlingHeadless handling, AutorouteControl.ExpansionCostFactor[] trace_costs,
+      int p_start_ripup, Item item, int net, SortedSet<Item> ripped, java.util.Map<Item, Integer> ripped_costs, int pass_no,
+      StringBuilder located_out) {
     try {
       AutorouteSettings settings = handling.get_settings().autoroute_settings;
       Net route_net = board.rules.nets.get(net);
@@ -775,7 +1096,7 @@ public class MazeParity {
       int via_costs = contains_plane ? settings.get_plane_via_costs() : settings.get_via_costs();
       AutorouteControl ctrl = new AutorouteControl(board, net, handling.get_settings(), via_costs, trace_costs);
       ctrl.ripup_allowed = true;
-      ctrl.ripup_costs = settings.get_start_ripup_costs() * pass_no;
+      ctrl.ripup_costs = p_start_ripup * pass_no;
       ctrl.remove_unconnected_vias = !settings.get_with_fanout();
       Set<Item> unconnected = item.get_unconnected_set(net);
       if (unconnected.isEmpty()) {

@@ -153,12 +153,20 @@ impl Control {
     /// [`Control::for_batch`], `None` where FreeRouting throws.
     pub fn try_for_batch(board: &Board, net_no: i32, pass_no: i32) -> Option<Control> {
         let s = &board.settings;
+        Control::try_for_router(board, net_no, pass_no, s.start_ripup_costs, &s.trace_costs, !s.with_fanout)
+    }
+
+    /// The control a `BatchAutorouter` made with ripup costs
+    /// `start_ripup_costs` and trace costs `trace_costs` builds: the batch
+    /// autorouter's own, or the optimizer's.
+    pub fn try_for_router(board: &Board, net_no: i32, pass_no: i32, start_ripup_costs: i32, trace_costs: &[(f64, f64)], remove_unconnected_vias: bool) -> Option<Control> {
+        let s = &board.settings;
         let contains_plane = board.rules.net(net_no).is_some_and(|n| n.contains_plane);
         let via_costs = if contains_plane { s.plane_via_costs } else { s.via_costs };
-        let mut c = Control::try_new(board, net_no, via_costs, s.trace_costs.clone())?;
+        let mut c = Control::try_new(board, net_no, via_costs, trace_costs.to_vec())?;
         c.ripup_allowed = true;
-        c.ripup_costs = s.start_ripup_costs * pass_no;
-        c.remove_unconnected_vias = !s.with_fanout;
+        c.ripup_costs = start_ripup_costs * pass_no;
+        c.remove_unconnected_vias = remove_unconnected_vias;
         Some(c)
     }
 }

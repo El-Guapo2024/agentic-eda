@@ -9,8 +9,9 @@
 #                                           add a board
 #
 # The dump carries FreeRouting's routing of the board too, pass by pass, up
-# to MAZE_PASSES (default 20) passes, as maze_dump.sh's do; MAZE_PASS=0 dumps
-# the board alone. FreeRouting runs with automatic neckdown off, as
+# to MAZE_PASSES (default 20) passes, as maze_dump.sh's do, then its
+# post-route optimizer, up to OPT_PASSES (default 2) passes of it;
+# MAZE_PASS=0 dumps the board alone. FreeRouting runs with automatic neckdown off, as
 # eda-freeroute routes designs.
 # Needs Java 25 and a FreeRouting checkout, as maze_dump.sh does.
 set -eu
@@ -41,7 +42,7 @@ done
 tmp=$(mktemp -d)
 for name in "$@"; do
   "$root/target/release/examples/design_dsn" "$out/$name/design.json" "$out/$name/intent.yaml" > "$tmp/$name.dsn"
-  (cd "$fr" && AUTOMATIC_NECKDOWN=0 MAZE_PASS=${MAZE_PASS:-1000000} MAZE_PASSES=${MAZE_PASSES:-20} "$JAVA_HOME/bin/java" -cp "$jar" "$here/MazeParity.java" "$tmp/$name.dsn" 2>/dev/null) | grep -E "$records" > "$out/$name/board.txt"
+  (cd "$fr" && AUTOMATIC_NECKDOWN=0 MAZE_PASS=${MAZE_PASS:-1000000} MAZE_PASSES=${MAZE_PASSES:-20} OPT_PASSES=${OPT_PASSES:-2} "$JAVA_HOME/bin/java" -cp "$jar" "$here/MazeParity.java" "$tmp/$name.dsn" 2>/dev/null) | grep -E "$records" > "$out/$name/board.txt"
   echo "$name: $(grep -c '^it ' "$out/$name/board.txt") items"
 done
 rm -r "$tmp"

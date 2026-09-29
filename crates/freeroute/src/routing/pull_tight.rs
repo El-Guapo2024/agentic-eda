@@ -70,6 +70,10 @@ fn round(p: (f64, f64)) -> IntPoint {
     FloatPoint::new(p.0, p.1).round()
 }
 
+/// The rounds [`PullTight::opt_changed_area`] gives an area to settle:
+/// some take hundreds, one of FreeRouting's own boards nearly two thousand.
+const MAX_OPT_ROUNDS: usize = 10_000;
+
 impl PullTight {
     /// `PullTightAlgo.get_instance`, in 45 degree mode.
     pub fn new(only_nets: &[i32], clip: Option<IntOctagon>, min_translate_dist: i32, keep_point: Option<Point>, keep_point_layer: i32) -> Self {
@@ -109,8 +113,20 @@ impl PullTight {
         if rb.changed_area.is_none() {
             return;
         }
+        // A round can report changes and leave the copper as it was, and
+        // then does so for ever (a via moved there and back): the batch
+        // autorouter stops that after a second
+        // (`TIME_LIMIT_TO_PREVENT_ENDLESS_LOOP`), the port when the copper
+        // comes back to what an earlier round left, or after
+        // `MAX_OPT_ROUNDS`, should it wander.
         let mut something_changed = true;
+        let mut rounds = 0;
+        let mut seen: Vec<u64> = Vec::new();
         while something_changed {
+            rounds += 1;
+            if rounds > MAX_OPT_ROUNDS {
+                return;
+            }
             something_changed = false;
             for layer in 0..rb.board.layer_count() as i32 {
                 let changed_region = rb.changed_area.as_ref().expect("a changed area").get_area(layer);
@@ -142,6 +158,13 @@ impl PullTight {
                         _ => {}
                     }
                 }
+            }
+            if something_changed {
+                let h = rb.routing_hash();
+                if seen.contains(&h) {
+                    return;
+                }
+                seen.push(h);
             }
         }
     }

@@ -8,16 +8,18 @@
 
 use crate::autoroute::engine::TreeItem;
 use crate::board::{tree_shapes, TreeKind};
+use crate::cellgrid::{CellGrid, SlotId};
 use crate::door::Entry;
 use crate::geometry::{IntOctagon, TileShape};
 use crate::model::{Board, ItemKind};
 use crate::searchtree::{LeafId, ShapeTree};
 
 pub struct DefaultTree {
-    /// Each entry: item index, shape index, layer.
-    tree: ShapeTree<(usize, u32, i32)>,
-    /// Per item index: its leaves, `None` where it has no shape.
-    leaves: Vec<Vec<Option<LeafId>>>,
+    /// Each entry: item index, shape index, layer. A grid, not the Java's
+    /// tree, as nothing sees its layout.
+    tree: CellGrid<(usize, u32, i32)>,
+    /// Per item index: its entries, `None` where it has no shape.
+    leaves: Vec<Vec<Option<SlotId>>>,
     /// Per item index: its tree shapes, counting those FreeRouting has none
     /// for.
     shapes: Vec<Vec<Option<TileShape>>>,
@@ -25,7 +27,7 @@ pub struct DefaultTree {
 
 impl DefaultTree {
     pub fn new(board: &Board) -> Self {
-        let mut t = DefaultTree { tree: ShapeTree::new(), leaves: Vec::new(), shapes: Vec::new() };
+        let mut t = DefaultTree { tree: CellGrid::new(&board.bounds), leaves: Vec::new(), shapes: Vec::new() };
         for i in 0..board.items.len() {
             t.insert(board, i);
         }
@@ -76,7 +78,14 @@ impl DefaultTree {
     /// order: by item number descending, then shape index; each with its
     /// layer. `MinAreaTree.overlaps`.
     pub fn candidates(&self, board: &Board, bounds: &IntOctagon) -> Vec<(usize, u32, i32)> {
-        let mut found: Vec<(usize, u32, i32)> = self.tree.overlaps(bounds).into_iter().map(|l| *self.tree.payload(l)).collect();
+        self.sorted(board, bounds, |_| true)
+    }
+
+    /// The entries `keep` accepts of those whose bounding octagons meet
+    /// `bounds`, in FreeRouting's order.
+    fn sorted(&self, board: &Board, bounds: &IntOctagon, keep: impl FnMut(&(usize, u32, i32)) -> bool) -> Vec<(usize, u32, i32)> {
+        let mut found = Vec::new();
+        self.tree.overlaps(bounds, keep, &mut found);
         found.sort_by(|a, b| board.items[b.0].id.cmp(&board.items[a.0].id).then(a.1.cmp(&b.1)));
         found
     }
@@ -87,22 +96,19 @@ impl DefaultTree {
     /// layer. `ShapeSearchTree.overlapping_tree_entries`.
     pub fn overlapping_entries(&self, board: &Board, shape: &TileShape, layer: i32, ignore_nets: &[i32]) -> Vec<(usize, u32, i32)> {
         let Some(bounds) = shape.bounding_octagon() else { return Vec::new() };
-        let found = self.candidates(board, &bounds);
         let is_45_degree = matches!(shape, TileShape::Octagon(_));
-        found
-            .into_iter()
-            .filter(|&(i, k, l)| {
-                if layer >= 0 && l != layer {
-                    return false;
-                }
-                let item = &board.items[i];
-                if ignore_nets.iter().any(|&net| !item.is_obstacle(net)) {
-                    return false;
-                }
-                let s = self.shape(i, k);
-                (is_45_degree && matches!(s, TileShape::Octagon(_))) || s.intersects(shape)
-            })
-            .collect()
+        // Filtered before sorting, which gives what sorting first would.
+        self.sorted(board, &bounds, |&(i, k, l)| {
+            if layer >= 0 && l != layer {
+                return false;
+            }
+            let item = &board.items[i];
+            if ignore_nets.iter().any(|&net| !item.is_obstacle(net)) {
+                return false;
+            }
+            let s = self.shape(i, k);
+            (is_45_degree && matches!(s, TileShape::Octagon(_))) || s.intersects(shape)
+        })
     }
 }
 

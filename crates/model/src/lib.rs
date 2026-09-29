@@ -230,6 +230,10 @@ pub struct RoutingTuning {
     /// Cells a pad's free pocket must reach (or a via site / own pad) to
     /// pass the placement preflight.
     pub preflight_reach_cells: usize,
+    /// Passes the post-route optimizer may make, rerouting each via and
+    /// trace for fewer vias and less copper; it stops sooner once a pass
+    /// improves the board too little. 0 skips it.
+    pub optimizer_passes: u32,
 }
 
 impl RoutingTuning {
@@ -244,7 +248,7 @@ impl RoutingTuning {
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
-        RoutingTuning { edge_clearance_um: 500, between_pads_max_gap_um: 2000, preflight_reach_cells: 2000 }
+        RoutingTuning { edge_clearance_um: 500, between_pads_max_gap_um: 2000, preflight_reach_cells: 2000, optimizer_passes: 10 }
     }
 }
 

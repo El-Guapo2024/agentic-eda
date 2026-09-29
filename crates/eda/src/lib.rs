@@ -78,7 +78,7 @@ pub fn route_partial(
     rules: &RouteRules,
 ) -> (Option<eda_model::ir::Design>, Vec<eda_model::CheckResult>) {
     use eda_model::CheckResult;
-    match eda_freeroute::design::route_design(design, model, rules, FREEROUTE_MAX_PASSES) {
+    match eda_freeroute::design::route_design(design, model, rules, FREEROUTE_MAX_PASSES, i32::try_from(rules.tuning.optimizer_passes).unwrap_or(i32::MAX)) {
         Err(e) => (None, vec![CheckResult::fail("route_precondition", "design", e)]),
         Ok(routed) => {
             let passes = routed.passes.len();

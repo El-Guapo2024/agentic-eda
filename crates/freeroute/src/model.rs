@@ -362,6 +362,10 @@ pub struct Board {
     pub area_section: f64,
     /// The last item number drawn, `ItemIdNoGenerator.max_generated_no`.
     pub id_max: u32,
+    /// How the board's units show to the user, as `BoardHandling` makes its
+    /// `CoordinateTransform`: the scale factor, and the unit in micrometres.
+    /// The optimizer measures its progress in them.
+    pub user_unit: (f64, f64),
 }
 
 impl Board {

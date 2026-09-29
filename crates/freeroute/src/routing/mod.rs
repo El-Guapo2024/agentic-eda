@@ -93,6 +93,10 @@ pub struct RoutingBoard {
     /// contact asked about is slow.
     area_pieces: RefCell<HashMap<usize, Rc<Vec<TileShape>>>>,
     on_board: Vec<bool>,
+    /// The items on the board, in no order, and each one's place in it:
+    /// the board's items only ever grow, most of them long gone.
+    on_board_list: Vec<usize>,
+    on_board_pos: Vec<usize>,
     /// `ItemIdNoGenerator.max_generated_no`.
     id_max: Cell<u32>,
     pub changed_area: Option<ChangedArea>,
@@ -104,6 +108,22 @@ pub struct RoutingBoard {
     /// Whether each connection routed records the autoroute tree's layout
     /// (`Routed::tree`), for the parity tests; it costs a walk of the tree.
     pub fingerprint_trees: bool,
+    /// What changed since the snapshot, while one is open.
+    undo: Option<UndoLevel>,
+}
+
+/// What changed on the board since a snapshot, to put back: FreeRouting's
+/// `UndoableObjects`, for the one level its optimizer opens.
+#[derive(Debug, Default)]
+struct UndoLevel {
+    /// Items made since, by index.
+    made: std::collections::BTreeSet<usize>,
+    /// Items on the board at the snapshot and changed in place since: their
+    /// state then. `save_for_undo`.
+    saved: std::collections::BTreeMap<usize, Item>,
+    /// Items taken off since, in the order they went, as they were at the
+    /// snapshot.
+    deleted: Vec<(usize, Item)>,
 }
 
 /// `Nets.max_legal_net_no`.
@@ -124,10 +144,12 @@ impl RoutingBoard {
     pub fn new(board: Board) -> Self {
         let tree = DefaultTree::new(&board);
         let on_board = vec![true; board.items.len()];
+        let on_board_list: Vec<usize> = (0..board.items.len()).collect();
+        let on_board_pos = on_board_list.clone();
         let id_max = board.id_max.max(board.items.iter().map(|i| i.id).max().unwrap_or(0));
         let min_trace_half_width = board.rules.min_trace_half_width;
         let max_trace_half_width = board.rules.board_max_trace_half_width;
-        RoutingBoard { board, tree, autoroute_trees: RefCell::new(Vec::new()), area_pieces: RefCell::new(HashMap::new()), on_board, id_max: Cell::new(id_max), changed_area: None, min_trace_half_width, max_trace_half_width, fingerprint_trees: false }
+        RoutingBoard { board, tree, autoroute_trees: RefCell::new(Vec::new()), area_pieces: RefCell::new(HashMap::new()), on_board, on_board_list, on_board_pos, id_max: Cell::new(id_max), changed_area: None, min_trace_half_width, max_trace_half_width, fingerprint_trees: false, undo: None }
     }
 
     /// The autoroute tree for traces of clearance class `class`, made from
@@ -221,9 +243,59 @@ impl RoutingBoard {
 
     /// The items on the board in its order: by number descending.
     pub fn items_in_order(&self) -> Vec<usize> {
-        let mut v: Vec<usize> = (0..self.board.items.len()).filter(|&i| self.on_board[i]).collect();
-        v.sort_by(|a, b| self.board.items[*b].id.cmp(&self.board.items[*a].id));
+        let mut v = self.on_board_list.clone();
+        v.sort_by(|a, b| self.board.items[*b].id.cmp(&self.board.items[*a].id).then(a.cmp(b)));
         v
+    }
+
+    /// Put an item on the board or take it off, as far as the lists of
+    /// what is on it go.
+    fn set_on_board(&mut self, item: usize, on: bool) {
+        if self.on_board[item] == on {
+            return;
+        }
+        self.on_board[item] = on;
+        if on {
+            self.on_board_pos[item] = self.on_board_list.len();
+            self.on_board_list.push(item);
+        } else {
+            let k = self.on_board_pos[item];
+            self.on_board_list.swap_remove(k);
+            if let Some(&moved) = self.on_board_list.get(k) {
+                self.on_board_pos[moved] = k;
+            }
+        }
+    }
+
+    /// A hash of the traces and vias on the board, the same for the same
+    /// copper however it came about. What `BasicBoard.get_hash` is for in the
+    /// passes: telling a board seen before.
+    pub fn routing_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut pieces: Vec<u64> = self
+            .on_board_list
+            .iter()
+            .filter_map(|&i| {
+                let item = &self.board.items[i];
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                item.nets.hash(&mut h);
+                match &item.kind {
+                    ItemKind::Trace { layer, half_width, polyline } => {
+                        (0, layer, half_width).hash(&mut h);
+                        for l in &polyline.lines {
+                            (l.a.x, l.a.y, l.b.x, l.b.y).hash(&mut h);
+                        }
+                    }
+                    ItemKind::Via { center, padstack, .. } => (1, center.x, center.y, padstack).hash(&mut h),
+                    _ => return None,
+                }
+                Some(h.finish())
+            })
+            .collect();
+        pieces.sort_unstable();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        pieces.hash(&mut h);
+        h.finish()
     }
 
     /// Sort item indices by number descending, dropping repeats: a
@@ -258,8 +330,63 @@ impl RoutingBoard {
     /// Put a numbered item on the board but into no search tree yet.
     fn push_item(&mut self, item: Item) -> usize {
         self.board.items.push(item);
-        self.on_board.push(true);
-        self.board.items.len() - 1
+        let i = self.board.items.len() - 1;
+        self.on_board.push(false);
+        self.on_board_pos.push(usize::MAX);
+        self.set_on_board(i, true);
+        if let Some(level) = &mut self.undo {
+            level.made.insert(i);
+        }
+        i
+    }
+
+    /// Record from here on what changes, to undo or to keep.
+    /// `generate_snapshot`.
+    pub fn generate_snapshot(&mut self) {
+        self.undo = Some(UndoLevel::default());
+    }
+
+    /// Keep what changed since the snapshot. `pop_snapshot`.
+    pub fn pop_snapshot(&mut self) {
+        self.undo = None;
+    }
+
+    /// Put the board back as it was at the snapshot, as `BasicBoard.undo`
+    /// does: the items made or changed since leave the search trees, by
+    /// number descending; those changed come back as they were, in the same
+    /// order; then those taken off, in the order they went. The trees' leaves
+    /// fall where those inserts put them, as FreeRouting's do.
+    pub fn undo(&mut self) {
+        let Some(level) = self.undo.take() else { return };
+        let mut touched: Vec<usize> = level.made.iter().chain(level.saved.keys()).copied().filter(|&i| self.on_board[i]).collect();
+        self.sort_items(&mut touched);
+        for &i in &touched {
+            self.trees_remove(i);
+            self.set_on_board(i, false);
+        }
+        let mut changed: Vec<usize> = level.saved.keys().copied().filter(|&i| touched.contains(&i)).collect();
+        self.sort_items(&mut changed);
+        let mut saved = level.saved;
+        for i in changed {
+            self.board.items[i] = saved.remove(&i).expect("saved");
+            self.set_on_board(i, true);
+            self.trees_insert(i);
+        }
+        for (i, item) in level.deleted {
+            self.board.items[i] = item;
+            self.set_on_board(i, true);
+            self.trees_insert(i);
+        }
+    }
+
+    /// Note an item's state before it changes in place, the first time it
+    /// does since the snapshot. `UndoableObjects.save_for_undo`.
+    pub(crate) fn save_for_undo(&mut self, item: usize) {
+        if let Some(level) = &mut self.undo {
+            if !level.made.contains(&item) && !level.saved.contains_key(&item) {
+                level.saved.insert(item, self.board.items[item].clone());
+            }
+        }
     }
 
     /// Traces `start` and `end`, pushed on the board, are what is left of
@@ -280,8 +407,16 @@ impl RoutingBoard {
         if !self.on_board[item] {
             return;
         }
+        // An item there at the snapshot goes back as it was then; one made
+        // since simply goes.
+        if let Some(level) = &mut self.undo {
+            if !level.made.remove(&item) {
+                let then = level.saved.remove(&item).unwrap_or_else(|| self.board.items[item].clone());
+                level.deleted.push((item, then));
+            }
+        }
         self.trees_remove(item);
-        self.on_board[item] = false;
+        self.set_on_board(item, false);
     }
 
     /// Remove the items not fixed against it; false if some were.
@@ -362,6 +497,7 @@ impl RoutingBoard {
 
     /// Replace a trace's polyline, leaving the trees to the caller.
     fn put_polyline(&mut self, item: usize, polyline: Polyline) {
+        self.save_for_undo(item);
         if let ItemKind::Trace { polyline: p, .. } = &mut self.board.items[item].kind {
             *p = polyline;
         }

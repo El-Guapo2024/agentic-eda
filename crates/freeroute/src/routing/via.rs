@@ -263,6 +263,8 @@ impl RoutingBoard {
             }
         }
         infos.sort_by(|a, b| b.0.cmp(&a.0));
+        // `Item.move_by`.
+        self.save_for_undo(item);
         self.trees_remove(item);
         match &mut self.board.items[item].kind {
             ItemKind::Via { center, pads, .. } | ItemKind::Pin { center, pads, .. } => {

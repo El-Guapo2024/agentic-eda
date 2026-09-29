@@ -640,7 +640,8 @@ fn pass_dumps() -> Vec<PathBuf> {
 /// Replay the dump's first pass connection by connection; the number of
 /// connections that agree, and the first difference if one does not.
 fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
-    use eda_freeroute::autoroute::batch::{autoroute_item, pass_items, remove_pass_tails};
+    use eda_freeroute::autoroute::batch::{autoroute_item, autoroute_item_params, pass_items, remove_pass_tails, remove_tails_params};
+    use eda_freeroute::autoroute::optimize::{Attempt, OptPass, Optimizer};
     use eda_freeroute::routing::RoutingBoard;
     dump.lines().find(|l| l.starts_with("pass "))?;
     let board = read_board(dump).unwrap();
@@ -667,8 +668,13 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
             }
         }
     };
-    let is_step = |l: &str| l.starts_with("conn ") || l.starts_with("pass ") || l.starts_with("tails ");
-    let lines: Vec<&str> = dump.lines().filter(|l| l.starts_with("conn") || l.starts_with("pass ") || l.starts_with("tails ")).collect();
+    let is_step = |l: &str| l.starts_with("conn ") || l.starts_with("pass ") || l.starts_with("tails ") || l.starts_with("opt_");
+    let lines: Vec<&str> = dump.lines().filter(|l| l.starts_with("conn") || l.starts_with("pass ") || l.starts_with("tails ") || l.starts_with("opt_")).collect();
+    // The optimizer after the passes, where the dump has it: its pass, and
+    // the item whose connections are being routed again.
+    let mut opt: Option<(Optimizer, OptPass)> = None;
+    let mut attempt: Option<Attempt> = None;
+    let mut inner_pass_no = 0;
     // Dumps from before the harness wrote the tree's layout have none.
     let has_trees = lines.iter().any(|l| l.starts_with("conn_tree "));
     let mut before = records(&rb);
@@ -692,6 +698,67 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
             // The clean-up ending the pass.
             remove_pass_tails(&mut rb);
             got = vec![format!("tails {}", rb.id_max())];
+        } else if head.starts_with("opt_pass ") {
+            let n: i32 = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+            let mut o = opt.take().map(|(o, _)| o).unwrap_or_default();
+            let p = o.begin_pass(&rb, n);
+            got = vec![format!("opt_pass {n} {}", p.with_preferred_directions as i32)];
+            opt = Some((o, p));
+        } else if head.starts_with("opt_item ") {
+            let (o, p) = opt.as_mut().expect("an optimizer pass");
+            got = match p.items.next(&rb) {
+                None => vec!["opt_item (none)".to_string()],
+                Some(i) => {
+                    let id = rb.item(i).id;
+                    match o.begin_item(&mut rb, i, p) {
+                        None => vec![format!("opt_item {id} fixed")],
+                        Some(a) => {
+                            let ripped: String = a.ripped.iter().map(|&r| format!(" {}", rb.item(r).id)).collect();
+                            attempt = Some(a);
+                            vec![format!("opt_item {id}{ripped}")]
+                        }
+                    }
+                }
+            };
+        } else if head.starts_with("opt_ipass ") {
+            inner_pass_no = head.split_whitespace().nth(1).unwrap().parse().unwrap();
+            let items = pass_items(&rb);
+            let got = format!("opt_ipass {inner_pass_no} {} {}", items.len(), items.iter().map(|&i| rb.item(i).id.to_string()).collect::<Vec<_>>().join(" "));
+            if got.trim_end() != head {
+                return Some((matched, Some(format!("the items of the optimizer's pass {inner_pass_no} differ\n  FreeRouting: {head}\n  port:        {got}"))));
+            }
+            k += 1;
+            continue;
+        } else if head.starts_with("opt_tails ") || head.starts_with("opt_final_tails ") {
+            remove_tails_params(&mut rb, &attempt.as_ref().expect("an item being routed again").params);
+            got = vec![format!("{} {}", head.split_whitespace().next().unwrap(), rb.id_max())];
+        } else if head.starts_with("opt_result ") {
+            let (o, p) = opt.as_mut().expect("an optimizer pass");
+            let a = attempt.take().expect("an item being routed again");
+            let id = rb.item(a.item).id;
+            let r = o.finish_item(&mut rb, &a, p);
+            let f: Vec<&str> = head.split_whitespace().collect();
+            let same = f[1] == id.to_string()
+                && f[2] == (r.improved as i32).to_string()
+                && f[3] == r.incomplete_count_before.to_string()
+                && f[4] == r.incomplete_count_after.to_string()
+                && f[5] == r.via_count_before.to_string()
+                && f[6] == r.via_count_after.to_string()
+                && f[7].parse::<f64>().unwrap() == r.trace_length_before
+                && f[8].parse::<f64>().unwrap() == r.trace_length_after;
+            got = vec![if same {
+                head.to_string()
+            } else {
+                format!(
+                    "opt_result {id} {} {} {} {} {} {:?} {:?}",
+                    r.improved as i32, r.incomplete_count_before, r.incomplete_count_after, r.via_count_before, r.via_count_after, r.trace_length_before, r.trace_length_after
+                )
+            }];
+        } else if head.starts_with("opt_end ") {
+            let (o, p) = opt.as_mut().expect("an optimizer pass");
+            let improved = o.end_pass(p) as f64;
+            let f: Vec<&str> = head.split_whitespace().collect();
+            got = vec![if f[2].parse::<f64>().unwrap() == improved { head.to_string() } else { format!("opt_end {} {improved:?}", f[1]) }];
         } else {
             let f: Vec<&str> = head.split_whitespace().collect();
             let (item_id, net): (u32, i32) = (f[2].parse().unwrap(), f[3].parse().unwrap());
@@ -706,7 +773,11 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
                 let listing = rb.autoroute_tree_listing(class);
                 std::fs::OpenOptions::new().create(true).append(true).open(file).unwrap().write_all(listing.as_bytes()).unwrap();
             }
-            let routed = autoroute_item(&mut rb, item, net, pass_no);
+            let routed = match &attempt {
+                // Inside the optimizer, as its router routes.
+                Some(a) => autoroute_item_params(&mut rb, item, net, inner_pass_no, &a.params),
+                None => autoroute_item(&mut rb, item, net, pass_no),
+            };
             let id = |rb: &RoutingBoard, i: usize| rb.item(i).id;
             got = vec![format!("conn {} {item_id} {net} {} {}{}", f[1], routed.result.name(), rb.id_max(), routed.ripped.iter().map(|&r| format!(" {}", id(&rb, r))).collect::<String>())];
             if !routed.start.is_empty() || !routed.dest.is_empty() {
@@ -733,7 +804,13 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
             want.push(lines[k]);
             k += 1;
         }
-        let what = if head.starts_with("tails ") { format!("the clean-up after pass {pass_no}") } else { format!("connection {matched}") };
+        let what = if head.starts_with("tails ") {
+            format!("the clean-up after pass {pass_no}")
+        } else if head.starts_with("opt_") {
+            format!("the optimizer's step {head:?}")
+        } else {
+            format!("connection {matched}")
+        };
         for (i, g) in got.iter().enumerate() {
             let w = want.get(i).copied().unwrap_or("(nothing)");
             if w != g {
@@ -747,7 +824,7 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
         if want.len() != got.len() {
             return Some((matched, Some(format!("{what}: FreeRouting has {} records, the port {}\n  FreeRouting: {}", want.len(), got.len(), want.get(got.len()).copied().unwrap_or("")))));
         }
-        if !head.starts_with("tails ") {
+        if head.starts_with("conn ") {
             matched += 1;
         }
     }

@@ -163,6 +163,8 @@ pub fn read_board(text: &str) -> Result<Board, String> {
     let mut bounds = None;
     let mut layers: Vec<Layer> = Vec::new();
     let mut host_cad = false;
+    // Dumps from before the harness wrote it are all tenths of a micrometre.
+    let mut user_unit = (0.1, 1.0);
     let mut area_section = 50_000.0;
     let mut min_trace_half_width = 0;
     let mut default_via_diameter = 0.0;
@@ -204,6 +206,7 @@ pub fn read_board(text: &str) -> Result<Board, String> {
                 layers.push(Layer { name, is_signal });
             }
             "host_cad" => host_cad = w.int()? != 0,
+            "user_unit" => user_unit = (w.float()?, w.float()?),
             "area_section" => area_section = w.float()?,
             "min_trace_half_width" => min_trace_half_width = w.int()?,
             "default_via_diameter" => default_via_diameter = w.float()?,
@@ -446,7 +449,7 @@ pub fn read_board(text: &str) -> Result<Board, String> {
         items.push(Item { id, kind, first_layer, last_layer, clearance_class, fixed, component, nets });
     }
 
-    Ok(Board { bounds: bounds.ok_or("no board record")?, layers, rules, settings, items, host_cad, area_section, id_max })
+    Ok(Board { bounds: bounds.ok_or("no board record")?, layers, rules, settings, items, host_cad, area_section, id_max, user_unit })
 }
 
 /// The values of a map keyed 0, 1, 2, ... in key order; an error naming the

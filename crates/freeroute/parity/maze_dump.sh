@@ -31,7 +31,7 @@ fi
 (cd "$fr" && ./gradlew -q executableV19Jar)
 jar="$fr/build/libs/freerouting-1.9.0-executable.jar"
 # Keep only the dump's own records: FreeRouting logs to the same stream.
-records='^(fixture|board|layer|host_cad|area_section|min_trace_half_width|trace_half_widths|pull_tight_accuracy|id_generator|default_via_diameter|pin_edge_to_turn_dist|classes|cm|cmax|padstack|padstack_shape|viainfo|viarule|netclass|net|settings|layer_costs|it|center|via_padstack|pin_neckdown|pin_exit|conduction|pad|trace|area|area_piece|outline|outline_shape|tree_class|item|exact|ditem|route|start_item|dest_item|ctrl|step|result|path|maze|located|located_trace|id_max|inserted|ins_trace|ins_via|optimized|opt_trace|opt_via|pass|conn|conn_start|conn_dest|conn_tree|conn_located|conn_located_trace|conn_del|conn_add|tails)( |$)'
+records='^(fixture|board|layer|host_cad|area_section|min_trace_half_width|trace_half_widths|pull_tight_accuracy|id_generator|default_via_diameter|pin_edge_to_turn_dist|classes|cm|cmax|padstack|padstack_shape|viainfo|viarule|netclass|net|settings|layer_costs|it|center|via_padstack|pin_neckdown|pin_exit|conduction|pad|trace|area|area_piece|outline|outline_shape|tree_class|item|exact|ditem|route|start_item|dest_item|ctrl|step|result|path|maze|located|located_trace|id_max|inserted|ins_trace|ins_via|optimized|opt_trace|opt_via|pass|conn|conn_start|conn_dest|conn_tree|conn_located|conn_located_trace|conn_del|conn_add|tails|user_unit|opt_pass|opt_item|opt_ipass|opt_tails|opt_final_tails|opt_result|opt_end)( |$)'
 cd "$fr"
 dump() {
   "$JAVA_HOME/bin/java" -cp "$jar" "$here/MazeParity.java" "$1" 2>/dev/null | grep -E "$records"

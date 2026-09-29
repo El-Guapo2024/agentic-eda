@@ -27,7 +27,8 @@ use eda_model::footprint::{placed_pads, placed_refdes_box, PlacedPad};
 use eda_model::ir::{Design, Point as IrPoint, RoutingSection, Side, Track, Via as IrVia};
 use eda_model::{BoardRules, ConstraintModel};
 
-use crate::autoroute::batch::{autoroute_item, autoroute_passes, autoroute_passes_with, pass_items, remove_pass_tails, routing_hash, PassSummary, RouteResult};
+use crate::autoroute::batch::{autoroute_item, autoroute_passes, autoroute_passes_with, pass_items, remove_pass_tails, PassSummary, RouteResult};
+use crate::autoroute::optimize::{optimize_board, OptSummary};
 use crate::board::PadShape;
 use crate::board::AreaShape;
 use crate::geometry::{Circle, Direction, FloatPoint, IntBox, IntPoint, Line, PolygonShape, TileShape};
@@ -911,7 +912,8 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     // Traces keep their class's width into narrow pins: the routing gates
     // hold every track to it.
     let settings = AutorouteSettings { automatic_neckdown: false, ..autoroute_settings(&layer_rules(&plan, &bounds)) };
-    Ok(Board { bounds, layers, rules: rules_out, settings, items, host_cad: true, area_section: 50_000.0, id_max })
+    // The DSN's micrometres at resolution 10.
+    Ok(Board { bounds, layers, rules: rules_out, settings, items, host_cad: true, area_section: 50_000.0, id_max, user_unit: (0.1, 1.0) })
 }
 
 /// Whether `p` lies on the pad, border included.
@@ -1031,6 +1033,8 @@ pub struct RoutedDesign {
     pub routing: RoutingSection,
     /// What each pass did.
     pub passes: Vec<PassSummary>,
+    /// What the optimizer did after them.
+    pub optimized: OptSummary,
     /// The nets whose pins the passes left apart, in the order a next pass
     /// would take them.
     pub unrouted: Vec<String>,
@@ -1040,9 +1044,10 @@ pub struct RoutedDesign {
 /// to `max_passes` passes over the board [`board_from_design`] builds,
 /// stopping once one finds nothing left to route or the board repeats
 /// itself; then, for anything left, rescue passes whose search keeps a
-/// little room to spare. A net poured on an outer layer goes first: see
-/// [`route_pour_nets`]. The routes back as the design's routing section.
-pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules, max_passes: i32) -> Result<RoutedDesign, String> {
+/// little room to spare; then FreeRouting's post-route optimizer, up to
+/// `optimizer_passes` passes. A net poured on an outer layer goes first:
+/// see [`route_pour_nets`]. The routes back as the design's routing section.
+pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules, max_passes: i32, optimizer_passes: i32) -> Result<RoutedDesign, String> {
     let plan = Plan::of(design, model, rules)?;
     let board = board_from_design(design, model, rules)?;
     let (mut rb, mut passes) = route_board(&plan, &board, max_passes);
@@ -1058,6 +1063,18 @@ pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules
             (rb, passes) = route_board(&plan, &board, max_passes);
         }
     }
+    // The optimizer counts vias first, and a poured net's are what joins
+    // the plane: it would route the net off the pour's layer and leave the
+    // plane floating. Routed, that copper stays as it is.
+    for net in outer_pour_nets(&plan) {
+        for i in 0..rb.board.items.len() {
+            let item = &rb.board.items[i];
+            if rb.is_on_board(i) && item.nets.contains(&net) && matches!(item.kind, ItemKind::Trace { .. } | ItemKind::Via { .. }) {
+                rb.board.items[i].fixed = FixedState::UserFixed;
+            }
+        }
+    }
+    let optimized = optimize_board(&mut rb, optimizer_passes);
     let mut unrouted: Vec<String> = Vec::new();
     for i in pass_items(&rb) {
         for &net in &rb.board.items[i].nets {
@@ -1067,7 +1084,7 @@ pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules
             }
         }
     }
-    Ok(RoutedDesign { routing: routing_section(design, model, rules, &rb)?, passes, unrouted })
+    Ok(RoutedDesign { routing: routing_section(design, model, rules, &rb)?, passes, optimized, unrouted })
 }
 
 /// The poured nets whose every pour lies on an outer layer, by number.
@@ -1130,7 +1147,7 @@ fn route_pour_nets(rb: &mut RoutingBoard, plan: &Plan, nets: &[i32], max_passes:
         let mut seen = std::collections::HashSet::new();
         for _ in 0..max_passes {
             let items: Vec<usize> = pass_items(rb).into_iter().filter(|&i| rb.item(i).nets.contains(&net)).collect();
-            if items.is_empty() || !seen.insert(routing_hash(rb)) {
+            if items.is_empty() || !seen.insert(rb.routing_hash()) {
                 break;
             }
             let mut summary = PassSummary { pass_no, items: items.len(), routed: 0, not_routed: 0, insert_errors: 0 };
