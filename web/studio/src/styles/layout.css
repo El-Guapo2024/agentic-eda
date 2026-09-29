@@ -1,0 +1,261 @@
+/* Frame layout, per crates/cli task notes on pcb_edit_frame.cpp's AUI
+   pane placement: menu bar + main toolbar + aux toolbar on top; options
+   toolbar (vertical) at the canvas's left edge; properties dock at the
+   far left; canvas center; drawing toolbar (vertical) at the canvas's
+   right edge; appearance/filter/activity dock at the far right; message
+   panel + status bar along the bottom. */
+
+.app-frame {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto auto;
+  grid-template-areas:
+    "menubar"
+    "main-toolbar"
+    "aux-toolbar"
+    "body"
+    "message-panel"
+    "status-bar";
+  height: 100%;
+  width: 100%;
+}
+
+.app-frame .menubar-row {
+  grid-area: menubar;
+}
+.app-frame .main-toolbar-row {
+  grid-area: main-toolbar;
+}
+.app-frame .aux-toolbar-row {
+  grid-area: aux-toolbar;
+}
+.app-frame .message-panel-row {
+  grid-area: message-panel;
+}
+.app-frame .status-bar-row {
+  grid-area: status-bar;
+}
+
+.app-body {
+  grid-area: body;
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  grid-template-areas: "properties options-toolbar canvas drawing-toolbar right-dock";
+  min-height: 0;
+}
+.app-body .properties-col {
+  grid-area: properties;
+}
+.app-body .options-toolbar-col {
+  grid-area: options-toolbar;
+}
+.app-body .canvas-col {
+  grid-area: canvas;
+  min-width: 0;
+  position: relative;
+}
+.app-body .drawing-toolbar-col {
+  grid-area: drawing-toolbar;
+}
+.app-body .right-dock-col {
+  grid-area: right-dock;
+}
+
+/* ---------------------------------------------------------- menu bar */
+.menubar {
+  display: flex;
+  align-items: stretch;
+  background: var(--chrome-bg-raised);
+  border-bottom: 1px solid var(--chrome-border);
+  padding: 0 6px;
+  height: 28px;
+  user-select: none;
+}
+.menubar-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  cursor: default;
+  color: var(--chrome-text);
+}
+.menubar-item:hover,
+.menubar-item.open {
+  background: var(--chrome-hover);
+}
+.menubar-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 240px;
+  background: var(--chrome-bg-raised);
+  border: 1px solid var(--chrome-border);
+  box-shadow: 0 6px 16px var(--chrome-shadow);
+  border-radius: 6px;
+  padding: 4px;
+  z-index: 1000;
+}
+.menu-node-item,
+.menu-node-submenu > .menu-node-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  cursor: default;
+}
+.menu-node-item:hover,
+.menu-node-submenu:hover > .menu-node-label {
+  background: var(--chrome-selected-bg);
+  color: var(--chrome-selected-text);
+}
+.menu-node-item[aria-disabled="true"] {
+  color: var(--chrome-text-dim);
+  opacity: 0.55;
+}
+.menu-node-item[aria-disabled="true"]:hover {
+  background: none;
+  color: var(--chrome-text-dim);
+}
+.menu-node-hotkey {
+  color: var(--chrome-text-dim);
+  font-size: 11px;
+}
+.menu-node-item:hover .menu-node-hotkey,
+.menu-node-submenu:hover > .menu-node-label .menu-node-hotkey {
+  color: var(--chrome-selected-text);
+  opacity: 0.85;
+}
+.menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--chrome-border);
+}
+.menu-node-submenu {
+  position: relative;
+}
+.menu-node-submenu > .menubar-dropdown {
+  top: -5px;
+  left: 100%;
+}
+
+/* ------------------------------------------------------------ toolbars */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--chrome-border);
+  padding: 3px 4px;
+}
+.toolbar.vertical {
+  flex-direction: column;
+  border-bottom: none;
+  border-right: 1px solid var(--chrome-border);
+  padding: 4px 3px;
+}
+.app-body .drawing-toolbar-col .toolbar.vertical {
+  border-right: none;
+  border-left: 1px solid var(--chrome-border);
+}
+.toolbar-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--chrome-text);
+  padding: 0;
+  cursor: default;
+}
+.toolbar-button:hover:not(:disabled) {
+  background: var(--chrome-hover);
+  border-color: var(--chrome-border);
+}
+.toolbar-button.active {
+  background: var(--chrome-active);
+  border-color: var(--chrome-accent);
+}
+.toolbar-button:disabled {
+  opacity: 0.4;
+}
+.toolbar-button .icon-placeholder {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: currentColor;
+  opacity: 0.25;
+}
+.toolbar-separator {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--chrome-border);
+}
+.toolbar.vertical .toolbar-separator {
+  width: 20px;
+  height: 1px;
+  margin: 4px 0;
+}
+.toolbar-control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--chrome-text-dim);
+}
+.toolbar-control select,
+.toolbar-control input {
+  height: 22px;
+  padding: 0 4px;
+}
+
+/* ------------------------------------------------------------ status bar */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 22px;
+  padding: 0 10px;
+  background: var(--chrome-bg-raised);
+  border-top: 1px solid var(--chrome-border);
+  color: var(--chrome-text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.status-bar .spacer {
+  flex: 1;
+}
+.status-bar .field {
+  white-space: nowrap;
+}
+.status-bar label.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ message panel */
+.message-panel {
+  display: flex;
+  gap: 16px;
+  padding: 3px 10px;
+  background: var(--chrome-bg);
+  border-top: 1px solid var(--chrome-border);
+  font-size: 11px;
+  color: var(--chrome-text-dim);
+  min-height: 18px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.message-panel .kv b {
+  color: var(--chrome-text);
+  font-weight: 600;
+  margin-right: 4px;
+}

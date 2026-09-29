@@ -1,0 +1,111 @@
+/* Chrome (menu bar/toolbars/panels/status bar) follows the OS light/dark
+   mode, with native-looking controls and the system font -- the canvas
+   itself does NOT follow this; it always paints the KiCad Default theme
+   regardless (see components/canvas/layers.ts). */
+:root {
+  --chrome-bg: #ececec;
+  --chrome-bg-raised: #f6f6f6;
+  --chrome-border: #c7c7c7;
+  --chrome-text: #1d1d1f;
+  --chrome-text-dim: #6e6e73;
+  --chrome-accent: #0a6cff;
+  --chrome-hover: rgba(0, 0, 0, 0.06);
+  --chrome-active: rgba(0, 0, 0, 0.12);
+  --chrome-selected-bg: #0a6cff;
+  --chrome-selected-text: #ffffff;
+  --chrome-input-bg: #ffffff;
+  --chrome-shadow: rgba(0, 0, 0, 0.18);
+  --chrome-danger: #d1373f;
+  --chrome-ok: #1a8a3d;
+  --chrome-warn: #b3760a;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --chrome-bg: #2b2b2d;
+    --chrome-bg-raised: #363638;
+    --chrome-border: #1a1a1b;
+    --chrome-text: #f0f0f0;
+    --chrome-text-dim: #9a9a9e;
+    --chrome-accent: #3d93ff;
+    --chrome-hover: rgba(255, 255, 255, 0.08);
+    --chrome-active: rgba(255, 255, 255, 0.16);
+    --chrome-selected-bg: #3d93ff;
+    --chrome-selected-text: #ffffff;
+    --chrome-input-bg: #1e1e1f;
+    --chrome-shadow: rgba(0, 0, 0, 0.5);
+    --chrome-danger: #ff6b6f;
+    --chrome-ok: #52c47a;
+    --chrome-warn: #e0a93a;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --chrome-bg: #2b2b2d;
+  --chrome-bg-raised: #363638;
+  --chrome-border: #1a1a1b;
+  --chrome-text: #f0f0f0;
+  --chrome-text-dim: #9a9a9e;
+  --chrome-accent: #3d93ff;
+  --chrome-hover: rgba(255, 255, 255, 0.08);
+  --chrome-active: rgba(255, 255, 255, 0.16);
+  --chrome-selected-bg: #3d93ff;
+  --chrome-selected-text: #ffffff;
+  --chrome-input-bg: #1e1e1f;
+  --chrome-shadow: rgba(0, 0, 0, 0.5);
+  --chrome-danger: #ff6b6f;
+  --chrome-ok: #52c47a;
+  --chrome-warn: #e0a93a;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--chrome-bg);
+  color: var(--chrome-text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-size: 12px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  background: var(--chrome-input-bg);
+  color: var(--chrome-text);
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--chrome-active);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
