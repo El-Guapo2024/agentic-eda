@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "generated": false,
+    "kicadCommit": null,
+    "kicadCommitDate": null,
+    "extractedAt": null,
+    "sourceFiles": ["pcbnew/tools/pcb_actions.cpp", "common/tool/actions.cpp"],
+    "note": "Not yet extracted. This session could not reach ~/ws/kicad-mirror (git access to that repo is blocked in this sandboxed worktree, and the harness's auto-mode classifier denied fetching it over HTTPS as a substitute -- 'Untrusted Code Integration'). Run `node tools/extract-actions.js` from an environment where `git -C ~/ws/kicad-mirror ...` works (a plain terminal, not this worktree-isolated agent session) to populate this file against commit 8303b2ada05226fa603e5ac0420d240fd65ce52b (origin/master, 2026-05-04)."
+  },
+  "actions": []
+}

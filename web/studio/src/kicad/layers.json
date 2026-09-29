@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "generated": false,
+    "kicadCommit": null,
+    "kicadCommitDate": null,
+    "extractedAt": null,
+    "sourceFiles": ["include/layer_ids.h", "pcbnew/widgets/appearance_controls.cpp", "pcbnew/pcb_draw_panel_gal.cpp"],
+    "note": "Not yet extracted -- see actions.json's note for why. Run `node tools/extract-layers.js` from an environment with git access to ~/ws/kicad-mirror. Until then the canvas falls back to a small hard-coded draw order in src/components/canvas/layers.ts (F.Cu over B.Cu, courtyard/silk above copper, outline on top) -- reasonable but NOT source-verified."
+  },
+  "layers": [],
+  "drawOrder": []
+}

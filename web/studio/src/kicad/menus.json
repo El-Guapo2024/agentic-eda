@@ -1,0 +1,11 @@
+{
+  "meta": {
+    "generated": false,
+    "kicadCommit": null,
+    "kicadCommitDate": null,
+    "extractedAt": null,
+    "sourceFiles": ["pcbnew/menubar_pcb_editor.cpp"],
+    "note": "Not yet extracted -- see actions.json's note for why. Run `node tools/extract-menus.js` from an environment with git access to ~/ws/kicad-mirror."
+  },
+  "menus": []
+}

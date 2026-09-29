@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "generated": false,
+    "kicadCommit": null,
+    "kicadCommitDate": null,
+    "extractedAt": null,
+    "sourceFiles": ["common/settings/builtin_color_themes.h"],
+    "note": "Not yet extracted -- see actions.json's note for why. Run `node tools/extract-colors.js` from an environment with git access to ~/ws/kicad-mirror. Until then the canvas falls back to src/kicad/placeholderColors.ts, which is hand-picked and explicitly NOT verified against KiCad's source -- do not treat it as accurate."
+  },
+  "themeName": "KiCad Default",
+  "colors": {}
+}
