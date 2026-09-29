@@ -296,6 +296,22 @@ pub fn verify(grid: &Grid, spec: &Pour, layer: u8, entries: &[(String, (i64, i64
     out
 }
 
+/// The plane's body on `layer`: the cells of its largest pourable
+/// component, row by row. Empty where nothing on the layer is pourable.
+pub fn body_cells(grid: &Grid, spec: &Pour, layer: u8) -> Vec<(i64, i64)> {
+    let net_id = grid.net_id_of(&spec.net);
+    let (comp, ncomp) = components(grid, layer, net_id);
+    let mut size = vec![0usize; ncomp];
+    for &c in &comp {
+        if c >= 0 {
+            size[c as usize] += 1;
+        }
+    }
+    let Some(body) = (0..ncomp).max_by_key(|&i| size[i]).map(|i| i as i32) else { return Vec::new() };
+    let w = grid.cells_x;
+    (0..comp.len()).filter(|&i| comp[i] == body).map(|i| (i as i64 % w, i as i64 / w)).collect()
+}
+
 /// Why no stitching via could be placed for `p`: a tally of what each
 /// criterion rejected over the whole search area.
 ///

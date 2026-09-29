@@ -76,6 +76,10 @@ fn route_freeroute(
                 .collect();
             let mut out = design.clone();
             out.routing = Some(routed.routing);
+            // The pour's own honesty: FreeRouting lets other nets cross a
+            // plane, and a plane cut into islands leaves pads floating.
+            let mut fails: Vec<CheckResult> = fails;
+            fails.extend(eda_router::check_pours(&out, model, rules));
             (Some(out), fails)
         }
     }

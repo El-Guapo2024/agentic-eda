@@ -1420,6 +1420,89 @@ fn verify_pours(
     fails
 }
 
+/// Whether each pour of a routed design still reaches every pad of its
+/// net, once every track and via of the design has carved the plane: from
+/// the plane's body through the net's own copper -- its tracks, its vias,
+/// its pads -- on any layer. The check this router makes of its own
+/// routing (`routing_pour_cut_off`), for a design routed some other way,
+/// whose net may reach the plane by tracks as well as by stitching vias.
+/// As conservative as the router's own flood: the plane is only where a
+/// track of its net could lie.
+pub fn check_pours(design: &Design, model: &ConstraintModel, rules: &RouteRules) -> Vec<CheckResult> {
+    let (Some(placement), Some(routing)) = (&design.placement, &design.routing) else { return Vec::new() };
+    if rules.pours.is_empty() {
+        return Vec::new();
+    }
+    let ObstacleMap { mut grid, pads, rules, .. } = match obstacle_map(placement, model, rules) {
+        Ok(m) => m,
+        Err(f) => return f,
+    };
+    stamp_routed(&mut grid, &routing.tracks, &routing.vias, &rules);
+    let mut fails = Vec::new();
+    for spec in &rules.pours {
+        let Some(layer) = rules.layers.iter().position(|l| *l == spec.layer).map(|l| l as u8) else {
+            fails.push(CheckResult::fail("routing_pour_layer", &spec.net, format!("pour names layer {}, which is not in the board stackup {:?}", spec.layer, rules.layers)));
+            continue;
+        };
+        // The net's own copper, cell by cell and layer by layer, and where
+        // it passes between layers: its vias and its through-hole pads.
+        let net_pads: Vec<(&String, &PadInfo)> = pads.iter().filter(|(_, p)| p.net == spec.net).collect();
+        let mut own: HashSet<(i64, i64, u8)> = grid.routed_cells_of(&spec.net).into_iter().collect();
+        let mut through: HashSet<(i64, i64)> = routing.vias.iter().filter(|v| v.net == spec.net).map(|v| grid.to_cell(v.at)).collect();
+        for (_, p) in &net_pads {
+            let cells = pad_cells(&grid, p);
+            for &l in &p.layers {
+                own.extend(cells.iter().map(|&(x, y)| (x, y, l)));
+            }
+            if p.layers.len() > 1 {
+                through.extend(cells.iter().copied());
+            }
+        }
+        // Flood from the plane's body through it.
+        let mut seen: HashSet<(i64, i64, u8)> = HashSet::new();
+        let mut queue: VecDeque<(i64, i64, u8)> = VecDeque::new();
+        for (x, y) in pour::body_cells(&grid, spec, layer) {
+            if seen.insert((x, y, layer)) {
+                queue.push_back((x, y, layer));
+            }
+        }
+        while let Some((x, y, l)) = queue.pop_front() {
+            // Eight ways: a 45-degree track steps corner to corner.
+            let mut next: Vec<(i64, i64, u8)> = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)].iter().map(|&(dx, dy)| (x + dx, y + dy, l)).collect();
+            if through.contains(&(x, y)) {
+                next.extend((0..grid.num_layers as u8).map(|m| (x, y, m)));
+            }
+            for n in next {
+                if own.contains(&n) && seen.insert(n) {
+                    queue.push_back(n);
+                }
+            }
+        }
+        let mut cut: Vec<String> = net_pads
+            .iter()
+            .filter(|(_, p)| !pad_cells(&grid, p).iter().any(|&(x, y)| p.layers.iter().any(|&l| seen.contains(&(x, y, l)))))
+            .map(|(r, _)| (*r).clone())
+            .collect();
+        cut.sort();
+        if !cut.is_empty() {
+            fails.push(CheckResult::fail(
+                "routing_pour_cut_off",
+                &spec.net,
+                format!(
+                    "the {} pour on {} does not reach {} of the {} pads of its net, by the plane or by the net's own copper, once the board's copper has cut it: {}. \
+                     The copper that isolated them has to move, or the plane needs a path back; a pad the plane does not reach is floating.",
+                    spec.net,
+                    spec.layer,
+                    cut.len(),
+                    net_pads.len(),
+                    cut.join(", ")
+                ),
+            ));
+        }
+    }
+    fails
+}
+
 /// Replay routed tracks and vias into the grid's occupancy.
 ///
 /// Only needed because the negotiator owns its own occupancy structure;

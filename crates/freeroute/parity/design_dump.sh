@@ -4,6 +4,7 @@
 # design and its intent:
 #
 #   design_dump.sh                          redo every board in tests/design
+#   design_dump.sh <name>...                redo these
 #   design_dump.sh <name> <design.json> <intent.yaml>
 #                                           add a board
 #
@@ -23,17 +24,20 @@ records=$(sed -n "s/^records='\(.*\)'$/\1/p" "$here/maze_dump.sh")
 (cd "$root" && cargo build -q --release -p eda-freeroute --example design_dsn)
 (cd "$fr" && ./gradlew -q executableV19Jar)
 jar="$fr/build/libs/freerouting-1.9.0-executable.jar"
-if [ $# -eq 3 ]; then
+if [ $# -eq 3 ] && [ -f "$2" ]; then
   mkdir -p "$out/$1"
   cp "$2" "$out/$1/design.json"
   cp "$3" "$out/$1/intent.yaml"
   set -- "$1"
 elif [ $# -eq 0 ]; then
   set -- $(cd "$out" && ls)
-else
-  echo "usage: design_dump.sh [<name> <design.json> <intent.yaml>]" >&2
-  exit 2
 fi
+for name in "$@"; do
+  if [ ! -f "$out/$name/design.json" ]; then
+    echo "usage: design_dump.sh [<name>... | <name> <design.json> <intent.yaml>]; no board $name" >&2
+    exit 2
+  fi
+done
 tmp=$(mktemp -d)
 for name in "$@"; do
   "$root/target/release/examples/design_dsn" "$out/$name/design.json" "$out/$name/intent.yaml" > "$tmp/$name.dsn"

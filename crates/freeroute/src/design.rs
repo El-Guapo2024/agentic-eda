@@ -27,7 +27,7 @@ use eda_model::footprint::{placed_pads, placed_refdes_box, PlacedPad};
 use eda_model::ir::{Design, Point as IrPoint, RoutingSection, Side, Track, Via as IrVia};
 use eda_model::{BoardRules, ConstraintModel};
 
-use crate::autoroute::batch::{autoroute_passes, autoroute_passes_with, pass_items, PassSummary};
+use crate::autoroute::batch::{autoroute_item, autoroute_passes, autoroute_passes_with, pass_items, remove_pass_tails, routing_hash, PassSummary, RouteResult};
 use crate::board::PadShape;
 use crate::board::AreaShape;
 use crate::geometry::{Circle, Direction, FloatPoint, IntBox, IntPoint, Line, PolygonShape, TileShape};
@@ -60,6 +60,15 @@ const RESCUE_PASSES: i32 = 10;
 /// spare that its insertion then refuses, and in batch it takes the same
 /// gap every pass; a micrometre to spare is not enough to stop it.
 const RESCUE_MARGIN: i64 = 50;
+
+/// How much dearer a trace is on an outer layer carrying a pour. Each one
+/// there cuts the plane; kept small, as the grid router keeps its own
+/// pour penalty, so a net with nowhere else to go still gets through.
+const POUR_LAYER_COST_FACTOR: f64 = 2.0;
+
+/// How much dearer a poured net's traces are off its pour's layer, while
+/// it goes first: that copper is the plane's backbone.
+const POUR_NET_OFF_LAYER_FACTOR: f64 = 4.0;
 
 /// How far a strip between two pads stops short of each, µm. A keep-out
 /// meeting a pad edge to edge leaves FreeRouting's rooms beside the pad
@@ -164,6 +173,15 @@ struct PlanNet {
     name: String,
     /// Index into [`Plan::classes`].
     class: usize,
+    /// Poured on a layer: FreeRouting's plane.
+    plane: bool,
+}
+
+/// A copper pour: its net flooded over the whole board on one layer.
+struct PlanPlane {
+    /// Index into [`Plan::nets`].
+    net: usize,
+    layer: usize,
 }
 
 struct PlanClass {
@@ -239,6 +257,8 @@ struct Plan {
     /// In the order the DSN lists them: by footprint, its pad strips then
     /// its label.
     keepouts: Vec<PlanKeepout>,
+    /// The pours whose net has a placed pin, in the rules' order.
+    planes: Vec<PlanPlane>,
     /// Board units.
     track_half_width: i64,
     /// Between copper, from copper to the outline's, and from copper to a
@@ -255,8 +275,10 @@ impl Plan {
         if layer_count == 0 {
             return Err("the board has no copper layers".into());
         }
-        if !rules.pours.is_empty() {
-            return Err("copper pours are not supported yet".into());
+        for pour in &rules.pours {
+            if !rules.layers.contains(&pour.layer) {
+                return Err(format!("the {} pour names layer {}, which is not in the stackup {:?}", pour.net, pour.layer, rules.layers));
+            }
         }
         if rules.track_width <= 0 || rules.clearance < 0 || rules.via_diameter <= 0 {
             return Err(format!("unusable rules: track {} clearance {} via {} um", rules.track_width, rules.clearance, rules.via_diameter));
@@ -365,14 +387,34 @@ impl Plan {
             }
             classes.push(PlanClass { name, half_width: width * UNITS_PER_UM / 2 });
         }
-        let mut net_no = vec![usize::MAX; model.nets.len()];
-        let mut nets = Vec::new();
-        for (i, net) in model.nets.iter().enumerate() {
-            if used[i] {
-                net_no[i] = nets.len();
-                nets.push(PlanNet { name: net.name.clone(), class: class_no[class_of(&net.name)] });
+        // Nets by number: FreeRouting makes a plane's net as it reads the
+        // plane, before the netlist, so poured nets come first.
+        let poured = |name: &str| rules.pours.iter().any(|p| p.net == name);
+        let mut order: Vec<usize> = Vec::new();
+        for pour in &rules.pours {
+            if let Some(i) = model.nets.iter().position(|n| n.name == pour.net) {
+                if used[i] && !order.contains(&i) {
+                    order.push(i);
+                }
             }
         }
+        let rest: Vec<usize> = (0..model.nets.len()).filter(|&i| used[i] && !order.contains(&i)).collect();
+        order.extend(rest);
+        let mut net_no = vec![usize::MAX; model.nets.len()];
+        let mut nets = Vec::new();
+        for i in order {
+            let net = &model.nets[i];
+            net_no[i] = nets.len();
+            nets.push(PlanNet { name: net.name.clone(), class: class_no[class_of(&net.name)], plane: poured(&net.name) });
+        }
+        let planes = rules
+            .pours
+            .iter()
+            .filter_map(|pour| {
+                let net = nets.iter().position(|n| n.name == pour.net)?;
+                Some(PlanPlane { net, layer: rules.layers.iter().position(|l| *l == pour.layer)? })
+            })
+            .collect();
         let components = placed
             .into_iter()
             .map(|(reference, pins)| PlanComponent {
@@ -389,6 +431,7 @@ impl Plan {
             nets,
             classes,
             keepouts,
+            planes,
             track_half_width: rules.track_width * UNITS_PER_UM / 2,
             clearance: rules.clearance * UNITS_PER_UM + margin,
             // The outline is copper `OUTLINE_HALF_WIDTH` wide either side
@@ -396,6 +439,14 @@ impl Plan {
             edge_clearance: rules.tuning.edge_clearance_um.max(EDGE_CLEARANCE_UM) * UNITS_PER_UM - OUTLINE_HALF_WIDTH + margin,
             keepout_clearance: margin,
         })
+    }
+
+    /// The board's bounding box, board units: the outline's, grown by
+    /// 1000 as FreeRouting grows it.
+    fn bounds(&self) -> IntBox {
+        let u = UNITS_PER_UM;
+        let (xs, ys) = (self.outline.iter().map(|p| p.x * u), self.outline.iter().map(|p| p.y * u));
+        IntBox::new(xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap()).offset(1000)
     }
 
     fn via_padstack(&self) -> &PlanPadstack {
@@ -417,6 +468,21 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     for l in 0..plan.layers.len() {
         let _ = writeln!(out, "    (layer {}\n      (type signal)\n      (property\n        (index {l})\n      )\n    )", layer(l));
     }
+    // The settings, all of them: given any, FreeRouting takes none of its
+    // own. Before the keep-outs and planes, or it skips them.
+    let _ = writeln!(out, "    (autoroute_settings\n      (fanout off)\n      (autoroute on)\n      (postroute on)\n      (vias on)\n      (via_costs 50)\n      (plane_via_costs 5)\n      (start_ripup_costs 100)\n      (start_pass_no 1)");
+    for (l, r) in layer_rules(&plan, &plan.bounds()).iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "      (layer_rule {}\n        (active {})\n        (preferred_direction {})\n        (preferred_direction_trace_costs {:?})\n        (against_preferred_direction_trace_costs {:?})\n      )",
+            layer(l),
+            if r.active { "on" } else { "off" },
+            if r.horizontal { "horizontal" } else { "vertical" },
+            r.preferred,
+            r.against
+        );
+    }
+    let _ = writeln!(out, "    )");
     let _ = write!(out, "    (boundary\n      (path pcb 0");
     for p in &plan.outline {
         let _ = write!(out, "  {} {}", p.x, p.y);
@@ -437,6 +503,13 @@ pub fn to_dsn(design: &Design, model: &ConstraintModel, rules: &BoardRules) -> R
     for k in &plan.keepouts {
         let (x0, y0, x1, y1) = k.rect;
         let _ = writeln!(out, "    (keepout \"\" (rect {} {x0} {y0} {x1} {y1}) (clearance_class keepout))", layer(k.layer));
+    }
+    for p in &plan.planes {
+        let _ = write!(out, "    (plane {} (polygon {} 0", quoted(&plan.nets[p.net].name), layer(p.layer));
+        for c in &plan.outline {
+            let _ = write!(out, " {} {}", c.x, c.y);
+        }
+        let _ = writeln!(out, "))");
     }
     let _ = writeln!(out, "  )");
     let _ = writeln!(out, "  (placement");
@@ -574,29 +647,74 @@ fn java_round(x: f64) -> f64 {
     (x + 0.5).floor()
 }
 
-/// `AutorouteSettings(RoutingBoard)`: preferred directions alternating
-/// from the one across the board's longer side, the cost against it by
-/// the board's aspect.
-fn autoroute_settings(bounds: &IntBox, layer_count: usize) -> AutorouteSettings {
+/// What the autorouter is told about one layer: whether to route on it,
+/// the direction it prefers there, and what a trace costs along that
+/// direction and against it.
+#[derive(Debug, Clone, Copy)]
+struct LayerRule {
+    active: bool,
+    horizontal: bool,
+    preferred: f64,
+    against: f64,
+}
+
+/// FreeRouting's defaults, `AutorouteSettings(RoutingBoard)`: preferred
+/// directions alternating from the one across the board's longer side, the
+/// cost against it by the board's aspect, the outer layers dearer on a
+/// board of more than two.
+fn default_layer_rules(bounds: &IntBox, layer_count: usize) -> Vec<LayerRule> {
     let (w, h) = ((bounds.ur.x - bounds.ll.x) as f64, (bounds.ur.y - bounds.ll.y) as f64);
     let horizontal_add = 0.1 * java_round(10.0 * w / h);
     let vertical_add = 0.1 * java_round(10.0 * h / w);
     let mut horizontal = w < h;
-    let mut is_horizontal = vec![false; layer_count];
-    let mut preferred = vec![1.0; layer_count];
-    let mut against = vec![1.0; layer_count];
-    for l in 0..layer_count {
+    let mut rules = Vec::with_capacity(layer_count);
+    for _ in 0..layer_count {
         horizontal = !horizontal;
-        is_horizontal[l] = horizontal;
-        against[l] += if horizontal { horizontal_add } else { vertical_add };
+        rules.push(LayerRule { active: true, horizontal, preferred: 1.0, against: 1.0 + if horizontal { horizontal_add } else { vertical_add } });
     }
     if layer_count > 2 {
         let outer = 0.2 * layer_count as f64;
         for l in [0, layer_count - 1] {
-            preferred[l] += outer;
-            against[l] += outer;
+            rules[l].preferred += outer;
+            rules[l].against += outer;
         }
     }
+    rules
+}
+
+/// The layer rules a plan routes with. FreeRouting's defaults, with an
+/// inner layer carrying a plane taken out of routing and the preferred
+/// directions of the others alternating anew, as FreeRouting adjusts a
+/// board read with planes (`DsnFile.adjust_plane_autoroute_settings`);
+/// and an outer layer carrying one made [`POUR_LAYER_COST_FACTOR`] times as
+/// dear, since every trace there cuts the plane.
+fn layer_rules(plan: &Plan, bounds: &IntBox) -> Vec<LayerRule> {
+    let layer_count = plan.layers.len();
+    let mut rules = default_layer_rules(bounds, layer_count);
+    let outer = |l: usize| l == 0 || l == layer_count - 1;
+    if layer_count > 2 && plan.planes.iter().any(|p| !outer(p.layer)) {
+        let mut horizontal = rules[0].horizontal;
+        for (l, r) in rules.iter_mut().enumerate() {
+            if plan.planes.iter().any(|p| p.layer == l && !outer(l)) {
+                r.active = false;
+            } else if r.active {
+                r.horizontal = horizontal;
+                horizontal = !horizontal;
+            }
+        }
+    }
+    for p in &plan.planes {
+        if outer(p.layer) {
+            rules[p.layer].preferred *= POUR_LAYER_COST_FACTOR;
+            rules[p.layer].against *= POUR_LAYER_COST_FACTOR;
+        }
+    }
+    rules
+}
+
+/// The autoroute settings a plan routes with: FreeRouting's, with
+/// [`layer_rules`].
+fn autoroute_settings(rules: &[LayerRule]) -> AutorouteSettings {
     AutorouteSettings {
         vias_allowed: true,
         via_costs: 50,
@@ -604,9 +722,9 @@ fn autoroute_settings(bounds: &IntBox, layer_count: usize) -> AutorouteSettings 
         start_ripup_costs: 100,
         with_fanout: false,
         automatic_neckdown: true,
-        layer_active: vec![true; layer_count],
-        trace_costs: (0..layer_count).map(|l| if is_horizontal[l] { (preferred[l], against[l]) } else { (against[l], preferred[l]) }).collect(),
-        preferred_direction_costs: preferred,
+        layer_active: rules.iter().map(|r| r.active).collect(),
+        trace_costs: rules.iter().map(|r| if r.horizontal { (r.preferred, r.against) } else { (r.against, r.preferred) }).collect(),
+        preferred_direction_costs: rules.iter().map(|r| r.preferred).collect(),
     }
 }
 
@@ -642,8 +760,7 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     let layer_count = plan.layers.len();
     let layers = plan.layers.iter().map(|name| Layer { name: name.clone(), is_signal: true }).collect();
     let corners: Vec<IntPoint> = plan.outline.iter().map(|p| IntPoint::new(p.x * UNITS_PER_UM, p.y * UNITS_PER_UM)).collect();
-    let (xs, ys) = (corners.iter().map(|c| c.x), corners.iter().map(|c| c.y));
-    let bounds = IntBox::new(xs.clone().min().unwrap(), ys.clone().min().unwrap(), xs.max().unwrap(), ys.max().unwrap()).offset(1000);
+    let bounds = plan.bounds();
 
     // The structure's rule: the clearance, then the outline's class and
     // the keep-outs'.
@@ -697,7 +814,7 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
             }
         }
     }
-    let nets = plan.nets.iter().enumerate().map(|(n, net)| (n as i32 + 1, Net { no: n as i32 + 1, class: net.class + 1, contains_plane: false })).collect();
+    let nets = plan.nets.iter().enumerate().map(|(n, net)| (n as i32 + 1, Net { no: n as i32 + 1, class: net.class + 1, contains_plane: net.plane })).collect();
     let rules_out = Rules {
         clearance,
         max_clearance: matrix.row_max.clone(),
@@ -715,8 +832,8 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
         pull_tight_accuracy: 500,
     };
 
-    // The outline first, the keep-outs, then the pins by component; the
-    // board lists them last in first.
+    // The outline first, the keep-outs, the planes, then the pins by
+    // component; the board lists them last in first.
     let outline = PolygonShape::new(&corners);
     let n = outline.corners.len();
     let lines = (0..n).map(|i| Line::new(outline.corners[i], outline.corners[(i + 1) % n])).collect();
@@ -742,6 +859,21 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
             fixed: FixedState::SystemFixed,
             component: 0,
             nets: Vec::new(),
+        });
+    }
+    // A plane is copper of its net over the whole board, which the traces
+    // of other nets may cross: the pour flows round them.
+    for p in &plan.planes {
+        let layer = p.layer as i32;
+        items.push(Item {
+            id: items.len() as u32 + 1,
+            kind: ItemKind::Area { kind: AreaKind::Conduction { is_obstacle: false }, layer, shape: AreaShape::Polygon(PolygonShape::new(&corners)) },
+            first_layer: layer,
+            last_layer: layer,
+            clearance_class: 1,
+            fixed: FixedState::SystemFixed,
+            component: 0,
+            nets: vec![p.net as i32 + 1],
         });
     }
     for (c, component) in plan.components.iter().enumerate() {
@@ -776,7 +908,7 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     items.reverse();
     // Traces keep their class's width into narrow pins: the routing gates
     // hold every track to it.
-    let settings = AutorouteSettings { automatic_neckdown: false, ..autoroute_settings(&bounds, layer_count) };
+    let settings = AutorouteSettings { automatic_neckdown: false, ..autoroute_settings(&layer_rules(&plan, &bounds)) };
     Ok(Board { bounds, layers, rules: rules_out, settings, items, host_cad: true, area_section: 50_000.0, id_max })
 }
 
@@ -811,8 +943,8 @@ fn to_um(p: FloatPoint) -> IrPoint {
 pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRules, rb: &RoutingBoard) -> Result<RoutingSection, String> {
     let plan = Plan::of(design, model, rules)?;
     // "REF.PIN" of every pin, by item number as `board_from_design` gives
-    // them: after the outline and the keep-outs.
-    let first_pin = plan.keepouts.len() as u32 + 2;
+    // them: after the outline, the keep-outs and the planes.
+    let first_pin = (plan.keepouts.len() + plan.planes.len()) as u32 + 2;
     let mut pin_names: BTreeMap<u32, String> = BTreeMap::new();
     for c in &plan.components {
         for pin in &c.pins {
@@ -879,7 +1011,16 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
     let mut tracks = drop_pad_loops(split_at_own_pads(tracks, &pads), &vias, &pads);
     tracks.sort_by(|a: &Track, b: &Track| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
     vias.sort_by(|a: &IrVia, b: &IrVia| (&a.net, a.at).cmp(&(&b.net, b.at)));
-    Ok(RoutingSection { tracks, vias, zones: design.routing.as_ref().map(|r| r.zones.clone()).unwrap_or_default() })
+    // The pours as zones, the board's outline filled, as the grid router
+    // writes them; the design's own zones stay.
+    let mut zones = design.routing.as_ref().map(|r| r.zones.clone()).unwrap_or_default();
+    for p in &plan.planes {
+        let (net, layer) = (&plan.nets[p.net].name, &plan.layers[p.layer]);
+        if !zones.iter().any(|z| &z.net == net && &z.layer == layer) {
+            zones.push(eda_model::ir::Zone { net: net.clone(), layer: layer.clone(), outline: design.placement.as_ref().map(|pl| pl.outline.clone()).unwrap_or_default() });
+        }
+    }
+    Ok(RoutingSection { tracks, vias, zones })
 }
 
 /// A design routed by [`route_design`].
@@ -897,12 +1038,12 @@ pub struct RoutedDesign {
 /// to `max_passes` passes over the board [`board_from_design`] builds,
 /// stopping once one finds nothing left to route or the board repeats
 /// itself; then, for anything left, rescue passes whose search keeps a
-/// little room to spare. The routes back as the design's routing section.
+/// little room to spare. A net poured on an outer layer goes first: see
+/// [`route_pour_nets`]. The routes back as the design's routing section.
 pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules, max_passes: i32) -> Result<RoutedDesign, String> {
     let plan = Plan::of(design, model, rules)?;
     let board = board_from_design(design, model, rules)?;
-    let mut rb = RoutingBoard::new(board.clone());
-    let mut passes = autoroute_passes(&mut rb, 1, max_passes);
+    let (mut rb, mut passes) = route_board(&plan, &board, max_passes);
     let left = pass_items(&rb).len();
     if left > 0 {
         let next = passes.last().map_or(1, |p| p.pass_no + 1);
@@ -910,10 +1051,9 @@ pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules
         if pass_items(&rb).len() <= left {
             passes.extend(rescue);
         } else {
-            // The rescue ripped up more than it laid: FreeRouting's own
-            // result, again, for it is deterministic.
-            rb = RoutingBoard::new(board);
-            passes = autoroute_passes(&mut rb, 1, max_passes);
+            // The rescue ripped up more than it laid: the plain result,
+            // again, for it is deterministic.
+            (rb, passes) = route_board(&plan, &board, max_passes);
         }
     }
     let mut unrouted: Vec<String> = Vec::new();
@@ -926,6 +1066,89 @@ pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules
         }
     }
     Ok(RoutedDesign { routing: routing_section(design, model, rules, &rb)?, passes, unrouted })
+}
+
+/// The poured nets whose every pour lies on an outer layer, by number.
+fn outer_pour_nets(plan: &Plan) -> Vec<i32> {
+    let last = plan.layers.len() - 1;
+    let mut nets: Vec<i32> = Vec::new();
+    for p in &plan.planes {
+        let net = p.net as i32 + 1;
+        let all_outer = plan.planes.iter().filter(|q| q.net == p.net).all(|q| q.layer == 0 || q.layer == last);
+        if all_outer && !nets.contains(&net) {
+            nets.push(net);
+        }
+    }
+    nets
+}
+
+/// The board routed: the outer pours' nets first, then FreeRouting's
+/// passes over the rest.
+fn route_board(plan: &Plan, board: &Board, max_passes: i32) -> (RoutingBoard, Vec<PassSummary>) {
+    let first = outer_pour_nets(plan);
+    let mut board = board.clone();
+    if !first.is_empty() {
+        // Those planes stay out of the routing; the zones stand for them.
+        board.items.retain(|i| !(matches!(i.kind, ItemKind::Area { kind: AreaKind::Conduction { .. }, .. }) && i.nets.iter().any(|n| first.contains(n))));
+        for net in board.rules.nets.values_mut() {
+            if first.contains(&net.no) {
+                net.contains_plane = false;
+            }
+        }
+    }
+    let mut rb = RoutingBoard::new(board);
+    let mut passes = route_pour_nets(&mut rb, plan, &first, max_passes);
+    let next = passes.last().map_or(1, |p| p.pass_no + 1);
+    passes.extend(autoroute_passes(&mut rb, next, max_passes));
+    (rb, passes)
+}
+
+/// Route each net poured on an outer layer before anything else, as copper
+/// of its own and on the pour's layer wherever it can: a backbone joining
+/// every pad, which the plane then only has to touch. FreeRouting lets the
+/// signals cross a plane anywhere, and on an outer layer they cut it into
+/// islands; a pad of the net then still reaches the rest by the net's own
+/// copper. The signals may push the backbone aside, or rip it up and
+/// route it again: fixed, it walled them out of too much of the layer. An
+/// inner plane is FreeRouting's own: its layer carries nothing else.
+fn route_pour_nets(rb: &mut RoutingBoard, plan: &Plan, nets: &[i32], max_passes: i32) -> Vec<PassSummary> {
+    let mut summaries = Vec::new();
+    let mut pass_no = 1;
+    for &net in nets {
+        let saved = rb.board.settings.clone();
+        let pour_layers: Vec<usize> = plan.planes.iter().filter(|p| p.net as i32 + 1 == net).map(|p| p.layer).collect();
+        let s = &mut rb.board.settings;
+        for l in 0..plan.layers.len() {
+            // The pour's layer as cheap as a plain layer, the others dear.
+            let f = if pour_layers.contains(&l) { 1.0 / POUR_LAYER_COST_FACTOR } else { POUR_NET_OFF_LAYER_FACTOR };
+            s.trace_costs[l].0 *= f;
+            s.trace_costs[l].1 *= f;
+            s.preferred_direction_costs[l] *= f;
+        }
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..max_passes {
+            let items: Vec<usize> = pass_items(rb).into_iter().filter(|&i| rb.item(i).nets.contains(&net)).collect();
+            if items.is_empty() || !seen.insert(routing_hash(rb)) {
+                break;
+            }
+            let mut summary = PassSummary { pass_no, items: items.len(), routed: 0, not_routed: 0, insert_errors: 0 };
+            for item in items {
+                match autoroute_item(rb, item, net, pass_no).result {
+                    RouteResult::Routed | RouteResult::AlreadyConnected => summary.routed += 1,
+                    RouteResult::NotRouted => summary.not_routed += 1,
+                    RouteResult::InsertError => {
+                        summary.not_routed += 1;
+                        summary.insert_errors += 1;
+                    }
+                }
+            }
+            remove_pass_tails(rb);
+            summaries.push(summary);
+            pass_no += 1;
+        }
+        rb.board.settings = saved;
+    }
+    summaries
 }
 
 /// A pad as the routing gates see it.
