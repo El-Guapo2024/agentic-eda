@@ -25,24 +25,29 @@ use crate::geometry::IntOctagon;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LeafId(usize);
 
-#[derive(Debug, Clone)]
-enum Kind<T> {
+#[derive(Debug, Clone, Copy)]
+enum Kind {
     Inner { first: usize, second: usize },
-    Leaf { payload: T },
+    /// Its payload is in [`ShapeTree::payloads`] under the same index.
+    Leaf,
     /// A recycled slot.
     Free,
 }
 
+/// A node, its payload kept apart: the walks of a room completion touch
+/// only bounds and links, so nodes stay small.
 #[derive(Debug, Clone)]
-struct Node<T> {
+struct Node {
     bounds: IntOctagon,
     parent: Option<usize>,
-    kind: Kind<T>,
+    kind: Kind,
 }
 
 #[derive(Debug, Clone)]
 pub struct ShapeTree<T> {
-    nodes: Vec<Node<T>>,
+    nodes: Vec<Node>,
+    /// By node index: a leaf's payload, `None` for any other node.
+    payloads: Vec<Option<T>>,
     free: Vec<usize>,
     root: Option<usize>,
     leaf_count: usize,
@@ -56,7 +61,7 @@ impl<T> Default for ShapeTree<T> {
 
 impl<T> ShapeTree<T> {
     pub fn new() -> Self {
-        ShapeTree { nodes: Vec::new(), free: Vec::new(), root: None, leaf_count: 0 }
+        ShapeTree { nodes: Vec::new(), payloads: Vec::new(), free: Vec::new(), root: None, leaf_count: 0 }
     }
 
     pub fn len(&self) -> usize {
@@ -67,12 +72,14 @@ impl<T> ShapeTree<T> {
         self.leaf_count == 0
     }
 
-    fn alloc(&mut self, node: Node<T>) -> usize {
+    fn alloc(&mut self, node: Node, payload: Option<T>) -> usize {
         if let Some(i) = self.free.pop() {
             self.nodes[i] = node;
+            self.payloads[i] = payload;
             i
         } else {
             self.nodes.push(node);
+            self.payloads.push(payload);
             self.nodes.len() - 1
         }
     }
@@ -80,19 +87,20 @@ impl<T> ShapeTree<T> {
     fn release(&mut self, i: usize) {
         self.nodes[i].kind = Kind::Free;
         self.nodes[i].parent = None;
+        self.payloads[i] = None;
         self.free.push(i);
     }
 
     pub fn payload(&self, leaf: LeafId) -> &T {
-        match &self.nodes[leaf.0].kind {
-            Kind::Leaf { payload } => payload,
+        match (self.nodes[leaf.0].kind, &self.payloads[leaf.0]) {
+            (Kind::Leaf, Some(payload)) => payload,
             _ => panic!("ShapeTree::payload: {leaf:?} is not a live leaf"),
         }
     }
 
     pub fn payload_mut(&mut self, leaf: LeafId) -> &mut T {
-        match &mut self.nodes[leaf.0].kind {
-            Kind::Leaf { payload } => payload,
+        match (self.nodes[leaf.0].kind, &mut self.payloads[leaf.0]) {
+            (Kind::Leaf, Some(payload)) => payload,
             _ => panic!("ShapeTree::payload_mut: {leaf:?} is not a live leaf"),
         }
     }
@@ -105,7 +113,7 @@ impl<T> ShapeTree<T> {
     /// MinAreaTree.insertUnlocked.
     pub fn insert(&mut self, bounds: IntOctagon, payload: T) -> LeafId {
         self.leaf_count += 1;
-        let leaf = self.alloc(Node { bounds, parent: None, kind: Kind::Leaf { payload } });
+        let leaf = self.alloc(Node { bounds, parent: None, kind: Kind::Leaf }, Some(payload));
         let Some(root) = self.root else {
             self.root = Some(leaf);
             return LeafId(leaf);
@@ -113,7 +121,7 @@ impl<T> ShapeTree<T> {
         let replace = self.position_locate(root, &bounds);
         let new_bounds = bounds.union(&self.nodes[replace].bounds);
         let parent = self.nodes[replace].parent;
-        let inner = self.alloc(Node { bounds: new_bounds, parent, kind: Kind::Inner { first: replace, second: leaf } });
+        let inner = self.alloc(Node { bounds: new_bounds, parent, kind: Kind::Inner { first: replace, second: leaf } }, None);
         if let Some(p) = parent {
             if let Kind::Inner { first, second } = &mut self.nodes[p].kind {
                 if *first == replace {
@@ -152,7 +160,7 @@ impl<T> ShapeTree<T> {
     /// Remove a stored shape. MinAreaTree.removeLeafUnlocked.
     pub fn remove(&mut self, leaf: LeafId) {
         let l = leaf.0;
-        if !matches!(self.nodes[l].kind, Kind::Leaf { .. }) {
+        if !matches!(self.nodes[l].kind, Kind::Leaf) {
             panic!("ShapeTree::remove: {leaf:?} is not a live leaf");
         }
         let parent = self.nodes[l].parent;
@@ -198,9 +206,9 @@ impl<T> ShapeTree<T> {
         }
     }
 
-    /// Every stored shape whose bounds intersect `shape`, in leaf order.
-    /// MinAreaTree.overlapsUnlocked. Java then sorts by the stored object's
-    /// own ordering; callers here sort their payloads if they need that.
+    /// Every stored shape whose bounds intersect `shape`, in no particular
+    /// order. MinAreaTree.overlapsUnlocked. Java then sorts by the stored
+    /// object's own ordering; callers here sort their payloads by it.
     pub fn overlaps(&self, shape: &IntOctagon) -> Vec<LeafId> {
         let mut found = Vec::new();
         let Some(root) = self.root else { return found };
@@ -210,7 +218,7 @@ impl<T> ShapeTree<T> {
                 continue;
             }
             match self.nodes[n].kind {
-                Kind::Leaf { .. } => found.push(LeafId(n)),
+                Kind::Leaf => found.push(LeafId(n)),
                 Kind::Inner { first, second } => {
                     stack.push(first);
                     stack.push(second);
@@ -218,7 +226,6 @@ impl<T> ShapeTree<T> {
                 Kind::Free => unreachable!("a free slot is linked into the tree"),
             }
         }
-        found.sort();
         found
     }
 
@@ -237,7 +244,7 @@ impl<T> ShapeTree<T> {
     /// `Ok(leaf)` for a leaf, `Err((first, second))` for an inner node.
     pub(crate) fn node_step(&self, n: usize) -> Result<LeafId, (usize, usize)> {
         match self.nodes[n].kind {
-            Kind::Leaf { .. } => Ok(LeafId(n)),
+            Kind::Leaf => Ok(LeafId(n)),
             Kind::Inner { first, second } => Err((first, second)),
             Kind::Free => panic!("ShapeTree: free slot {n} reached by traversal"),
         }
@@ -255,14 +262,14 @@ impl<T> ShapeTree<T> {
         let mut text = full.then(|| String::from("tree\n"));
         let mut stack: Vec<usize> = self.root.into_iter().collect();
         while let Some(n) = stack.pop() {
-            let mut tokens = match &self.nodes[n].kind {
-                Kind::Leaf { payload } => {
+            let mut tokens = match self.nodes[n].kind {
+                Kind::Leaf => {
                     leaves += 1;
-                    format!("L {} ", name(payload))
+                    format!("L {} ", name(self.payloads[n].as_ref().expect("a leaf's payload")))
                 }
                 Kind::Inner { first, second } => {
-                    stack.push(*second);
-                    stack.push(*first);
+                    stack.push(second);
+                    stack.push(first);
                     String::from("I ")
                 }
                 Kind::Free => unreachable!("a free slot is linked into the tree"),
@@ -298,7 +305,7 @@ impl<T> ShapeTree<T> {
         let mut stack = vec![root];
         while let Some(n) = stack.pop() {
             match self.nodes[n].kind {
-                Kind::Leaf { .. } => leaves += 1,
+                Kind::Leaf => leaves += 1,
                 Kind::Inner { first, second } => {
                     for c in [first, second] {
                         if self.nodes[c].parent != Some(n) {
@@ -364,7 +371,9 @@ mod tests {
             let q = shape(&mut next).offset(next(0, 80) as f64);
             let mut want: Vec<LeafId> = flat.iter().filter(|(_, s)| s.intersects(&q)).map(|(id, _)| *id).collect();
             want.sort();
-            assert_eq!(tree.overlaps(&q), want);
+            let mut got = tree.overlaps(&q);
+            got.sort();
+            assert_eq!(got, want);
         }
     }
 
@@ -387,7 +396,9 @@ mod tests {
                 tree.check_invariants().unwrap_or_else(|e| panic!("round {round}: {e}"));
                 let q = shape(&mut next).offset(40.0);
                 let want: Vec<LeafId> = flat.iter().filter(|(_, s)| s.intersects(&q)).map(|(id, _)| *id).collect();
-                assert_eq!(tree.overlaps(&q), want, "round {round}");
+                let mut got = tree.overlaps(&q);
+                got.sort();
+                assert_eq!(got, want, "round {round}");
             }
         }
         assert_eq!(tree.len(), flat.len());

@@ -118,6 +118,9 @@ pub fn complete_shape<T: TreeObject>(
     };
     let mut bound = start;
     let mut result = vec![GrownRoom { shape: start, layer: room.layer, contained }];
+    // The pieces after each obstacle, swapped with `result`: two buffers
+    // for the whole walk.
+    let mut next: Vec<GrownRoom> = Vec::new();
 
     // Java's ArrayStack pops the most recently pushed node, and pushes the
     // first child before the second: the second is visited first.
@@ -135,11 +138,12 @@ pub fn complete_shape<T: TreeObject>(
             }
         };
         let obj = tree.payload(leaf);
-        if !(obj.is_obstacle_for(net) && obj.layer() == room.layer && Some(leaf) != ignore) {
+        // The layer first: it is inline, and rules out most leaves.
+        if !(obj.layer() == room.layer && Some(leaf) != ignore && obj.is_obstacle_for(net)) {
             continue;
         }
         let obstacle = tree.bounds(leaf);
-        let mut next = Vec::new();
+        next.clear();
         let mut next_bound = IntOctagon::EMPTY;
         for cur in &result {
             if !cur.shape.overlaps(&obstacle) {
@@ -169,7 +173,7 @@ pub fn complete_shape<T: TreeObject>(
                 next_bound = next_bound.union(&r.shape);
             }
         }
-        result = next;
+        std::mem::swap(&mut result, &mut next);
         bound = next_bound;
     }
 
