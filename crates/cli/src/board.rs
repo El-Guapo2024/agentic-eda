@@ -384,7 +384,8 @@ pub fn run(
         "route" => route_board(&dir, &actor()).map(|s| eprintln!("{s}")),
         "serve" => {
             let port = flag(rest, "--port").and_then(|p| p.parse().ok()).unwrap_or(8765);
-            crate::studio::serve(&dir, port)
+            let ui = flag(rest, "--ui").map(PathBuf::from);
+            crate::studio::serve(&dir, port, ui)
         }
         other => Err(fail(
             "board_usage",
