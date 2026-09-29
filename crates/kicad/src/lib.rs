@@ -23,6 +23,10 @@ use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 mod pcb;
 pub use pcb::export_kicad_pcb;
 
+mod sexpr;
+mod import;
+pub use import::{import_kicad_pcb, ImportNotes};
+
 const STUB_MM: f64 = 1.27;
 
 /// Fixed provenance for the title block. Passed explicitly (never system
