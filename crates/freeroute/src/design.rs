@@ -27,7 +27,7 @@ use eda_model::footprint::{placed_pads, placed_refdes_box, PlacedPad};
 use eda_model::ir::{Design, Point as IrPoint, RoutingSection, Side, Track, Via as IrVia};
 use eda_model::{BoardRules, ConstraintModel};
 
-use crate::autoroute::batch::{autoroute_passes, pass_items, PassSummary};
+use crate::autoroute::batch::{autoroute_passes, autoroute_passes_with, pass_items, PassSummary};
 use crate::board::PadShape;
 use crate::board::AreaShape;
 use crate::geometry::{Circle, Direction, FloatPoint, IntBox, IntPoint, Line, PolygonShape, TileShape};
@@ -51,6 +51,15 @@ const ROUNDING_MARGIN_UM: i64 = 2;
 
 /// The copper-to-edge clearance the routing gate holds a board to, µm.
 const EDGE_CLEARANCE_UM: i64 = 500;
+
+/// Passes of rescue for what FreeRouting's own passes leave, each search
+/// keeping [`RESCUE_MARGIN`] more room round the trace than it needs.
+const RESCUE_PASSES: i32 = 10;
+
+/// Board units: 5 µm. FreeRouting's search can take a gap with no room to
+/// spare that its insertion then refuses, and in batch it takes the same
+/// gap every pass; a micrometre to spare is not enough to stop it.
+const RESCUE_MARGIN: i64 = 50;
 
 /// How far a strip between two pads stops short of each, µm. A keep-out
 /// meeting a pad edge to edge leaves FreeRouting's rooms beside the pad
@@ -886,12 +895,27 @@ pub struct RoutedDesign {
 
 /// A placed design routed as FreeRouting's batch autorouter routes it: up
 /// to `max_passes` passes over the board [`board_from_design`] builds,
-/// stopping once one finds nothing left to route; the routes back as the
-/// design's routing section.
+/// stopping once one finds nothing left to route or the board repeats
+/// itself; then, for anything left, rescue passes whose search keeps a
+/// little room to spare. The routes back as the design's routing section.
 pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules, max_passes: i32) -> Result<RoutedDesign, String> {
     let plan = Plan::of(design, model, rules)?;
-    let mut rb = RoutingBoard::new(board_from_design(design, model, rules)?);
-    let passes = autoroute_passes(&mut rb, 1, max_passes);
+    let board = board_from_design(design, model, rules)?;
+    let mut rb = RoutingBoard::new(board.clone());
+    let mut passes = autoroute_passes(&mut rb, 1, max_passes);
+    let left = pass_items(&rb).len();
+    if left > 0 {
+        let next = passes.last().map_or(1, |p| p.pass_no + 1);
+        let rescue = autoroute_passes_with(&mut rb, next, RESCUE_PASSES, RESCUE_MARGIN);
+        if pass_items(&rb).len() <= left {
+            passes.extend(rescue);
+        } else {
+            // The rescue ripped up more than it laid: FreeRouting's own
+            // result, again, for it is deterministic.
+            rb = RoutingBoard::new(board);
+            passes = autoroute_passes(&mut rb, 1, max_passes);
+        }
+    }
     let mut unrouted: Vec<String> = Vec::new();
     for i in pass_items(&rb) {
         for &net in &rb.board.items[i].nets {

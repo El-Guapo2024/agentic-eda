@@ -206,15 +206,27 @@ pub struct Routed {
 /// what it runs through, insert it, and tidy the changed area.
 /// `BatchAutorouter.autoroute_item` with `AutorouteEngine.autoroute_connection`.
 pub fn autoroute_item(rb: &mut RoutingBoard, item: usize, net: i32, pass_no: i32) -> Routed {
+    autoroute_item_with(rb, item, net, pass_no, 0)
+}
+
+/// [`autoroute_item`] with the search keeping `search_margin` more room
+/// round the trace than it needs, the trace itself going in as wide as
+/// ever: FreeRouting's own search can take a gap with no room to spare
+/// that its insertion then refuses, and in batch it takes the same gap
+/// every pass.
+pub fn autoroute_item_with(rb: &mut RoutingBoard, item: usize, net: i32, pass_no: i32, search_margin: i64) -> Routed {
     let mut out = Routed { result: RouteResult::NotRouted, ripped: Vec::new(), start: Vec::new(), dest: Vec::new(), located: None, tree: None };
     // autoroute_pass marks what changes from here on, ripping up included;
     // an area a failed connection left is kept for the next.
     rb.start_marking_changed_area();
     let contains_plane = rb.board.rules.net(net).is_some_and(|n| n.contains_plane);
     // FreeRouting throws making the control, which autoroute_pass catches.
-    let Some(ctrl) = Control::try_for_batch(&rb.board, net, pass_no) else {
+    let Some(mut ctrl) = Control::try_for_batch(&rb.board, net, pass_no) else {
         return out;
     };
+    for w in &mut ctrl.compensated_trace_half_width {
+        *w += search_margin;
+    }
     let unconnected = rb.unconnected_set(item, net);
     if unconnected.is_empty() {
         out.result = RouteResult::AlreadyConnected;
@@ -307,17 +319,55 @@ pub struct PassSummary {
     pub insert_errors: usize,
 }
 
+/// A hash of the traces and vias on the board, the same for the same
+/// copper however it came about. What `BasicBoard.get_hash` is for in the
+/// passes: telling a board seen before.
+pub fn routing_hash(rb: &RoutingBoard) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut pieces: Vec<u64> = (0..rb.board.items.len())
+        .filter(|&i| rb.is_on_board(i))
+        .filter_map(|i| {
+            let item = rb.item(i);
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            item.nets.hash(&mut h);
+            match &item.kind {
+                ItemKind::Trace { layer, half_width, polyline } => {
+                    (0, layer, half_width).hash(&mut h);
+                    for l in &polyline.lines {
+                        (l.a.x, l.a.y, l.b.x, l.b.y).hash(&mut h);
+                    }
+                }
+                ItemKind::Via { center, padstack, .. } => (1, center.x, center.y, padstack).hash(&mut h),
+                _ => return None,
+            }
+            Some(h.finish())
+        })
+        .collect();
+    pieces.sort_unstable();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    pieces.hash(&mut h);
+    h.finish()
+}
+
 /// Route the board pass after pass, from `start_pass_no`, until a pass
-/// finds nothing left to route or `max_passes` have run: each routes its
-/// items with ripup costs growing with the pass number, then removes the
-/// tails and tidies. `BatchAutorouter.autoroute_passes`, less its stops for
-/// boards it has seen before or that stop improving, and with no time
-/// limits.
+/// finds nothing left to route, the board comes back to a state a pass
+/// started from before, or `max_passes` have run: each routes its items
+/// with ripup costs growing with the pass number, then removes the tails
+/// and tidies. `BatchAutorouter.autoroute_passes`, less its stop for boards
+/// that stop improving, and with no time limits.
 pub fn autoroute_passes(rb: &mut RoutingBoard, start_pass_no: i32, max_passes: i32) -> Vec<PassSummary> {
+    autoroute_passes_with(rb, start_pass_no, max_passes, 0)
+}
+
+/// [`autoroute_passes`] with each search keeping `search_margin` to spare:
+/// see [`autoroute_item_with`].
+pub fn autoroute_passes_with(rb: &mut RoutingBoard, start_pass_no: i32, max_passes: i32, search_margin: i64) -> Vec<PassSummary> {
     let mut summaries = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for pass_no in start_pass_no..start_pass_no + max_passes {
         let items = pass_items(rb);
-        if items.is_empty() {
+        // A board seen before would only go round again.
+        if items.is_empty() || !seen.insert(routing_hash(rb)) {
             break;
         }
         let mut summary = PassSummary { pass_no, items: items.len(), routed: 0, not_routed: 0, insert_errors: 0 };
@@ -326,7 +376,7 @@ pub fn autoroute_passes(rb: &mut RoutingBoard, start_pass_no: i32, max_passes: i
             // board, and is routed still, as the Java routes the object.
             let nets = rb.item(item).nets.clone();
             for net in nets {
-                match autoroute_item(rb, item, net, pass_no).result {
+                match autoroute_item_with(rb, item, net, pass_no, search_margin).result {
                     RouteResult::Routed | RouteResult::AlreadyConnected => summary.routed += 1,
                     RouteResult::NotRouted => summary.not_routed += 1,
                     RouteResult::InsertError => {
