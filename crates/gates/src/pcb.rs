@@ -41,6 +41,29 @@ fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
     ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()
 }
 
+/// Distance from segment `a`-`b` to the pad's copper (negative where they
+/// overlap), exact but for rounding to whole µm; `far` or more for any pad
+/// whose centre is that much further off than its half-diagonal. The pad's
+/// signed distance is convex, so along the segment it has one minimum.
+fn seg_pad_copper_dist(a: Point, b: Point, pad: &eda_model::footprint::PlacedPad, far: f64) -> f64 {
+    let half_diag = ((pad.size.0 as f64).hypot(pad.size.1 as f64)) / 2.0;
+    let rough = seg_point_dist(a, b, pad.center) - half_diag;
+    if rough >= far {
+        return rough;
+    }
+    let at = |t: f64| Point { x: a.x + ((b.x - a.x) as f64 * t).round() as Um, y: a.y + ((b.y - a.y) as f64 * t).round() as Um };
+    let (mut lo, mut hi) = (0.0f64, 1.0f64);
+    for _ in 0..60 {
+        let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+        if pad.signed_distance(at(m1)) <= pad.signed_distance(at(m2)) {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    [0.0, lo, hi, 1.0].iter().map(|&t| pad.signed_distance(at(t))).fold(f64::MAX, f64::min)
+}
+
 fn orient(a: Point, b: Point, c: Point) -> i128 {
     (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128
 }
@@ -181,6 +204,31 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
     }
     if inside_ok {
         out.push(CheckResult::pass("placement_within_outline"));
+    }
+
+    // Pad copper to board edge. KiCad holds every pad to its edge
+    // clearance against Edge.Cuts, and nothing after placement can fix
+    // one: the router keeps its own copper off the edge, not the pads.
+    let clearance = model.board.tuning.copper_edge_clearance() as f64;
+    let n = pl.outline.len();
+    let mut pad_edge_ok = true;
+    for fp in &pl.footprints {
+        let Some(part) = model.part(&fp.id) else { continue };
+        let Some(pads) = placed_pads(model, part, fp) else { continue };
+        for pad in &pads {
+            let d = (0..n).map(|i| seg_pad_copper_dist(pl.outline[i], pl.outline[(i + 1) % n], pad, clearance)).fold(f64::MAX, f64::min);
+            if d < clearance {
+                pad_edge_ok = false;
+                out.push(CheckResult::fail(
+                    "placement_pad_edge_clearance",
+                    format!("{}.{}", fp.id, pad.number),
+                    format!("pad copper {d:.0} µm from the board edge (min {clearance:.0} µm)"),
+                ));
+            }
+        }
+    }
+    if pad_edge_ok {
+        out.push(CheckResult::pass("placement_pad_edge_clearance"));
     }
 
     let mut overlap_ok = true;

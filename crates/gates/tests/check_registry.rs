@@ -26,6 +26,7 @@ const REGISTERED: &[&str] = &[
     "placement_isolation",
     "placement_net_compactness",
     "placement_outline",
+    "placement_pad_edge_clearance",
     "placement_present",
     "placement_proximity",
     "placement_refdes_clear",

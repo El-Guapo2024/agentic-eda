@@ -39,7 +39,7 @@
 //! the model has never heard of. A command that silently did nothing
 //! would be indistinguishable from one that worked.
 
-use eda_model::footprint::{placed_courtyard, placed_keepout};
+use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
 use eda_model::ir::{Design, FootprintInstance, LabelSide, Point, Side, Um};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::BTreeSet;
@@ -571,12 +571,31 @@ impl<'a> Board<'a> {
         // because legalisation nudges everything inward by a snap. One
         // step is far inside the 1500µm an edge connector is allowed to
         // sit from its edge, so this costs nothing.
-        let inset = self.snap.max(1);
+        //
+        // And far enough that the pads' copper keeps the edge clearance:
+        // KiCad measures copper to Edge.Cuts, and a header's pads sit a
+        // few tenths inside its courtyard -- 0.35 mm on L1, where 0.5 mm
+        // is the rule.
+        let step = self.snap.max(1);
+        let clearance = self.model.board.tuning.copper_edge_clearance();
+        let pads = placed_pads(self.model, self.part(part)?, &probe).unwrap_or_default();
+        let copper = pads.iter().fold((Um::MAX, Um::MAX, Um::MIN, Um::MIN), |r, p| {
+            (r.0.min(p.center.x - p.size.0 / 2), r.1.min(p.center.y - p.size.1 / 2), r.2.max(p.center.x + p.size.0 / 2), r.3.max(p.center.y + p.size.1 / 2))
+        });
+        // Per side, how much further in than its courtyard the part must
+        // sit for that: whole snap steps, plus one for the snapping below,
+        // and nothing where the pads clear it anyway. The ends count too:
+        // a row put near a corner has its end pad by the other edge.
+        let room = |gap: Um| -> Um {
+            let short = clearance - gap;
+            if short <= 0 { 0 } else { (short + step - 1) / step * step + step }
+        };
+        let (w, n, e, s) = if pads.is_empty() { (0, 0, 0, 0) } else { (room(copper.0 - c.0), room(copper.1 - c.1), room(c.2 - copper.2), room(c.3 - copper.3)) };
         let at = match edge {
-            Dir::North => Point { x: along(bb.0, bb.2, half_w), y: bb.1 + half_h + inset },
-            Dir::South => Point { x: along(bb.0, bb.2, half_w), y: bb.3 - half_h - inset },
-            Dir::West => Point { x: bb.0 + half_w + inset, y: along(bb.1, bb.3, half_h) },
-            Dir::East => Point { x: bb.2 - half_w - inset, y: along(bb.1, bb.3, half_h) },
+            Dir::North => Point { x: along(bb.0 + w, bb.2 - e, half_w), y: bb.1 + half_h + step.max(n) },
+            Dir::South => Point { x: along(bb.0 + w, bb.2 - e, half_w), y: bb.3 - half_h - step.max(s) },
+            Dir::West => Point { x: bb.0 + half_w + step.max(w), y: along(bb.1 + n, bb.3 - s, half_h) },
+            Dir::East => Point { x: bb.2 - half_w - step.max(e), y: along(bb.1 + n, bb.3 - s, half_h) },
         };
         let at = Point { x: snap(at.x, self.snap), y: snap(at.y, self.snap) };
         let fp = FootprintInstance { id: part.into(), at, rot, side: Side::Top, label: LabelSide::Above };

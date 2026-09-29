@@ -236,7 +236,17 @@ pub struct RoutingTuning {
     pub optimizer_passes: u32,
 }
 
+/// KiCad's default board-setup copper-to-edge clearance, which
+/// `kicad-cli pcb drc` holds every pad, track and via to against Edge.Cuts.
+pub const KICAD_EDGE_CLEARANCE_UM: ir::Um = 500;
+
 impl RoutingTuning {
+    /// How far copper keeps from the board edge: the tuning's clearance,
+    /// never under KiCad's own.
+    pub fn copper_edge_clearance(&self) -> ir::Um {
+        self.edge_clearance_um.max(KICAD_EDGE_CLEARANCE_UM)
+    }
+
     /// Reject a tuning that cannot describe a board: a zero here is a loop
     /// bound downstream. Checking once at the boundary is what lets every
     /// consumer use it without a guard.

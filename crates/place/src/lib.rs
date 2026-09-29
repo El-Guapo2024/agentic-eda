@@ -133,6 +133,10 @@ struct Item {
     half: (Um, Um),
     /// Local pad centres (x, y) at rot 0, per pad number.
     pads: Vec<(String, (Um, Um))>,
+    /// The least distance, on any side, from the courtyard (as `half`
+    /// has it) in to pad copper: how far pads stay off an edge the
+    /// courtyard touches.
+    pad_inset: Um,
     /// Pads boxed in by a neighbour on both sides along their row: their
     /// only escape is outward, so the keepout grows on that side of the
     /// courtyard (`Problem::keepout`). Middle pins of a SOT-23-6 row, the
@@ -285,6 +289,8 @@ struct Problem<'a> {
     /// edge (L4 sweep: D3 in a corner failed placement_pad_reach on every
     /// anneal seed). Connectors still go to `bbox`.
     inner: (Um, Um, Um, Um),
+    /// How far pad copper keeps from the board edge, whatever the bound.
+    copper_edge: Um,
     outline: Vec<Point>,
     /// No outline was given: we placed on a generous square and will
     /// shrink it to the cluster afterwards, so board-use terms don't apply.
@@ -383,9 +389,13 @@ impl Problem<'_> {
         (c.0.min(l.0), c.1.min(l.1), c.2.max(l.2), c.3.max(l.3))
     }
 
-    /// The rectangle item `i`'s keepout must lie inside.
+    /// The rectangle item `i`'s keepout must lie inside: `inner`, or the
+    /// board for a connector, and never so near the edge that a pad's
+    /// copper breaks the edge clearance.
     fn bounds(&self, i: usize) -> (Um, Um, Um, Um) {
-        if self.items[i].connector { self.bbox } else { self.inner }
+        let b = if self.items[i].connector { self.bbox } else { self.inner };
+        let s = (self.copper_edge - self.items[i].pad_inset).max(0);
+        (b.0.max(self.bbox.0 + s), b.1.max(self.bbox.1 + s), b.2.min(self.bbox.2 - s), b.3.min(self.bbox.3 - s))
     }
 
     fn pad_center(&self, i: usize, k: usize, pose: Pose) -> Point {
@@ -847,8 +857,10 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
                 let mut pads: Vec<(String, (Um, Um))> = fp.pads.iter().map(|p| (p.number.clone(), p.at)).collect();
                 pads.sort_by(|a, b| a.0.cmp(&b.0));
                 let (hw, hh) = fp.courtyard_half();
+                let half = (hw + opts.spacing, hh + opts.spacing);
+                let pad_inset = fp.pads.iter().map(|p| (half.0 - p.at.0.abs() - p.size.0 / 2).min(half.1 - p.at.1.abs() - p.size.1 / 2)).min().unwrap_or(0);
                 let boxed = boxed_pads(&pads, 1300);
-                items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half: (hw + opts.spacing, hh + opts.spacing), pads, boxed });
+                items.push(Item { id: part.reference.clone(), connector: is_edge_connector(part), half, pads, pad_inset, boxed });
             }
             None => fails.push(CheckResult::fail(
                 "place_precondition",
@@ -1008,7 +1020,7 @@ fn build_problem<'a>(model: &'a ConstraintModel, opts: &PlaceOptions) -> Result<
         }
     }
     let region: Vec<Option<(Um, Um, Um, Um)>> = items.iter().map(|it| opts.floorplan.as_ref().and_then(|f| f.region_of(&it.id))).collect();
-    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
+    Ok(Problem { region, keep_cache, sep_rules, items, index, nets, nets_of, compact_limit, pair_rules, pair_rules_true, group_rules, stubs, stub_free, stubs_of, bbox, escape_lane, escape_lane_small, inner, copper_edge: model.board.tuning.copper_edge_clearance(), outline, auto_outline, spacing: opts.spacing, font, model, bin_um, congest_capacity, congest_nets })
 }
 
 /// Connectivity-aware placement order: the highest-degree part seeds a
