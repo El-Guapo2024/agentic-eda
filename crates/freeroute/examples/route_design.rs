@@ -2,14 +2,9 @@
 //!
 //!   cargo run --release -p eda-freeroute --example route_design -- design.json intent.yaml [out.json] [max passes]
 //!
-//! Prints what each pass did and what is left unrouted. With
-//! `NO_EXIT_RESTRICTIONS` set, traces may leave pins any way.
+//! Prints what each pass did and the nets left unrouted.
 
 use std::time::Instant;
-
-use eda_freeroute::autoroute::batch::autoroute_passes;
-use eda_freeroute::design::{board_from_design, routing_section};
-use eda_freeroute::routing::RoutingBoard;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -21,24 +16,19 @@ fn main() {
     let model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&args[2]).expect("read the intent")).expect("parse the intent");
     let max_passes = args.get(4).map_or(20, |a| a.parse().expect("a number of passes"));
     let start = Instant::now();
-    let mut board = match board_from_design(&design, &model, &model.board) {
-        Ok(b) => b,
+    let routed = match eda_freeroute::design::route_design(&design, &model, &model.board, max_passes) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
         }
     };
-    if std::env::var_os("NO_EXIT_RESTRICTIONS").is_some() {
-        board.rules.pin_edge_to_turn_dist = -1.0;
-    }
-    let mut rb = RoutingBoard::new(board);
-    for p in autoroute_passes(&mut rb, 1, max_passes) {
+    for p in &routed.passes {
         println!("pass {}: {} items, {} routed, {} not routed", p.pass_no, p.items, p.routed, p.not_routed);
     }
-    let routing = routing_section(&design, &model, &model.board, &rb).expect("write back");
-    println!("{} tracks, {} vias in {:.2?}", routing.tracks.len(), routing.vias.len(), start.elapsed());
+    println!("{} tracks, {} vias in {:.2?}; unrouted: {:?}", routed.routing.tracks.len(), routed.routing.vias.len(), start.elapsed(), routed.unrouted);
     if let Some(out) = args.get(3) {
-        design.routing = Some(routing);
+        design.routing = Some(routed.routing);
         std::fs::write(out, serde_json::to_string_pretty(&design).expect("serialise")).expect("write the design");
     }
 }

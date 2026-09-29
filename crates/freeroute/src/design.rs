@@ -27,7 +27,7 @@ use eda_model::footprint::{placed_pads, placed_refdes_box, PlacedPad};
 use eda_model::ir::{Design, Point as IrPoint, RoutingSection, Side, Track, Via as IrVia};
 use eda_model::{BoardRules, ConstraintModel};
 
-use crate::autoroute::batch::{autoroute_passes, PassSummary};
+use crate::autoroute::batch::{autoroute_passes, pass_items, PassSummary};
 use crate::board::PadShape;
 use crate::board::AreaShape;
 use crate::geometry::{Circle, Direction, FloatPoint, IntBox, IntPoint, Line, PolygonShape, TileShape};
@@ -128,6 +128,8 @@ struct PlanPin {
     padstack: usize,
     /// Index into [`Plan::nets`].
     net: Option<usize>,
+    /// Its copper as the model has it, the gates' measure.
+    geom: PlacedPad,
 }
 
 struct PlanComponent {
@@ -296,7 +298,7 @@ impl Plan {
                 let net = pin_nets.get(format!("{}.{}", fp.id, pad.number).as_str()).and_then(|n| net_index.get(n).copied());
                 max_coor = max_coor.max(pad.center.x.abs()).max(pad.center.y.abs());
                 let center = IntPoint::new(pad.center.x * UNITS_PER_UM, pad.center.y * UNITS_PER_UM);
-                pins.push((PlanPin { number: pad.number.clone(), name, center, padstack: 0, net }, key));
+                pins.push((PlanPin { number: pad.number.clone(), name, center, padstack: 0, net, geom: pad.clone() }, key));
             }
             placed.push((fp.id.clone(), pins));
         }
@@ -846,17 +848,245 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
             _ => {}
         }
     }
+    let pads: Vec<GatePad> = plan
+        .components
+        .iter()
+        .flat_map(|c| c.pins.iter())
+        .filter_map(|pin| {
+            let ps = &plan.padstacks[pin.padstack];
+            Some(GatePad { geom: &pin.geom, net: &plan.nets[pin.net?].name, layers: plan.layers[ps.from_layer..=ps.to_layer].iter().map(String::as_str).collect() })
+        })
+        .collect();
+    let mut tracks = drop_pad_loops(split_at_own_pads(tracks, &pads), &vias, &pads);
     tracks.sort_by(|a: &Track, b: &Track| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
     vias.sort_by(|a: &IrVia, b: &IrVia| (&a.net, a.at).cmp(&(&b.net, b.at)));
     Ok(RoutingSection { tracks, vias, zones: design.routing.as_ref().map(|r| r.zones.clone()).unwrap_or_default() })
 }
 
+/// A design routed by [`route_design`].
+#[derive(Debug, Clone)]
+pub struct RoutedDesign {
+    pub routing: RoutingSection,
+    /// What each pass did.
+    pub passes: Vec<PassSummary>,
+    /// The nets whose pins the passes left apart, in the order a next pass
+    /// would take them.
+    pub unrouted: Vec<String>,
+}
+
 /// A placed design routed as FreeRouting's batch autorouter routes it: up
-/// to `max_passes` passes over the board [`board_from_design`] builds, the
-/// routes back as the design's routing section, and what each pass did --
-/// the last one's unrouted count is what is left.
-pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules, max_passes: i32) -> Result<(RoutingSection, Vec<PassSummary>), String> {
+/// to `max_passes` passes over the board [`board_from_design`] builds,
+/// stopping once one finds nothing left to route; the routes back as the
+/// design's routing section.
+pub fn route_design(design: &Design, model: &ConstraintModel, rules: &BoardRules, max_passes: i32) -> Result<RoutedDesign, String> {
+    let plan = Plan::of(design, model, rules)?;
     let mut rb = RoutingBoard::new(board_from_design(design, model, rules)?);
     let passes = autoroute_passes(&mut rb, 1, max_passes);
-    Ok((routing_section(design, model, rules, &rb)?, passes))
+    let mut unrouted: Vec<String> = Vec::new();
+    for i in pass_items(&rb) {
+        for &net in &rb.board.items[i].nets {
+            let name = &plan.nets[(net - 1) as usize].name;
+            if rb.connected_set(i, net).len() < rb.connectable_item_count(net) && !unrouted.contains(name) {
+                unrouted.push(name.clone());
+            }
+        }
+    }
+    Ok(RoutedDesign { routing: routing_section(design, model, rules, &rb)?, passes, unrouted })
+}
+
+/// A pad as the routing gates see it.
+struct GatePad<'a> {
+    geom: &'a PlacedPad,
+    net: &'a str,
+    layers: Vec<&'a str>,
+}
+
+impl GatePad<'_> {
+    /// The rectangle a rounded rectangle is rounded about, and the radius:
+    /// its copper is the points within that of it. As the gates round it.
+    fn core(&self) -> ((f64, f64, f64, f64), f64) {
+        let g = self.geom;
+        let r = g.corner_radius();
+        let (cx, cy, hw, hh) = (g.center.x as f64, g.center.y as f64, g.size.0 as f64 / 2.0, g.size.1 as f64 / 2.0);
+        (((cx - hw + r).round(), (cy - hh + r).round(), (cx + hw - r).round(), (cy + hh - r).round()), r)
+    }
+
+    /// Where on the segment the pad's copper lies deepest, if the segment's
+    /// centreline touches it: nearest its centre for a round pad; for a
+    /// rectangle, midway along the run through its core, or nearest the
+    /// core where the segment misses it.
+    fn deepest_on(&self, a: IrPoint, b: IrPoint) -> Option<(f64, f64)> {
+        let g = self.geom;
+        let (ax, ay, dx, dy) = (a.x as f64, a.y as f64, (b.x - a.x) as f64, (b.y - a.y) as f64);
+        let at = |t: f64| (ax + t * dx, ay + t * dy);
+        if g.is_round() {
+            let (cx, cy) = (g.center.x as f64, g.center.y as f64);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 == 0.0 { 0.0 } else { (((cx - ax) * dx + (cy - ay) * dy) / len2).clamp(0.0, 1.0) };
+            let p = at(t);
+            let reach = (g.size.0.min(g.size.1) / 2) as f64;
+            return (((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt() <= reach).then_some(p);
+        }
+        let (core, r) = self.core();
+        // The run through the core, clipped (Liang-Barsky).
+        let (mut t0, mut t1) = (0.0f64, 1.0f64);
+        let mut inside = true;
+        for (p, q) in [(-dx, ax - core.0), (dx, core.2 - ax), (-dy, ay - core.1), (dy, core.3 - ay)] {
+            if p == 0.0 {
+                inside &= q >= 0.0;
+            } else if p < 0.0 {
+                t0 = t0.max(q / p);
+            } else {
+                t1 = t1.min(q / p);
+            }
+        }
+        if inside && t0 <= t1 {
+            return Some(at((t0 + t1) / 2.0));
+        }
+        // Missing the core: nearest it, the distance being convex along the
+        // segment.
+        let dist = |(x, y): (f64, f64)| {
+            let (ox, oy) = ((core.0 - x).max(x - core.2).max(0.0), (core.1 - y).max(y - core.3).max(0.0));
+            (ox * ox + oy * oy).sqrt()
+        };
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..100 {
+            let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
+            if dist(at(m1)) <= dist(at(m2)) {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        let p = at((lo + hi) / 2.0);
+        (dist(p) <= r).then_some(p)
+    }
+}
+
+/// Every track that runs through a pad of its own net without ending in
+/// it cut in two inside the pad: the same copper, meeting where the pad
+/// joins it anyway, as the gates would have it -- a pad is where a track
+/// ends, not a stepping stone. A track that only grazes a pad, with no
+/// point of its copper strictly inside, is left whole.
+fn split_at_own_pads(tracks: Vec<Track>, pads: &[GatePad]) -> Vec<Track> {
+    let mut done = Vec::new();
+    let mut todo = tracks;
+    'next: while let Some(t) = todo.pop() {
+        let (first, last) = (t.pts[0], t.pts[t.pts.len() - 1]);
+        for pad in pads.iter().filter(|p| p.net == t.net && p.layers.contains(&t.layer.as_str())) {
+            if pad.geom.contains(first) || pad.geom.contains(last) {
+                continue;
+            }
+            for k in 0..t.pts.len() - 1 {
+                let Some((x, y)) = pad.deepest_on(t.pts[k], t.pts[k + 1]) else { continue };
+                let cut = IrPoint { x: x.round() as i64, y: y.round() as i64 };
+                if !pad.geom.contains(cut) {
+                    continue;
+                }
+                let mut head: Vec<IrPoint> = t.pts[..=k].to_vec();
+                let mut tail: Vec<IrPoint> = vec![cut];
+                if head.last() != Some(&cut) {
+                    head.push(cut);
+                }
+                tail.extend(t.pts[k + 1..].iter().copied().filter(|&p| p != cut));
+                for pts in [head, tail] {
+                    if pts.len() >= 2 {
+                        todo.push(Track { pts, ..t.clone() });
+                    }
+                }
+                continue 'next;
+            }
+        }
+        done.push(t);
+    }
+    done
+}
+
+/// The runs of track that leave a pad only to come back into it, with
+/// nothing else on the way, dropped: FreeRouting's exit stub turning back
+/// over its own pin, once [`split_at_own_pads`] has cut it at the pad.
+/// Nothing they join is joined otherwise, for the pad joins it.
+fn drop_pad_loops(mut tracks: Vec<Track>, vias: &[IrVia], pads: &[GatePad]) -> Vec<Track> {
+    loop {
+        // Where a run may not pass through: a pad or via of its net, or a
+        // point more than two track ends meet at.
+        let pad_at = |t: &Track, p: IrPoint| pads.iter().position(|pad| pad.net == t.net && pad.layers.contains(&t.layer.as_str()) && pad.geom.contains(p));
+        let via_at = |t: &Track, p: IrPoint| vias.iter().any(|v| v.net == t.net && v.at == p);
+        let ends_at = |t: &Track, p: IrPoint| tracks.iter().filter(|o| o.net == t.net && o.layer == t.layer && (o.pts[0] == p || o.pts[o.pts.len() - 1] == p)).count();
+        let mut drop: Option<Vec<usize>> = None;
+        let starts = tracks.iter().enumerate().flat_map(|(i, t)| [(i, t.pts[0], t.pts[t.pts.len() - 1]), (i, t.pts[t.pts.len() - 1], t.pts[0])]);
+        'search: for (i, from, to) in starts {
+            let t = &tracks[i];
+            let Some(pad) = pad_at(t, from) else { continue };
+            // Follow the run from the pad on through plain joints.
+            let (mut run, mut at, mut cur) = (vec![i], to, i);
+            loop {
+                if pad_at(&tracks[cur], at).is_some() || via_at(&tracks[cur], at) || ends_at(&tracks[cur], at) != 2 {
+                    break;
+                }
+                let next = tracks.iter().enumerate().find(|(j, o)| !run.contains(j) && o.net == t.net && o.layer == t.layer && (o.pts[0] == at || o.pts[o.pts.len() - 1] == at));
+                let Some((j, o)) = next else { break };
+                at = if o.pts[0] == at { o.pts[o.pts.len() - 1] } else { o.pts[0] };
+                run.push(j);
+                cur = j;
+            }
+            if pad_at(&tracks[cur], at) == Some(pad) {
+                drop = Some(run);
+                break 'search;
+            }
+        }
+        let Some(run) = drop else { return tracks };
+        let mut i = 0;
+        tracks.retain(|_| {
+            i += 1;
+            !run.contains(&(i - 1))
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eda_model::footprint::PadShape as ModelPadShape;
+
+    fn pad(x: i64, y: i64, shape: ModelPadShape) -> PlacedPad {
+        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (1000, 1000), through_hole: false, shape }
+    }
+
+    fn track(pts: &[(i64, i64)]) -> Track {
+        Track { net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect() }
+    }
+
+    fn gate_pads(pads: &[PlacedPad]) -> Vec<GatePad<'_>> {
+        pads.iter().map(|g| GatePad { geom: g, net: "A", layers: vec!["F.Cu"] }).collect()
+    }
+
+    #[test]
+    fn a_track_through_a_pad_of_its_net_ends_in_it() {
+        for shape in [ModelPadShape::Rect, ModelPadShape::RoundRect, ModelPadShape::Circle] {
+            let pads = [pad(0, 0, shape)];
+            let split = split_at_own_pads(vec![track(&[(-3000, 100), (3000, 100)])], &gate_pads(&pads));
+            assert_eq!(split.len(), 2, "{shape:?}");
+            for t in &split {
+                assert!(pads[0].contains(t.pts[0]) || pads[0].contains(t.pts[t.pts.len() - 1]), "{shape:?}: {:?}", t.pts);
+            }
+        }
+        // Grazing a rounded corner is not running through it.
+        let pads = [pad(0, 0, ModelPadShape::Circle)];
+        assert_eq!(split_at_own_pads(vec![track(&[(-3000, 600), (3000, 600)])], &gate_pads(&pads)).len(), 1);
+    }
+
+    #[test]
+    fn a_run_back_into_its_own_pad_goes() {
+        let pads = [pad(0, 0, ModelPadShape::Rect), pad(5000, 0, ModelPadShape::Rect)];
+        // Out of the first pad and back into it, and on to the second.
+        let tracks = vec![track(&[(0, 0), (0, 2000)]), track(&[(0, 2000), (300, 2000), (300, 300)]), track(&[(300, 300), (5000, 0)])];
+        let kept = drop_pad_loops(tracks, &[], &gate_pads(&pads));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].pts[0], IrPoint { x: 300, y: 300 });
+        // A via on the way keeps the run: it may lead elsewhere.
+        let tracks = vec![track(&[(0, 0), (0, 2000)]), track(&[(0, 2000), (300, 300)])];
+        let via = IrVia { net: "A".into(), at: IrPoint { x: 0, y: 2000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        assert_eq!(drop_pad_loops(tracks, &[via], &gate_pads(&pads)).len(), 2);
+    }
 }

@@ -15,6 +15,7 @@ eda-gates = { path = "../gates" }
 eda-kicad = { path = "../kicad" }
 eda-interchange = { path = "../interchange" }
 eda-router = { path = "../router" }
+eda-freeroute = { path = "../freeroute" }
 eda-place = { path = "../place" }
 eda-logger = { path = "../logger" }
 eda-cypress = { path = "../cypress" }

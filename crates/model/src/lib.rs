@@ -223,7 +223,8 @@ impl BoardRules {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RoutingTuning {
-    /// `negotiated` (PathFinder, default) or `sequential` (rip-up & reroute).
+    /// `negotiated` (PathFinder, default), `sequential` (rip-up & reroute),
+    /// or `freeroute` (the FreeRouting port: gridless, push-and-shove).
     pub router: String,
     /// Cost of a via in reference cells (~7.6 mm of track at 30).
     pub via_cost_cells: i64,
@@ -321,8 +322,8 @@ impl RoutingTuning {
         let mut bad = |what: &str, why: String| {
             out.push(CheckResult::fail("board_rules", format!("board.tuning.{what}"), why));
         };
-        if self.router != "negotiated" && self.router != "sequential" {
-            bad("router", format!("{:?} is not a router; it is `negotiated` or `sequential`", self.router));
+        if !["negotiated", "sequential", "freeroute"].contains(&self.router.as_str()) {
+            bad("router", format!("{:?} is not a router; it is `negotiated`, `sequential` or `freeroute`", self.router));
         }
         if self.via_cost_cells <= 0 {
             bad("via_cost_cells", format!("a via costs {} cells, so the router would sprinkle them for free", self.via_cost_cells));

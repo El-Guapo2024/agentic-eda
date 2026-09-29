@@ -50,6 +50,37 @@ mod tests {
 }
 
 
+/// Passes the FreeRouting port runs before it gives up on what is left.
+const FREEROUTE_MAX_PASSES: i32 = 20;
+
+/// Route with the FreeRouting port (`board.tuning.router: freeroute`): its
+/// batch passes over the board the design makes, the routes written back.
+/// A net the passes leave apart fails, named, as the grid routers' do.
+fn route_freeroute(
+    design: &eda_model::ir::Design,
+    model: &eda_model::ConstraintModel,
+    rules: &RouteRules,
+) -> (Option<eda_model::ir::Design>, Vec<eda_model::CheckResult>) {
+    use eda_model::CheckResult;
+    match eda_freeroute::design::route_design(design, model, rules, FREEROUTE_MAX_PASSES) {
+        Err(e) => (None, vec![CheckResult::fail("route_precondition", "design", e)]),
+        Ok(routed) => {
+            let passes = routed.passes.len();
+            let fails = routed
+                .unrouted
+                .iter()
+                .map(|net| {
+                    CheckResult::fail("route_net_unrouted", net, format!("the FreeRouting port left the net's pins apart after {passes} passes"))
+                        .with_detail(serde_json::json!({ "net": net, "passes": passes }))
+                })
+                .collect();
+            let mut out = design.clone();
+            out.routing = Some(routed.routing);
+            (Some(out), fails)
+        }
+    }
+}
+
 /// Route, then check that the router and the geometry gate agree about
 /// what they just produced.
 ///
@@ -74,7 +105,7 @@ pub fn route_checked(
     seed: u64,
 ) -> (Option<eda_model::ir::Design>, Vec<eda_model::CheckResult>) {
     use eda_model::{CheckResult, CheckStatus};
-    let (out, mut fails) = route_partial_raw(design, model, rules, seed);
+    let (out, mut fails) = if rules.tuning.router == "freeroute" { route_freeroute(design, model, rules) } else { route_partial_raw(design, model, rules, seed) };
     let router_claims_clean = fails.is_empty();
     let Some(routed) = out else { return (None, fails) };
     if !router_claims_clean {

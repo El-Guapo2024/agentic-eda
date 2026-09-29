@@ -463,6 +463,7 @@ version = "0.1.0"
 dependencies = [
  "eda-cypress",
  "eda-engine",
+ "eda-freeroute",
  "eda-gates",
  "eda-intent",
  "eda-interchange",

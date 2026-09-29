@@ -885,9 +885,14 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     // cells that do not describe the copper. It reads 0 on every board in
     // the ladder, so promoting it costs nothing and turns an invariant we
     // were merely hoping for into one that is enforced.
+    //
+    // A gridless router has no grid to be off: its copper lies where the
+    // shapes it keeps clear put it, and the clearance gates measure that
+    // copper exactly.
+    let gridless = rules.tuning.router == "freeroute";
     out.push(CheckResult {
         check: "routing_offgrid_points".into(),
-        status: if offgrid == 0 { CheckStatus::Pass } else { CheckStatus::Fail },
+        status: if offgrid == 0 || gridless { CheckStatus::Pass } else { CheckStatus::Fail },
         location: None,
         hint: Some(format!(
             "{offgrid} track vertice(s) off the {}µm routing grid; every vertex this router emits is a              cell index times the pitch, so off-grid copper means the geometry and the grid the              clearances were checked against are not the same board",
