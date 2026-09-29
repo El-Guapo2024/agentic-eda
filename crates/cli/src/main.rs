@@ -13,9 +13,11 @@
 //! eda export    <intent> --design design.json [-o out_dir]   # kicad_sch + circuit json
 //! eda check     <intent> --design design.json          # run every gate, print scorecard
 //! eda import-pl <intent> --design design.json --pl x.gp.pl [-o out]  # Bookshelf placement (Cypress) -> design.json
+//! eda import-kicad <board.kicad_pcb> -o <dir>           # KiCad board -> an `eda board` directory
 //! ```
 
 mod board;
+mod import_kicad;
 mod studio;
 
 use eda::prelude::*;
@@ -1074,6 +1076,17 @@ fn main() -> ExitCode {
     // It is dispatched before the usual argument parsing because its
     // verbs and flags are its own.
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if argv.first().map(String::as_str) == Some("import-kicad") {
+        return match import_kicad::run(&argv[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(fails) => {
+                for f in &fails {
+                    eprintln!("FAIL {} @ {}: {}", f.check, f.location.as_deref().unwrap_or("-"), f.hint.as_deref().unwrap_or(""));
+                }
+                ExitCode::FAILURE
+            }
+        };
+    }
     if argv.first().map(String::as_str) == Some("board") {
         let r = board::run(&argv[1..], |model| {
             let empty = Design {
