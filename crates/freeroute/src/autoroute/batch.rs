@@ -303,6 +303,8 @@ pub struct PassSummary {
     pub routed: usize,
     /// Connections not routed.
     pub not_routed: usize,
+    /// Of those, the ones whose path was found but would not go in.
+    pub insert_errors: usize,
 }
 
 /// Route the board pass after pass, from `start_pass_no`, until a pass
@@ -318,7 +320,7 @@ pub fn autoroute_passes(rb: &mut RoutingBoard, start_pass_no: i32, max_passes: i
         if items.is_empty() {
             break;
         }
-        let mut summary = PassSummary { pass_no, items: items.len(), routed: 0, not_routed: 0 };
+        let mut summary = PassSummary { pass_no, items: items.len(), routed: 0, not_routed: 0, insert_errors: 0 };
         for &item in &items {
             // The nets as the item has them now; the item may have left the
             // board, and is routed still, as the Java routes the object.
@@ -326,7 +328,11 @@ pub fn autoroute_passes(rb: &mut RoutingBoard, start_pass_no: i32, max_passes: i
             for net in nets {
                 match autoroute_item(rb, item, net, pass_no).result {
                     RouteResult::Routed | RouteResult::AlreadyConnected => summary.routed += 1,
-                    RouteResult::NotRouted | RouteResult::InsertError => summary.not_routed += 1,
+                    RouteResult::NotRouted => summary.not_routed += 1,
+                    RouteResult::InsertError => {
+                        summary.not_routed += 1;
+                        summary.insert_errors += 1;
+                    }
                 }
             }
         }

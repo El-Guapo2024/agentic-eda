@@ -52,6 +52,13 @@ const ROUNDING_MARGIN_UM: i64 = 2;
 /// The copper-to-edge clearance the routing gate holds a board to, µm.
 const EDGE_CLEARANCE_UM: i64 = 500;
 
+/// How far a strip between two pads stops short of each, µm. A keep-out
+/// meeting a pad edge to edge leaves FreeRouting's rooms beside the pad
+/// degenerate, and the pad's own net cannot get out; a foreign trace fits
+/// no better through the sliver left, which lies within the pad's
+/// clearance.
+const STRIP_INSET_UM: i64 = 5;
+
 /// A pad's copper about its centre, in board units, as a DSN padstack
 /// writes it and FreeRouting keeps it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,7 +174,8 @@ struct PlanKeepout {
 /// footprint, µm, as the grid router blocks them: under the part's body, a
 /// track threading between its pads is what the gates send back. Pairs
 /// with a third pad between them, or further apart than `max_gap`, have
-/// none; through-hole rows are left open.
+/// none; through-hole rows are left open. Each stops [`STRIP_INSET_UM`]
+/// short of the pads.
 fn pad_gap_strips(pads: &[PlacedPad], max_gap: i64) -> Vec<(i64, i64, i64, i64)> {
     let rects: Vec<(i64, i64, i64, i64)> =
         pads.iter().filter(|p| !p.through_hole).map(|p| (p.center.x - p.size.0 / 2, p.center.y - p.size.1 / 2, p.center.x + p.size.0 / 2, p.center.y + p.size.1 / 2)).collect();
@@ -178,24 +186,26 @@ fn pad_gap_strips(pads: &[PlacedPad], max_gap: i64) -> Vec<(i64, i64, i64, i64)>
             let (ox0, ox1) = (ra.0.max(rb.0), ra.2.min(rb.2));
             let (oy0, oy1) = (ra.1.max(rb.1), ra.3.min(rb.3));
             // Between the facing edges, as wide as the pads share.
-            let strip = if oy1 > oy0 && (ra.2 <= rb.0 || rb.2 <= ra.0) {
+            let d = STRIP_INSET_UM;
+            let (strip, inset) = if oy1 > oy0 && (ra.2 <= rb.0 || rb.2 <= ra.0) {
                 let (gx0, gx1) = if ra.2 <= rb.0 { (ra.2, rb.0) } else { (rb.2, ra.0) };
                 if gx1 - gx0 > max_gap {
                     continue;
                 }
-                (gx0, oy0, gx1, oy1)
+                ((gx0, oy0, gx1, oy1), (gx0 + d, oy0, gx1 - d, oy1))
             } else if ox1 > ox0 && (ra.3 <= rb.1 || rb.3 <= ra.1) {
                 let (gy0, gy1) = if ra.3 <= rb.1 { (ra.3, rb.1) } else { (rb.3, ra.1) };
                 if gy1 - gy0 > max_gap {
                     continue;
                 }
-                (ox0, gy0, ox1, gy1)
+                ((ox0, gy0, ox1, gy1), (ox0, gy0 + d, ox1, gy1 - d))
             } else {
                 continue;
             };
             let crosses_other = rects.iter().enumerate().any(|(k, o)| k != i && k != j && o.0 < strip.2 && o.2 > strip.0 && o.1 < strip.3 && o.3 > strip.1);
-            if !crosses_other {
-                strips.push(strip);
+            // A gap no wider than the insets leaves nothing to keep out.
+            if !crosses_other && inset.0 < inset.2 && inset.1 < inset.3 {
+                strips.push(inset);
             }
         }
     }

@@ -24,7 +24,7 @@ fn main() {
         }
     };
     for p in &routed.passes {
-        println!("pass {}: {} items, {} routed, {} not routed", p.pass_no, p.items, p.routed, p.not_routed);
+        println!("pass {}: {} items, {} routed, {} not routed ({} insert errors)", p.pass_no, p.items, p.routed, p.not_routed, p.insert_errors);
     }
     println!("{} tracks, {} vias in {:.2?}; unrouted: {:?}", routed.routing.tracks.len(), routed.routing.vias.len(), start.elapsed(), routed.unrouted);
     if let Some(out) = args.get(3) {
