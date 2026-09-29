@@ -6,3 +6,6 @@ datasets/samples/
 
 # Boards worked with `eda board` (local state, not source)
 work/
+
+# KiCad View builds
+tools/kicad-view/build/

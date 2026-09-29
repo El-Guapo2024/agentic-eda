@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KiCad View</title>
+<style>
+:root { --bg: #111418; --text: #d7dde5; --dim: #8a96a6; --bad: #ef5b5b; --ok: #3fb97a; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 12px -apple-system, BlinkMacSystemFont, sans-serif; overflow: hidden; }
+#screen { position: absolute; inset: 0 0 22px 0; width: 100%; height: calc(100% - 22px); outline: none; cursor: default; touch-action: none; }
+#bar { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; display: flex; align-items: center; gap: 10px; padding: 0 8px; background: #181d24; border-top: 1px solid #2a3441; color: var(--dim); }
+#dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+#dot.on { background: var(--ok); }
+#problems { color: #ffb0b0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<canvas id="screen" tabindex="0"></canvas>
+<div id="bar"><span id="dot"></span><span id="state">connecting…</span><span id="fps"></span><span id="problems"></span></div>
+<script>
+"use strict";
+const cv = document.getElementById("screen"), g = cv.getContext("2d");
+let W = 1600, H = 1000, ws = null, frame = null, frames = 0;
+let fit = { s: 1, x: 0, y: 0 };
+
+function layout() {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  const s = Math.min(r.width / W, r.height / H);
+  fit = { s, x: (r.width - W * s) / 2, y: (r.height - H * s) / 2 };
+  draw();
+}
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.fillStyle = "#111418"; g.fillRect(0, 0, cv.width, cv.height);
+  if (frame) { g.imageSmoothingQuality = "high"; g.drawImage(frame, fit.x, fit.y, W * fit.s, H * fit.s); }
+}
+new ResizeObserver(layout).observe(cv);
+
+function connect() {
+  ws = new WebSocket(`ws://127.0.0.1:__WS_PORT__/`);
+  ws.binaryType = "blob";
+  ws.onopen = () => { document.getElementById("dot").className = "on"; document.getElementById("state").textContent = "connected"; };
+  ws.onclose = () => { document.getElementById("dot").className = ""; document.getElementById("state").textContent = "disconnected, retrying…"; setTimeout(connect, 1000); };
+  ws.onmessage = async ev => {
+    if (typeof ev.data === "string") {
+      const s = JSON.parse(ev.data);
+      if (s.w && s.h && (s.w !== W || s.h !== H)) { W = s.w; H = s.h; layout(); }
+      document.getElementById("problems").textContent = (s.problems || []).join(" · ");
+      return;
+    }
+    const bmp = await createImageBitmap(ev.data);
+    if (frame && frame.close) frame.close();
+    frame = bmp; frames++; draw();
+  };
+}
+setInterval(() => { document.getElementById("fps").textContent = frames ? `${frames} fps` : ""; frames = 0; }, 1000);
+
+// Page position to our screen's, in its pixels.
+function at(ev) {
+  const r = cv.getBoundingClientRect();
+  return { x: Math.max(0, Math.min(W - 1, (ev.clientX - r.left - fit.x) / fit.s)), y: Math.max(0, Math.min(H - 1, (ev.clientY - r.top - fit.y) / fit.s)) };
+}
+function mods(ev) { return { shift: ev.shiftKey, ctrl: ev.ctrlKey, alt: ev.altKey, meta: ev.metaKey }; }
+function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+
+let pendingMove = null;
+function flushMove() { if (pendingMove) { send(pendingMove); pendingMove = null; } }
+cv.addEventListener("pointerdown", ev => { cv.focus(); cv.setPointerCapture(ev.pointerId); flushMove(); send({ t: "down", b: ev.button, n: ev.detail || 1, ...at(ev), ...mods(ev) }); ev.preventDefault(); });
+cv.addEventListener("pointerup", ev => { flushMove(); send({ t: "up", b: ev.button, n: ev.detail || 1, ...at(ev), ...mods(ev) }); ev.preventDefault(); });
+cv.addEventListener("pointermove", ev => { const first = !pendingMove; pendingMove = { t: "move", ...at(ev), ...mods(ev) }; if (first) requestAnimationFrame(flushMove); });
+cv.addEventListener("wheel", ev => { ev.preventDefault(); const k = ev.deltaMode === 1 ? 40 : ev.deltaMode === 2 ? 400 : 1; send({ t: "wheel", dx: ev.deltaX * k, dy: ev.deltaY * k, ...at(ev), ...mods(ev) }); }, { passive: false });
+cv.addEventListener("contextmenu", ev => ev.preventDefault());
+cv.addEventListener("keydown", ev => { send({ t: "key", down: true, code: ev.code, ...mods(ev) }); ev.preventDefault(); });
+cv.addEventListener("keyup", ev => { send({ t: "key", down: false, code: ev.code, ...mods(ev) }); ev.preventDefault(); });
+
+connect();
+</script>
+</body>
+</html>

@@ -32,9 +32,15 @@ type Job = Arc<Mutex<String>>;
 pub fn serve(dir: &Path, port: u16) -> Result<(), Vec<CheckResult>> {
     // Fail now, not on the first request, if this is no board.
     board::load(dir)?;
-    let listener = TcpListener::bind(("127.0.0.1", port))
-        .map_err(|e| vec![CheckResult::fail("serve_bind", format!("127.0.0.1:{port}"), format!("cannot listen: {e}"))])?;
-    eprintln!("board: serving {} at http://127.0.0.1:{port}/", dir.display());
+    // A taken port is usually another studio already showing a board;
+    // take the next free one rather than refuse.
+    let (listener, got) = (port..port.saturating_add(20))
+        .find_map(|p| TcpListener::bind(("127.0.0.1", p)).ok().map(|l| (l, p)))
+        .ok_or_else(|| vec![CheckResult::fail("serve_bind", format!("127.0.0.1:{port}"), format!("ports {port}-{} are all taken", port.saturating_add(19)))])?;
+    if got != port {
+        eprintln!("board: port {port} is taken (another studio open there?), using {got}");
+    }
+    eprintln!("board: serving {} at http://127.0.0.1:{got}/", dir.display());
     let job: Job = Arc::new(Mutex::new("idle".into()));
     let schematic: Mutex<Option<(std::time::SystemTime, String)>> = Mutex::new(None);
     for stream in listener.incoming() {
