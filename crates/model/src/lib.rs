@@ -105,7 +105,7 @@ pub struct BoardRules {
     /// -- an unreachable pad is a hard fail, not a silent island.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pours: Vec<Pour>,
-    /// Router tuning. Every value has a default; all are settable here.
+    /// Routing tuning. Every value has a default; all are settable here.
     #[serde(default)]
     pub tuning: RoutingTuning,
 }
@@ -217,175 +217,34 @@ impl BoardRules {
     }
 }
 
-/// Every router constant, with the corpus-tuned value as default. Costs are
-/// in A* steps at the reference 254 µm grid (the router rescales them to
-/// the board's grid); distances in µm.
+/// The routing rules' tunable distances, with defaults. µm, and cells of
+/// the board's routing grid for the placement preflight.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct RoutingTuning {
-    /// `negotiated` (PathFinder, default), `sequential` (rip-up & reroute),
-    /// or `freeroute` (the FreeRouting port: gridless, push-and-shove).
-    pub router: String,
-    /// Cost of a via in reference cells (~7.6 mm of track at 30).
-    pub via_cost_cells: i64,
-    /// Extra cost per direction change.
-    pub bend_cost: i64,
     /// Copper-to-board-edge clearance (KiCad's default 0.5 mm).
     pub edge_clearance_um: ir::Um,
-    /// Same-footprint SMD pad gaps narrower than this are hard-blocked.
+    /// Same-footprint SMD pad gaps narrower than this are kept clear of
+    /// tracks.
     pub between_pads_max_gap_um: ir::Um,
-    /// Penalty per cell under a refdes label (labels are hard keep-outs;
-    /// this only prices the relaxed diagnostics passes).
-    pub refdes_penalty: u8,
-    /// Soft escape lane outside fine-pitch pad rows: reach and per-cell price.
-    pub escape_lane_um: ir::Um,
-    pub escape_lane_penalty: u8,
     /// Cells a pad's free pocket must reach (or a via site / own pad) to
     /// pass the placement preflight.
     pub preflight_reach_cells: usize,
-    /// Sequential router: rip-up rounds per net, victims per round, history
-    /// bump per round, A* expansion cap at the reference grid.
-    pub seq_max_rounds: u32,
-    pub seq_max_victims: usize,
-    pub seq_hist_bump: u8,
-    pub seq_max_expansions: usize,
-    /// Negotiated router: iteration cap, present-cost factor start /
-    /// growth / ceiling, minimum history increment.
-    ///
-    /// The iteration cap is a backstop, not the budget. `nc_max_wall_s` is
-    /// what should normally stop the router: iterations vary by two orders
-    /// of magnitude between a four-part fixture and L4, so a count means
-    /// nothing across boards while a second means the same everywhere. At
-    /// 40 this cap was the binding constraint on L4 with half the wall
-    /// budget unused, and the board needed 150 to converge.
-    pub nc_max_iters: usize,
-    pub nc_pres_fac_0: f64,
-    pub nc_pres_fac_mult: f64,
-    pub nc_pres_fac_max: f64,
-    pub nc_hist_inc: u16,
-    /// Wall-clock budget for the negotiated router, seconds. When it runs
-    /// out the run fails with route_congestion_unresolved and its hotspots
-    /// instead of grinding through every iteration (L4 took 16-24 min to
-    /// fail). 0 = no budget.
-    pub nc_max_wall_s: f64,
-    /// Stop when the overused-cell count has not improved for this many
-    /// iterations. Off by default (0): PathFinder convergence is not
-    /// monotone (L4 seed 0 sat at 26-166 overused cells for 12+ iterations
-    /// and still converged before 40), so the wall budget is the honest
-    /// limit. Set it for fast exploratory batches.
-    pub nc_stall_iters: usize,
-    /// Overused-cell count at or below which the negotiator stops ripping
-    /// up the whole board each pass and rips up only the nets actually in
-    /// conflict. 0 disables focusing and always rips up everything.
-    pub nc_focus_cells: usize,
-    /// After an iteration that ends worse than the best seen, restore the
-    /// best board and keep the history learned from the bad pass. Turns
-    /// the negotiation from a random walk into a monotone search.
-    pub nc_rollback: bool,
-    /// Extra A* step cost on a layer carrying a copper pour. Signals are
-    /// discouraged from crossing the plane, not forbidden: a track there
-    /// cuts the plane into islands, but sealing the layer outright would
-    /// strand nets that have nowhere else to go. 0 disables.
-    ///
-    /// Kept small deliberately. At 3 (4x the base step) a ten-cell run
-    /// across the plane cost more than a via, the signals crowded onto the
-    /// remaining layer, and L4 went from routing clean to 14 unresolved
-    /// conflicts against its whole wall budget. At 1 the router still
-    /// prefers another layer wherever one will do.
-    pub pour_layer_penalty: u8,
-    /// How far from a pad a stitching via may sit, µm. The via has to
-    /// clear every pad's copper and every silkscreen label, both of which
-    /// are hard gates, so on a dense board the first legal site is not
-    /// next door. Too short a leash reports a reachable pad unreachable.
-    pub pour_stitch_reach_um: ir::Um,
-    /// Reserve a corridor on the poured layer joining every point a pad
-    /// meets the plane, and keep other nets out of it.
-    ///
-    /// Without this, plane connectivity is whatever the signals happen to
-    /// leave behind, and `routing_pour_cut_off` reports the damage after
-    /// the fact. With it, the connection cannot be severed: the corridor
-    /// is the net's own copper as far as the negotiator is concerned.
-    ///
-    /// The cost is real -- that copper is routing space the signals do not
-    /// get -- but so is the physics. A layer carrying a plane is not a
-    /// signal layer with a plane drawn on top of it.
-    pub pour_reserve_skeleton: bool,
 }
 
 impl RoutingTuning {
-    /// Reject a tuning that cannot describe a search. These are knobs, not
-    /// board geometry, but a zero here is just as fatal downstream: it is a
-    /// divisor, a loop bound, or the only thing keeping a cost from being
-    /// free. Checking once at the boundary is what lets every consumer
-    /// divide and index without a guard.
+    /// Reject a tuning that cannot describe a board: a zero here is a loop
+    /// bound downstream. Checking once at the boundary is what lets every
+    /// consumer use it without a guard.
     pub fn validate(&self, out: &mut Vec<CheckResult>) {
-        let mut bad = |what: &str, why: String| {
-            out.push(CheckResult::fail("board_rules", format!("board.tuning.{what}"), why));
-        };
-        if !["negotiated", "sequential", "freeroute"].contains(&self.router.as_str()) {
-            bad("router", format!("{:?} is not a router; it is `negotiated`, `sequential` or `freeroute`", self.router));
-        }
-        if self.via_cost_cells <= 0 {
-            bad("via_cost_cells", format!("a via costs {} cells, so the router would sprinkle them for free", self.via_cost_cells));
-        }
-        if self.bend_cost < 0 {
-            bad("bend_cost", format!("a bend costs {}, so turning would pay the router to spiral", self.bend_cost));
-        }
-        if self.seq_max_expansions == 0 {
-            bad("seq_max_expansions", "the A* expansion cap is 0, so every search gives up before its first step".into());
-        }
         if self.preflight_reach_cells == 0 {
-            bad("preflight_reach_cells", "a pad pocket must reach 0 cells, which every buried pad satisfies".into());
-        }
-        if self.nc_max_iters == 0 {
-            bad("nc_max_iters", "the negotiator is capped at 0 iterations, so it never routes anything".into());
-        }
-        if !(self.nc_pres_fac_0 > 0.0) {
-            bad("nc_pres_fac_0", format!("the present-cost factor starts at {}; congestion would be free on the first pass", self.nc_pres_fac_0));
-        }
-        if !(self.nc_pres_fac_mult > 1.0) {
-            bad("nc_pres_fac_mult", format!("the present-cost factor grows by x{}, so sharing a cell never gets more expensive and the negotiation cannot converge", self.nc_pres_fac_mult));
-        }
-        if self.nc_pres_fac_max < self.nc_pres_fac_0 {
-            bad("nc_pres_fac_max", format!("the present-cost ceiling {} is below its start {}", self.nc_pres_fac_max, self.nc_pres_fac_0));
-        }
-        if self.nc_max_wall_s < 0.0 {
-            bad("nc_max_wall_s", format!("the wall budget is {} s", self.nc_max_wall_s));
-        }
-        if self.pour_stitch_reach_um <= 0 {
-            bad("pour_stitch_reach_um", format!("a stitching via may sit {} µm from its pad, so no via site is ever legal", self.pour_stitch_reach_um));
+            out.push(CheckResult::fail("board_rules", "board.tuning.preflight_reach_cells", "a pad pocket must reach 0 cells, which every buried pad satisfies"));
         }
     }
 }
 impl Default for RoutingTuning {
     fn default() -> Self {
-        RoutingTuning {
-            router: "negotiated".into(),
-            via_cost_cells: 30,
-            bend_cost: 2,
-            edge_clearance_um: 500,
-            between_pads_max_gap_um: 2000,
-            refdes_penalty: 8,
-            escape_lane_um: 1200,
-            escape_lane_penalty: 6,
-            preflight_reach_cells: 2000,
-            seq_max_rounds: 6,
-            seq_max_victims: 6,
-            seq_hist_bump: 4,
-            seq_max_expansions: 400_000,
-            nc_max_iters: 400,
-            nc_pres_fac_0: 0.5,
-            nc_pres_fac_mult: 1.6,
-            nc_pres_fac_max: 2000.0,
-            nc_hist_inc: 2,
-            nc_max_wall_s: 900.0,
-            nc_stall_iters: 0,
-            nc_focus_cells: 8,
-            nc_rollback: true,
-            pour_layer_penalty: 1,
-            pour_stitch_reach_um: 3000,
-            pour_reserve_skeleton: true,
-        }
+        RoutingTuning { edge_clearance_um: 500, between_pads_max_gap_um: 2000, preflight_reach_cells: 2000 }
     }
 }
 

@@ -17,8 +17,7 @@ pub use eda_intent::lint::lint;
 pub use eda_render::render_schematic;
 pub use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
 pub use eda_interchange::{from_bookshelf_pl, to_bookshelf, to_circuit_json, Bookshelf};
-pub use eda_router::{preflight, route, RouteRules};
-pub use eda_router::route_partial as route_partial_raw;
+pub use eda_grid::{check_pours, preflight, RouteRules};
 pub use eda_place::{hpwl, place, Anneal, PlaceOptions, Placer};
 pub use eda_cypress::{place_with_cypress, Cypress, CypressOptions};
 pub use eda_model::board::{fit_outline, trim_empty_edges};
@@ -50,13 +49,30 @@ mod tests {
 }
 
 
-/// Passes the FreeRouting port runs before it gives up on what is left.
+/// Passes the router runs before it gives up on what is left.
 const FREEROUTE_MAX_PASSES: i32 = 20;
 
-/// Route with the FreeRouting port (`board.tuning.router: freeroute`): its
-/// batch passes over the board the design makes, the routes written back.
-/// A net the passes leave apart fails, named, as the grid routers' do.
-fn route_freeroute(
+/// Route a placed design: the gated contract. The routed design, or every
+/// failure -- a net left apart, a pour cut off, a precondition unmet.
+/// The router is deterministic; `seed` is taken for the callers' sake.
+pub fn route(
+    design: &eda_model::ir::Design,
+    model: &eda_model::ConstraintModel,
+    rules: &RouteRules,
+    _seed: u64,
+) -> Result<eda_model::ir::Design, Vec<eda_model::CheckResult>> {
+    match route_partial(design, model, rules) {
+        (Some(d), fails) if fails.is_empty() => Ok(d),
+        (_, fails) => Err(fails),
+    }
+}
+
+/// Route with the FreeRouting port: its batch passes over the board the
+/// design makes, the routes written back. A net the passes leave apart
+/// fails, named; a pour that no longer reaches every pad of its net fails
+/// too. On failure, whatever was routed comes back with the failures, for
+/// review; `None` where a precondition failed before routing started.
+pub fn route_partial(
     design: &eda_model::ir::Design,
     model: &eda_model::ConstraintModel,
     rules: &RouteRules,
@@ -79,7 +95,7 @@ fn route_freeroute(
             // The pour's own honesty: FreeRouting lets other nets cross a
             // plane, and a plane cut into islands leaves pads floating.
             let mut fails: Vec<CheckResult> = fails;
-            fails.extend(eda_router::check_pours(&out, model, rules));
+            fails.extend(eda_grid::check_pours(&out, model, rules));
             (Some(out), fails)
         }
     }
@@ -88,13 +104,12 @@ fn route_freeroute(
 /// Route, then check that the router and the geometry gate agree about
 /// what they just produced.
 ///
-/// The router reasons in grid cells; the gates measure real copper. They
-/// are two independent models of the same physics, and nothing used to
-/// assert they agree. They drifted: with per-width clearance buckets in
-/// play the negotiator reported zero contested cells on an L4 board the
-/// clearance gate found 251 real overlaps on, because pads were stamped
-/// into one bucket only. Both models were internally consistent and both
-/// were wrong about each other, so neither could notice.
+/// The router reasons in its own shapes; the gates measure the copper
+/// written back. They are two independent models of the same physics, and
+/// they can drift: a grid router this pipeline once had reported zero
+/// contested cells on an L4 board the clearance gate found 251 real
+/// overlaps on. Both models were internally consistent and both were wrong
+/// about each other, so neither could notice.
 ///
 /// That matters more here than in an ordinary tool. These gates are the
 /// reward signal: a router that reports success on a board with 251
@@ -109,7 +124,8 @@ pub fn route_checked(
     seed: u64,
 ) -> (Option<eda_model::ir::Design>, Vec<eda_model::CheckResult>) {
     use eda_model::{CheckResult, CheckStatus};
-    let (out, mut fails) = if rules.tuning.router == "freeroute" { route_freeroute(design, model, rules) } else { route_partial_raw(design, model, rules, seed) };
+    let _ = seed;
+    let (out, mut fails) = route_partial(design, model, rules);
     let router_claims_clean = fails.is_empty();
     let Some(routed) = out else { return (None, fails) };
     if !router_claims_clean {

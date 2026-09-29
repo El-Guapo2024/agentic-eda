@@ -112,7 +112,18 @@ fn too_small_board_fails_not_panics() {
 fn placement_then_routing_end_to_end() {
     let m = ldo_model();
     let placed = place(&design(), &m, &PlaceOptions::default()).expect("places");
-    let routed = eda_router::route(&placed, &m, &m.board, 1).expect("routes");
+    let routed = route(&placed, &m, &m.board, 1).expect("routes");
     let fails: Vec<_> = eda_gates::check_routing(&routed, &m).into_iter().filter(|c| c.status == CheckStatus::Fail).collect();
     assert!(fails.is_empty(), "{fails:#?}");
+}
+
+/// The design routed by the FreeRouting port, or what it left unrouted.
+fn route(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, rules: &eda_model::BoardRules, _seed: u64) -> Result<eda_model::ir::Design, Vec<String>> {
+    let routed = eda_freeroute::design::route_design(design, model, rules, 20).map_err(|e| vec![e])?;
+    if !routed.unrouted.is_empty() {
+        return Err(routed.unrouted);
+    }
+    let mut out = design.clone();
+    out.routing = Some(routed.routing);
+    Ok(out)
 }

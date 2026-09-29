@@ -10,7 +10,7 @@
 //! half-cell extent (63 µm) instead of the track's real 100 µm.
 
 use eda_model::ir::Point;
-use eda_router::grid::{Grid, Occ};
+use eda_grid::grid::{Grid, Occ};
 
 /// The l2_sensor_hub numbers: 127 µm grid, 200 µm clearance, 200 µm
 /// tracks, 600 µm vias, two layers.

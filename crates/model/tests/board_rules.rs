@@ -88,50 +88,17 @@ fn the_default_tuning_is_valid() {
 }
 
 #[test]
-fn a_free_via_is_rejected() {
-    // At zero cost the router sprinkles vias instead of routing.
+fn a_zero_preflight_reach_is_rejected() {
+    // Every buried pad would pass the placement preflight.
     let mut b = BoardRules::default();
-    b.tuning.via_cost_cells = 0;
-    assert!(failing_fields(&b).contains(&"board.tuning.via_cost_cells".to_string()));
+    b.tuning.preflight_reach_cells = 0;
+    assert!(failing_fields(&b).contains(&"board.tuning.preflight_reach_cells".to_string()));
 }
 
 #[test]
-fn a_present_cost_that_never_grows_is_rejected() {
-    // PathFinder converges *because* sharing a cell gets dearer each pass.
-    // At a multiplier of 1.0 the negotiation is an infinite loop that the
-    // wall budget happens to interrupt.
-    let mut b = BoardRules::default();
-    b.tuning.nc_pres_fac_mult = 1.0;
-    assert!(failing_fields(&b).contains(&"board.tuning.nc_pres_fac_mult".to_string()));
-}
-
-#[test]
-fn a_zero_iteration_cap_is_rejected() {
-    let mut b = BoardRules::default();
-    b.tuning.nc_max_iters = 0;
-    assert!(failing_fields(&b).contains(&"board.tuning.nc_max_iters".to_string()));
-}
-
-#[test]
-fn a_zero_expansion_cap_is_rejected() {
-    // Every A* search would give up before its first step, and the router
-    // would report the board unroutable.
-    let mut b = BoardRules::default();
-    b.tuning.seq_max_expansions = 0;
-    assert!(failing_fields(&b).contains(&"board.tuning.seq_max_expansions".to_string()));
-}
-
-#[test]
-fn a_router_that_does_not_exist_is_rejected() {
-    let mut b = BoardRules::default();
-    b.tuning.router = "astar".into();
-    assert!(failing_fields(&b).contains(&"board.tuning.router".to_string()));
-}
-
-#[test]
-fn a_stitch_reach_of_zero_is_rejected() {
-    // No via site is ever legal, so every poured pad reports unreachable.
-    let mut b = BoardRules::default();
-    b.tuning.pour_stitch_reach_um = 0;
-    assert!(failing_fields(&b).contains(&"board.tuning.pour_stitch_reach_um".to_string()));
+fn an_intent_still_choosing_a_router_is_refused() {
+    // There is one router; a knob that chose among several means nothing,
+    // and ignoring it would let the intent believe it had been obeyed.
+    let yaml = "tuning:\n  router: negotiated\n";
+    assert!(serde_yaml::from_str::<BoardRules>(yaml).is_err());
 }

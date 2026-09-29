@@ -16,7 +16,7 @@
 //! of it passes them: every pad is the rectangle the gates measure it by,
 //! the outline keeps copper the gates' edge clearance away, the strips
 //! between adjacent SMD pads of a part and the refdes labels are
-//! keep-outs, as the grid router has them, and traces keep their class's
+//! keep-outs, as the gates want them, and traces keep their class's
 //! width into narrow pins. Every clearance carries a small margin for the
 //! rounding to whole µm on the way back.
 
@@ -62,8 +62,8 @@ const RESCUE_PASSES: i32 = 10;
 const RESCUE_MARGIN: i64 = 50;
 
 /// How much dearer a trace is on an outer layer carrying a pour. Each one
-/// there cuts the plane; kept small, as the grid router keeps its own
-/// pour penalty, so a net with nowhere else to go still gets through.
+/// there cuts the plane; kept small, so a net with nowhere else to go
+/// still gets through.
 const POUR_LAYER_COST_FACTOR: f64 = 2.0;
 
 /// How much dearer a poured net's traces are off its pour's layer, while
@@ -198,7 +198,7 @@ struct PlanKeepout {
 }
 
 /// The strips between the facing edges of adjacent SMD pads of one
-/// footprint, µm, as the grid router blocks them: under the part's body, a
+/// footprint, µm: under the part's body, a
 /// track threading between its pads is what the gates send back. Pairs
 /// with a third pad between them, or further apart than `max_gap`, have
 /// none; through-hole rows are left open. Each stops [`STRIP_INSET_UM`]
@@ -407,14 +407,16 @@ impl Plan {
             net_no[i] = nets.len();
             nets.push(PlanNet { name: net.name.clone(), class: class_no[class_of(&net.name)], plane: poured(&net.name) });
         }
-        let planes = rules
-            .pours
-            .iter()
-            .filter_map(|pour| {
-                let net = nets.iter().position(|n| n.name == pour.net)?;
-                Some(PlanPlane { net, layer: rules.layers.iter().position(|l| *l == pour.layer)? })
-            })
-            .collect();
+        let mut planes = Vec::new();
+        for pour in &rules.pours {
+            // A pour on a net with nothing to reach is a claim about a
+            // board that does not exist.
+            let Some(net) = nets.iter().position(|n| n.name == pour.net) else {
+                return Err(format!("the {} pour is on a net with no placed pad", pour.net));
+            };
+            let layer = rules.layers.iter().position(|l| *l == pour.layer).expect("checked above");
+            planes.push(PlanPlane { net, layer });
+        }
         let components = placed
             .into_iter()
             .map(|(reference, pins)| PlanComponent {
@@ -1011,8 +1013,8 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
     let mut tracks = drop_pad_loops(split_at_own_pads(tracks, &pads), &vias, &pads);
     tracks.sort_by(|a: &Track, b: &Track| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
     vias.sort_by(|a: &IrVia, b: &IrVia| (&a.net, a.at).cmp(&(&b.net, b.at)));
-    // The pours as zones, the board's outline filled, as the grid router
-    // writes them; the design's own zones stay.
+    // The pours as zones, the board's outline filled; the design's own
+    // zones stay.
     let mut zones = design.routing.as_ref().map(|r| r.zones.clone()).unwrap_or_default();
     for p in &plan.planes {
         let (net, layer) = (&plan.nets[p.net].name, &plan.layers[p.layer]);

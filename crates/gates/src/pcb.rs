@@ -9,7 +9,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::{Design, Point, Side, Track, Um, Via};
-use eda_model::{CheckResult, CheckStatus, ConstraintModel, PlacementRule};
+use eda_model::{CheckResult, ConstraintModel, PlacementRule};
 use std::collections::{BTreeMap, HashMap};
 
 // ------------------------------------------------------------- geometry
@@ -814,34 +814,9 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
         out.push(CheckResult::pass("routing_footprint"));
     }
 
-    // Track width & outline & grid.
+    // Track width & outline.
     let mut width_ok = true;
     let mut outline_ok = true;
-    let mut offgrid = 0usize;
-    // The router is allowed to escape a fine-pitch part on a finer
-    // internal grid than the configured routing pitch — halving it when
-    // the configured grid is coarser than 130 um and some same-footprint
-    // pad pair is closer than one configured cell (see
-    // `eda_router::route_partial`'s rationale: a 650 um-pitch TSSOP's
-    // pad-to-pad gap is regularly narrower than a 254 um cell). Whether
-    // that applies depends on the board's footprints, which this gate
-    // doesn't re-derive; accepting either resolution keeps this a warning
-    // about genuinely off-grid geometry (a real router bug) rather than
-    // firing on every fine-pitch board, whose vertices are still exactly
-    // on the resolution the router actually used.
-    let half_grid = if rules.grid > 130 { rules.grid / 2 } else { rules.grid };
-    // The grid starts where the router starts it: the outline's lower-left
-    // corner (eda_router::grid maps cell cx to `min_x + cx * pitch`), not
-    // the coordinate origin. Measuring from (0,0) agreed with the router
-    // only while every outline happened to start there; once the board
-    // trim moved L1's west edge to x = 1325, every vertex read 55 um off
-    // grid (1325 mod 127) on copper the router had laid exactly on its
-    // own lattice.
-    let gx = pl.outline.iter().map(|p| p.x).min().unwrap_or(0);
-    let gy = pl.outline.iter().map(|p| p.y).min().unwrap_or(0);
-    let on_grid_from = |v: eda_model::ir::Um, o: eda_model::ir::Um| {
-        (v - o).rem_euclid(rules.grid) == 0 || (v - o).rem_euclid(half_grid) == 0
-    };
     for (i, t) in rt.tracks.iter().enumerate() {
         // A net in a class must carry that class's copper, not merely the
         // board minimum: a power net routed at signal width is the failure
@@ -861,9 +836,6 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
                 outline_ok = false;
                 out.push(CheckResult::fail("routing_within_outline", format!("{}#{i}", t.net), format!("track point ({},{}) outside outline", p.x, p.y)));
             }
-            if !on_grid_from(p.x, gx) || !on_grid_from(p.y, gy) {
-                offgrid += 1;
-            }
         }
     }
     for v in &rt.vias {
@@ -878,28 +850,6 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     if outline_ok {
         out.push(CheckResult::pass("routing_within_outline"));
     }
-    // Fails rather than warns. This is not a quality score -- every track
-    // this router emits comes from a cell index times the pitch, so an
-    // off-grid vertex means our own geometry disagrees with the grid we
-    // routed it on, and every clearance we checked was measured against
-    // cells that do not describe the copper. It reads 0 on every board in
-    // the ladder, so promoting it costs nothing and turns an invariant we
-    // were merely hoping for into one that is enforced.
-    //
-    // A gridless router has no grid to be off: its copper lies where the
-    // shapes it keeps clear put it, and the clearance gates measure that
-    // copper exactly.
-    let gridless = rules.tuning.router == "freeroute";
-    out.push(CheckResult {
-        check: "routing_offgrid_points".into(),
-        status: if offgrid == 0 || gridless { CheckStatus::Pass } else { CheckStatus::Fail },
-        location: None,
-        hint: Some(format!(
-            "{offgrid} track vertice(s) off the {}µm routing grid; every vertex this router emits is a              cell index times the pitch, so off-grid copper means the geometry and the grid the              clearances were checked against are not the same board",
-            rules.grid
-        )), detail: None
-    });
-
     // Connectivity: nodes = pads, track vertices, vias.
     check_connectivity(rt, &pads, model, rules.track_width, &mut out);
 
@@ -1133,9 +1083,9 @@ fn seg_seg_cross(a: Point, b: Point, c: Point, d: Point) -> Point {
 /// output, independent of `check_routing`'s legality checks. Two axes:
 ///
 /// - `routing_detour_ratio`: for a two-pin net, `total track length /
-///   Manhattan airline distance between its pads`. A grid A* router with
-///   sane costs never needs much more than the Manhattan airline on an
-///   open board; a large ratio means the router looped, zig-zagged, or
+///   Manhattan airline distance between its pads`. A router with sane
+///   costs never needs much more than the Manhattan airline on an open
+///   board; a large ratio means the router looped, zig-zagged, or
 ///   took a long way around an obstacle it should have gone straight
 ///   past. Threshold 2.5x is generous headroom over the corpus's worst
 ///   observed ratio (~1.35x on `mcu_board_30plus`, a 30+ part board) while
@@ -1513,6 +1463,7 @@ fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearan
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_model::CheckStatus;
 
     #[test]
     fn seg_seg_distance_basics() {

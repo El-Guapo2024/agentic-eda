@@ -15,4 +15,4 @@ blake3 = { workspace = true }
 
 [dev-dependencies]
 eda-place = { path = "../place" }
-eda-router = { path = "../router" }
+eda-freeroute = { path = "../freeroute" }

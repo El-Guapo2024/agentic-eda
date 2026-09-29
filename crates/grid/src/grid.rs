@@ -75,9 +75,6 @@ pub struct Grid {
     /// between SMD pads of one footprint, and (per edge) own-net pads a
     /// track must not use as a stepping stone.
     blocked: Vec<bool>,
-    /// Extra A* step cost per (cell, layer): soft keep-out for silkscreen
-    /// refdes boxes.
-    penalty: Vec<u8>,
     /// Soft keep-out per (cell, layer) for track copper: impassable while
     /// `soft_active`, merely penalised otherwise. An edge is first tried
     /// with the keep-outs enforced and falls back to the penalty-only pass
@@ -101,7 +98,7 @@ pub struct Grid {
     /// separation of the cell — `EMPTY`, one net id (the cell is passable
     /// only for that net), or `MULTI`. Maintained incrementally by
     /// [`Grid::set`] (copper only ever grows between rip-ups) and rebuilt
-    /// wholesale by [`Grid::clear_net`], so the A* hot loop answers
+    /// wholesale by [`Grid::clear_net`], so every query answers
     /// [`Grid::passable_as`] with one lookup instead of a radius scan.
     /// Clearance summary for tracks, one array per *querying* width.
     /// A summary answers "would copper of width W here violate clearance
@@ -120,11 +117,6 @@ pub struct Grid {
     /// Per (cell, layer): pad copper within the via-in-pad radius, i.e. a
     /// via may not sit here (see [`Grid::via_pad_radius_cells`]).
     via_near_pad: Vec<bool>,
-    /// PathFinder-style history cost per (cell, layer): bumped around the
-    /// pocket a net could not escape each time its fence is ripped up, so
-    /// the victims' reroutes stop walling the same pad in again. Never
-    /// decays within a run.
-    hist: Vec<u8>,
     /// Every pad's rectangle, per layer, for exact separation stamping:
     /// a track/via centre must keep `clearance + its own half-width` from
     /// the pad rect (the gate's measure, see `PlacedPad::rect_distance`). Cell-quantised pad blobs (half a cell of copper at
@@ -136,7 +128,7 @@ pub struct Grid {
     /// against the reference radius scan (slow; for debugging only).
     check_near: bool,
     /// Precomputed point-in-polygon per cell (`cy * cells_x + cx`), so the
-    /// A* hot loop never re-runs the polygon test.
+    /// flood never re-runs the polygon test.
     inside: Vec<bool>,
     /// Precomputed distance (µm) from each cell centre to the nearest
     /// outline edge, for the copper-to-edge clearance.
@@ -189,7 +181,6 @@ impl Grid {
             net_track_half: std::collections::HashMap::new(),
             occ: Vec::new(),
             blocked: Vec::new(),
-            penalty: Vec::new(),
             soft: Vec::new(),
             soft_via: Vec::new(),
             soft_active: false,
@@ -199,7 +190,6 @@ impl Grid {
             net_bucket: std::collections::HashMap::new(),
             near_via: Vec::new(),
             via_near_pad: Vec::new(),
-            hist: Vec::new(),
             pads_exact: Vec::new(),
             check_near: std::env::var_os("EDA_ROUTE_CHECK_NEAR").is_some(),
             inside: Vec::new(),
@@ -225,29 +215,13 @@ impl Grid {
         let n = (cells_x * cells_y * num_layers as i64) as usize;
         g.occ = (0..n).map(|_| None).collect();
         g.blocked = vec![false; n];
-        g.penalty = vec![0; n];
         g.soft = vec![false; n];
         g.soft_via = vec![false; n];
         g.track_query_halves = vec![track_width / 2];
         g.near_track = vec![vec![EMPTY; n]];
         g.near_via = vec![EMPTY; n];
         g.via_near_pad = vec![false; n];
-        g.hist = vec![0; n];
         g
-    }
-
-    /// Raise the history cost by `amount` on every cell within Chebyshev
-    /// radius `r` of `cells` (each on its own layer).
-    pub fn bump_history(&mut self, cells: &[(i64, i64, u8)], r: i64, amount: u8) {
-        for &(cx, cy, l) in cells {
-            for dx in -r..=r {
-                for dy in -r..=r {
-                    if let Some(i) = self.idx(cx + dx, cy + dy, l) {
-                        self.hist[i] = self.hist[i].saturating_add(amount);
-                    }
-                }
-            }
-        }
     }
 
     /// Record copper of `net_id` with half-extent `half_um` at (cx, cy,
@@ -300,12 +274,6 @@ impl Grid {
         }
     }
 
-    /// Public form of [`Grid::sep_cells_for`], for the negotiation
-    /// bookkeeping, which has to size a net's claim to its own copper.
-    pub fn sep_cells_for_pub(&self, query_half_um: Um, b_half_um: Um) -> i64 {
-        self.sep_cells_for(query_half_um, b_half_um)
-    }
-
     /// Cells of separation a querying half-width owes copper of half-width
     /// `b_half_um`.
     fn sep_cells_for(&self, query_half_um: Um, b_half_um: Um) -> i64 {
@@ -327,7 +295,7 @@ impl Grid {
         // empty of pads and stayed that way, so a 0.45 mm power net saw no
         // pad separation at all and routed straight into pad copper: on L4
         // at net-class widths that was 251 routing_clearance failures the
-        // negotiator scored as zero conflicts, against pads like J4.2.
+        // router of the time scored as zero conflicts, against pads like J4.2.
         let vias = self.track_query_halves.len();
         for b in 0..=vias {
             let is_via = b == vias;
@@ -484,11 +452,6 @@ impl Grid {
         self.net_bucket.insert(id, bucket);
     }
 
-    /// Track half-width `net` lays copper at.
-    pub fn net_track_half_of(&self, net: &str) -> Um {
-        self.net_ids.get(net).and_then(|id| self.net_track_half.get(id)).copied().unwrap_or(self.track_half_um)
-    }
-
     /// Bucket 0 is the default-width bucket, and a net with no declared
     /// class genuinely lays copper at the default width -- so this `0` is
     /// the right answer, not a fallback papering over a missing entry.
@@ -551,12 +514,6 @@ impl Grid {
         }
     }
 
-    /// True if the cell holds pad copper of `net` on `layer`.
-    pub fn is_pad_of(&self, cx: i64, cy: i64, layer: u8, net: &str) -> bool {
-        let Some(net_id) = self.net_id_ro(net) else { return false };
-        self.idx(cx, cy, layer).and_then(|i| self.occ[i].as_ref()).map(|c| c.kind == Occ::Pad && c.net_id == net_id).unwrap_or(false)
-    }
-
     /// True if pad copper lies within the via-in-pad radius of the cell.
     #[inline]
     pub fn via_near_pad(&self, cx: i64, cy: i64, layer: u8) -> bool {
@@ -595,49 +552,11 @@ impl Grid {
         }
     }
 
-    /// True if via copper here is a soft keep-out, regardless of whether
-    /// enforcement is currently switched on. Stitching vias need the raw
-    /// answer: `routing_over_refdes` is a hard gate with no allowance, so
-    /// a pour placing a via under a silkscreen label fails the board --
-    /// there is nothing soft about it once the negotiation is over.
-    pub fn is_soft_via(&self, cx: i64, cy: i64, layer: u8) -> bool {
-        self.idx(cx, cy, layer).map(|i| self.soft_via[i]).unwrap_or(true)
-    }
-
     /// Mark a cell as a soft keep-out for via copper (see `soft_active`).
     pub fn set_soft_via(&mut self, cx: i64, cy: i64, layer: u8) {
         if let Some(i) = self.idx(cx, cy, layer) {
             self.soft_via[i] = true;
         }
-    }
-
-    /// Add `p` to the per-step cost of entering a cell (saturating).
-    pub fn add_penalty(&mut self, cx: i64, cy: i64, layer: u8, p: u8) {
-        if let Some(i) = self.idx(cx, cy, layer) {
-            self.penalty[i] = self.penalty[i].saturating_add(p);
-        }
-    }
-
-    #[inline]
-    pub fn penalty(&self, cx: i64, cy: i64, layer: u8) -> i64 {
-        self.idx(cx, cy, layer).map(|i| self.penalty[i] as i64 + self.hist[i] as i64).unwrap_or(0)
-    }
-
-    /// True if any pad (any net, own included) occupies a cell within
-    /// Chebyshev radius `r` of (cx, cy) on `layer`. Used to keep vias out
-    /// of pad copper: via-in-pad is a fab/assembly defect even on the
-    /// via's own net.
-    pub fn pad_within(&self, cx: i64, cy: i64, layer: u8, r: i64) -> bool {
-        for dx in -r..=r {
-            for dy in -r..=r {
-                if let Some(i) = self.idx(cx + dx, cy + dy, layer) {
-                    if matches!(&self.occ[i], Some(c) if c.kind == Occ::Pad) {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
     }
 
     /// Cells whose radius-`r` (Chebyshev) neighbourhood is pad-free are
@@ -672,32 +591,6 @@ impl Grid {
             return 'S';
         }
         '.'
-    }
-
-    /// Debug: everything the grid knows about one cell for `net`: the
-    /// why-blocked verdict, the separation summaries, and every registered
-    /// pad within 1.5 mm with its exact distance to the cell centre.
-    pub fn probe(&self, cx: i64, cy: i64, layer: u8, net: &str) -> String {
-        let mut out = format!("probe ({cx},{cy},{layer}) {:?} net={net}: why={} ", self.to_point(cx, cy), self.why_blocked(cx, cy, layer, net));
-        if let Some(i) = self.idx(cx, cy, layer) {
-            let name = |id: u32| match id {
-                EMPTY => "EMPTY".to_string(),
-                MULTI => "MULTI".to_string(),
-                x => self.net_names.get(x as usize).cloned().unwrap_or_else(|| format!("#{x}")),
-            };
-            out += &format!("near_track={} near_via={} occ={:?}\n", name(self.near_track[0][i]), name(self.near_via[i]), self.occ[i].as_ref().map(|c| (name(c.net_id), c.kind, c.half_um)));
-        }
-        let p = self.to_point(cx, cy);
-        for (nid, l, pad) in &self.pads_exact {
-            if *l != layer {
-                continue;
-            }
-            let d = pad.rect_distance(p);
-            if d < 1500.0 {
-                out += &format!("  pad net={} {:?} center={:?} size={:?} dist={d:.0}\n", self.net_names.get(*nid as usize).cloned().unwrap_or_default(), pad.number, pad.center, pad.size);
-            }
-        }
-        out
     }
 
     /// Debug: `why_blocked` map around a cell.
@@ -797,16 +690,6 @@ impl Grid {
         }
     }
 
-    /// Minimum centre-to-centre separation, in cells, between copper of
-    /// kind `a` and copper whose recorded half-extent is `b_half_um`, on
-    /// different nets.
-    #[inline]
-    /// Public wrapper of `min_sep_cells_half` for the negotiated router's
-    /// claim stamping.
-    pub fn sep_cells(&self, a: Occ, b_half_um: Um) -> i64 {
-        self.min_sep_cells_half(a, b_half_um)
-    }
-
     fn min_sep_cells_half(&self, a: Occ, b_half_um: Um) -> i64 {
         let um = self.clearance_um + self.half_extent(a) + b_half_um;
         (um + self.grid_um - 1) / self.grid_um
@@ -901,62 +784,6 @@ impl Grid {
         true
     }
 
-    /// Nets whose routed copper (track/via, any layer) lies within
-    /// Chebyshev radius `r` of any of `cells` on that cell's layer: the
-    /// fence around a pocket the search could not leave.
-    pub fn nets_bordering(&self, cells: &[(i64, i64, u8)], r: i64) -> std::collections::HashSet<String> {
-        let mut set = std::collections::HashSet::new();
-        for &(cx, cy, _l) in cells {
-            // Every layer, not just the pocket's own: when a pocket's only
-            // way out is a via, the copper sealing it is on the *other*
-            // layer (l2 BOOT0: the pocket had via sites in preflight, all
-            // taken by bottom-side tracks at routing time, none ever
-            // ripped up because the fence only looked at the top).
-            for l in 0..self.num_layers as u8 {
-            for dx in -r..=r {
-                for dy in -r..=r {
-                    if let Some(i) = self.idx(cx + dx, cy + dy, l) {
-                        if let Some(c) = &self.occ[i] {
-                            if c.kind != Occ::Pad {
-                                set.insert(self.net_names[c.net_id as usize].clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        }
-        set
-    }
-
-    /// Nets whose occupied cells (any layer) fall within the bounding box
-    /// of `a`..`b`, dilated by `margin` cells. Used to pick rip-up victims.
-    pub fn nets_in_region(&self, a: (i64, i64), b: (i64, i64), margin: i64) -> std::collections::HashSet<String> {
-        let (x0, x1) = (a.0.min(b.0) - margin, a.0.max(b.0) + margin);
-        let (y0, y1) = (a.1.min(b.1) - margin, a.1.max(b.1) + margin);
-        let x0 = x0.max(0);
-        let y0 = y0.max(0);
-        let x1 = x1.min(self.cells_x - 1);
-        let y1 = y1.min(self.cells_y - 1);
-        let mut set = std::collections::HashSet::new();
-        if x0 > x1 || y0 > y1 {
-            return set;
-        }
-        for cy in y0..=y1 {
-            for cx in x0..=x1 {
-                for l in 0..self.num_layers as u8 {
-                    if let Some(i) = self.idx(cx, cy, l) {
-                        if let Some(c) = &self.occ[i] {
-                            if c.kind != Occ::Pad {
-                                set.insert(self.net_names[c.net_id as usize].clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        set
-    }
 }
 
 fn point_in_polygon(p: Point, poly: &[Point]) -> bool {

@@ -11,7 +11,6 @@ use eda_engine::{derive_schematic, EngineOptions};
 use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
 use eda_model::ConstraintModel;
 use eda_place::{place, PlaceOptions};
-use eda_router::route;
 
 fn find_kicad_cli() -> Option<PathBuf> {
     if let Ok(out) = Command::new("which").arg("kicad-cli").output() {
@@ -153,4 +152,15 @@ fn kicad_cli_drc_ldo_seed3() {
     }
 
     assert!(in_scope_failures.is_empty(), "{} in-scope DRC violations found:\n{}", in_scope_failures.len(), in_scope_failures.join("\n"));
+}
+
+/// The design routed by the FreeRouting port, or what it left unrouted.
+fn route(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, rules: &eda_model::BoardRules, _seed: u64) -> Result<eda_model::ir::Design, Vec<String>> {
+    let routed = eda_freeroute::design::route_design(design, model, rules, 20).map_err(|e| vec![e])?;
+    if !routed.unrouted.is_empty() {
+        return Err(routed.unrouted);
+    }
+    let mut out = design.clone();
+    out.routing = Some(routed.routing);
+    Ok(out)
 }

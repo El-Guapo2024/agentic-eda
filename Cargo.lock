@@ -465,6 +465,7 @@ dependencies = [
  "eda-engine",
  "eda-freeroute",
  "eda-gates",
+ "eda-grid",
  "eda-intent",
  "eda-interchange",
  "eda-kicad",
@@ -473,7 +474,6 @@ dependencies = [
  "eda-model",
  "eda-place",
  "eda-render",
- "eda-router",
  "serde_json",
 ]
 
@@ -551,6 +551,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda-grid"
+version = "0.1.0"
+dependencies = [
+ "eda-gates",
+ "eda-model",
+ "serde_json",
+]
+
+[[package]]
 name = "eda-intent"
 version = "0.1.0"
 dependencies = [
@@ -591,10 +600,10 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "eda-engine",
+ "eda-freeroute",
  "eda-layout",
  "eda-model",
  "eda-place",
- "eda-router",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -647,9 +656,9 @@ dependencies = [
 name = "eda-place"
 version = "0.1.0"
 dependencies = [
+ "eda-freeroute",
  "eda-gates",
  "eda-model",
- "eda-router",
  "serde_json",
  "serde_yaml",
 ]
@@ -662,15 +671,6 @@ dependencies = [
  "eda-layout",
  "eda-model",
  "roxmltree",
-]
-
-[[package]]
-name = "eda-router"
-version = "0.1.0"
-dependencies = [
- "eda-gates",
- "eda-model",
- "serde_json",
 ]
 
 [[package]]

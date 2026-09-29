@@ -3,7 +3,7 @@
 //! Node dependency. Unlocks circuit-to-svg style viewers.
 //!
 //! There is deliberately no Specctra DSN/SES bridge here: routing is done
-//! by `eda-router`, natively, and nothing else.
+//! by `eda-freeroute`, natively, on `design.json`.
 
 pub mod bookshelf;
 pub mod circuit_json;

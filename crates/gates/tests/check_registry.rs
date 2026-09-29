@@ -41,7 +41,6 @@ const REGISTERED: &[&str] = &[
     "routing_detour_ratio",
     "routing_edge_clearance",
     "routing_footprint",
-    "routing_offgrid_points",
     "routing_over_refdes",
     "routing_pass_through_pad",
     "routing_present",
