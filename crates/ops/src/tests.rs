@@ -47,6 +47,7 @@ fn empty_design() -> Design {
             footprints: Vec::new(),
             modules: Vec::new(),
         }),
+        drawings: None,
     }
 }
 
@@ -323,5 +324,224 @@ fn every_region_lands_somewhere_distinct() {
         b.apply(&Cmd::PlaceRegion { part: format!("U{i}"), region: *r }).unwrap();
         let at = b.pose_of(&format!("U{i}")).unwrap().at;
         assert!(seen.insert((at.x, at.y)), "{} landed on top of an earlier region", r.as_str());
+    }
+}
+
+// --------------------------------------------------------------- flip
+
+#[test]
+fn flip_turns_a_placed_part_to_the_other_side() {
+    let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceRegion { part: "U1".into(), region: Region::Centre }).unwrap();
+    assert_eq!(b.pose_of("U1").unwrap().side, Side::Top);
+    b.apply(&Cmd::Flip { part: "U1".into() }).unwrap();
+    assert_eq!(b.pose_of("U1").unwrap().side, Side::Bottom);
+    b.apply(&Cmd::Flip { part: "U1".into() }).unwrap();
+    assert_eq!(b.pose_of("U1").unwrap().side, Side::Top);
+}
+
+#[test]
+fn flipping_an_unplaced_part_is_refused() {
+    let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::Flip { part: "U1".into() }).unwrap_err();
+    assert_eq!(e[0].check, "ops_not_placed");
+}
+
+// ------------------------------------------------------------- tracks
+
+fn net_model() -> ConstraintModel {
+    model(vec![part("U1", "SOIC-8"), part("C1", "0402")], &[("GND", &["U1", "C1"])], vec![])
+}
+
+#[test]
+fn add_track_needs_a_real_net_and_a_real_layer() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::AddTrack { net: "NOPE".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_net");
+
+    let e = b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "In1.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_layer");
+
+    let e = b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_track");
+}
+
+#[test]
+fn add_track_assigns_an_id_that_set_track_width_and_delete_track_can_use() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+    assert!(!id.is_empty(), "a track must get an id the moment it is added");
+
+    b.apply(&Cmd::SetTrackWidth { id: id.clone(), width: 350 }).unwrap();
+    let t = &b.design().routing.as_ref().unwrap().tracks[0];
+    assert_eq!(t.width, 350);
+    assert_eq!(t.id, id, "changing width must not move the id");
+
+    b.apply(&Cmd::DeleteTrack { id: id.clone() }).unwrap();
+    assert!(b.design().routing.as_ref().unwrap().tracks.is_empty());
+
+    let e = b.apply(&Cmd::DeleteTrack { id }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_track");
+}
+
+#[test]
+fn adding_a_track_does_not_disturb_an_existing_one() {
+    // Two AddTracks on the same net must not collide on id or clobber
+    // each other.
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 2000 }, Point { x: 1000, y: 2000 }] }).unwrap();
+    let ids: std::collections::BTreeSet<String> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
+    assert_eq!(ids.len(), 2, "two different tracks must get two different ids");
+}
+
+// --------------------------------------------------------------- vias
+
+#[test]
+fn add_via_rejects_a_drill_not_smaller_than_its_pad() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 600, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_via");
+    let e = b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "F.Cu".into() }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_via");
+}
+
+#[test]
+fn move_via_changes_position_but_not_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().vias[0].id.clone();
+
+    b.apply(&Cmd::MoveVia { id: id.clone(), x: 9000, y: 9000 }).unwrap();
+    let v = &b.design().routing.as_ref().unwrap().vias[0];
+    assert_eq!(v.at, Point { x: 9000, y: 9000 });
+    assert_eq!(v.id, id);
+
+    b.apply(&Cmd::DeleteVia { id: id.clone() }).unwrap();
+    assert!(b.design().routing.as_ref().unwrap().vias.is_empty());
+    assert_eq!(b.apply(&Cmd::MoveVia { id, x: 0, y: 0 }).unwrap_err()[0].check, "ops_unknown_via");
+}
+
+// --------------------------------------------------------------- zones
+
+#[test]
+fn add_zone_then_delete_it() {
+    let m = net_model();
+    let mut b = board(&m);
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }];
+    let e = b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 1 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_zone");
+
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: outline.clone() }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    assert!(!id.is_empty());
+    b.apply(&Cmd::DeleteZone { id }).unwrap();
+    assert!(b.design().routing.as_ref().unwrap().zones.is_empty());
+}
+
+// -------------------------------------------------------------- shapes
+
+#[test]
+fn add_shape_move_and_delete() {
+    let m = net_model();
+    let mut b = board(&m);
+    let shape = Shape::Segment { id: "ignored-on-input".into(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } };
+    b.apply(&Cmd::AddShape { shape }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
+    assert_ne!(id, "ignored-on-input", "a caller-supplied id must never be trusted");
+    assert!(!id.is_empty());
+
+    b.apply(&Cmd::MoveShape { id: id.clone(), dx: 500, dy: -500 }).unwrap();
+    let moved = &b.design().drawings.as_ref().unwrap().shapes[0];
+    assert_eq!(moved.points(), vec![Point { x: 500, y: -500 }, Point { x: 1500, y: -500 }]);
+
+    b.apply(&Cmd::DeleteShape { id: id.clone() }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().shapes.is_empty());
+    assert_eq!(b.apply(&Cmd::DeleteShape { id }).unwrap_err()[0].check, "ops_unknown_shape");
+}
+
+#[test]
+fn add_shape_rejects_a_short_polygon() {
+    let m = net_model();
+    let mut b = board(&m);
+    let shape = Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] };
+    let e = b.apply(&Cmd::AddShape { shape }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_shape");
+}
+
+// --------------------------------------------------------------- text
+
+#[test]
+fn add_edit_move_delete_text() {
+    let m = net_model();
+    let mut b = board(&m);
+    let text = Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false };
+    b.apply(&Cmd::AddText { text }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
+    assert!(!id.is_empty());
+
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_um: 1200, stroke_width: 200, justify: TextJustify::Left, mirror: true }).unwrap();
+    let t = &b.design().drawings.as_ref().unwrap().texts[0];
+    assert_eq!(t.content, "REV B");
+    assert_eq!(t.layer, "F.Fab");
+    assert_eq!(t.justify, TextJustify::Left);
+    assert!(t.mirror);
+    assert_eq!(t.id, id, "editing style must not move the id");
+
+    b.apply(&Cmd::MoveText { id: id.clone(), x: 4000, y: 4000 }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().texts[0].at, Point { x: 4000, y: 4000 });
+
+    b.apply(&Cmd::DeleteText { id: id.clone() }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().texts.is_empty());
+    assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
+}
+
+// ---------------------------------------------------- clears_routing
+
+#[test]
+fn only_part_edits_and_flip_clear_routing() {
+    let copper_and_drawing_cmds = [
+        Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![] },
+        Cmd::DeleteTrack { id: "x".into() },
+        Cmd::SetTrackWidth { id: "x".into(), width: 200 },
+        Cmd::AddVia { net: "GND".into(), x: 0, y: 0, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() },
+        Cmd::DeleteVia { id: "x".into() },
+        Cmd::MoveVia { id: "x".into(), x: 0, y: 0 },
+        Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![] },
+        Cmd::DeleteZone { id: "x".into() },
+        Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 0, y: 0 } } },
+        Cmd::DeleteShape { id: "x".into() },
+        Cmd::MoveShape { id: "x".into(), dx: 0, dy: 0 },
+        Cmd::AddText { text: Text { id: String::new(), content: String::new(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false } },
+        Cmd::EditText { id: "x".into(), content: String::new(), angle: 0, layer: "F.SilkS".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false },
+        Cmd::DeleteText { id: "x".into() },
+        Cmd::MoveText { id: "x".into(), x: 0, y: 0 },
+    ];
+    for c in &copper_and_drawing_cmds {
+        assert!(!c.clears_routing(), "{c:?} must not clear routing -- only part edits do");
+    }
+
+    let part_edit_cmds = [
+        Cmd::Place { part: "U1".into(), anchor: "U2".into(), side: Dir::North },
+        Cmd::PlaceEdge { part: "U1".into(), edge: Dir::North, fraction: 0.5 },
+        Cmd::PlaceRegion { part: "U1".into(), region: Region::Centre },
+        Cmd::PlaceAt { part: "U1".into(), x: 0, y: 0 },
+        Cmd::MoveTo { part: "U1".into(), x: 0, y: 0 },
+        Cmd::Nudge { part: "U1".into(), dir: Dir::North, steps: 1 },
+        Cmd::Rotate { part: "U1".into(), quarter_turns: 1 },
+        Cmd::Swap { a: "U1".into(), b: "U2".into() },
+        Cmd::Rip { part: "U1".into() },
+        Cmd::Flip { part: "U1".into() },
+    ];
+    for c in &part_edit_cmds {
+        assert!(c.clears_routing(), "{c:?} must clear routing -- it can move a part out from under a track");
     }
 }

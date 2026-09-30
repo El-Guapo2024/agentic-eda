@@ -307,6 +307,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         schematic: Some(SchematicSection { symbols, wires, labels }),
         placement: None,
         routing: None,
+        drawings: None,
     })
 }
 

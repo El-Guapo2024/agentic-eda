@@ -15,7 +15,7 @@
 
 use crate::board;
 use eda_model::footprint::{placed_courtyard, placed_pads};
-use eda_model::ir::{LabelSide, Side};
+use eda_model::ir::{LabelSide, Shape, Side};
 use eda_model::{CheckResult, CheckStatus};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -288,8 +288,33 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         .collect();
     let routing = design.routing.as_ref().map(|r| {
         json!({
-            "tracks": r.tracks.iter().map(|t| json!({ "net": t.net, "layer": t.layer, "width": t.width, "pts": t.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect::<Vec<_>>(),
-            "vias": r.vias.iter().map(|v| json!({ "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter })).collect::<Vec<_>>(),
+            "tracks": r.tracks.iter().map(|t| json!({
+                "id": t.id, "net": t.net, "layer": t.layer, "width": t.width,
+                "pts": t.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "vias": r.vias.iter().map(|v| json!({
+                "id": v.id, "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter,
+                "drill": v.drill, "from": v.from_layer, "to": v.to_layer,
+            })).collect::<Vec<_>>(),
+            "zones": r.zones.iter().map(|z| json!({
+                "id": z.id, "net": z.net, "layer": z.layer,
+                "outline": z.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        })
+    });
+    let drawings = design.drawings.as_ref().map(|d| {
+        json!({
+            "shapes": d.shapes.iter().map(shape_json).collect::<Vec<_>>(),
+            "texts": d.texts.iter().map(|t| json!({
+                "id": t.id, "content": t.content, "x": t.at.x, "y": t.at.y, "angle": t.angle,
+                "layer": t.layer, "size": t.size_um, "stroke_width": t.stroke_width,
+                "justify": match t.justify {
+                    eda_model::ir::TextJustify::Left => "left",
+                    eda_model::ir::TextJustify::Center => "center",
+                    eda_model::ir::TextJustify::Right => "right",
+                },
+                "mirror": t.mirror,
+            })).collect::<Vec<_>>(),
         })
     });
     Ok(json!({
@@ -301,9 +326,10 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         "parts": parts,
         "rules": model.placement_rules,
         // Read-only board-wide defaults for the auxiliary toolbar's
-        // track-width/via-size indicators (display-only there: this UI
-        // has no command to change them, just like it has none yet for
-        // drawing a track or via at all).
+        // track-width/via-size indicators. `/api/cmd` takes any `Cmd` as
+        // JSON, including `add_track`/`add_via`, which can draw copper at
+        // other widths/sizes than these -- these are only the defaults a
+        // new track/via would start from.
         "board_rules": {
             "track_width": model.board.track_width,
             "via_drill": model.board.via_drill,
@@ -311,10 +337,37 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "clearance": model.board.clearance,
         },
         "routing": routing,
+        "drawings": drawings,
         "checks": checks,
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),
     }))
+}
+
+/// One `Shape` as JSON: every variant carries `id`/`kind`/`layer`/
+/// `stroke_width`/`filled` plus its own geometry, points as `[x, y]` pairs
+/// -- the same convention `outline`/`pts` already use elsewhere in this
+/// API, so a `(add|move|delete)_shape` command and this read use the same
+/// shape.
+fn shape_json(s: &Shape) -> Value {
+    let pt = |p: eda_model::ir::Point| json!([p.x, p.y]);
+    match s {
+        Shape::Segment { id, layer, stroke_width, filled, start, end } => {
+            json!({ "id": id, "kind": "segment", "layer": layer, "stroke_width": stroke_width, "filled": filled, "start": pt(*start), "end": pt(*end) })
+        }
+        Shape::Arc { id, layer, stroke_width, filled, start, mid, end } => {
+            json!({ "id": id, "kind": "arc", "layer": layer, "stroke_width": stroke_width, "filled": filled, "start": pt(*start), "mid": pt(*mid), "end": pt(*end) })
+        }
+        Shape::Rect { id, layer, stroke_width, filled, start, end } => {
+            json!({ "id": id, "kind": "rect", "layer": layer, "stroke_width": stroke_width, "filled": filled, "start": pt(*start), "end": pt(*end) })
+        }
+        Shape::Circle { id, layer, stroke_width, filled, center, end } => {
+            json!({ "id": id, "kind": "circle", "layer": layer, "stroke_width": stroke_width, "filled": filled, "center": pt(*center), "end": pt(*end) })
+        }
+        Shape::Polygon { id, layer, stroke_width, filled, pts } => {
+            json!({ "id": id, "kind": "polygon", "layer": layer, "stroke_width": stroke_width, "filled": filled, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>() })
+        }
+    }
 }
 
 /// The design's schematic drawn, or, for a board started from an intent

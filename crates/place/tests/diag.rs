@@ -39,6 +39,7 @@ fn place_one() {
         schematic: None,
         placement: None,
         routing: None,
+        drawings: None,
     };
     match eda_place::place(&design, &model, &eda_place::PlaceOptions { seed, ..Default::default() }) {
         Ok(d) => {

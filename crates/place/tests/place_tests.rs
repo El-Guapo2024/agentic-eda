@@ -22,6 +22,7 @@ fn design() -> Design {
         schematic: None,
         placement: None,
         routing: None,
+        drawings: None,
     }
 }
 

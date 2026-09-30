@@ -1558,12 +1558,13 @@ mod tests {
             schematic: None,
             placement: Some(PlacementSection { outline, footprints: vec![fpi("R1", 5000), fpi("C1", 10000)], modules: Vec::new() }),
             routing: Some(rt),
+            drawings: None,
         };
         (design, model)
     }
 
     fn track(net: &str, pts: &[(Um, Um)]) -> Track {
-        Track { net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() }
+        Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() }
     }
 
     fn fails(design: &Design, model: &ConstraintModel, check: &str) -> Vec<CheckResult> {
@@ -1616,12 +1617,12 @@ mod tests {
     #[test]
     fn via_in_pad_fails_when_via_overlaps_pad() {
         let mut rt = clean_routing();
-        rt.vias.push(Via { net: "A".into(), at: Point { x: 9175, y: 5000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "A".into(), at: Point { x: 9175, y: 5000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let (d, m) = wfixture(rt);
         assert_eq!(fails(&d, &m, "routing_via_in_pad").len(), 1);
         // Just outside the pad copper (pad top edge at 5000-475): clean.
         rt = clean_routing();
-        rt.vias.push(Via { net: "A".into(), at: Point { x: 9175, y: 3800 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "A".into(), at: Point { x: 9175, y: 3800 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let (d, m) = wfixture(rt);
         assert!(fails(&d, &m, "routing_via_in_pad").is_empty());
     }

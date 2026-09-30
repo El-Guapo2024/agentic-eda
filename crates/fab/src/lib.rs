@@ -199,6 +199,7 @@ mod tests {
             schematic: None,
             placement: Some(placement),
             routing: None,
+            drawings: None,
         };
         (design, model)
     }

@@ -117,6 +117,66 @@ fn round_trips_own_pipeline_output() {
     }
 }
 
+/// `export_kicad_pcb` -> `import_kicad_pcb` for every graphic shape kind
+/// and free text: no kicad-cli needed, both ends are our own code. Ids
+/// round-trip too -- the importer assigns them from the same content the
+/// exporter wrote, so they land back on the same values.
+#[test]
+fn round_trips_shapes_and_text() {
+    use eda_model::ir::{Design, DrawingsSection, PlacementSection, Point, Provenance, Shape, Text, TextJustify};
+
+    let mut drawings = DrawingsSection {
+        shapes: vec![
+            Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 5_000, y: 0 } },
+            Shape::Arc { id: String::new(), layer: "Cmts.User".into(), stroke_width: 100, filled: false, start: Point { x: 10_000, y: 0 }, mid: Point { x: 7_071, y: 7_071 }, end: Point { x: 0, y: 10_000 } },
+            Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: true, start: Point { x: 0, y: 0 }, end: Point { x: 8_000, y: 4_000 } },
+            Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: 120, filled: false, center: Point { x: 20_000, y: 20_000 }, end: Point { x: 23_000, y: 20_000 } },
+            Shape::Polygon { id: String::new(), layer: "F.CrtYd".into(), stroke_width: 50, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 3_000, y: 0 }, Point { x: 3_000, y: 3_000 }, Point { x: 0, y: 3_000 }] },
+        ],
+        texts: vec![
+            Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 90_000, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
+            Text { id: String::new(), content: "made in eda".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 800, stroke_width: 120, justify: TextJustify::Center, mirror: false },
+        ],
+    };
+    drawings.assign_missing_ids();
+
+    let design = Design {
+        schema: 1,
+        provenance: Provenance { engine_version: "0".into(), intent_hash: "drawings_rt".into(), seed: 0, stage_hashes: vec![] },
+        schematic: None,
+        placement: Some(PlacementSection {
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 30_000, y: 0 }, Point { x: 30_000, y: 30_000 }, Point { x: 0, y: 30_000 }],
+            footprints: vec![],
+            modules: vec![],
+        }),
+        routing: None,
+        drawings: Some(drawings.clone()),
+    };
+    let model = ConstraintModel::default();
+    let meta = ExportMeta { date: "2026-01-01", title: "drawings_rt" };
+    let pcb_text = export_kicad_pcb(&design, &model, &meta).expect("export_kicad_pcb");
+
+    let (back, _model2, _notes) = import_kicad_pcb(&pcb_text).expect("import_kicad_pcb");
+    let back_dr = back.drawings.expect("shapes/text must come back");
+    assert_eq!(back_dr.shapes.len(), drawings.shapes.len());
+    assert_eq!(back_dr.texts.len(), drawings.texts.len());
+
+    let by_id_before: std::collections::BTreeMap<&str, &Shape> = drawings.shapes.iter().map(|s| (s.id(), s)).collect();
+    for got in &back_dr.shapes {
+        let want = by_id_before.get(got.id()).unwrap_or_else(|| panic!("id {} did not round-trip (ids are content hashes, so a mismatch means the geometry changed)", got.id()));
+        assert_eq!(want.points(), got.points(), "{}: points", got.id());
+        assert_eq!(want.layer(), got.layer(), "{}: layer", got.id());
+    }
+    for (want, got) in drawings.texts.iter().zip(&back_dr.texts) {
+        assert_eq!(want.id, got.id);
+        assert_eq!(want.content, got.content);
+        assert_eq!(want.at, got.at);
+        assert_eq!(want.angle, got.angle);
+        assert_eq!(want.justify, got.justify);
+        assert_eq!(want.mirror, got.mirror);
+    }
+}
+
 fn collect_kicad_pcb(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {

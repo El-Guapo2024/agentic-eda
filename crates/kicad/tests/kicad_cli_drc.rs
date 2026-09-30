@@ -197,6 +197,7 @@ fn kicad_cli_drc_bottom_side_pads() {
         .iter()
         .filter(|n| n.pins.len() == 2)
         .map(|n| Track {
+            id: String::new(),
             net: n.name.clone(),
             pins: n.pins.clone(),
             layer: if instance(&n.pins[0]).side == Side::Bottom { "B.Cu" } else { "F.Cu" }.into(),
@@ -211,6 +212,7 @@ fn kicad_cli_drc_bottom_side_pads() {
         schematic: None,
         placement: Some(PlacementSection { outline, footprints: footprints.clone(), modules: Vec::new() }),
         routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![] }),
+        drawings: None,
     };
 
     let meta = ExportMeta { date: "2026-01-01", title: "bottom_side_pads" };
@@ -227,6 +229,80 @@ fn kicad_cli_drc_bottom_side_pads() {
         .flat_map(|ty| by_type.get(*ty).into_iter().flatten().map(move |v| format!("[{ty}] {v}")))
         .collect();
     assert!(failures.is_empty(), "{} DRC violations on the bottom-side board:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// Every graphic shape kind and free text, run through real `kicad-cli pcb
+/// drc`: the point isn't the (empty) DRC result, it's that kicad-cli
+/// parses the file at all -- `drc_by_type` already asserts the report was
+/// produced, which fails loudly if a `gr_*`/`gr_text` token this exporter
+/// wrote is not what KiCad 9's own grammar expects.
+#[test]
+#[ignore]
+fn kicad_cli_drc_shapes_and_text() {
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+
+    let mut drawings = eda_model::ir::DrawingsSection {
+        shapes: vec![
+            eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 1_000, y: 1_000 }, end: Point { x: 9_000, y: 1_000 } },
+            eda_model::ir::Shape::Arc {
+                id: String::new(),
+                layer: "Cmts.User".into(),
+                stroke_width: 100,
+                filled: false,
+                start: Point { x: 15_000, y: 5_000 },
+                mid: Point { x: 12_071, y: 12_071 },
+                end: Point { x: 5_000, y: 15_000 },
+            },
+            eda_model::ir::Shape::Rect { id: String::new(), layer: "F.Fab".into(), stroke_width: 100, filled: true, start: Point { x: 1_000, y: 1_000 }, end: Point { x: 9_000, y: 9_000 } },
+            eda_model::ir::Shape::Circle { id: String::new(), layer: "B.SilkS".into(), stroke_width: 120, filled: false, center: Point { x: 10_000, y: 10_000 }, end: Point { x: 12_000, y: 10_000 } },
+            eda_model::ir::Shape::Polygon {
+                id: String::new(),
+                layer: "F.CrtYd".into(),
+                stroke_width: 50,
+                filled: true,
+                pts: vec![Point { x: 1_000, y: 1_000 }, Point { x: 4_000, y: 1_000 }, Point { x: 4_000, y: 4_000 }, Point { x: 1_000, y: 4_000 }],
+            },
+        ],
+        texts: vec![eda_model::ir::Text {
+            id: String::new(),
+            content: "REV A".into(),
+            at: Point { x: 5_000, y: 18_000 },
+            angle: 0,
+            layer: "F.SilkS".into(),
+            size_um: 1_000,
+            stroke_width: 150,
+            justify: eda_model::ir::TextJustify::Center,
+            mirror: false,
+        }],
+    };
+    drawings.assign_missing_ids();
+
+    let design = Design {
+        schema: 1,
+        provenance: Provenance { engine_version: "0".into(), intent_hash: "shapes_text_drc".into(), seed: 0, stage_hashes: vec![] },
+        schematic: None,
+        placement: Some(PlacementSection {
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
+            footprints: vec![],
+            modules: Vec::new(),
+        }),
+        routing: None,
+        drawings: Some(drawings),
+    };
+    let model = ConstraintModel::default();
+    let meta = ExportMeta { date: "2026-01-01", title: "shapes_text_drc" };
+    let pcb_text = export_kicad_pcb(&design, &model, &meta).expect("export_kicad_pcb");
+    let dir = std::env::temp_dir().join("eda_kicad_shapes_text_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pcb_path = dir.join("shapes_text_drc.kicad_pcb");
+    std::fs::write(&pcb_path, &pcb_text).unwrap();
+
+    let by_type = drc_by_type(&cli, &pcb_path);
+    let in_scope: usize = IN_SCOPE.iter().filter_map(|ty| by_type.get(*ty)).map(|v| v.len()).sum();
+    assert_eq!(in_scope, 0, "shapes/text alone must not create DRC violations: {by_type:?}");
 }
 
 /// `kicad-cli pcb drc` on `pcb`: its violations and unconnected items

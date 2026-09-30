@@ -417,6 +417,7 @@ mod tests {
                 modules: Vec::new(),
             }),
             routing: None,
+            drawings: None,
         };
         (design, model)
     }
