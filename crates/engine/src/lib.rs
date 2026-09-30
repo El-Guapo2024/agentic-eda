@@ -46,6 +46,21 @@ impl EngineOptions {
 /// survives layout passes the gate with margin.
 pub const WIRE_BUDGET_UM: i64 = 76_000;
 
+/// A same-part run of adjacent same-net pins (see the net-label loop below)
+/// is joined by one bus stub only up to this length/bend count. Mirrors
+/// `eda-gates`' `MAX_POWER_WIRE_LEN_UM`/`MAX_POWER_WIRE_BENDS` with margin
+/// (`eda-engine` cannot depend on `eda-gates` -- the same reason
+/// `is_control_pin_name` is duplicated rather than shared -- so the two are
+/// kept in lockstep by inspection/tests instead). "Adjacent" pins on a small
+/// part are a few mm apart and a short stub reads as one local jumper; on a
+/// wide multi-ground connector the same rule can pick out five pins spread
+/// across the whole box, and stubbing those together draws exactly the
+/// sheet-spanning rail the gate exists to catch. Past this size each pin in
+/// the run gets its own independent flag instead, which is how a real
+/// schematic draws a connector's several ground pins anyway.
+const MAX_MERGED_STUB_LEN_UM: i64 = 24_000;
+const MAX_MERGED_STUB_BENDS: usize = 2;
+
 /// Gap left between packed cluster blocks (um), and the slack around a
 /// block's drawn extent for its net-label glyphs/text. Two settings: blocks
 /// *inside* one cluster (an IC and its decoupling caps) are packed tight,
@@ -273,8 +288,17 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             for run in runs {
                 let points: Vec<graph::Point> =
                     run.iter().map(|(_, port_idx)| node.port_point(top_left, *port_idx)).collect();
-                if points.len() == 1 {
-                    labels.push(NetLabel { net: net.clone(), at: Point { x: points[0].x, y: points[0].y } });
+                let stub_points: Vec<graph::Point> =
+                    run.iter().map(|(_, port_idx)| node.stub_tip(top_left, *port_idx)).collect();
+                let stub_len: i64 = stub_points.windows(2).map(|w| (w[0].x - w[1].x).abs() + (w[0].y - w[1].y).abs()).sum();
+                let stub_bends = stub_points.len().saturating_sub(2);
+                if points.len() == 1 || stub_len > MAX_MERGED_STUB_LEN_UM || stub_bends > MAX_MERGED_STUB_BENDS {
+                    // A single pin, or a run too wide to read as one local
+                    // jumper (see `MAX_MERGED_STUB_LEN_UM`): flag each pin
+                    // independently, with no connecting wire at all.
+                    for p in &points {
+                        labels.push(NetLabel { net: net.clone(), at: Point { x: p.x, y: p.y } });
+                    }
                 } else {
                     // Adjacent same-net pins on one part: a single flag at
                     // the run's midpoint plus a short bus stub joining the
@@ -284,8 +308,6 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                     let mid_x = points.iter().map(|p| p.x).sum::<i64>() / points.len() as i64;
                     let mid_y = points.iter().map(|p| p.y).sum::<i64>() / points.len() as i64;
                     labels.push(NetLabel { net: net.clone(), at: Point { x: mid_x, y: mid_y } });
-                    let stub_points: Vec<graph::Point> =
-                        run.iter().map(|(_, port_idx)| node.stub_tip(top_left, *port_idx)).collect();
                     wires.push(Wire {
                         net: net.clone(),
                         pins: run.iter().map(|(pin_ref, _)| pin_ref.clone()).collect(),
@@ -1081,7 +1103,7 @@ mod tests {
     }
 
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: None, package: None, footprint: None, pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, pins, body_um: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {
@@ -1196,6 +1218,45 @@ mod tests {
         assert!(sch.wires.iter().all(|w| w.net != "GND"), "dense GND net must not be wired");
         let gnd_labels: Vec<_> = sch.labels.iter().filter(|l| l.net == "GND").collect();
         assert_eq!(gnd_labels.len(), 6, "one label per pin on the dense GND net");
+    }
+
+    #[test]
+    fn a_wide_multi_ground_pin_connector_flags_each_pin_independently() {
+        // J1's real case: several ground pins on *one* part (a USB-C
+        // receptacle's redundant GND pads), spread across a wide symbol.
+        // These land on the same side with consecutive port indices (see
+        // `build_ports`), so without `MAX_MERGED_STUB_LEN_UM`/`_BENDS` they
+        // would be joined into one bus stub -- exactly the sheet-spanning,
+        // multi-bend "wire" `schematic_power_net_as_wire` exists to catch.
+        let j1 = part(
+            "J1",
+            vec![
+                pin("1", "GND", PinKind::Ground),
+                pin("2", "VBUS", PinKind::Power),
+                pin("3", "CC1", PinKind::Signal),
+                pin("4", "VBUS", PinKind::Power),
+                pin("5", "GND", PinKind::Ground),
+                pin("6", "GND", PinKind::Ground),
+                pin("7", "VBUS", PinKind::Power),
+                pin("8", "GND", PinKind::Ground),
+                pin("9", "GND", PinKind::Ground),
+            ],
+        );
+        let r1 = part("R1", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)]);
+        let model = ConstraintModel {
+            parts: vec![j1, r1],
+            nets: vec![
+                net("GND", &["J1.1", "J1.5", "J1.6", "J1.8", "J1.9"]),
+                net("VBUS", &["J1.2", "J1.4", "J1.7"]),
+                net("CC1", &["J1.3", "R1.1"]),
+            ],
+            ..Default::default()
+        };
+        let d = derive_schematic(&model, &opts(7)).unwrap();
+        let sch = d.schematic.unwrap();
+        assert!(sch.wires.iter().all(|w| w.net != "GND"), "a widely spread same-part GND run must not become one bendy wire: {:?}", sch.wires);
+        let gnd_labels: Vec<_> = sch.labels.iter().filter(|l| l.net == "GND").collect();
+        assert_eq!(gnd_labels.len(), 5, "one flag per ground pin, not one flag for the whole run");
     }
 
     #[test]

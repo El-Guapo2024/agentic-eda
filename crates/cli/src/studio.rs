@@ -104,6 +104,67 @@ fn serve_file(stream: &mut TcpStream, root: &Path, rel: &str) -> Result<(), Stri
     }
 }
 
+/// Where KiCad's own installed 3D model library lives, in precedence
+/// order: `EDA_KICAD_3DMODELS_DIR`, then the well-known macOS install
+/// path -- same "env var, then a sane default" shape as [`ui_dir`].
+fn kicad_3dmodels_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("EDA_KICAD_3DMODELS_DIR") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    PathBuf::from("/Applications/KiCad/KiCad.app/Contents/SharedSupport/3dmodels")
+}
+
+/// GET /api/3dmodel?name=<Lib.3dshapes/File.ext> -- serves one file out
+/// of KiCad's own installed 3D model library, read-only, format-
+/// agnostic (whatever bytes are on disk at that path). `name` is
+/// rejected outright if it contains `..` or is itself an absolute path;
+/// what's left is resolved against the library root and canonicalized,
+/// the same traversal protection [`serve_file`] already uses for the UI
+/// directory, so nothing outside that one directory tree is ever
+/// readable through this route. Not percent-decoded: real KiCad
+/// library/file names are plain ASCII (letters, digits, `_.-` and the
+/// one literal `/` between library and file) with nothing that needs
+/// escaping in a query string, so the caller sends `name` unencoded
+/// rather than this needing a general percent-decoder for one path.
+///
+/// The task this route was built for asked for `.wrl` (VRML) files
+/// specifically, loaded client-side with three's VRMLLoader -- checked
+/// directly against the KiCad 10.99.0 install on this machine
+/// (`/Applications/KiCad/KiCad.app`, `EDA_KICAD_3DMODELS_DIR` unset) and
+/// it ships zero `.wrl` files: 7238 `.step` files and no VRML anywhere
+/// under 3dmodels/. Modern KiCad (this one included) bundles STEP, not
+/// VRML, for its footprint 3D models. Three.js has no STEP loader (it's
+/// a full CAD B-rep format, not a mesh format a mesh loader can read),
+/// so this route is real and correct but nothing in this app's frontend
+/// calls it yet -- wiring VRMLLoader up against a library that has no
+/// `.wrl` files would 404 on every single model. Left in place as
+/// working, generically useful (format-agnostic) infrastructure for
+/// whatever actually converts/serves real geometry later, rather than
+/// building a client-side loader that can only ever fail here.
+fn serve_3dmodel(stream: &mut TcpStream, name: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains("..") || Path::new(name).is_absolute() {
+        return respond(stream, "400 Bad Request", "text/plain", b"invalid model name");
+    }
+    let root = kicad_3dmodels_dir();
+    let candidate = root.join(name);
+    let resolved = candidate.canonicalize().ok().zip(root.canonicalize().ok()).filter(|(p, r)| p.starts_with(r)).map(|(p, _)| p);
+    match resolved.and_then(|p| std::fs::read(&p).map(|b| (p, b)).ok()) {
+        // Content-Type by actual extension, not assumed VRML -- this
+        // library is all .step right now (see the doc comment above).
+        Some((p, bytes)) => {
+            let kind = match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
+                "wrl" => "model/vrml",
+                "step" | "stp" => "model/step",
+                _ => "application/octet-stream",
+            };
+            respond(stream, "200 OK", kind, &bytes)
+        }
+        None => respond(stream, "404 Not Found", "text/plain", b"model not found"),
+    }
+}
+
 fn mime_of(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "html" => "text/html; charset=utf-8",
@@ -155,12 +216,21 @@ fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Optio
             Ok(svg) => respond(stream, "200 OK", "image/svg+xml", svg.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
+        ("GET", "/api/3dmodel") => {
+            let query = target.split('?').nth(1).unwrap_or("");
+            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
+            serve_3dmodel(stream, name)
+        }
         ("GET", "/api/schematic") => {
             let v = schematic_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/drc") => {
             let v = drc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
+        ("GET", "/api/ratsnest") => {
+            let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("POST", "/api/cmd") => {
@@ -464,4 +534,18 @@ fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         })
         .collect();
     Ok(json!({ "violations": violations, "counts": counts }))
+}
+
+/// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest
+/// display -- every still-missing copper connection, one line per pair,
+/// `from`/`to` in board-space micrometers like every other endpoint here.
+/// Computed by `eda_connectivity` (KiCad's `CN_CONNECTIVITY_ALGO`/`RN_NET`
+/// ported; see `crates/connectivity`), which does its own from-scratch
+/// pass over `design`/`model` each call -- no caching, same as every other
+/// read here.
+fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let report = eda_connectivity::analyze(&design, &model);
+    let edges: Vec<Value> = report.ratsnest.iter().map(|e| json!({ "net": e.net, "from": [e.from.x, e.from.y], "to": [e.to.x, e.to.y] })).collect();
+    Ok(json!({ "edges": edges }))
 }

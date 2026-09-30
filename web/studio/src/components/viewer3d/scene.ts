@@ -49,7 +49,7 @@
 // and the bottom-side mirror into `pads[].x/y` and `courtyard`.
 import * as THREE from "three";
 import type { BoardState, BoardText, Part, Shape, Side } from "../../api/types";
-import { layerColor, copperColorKey } from "../canvas/layers";
+import { layerColor } from "../canvas/layers";
 import { circleThrough, normalizeSweep } from "../canvas/painter";
 
 // ---------------------------------------------------------------------
@@ -132,29 +132,36 @@ function layerY(layerName: string, layerOrder: readonly string[]): number {
 }
 
 // ---------------------------------------------------------------------
-// Colors. Copper (tracks) reuses this app's own source-verified 2D
-// theme (colors.json via layerColor()/copperColorKey()) -- KiCad's real
-// 2D editor colors F.Cu/B.Cu red/blue to tell layers apart, not by
-// physical appearance, and this view keeps that same distinction rather
-// than inventing a third, unverified "3D copper" color. Mask, pads and
-// silk get KiCad's usual realistic 3D-viewer look instead (green/gold
-// ENIG/white, per explicit instruction): this app's 2D theme colors for
-// those layers are bright layer-distinction tints for the 2D editor
-// (e.g. F_Mask is magenta, B_Mask cyan, F_SilkS pale yellow), not real
-// physical colors, so reusing them here would look wrong.
+// Colors. Every material below reads a real value out of colors.json
+// (extracted from common/settings/builtin_color_themes.h): the
+// LAYER_3D_* keys are KiCad's own default 3D-viewer theme (background
+// gradient, board, copper, mask, silkscreen) -- a *different* set of
+// keys from the 2D editor's per-layer F_Cu/B_Cu/F_SilkS/etc (used
+// elsewhere in this app via copperColorKey()), which exist to tell
+// layers apart at a glance in the 2D canvas, not to look physically
+// real (e.g. F_Mask is magenta, B_Mask cyan). The realistic 3D view
+// uses the LAYER_3D_* set instead, matching real KiCad's own default 3D
+// look rather than recoloring the 2D editor's distinguishing tints.
 // ---------------------------------------------------------------------
 
-const REALISTIC_LOOK = {
-  maskGreen: 0x1a5c2e,
-  maskOpacity: 0.82,
-  platedGold: 0xd4af37,
-  silkWhite: 0xf2f2f2,
-};
+/**
+ * A plain silver-grey for SMD pads (HASL/tin finish) -- this app's
+ * verified palette (colors.json, from builtin_color_themes.h) has no
+ * dedicated "SMD finish" 3D color the way it does for the mask/copper/
+ * silkscreen/background entries below, so this one hex is this file's
+ * own reasonable, unsourced placeholder, called out rather than silently
+ * presented as extracted. Everything else in this block (mask, copper,
+ * silkscreen, background, IC body) is a real value, either from
+ * colors.json's LAYER_3D_* keys or given verbatim by the task ("a
+ * KiCad-like mid grey (about #3a3a3a)").
+ */
+const SMD_FINISH_GREY = 0xc8c8c8;
+const IC_BODY_GREY = 0x3a3a3a;
 
 /**
  * KiCad theme colors are `#RRGGBBAA`; THREE.Color only understands RGB.
  * The theme itself already encodes translucency this way -- mask
- * entries are ~0x66 alpha, everything else ~0xff -- so this alpha *is*
+ * entries are ~0xd4 alpha, everything else ~0xff -- so this alpha *is*
  * this app's verified "low opacity" for the solder mask, not a second,
  * separately-invented constant.
  */
@@ -169,20 +176,36 @@ function hexToColor(hex: string): THREE.Color {
   return hexToColorAlpha(hex).color;
 }
 
-function copperMaterial(bucketKey: string): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor(bucketKey)), metalness: 0.7, roughness: 0.4 });
+/**
+ * One shared copper look for every track regardless of layer --
+ * colors.json's LAYER_3D_COPPER_TOP (from builtin_color_themes.h) is
+ * KiCad's *default* 3D-viewer copper color, a single gold-brass tone,
+ * not the 2D editor's per-layer red/blue/etc (copperColorKey/layerColor
+ * elsewhere in this app): the 2D canvas colors layers to tell them
+ * apart at a glance, the realistic 3D view colors copper as copper.
+ * Slightly raised + visible through the translucent mask above it (see
+ * layerY/maskCenterY) is what reads as "copper under mask" here.
+ */
+function copperMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_COPPER_TOP")), metalness: 0.75, roughness: 0.35 });
 }
 
-/** Pads and via barrels: both are plated/finished copper features (ENIG = gold, KiCad's usual 3D-viewer default finish), sharing one material rather than two identical ones. */
+/** Via barrels and through-hole pad rings: plated copper (ENIG/HASL gold), shinier than a flat trace. */
 function platedMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: REALISTIC_LOOK.platedGold, metalness: 0.85, roughness: 0.3 });
+  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_COPPER_TOP")), metalness: 0.9, roughness: 0.22 });
 }
 
-function maskMaterial(): THREE.MeshStandardMaterial {
+/** SMD pad lands: silver-grey HASL/tin finish, distinct from a via/TH pad's gold plating -- see the reference renders this task was matched against. */
+function smdPadMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: SMD_FINISH_GREY, metalness: 0.6, roughness: 0.4 });
+}
+
+function maskMaterial(side: Side): THREE.MeshStandardMaterial {
+  const { color, alpha } = hexToColorAlpha(layerColor(side === "top" ? "LAYER_3D_SOLDERMASK_TOP" : "LAYER_3D_SOLDERMASK_BOTTOM"));
   return new THREE.MeshStandardMaterial({
-    color: REALISTIC_LOOK.maskGreen,
+    color,
     transparent: true,
-    opacity: REALISTIC_LOOK.maskOpacity,
+    opacity: alpha,
     // ShapeGeometry is one-sided and we do not control (or trust) the
     // winding direction of an arbitrary board outline -- see buildSlab's
     // comment. DoubleSide + no depthWrite keeps a translucent tint
@@ -195,38 +218,33 @@ function maskMaterial(): THREE.MeshStandardMaterial {
   });
 }
 
-function silkMaterial(): THREE.LineBasicMaterial {
-  return new THREE.LineBasicMaterial({ color: REALISTIC_LOOK.silkWhite });
+function silkMaterial(side: Side): THREE.LineBasicMaterial {
+  return new THREE.LineBasicMaterial({ color: hexToColor(layerColor(side === "top" ? "LAYER_3D_SILKSCREEN_TOP" : "LAYER_3D_SILKSCREEN_BOTTOM")) });
 }
 
-/**
- * Edge_Cuts (this app's only board-outline-adjacent verified color) is a
- * bright 2D drawing-layer stroke color, not a laminate/substrate color
- * -- using it would tint the whole slab a garish outline-yellow. There
- * is no verified substrate color in this app's palette (colors.json is
- * 2D-canvas layer colors; raw FR4 laminate is never one of those
- * layers), so this is an explicit, arbitrary, unverified placeholder
- * (a plausible raw-fibreglass tan), not a KiCad color -- called out here
- * rather than silently presented as sourced.
- */
+/** The board substrate -- colors.json's LAYER_3D_BOARD (from builtin_color_themes.h), a near-black dark brown that reads almost black on the slab's vertical edge under normal lighting, matching KiCad's own 3D render. */
 function boardMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: 0xc9b380, roughness: 0.85, metalness: 0.05, side: THREE.DoubleSide });
+  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_BOARD")), roughness: 0.85, metalness: 0.05, side: THREE.DoubleSide });
 }
 
 /**
  * No real per-part color data (see PART_HEIGHT_MM), so this app's own
  * KiCad-package heuristic (already used for the schematic's passive
- * glyphs -- schematic/layout.ts's isTwoPinPassive) stands in: dark grey
- * for anything else (ICs, connectors, switches...), tan for a
- * recognized 2-pin passive, matching KiCad's own default placeholder
- * body colors.
+ * glyphs -- schematic/layout.ts's isTwoPinPassive) stands in: a mid grey
+ * for anything else (ICs, connectors, switches...) -- IC_BODY_GREY,
+ * given verbatim by the task ("a KiCad-like mid grey (about #3a3a3a)")
+ * because a near-black body was reading as a hole in the board -- tan
+ * for a recognized 2-pin passive, matching KiCad's own default
+ * placeholder body colors.
  */
 function icBodyMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.7, metalness: 0.2 });
+  return new THREE.MeshStandardMaterial({ color: IC_BODY_GREY, roughness: 0.7, metalness: 0.2 });
 }
 function passiveBodyMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color: 0xc9a876, roughness: 0.6, metalness: 0.1 });
 }
+/** A lighter edge outline on every part body, per the task ("a lighter edge, or a soft outline") -- cheap (one THREE.EdgesGeometry per box) and keeps a mid-grey body from reading as a flat hole against the board. */
+const PART_EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0x8a8a8a });
 /** Same heuristic as schematic/layout.ts's isTwoPinPassive, adapted to a PCB Part (pad count stands in for pin count -- this type has no pin list). */
 function isPassivePart(part: Part): boolean {
   if ((part.pads?.length ?? 0) !== 2) return false;
@@ -310,7 +328,7 @@ function buildSlab(shape: THREE.Shape): THREE.Mesh | null {
  */
 function buildMask(shape: THREE.Shape, side: Side): THREE.Mesh {
   const geometry = new THREE.ShapeGeometry(shape);
-  const mesh = new THREE.Mesh(geometry, maskMaterial());
+  const mesh = new THREE.Mesh(geometry, maskMaterial(side));
   mesh.rotation.x = Math.PI / 2;
   mesh.position.y = maskCenterY(side);
   mesh.name = `solder-mask-${side}`;
@@ -390,13 +408,13 @@ function addTrack(group: THREE.Group, ptsMm: ReadonlyArray<[number, number]>, y:
  * only draws a zone's outline) -- this renders the *outline polygon
  * itself* as a flat, translucent copper-colored fill, an honest stand-in
  * for "the pour would go here" rather than a real clearance-aware fill
- * shape. Reuses the same per-layer copper color as tracks/pads
- * (copperColorKey/layerColor) so a zone reads as "the same layer" as the
- * copper it's on, distinguished from solid copper only by opacity.
+ * shape. Same LAYER_3D_COPPER_TOP tone as tracks/pads (not the 2D
+ * editor's per-layer red/blue), distinguished from solid copper only by
+ * opacity.
  */
-function zoneMaterial(bucketKey: string): THREE.MeshStandardMaterial {
+function zoneMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
-    color: hexToColor(layerColor(bucketKey)),
+    color: hexToColor(layerColor("LAYER_3D_COPPER_TOP")),
     transparent: true,
     opacity: 0.4,
     // Outline winding (board.routing.zones[].outline) is just as
@@ -441,27 +459,13 @@ function addZoneFill(group: THREE.Group, outlineMm: ReadonlyArray<[number, numbe
 // ---------------------------------------------------------------------
 
 /**
- * Silkscreen simplification: this data model has no font/stroke glyph
- * data (no per-character outlines), so drawing actual silkscreen TEXT
- * in 3D is out of scope. As a stand-in that still shows where every
- * part sits, this draws each placed part's courtyard rectangle as a
- * thin line loop in the silkscreen color. This is not real silkscreen
- * art.
- */
-function addSilkOutline(group: THREE.Group, courtyardMm: readonly [number, number, number, number], side: Side, material: THREE.LineBasicMaterial): void {
-  const [minX, minY, maxX, maxY] = courtyardMm;
-  const y = silkY(side);
-  const points = [new THREE.Vector3(minX, y, minY), new THREE.Vector3(maxX, y, minY), new THREE.Vector3(maxX, y, maxY), new THREE.Vector3(minX, y, maxY)];
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const loop = new THREE.LineLoop(geometry, material);
-  group.add(loop);
-}
-
-/**
  * Part body simplification: no real 3D model data exists for any part
  * (task spec: "There are no 3D models yet"). Every placed part renders
  * as a plain box sized to its courtyard footprint and PART_HEIGHT_MM
- * tall, sitting on the board surface on its own side.
+ * tall, sitting on the board surface on its own side. A lighter edge
+ * outline (PART_EDGE_MATERIAL) is drawn on top of the box so a mid-grey
+ * body still reads as a raised part against the board, not a flat patch
+ * -- see PART_EDGE_MATERIAL's own comment.
  */
 function addPartBody(group: THREE.Group, courtyardMm: readonly [number, number, number, number], side: Side, material: THREE.Material): void {
   const [minX, minY, maxX, maxY] = courtyardMm;
@@ -470,6 +474,9 @@ function addPartBody(group: THREE.Group, courtyardMm: readonly [number, number, 
   const geometry = new THREE.BoxGeometry(width, PART_HEIGHT_MM, depth);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set((minX + maxX) / 2, partBodyCenterY(side), (minY + maxY) / 2);
+  mesh.name = "part-body";
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), PART_EDGE_MATERIAL);
+  mesh.add(edges);
   group.add(mesh);
 }
 
@@ -482,8 +489,8 @@ function silkSide(layerName: string): Side {
   return layerName.toLowerCase().startsWith("b.") ? "bottom" : "top";
 }
 
-function silkFillMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: REALISTIC_LOOK.silkWhite, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+function silkFillMaterial(side: Side): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor(side === "top" ? "LAYER_3D_SILKSCREEN_TOP" : "LAYER_3D_SILKSCREEN_BOTTOM")), roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
 }
 
 const ARC_SEGMENTS = 24;
@@ -592,12 +599,24 @@ const TEXT_TEXTURE_PX_PER_MM = 48;
  * maps it onto a flat plane in the silk layer, so the label is legible
  * in the 3D view rather than just a placeholder box.
  */
-function buildTextMesh(t: BoardText): THREE.Mesh {
-  const side = silkSide(t.layer);
-  const sizeMm = Math.max(mm(t.size), 0.01);
+interface SilkTextSpec {
+  content: string;
+  xMm: number;
+  zMm: number;
+  sizeMm: number;
+  angleDeg: number;
+  side: Side;
+  justify: "left" | "center" | "right";
+  mirror: boolean;
+  name: string;
+}
+
+/** Shared by buildTextMesh (Place > Text) and buildRefDesignatorMesh (every placed part's silk reference) -- see either caller's own comment for why a rendered-string texture stands in for real glyph outlines. */
+function buildSilkTextMesh(spec: SilkTextSpec): THREE.Mesh {
+  const sizeMm = Math.max(spec.sizeMm, 0.01);
   const px = Math.max(TEXT_TEXTURE_PX_PER_MM * sizeMm, 1);
   const font = `${px}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  const content = t.content || " ";
+  const content = spec.content || " ";
 
   const canvas = document.createElement("canvas");
   const measureCtx = canvas.getContext("2d")!;
@@ -618,39 +637,124 @@ function buildTextMesh(t: BoardText): THREE.Mesh {
   const widthMm = (canvas.width / px) * sizeMm;
   const heightMm = (canvas.height / px) * sizeMm;
   const geometry = new THREE.PlaneGeometry(widthMm, heightMm);
-  // The texture itself was always drawn left-aligned -- anchor (t.x,t.y)
-  // at the plane's left/center/right edge per `justify` by shifting the
+  // The texture itself was always drawn left-aligned -- anchor (x,z) at
+  // the plane's left/center/right edge per `justify` by shifting the
   // geometry in its own local space, before the flatten/yaw below, the
   // same way the 2D canvas's translate-then-rotate-then-textAlign order
   // keeps the alignment offset in the text's own (unrotated) frame.
-  const offsetX = t.justify === "left" ? widthMm / 2 : t.justify === "right" ? -widthMm / 2 : 0;
+  const offsetX = spec.justify === "left" ? widthMm / 2 : spec.justify === "right" ? -widthMm / 2 : 0;
   geometry.translate(offsetX, 0, 0);
   // Flatten the plane (local XY, facing local +Z) into this file's
   // world board plane (X/Z), facing outward from `side` -- the same
   // local-XY -> world-XZ mapping as buildMask/addZoneFill, mirrored for
   // the bottom side so the printed face looks outward from the board
   // rather than into it.
-  geometry.rotateX(side === "top" ? -Math.PI / 2 : Math.PI / 2);
+  geometry.rotateX(spec.side === "top" ? -Math.PI / 2 : Math.PI / 2);
 
   const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthWrite: false });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(mm(t.x), silkY(side), mm(t.y));
-  // Millidegrees, CCW-positive in board space -- same conversion and
-  // sign the 2D painter's drawTexts uses for its own (canvas) rotation;
-  // kept consistent here even though this file's world axes are a
-  // separate (if parallel/unmirrored) convention from the 2D canvas's.
-  mesh.rotation.y = -(t.angle / 1000) * (Math.PI / 180);
-  if (t.mirror) mesh.scale.x *= -1;
-  mesh.name = "silk-text";
+  mesh.position.set(spec.xMm, silkY(spec.side), spec.zMm);
+  mesh.rotation.y = -(spec.angleDeg * Math.PI) / 180;
+  if (spec.mirror) mesh.scale.x *= -1;
+  mesh.name = spec.name;
   return mesh;
+}
+
+/**
+ * Free-standing board text (Place > Text) in 3D. Like the reference
+ * designator below, this data model has no font/stroke glyph outlines to
+ * draw as real vector silkscreen art (same limitation the 2D painter's
+ * own drawTexts notes) -- instead of a bare bounding-box line loop,
+ * though, this renders the actual string into an offscreen canvas and
+ * maps it onto a flat plane in the silk layer, so the label is legible
+ * in the 3D view rather than just a placeholder box.
+ */
+function buildTextMesh(t: BoardText): THREE.Mesh {
+  return buildSilkTextMesh({
+    content: t.content,
+    xMm: mm(t.x),
+    zMm: mm(t.y),
+    sizeMm: mm(t.size),
+    // Millidegrees, CCW-positive in board space -- same conversion and
+    // sign the 2D painter's drawTexts uses for its own (canvas)
+    // rotation; kept consistent here even though this file's world axes
+    // are a separate (if parallel/unmirrored) convention from the 2D
+    // canvas's.
+    angleDeg: t.angle / 1000,
+    side: silkSide(t.layer),
+    justify: t.justify,
+    mirror: t.mirror,
+    name: "silk-text",
+  });
+}
+
+/**
+ * Every placed part's own reference designator ("R1", "U1", ...) as
+ * white silk text -- KiCad's real 3D render shows this for every part
+ * (no courtyard rectangle; this app drew one as a stand-in before real
+ * text rendering existed here, which doesn't match and has been
+ * removed). Position/size/side-of-board logic (courtyard center, font
+ * size clamped to the courtyard's own size, `part.label` choosing
+ * above/below/left/right of the box) is ported straight from
+ * components/canvas/painter.ts's drawFootprint -- same convention as the
+ * 2D PCB canvas's own reference-designator label, including *not*
+ * rotating the text with `part.rot` (that 2D convention, kept here
+ * rather than inventing a second one for 3D).
+ */
+function buildRefDesignatorMesh(part: Part): THREE.Mesh | null {
+  const courtyard = part.courtyard;
+  const side = part.side;
+  if (!courtyard || !side) return null;
+  const [x0, y0, x1, y1] = courtyard;
+  const sizeUm = Math.max(500, Math.min(900, Math.min(x1 - x0, y1 - y0) * 0.45));
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  let tx = cx;
+  let ty = y0 - sizeUm * 0.3;
+  let justify: "left" | "center" | "right" = "center";
+  if (part.label === "below") ty = y1 + sizeUm * 0.95;
+  if (part.label === "left") {
+    tx = x0 - sizeUm * 0.3;
+    ty = cy;
+    justify = "right";
+  }
+  if (part.label === "right") {
+    tx = x1 + sizeUm * 0.3;
+    ty = cy;
+    justify = "left";
+  }
+  return buildSilkTextMesh({
+    content: part.ref,
+    xMm: mm(tx),
+    zMm: mm(ty),
+    sizeMm: mm(sizeUm),
+    angleDeg: 0,
+    side,
+    justify,
+    mirror: false,
+    name: "part-ref",
+  });
 }
 
 // ---------------------------------------------------------------------
 // Top-level: board -> Group
 // ---------------------------------------------------------------------
 
+export interface BuildBoardOptions {
+  /** KiCad's 3D viewer can hide its rendered component models independently of the board/copper/silk -- there are no real models here yet (see PART_HEIGHT_MM), so this hides the placeholder boxes instead. Independent of showSilkscreen: a part's reference designator is silkscreen ink, not a 3D model, same as real KiCad. Default true. */
+  showComponents?: boolean;
+  /** Default true. */
+  showSilkscreen?: boolean;
+  /** Default true. */
+  showSolderMask?: boolean;
+}
+
 /** Builds the whole board as a single Group. Safe to call with a board that has no outline and/or no placed parts -- renders whatever subset of the geometry makes sense, never throws. */
-export function buildBoardGroup(board: BoardState): THREE.Group {
+export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {}): THREE.Group {
+  const showComponents = opts.showComponents ?? true;
+  const showSilkscreen = opts.showSilkscreen ?? true;
+  const showSolderMask = opts.showSolderMask ?? true;
+
   const group = new THREE.Group();
   group.name = "viewer3d-board";
 
@@ -659,29 +763,25 @@ export function buildBoardGroup(board: BoardState): THREE.Group {
   if (shape) {
     const slab = buildSlab(shape);
     if (slab) group.add(slab);
-    group.add(buildMask(shape, "top"));
-    group.add(buildMask(shape, "bottom"));
+    if (showSolderMask) {
+      group.add(buildMask(shape, "top"));
+      group.add(buildMask(shape, "bottom"));
+    }
   }
 
   const layerOrder = board.layers.length > 0 ? board.layers : ["F.Cu", "B.Cu"];
 
-  // One material per copper bucket key, reused across every pad/track/via
-  // on that layer instead of allocating a new one per element.
-  const copperMaterials = new Map<string, THREE.MeshStandardMaterial>();
-  const copperMatFor = (bucketKey: string): THREE.MeshStandardMaterial => {
-    let material = copperMaterials.get(bucketKey);
-    if (!material) {
-      material = copperMaterial(bucketKey);
-      copperMaterials.set(bucketKey, material);
-    }
-    return material;
-  };
+  // One shared material per kind, reused across every element instead of
+  // allocating a new one per pad/track/via/zone (KiCad's default 3D
+  // theme has a single copper/mask/silk tone each, not a per-layer set).
+  const copperMat = copperMaterial();
+  const zoneMat = zoneMaterial();
 
   if (board.routing) {
     for (const track of board.routing.tracks) {
       const y = layerY(track.layer, layerOrder);
       const ptsMm: Array<[number, number]> = track.pts.map(([x, yy]) => [mm(x), mm(yy)]);
-      addTrack(group, ptsMm, y, mm(track.width), copperMatFor(copperColorKey(track.layer)));
+      addTrack(group, ptsMm, y, mm(track.width), copperMat);
     }
     if (board.routing.vias.length > 0) {
       const viaMat = platedMaterial();
@@ -690,27 +790,20 @@ export function buildBoardGroup(board: BoardState): THREE.Group {
       }
     }
     if (board.routing.zones.length > 0) {
-      const zoneMaterials = new Map<string, THREE.MeshStandardMaterial>();
-      const zoneMatFor = (bucketKey: string): THREE.MeshStandardMaterial => {
-        let material = zoneMaterials.get(bucketKey);
-        if (!material) {
-          material = zoneMaterial(bucketKey);
-          zoneMaterials.set(bucketKey, material);
-        }
-        return material;
-      };
       for (const zone of board.routing.zones) {
         const y = zoneY(zone.layer, layerOrder);
         const outlineMm: Array<[number, number]> = zone.outline.map(([x, yy]) => [mm(x), mm(yy)]);
-        addZoneFill(group, outlineMm, y, zoneMatFor(copperColorKey(zone.layer)));
+        addZoneFill(group, outlineMm, y, zoneMat);
       }
     }
   }
 
   const topCuY = layerY("F.Cu", layerOrder);
   const botCuY = layerY("B.Cu", layerOrder);
-  const padMat = platedMaterial();
-  const silkMat = silkMaterial();
+  const platedMat = platedMaterial(); // via barrels above already built their own; this one's for through-hole pad rings
+  const smdMat = smdPadMaterial();
+  const silkLineMat = { top: silkMaterial("top"), bottom: silkMaterial("bottom") };
+  const silkFillMat = { top: silkFillMaterial("top"), bottom: silkFillMaterial("bottom") };
   const icMat = icBodyMaterial();
   const passiveMat = passiveBodyMaterial();
 
@@ -719,21 +812,29 @@ export function buildBoardGroup(board: BoardState): THREE.Group {
     if (!part.placed || !side) continue;
 
     for (const pad of part.pads ?? []) {
-      addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, side === "top" ? topCuY : botCuY, padMat);
+      addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, side === "top" ? topCuY : botCuY, pad.th ? platedMat : smdMat);
     }
 
-    const courtyard = part.courtyard;
-    if (courtyard) {
-      const courtyardMm: [number, number, number, number] = [mm(courtyard[0]), mm(courtyard[1]), mm(courtyard[2]), mm(courtyard[3])];
-      addSilkOutline(group, courtyardMm, side, silkMat);
-      addPartBody(group, courtyardMm, side, isPassivePart(part) ? passiveMat : icMat);
+    // Independent toggles, matching real KiCad: "show silkscreen" and
+    // "show components" gate different things (the reference text is
+    // silkscreen ink, not a 3D model), not one hiding the other.
+    if (showSilkscreen) {
+      const refMesh = buildRefDesignatorMesh(part);
+      if (refMesh) group.add(refMesh);
+    }
+    if (showComponents) {
+      const courtyard = part.courtyard;
+      if (courtyard) {
+        const courtyardMm: [number, number, number, number] = [mm(courtyard[0]), mm(courtyard[1]), mm(courtyard[2]), mm(courtyard[3])];
+        addPartBody(group, courtyardMm, side, isPassivePart(part) ? passiveMat : icMat);
+      }
     }
   }
 
-  if (board.drawings) {
-    const silkFillMat = silkFillMaterial();
+  if (board.drawings && showSilkscreen) {
     for (const s of board.drawings.shapes) {
-      addSilkShape(group, s, silkMat, silkFillMat);
+      const side = silkSide(s.layer);
+      addSilkShape(group, s, silkLineMat[side], silkFillMat[side]);
     }
     for (const t of board.drawings.texts) {
       group.add(buildTextMesh(t));
@@ -741,6 +842,29 @@ export function buildBoardGroup(board: BoardState): THREE.Group {
   }
 
   return group;
+}
+
+/**
+ * KiCad's 3D viewer background: a vertical lavender-to-grey gradient
+ * (LAYER_3D_BACKGROUND_TOP/BOTTOM, colors.json), not a flat color. A
+ * flat Scene.background can only be one color, so this renders the
+ * two-stop gradient into a tall, 1px-wide canvas and uses that as the
+ * scene background texture instead -- cheap (built once per mount, not
+ * per frame) and needs no skybox mesh/extra draw call.
+ */
+export function buildBackgroundTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, layerColor("LAYER_3D_BACKGROUND_TOP"));
+  gradient.addColorStop(1, layerColor("LAYER_3D_BACKGROUND_BOTTOM"));
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 /** Traverses `root` disposing every geometry/material exactly once. Call on every rebuild (not just unmount) to avoid leaking GPU resources across board updates/tab switches. */

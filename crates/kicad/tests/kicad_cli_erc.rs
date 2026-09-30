@@ -30,6 +30,7 @@ fn ldo_model() -> ConstraintModel {
     let part = |reference: &str, pins: Vec<Pin>| Part {
         reference: reference.into(),
         mpn: None,
+        lcsc: None,
         value: Some(format!("{reference}_val")),
         package: None,
         footprint: Some("Foo:Bar".into()),

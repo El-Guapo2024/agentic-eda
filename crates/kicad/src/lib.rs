@@ -21,7 +21,7 @@ use eda_model::ir::{Design, NetLabel, SymbolInstance, Wire};
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
-pub use pcb::export_kicad_pcb;
+pub use pcb::{export_kicad_pcb, export_kicad_pro};
 
 mod sexpr;
 mod import;
@@ -379,7 +379,7 @@ mod tests {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), pins, body_um: None, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }

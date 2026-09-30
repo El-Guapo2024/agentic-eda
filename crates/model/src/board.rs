@@ -242,6 +242,7 @@ mod tests {
             .map(|(i, pkg)| Part {
                 reference: format!("U{i}"),
                 mpn: None,
+                lcsc: None,
                 value: None,
                 package: Some((*pkg).into()),
                 footprint: Some((*pkg).into()),

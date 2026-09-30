@@ -843,6 +843,11 @@ fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
         let date = eda::now_rfc3339();
         let pcb = export_kicad_pcb(design, &cx.model, &ExportMeta { date: &date[..10], title })?;
         write(&cx.args.out.join(format!("{title}.kicad_pcb")), pcb.as_bytes())?;
+        // Without a sibling project file, `kicad-cli pcb drc` has no
+        // project to load and checks the board against its own hard-coded
+        // design-rule floors instead of this board's own -- see
+        // `export_kicad_pro`.
+        write(&cx.args.out.join(format!("{title}.kicad_pro")), eda::export_kicad_pro(&cx.model).as_bytes())?;
     }
     if design.placement.is_some() {
         let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
@@ -1073,6 +1078,11 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             }
             if d.routing.is_some() {
                 ok &= print_checks("routing gates", &check_routing(&d, &cx.model));
+                // KiCad's own DRC type names (`unconnected_items`,
+                // `track_dangling`, `via_dangling`) -- see
+                // `eda_connectivity::check`, ported from
+                // `DRC_TEST_PROVIDER_CONNECTIVITY::Run`.
+                ok &= print_checks("connectivity", &eda_connectivity::check(&d, &cx.model));
             }
             if cx.args.drc {
                 ok &= print_drc(&d, &cx.model);
