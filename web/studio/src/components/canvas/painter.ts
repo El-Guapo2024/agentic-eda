@@ -218,6 +218,35 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
   }
 }
 
+/**
+ * Zones as outlines only -- fill isn't computed anywhere in this model
+ * (no polygon-clipping/thermal-relief engine exists), so drawing a solid
+ * copper-colored fill would show area that isn't actually guaranteed
+ * copper. KiCad has the same "outline display mode" for exactly this
+ * situation (a zone whose fill is stale/not yet run).
+ */
+function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
+  if (!board.routing) return;
+  for (const z of board.routing.zones) {
+    const key = copperColorKey(z.layer);
+    const bucket = key === "f_cu" ? "f_cu" : key === "b_cu" ? "b_cu" : "inner";
+    if (bucket !== wantLayer) continue;
+    if (opts.layerVisible[z.layer] === false) continue;
+    if (z.outline.length < 3) continue;
+    const selected = opts.selection.has(z.id);
+    withAlpha(ctx, layerAlpha(opts, z.layer), () => {
+      ctx.beginPath();
+      z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.closePath();
+      ctx.strokeStyle = selected ? layerColor("selection") : layerColor(key);
+      ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
+      ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+}
+
 function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, curved: boolean) {
   const byNet = padPointsByNet(board.parts);
   ctx.strokeStyle = layerColor("ratsnest");
@@ -337,10 +366,19 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   const byLayer: Record<string, () => void> = {
     grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm),
     background: () => drawOutline(ctx, view, board.outline),
-    b_cu: () => drawTracksAndVias(ctx, view, board, opts, "b_cu"),
-    in2_cu: () => drawTracksAndVias(ctx, view, board, opts, "inner"),
+    b_cu: () => {
+      drawZones(ctx, view, board, opts, "b_cu");
+      drawTracksAndVias(ctx, view, board, opts, "b_cu");
+    },
+    in2_cu: () => {
+      drawZones(ctx, view, board, opts, "inner");
+      drawTracksAndVias(ctx, view, board, opts, "inner");
+    },
     in1_cu: () => {},
-    f_cu: () => drawTracksAndVias(ctx, view, board, opts, "f_cu"),
+    f_cu: () => {
+      drawZones(ctx, view, board, opts, "f_cu");
+      drawTracksAndVias(ctx, view, board, opts, "f_cu");
+    },
     ratsnest: () => opts.showRatsnest && !board.routing && drawRatsnest(ctx, view, board, opts.ratsnestCurved),
   };
   for (const key of drawOrder()) byLayer[key]?.();
