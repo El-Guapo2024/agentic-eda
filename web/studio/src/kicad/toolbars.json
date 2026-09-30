@@ -2,16 +2,16 @@
   "meta": {
     "generated": true,
     "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
-    "kicadCommitDate": "2026-05-04T07:39:57+03:00",
-    "extractedAt": "2026-09-30T00:52:04.538Z",
+    "kicadCommitDate": null,
+    "extractedAt": "2026-09-30T02:51:28.418Z",
     "sourceFiles": [
       "pcbnew/toolbars_pcb_editor.cpp",
       "pcbnew/tools/pcb_actions.cpp",
       "common/tool/actions.cpp",
-      "common/hotkey_store.cpp",
-      "pcbnew/router/router_tool.cpp"
+      "pcbnew/router/router_tool.cpp",
+      "common/hotkey_store.cpp"
     ],
-    "note": "heuristic extraction -- action/separator tokens only, no groups or controls; see script header comment"
+    "note": "group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call this script found; auxiliary toolbar combo-box controls are not parsed"
   },
   "toolbars": [
     {
@@ -181,14 +181,6 @@
         },
         {
           "type": "action",
-          "action": "common.Control.editGrids"
-        },
-        {
-          "type": "action",
-          "action": "common.Control.editGridOrigin"
-        },
-        {
-          "type": "action",
           "action": "common.Control.toggleGridOverrides"
         },
         {
@@ -196,43 +188,37 @@
           "action": "common.Control.togglePolarCoords"
         },
         {
-          "type": "action",
-          "action": "common.Control.metricUnits"
+          "type": "group",
+          "label": "Units",
+          "icon": "unit_mm",
+          "items": [
+            "common.Control.metricUnits",
+            "common.Control.imperialUnits",
+            "common.Control.mils"
+          ]
         },
         {
-          "type": "action",
-          "action": "common.Control.imperialUnits"
-        },
-        {
-          "type": "action",
-          "action": "common.Control.mils"
-        },
-        {
-          "type": "action",
-          "action": "common.Control.cursorSmallCrosshairs"
-        },
-        {
-          "type": "action",
-          "action": "common.Control.cursorFullCrosshairs"
-        },
-        {
-          "type": "action",
-          "action": "common.Control.cursor45Crosshairs"
+          "type": "group",
+          "label": "Crosshair modes",
+          "icon": "cursor_shape",
+          "items": [
+            "common.Control.cursorSmallCrosshairs",
+            "common.Control.cursorFullCrosshairs",
+            "common.Control.cursor45Crosshairs"
+          ]
         },
         {
           "type": "separator"
         },
         {
-          "type": "action",
-          "action": "pcbnew.EditorControl.lineModeFree"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.EditorControl.lineModeOrthonal"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.EditorControl.lineMode45"
+          "type": "group",
+          "label": "Line modes",
+          "icon": "lines_any",
+          "items": [
+            "pcbnew.EditorControl.lineModeFree",
+            "pcbnew.EditorControl.lineModeOrthonal",
+            "pcbnew.EditorControl.lineMode45"
+          ]
         },
         {
           "type": "separator"
@@ -312,12 +298,13 @@
       "orientation": "vertical",
       "items": [
         {
-          "type": "action",
-          "action": "common.Interactive.selectSetRect"
-        },
-        {
-          "type": "action",
-          "action": "common.Interactive.selectSetLasso"
+          "type": "group",
+          "label": "Selection modes",
+          "icon": "cursor",
+          "items": [
+            "common.Interactive.selectSetRect",
+            "common.Interactive.selectSetLasso"
+          ]
         },
         {
           "type": "action",
@@ -331,43 +318,23 @@
           "action": "pcbnew.EditorControl.placeFootprint"
         },
         {
-          "type": "action",
-          "action": "pcbnew.InteractiveRouter.SingleTrack"
+          "type": "group",
+          "label": "Track routing tools",
+          "icon": "add_tracks",
+          "items": [
+            "pcbnew.InteractiveRouter.SingleTrack",
+            "pcbnew.InteractiveRouter.DiffPair"
+          ]
         },
         {
-          "type": "action",
-          "action": "pcbnew.InteractiveRouter.DiffPair"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.InteractiveRouter.HighlightMode"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.InteractiveRouter.ShoveMode"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.InteractiveRouter.WalkaroundMode"
-        },
-        {
-          "type": "separator"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.InteractiveRouter.SettingsDialog"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.LengthTuner.TuneSingleTrack"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.LengthTuner.TuneDiffPair"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.LengthTuner.TuneDiffPairSkew"
+          "type": "group",
+          "label": "Track tuning tools",
+          "icon": "ps_tune_length",
+          "items": [
+            "pcbnew.LengthTuner.TuneSingleTrack",
+            "pcbnew.LengthTuner.TuneDiffPair",
+            "pcbnew.LengthTuner.TuneDiffPairSkew"
+          ]
         },
         {
           "type": "action",
@@ -376,14 +343,6 @@
         {
           "type": "action",
           "action": "pcbnew.InteractiveDrawing.zone"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.ZoneFiller.zoneFillAll"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.ZoneFiller.zoneUnfillAll"
         },
         {
           "type": "action",
@@ -399,18 +358,6 @@
         {
           "type": "action",
           "action": "pcbnew.InteractiveDrawing.arc"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.PointEditor.arcKeepCenter"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.PointEditor.arcKeepEndpoint"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.PointEditor.arcKeepRadius"
         },
         {
           "type": "action",
@@ -445,24 +392,16 @@
           "action": "pcbnew.InteractiveDrawing.drawTable"
         },
         {
-          "type": "action",
-          "action": "pcbnew.InteractiveDrawing.orthogonalDimension"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.InteractiveDrawing.alignedDimension"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.InteractiveDrawing.centerDimension"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.InteractiveDrawing.radialDimension"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.InteractiveDrawing.leader"
+          "type": "group",
+          "label": "Dimension objects",
+          "icon": "add_orthogonal_dimension",
+          "items": [
+            "pcbnew.InteractiveDrawing.orthogonalDimension",
+            "pcbnew.InteractiveDrawing.alignedDimension",
+            "pcbnew.InteractiveDrawing.centerDimension",
+            "pcbnew.InteractiveDrawing.radialDimension",
+            "pcbnew.InteractiveDrawing.leader"
+          ]
         },
         {
           "type": "action",
@@ -476,12 +415,13 @@
           "type": "separator"
         },
         {
-          "type": "action",
-          "action": "common.Control.gridSetOrigin"
-        },
-        {
-          "type": "action",
-          "action": "pcbnew.EditorControl.drillOrigin"
+          "type": "group",
+          "label": "PCB origins and points",
+          "icon": "grid_select_axis",
+          "items": [
+            "common.Control.gridSetOrigin",
+            "pcbnew.EditorControl.drillOrigin"
+          ]
         },
         {
           "type": "action",
@@ -510,9 +450,6 @@
         {
           "type": "action",
           "action": "pcbnew.InteractiveRouter.SelectLayerPair"
-        },
-        {
-          "type": "separator"
         },
         {
           "type": "separator"
