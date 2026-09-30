@@ -358,11 +358,9 @@ fn write_footprint(
         // which the placer, router and gates all go through). KiCad
         // mirrors nothing when it loads a footprint -- it rotates and
         // translates the pad's `(at x y)` whatever the layer -- so the file
-        // has to carry the mirrored x. Written as-is, every bottom-side
-        // pin landed across the part from the copper routed to it (a
-        // 0603's two pins swapped nets). The angle needs nothing: our pads
-        // are symmetric about their own axes, so mirroring one only moves
-        // it.
+        // has to carry the mirrored x. The pad's own rotation, if any, is
+        // handled by `pad_file_angle` (mirroring flips its sense; see
+        // there), so it needs no mirroring of its own here.
         let px = mm(if fp.side == Side::Bottom { -pad.at.0 } else { pad.at.0 });
         let py = mm(pad.at.1);
         let (w, h) = pad.size;
@@ -371,6 +369,7 @@ fn write_footprint(
         let kind = match pad.kind {
             PadKind::Smd => "smd",
             PadKind::ThroughHole => "thru_hole",
+            PadKind::NonPlatedHole => "np_thru_hole",
         };
         let shape = match pad.shape {
             PadShape::Rect => "rect",
@@ -378,22 +377,31 @@ fn write_footprint(
             PadShape::Circle => "circle",
             PadShape::Oval => "oval",
         };
-        let uuid = duid(&format!("pad:{}:{}", fp.id, pad.number));
-        // KiCad stores a pad's orientation as an absolute angle (footprint
-        // angle + pad's own, which is 0 for us), so the footprint angle
-        // must be repeated here or a rotated part's pads render unrotated.
-        write!(out, "\t\t(pad {} {kind} {shape} (at {px} {py} {rot_deg})", sexpr_str(&pad.number)).unwrap();
+        // Pad numbers repeat by design (a connector's shield tab, several
+        // physical pads on one pin), so the number alone cannot make a
+        // unique uuid; the position can, since two pads of one footprint
+        // never coincide.
+        let uuid = duid(&format!("pad:{}:{}:{}:{}", fp.id, pad.number, pad.at.0, pad.at.1));
+        // KiCad stores a pad's orientation as its footprint's own angle
+        // plus the pad's own (0 for the overwhelming majority of pads) --
+        // see `pad_file_angle` for the mirroring subtlety.
+        let pad_rot_deg = crate::pad_file_angle(fp.side, fp.rot, pad.rot);
+        write!(out, "\t\t(pad {} {kind} {shape} (at {px} {py} {pad_rot_deg})", sexpr_str(&pad.number)).unwrap();
         write!(out, " (size {wmm} {hmm})").unwrap();
         if pad.shape == PadShape::RoundRect {
-            write!(out, " (roundrect_rratio 0.25)").unwrap();
+            write!(out, " (roundrect_rratio {})", fmt_mm_f(pad.roundrect_ratio.unwrap_or(0.25))).unwrap();
         }
         match pad.kind {
-            PadKind::ThroughHole => {
-                // Footprint::validate guarantees a through-hole pad
-                // declares its drill; inventing one here shipped a
-                // different hole than the circuit-json writer invented.
-                let drill = mm(pad.drill.expect("through-hole pad without a drill passed Footprint::validate"));
-                write!(out, " (drill {drill})").unwrap();
+            PadKind::ThroughHole | PadKind::NonPlatedHole => {
+                // Footprint::validate guarantees a through-hole/non-plated
+                // pad declares a drill, round or slot; inventing one here
+                // shipped a different hole than the circuit-json writer
+                // invented.
+                match (pad.drill, pad.drill_slot) {
+                    (Some(d), _) => write!(out, " (drill {})", mm(d)).unwrap(),
+                    (None, Some((w, h))) => write!(out, " (drill oval {} {})", mm(w), mm(h)).unwrap(),
+                    (None, None) => unreachable!("Footprint::validate requires a drill on a through-hole/non-plated pad"),
+                }
                 write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
             }
             PadKind::Smd => {
@@ -405,9 +413,12 @@ fn write_footprint(
                 write!(out, " (layers {} {} {})", sexpr_str(cu), sexpr_str(paste), sexpr_str(mask)).unwrap();
             }
         }
-        if let Some(net_name) = pin_net(&pad.number) {
-            if let Some(&n) = net_num.get(net_name) {
-                write!(out, " (net {n} {})", sexpr_str(net_name)).unwrap();
+        // A non-plated hole has no net by definition -- nothing to look up.
+        if pad.kind != PadKind::NonPlatedHole {
+            if let Some(net_name) = pin_net(&pad.number) {
+                if let Some(&n) = net_num.get(net_name) {
+                    write!(out, " (net {n} {})", sexpr_str(net_name)).unwrap();
+                }
             }
         }
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();

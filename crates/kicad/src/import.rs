@@ -19,6 +19,14 @@
 //! for a format we do not fully own should do -- a newer KiCad adding a
 //! field must not break every board written since.
 //!
+//! Pads carry every feature `Pad` models: number (not necessarily unique --
+//! a connector's shield tab is commonly several physical pads on one pin),
+//! plated/non-plated/smd kind, round or slot (oval) drill, a rotation of
+//! their own relative to their footprint, and a roundrect ratio. A
+//! non-plated hole (`np_thru_hole`) is kept as a pad (mechanical, no net,
+//! no schematic pin) rather than dropped, so it still counts as a hole for
+//! clearance.
+//!
 //! What real boards carry that this does not import, and why (see the
 //! task's report for proposed model shapes):
 //! - **Zones/pours**: counted in [`ImportNotes::zones_skipped`], not
@@ -35,13 +43,6 @@
 //! - **Non-rect/roundrect/circle/oval pads** (trapezoid, custom): mapped to
 //!   `PadShape::Rect` at the pad's nominal `size`, counted in
 //!   [`ImportNotes::non_rect_pad_shapes_approximated`].
-//! - **NPTH (mechanical, non-plated) pads**: skipped entirely (no number,
-//!   no net -- not something `Footprint::validate`'s unique-pad-number rule
-//!   could hold anyway), counted in [`ImportNotes::npth_pads_skipped`].
-//! - **A pad rotated independently of its footprint**: our `Pad` has no
-//!   per-pad rotation, so the pad's centre imports correctly but a nonzero
-//!   delta is dropped, counted in
-//!   [`ImportNotes::pads_with_independent_rotation`].
 //! - **Board-level graphics and text** (`gr_line`/`gr_rect`/`gr_circle`/
 //!   `gr_poly`/`gr_arc`/`gr_text`, any layer other than Edge.Cuts, which
 //!   stays outline-only as before): imported into `design.drawings` as
@@ -64,9 +65,7 @@ use crate::sexpr::{self, Sexpr};
 pub struct ImportNotes {
     pub zones_skipped: usize,
     pub track_arcs_approximated: usize,
-    pub npth_pads_skipped: usize,
     pub non_rect_pad_shapes_approximated: usize,
-    pub pads_with_independent_rotation: usize,
     /// How the board outline was reconstructed: "poly" (one closed
     /// `gr_poly`), "circle" (one `gr_circle`), "lines" (chained
     /// `gr_line`/`gr_rect`/`gr_arc` edges), or "none" (nothing found).
@@ -142,7 +141,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     Ok((design, model, notes))
 }
 
-fn mm_to_um(mm: f64) -> i64 {
+pub(crate) fn mm_to_um(mm: f64) -> i64 {
     (mm * 1000.0).round() as i64
 }
 
@@ -151,7 +150,7 @@ fn mm_to_um(mm: f64) -> i64 {
 /// sense from `eda_model::footprint::to_board`'s rotation matrix, exactly
 /// as noted where the exporter negates it (see `pcb.rs::write_footprint`).
 /// Importing is the same negation run backwards.
-fn import_rot_millideg(file_deg: f64) -> u32 {
+pub(crate) fn import_rot_millideg(file_deg: f64) -> u32 {
     let md = (-file_deg * 1000.0).round() as i64;
     md.rem_euclid(360_000) as u32
 }
@@ -284,6 +283,71 @@ fn footprint_field(fp: &[Sexpr], field: &str) -> Option<String> {
     None
 }
 
+/// Parse one `(pad ...)` node's geometry -- number, kind, shape, position,
+/// size, drill (round or slot), rotation relative to its footprint, and
+/// roundrect ratio. No net: a bare `.kicad_mod` (the library loader) has
+/// none, and the whole-board importer, which does, reads a `(net ...)`
+/// child from the same node itself (see its call site) rather than this
+/// shared function knowing about board-level net codes.
+///
+/// `fp_side`/`fp_rot` are the *footprint's own*, already resolved --
+/// needed to recover this pad's own rotation from its absolute file angle
+/// (see `pad_rot_from_file`). `None` for a pad this reader cannot place at
+/// all (no `at`/`size`).
+pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, notes: &mut ImportNotes) -> Option<Pad> {
+    let number = sexpr::txt(pad, 1).unwrap_or("").to_string();
+    let kind_tok = sexpr::txt(pad, 2).unwrap_or("");
+    let pad_kind = match kind_tok {
+        "np_thru_hole" => PadKind::NonPlatedHole,
+        "smd" | "connect" => PadKind::Smd,
+        _ => PadKind::ThroughHole, // "thru_hole"
+    };
+    let shape_tok = sexpr::txt(pad, 3).unwrap_or("");
+    let pad_shape = match shape_tok {
+        "circle" => PadShape::Circle,
+        "oval" => PadShape::Oval,
+        "roundrect" => PadShape::RoundRect,
+        "rect" => PadShape::Rect,
+        _ => {
+            // trapezoid / custom: no equivalent shape, keep the pad's
+            // nominal rectangle so it still occupies roughly the right
+            // footprint.
+            notes.non_rect_pad_shapes_approximated += 1;
+            PadShape::Rect
+        }
+    };
+
+    let pad_at = sexpr::find(pad, "at")?;
+    let (px, py) = (sexpr::num(pad_at, 1)?, sexpr::num(pad_at, 2)?);
+    let pad_file_rot = sexpr::num(pad_at, 3).unwrap_or(0.0);
+    let rot = crate::pad_rot_from_file(fp_side, fp_rot, pad_file_rot);
+
+    let size = sexpr::find(pad, "size")?;
+    let (w, h) = (sexpr::num(size, 1)?, sexpr::num(size, 2)?);
+
+    // `(drill W)` is a round hole; `(drill oval W H)` a slot; an absent
+    // token (an smd pad) is neither.
+    let (drill, drill_slot) = match sexpr::find(pad, "drill") {
+        Some(d) => {
+            let toks: Vec<&str> = d.iter().skip(1).filter_map(Sexpr::text).collect();
+            if toks.first() == Some(&"oval") {
+                let nums: Vec<f64> = toks[1..].iter().filter_map(|s| s.parse::<f64>().ok()).collect();
+                let dw = nums.first().copied().unwrap_or(0.0);
+                let dh = nums.get(1).copied().unwrap_or(dw);
+                (None, Some((mm_to_um(dw), mm_to_um(dh))))
+            } else {
+                let d0 = toks.iter().find_map(|s| s.parse::<f64>().ok());
+                (d0.map(mm_to_um), None)
+            }
+        }
+        None => (None, None),
+    };
+
+    let roundrect_ratio = sexpr::find(pad, "roundrect_rratio").and_then(|r| sexpr::num(r, 1));
+
+    Some(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: pad_shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio })
+}
+
 #[allow(clippy::type_complexity)]
 fn import_footprints(
     root: &[Sexpr],
@@ -322,53 +386,23 @@ fn import_footprints(
         let mut pads = Vec::new();
         let mut pins = Vec::new();
         for pad in sexpr::find_all(fp, "pad") {
-            let number = sexpr::txt(pad, 1).unwrap_or("").to_string();
-            let kind_tok = sexpr::txt(pad, 2).unwrap_or("");
-            if kind_tok == "np_thru_hole" {
-                notes.npth_pads_skipped += 1;
-                continue;
-            }
-            let shape_tok = sexpr::txt(pad, 3).unwrap_or("");
-            let pad_shape = match shape_tok {
-                "circle" => PadShape::Circle,
-                "oval" => PadShape::Oval,
-                "roundrect" => PadShape::RoundRect,
-                "rect" => PadShape::Rect,
-                _ => {
-                    // trapezoid / custom: no equivalent shape, keep the pad's
-                    // nominal rectangle so it still occupies roughly the
-                    // right footprint.
-                    notes.non_rect_pad_shapes_approximated += 1;
-                    PadShape::Rect
-                }
-            };
-            let pad_kind = if kind_tok == "smd" || kind_tok == "connect" { PadKind::Smd } else { PadKind::ThroughHole };
+            let Some(p) = parse_pad_geometry(pad, side, rot, notes) else { continue };
 
-            let Some(pad_at) = sexpr::find(pad, "at") else { continue };
-            let (Some(px), Some(py)) = (sexpr::num(pad_at, 1), sexpr::num(pad_at, 2)) else { continue };
-            let pad_file_rot = sexpr::num(pad_at, 3).unwrap_or(0.0);
-            if (pad_file_rot - file_rot).abs() > 0.01 {
-                // Our Pad has no per-pad rotation; the centre still imports
-                // correctly (raw local coordinates, see module docs), only
-                // the shape's own orientation is lost.
-                notes.pads_with_independent_rotation += 1;
-            }
-
-            let Some(size) = sexpr::find(pad, "size") else { continue };
-            let (Some(w), Some(h)) = (sexpr::num(size, 1), sexpr::num(size, 2)) else { continue };
-
-            let drill = sexpr::find(pad, "drill").and_then(|d| d.iter().skip(1).find_map(|it| it.text().and_then(|s| s.parse::<f64>().ok()))).map(mm_to_um);
-
-            if let Some(net) = sexpr::find(pad, "net") {
-                if let Some(name) = sexpr::txt(net, 2) {
-                    if !name.is_empty() {
-                        pin_nets.push((format!("{reference}.{number}"), name.to_string()));
+            // A non-plated hole is mechanical, not electrical: it has no
+            // net and is not a schematic pin (nothing a symbol would draw
+            // a stub for), but it still occupies space in `pads`, so it
+            // still counts as a hole for clearance.
+            if p.kind != PadKind::NonPlatedHole {
+                if let Some(net) = sexpr::find(pad, "net") {
+                    if let Some(name) = sexpr::txt(net, 2) {
+                        if !name.is_empty() {
+                            pin_nets.push((format!("{reference}.{}", p.number), name.to_string()));
+                        }
                     }
                 }
+                pins.push(Pin { number: p.number.clone(), name: None, kind: PinKind::Signal });
             }
-
-            pins.push(Pin { number: number.clone(), name: None, kind: PinKind::Signal });
-            pads.push(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: pad_shape, kind: pad_kind, drill });
+            pads.push(p);
         }
 
         // Pad geometry is keyed by lib id and shared across instances (the
