@@ -1,0 +1,418 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": null,
+    "extractedAt": "2026-09-30T04:08:28.667Z",
+    "sourceFiles": [
+      "eeschema/toolbars_sch_editor.cpp",
+      "common/tool/action_toolbar.cpp",
+      "pcbnew/tools/pcb_actions.cpp",
+      "common/tool/actions.cpp",
+      "pcbnew/router/router_tool.cpp",
+      "common/hotkey_store.cpp",
+      "eeschema/tools/sch_actions.cpp"
+    ],
+    "note": "group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call this script found; TOOLBAR_LOC::TOP_AUX returns std::nullopt in source -- eeschema has no auxiliary toolbar at all (unlike pcbnew), so only main/options/drawing are emitted here; control labels here ARE real source strings (ACTION_TOOLBAR_CONTROL's 2nd constructor argument, read from toolbars_sch_editor.cpp and common/tool/action_toolbar.cpp) -- not a hand-guessed table; two items are behind source-level conditionals not evaluated by this script: ACTIONS.doNew/open (Kiface().IsSingle()) in main, ACTIONS.toggleBoundingBoxes (ADVANCED_CFG debug flag) in options"
+  },
+  "toolbars": [
+    {
+      "id": "main",
+      "orientation": "horizontal",
+      "items": [
+        {
+          "type": "action",
+          "action": "common.Control.new"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.open"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.save"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.schematicSetup"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.pageSettings"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.print"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.plot"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.paste"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.undo"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.redo"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.find"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.findAndReplace"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomRedraw"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomInCenter"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomOutCenter"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomFitScreen"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomFitObjects"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomTool"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.NavigateTool.back"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.NavigateTool.up"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.NavigateTool.forward"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.rotateCCW"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.rotateCW"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.mirrorV"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.mirrorH"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.group"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.ungroup"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.showSymbolEditor"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.showSymbolBrowser"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.showFootprintEditor"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.annotate"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InspectionTool.runERC"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.showSimulator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.assignFootprints"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.editSymbolFields"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.generateBOM"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.showPcbNew"
+        },
+        {
+          "type": "control",
+          "control": "currentVariant",
+          "label": "Current variant"
+        },
+        {
+          "type": "control",
+          "control": "ipcScripting",
+          "label": "IPC/Scripting plugins"
+        },
+        {
+          "type": "control",
+          "control": "overrideLocks",
+          "label": "Override locks"
+        }
+      ]
+    },
+    {
+      "id": "options",
+      "orientation": "vertical",
+      "items": [
+        {
+          "type": "action",
+          "action": "common.Control.toggleGrid"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.toggleGridOverrides"
+        },
+        {
+          "type": "group",
+          "label": "Units",
+          "icon": "unit_inch",
+          "items": [
+            "common.Control.imperialUnits",
+            "common.Control.mils",
+            "common.Control.metricUnits"
+          ]
+        },
+        {
+          "type": "group",
+          "label": "Crosshair modes",
+          "icon": "cursor_shape",
+          "items": [
+            "common.Control.cursorSmallCrosshairs",
+            "common.Control.cursorFullCrosshairs",
+            "common.Control.cursor45Crosshairs"
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.showHiddenPins"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "group",
+          "label": "Line modes",
+          "icon": "lines_any",
+          "items": [
+            "eeschema.EditorControl.lineModeFree",
+            "eeschema.EditorControl.lineModeOrthonal",
+            "eeschema.EditorControl.lineMode45"
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.annotateAutomatically"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorTool.showHierarchy"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.showProperties"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.toggleBoundingBoxes"
+        }
+      ]
+    },
+    {
+      "id": "drawing",
+      "orientation": "vertical",
+      "items": [
+        {
+          "type": "group",
+          "label": "Selection modes",
+          "icon": "cursor",
+          "items": [
+            "common.Interactive.selectSetRect",
+            "common.Interactive.selectSetLasso"
+          ]
+        },
+        {
+          "type": "action",
+          "action": "eeschema.EditorControl.highlightNetTool"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.placeSymbol"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.placePowerSymbol"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawingLineWireBus.drawWires"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawingLineWireBus.drawBuses"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.placeBusWireEntry"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.placeNoConnect"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.placeJunction"
+        },
+        {
+          "type": "group",
+          "label": "Labels",
+          "icon": "add_label",
+          "items": [
+            "eeschema.InteractiveDrawing.placeLabel",
+            "eeschema.InteractiveDrawing.placeClassLabel",
+            "eeschema.InteractiveDrawing.placeGlobalLabel",
+            "eeschema.InteractiveDrawing.placeHierarchicalLabel"
+          ]
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawRuleArea"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawSheet"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.placeSheetPin"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.syncAllSheetsPins"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.placeSchematicText"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawTextBox"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawTable"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawRectangle"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawCircle"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawArc"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawBezier"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawingLineWireBus.drawLines"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.placeImage"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.deleteTool"
+        }
+      ]
+    }
+  ]
+}
