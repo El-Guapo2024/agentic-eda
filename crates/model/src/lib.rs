@@ -108,6 +108,35 @@ pub struct BoardRules {
     /// Routing tuning. Every value has a default; all are settable here.
     #[serde(default)]
     pub tuning: RoutingTuning,
+    /// Minimum edge-to-edge gap between two drilled holes (KiCad's
+    /// `hole_to_hole_min`, default 250 µm) — mechanical, not electrical:
+    /// applies between any two round-drilled pads/vias regardless of net.
+    #[serde(default = "d_hole_to_hole_min")]
+    pub hole_to_hole_min_um: ir::Um,
+    /// Minimum clearance from a drilled hole's edge to other copper (KiCad's
+    /// `hole_clearance`, default 250 µm).
+    #[serde(default = "d_hole_clearance")]
+    pub hole_clearance_um: ir::Um,
+    /// Minimum silkscreen-to-silkscreen (and silk-to-exposed-copper)
+    /// clearance (KiCad's `silk_clearance`, default 0).
+    #[serde(default = "d_silk_clearance")]
+    pub silk_clearance_um: ir::Um,
+    /// Minimum copper annular ring width on a via or plated through-hole pad
+    /// (KiCad's `via_min_annular_width`; factory default derives from
+    /// `(via_diameter - via_drill) / 2`, i.e. exactly the via's own nominal
+    /// ring, so a via routed at the board's own default via size never
+    /// trips it).
+    #[serde(default = "d_annular_width_min")]
+    pub annular_width_min_um: ir::Um,
+    /// Minimum silkscreen text height (KiCad's `min_silk_text_height`,
+    /// factory default 0.8 mm = 80% of the 1 mm default silk text size).
+    #[serde(default = "d_min_silk_text_height")]
+    pub min_silk_text_height_um: ir::Um,
+    /// Minimum silkscreen text stroke thickness (KiCad's
+    /// `min_silk_text_thickness`, factory default 0.08 mm = 80% of the
+    /// 0.1 mm default silk text width).
+    #[serde(default = "d_min_silk_text_thickness")]
+    pub min_silk_text_thickness_um: ir::Um,
 }
 
 /// One copper plane: a net flooded across a whole layer.
@@ -367,6 +396,12 @@ fn d_clearance() -> ir::Um { 200 }
 fn d_via_drill() -> ir::Um { 300 }
 fn d_via_dia() -> ir::Um { 600 }
 fn d_layers() -> Vec<String> { vec!["F.Cu".into(), "B.Cu".into()] }
+fn d_hole_to_hole_min() -> ir::Um { 250 }
+fn d_hole_clearance() -> ir::Um { 250 }
+fn d_silk_clearance() -> ir::Um { 0 }
+fn d_annular_width_min() -> ir::Um { 100 }
+fn d_min_silk_text_height() -> ir::Um { 800 }
+fn d_min_silk_text_thickness() -> ir::Um { 80 }
 impl BoardRules {
     /// The class owning `net`, if any: first match wins.
     pub fn class_of(&self, net: &str) -> Option<&NetClass> {
@@ -376,6 +411,12 @@ impl BoardRules {
     /// Track width `net` must be routed at.
     pub fn width_of(&self, net: &str) -> ir::Um {
         self.class_of(net).and_then(|c| c.track_width).unwrap_or(self.track_width)
+    }
+
+    /// Clearance `net`'s class asks for -- the board default absent an
+    /// override (see [`NetClass::clearance`]).
+    pub fn clearance_of(&self, net: &str) -> ir::Um {
+        self.class_of(net).and_then(|c| c.clearance).unwrap_or(self.clearance)
     }
 
     /// Widest track any net on this board can take. The router's clearance
@@ -393,7 +434,12 @@ impl BoardRules {
 
 impl Default for BoardRules {
     fn default() -> Self {
-        BoardRules { grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(), net_classes: Vec::new(), outline: None, refdes_font_um: None, pours: Vec::new(), tuning: RoutingTuning::default() }
+        BoardRules {
+            grid: d_grid(), track_width: d_track(), clearance: d_clearance(), via_drill: d_via_drill(), via_diameter: d_via_dia(), layers: d_layers(),
+            net_classes: Vec::new(), outline: None, refdes_font_um: None, pours: Vec::new(), tuning: RoutingTuning::default(),
+            hole_to_hole_min_um: d_hole_to_hole_min(), hole_clearance_um: d_hole_clearance(), silk_clearance_um: d_silk_clearance(),
+            annular_width_min_um: d_annular_width_min(), min_silk_text_height_um: d_min_silk_text_height(), min_silk_text_thickness_um: d_min_silk_text_thickness(),
+        }
     }
 }
 
@@ -543,6 +589,12 @@ pub struct NetClass {
     /// Track width for this class. Absent = the board default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_width: Option<ir::Um>,
+    /// Clearance for this class (KiCad's per-netclass clearance). Absent =
+    /// the board default. DRC resolves the clearance between two items as
+    /// the *larger* of their two nets' clearances — same as KiCad's own
+    /// `DRC_ENGINE::EvalRules` netclass fast path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<ir::Um>,
     /// Routed before lower numbers. Power belongs first: it needs copper,
     /// it sets the return paths, and it is the hardest thing to squeeze in
     /// once signal nets have taken the channels. Default 0; signals sit at
