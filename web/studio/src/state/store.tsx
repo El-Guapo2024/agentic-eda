@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, Part, Schematic } from "../api/types";
+import type { BoardState, Cmd, Part, Schematic, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
 import { fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -31,11 +31,31 @@ export type EditorTab = "pcb" | "schematic" | "3d";
  * deeper (a whole TOOL_MANAGER with push/pop tool states); this is only
  * as much of that idea as this app's two real modes need.
  */
-export type ToolId = "select" | "move";
+export type ToolId = "select" | "move" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
+  route: "Route track: click to add a point, V for via, Enter/double-click to finish, Esc to cancel",
+  via: "Click to place a via",
+  zone: "Zone: click to add points, Enter/double-click to finish, Esc to cancel",
+  draw_segment: "Line: click start, then end",
+  draw_arc: "Arc: click start, mid, then end",
+  draw_rect: "Rectangle: click one corner, then the opposite one",
+  draw_circle: "Circle: click center, then a point on the edge",
+  draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
+  text: "Click to place text",
 };
+
+/**
+ * The interactive routing/zone/drawing tools' in-progress geometry
+ * (Canvas.tsx). One shape covers all of them since they're all "click to
+ * add a point, Enter/double-click to finish, Esc to cancel" -- the only
+ * per-tool difference is how many points are needed and what finishing
+ * does with them. Route commits incrementally (see useActionRunner.ts's
+ * "V drops a via" handling) rather than only at the end, so `pts` there
+ * is just the CURRENT segment's points since the last via/start.
+ */
+export type DrawState = { kind: "route"; net: string; layer: string; width: Um; pts: [Um, Um][] } | { kind: "zone"; pts: [Um, Um][] } | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] };
 
 export interface ViewTransform {
   /** Screen pixels per board µm. */
@@ -48,6 +68,8 @@ export interface ViewTransform {
 /** A part being dragged, previewed locally before `move_to` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
 export interface MovePreview {
   refs: string[];
+  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text: their own move_* by id). Defaults to "part" (every pre-existing caller moves parts). */
+  kind?: "part" | "via" | "shape" | "text";
   dxUm: number;
   dyUm: number;
 }
@@ -68,6 +90,11 @@ export interface StudioState {
   armed: string | null;
   movePreview: MovePreview | null;
   activeTool: ToolId;
+  drawState: DrawState | null;
+  /** A just-drawn zone outline waiting for its net/layer to be confirmed in ZoneDialog before `add_zone` commits it. */
+  zonePending: [Um, Um][] | null;
+  /** The text tool/E-to-edit dialog: "add" (fresh, at a clicked point) or "edit" (an existing text's id). */
+  textDialog: { mode: "add"; at: [Um, Um] } | { mode: "edit"; id: string } | null;
 
   view: ViewTransform;
   viewInitialized: boolean;
@@ -139,6 +166,9 @@ const initialState: StudioState = {
   armed: null,
   movePreview: null,
   activeTool: "select",
+  drawState: null,
+  zonePending: null,
+  textDialog: null,
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
   schematicView: { scale: 0, x: 0, y: 0 },
@@ -215,7 +245,10 @@ type Action =
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
-  | { type: "SCHEMATIC_ERR"; message: string };
+  | { type: "SCHEMATIC_ERR"; message: string }
+  | { type: "SET_DRAW_STATE"; draw: DrawState | null }
+  | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
+  | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] };
 
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
@@ -251,7 +284,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, selection: next };
     }
     case "CLEAR_SELECTION":
-      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select" };
+      // The universal "cancel and go back to Select" -- Escape's own
+      // handler (common.Interactive.cancel, useActionRunner.ts) reaches
+      // this same action, so it has to drop whatever the route/zone/
+      // drawing/text tools were in the middle of too, not just a footprint
+      // selection/move.
+      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null };
     case "SET_HOT":
       return { ...state, hot: new Set(action.refs) };
     case "SET_NET_HIGHLIGHT":
@@ -322,6 +360,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, schematic: action.schematic, schematicError: null };
     case "SCHEMATIC_ERR":
       return { ...state, schematicError: action.message };
+    case "SET_DRAW_STATE":
+      return { ...state, drawState: action.draw };
+    case "SET_ZONE_PENDING":
+      return { ...state, zonePending: action.outline };
+    case "SET_TEXT_DIALOG":
+      return { ...state, textDialog: action.dialog };
     default:
       return state;
   }
@@ -333,13 +377,20 @@ export interface StudioApi {
   rotateSelection: (quarterTurns: number) => Promise<void>;
   ripSelection: () => Promise<void>;
   flipSelection: () => Promise<void>;
-  /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position. */
-  commitMove: (refs: string[], dxUm: number, dyUm: number) => Promise<void>;
+  /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position. `kind` picks which Cmd this becomes (default "part") -- see MovePreview. */
+  commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"]) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
   route: () => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   partByRef: (ref: string) => Part | undefined;
+  trackById: (id: string) => Track | undefined;
+  viaById: (id: string) => Via | undefined;
+  zoneById: (id: string) => Zone | undefined;
+  shapeById: (id: string) => Shape | undefined;
+  textById: (id: string) => BoardText | undefined;
+  /** Any other Cmd this file doesn't have a named wrapper for (the delete_ ops, set_track_width, edit_text, ...) -- returns whether the backend accepted it, same as every named wrapper's underlying runCmd. */
+  cmd: (c: Cmd) => Promise<boolean>;
 }
 
 const StudioStateContext = createContext<StudioState | null>(null);
@@ -418,6 +469,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const api: StudioApi = {
     refresh,
     partByRef: (ref) => stateRef.current.board?.parts.find((p) => p.ref === ref),
+    trackById: (id) => stateRef.current.board?.routing?.tracks.find((t) => t.id === id),
+    viaById: (id) => stateRef.current.board?.routing?.vias.find((v) => v.id === id),
+    zoneById: (id) => stateRef.current.board?.routing?.zones.find((z) => z.id === id),
+    shapeById: (id) => stateRef.current.board?.drawings?.shapes.find((s) => s.id === id),
+    textById: (id) => stateRef.current.board?.drawings?.texts.find((t) => t.id === id),
+    cmd: (c) => runCmd(c),
     rotateSelection: async (quarterTurns) => {
       for (const ref of stateRef.current.selection) {
         const p = api.partByRef(ref);
@@ -435,11 +492,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (p?.placed) await runCmd({ op: "flip", part: ref });
       }
     },
-    commitMove: async (refs, dxUm, dyUm) => {
+    commitMove: async (refs, dxUm, dyUm, kind = "part") => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       for (const ref of refs) {
-        const p = api.partByRef(ref);
-        if (p?.placed && p.at) await runCmd({ op: "move_to", part: ref, x: p.at[0] + dxUm, y: p.at[1] + dyUm });
+        if (kind === "part") {
+          const p = api.partByRef(ref);
+          if (p?.placed && p.at) await runCmd({ op: "move_to", part: ref, x: p.at[0] + dxUm, y: p.at[1] + dyUm });
+        } else if (kind === "via") {
+          const v = api.viaById(ref);
+          if (v) await runCmd({ op: "move_via", id: ref, x: v.x + dxUm, y: v.y + dyUm });
+        } else if (kind === "shape") {
+          await runCmd({ op: "move_shape", id: ref, dx: dxUm, dy: dyUm });
+        } else if (kind === "text") {
+          const t = api.textById(ref);
+          if (t) await runCmd({ op: "move_text", id: ref, x: t.x + dxUm, y: t.y + dyUm });
+        }
       }
     },
     placeArmedAt: async (xUm, yUm) => {
