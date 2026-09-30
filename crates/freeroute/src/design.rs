@@ -990,9 +990,10 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
                         }
                     }
                 }
-                tracks.push(Track { net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: 2 * half_width / UNITS_PER_UM, pts });
+                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: 2 * half_width / UNITS_PER_UM, pts });
             }
             ItemKind::Via { center, .. } => vias.push(IrVia {
+                id: String::new(),
                 net,
                 at: to_um(FloatPoint::new(center.x as f64, center.y as f64)),
                 drill: rules.via_drill,
@@ -1021,10 +1022,15 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
     for p in &plan.planes {
         let (net, layer) = (&plan.nets[p.net].name, &plan.layers[p.layer]);
         if !zones.iter().any(|z| &z.net == net && &z.layer == layer) {
-            zones.push(eda_model::ir::Zone { net: net.clone(), layer: layer.clone(), outline: design.placement.as_ref().map(|pl| pl.outline.clone()).unwrap_or_default() });
+            zones.push(eda_model::ir::Zone { id: String::new(), net: net.clone(), layer: layer.clone(), outline: design.placement.as_ref().map(|pl| pl.outline.clone()).unwrap_or_default() });
         }
     }
-    Ok(RoutingSection { tracks, vias, zones })
+    let mut rt = RoutingSection { tracks, vias, zones };
+    // Assigned here, at the router's own output, so every track/via/zone
+    // is addressable the moment a route finishes -- deterministically:
+    // the same design routed twice gets the same ids both times.
+    rt.assign_missing_ids();
+    Ok(rt)
 }
 
 /// A design routed by [`route_design`].
@@ -1330,7 +1336,7 @@ mod tests {
     }
 
     fn track(pts: &[(i64, i64)]) -> Track {
-        Track { net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect() }
+        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect() }
     }
 
     fn gate_pads(pads: &[PlacedPad]) -> Vec<GatePad<'_>> {
@@ -1362,7 +1368,7 @@ mod tests {
         assert_eq!(kept[0].pts[0], IrPoint { x: 300, y: 300 });
         // A via on the way keeps the run: it may lead elsewhere.
         let tracks = vec![track(&[(0, 0), (0, 2000)]), track(&[(0, 2000), (300, 300)])];
-        let via = IrVia { net: "A".into(), at: IrPoint { x: 0, y: 2000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: 0, y: 2000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
         assert_eq!(drop_pad_loops(tracks, &[via], &gate_pads(&pads)).len(), 2);
     }
 }
