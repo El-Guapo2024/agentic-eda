@@ -16,11 +16,25 @@ const TEXT_INPUT_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA"]);
 export function useGlobalHotkeys() {
   const { run, isEnabled } = useActionRunner();
 
+  // Several extracted hotkeys collide across actions (e.g. "Ctrl+F1" is
+  // shared by common.Control.zoomIn and common.SuiteControl.listHotKeys,
+  // "Ctrl+Home" by zoomFitObjects and zoomFitScreen) -- real KiCad has
+  // only one such action live in a given tool context at a time, but this
+  // app has no tool-context model, so every candidate for a key is kept
+  // here and the first one that's actually enabled wins at dispatch time.
+  // A plain "first name wins" index would let an unimplemented action
+  // permanently shadow an implemented one that happens to share its key.
   const hotkeyIndex = useMemo(() => {
-    const idx = new Map<string, string>();
+    const idx = new Map<string, string[]>();
+    const add = (hk: string | null, name: string) => {
+      if (!hk) return;
+      const list = idx.get(hk);
+      if (list) list.push(name);
+      else idx.set(hk, [name]);
+    };
     for (const a of actionsFile.actions) {
-      if (a.hotkey && !idx.has(a.hotkey)) idx.set(a.hotkey, a.name);
-      if (a.altHotkey && !idx.has(a.altHotkey)) idx.set(a.altHotkey, a.name);
+      add(a.hotkey, a.name);
+      add(a.altHotkey, a.name);
     }
     return idx;
   }, []);
@@ -43,8 +57,8 @@ export function useGlobalHotkeys() {
 
       const combo = eventToHotkey(e);
       if (!combo) return;
-      const actionName = hotkeyIndex.get(combo);
-      if (!actionName || !isEnabled(actionName)) return;
+      const actionName = hotkeyIndex.get(combo)?.find(isEnabled);
+      if (!actionName) return;
       e.preventDefault();
       run(actionName);
     }

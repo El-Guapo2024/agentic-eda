@@ -60,9 +60,13 @@ export function useActionRunner() {
     // zoomOutCenter's near-neighbors in source position, which also
     // collides with common.SuiteControl.listHotKeys's real Ctrl+F1 --
     // almost certainly a parser misattribution (regex proximity, not a
-    // real shared binding), and listHotKeys is the one this session is
-    // confident about, so it wins; zoomIn/zoomOut stay unmapped rather
-    // than guess which of the two dubious hotkeys to keep.
+    // real shared binding). Leaving them out of the registry is what
+    // actually resolves the collision: useGlobalHotkeys tries every
+    // action name registered against a given key and fires the first one
+    // that isEnabled() -- with zoomIn/zoomOut absent, listHotKeys is the
+    // only enabled candidate left for Ctrl+F1, so it wins Ctrl+F1 without
+    // this file needing to guess which of the two dubious bindings to
+    // keep.
     m.set("common.Control.zoomCenter", () => zoomAtCenter(1));
     m.set("common.Control.zoomRedraw", () => zoomAtCenter(1));
     m.set("common.SuiteControl.listHotKeys", () => dispatch({ type: "SET_HOTKEYS_DIALOG_OPEN", open: true }));
