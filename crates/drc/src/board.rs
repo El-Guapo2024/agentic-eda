@@ -3,20 +3,24 @@
 //! KiCad's own `BOARD` class plays for `DRC_ENGINE`. Built once per run.
 
 use crate::kimath::Shape;
-use eda_model::footprint::{placed_courtyard, placed_refdes_box};
-use eda_model::ir::{Design, Point, Shape as IrShape, Side, Text, Um};
+use eda_model::footprint::placed_courtyard;
+use eda_model::ir::{Design, LabelSide, Point, Shape as IrShape, Side, Text, Um};
 use eda_model::{ConstraintModel, Pad, PadKind, PadShape};
 use std::collections::HashMap;
 
 /// A silkscreen item for the silk-clearance/silk-edge/silk-over-copper
 /// checks: a free-standing drawing shape or text on `F.SilkS`/`B.SilkS`, or
 /// -- since this model has no explicit per-footprint silk graphics -- a
-/// footprint's own reference-designator label, using the exact box
-/// `eda_kicad`'s exporter and `eda_gates` already place it at
-/// ([`placed_refdes_box`]). Refdes labels are, in practice, the single
-/// biggest source of real silk violations (dense boards where a label
-/// overlaps a neighbour's pad or courtyard), so leaving them out would
-/// silently under-report against the oracle.
+/// footprint's own reference-designator label, using [`exported_refdes_shape`]
+/// (*not* `eda_model::footprint::placed_refdes_box`: that box is placement's
+/// own coarser keepout approximation -- different gap constant, different
+/// per-character width formula, font size from a board setting rather than
+/// the fixed 1 mm the exporter always writes -- so reusing it here silently
+/// disagreed with what a real board, and kicad-cli, actually sees; see the
+/// task report). Refdes labels are, in practice, the single biggest source
+/// of real silk violations (dense boards where a label overlaps a
+/// neighbour's pad or courtyard), so leaving them out would silently
+/// under-report against the oracle.
 pub struct SilkItem {
     pub id: String,
     pub desc: String,
@@ -158,6 +162,37 @@ fn pad_center(fp: &eda_model::ir::FootprintInstance, local: (Um, Um)) -> Point {
     eda_model::footprint::to_board(fp, local)
 }
 
+/// The reference-designator silk label's board-space shape, mirroring
+/// `eda_kicad`'s exporter formula exactly (`crates/kicad/src/pcb.rs`'s
+/// footprint writer) rather than placement's own `placed_refdes_box`
+/// keepout approximation -- see this module's doc comment. The exporter
+/// writes the label as a child of the footprint's own `(at .. rot)`, so its
+/// local-frame offset from the footprint origin is rotated and translated
+/// by [`pad_center`]/`to_board` exactly like a pad's; and it is written
+/// with no extra local rotation, so it turns with the footprint on the
+/// board (KiCad applies no keep-upright correction here), hence the same
+/// `rotated_extent_by` conservative axis-aligned bbox pads use for a
+/// rotated rectangle -- exact at 0/90/180/270, which is effectively every
+/// placement this workspace produces.
+fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &eda_model::ir::FootprintInstance) -> Option<Shape> {
+    let footprint = model.footprint_of(part)?;
+    let (hw, hh) = footprint.courtyard_half();
+    // `eda_kicad::pcb`'s own constants: 300 µm per character of half-width,
+    // a 700 µm gap above/below the courtyard (200 µm beside it), and a
+    // fixed 1 mm/0.15 mm font for every reference label regardless of any
+    // board-level text-size setting.
+    let half_w = 300 * fp.id.chars().count() as Um;
+    let local = match fp.label {
+        LabelSide::Above => (0, -(hh + 700)),
+        LabelSide::Below => (0, hh + 700),
+        LabelSide::Left => (-(hw + 200 + half_w), 0),
+        LabelSide::Right => (hw + 200 + half_w, 0),
+    };
+    let center = pad_center(fp, local);
+    let (w, h) = rotated_extent_by(fp.rot as i64, (half_w * 2, 1000));
+    Some(Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 })
+}
+
 fn pad_hole_shape(center: Point, pad: &Pad, board_rot: i64) -> Option<Shape> {
     if let Some(d) = pad.drill {
         return Some(Shape::Circle { c: center, r: d / 2 });
@@ -258,9 +293,9 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     if let Some(pl) = &design.placement {
         for fp in &pl.footprints {
             let Some(part) = model.part(&fp.id) else { continue };
-            if let Some((x0, y0, x1, y1)) = placed_refdes_box(model, &pl.outline, part, fp) {
+            if let Some(shape) = exported_refdes_shape(model, part, fp) {
                 let layer = if fp.side == Side::Bottom { "B.SilkS" } else { "F.SilkS" };
-                silk_items.push(SilkItem { id: format!("{}.ref", fp.id), desc: format!("Reference of {}", fp.id), layer: layer.to_string(), shape: Shape::Rect { x0, y0, x1, y1 } });
+                silk_items.push(SilkItem { id: format!("{}.ref", fp.id), desc: format!("Reference of {}", fp.id), layer: layer.to_string(), shape });
             }
         }
     }
