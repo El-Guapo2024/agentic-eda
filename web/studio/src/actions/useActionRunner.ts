@@ -29,31 +29,51 @@ export function useActionRunner() {
 
   const registry = useMemo(() => {
     const m = new Map<string, () => void>();
+    // Rotate/move/rip/the footprint-properties dialog/the PCB view's own
+    // pan-zoom actions all read or write PCB-only state (api.*Selection,
+    // state.view, .pcb-canvas-container's rect) -- and that CSS class is
+    // shared by the Schematic tab's own container (for style reuse), so
+    // canvasRect() would resolve to the wrong canvas there. Read-only for
+    // now on the Schematic tab (see SchematicView.tsx's own header
+    // comment) means these must be no-ops there, not just "probably
+    // harmless" -- a stray R/M/Del/E keypress must never reach a real
+    // board command while looking at the schematic.
+    const pcbOnly =
+      <Args extends unknown[]>(fn: (...args: Args) => void) =>
+      (...args: Args) => {
+        if (state.tab === "pcb") fn(...args);
+      };
 
-    m.set("pcbnew.InteractiveEdit.rotateCcw", () => api.rotateSelection(1));
-    m.set("pcbnew.InteractiveEdit.rotateCw", () => api.rotateSelection(3));
-    m.set("common.Interactive.delete", () => api.ripSelection());
+    m.set("pcbnew.InteractiveEdit.rotateCcw", pcbOnly(() => api.rotateSelection(1)));
+    m.set("pcbnew.InteractiveEdit.rotateCw", pcbOnly(() => api.rotateSelection(3)));
+    m.set("common.Interactive.delete", pcbOnly(() => api.ripSelection()));
     m.set("common.Interactive.undo", () => api.undo());
     m.set("common.Interactive.redo", () => api.redo());
 
-    m.set("pcbnew.EditorControl.toggleNetHighlight", () => {
-      const ref = [...state.selection][0];
-      const part = ref ? api.partByRef(ref) : undefined;
-      const net = part?.pads?.[0]?.net ?? null;
-      dispatch({ type: "SET_NET_HIGHLIGHT", net: state.netHighlight ? null : net });
-    });
+    m.set(
+      "pcbnew.EditorControl.toggleNetHighlight",
+      pcbOnly(() => {
+        const ref = [...state.selection][0];
+        const part = ref ? api.partByRef(ref) : undefined;
+        const net = part?.pads?.[0]?.net ?? null;
+        dispatch({ type: "SET_NET_HIGHLIGHT", net: state.netHighlight ? null : net });
+      })
+    );
 
-    m.set("common.Control.zoomFitScreen", () => {
-      const rect = canvasRect();
-      const bounds = state.board?.outline ? boundsOfPoints(state.board.outline) : null;
-      if (!rect || !bounds) return;
-      dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height) });
-    });
-    const zoomAtCenter = (factor: number) => {
+    m.set(
+      "common.Control.zoomFitScreen",
+      pcbOnly(() => {
+        const rect = canvasRect();
+        const bounds = state.board?.outline ? boundsOfPoints(state.board.outline) : null;
+        if (!rect || !bounds) return;
+        dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height) });
+      })
+    );
+    const zoomAtCenter = pcbOnly((factor: number) => {
       const rect = canvasRect();
       if (!rect) return;
       dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, rect.width / 2, rect.height / 2, factor) });
-    };
+    });
     m.set("common.Control.zoomInCenter", () => zoomAtCenter(1.5));
     m.set("common.Control.zoomOutCenter", () => zoomAtCenter(1 / 1.5));
     // NOT common.Control.zoomIn/zoomOut here: extraction gave both of
@@ -75,20 +95,26 @@ export function useActionRunner() {
     m.set("pcbnew.Control.showLayersManager", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "appearance" }));
     m.set("common.Control.showProperties", () => {}); // properties panel is always visible in this layout; a no-op is the correct behavior, not a missing feature
 
-    m.set("pcbnew.InteractiveMove.move", () => {
-      if (state.selection.size === 0) return;
-      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-      dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
-    });
+    m.set(
+      "pcbnew.InteractiveMove.move",
+      pcbOnly(() => {
+        if (state.selection.size === 0) return;
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
+      })
+    );
     m.set("common.Interactive.cancel", () => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       dispatch({ type: "CLEAR_SELECTION" }); // also resets activeTool to "select"
     });
 
-    m.set("pcbnew.InteractiveEdit.properties", () => {
-      if (state.selection.size === 0) return;
-      dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
-    });
+    m.set(
+      "pcbnew.InteractiveEdit.properties",
+      pcbOnly(() => {
+        if (state.selection.size === 0) return;
+        dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+      })
+    );
     m.set("pcbnew.DRCTool.runDRC", () => dispatch({ type: "SET_DRC_OPEN", open: true }));
 
     // One window, three tabs (unlike KiCad's separate windows) -- these
