@@ -10,17 +10,12 @@ import { useEffect, useRef, useState } from "react";
 import menusData from "../kicad/menus.json";
 import actionsData from "../kicad/actions.json";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
-import { isMac } from "../platform";
+import { displayHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
 
 const menusFile = menusData as MenusFile;
 const actionsFile = actionsData as ActionsFile;
 const actionsByName = new Map<string, KicadAction>(actionsFile.actions.map((a) => [a.name, a]));
-
-function displayHotkey(hk: string | null): string {
-  if (!hk) return "";
-  return isMac() ? hk.replace(/\bCtrl\b/, "⌘").replace(/\bAlt\b/, "⌥").replace(/\bShift\b/, "⇧").replace(/\+/g, "") : hk;
-}
 
 function MenuNodeView({ node }: { node: MenuNode }) {
   const { run, isEnabled } = useActionRunner();

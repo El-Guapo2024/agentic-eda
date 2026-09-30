@@ -3,7 +3,7 @@
     "generated": true,
     "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
     "kicadCommitDate": null,
-    "extractedAt": "2026-09-30T02:56:05.812Z",
+    "extractedAt": "2026-09-30T03:11:55.634Z",
     "sourceFiles": [
       "pcbnew/toolbars_pcb_editor.cpp",
       "pcbnew/tools/pcb_actions.cpp",
@@ -172,12 +172,12 @@
         {
           "type": "control",
           "control": "currentVariant",
-          "label": "currentVariant"
+          "label": "Variant"
         },
         {
           "type": "control",
           "control": "ipcScripting",
-          "label": "ipcScripting"
+          "label": "Plugins"
         }
       ]
     },

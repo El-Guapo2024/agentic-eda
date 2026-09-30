@@ -168,6 +168,8 @@ const CONTROL_LABELS = {
   gridSelect: "Grid",
   zoomSelect: "Zoom",
   overrideLocks: "Override Locks",
+  currentVariant: "Variant",
+  ipcScripting: "Plugins",
 };
 
 function main() {
@@ -175,7 +177,19 @@ function main() {
   const index = buildSymbolIndex(actions);
   const iconByName = new Map(actions.map((a) => [a.name, a.icon]));
 
-  const text = readKicadFile(SOURCE_FILE);
+  const fullText = readKicadFile(SOURCE_FILE);
+  // Region attribution (regionAt()) has no upper bound -- once the last
+  // `case TOOLBAR_LOC::TOP_AUX:` marker is seen, everything after it for
+  // the *rest of the file* would otherwise still count as auxiliary
+  // toolbar content. DefaultToolbarConfig() (the function with the
+  // switch this script actually wants) ends at its own `return config;`;
+  // configureToolbars() right after it registers custom control
+  // factories (trackWidth, viaDiameter, but also currentVariant/
+  // ipcScripting for the *main* toolbar) using the same `.AppendControl`-
+  // adjacent enumerator names, which leaked in as bogus items before this
+  // cutoff existed. Truncate the scan there.
+  const endOfConfigFn = fullText.indexOf("return config;");
+  const text = endOfConfigFn === -1 ? fullText : fullText.slice(0, endOfConfigFn);
   const { byRegion, unresolved } = extractToolbarItems(
     text,
     (sym) => index.resolve(sym),

@@ -271,26 +271,21 @@ export function Canvas() {
     dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, e.clientX - rect.left, e.clientY - rect.top, factor) });
   };
 
+  // Rotate/delete/undo/redo/net-highlight-toggle are handled by
+  // actions/useGlobalHotkeys.ts now, driven by src/kicad/actions.json's
+  // real extracted hotkeys through the same registry the menu bar and
+  // toolbars use -- this canvas-level handler only keeps the two
+  // shortcuts that need *this component's* local state (moveMode,
+  // marquee), which that registry can't reach yet (see
+  // useActionRunner.ts's header comment on pcbnew.InteractiveMove.move).
   const onKeyDown = (e: React.KeyboardEvent) => {
-    const mod = e.metaKey || e.ctrlKey; // Cmd on macOS, Ctrl elsewhere -- see the task's hotkey-mapping note
-    if (mod && e.key.toLowerCase() === "z") {
-      e.preventDefault();
-      if (e.shiftKey) api.redo();
-      else api.undo();
-    } else if (e.key === "r" || e.key === "R") api.rotateSelection(e.shiftKey ? 3 : 1);
-    else if (e.key === "Delete" || e.key === "Backspace") api.ripSelection();
-    else if (e.key === "Escape") {
+    if (e.key === "Escape") {
       setMoveMode(false);
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       dispatch({ type: "CLEAR_SELECTION" });
     } else if ((e.key === "m" || e.key === "M") && state.selection.size > 0) {
       setMoveMode(true);
       dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
-    } else if (e.key === "`") {
-      const ref = [...state.selection][0];
-      const part = ref ? api.partByRef(ref) : undefined;
-      const net = part?.pads?.[0]?.net ?? null;
-      dispatch({ type: "SET_NET_HIGHLIGHT", net: state.netHighlight ? null : net });
     }
   };
 

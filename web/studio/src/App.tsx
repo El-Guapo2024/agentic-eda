@@ -10,6 +10,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Canvas } from "./components/canvas/Canvas";
 import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
+import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
 import "./styles/global.css";
 import "./styles/layout.css";
 import "./styles/panels.css";
@@ -47,6 +48,7 @@ function Toast() {
 
 function StudioFrame() {
   const state = useStudioState();
+  useGlobalHotkeys();
   return (
     <div className="app-frame">
       <div className="menubar-row">
