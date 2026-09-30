@@ -274,6 +274,13 @@ pub struct Footprint {
     /// exactly. Extending this to an offset rect is future work.
     #[serde(default)]
     pub courtyard: Option<(Um, Um)>,
+    /// KiCad `(model "...")` path for this footprint's 3D model, e.g.
+    /// `"${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl"`.
+    /// `None` when no model is known (this footprint predates 3D model
+    /// support, or nothing in the built-in package map matches it) -- the
+    /// 3D viewer falls back to its own procedural box for those.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -480,6 +487,7 @@ fn two_pad(name: &str, pitch: Um, pw: Um, ph: Um) -> Footprint {
             Pad::simple("2", (pitch / 2, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
         ],
         courtyard: None,
+        model: None,
     }
 }
 
@@ -498,7 +506,7 @@ fn dual_row(name: &str, n: usize, pitch: Um, col_x: Um, pw: Um, ph: Um) -> Footp
     for i in 0..per_col {
         pads.push(Pad::simple((per_col + i + 1).to_string(), (col_x, y0 + (per_col - 1 - i) as Um * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
     }
-    Footprint { name: name.into(), pads, courtyard: None }
+    Footprint { name: name.into(), pads, courtyard: None, model: None }
 }
 
 /// Single-row 2.54 mm through-hole header, `n` pins along +x, centred.
@@ -507,7 +515,7 @@ fn pin_header(name: &str, n: usize) -> Footprint {
     let pads = (0..n)
         .map(|i| Pad::simple((i + 1).to_string(), (x0 + i as Um * 2540, 0), (1700, 1700), if i == 0 { PadShape::Rect } else { PadShape::Circle }, PadKind::ThroughHole, Some(1000)))
         .collect();
-    Footprint { name: name.into(), pads, courtyard: None }
+    Footprint { name: name.into(), pads, courtyard: None, model: None }
 }
 
 /// All fixed-key built-ins (excludes the generic `PINHEADER-N` family, which
@@ -546,6 +554,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
                 Pad::simple("3", (938, 0), (1475, 600), PadShape::RoundRect, PadKind::Smd, None),
             ],
             courtyard: None,
+            model: None,
         },
         // Package_TO_SOT_SMD.pretty/SOT-23-5.kicad_mod / SOT-23-6.kicad_mod:
         // both columns at x = ∓1.1375mm, pitch 0.95mm. SOT-23-5 omits the
@@ -578,6 +587,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
                 Pad::simple("3", (-3150, 2300), (2000, 1500), PadShape::RoundRect, PadKind::Smd, None),
             ],
             courtyard: None,
+            model: None,
         },
         // Package_SO.pretty SOIC-8/14/16_3.9x*mm_P1.27mm.
         "SOIC-8" => dual_row(&key, 8, 1270, 2475, 1950, 600),
@@ -604,6 +614,62 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         }
     };
     Some(fp)
+}
+
+/// KiCad's own `(model "...")` path for a built-in package -- checked
+/// directly against this machine's installed KiCad 10.99.0 library
+/// files (`grep "(model " .../footprints/**/*.kicad_mod`), not guessed.
+/// `${KICAD10_3DMODEL_DIR}` is the exact variable those files use;
+/// older KiCad releases use `KICAD6_3DMODEL_DIR`/`KICAD9_3DMODEL_DIR`/
+/// etc instead, but `kicad-cli pcb export glb` resolves whichever
+/// variable its own installed version defines, so this only needs to
+/// match the version actually running this exporter.
+///
+/// `key` is the *pre-normalized* name (`builtin`'s own `key`, e.g. from
+/// `normalize_name(part.package)`) -- takes the already-normalized form
+/// so a caller that already has it (like `ConstraintModel::footprint_of`)
+/// doesn't normalize twice. The shared two-pad passive shapes ("0402"/
+/// "0603"/"0805") are the exact same footprint for a resistor, a
+/// capacitor or an LED, so those three need `reference`'s own R/C/D
+/// prefix to know which library to point at -- same convention the
+/// schematic passive-glyph heuristic already uses elsewhere in this app
+/// (web/studio's isTwoPinPassive / schematic/layout.ts).
+pub fn builtin_model_path(key: &str, reference: &str) -> Option<String> {
+    const DIR: &str = "${KICAD10_3DMODEL_DIR}";
+    match key {
+        "0402" | "0603" | "0805" => {
+            let (lib, prefix) = match reference.chars().next().unwrap_or('?').to_ascii_uppercase() {
+                'R' => ("Resistor_SMD", "R"),
+                'C' => ("Capacitor_SMD", "C"),
+                'D' => ("LED_SMD", "LED"),
+                _ => return None,
+            };
+            let metric = match key {
+                "0402" => "1005Metric",
+                "0603" => "1608Metric",
+                "0805" => "2012Metric",
+                _ => unreachable!(),
+            };
+            Some(format!("{DIR}/{lib}.3dshapes/{prefix}_{key}_{metric}.step"))
+        }
+        "SOT-223" => Some(format!("{DIR}/Package_TO_SOT_SMD.3dshapes/SOT-223.step")),
+        "TSSOP-20" => Some(format!("{DIR}/Package_SO.3dshapes/TSSOP-20_4.4x6.5mm_P0.65mm.step")),
+        "SOIC-8" => Some(format!("{DIR}/Package_SO.3dshapes/SOIC-8_3.9x4.9mm_P1.27mm.step")),
+        "SOIC-14" => Some(format!("{DIR}/Package_SO.3dshapes/SOIC-14_3.9x8.7mm_P1.27mm.step")),
+        "SOIC-16" => Some(format!("{DIR}/Package_SO.3dshapes/SOIC-16_3.9x9.9mm_P1.27mm.step")),
+        _ => {
+            // Generic headers -- same trailing-digit extraction `builtin`'s
+            // own fallback branch uses, since `key` here can be any of
+            // several spellings ("PINHEADER-4", "PIN-HEADER-4", "1X04").
+            let digits: String = key.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
+            if (key.starts_with("PINHEADER") || key.starts_with("PIN-HEADER") || key.contains("1X")) && !digits.is_empty() {
+                let n: u32 = digits.parse().ok()?;
+                Some(format!("{DIR}/Connector_PinHeader_2.54mm.3dshapes/PinHeader_1x{n:02}_P2.54mm_Vertical.step"))
+            } else {
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -678,7 +744,7 @@ mod tests {
         // footprint, must present the same board-space extent as an
         // unrotated pad inside a footprint rotated 90 degrees: rotation
         // composes additively regardless of which side contributes it.
-        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None };
+        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None };
         fp.pads[0].rot = 90_000;
         let (model, part) = part_with("T", fp.clone());
         let via_pad_rot = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -705,6 +771,7 @@ mod tests {
                 Pad::simple("SH", (4000, 1000), (1000, 1500), PadShape::Oval, PadKind::ThroughHole, None),
             ],
             courtyard: None,
+            model: None,
         };
         let (model, part) = part_with("CONN", shield);
         let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -724,6 +791,7 @@ mod tests {
                 p
             }],
             courtyard: None,
+            model: None,
         };
         let (model, part) = part_with("T", fp);
         let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();

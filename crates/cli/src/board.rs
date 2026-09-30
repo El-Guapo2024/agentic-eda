@@ -760,6 +760,7 @@ mod tests {
                 Pad { number: "2".into(), at: (1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
             ],
             courtyard: Some((2000, 1000)),
+            model: None,
         };
         let part = |r: &str| Part {
             reference: r.into(),

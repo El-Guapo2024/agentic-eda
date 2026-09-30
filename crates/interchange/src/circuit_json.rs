@@ -622,6 +622,7 @@ mod tests {
                     },
                 ],
                 courtyard: None,
+                model: None,
             }],
             ..model()
         };
