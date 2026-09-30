@@ -51,6 +51,7 @@ import * as THREE from "three";
 import type { BoardState, BoardText, Part, Shape, Side } from "../../api/types";
 import { layerColor } from "../canvas/layers";
 import { circleThrough, normalizeSweep } from "../canvas/painter";
+import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 
 // ---------------------------------------------------------------------
 // Units
@@ -587,23 +588,26 @@ function addSilkShape(group: THREE.Group, s: Shape, lineMaterial: THREE.LineBasi
   group.add(line);
 }
 
-/** Texture resolution for silk text -- arbitrary but crisp-enough pixels per mm of text height, not a real font metric (there is no font/glyph data in this model, see below). */
+/** Texture resolution for silk text -- pixels per mm of text height, chosen crisp enough for typical zoom levels (this becomes strokeFont.ts's own "sizeUm" unit for the offscreen canvas, in pixels rather than um -- see buildSilkTextMesh). */
 const TEXT_TEXTURE_PX_PER_MM = 48;
 
 /**
- * Free-standing board text (Place > Text) in 3D. Like the courtyard
- * outline below, this data model has no font/stroke glyph outlines to
- * draw as real vector silkscreen art (same limitation the 2D painter's
- * own drawTexts notes) -- instead of a bare bounding-box line loop,
- * though, this renders the actual string into an offscreen canvas and
- * maps it onto a flat plane in the silk layer, so the label is legible
- * in the 3D view rather than just a placeholder box.
+ * Free-standing board text (Place > Text) in 3D, and every placed
+ * part's own reference designator (buildRefDesignatorMesh, below) --
+ * both draw KiCad's real Newstroke font (strokeFont.ts) into an
+ * offscreen canvas, then map that canvas onto a flat plane in the silk
+ * layer. A texture rather than real 3D glyph geometry (extruded stroke
+ * paths) -- legible and correctly shaped either way, and far cheaper
+ * than building/disposing real geometry per character on every board
+ * edit.
  */
 interface SilkTextSpec {
   content: string;
   xMm: number;
   zMm: number;
   sizeMm: number;
+  /** Real per-item stroke width when the caller has one (BoardText does; a part's reference designator doesn't, so buildRefDesignatorMesh leaves this undefined and drawStrokeText falls back to its own default). */
+  thicknessMm?: number;
   angleDeg: number;
   side: Side;
   justify: "left" | "center" | "right";
@@ -615,25 +619,34 @@ interface SilkTextSpec {
 function buildSilkTextMesh(spec: SilkTextSpec): THREE.Mesh {
   const sizeMm = Math.max(spec.sizeMm, 0.01);
   const px = Math.max(TEXT_TEXTURE_PX_PER_MM * sizeMm, 1);
-  const font = `${px}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
   const content = spec.content || " ";
 
+  // Measure in the same "mm" unit the caller already works in (this
+  // function's own xMm/zMm/sizeMm), then convert to texture pixels --
+  // strokeFont.ts's layout doesn't care what unit its caller uses, as
+  // long as thickness/positions are all expressed in that same unit.
+  const textWidthPx = Math.max(measureStrokeText(content, sizeMm), 0.01) * px;
   const canvas = document.createElement("canvas");
-  const measureCtx = canvas.getContext("2d")!;
-  measureCtx.font = font;
-  const textWidthPx = Math.max(measureCtx.measureText(content).width, 1);
-  canvas.width = Math.ceil(textWidthPx) + 8;
+  const padPx = px * 0.3; // room for stroke width + descenders past the nominal em box
+  canvas.width = Math.ceil(textWidthPx) + padPx * 2;
   canvas.height = Math.ceil(px * 1.3);
-  const ctx = canvas.getContext("2d")!; // resizing a canvas resets its context state -- re-fetch and re-set font
-  ctx.font = font;
-  ctx.fillStyle = "#ffffff";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText(content, 4, canvas.height / 2);
+  const ctx = canvas.getContext("2d")!;
+  // Baseline sits a bit above vertical center (descenders need room
+  // below it too), matching the old fillText version's rough centering.
+  drawStrokeText(ctx, content, padPx, canvas.height * 0.6, {
+    sizeUm: px, // "Um" in name only -- strokeFont.ts is unit-agnostic; this call's unit is texture pixels
+    thicknessUm: spec.thicknessMm !== undefined ? spec.thicknessMm * (px / sizeMm) : undefined,
+    justify: "left",
+    color: "#ffffff",
+  });
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.minFilter = THREE.LinearFilter;
 
+  // Re-derived from the actual (padded) canvas size, not the raw text
+  // measurement, so the plane's aspect ratio always matches the
+  // texture's -- otherwise the padding added above would stretch the
+  // mapped text horizontally.
   const widthMm = (canvas.width / px) * sizeMm;
   const heightMm = (canvas.height / px) * sizeMm;
   const geometry = new THREE.PlaneGeometry(widthMm, heightMm);
@@ -660,21 +673,14 @@ function buildSilkTextMesh(spec: SilkTextSpec): THREE.Mesh {
   return mesh;
 }
 
-/**
- * Free-standing board text (Place > Text) in 3D. Like the reference
- * designator below, this data model has no font/stroke glyph outlines to
- * draw as real vector silkscreen art (same limitation the 2D painter's
- * own drawTexts notes) -- instead of a bare bounding-box line loop,
- * though, this renders the actual string into an offscreen canvas and
- * maps it onto a flat plane in the silk layer, so the label is legible
- * in the 3D view rather than just a placeholder box.
- */
+/** Free-standing board text (Place > Text) in 3D -- see buildSilkTextMesh's own comment. */
 function buildTextMesh(t: BoardText): THREE.Mesh {
   return buildSilkTextMesh({
     content: t.content,
     xMm: mm(t.x),
     zMm: mm(t.y),
     sizeMm: mm(t.size),
+    thicknessMm: mm(t.stroke_width),
     // Millidegrees, CCW-positive in board space -- same conversion and
     // sign the 2D painter's drawTexts uses for its own (canvas)
     // rotation; kept consistent here even though this file's world axes

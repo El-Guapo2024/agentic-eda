@@ -12,6 +12,7 @@ import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { minimumSpanningTree, padPointsByNet } from "./ratsnest";
 import { posture45 } from "./routing";
 import { snapPoint } from "./gridHelper";
+import { drawStrokeText } from "../text/strokeFont";
 
 export interface PaintOptions {
   selection: Set<string>;
@@ -163,11 +164,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
   if (opts.layerVisible[silkKey] !== false) {
     withAlpha(ctx, layerAlpha(opts, silkKey), () => {
-      ctx.fillStyle = layerColor(silkKey);
-      ctx.font = `600 ${fs}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-      ctx.textAlign = align;
-      ctx.textBaseline = "alphabetic";
-      ctx.fillText(part.ref, tx, ty);
+      drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: fs / 6, color: layerColor(silkKey) });
     });
   }
 
@@ -336,22 +333,23 @@ export function normalizeSweep(a0: number, aMid: number, a1: number): boolean {
   return ccwMidSpan <= ccwSpan; // mid falls within the CCW sweep from a0 to a1
 }
 
-/** Free-standing board text (Place > Text). No real font-outline rendering exists here either (see viewer3d/scene.ts's own silk simplification) -- Canvas2D's own text metrics are close enough for a 2D top-down view, unlike the 3D view where a plane+texture stands in instead. */
+/** Free-standing board text (Place > Text), KiCad's real Newstroke font (strokeFont.ts). */
 function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   const texts = board.drawings?.texts ?? [];
   for (const t of texts) {
     if (opts.layerVisible[t.layer] === false) continue;
     const selected = opts.selection.has(t.id);
-    ctx.save();
-    ctx.translate(t.x, t.y);
-    ctx.rotate((-t.angle / 1000) * (Math.PI / 180)); // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
-    if (t.mirror) ctx.scale(-1, 1);
-    ctx.fillStyle = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
-    ctx.font = `${Math.max(t.size, hairlineUm(view, 8))}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-    ctx.textAlign = t.justify === "left" ? "start" : t.justify === "right" ? "end" : "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(t.content, 0, 0);
-    ctx.restore();
+    const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
+    // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
+    const angleRad = (-t.angle / 1000) * (Math.PI / 180);
+    drawStrokeText(ctx, t.content, t.x, t.y, {
+      sizeUm: Math.max(t.size, hairlineUm(view, 8)),
+      thicknessUm: t.stroke_width,
+      justify: t.justify,
+      angleRad,
+      mirror: t.mirror,
+      color,
+    });
   }
 }
 
