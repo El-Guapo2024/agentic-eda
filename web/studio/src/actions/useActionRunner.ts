@@ -47,6 +47,7 @@ export function useActionRunner() {
     m.set("pcbnew.InteractiveEdit.rotateCcw", pcbOnly(() => api.rotateSelection(1)));
     m.set("pcbnew.InteractiveEdit.rotateCw", pcbOnly(() => api.rotateSelection(3)));
     m.set("common.Interactive.delete", pcbOnly(() => api.ripSelection()));
+    m.set("pcbnew.InteractiveEdit.flip", pcbOnly(() => api.flipSelection()));
     m.set("common.Interactive.undo", () => api.undo());
     m.set("common.Interactive.redo", () => api.redo());
 

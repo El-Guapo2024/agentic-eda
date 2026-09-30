@@ -332,6 +332,7 @@ export interface StudioApi {
   refresh: () => Promise<void>;
   rotateSelection: (quarterTurns: number) => Promise<void>;
   ripSelection: () => Promise<void>;
+  flipSelection: () => Promise<void>;
   /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position. */
   commitMove: (refs: string[], dxUm: number, dyUm: number) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
@@ -427,6 +428,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const refs = [...stateRef.current.selection];
       dispatch({ type: "CLEAR_SELECTION" });
       for (const ref of refs) await runCmd({ op: "rip", part: ref });
+    },
+    flipSelection: async () => {
+      for (const ref of stateRef.current.selection) {
+        const p = api.partByRef(ref);
+        if (p?.placed) await runCmd({ op: "flip", part: ref });
+      }
     },
     commitMove: async (refs, dxUm, dyUm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
