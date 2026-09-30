@@ -61,13 +61,15 @@ function pathForPad(ctx: CanvasRenderingContext2D, pad: Pad) {
   }
 }
 
+// The full-viewport background fill happens once in Canvas.tsx, in
+// screen space, before the world transform -- here we only draw the
+// Edge.Cuts stroke itself, no separate fill (KiCad doesn't shade
+// "inside the board" differently from "outside" it).
 function drawOutline(ctx: CanvasRenderingContext2D, view: ViewTransform, outline: [number, number][] | null) {
   if (!outline || outline.length < 2) return;
   ctx.beginPath();
   outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   ctx.closePath();
-  ctx.fillStyle = layerColor("background");
-  ctx.fill();
   ctx.strokeStyle = layerColor("board_edge");
   ctx.lineWidth = hairlineUm(view, 1.5);
   ctx.stroke();
@@ -155,14 +157,20 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
     const bucket = key === "f_cu" ? "f_cu" : key === "b_cu" ? "b_cu" : "inner";
     if (bucket !== wantLayer) continue;
     if (opts.layerVisible[t.layer] === false) continue;
-    withAlpha(ctx, layerAlpha(opts, key), () => {
+    // Slightly translucent tracks (KiCad's copper isn't fully opaque
+    // either), via withAlpha's own scoped save/restore -- NOT
+    // `ctx.globalAlpha *=`, which was a real bug: multiplying the
+    // *current* alpha in place, every track, with nothing to ever
+    // restore it, decayed it toward zero over a route's whole track
+    // list (141 tracks * 0.92^141 ~= 1e-6), leaving every draw call
+    // AFTER the tracks -- every footprint -- effectively invisible.
+    withAlpha(ctx, layerAlpha(opts, key) * 0.92, () => {
       ctx.beginPath();
       t.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.strokeStyle = layerColor(key);
       ctx.lineWidth = Math.max(t.width, hairlineUm(view, 1));
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
-      ctx.globalAlpha *= 0.92;
       ctx.stroke();
     });
   }

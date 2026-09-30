@@ -18,6 +18,7 @@ import type { Part } from "../../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { boundsOfPoints, fitTransform, screenToWorld, zoomAbout } from "./view";
 import { paintBoard } from "./painter";
+import { layerColor } from "./layers";
 import { snapPoint } from "./gridHelper";
 import "../../styles/canvas.css";
 
@@ -44,8 +45,23 @@ export function Canvas() {
   const dragRef = useRef<DragState | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   const [moveMode, setMoveMode] = useState(false);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   const board = state.board;
+
+  // The canvas's backing size tracks its container's actual box, not a
+  // value computed once at mount -- a side panel opening/closing or the
+  // window resizing must resize the canvas too.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (box) setContainerSize({ width: box.width, height: box.height });
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, []);
 
   // Fit once, the first time a board shows up.
   useEffect(() => {
@@ -61,10 +77,9 @@ export function Canvas() {
   // Render loop: repaint whenever anything visible changes.
   useEffect(() => {
     const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container || !board) return;
+    if (!canvas || !board || containerSize.width === 0) return;
     const dpr = window.devicePixelRatio || 1;
-    const { width, height } = container.getBoundingClientRect();
+    const { width, height } = containerSize;
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
     canvas.style.width = `${width}px`;
@@ -74,6 +89,11 @@ export function Canvas() {
     ctx.save();
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
+    // The whole viewport is the PCB background color, not just the area
+    // inside the board outline -- matches KiCad, where there's no
+    // "outside the board" canvas color distinct from the fill.
+    ctx.fillStyle = layerColor("background");
+    ctx.fillRect(0, 0, width, height);
     ctx.save();
     ctx.translate(state.view.x, state.view.y);
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
@@ -127,7 +147,7 @@ export function Canvas() {
       ctx.stroke();
     }
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, marquee]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, marquee, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
