@@ -284,6 +284,23 @@ export interface Ratsnest {
   edges: RatsnestEdge[];
 }
 
+// ---------------------------------------------------------------- board.glb
+//
+// GET /api/board.glb. Source of truth: crates/cli/src/studio.rs
+// `serve_board_glb`/`build_glb`/`GlbBuild`. Unlike every other route in
+// this file, a single GET does not necessarily carry the answer: the
+// backend runs kicad-cli's (potentially multi-minute) STEP-model export
+// on its own thread and answers immediately either way --
+//  - 202, body `{"status":"pending"}`               -- still building
+//  - 200, `Content-Type: model/gltf-binary`          -- the GLB itself
+//  - 200, body `{"status":"failed","error":string}`  -- kicad-cli
+//    errored or timed out (left cached as-is until the board's version
+//    actually changes -- the backend does not retry on its own, and
+//    Viewer3D.tsx must not either).
+// api/client.ts's `fetchBoardGlb` turns this into one discriminated
+// union rather than exposing the raw HTTP shape.
+export type BoardGlbResult = { status: "pending" } | { status: "failed"; error: string } | { status: "ready"; bytes: ArrayBuffer };
+
 // ---------------------------------------------------------------- Schematic
 //
 // GET /api/schematic. Source of truth: crates/cli/src/studio.rs

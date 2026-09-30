@@ -99,6 +99,15 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
   const dispatch = useStudioDispatch();
   const opts = state.viewer3d;
   const set = (patch: Partial<typeof opts>) => dispatch({ type: "SET_VIEWER3D_OPTIONS", options: patch });
+  // Quiet failure per this route's design (Viewer3D.tsx's fetch effect):
+  // no popup, no repeated retries -- just this toggle's own tooltip
+  // saying the last attempt didn't work, so it's discoverable on hover
+  // without being an interruption. Truncated: a raw kicad-cli stderr
+  // capture (studio.rs's build_glb) can be long.
+  const kicadModelsTitle =
+    state.glbStatus === "failed"
+      ? `Show KiCad's real render instead of the procedural scene. The last export failed, so the procedural scene is shown instead: ${(state.glbError ?? "unknown error").slice(0, 300)}`
+      : "Show GET /api/board.glb's real KiCad render (actual 3D models, kicad-cli's own colors) instead of this app's own procedural scene. Falls back to the procedural scene on its own if the GLB hasn't loaded.";
 
   return (
     <div className="toolbar" data-toolbar="viewer3d" style={{ display: "flex" }}>
@@ -113,12 +122,7 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
       <ToolbarButton label="Solder Mask" title="Show/hide solder mask" active={opts.showSolderMask} onClick={() => set({ showSolderMask: !opts.showSolderMask })} />
       <ToolbarButton label="Components" title="Show/hide the rendered component models" active={opts.showComponents} onClick={() => set({ showComponents: !opts.showComponents })} />
       <Sep />
-      <ToolbarButton
-        label="KiCad Models"
-        title="Show GET /api/board.glb's real KiCad render (actual 3D models, kicad-cli's own colors) instead of this app's own procedural scene. Falls back to the procedural scene on its own if the GLB hasn't loaded."
-        active={opts.kicadModels}
-        onClick={() => set({ kicadModels: !opts.kicadModels })}
-      />
+      <ToolbarButton label="KiCad Models" title={kicadModelsTitle} active={opts.kicadModels} onClick={() => set({ kicadModels: !opts.kicadModels })} />
     </div>
   );
 }
