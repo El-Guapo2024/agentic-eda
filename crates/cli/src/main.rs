@@ -128,22 +128,41 @@ fn load_model(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>> {
 
 fn load_model_unchecked(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>> {
     let ext = args.intent.extension().and_then(|e| e.to_str()).unwrap_or("");
-    match ext {
+    let mut model: ConstraintModel = match ext {
         "yaml" | "yml" => {
             let text = std::fs::read_to_string(&args.intent).map_err(|e| vec![CheckResult::fail("io", args.intent.display().to_string(), e.to_string())])?;
-            serde_yaml::from_str(&text).map_err(|e| vec![CheckResult::fail("yaml", args.intent.display().to_string(), e.to_string())])
+            serde_yaml::from_str(&text).map_err(|e| vec![CheckResult::fail("yaml", args.intent.display().to_string(), e.to_string())])?
         }
         "json" => {
             let text = std::fs::read_to_string(&args.intent).map_err(|e| vec![CheckResult::fail("io", args.intent.display().to_string(), e.to_string())])?;
-            serde_json::from_str(&text).map_err(|e| vec![CheckResult::fail("json", args.intent.display().to_string(), e.to_string())])
+            serde_json::from_str(&text).map_err(|e| vec![CheckResult::fail("json", args.intent.display().to_string(), e.to_string())])?
         }
         _ => {
             if args.use_pcb_cli {
-                import_zen_cli(&args.intent)
+                import_zen_cli(&args.intent)?
             } else {
-                import_zen(&args.intent)
+                import_zen(&args.intent)?
             }
         }
+    };
+    resolve_footprint_libraries(&mut model);
+    Ok(model)
+}
+
+/// For every part naming a `"Library:Footprint"` footprint not already in
+/// `model.footprints`, try to load it from the KiCad footprint libraries
+/// (see `eda::default_footprint_library_root`, overridable with
+/// `EDA_KICAD_FOOTPRINTS`) and add it there -- so `model.footprint_of`
+/// resolves it exactly as if the intent had defined it inline. Best-effort:
+/// a name that does not resolve is left for `footprint_of` to fail on
+/// downstream, the same as a typo in a built-in package name already does.
+/// The one place every intent this binary loads -- `.yaml`/`.json`/`.zen`,
+/// and `eda board new`/`eda board <verb>`'s own intent reads -- passes
+/// through, so a part only has to name its footprint once.
+pub(crate) fn resolve_footprint_libraries(model: &mut ConstraintModel) {
+    let root = eda::default_footprint_library_root();
+    for w in eda::resolve_library_footprints(model, &root) {
+        eprintln!("footprint library: {w}");
     }
 }
 

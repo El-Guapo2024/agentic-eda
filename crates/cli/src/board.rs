@@ -85,11 +85,12 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     // route or a hand-add would get, so every board is addressable from
     // the moment it is opened. A no-op once every id is already set.
     design.assign_missing_ids();
-    let model: ConstraintModel = serde_yaml::from_str(
+    let mut model: ConstraintModel = serde_yaml::from_str(
         &std::fs::read_to_string(&meta.intent)
             .map_err(|e| fail("board_no_intent", &meta.intent, format!("the intent this board came from is gone: {e}")))?,
     )
     .map_err(|e| fail("board_bad_intent", &meta.intent, format!("the intent does not parse: {e}")))?;
+    crate::resolve_footprint_libraries(&mut model);
     Ok((meta, design, model))
 }
 
@@ -515,10 +516,11 @@ pub fn run(
         "new" => {
             let intent = rest.get(1).ok_or_else(|| fail("board_usage", "new", "usage: eda board new <intent.yaml> -o <dir>"))?;
             let out = flag(rest, "-o").map(PathBuf::from).ok_or_else(|| fail("board_usage", "new", "eda board new needs -o <dir>"))?;
-            let model: ConstraintModel = serde_yaml::from_str(
+            let mut model: ConstraintModel = serde_yaml::from_str(
                 &std::fs::read_to_string(intent).map_err(|e| fail("board_no_intent", intent, e.to_string()))?,
             )
             .map_err(|e| fail("board_bad_intent", intent, e.to_string()))?;
+            crate::resolve_footprint_libraries(&mut model);
             std::fs::create_dir_all(&out).map_err(|e| fail("board_mkdir", &out.display().to_string(), e.to_string()))?;
             let design = seed_outline(&model)?;
             let abs = std::fs::canonicalize(intent).unwrap_or_else(|_| PathBuf::from(intent));
@@ -754,8 +756,8 @@ mod tests {
         let fp = Footprint {
             name: "2PAD".into(),
             pads: vec![
-                Pad { number: "1".into(), at: (-1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None },
-                Pad { number: "2".into(), at: (1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None },
+                Pad { number: "1".into(), at: (-1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
+                Pad { number: "2".into(), at: (1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
             ],
             courtyard: Some((2000, 1000)),
         };

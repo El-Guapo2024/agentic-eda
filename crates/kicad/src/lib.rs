@@ -27,6 +27,9 @@ mod sexpr;
 mod import;
 pub use import::{import_kicad_pcb, ImportNotes};
 
+mod footprint_lib;
+pub use footprint_lib::{default_footprint_library_root, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
+
 const STUB_MM: f64 = 1.27;
 
 /// Fixed provenance for the title block. Passed explicitly (never system
