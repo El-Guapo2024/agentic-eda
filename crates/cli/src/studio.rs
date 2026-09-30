@@ -360,7 +360,8 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             json!({
                 "id": s.id,
                 "at": [s.at.x, s.at.y],
-                "rot": s.rot,
+                // Millideg -> plain degrees, same convention `state()` uses for a PCB part's `rot`.
+                "rot": s.rot as f64 / 1000.0,
                 "mirrored": s.mirrored,
                 "value": part.and_then(|p| p.value.clone()),
                 "mpn": part.and_then(|p| p.mpn.clone()),
