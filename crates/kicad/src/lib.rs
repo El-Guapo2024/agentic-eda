@@ -494,6 +494,7 @@ mod tests {
             schematic: None,
             placement: None,
             routing: None,
+            drawings: None,
         };
         let model = ConstraintModel::default();
         let err = export_kicad_sch(&design, &model, &ExportMeta { date: "d", title: "t" }).unwrap_err();

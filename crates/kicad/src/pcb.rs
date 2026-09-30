@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use eda_model::ir::{Design, FootprintInstance, Side, Track, Via, Zone};
+use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
 
 use crate::{duid, fmt_mm_f, mm, sexpr_str};
@@ -240,6 +240,24 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         }
     }
 
+    // ---- drawings: graphic shapes + free text ----
+    // Edge.Cuts stays `placement.outline`'s business, below, unchanged --
+    // a shape a caller adds on that layer is exported as-is (whatever its
+    // own layer says), never folded into the outline; see the report for
+    // how the two should relate once outline editing exists.
+    if let Some(drawings) = &design.drawings {
+        let mut shapes: Vec<&Shape> = drawings.shapes.iter().collect();
+        shapes.sort_by(|a, b| a.id().cmp(b.id()));
+        for s in &shapes {
+            write_shape(&mut out, s);
+        }
+        let mut texts: Vec<&Text> = drawings.texts.iter().collect();
+        texts.sort_by(|a, b| a.id.cmp(&b.id));
+        for t in &texts {
+            write_text(&mut out, t);
+        }
+    }
+
     // ---- board outline (Edge.Cuts) ----
     if pl.outline.len() >= 2 {
         let n = pl.outline.len();
@@ -398,6 +416,90 @@ fn write_footprint(
     writeln!(out, "\t)").unwrap();
 }
 
+/// A free-standing graphic shape as KiCad's `gr_line`/`gr_arc`/`gr_rect`/
+/// `gr_circle`/`gr_poly`, matching `PCB_IO_KICAD_SEXPR::format(const
+/// PCB_SHAPE*)`: stroke width and type first, `fill` only for the three
+/// shapes KiCad actually fills (rect/circle/poly -- a line or an arc has no
+/// interior, and KiCad's own writer never emits `fill` for either).
+fn write_shape(out: &mut String, shape: &Shape) {
+    let sw = |w: Um| mm(w.max(0));
+    let uuid = duid(&format!("shape:{}", shape.id()));
+    let layer = sexpr_str(shape.layer());
+    let fill = |filled: bool| if filled { "yes" } else { "no" };
+    match shape {
+        Shape::Segment { stroke_width, start, end, .. } => {
+            writeln!(
+                out,
+                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width)
+            )
+            .unwrap();
+        }
+        Shape::Arc { stroke_width, start, mid, end, .. } => {
+            writeln!(
+                out,
+                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                mm(start.x), mm(start.y), mm(mid.x), mm(mid.y), mm(end.x), mm(end.y), sw(*stroke_width)
+            )
+            .unwrap();
+        }
+        Shape::Rect { stroke_width, filled, start, end, .. } => {
+            writeln!(
+                out,
+                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
+                mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
+            )
+            .unwrap();
+        }
+        Shape::Circle { stroke_width, filled, center, end, .. } => {
+            writeln!(
+                out,
+                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
+                mm(center.x), mm(center.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
+            )
+            .unwrap();
+        }
+        Shape::Polygon { stroke_width, filled, pts, .. } => {
+            write!(out, "\t(gr_poly (pts").unwrap();
+            for p in pts {
+                write!(out, " (xy {} {})", mm(p.x), mm(p.y)).unwrap();
+            }
+            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
+        }
+    }
+}
+
+/// Free board text as KiCad's `gr_text`, matching `PCB_IO_KICAD_SEXPR::
+/// format(const PCB_TEXT*)`/`EDA_TEXT::Format`: `(effects (font (size h w)
+/// (thickness t)) (justify ...))`, `justify` present only when the text is
+/// not centred/unmirrored (exactly KiCad's own rule, so a plain centred
+/// label round-trips without growing a token it never had).
+fn write_text(out: &mut String, text: &Text) {
+    let uuid = duid(&format!("text:{}", text.id));
+    let angle_deg = fmt_mm_f(text.angle as f64 / 1000.0);
+    let size_mm = mm(text.size_um);
+    let thickness_mm = mm(text.stroke_width);
+    let mut justify = String::new();
+    match text.justify {
+        TextJustify::Left => justify.push_str(" left"),
+        TextJustify::Right => justify.push_str(" right"),
+        TextJustify::Center => {}
+    }
+    if text.mirror {
+        justify.push_str(" mirror");
+    }
+    let justify_tok = if justify.is_empty() { String::new() } else { format!(" (justify{justify})") };
+    writeln!(
+        out,
+        "\t(gr_text {} (at {} {} {angle_deg}) (layer {}) (uuid \"{uuid}\")\n\t\t(effects (font (size {size_mm} {size_mm}) (thickness {thickness_mm})){justify_tok})\n\t)",
+        sexpr_str(&text.content),
+        mm(text.at.x),
+        mm(text.at.y),
+        sexpr_str(&text.layer)
+    )
+    .unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,10 +543,11 @@ mod tests {
             schematic: None,
             placement: Some(placement),
             routing: Some(RoutingSection {
-                tracks: vec![Track { net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }] }],
+                tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }] }],
                 vias: vec![],
                 zones: vec![],
             }),
+            drawings: None,
         };
         (design, model)
     }
@@ -484,6 +587,42 @@ mod tests {
     }
 
     #[test]
+    fn exports_shapes_and_text_on_their_own_layers() {
+        let (mut design, model) = fixture();
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            shapes: vec![
+                Shape::Segment { id: "s1".into(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } },
+                Shape::Rect { id: "s2".into(), layer: "F.Fab".into(), stroke_width: 100, filled: true, start: Point { x: 0, y: 0 }, end: Point { x: 2000, y: 2000 } },
+                Shape::Circle { id: "s3".into(), layer: "B.SilkS".into(), stroke_width: 100, filled: false, center: Point { x: 5000, y: 5000 }, end: Point { x: 6000, y: 5000 } },
+                Shape::Polygon { id: "s4".into(), layer: "F.CrtYd".into(), stroke_width: 50, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 1000 }] },
+                Shape::Arc { id: "s5".into(), layer: "Cmts.User".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, mid: Point { x: 707, y: 707 }, end: Point { x: 1000, y: 1000 } },
+            ],
+            texts: vec![
+                Text { id: "t1".into(), content: "REV A".into(), at: Point { x: 1000, y: 2000 }, angle: 90_000, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
+                Text { id: "t2".into(), content: "centred".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false },
+            ],
+        });
+        let a = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let b = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(a, b, "export must be deterministic");
+
+        assert!(a.contains("(gr_line (start 0 0) (end 1 0)") && a.contains("(layer \"F.SilkS\")"), "{a}");
+        assert!(a.contains("(gr_rect (start 0 0) (end 2 2)") && a.contains("(fill yes)") && a.contains("(layer \"F.Fab\")"), "{a}");
+        assert!(a.contains("(gr_circle (center 5 5) (end 6 5)") && a.contains("(fill no)"), "{a}");
+        assert!(a.contains("(gr_poly (pts (xy 0 0) (xy 1 0) (xy 1 1))"), "{a}");
+        assert!(a.contains("(gr_arc (start 0 0) (mid 0.707 0.707) (end 1 1)"), "{a}");
+        // A line/arc never gets a `fill` token -- KiCad's own writer does not emit one for either.
+        assert!(!a[a.find("(gr_line").unwrap()..a.find("(gr_line").unwrap() + 200].contains("fill"), "{a}");
+
+        assert!(a.contains("(gr_text \"REV A\" (at 1 2 90)") && a.contains("(justify left mirror)"), "{a}");
+        assert!(a.contains("(gr_text \"centred\" (at 0 0 0)"), "{a}");
+        // A centred, unmirrored text must not grow a `justify` token it never had.
+        let centred_start = a.find("\"centred\"").unwrap();
+        let centred_block = &a[centred_start..(centred_start + 200).min(a.len())];
+        assert!(!centred_block.contains("justify"), "{centred_block}");
+    }
+
+    #[test]
     fn a_track_on_a_net_that_is_not_in_the_netlist_fails_the_export() {
         // Net 0 is KiCad's *unconnected* net. Defaulting to it exported
         // copper claiming to belong to nothing, so the board KiCad checked
@@ -500,6 +639,7 @@ mod tests {
         // The worst case: a plane silently exported as floating copper.
         let (mut design, model) = fixture();
         design.routing.as_mut().unwrap().zones = vec![Zone {
+            id: String::new(),
             net: "NOT_A_NET".into(),
             layer: "B.Cu".into(),
             outline: vec![

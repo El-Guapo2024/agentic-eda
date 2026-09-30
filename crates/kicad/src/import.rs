@@ -29,7 +29,9 @@
 //!   analogue in our polyline-only `Track`/`outline`; both are tessellated
 //!   into short straight segments (see [`tessellate_arc`]), counted in
 //!   [`ImportNotes::track_arcs_approximated`]. Exact at the sampled points,
-//!   not bit-identical on re-export.
+//!   not bit-identical on re-export. A board-level `gr_arc` *not* on
+//!   Edge.Cuts becomes a [`eda_model::ir::Shape::Arc`] instead, exactly
+//!   (KiCad's own three-point arc storage is our `Arc`'s storage too).
 //! - **Non-rect/roundrect/circle/oval pads** (trapezoid, custom): mapped to
 //!   `PadShape::Rect` at the pad's nominal `size`, counted in
 //!   [`ImportNotes::non_rect_pad_shapes_approximated`].
@@ -40,12 +42,18 @@
 //!   per-pad rotation, so the pad's centre imports correctly but a nonzero
 //!   delta is dropped, counted in
 //!   [`ImportNotes::pads_with_independent_rotation`].
-//! - **Text, silkscreen, 3D models, stackup dielectric/material/thickness,
-//!   net ties, group/generator objects**: not imported at all.
+//! - **Board-level graphics and text** (`gr_line`/`gr_rect`/`gr_circle`/
+//!   `gr_poly`/`gr_arc`/`gr_text`, any layer other than Edge.Cuts, which
+//!   stays outline-only as before): imported into `design.drawings` as
+//!   [`eda_model::ir::Shape`]/[`eda_model::ir::Text`] (see
+//!   [`import_drawings`]).
+//! - **3D models, stackup dielectric/material/thickness, net ties,
+//!   group/generator objects, footprint-local graphics/text (`fp_line`,
+//!   `fp_text` other than Reference/Value)**: not imported at all.
 
 use std::collections::{BTreeMap, HashMap};
 
-use eda_model::ir::{Design, FootprintInstance, Point, PlacementSection, Provenance, RoutingSection, Side, Track, Via};
+use eda_model::ir::{Design, DrawingsSection, FootprintInstance, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via};
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
 use crate::sexpr::{self, Sexpr};
@@ -91,6 +99,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let nets = build_nets(&net_names, &pin_nets);
     let outline = import_outline(root, &mut notes);
     let (tracks, vias) = import_routing(root, &net_names, &mut notes);
+    let (shapes, texts) = import_drawings(root);
     notes.zones_skipped = sexpr::find_all(root, "zone").count();
 
     // The outline override lives on `board` too (used when a downstream
@@ -100,7 +109,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         board.outline = Some(outline.clone());
     }
 
-    let design = Design {
+    let mut design = Design {
         schema: 1,
         provenance: Provenance {
             engine_version: env!("CARGO_PKG_VERSION").into(),
@@ -111,7 +120,13 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         schematic: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones: vec![] }) },
+        drawings: if shapes.is_empty() && texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts }) },
     };
+    // Every track/via this parse just built, and every shape/text, has no
+    // id yet (the file does not carry ours) -- assign the same
+    // deterministic ids a fresh route or a hand-add would get, so an
+    // imported board is addressable from the moment it lands.
+    design.assign_missing_ids();
     let model = ConstraintModel {
         parts,
         nets,
@@ -385,7 +400,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         }
         let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
-        tracks.push(Track { net, pins: vec![], layer, width, pts: vec![s, e] });
+        tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e] });
     }
 
     for arc in sexpr::find_all(root, "arc") {
@@ -401,7 +416,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         notes.track_arcs_approximated += 1;
-        tracks.push(Track { net, pins: vec![], layer, width, pts: tessellate_arc(s, m, e) });
+        tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: tessellate_arc(s, m, e) });
     }
 
     let mut vias = Vec::new();
@@ -416,7 +431,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let (from_layer, to_layer) = sexpr::find(via, "layers")
             .map(|l| (sexpr::txt(l, 1).unwrap_or("F.Cu").to_string(), sexpr::txt(l, 2).unwrap_or("B.Cu").to_string()))
             .unwrap_or_else(|| ("F.Cu".into(), "B.Cu".into()));
-        vias.push(Via { net, at, drill, diameter: dia, from_layer, to_layer });
+        vias.push(Via { id: String::new(), net, at, drill, diameter: dia, from_layer, to_layer });
     }
 
     (tracks, vias)
@@ -462,6 +477,72 @@ fn tessellate_arc(start: Point, mid: Point, end: Point) -> Vec<Point> {
     pts[0] = start;
     *pts.last_mut().expect("SEGMENTS + 1 >= 1") = end;
     pts
+}
+
+// --------------------------------------------------------- drawings
+
+/// Board-level graphics (`gr_line`/`gr_arc`/`gr_rect`/`gr_circle`/
+/// `gr_poly`) and text (`gr_text`), any layer other than Edge.Cuts -- that
+/// one stays dedicated to [`import_outline`], unchanged, so a shape is
+/// never represented twice.
+fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
+    let stroke_width = |item: &[Sexpr]| -> i64 {
+        sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0)
+    };
+    let layer_of = |item: &[Sexpr]| -> String { sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string() };
+    let filled = |item: &[Sexpr]| -> bool { sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).is_some_and(|s| s == "yes" || s == "solid") };
+
+    let mut shapes = Vec::new();
+    for item in sexpr::find_all(root, "gr_line").filter(|it| !is_edge_cuts(it)) {
+        let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
+        shapes.push(Shape::Segment { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, end });
+    }
+    for item in sexpr::find_all(root, "gr_arc").filter(|it| !is_edge_cuts(it)) {
+        let (Some(start), Some(mid), Some(end)) =
+            (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "mid").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point))
+        else {
+            continue;
+        };
+        shapes.push(Shape::Arc { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, mid, end });
+    }
+    for item in sexpr::find_all(root, "gr_rect").filter(|it| !is_edge_cuts(it)) {
+        let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
+        shapes.push(Shape::Rect { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, end });
+    }
+    for item in sexpr::find_all(root, "gr_circle").filter(|it| !is_edge_cuts(it)) {
+        let (Some(center), Some(end)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
+        shapes.push(Shape::Circle { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), center, end });
+    }
+    for item in sexpr::find_all(root, "gr_poly").filter(|it| !is_edge_cuts(it)) {
+        let Some(pts) = poly_points(item) else { continue };
+        shapes.push(Shape::Polygon { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), pts });
+    }
+
+    let mut texts = Vec::new();
+    for item in sexpr::find_all(root, "gr_text") {
+        let Some(content) = sexpr::txt(item, 1) else { continue };
+        let Some(at) = sexpr::find(item, "at") else { continue };
+        let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
+        let angle = ((sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
+        let effects = sexpr::find(item, "effects");
+        let font = effects.and_then(|e| sexpr::find(e, "font"));
+        let size_um = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(mm_to_um).unwrap_or(1000);
+        let stroke_width = font.and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(mm_to_um).unwrap_or(150);
+        let (mut justify, mut mirror) = (TextJustify::Center, false);
+        if let Some(j) = effects.and_then(|e| sexpr::find(e, "justify")) {
+            for tok in j.iter().skip(1).filter_map(Sexpr::text) {
+                match tok {
+                    "left" => justify = TextJustify::Left,
+                    "right" => justify = TextJustify::Right,
+                    "mirror" => mirror = true,
+                    _ => {}
+                }
+            }
+        }
+        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_um, stroke_width, justify, mirror });
+    }
+
+    (shapes, texts)
 }
 
 // ---------------------------------------------------------------- outline
@@ -672,5 +753,61 @@ mod tests {
         assert_eq!(pl.outline.len(), 4);
         assert_eq!(notes.outline_source, "lines");
         assert!(!notes.outline_open);
+    }
+
+    /// Board-level graphics and text on non-Edge.Cuts layers become
+    /// `Shape`/`Text` items, ided, while the Edge.Cuts lines still go only
+    /// into the outline (never duplicated into `drawings`).
+    #[test]
+    fn imports_graphics_and_text_into_drawings() {
+        let text = r#"(kicad_pcb (version 20241229) (generator "eda-kicad")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+            (net 0 "")
+            (net_class "Default" "" (clearance 0.2) (trace_width 0.25) (via_dia 0.6) (via_drill 0.3))
+            (gr_line (start 0 0) (end 20 0) (layer "Edge.Cuts"))
+            (gr_line (start 20 0) (end 20 20) (layer "Edge.Cuts"))
+            (gr_line (start 20 20) (end 0 20) (layer "Edge.Cuts"))
+            (gr_line (start 0 20) (end 0 0) (layer "Edge.Cuts"))
+            (gr_line (start 1 1) (end 5 1) (stroke (width 0.15) (type solid)) (layer "F.SilkS") (uuid "s1"))
+            (gr_rect (start 2 2) (end 6 6) (stroke (width 0.1) (type solid)) (fill yes) (layer "F.Fab") (uuid "s2"))
+            (gr_circle (center 10 10) (end 12 10) (stroke (width 0.1) (type solid)) (fill no) (layer "B.SilkS") (uuid "s3"))
+            (gr_poly (pts (xy 0 0) (xy 4 0) (xy 4 4)) (stroke (width 0.1) (type solid)) (fill yes) (layer "F.CrtYd") (uuid "s4"))
+            (gr_text "REV A" (at 3 3 90) (layer "F.SilkS") (uuid "t1")
+                (effects (font (size 1 1) (thickness 0.15)) (justify left mirror)))
+        )"#;
+        let (design, _model, notes) = import_kicad_pcb(text).expect("parses");
+        assert_eq!(notes.outline_source, "lines", "Edge.Cuts lines must still build the outline");
+        let dr = design.drawings.expect("graphics/text on non-Edge.Cuts layers must produce a drawings section");
+        assert_eq!(dr.shapes.len(), 4, "the four Edge.Cuts gr_lines must not also become shapes");
+
+        let seg = dr.shapes.iter().find(|s| s.layer() == "F.SilkS" && matches!(s, Shape::Segment { .. })).expect("segment on F.SilkS");
+        assert!(!seg.id().is_empty());
+        let Shape::Segment { stroke_width, start, end, .. } = seg else { unreachable!() };
+        assert_eq!(*stroke_width, 150);
+        assert_eq!(*start, Point { x: 1000, y: 1000 });
+        assert_eq!(*end, Point { x: 5000, y: 1000 });
+
+        let rect = dr.shapes.iter().find(|s| s.layer() == "F.Fab").expect("rect on F.Fab");
+        assert!(matches!(rect, Shape::Rect { filled: true, .. }), "{rect:?}");
+
+        let circle = dr.shapes.iter().find(|s| s.layer() == "B.SilkS").expect("circle on B.SilkS");
+        assert!(matches!(circle, Shape::Circle { filled: false, .. }), "{circle:?}");
+
+        let poly = dr.shapes.iter().find(|s| s.layer() == "F.CrtYd").expect("polygon on F.CrtYd");
+        let Shape::Polygon { pts, filled, .. } = poly else { panic!("{poly:?}") };
+        assert!(filled);
+        assert_eq!(pts.len(), 3);
+
+        assert_eq!(dr.texts.len(), 1);
+        let t = &dr.texts[0];
+        assert!(!t.id.is_empty());
+        assert_eq!(t.content, "REV A");
+        assert_eq!(t.at, Point { x: 3000, y: 3000 });
+        assert_eq!(t.angle, 90_000);
+        assert_eq!(t.layer, "F.SilkS");
+        assert_eq!(t.size_um, 1000);
+        assert_eq!(t.stroke_width, 150);
+        assert_eq!(t.justify, TextJustify::Left);
+        assert!(t.mirror);
     }
 }
