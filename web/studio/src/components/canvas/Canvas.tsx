@@ -117,6 +117,7 @@ export function Canvas() {
       hot: state.hot,
       netHighlight: state.netHighlight,
       showRatsnest: state.showRatsnest,
+      ratsnestCurved: state.ratsnestCurved,
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
       activeLayer: state.activeLayer,
@@ -124,6 +125,9 @@ export function Canvas() {
       gridUm: state.gridUm,
       gridVisible: state.gridVisible,
       movePreview: state.movePreview,
+      sketchPads: state.sketchPads,
+      sketchTracks: state.sketchTracks,
+      sketchVias: state.sketchVias,
     });
     ctx.restore();
 
@@ -162,7 +166,7 @@ export function Canvas() {
       ctx.stroke();
     }
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, marquee, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, marquee, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

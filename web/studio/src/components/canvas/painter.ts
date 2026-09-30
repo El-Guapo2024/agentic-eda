@@ -16,6 +16,7 @@ export interface PaintOptions {
   hot: Set<string>;
   netHighlight: string | null;
   showRatsnest: boolean;
+  ratsnestCurved: boolean;
   layerVisible: Record<string, boolean>;
   layerOpacity: Record<string, number>;
   activeLayer: string | null;
@@ -23,6 +24,17 @@ export interface PaintOptions {
   gridUm: number;
   gridVisible: boolean;
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+  /**
+   * pcbnew.Control.pad/track/viaDisplayMode ("Sketch Pads/Tracks/Vias"):
+   * outline instead of filled. KiCad draws a true unfilled outline (two
+   * parallel edges for a track, a ring for a via/pad); this simplifies
+   * to a thin stroke on the same centerline/outline -- distinguishable
+   * from the filled look without offset-polygon geometry for every
+   * track segment join.
+   */
+  sketchPads: boolean;
+  sketchTracks: boolean;
+  sketchVias: boolean;
 }
 
 function layerAlpha(opts: PaintOptions, key: string): number {
@@ -100,8 +112,14 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     const highlighted = opts.netHighlight && pad.net === opts.netHighlight;
     const fill = highlighted ? "#ffffff" : layerColor(padCopperKey);
     pathForPad(ctx, pad);
-    ctx.fillStyle = fill;
-    ctx.fill();
+    if (opts.sketchPads) {
+      ctx.strokeStyle = fill;
+      ctx.lineWidth = hairlineUm(view, 1.5);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
     if (pad.th) {
       ctx.strokeStyle = layerColor("pad_th");
       ctx.lineWidth = hairlineUm(view, 1);
@@ -172,7 +190,7 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
       ctx.beginPath();
       t.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.strokeStyle = layerColor(key);
-      ctx.lineWidth = Math.max(t.width, hairlineUm(view, 1));
+      ctx.lineWidth = opts.sketchTracks ? hairlineUm(view, 1.5) : Math.max(t.width, hairlineUm(view, 1));
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.stroke();
@@ -182,13 +200,19 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
     for (const v of board.routing.vias) {
       ctx.beginPath();
       ctx.arc(v.x, v.y, v.d / 2, 0, Math.PI * 2);
-      ctx.fillStyle = layerColor("via");
-      ctx.fill();
+      if (opts.sketchVias) {
+        ctx.strokeStyle = layerColor("via");
+        ctx.lineWidth = hairlineUm(view, 1.5);
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = layerColor("via");
+        ctx.fill();
+      }
     }
   }
 }
 
-function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState) {
+function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, curved: boolean) {
   const byNet = padPointsByNet(board.parts);
   ctx.strokeStyle = layerColor("ratsnest");
   ctx.lineWidth = hairlineUm(view, 1);
@@ -196,7 +220,21 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, board:
     for (const [a, b] of minimumSpanningTree(points)) {
       ctx.beginPath();
       ctx.moveTo(a[0], a[1]);
-      ctx.lineTo(b[0], b[1]);
+      if (curved) {
+        // pcbnew.Control.ratsnestLineMode ("Curved Ratsnest Lines"): a
+        // gentle bow instead of a straight line, bulging perpendicular
+        // to the line by a fraction of its length -- KiCad's own curve
+        // is a proper spline; this is a single quadratic arc, visually
+        // the same "it's a curve, not a wire" cue at this zoom level.
+        const mx = (a[0] + b[0]) / 2,
+          my = (a[1] + b[1]) / 2;
+        const dx = b[0] - a[0],
+          dy = b[1] - a[1];
+        const bulge = 0.06;
+        ctx.quadraticCurveTo(mx - dy * bulge, my + dx * bulge, b[0], b[1]);
+      } else {
+        ctx.lineTo(b[0], b[1]);
+      }
       ctx.stroke();
     }
   }
@@ -236,7 +274,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     in2_cu: () => drawTracksAndVias(ctx, view, board, opts, "inner"),
     in1_cu: () => {},
     f_cu: () => drawTracksAndVias(ctx, view, board, opts, "f_cu"),
-    ratsnest: () => opts.showRatsnest && !board.routing && drawRatsnest(ctx, view, board),
+    ratsnest: () => opts.showRatsnest && !board.routing && drawRatsnest(ctx, view, board, opts.ratsnestCurved),
   };
   for (const key of drawOrder()) byLayer[key]?.();
   // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.

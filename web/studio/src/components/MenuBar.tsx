@@ -8,12 +8,15 @@
 // menu contents.
 import { useEffect, useRef, useState } from "react";
 import menusData from "../kicad/menus.json";
+import schMenusData from "../kicad/sch_menus.json";
 import actionsData from "../kicad/actions.json";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
 import { displayHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
+import { useStudioState } from "../state/store";
 
 const menusFile = menusData as MenusFile;
+const schMenusFile = schMenusData as MenusFile;
 const actionsFile = actionsData as ActionsFile;
 const actionsByName = new Map<string, KicadAction>(actionsFile.actions.map((a) => [a.name, a]));
 
@@ -48,6 +51,7 @@ function MenuNodeView({ node }: { node: MenuNode }) {
 }
 
 export function MenuBar() {
+  const state = useStudioState();
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -59,7 +63,13 @@ export function MenuBar() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  if (menusFile.menus.length === 0) {
+  // The 3D tab has no real menubar_3d_viewer.cpp-style extraction (that
+  // window's source wasn't available), so it keeps pcbnew's menu rather
+  // than showing an empty/fake one -- most of it is disabled there
+  // anyway, same as everywhere else this app hasn't ported an action.
+  const activeMenus = state.tab === "schematic" ? schMenusFile : menusFile;
+
+  if (activeMenus.menus.length === 0) {
     return (
       <div className="menubar" ref={ref}>
         <span style={{ color: "var(--chrome-text-dim)", fontStyle: "italic", padding: "0 8px", lineHeight: "28px" }}>
@@ -71,7 +81,7 @@ export function MenuBar() {
 
   return (
     <div className="menubar" ref={ref}>
-      {menusFile.menus.map((menu, i) => (
+      {activeMenus.menus.map((menu, i) => (
         <div key={menu.label} className={`menubar-item${openIndex === i ? " open" : ""}`} onClick={() => setOpenIndex(openIndex === i ? null : i)} onMouseEnter={() => openIndex !== null && setOpenIndex(i)}>
           {menu.label}
           {openIndex === i && (

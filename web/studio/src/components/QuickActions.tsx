@@ -42,8 +42,15 @@ export function QuickActions() {
       <button className="toolbar-button" title="Inspect → DRC" onClick={() => dispatch({ type: "SET_DRC_OPEN", open: true })}>
         <span aria-hidden>✓</span>
       </button>
-      <button className={`toolbar-button${state.tab === "schematic" ? " active" : ""}`} title="Switch to schematic editor" onClick={() => dispatch({ type: "SET_TAB", tab: state.tab === "pcb" ? "schematic" : "pcb" })}>
+      <div className="toolbar-separator" role="separator" />
+      <button className={`toolbar-button${state.tab === "pcb" ? " active" : ""}`} title="PCB Editor" onClick={() => dispatch({ type: "SET_TAB", tab: "pcb" })}>
+        <span aria-hidden>⛁</span>
+      </button>
+      <button className={`toolbar-button${state.tab === "schematic" ? " active" : ""}`} title="Switch to Schematic Editor" onClick={() => dispatch({ type: "SET_TAB", tab: "schematic" })}>
         <span aria-hidden>⧉</span>
+      </button>
+      <button className={`toolbar-button${state.tab === "3d" ? " active" : ""}`} title="3D Viewer (Alt+3)" onClick={() => dispatch({ type: "SET_TAB", tab: "3d" })}>
+        <span aria-hidden>⬢</span>
       </button>
     </>
   );
