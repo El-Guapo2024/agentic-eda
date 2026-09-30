@@ -109,6 +109,19 @@ export interface BoardState {
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */
   job: string;
+  /**
+   * Board-wide track/via defaults, for the auxiliary toolbar's
+   * display-only track-width/via-size indicators. Optional: only
+   * present once the backend serving this board has picked up the
+   * `board_rules` field (crates/cli/src/studio.rs) -- older `eda`
+   * binaries won't send it.
+   */
+  board_rules?: {
+    track_width: Um;
+    via_drill: Um;
+    via_diameter: Um;
+    clearance: Um;
+  };
 }
 
 // ---------------------------------------------------------------- Cmd
