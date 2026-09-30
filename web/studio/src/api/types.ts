@@ -51,6 +51,7 @@ export interface Part {
 }
 
 export interface Track {
+  id: string;
   net: string;
   layer: string;
   width: Um;
@@ -58,15 +59,76 @@ export interface Track {
 }
 
 export interface Via {
+  id: string;
   net: string;
   x: Um;
   y: Um;
+  /** Diameter (the backend's `d`, its `Via.diameter`). */
   d: Um;
+  drill: Um;
+  from: string;
+  to: string;
+}
+
+export interface Zone {
+  id: string;
+  net: string;
+  layer: string;
+  outline: [Um, Um][];
 }
 
 export interface Routing {
   tracks: Track[];
   vias: Via[];
+  zones: Zone[];
+}
+
+// ---------------------------------------------------------------- drawings
+//
+// crates/model/src/ir.rs `Shape`/`Text`. GET /api/state's *display* shape
+// (crates/cli/src/studio.rs `shape_json`/`state()`): points are `[x, y]`
+// pairs (matching Track.pts/Zone.outline above), Text is flat x/y (not
+// nested `at`), angle stays in millidegrees (unlike a Part's `rot`, which
+// the backend already divides down to plain degrees) -- confirmed by
+// reading studio.rs directly, not assumed from the naming alone. POSTing
+// a new Shape/Text back through Cmd is a *different* shape -- see the Cmd
+// section below.
+
+export type ShapeKind = "segment" | "arc" | "rect" | "circle" | "polygon";
+
+interface ShapeCommon {
+  id: string;
+  layer: string;
+  stroke_width: Um;
+  filled: boolean;
+}
+
+export type Shape =
+  | (ShapeCommon & { kind: "segment"; start: [Um, Um]; end: [Um, Um] })
+  | (ShapeCommon & { kind: "arc"; start: [Um, Um]; mid: [Um, Um]; end: [Um, Um] })
+  | (ShapeCommon & { kind: "rect"; start: [Um, Um]; end: [Um, Um] })
+  | (ShapeCommon & { kind: "circle"; center: [Um, Um]; end: [Um, Um] })
+  | (ShapeCommon & { kind: "polygon"; pts: [Um, Um][] });
+
+export type TextJustify = "left" | "center" | "right";
+
+export interface BoardText {
+  id: string;
+  content: string;
+  x: Um;
+  y: Um;
+  /** Millidegrees -- NOT divided down like a Part's `rot`. */
+  angle: number;
+  layer: string;
+  size: Um;
+  stroke_width: Um;
+  justify: TextJustify;
+  mirror: boolean;
+}
+
+export interface Drawings {
+  shapes: Shape[];
+  texts: BoardText[];
 }
 
 export interface Check {
@@ -104,6 +166,7 @@ export interface BoardState {
   parts: Part[];
   rules: Rule[];
   routing: Routing | null;
+  drawings: Drawings | null;
   checks: Check[];
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
@@ -133,6 +196,38 @@ export interface BoardState {
 export type Dir = "north" | "south" | "east" | "west";
 export type Region = "north_west" | "north" | "north_east" | "west" | "centre" | "east" | "south_west" | "south" | "south_east";
 
+// crates/model/src/ir.rs `Point` -- a plain {x,y} struct with the derived
+// serde impl (no custom flattening), so this is what a `Vec<Point>` field
+// (Track.pts, Zone.outline, a Shape's own geometry, Text.at) actually
+// serializes to. NOT the same as the `[x, y]` pairs GET /api/state uses
+// for the exact same data -- that array form is `state()`'s own hand-
+// built display JSON, not IR's native shape.
+export interface PointXY {
+  x: Um;
+  y: Um;
+}
+
+/** crates/model/src/ir.rs `Shape`, IR field names/point shape -- for `add_shape` only. Same `kind` tags as the display `Shape` above, different point representation ({x,y}, not [x,y]) and `id` left empty for a new one (the backend assigns it). */
+export type CmdShape =
+  | { kind: "segment"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; end: PointXY }
+  | { kind: "arc"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; mid: PointXY; end: PointXY }
+  | { kind: "rect"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; end: PointXY }
+  | { kind: "circle"; id?: string; layer: string; stroke_width: Um; filled: boolean; center: PointXY; end: PointXY }
+  | { kind: "polygon"; id?: string; layer: string; stroke_width: Um; filled: boolean; pts: PointXY[] };
+
+/** crates/model/src/ir.rs `Text`, IR field names -- for `add_text` only (`edit_text` takes flat fields instead, see Cmd below). */
+export interface CmdText {
+  id?: string;
+  content: string;
+  at: PointXY;
+  angle: number;
+  layer: string;
+  size_um: Um;
+  stroke_width: Um;
+  justify: TextJustify;
+  mirror: boolean;
+}
+
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
   | { op: "place_edge"; part: string; edge: Dir; fraction: number }
@@ -142,7 +237,23 @@ export type Cmd =
   | { op: "nudge"; part: string; dir: Dir; steps: number }
   | { op: "rotate"; part: string; quarter_turns: number }
   | { op: "swap"; a: string; b: string }
-  | { op: "rip"; part: string };
+  | { op: "rip"; part: string }
+  | { op: "flip"; part: string }
+  | { op: "add_track"; net: string; layer: string; width: Um; pts: PointXY[] }
+  | { op: "delete_track"; id: string }
+  | { op: "set_track_width"; id: string; width: Um }
+  | { op: "add_via"; net: string; x: Um; y: Um; drill: Um; diameter: Um; from_layer: string; to_layer: string }
+  | { op: "delete_via"; id: string }
+  | { op: "move_via"; id: string; x: Um; y: Um }
+  | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
+  | { op: "delete_zone"; id: string }
+  | { op: "add_shape"; shape: CmdShape }
+  | { op: "delete_shape"; id: string }
+  | { op: "move_shape"; id: string; dx: Um; dy: Um }
+  | { op: "add_text"; text: CmdText }
+  | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
+  | { op: "delete_text"; id: string }
+  | { op: "move_text"; id: string; x: Um; y: Um };
 
 export interface CmdReply {
   ok: boolean;

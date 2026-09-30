@@ -16,6 +16,7 @@
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { zoomAbout, fitTransform, boundsOfPoints } from "../components/canvas/view";
+import { commitRoute, dropViaAndSwitchLayer } from "../components/canvas/routing";
 import { GRID_OPTIONS_UM } from "../components/Toolbar";
 
 function canvasRect(): DOMRect | null {
@@ -46,7 +47,93 @@ export function useActionRunner() {
 
     m.set("pcbnew.InteractiveEdit.rotateCcw", pcbOnly(() => api.rotateSelection(1)));
     m.set("pcbnew.InteractiveEdit.rotateCw", pcbOnly(() => api.rotateSelection(3)));
-    m.set("common.Interactive.delete", pcbOnly(() => api.ripSelection()));
+    m.set(
+      "common.Interactive.delete",
+      pcbOnly(() => {
+        // One selection can only ever be one kind of thing at a time in
+        // practice (Canvas.tsx's hit-testing always replaces the
+        // selection with a single item; shift-click can still mix kinds
+        // by accumulating them), so this deletes each ref through
+        // whichever Cmd actually matches what it is, rather than
+        // assuming "selection" always means "footprints" the way
+        // ripSelection alone did before tracks/vias/zones/shapes/text
+        // existed to select at all.
+        const refs = [...state.selection];
+        dispatch({ type: "CLEAR_SELECTION" });
+        for (const id of refs) {
+          if (api.trackById(id)) api.cmd({ op: "delete_track", id });
+          else if (api.viaById(id)) api.cmd({ op: "delete_via", id });
+          else if (api.zoneById(id)) api.cmd({ op: "delete_zone", id });
+          else if (api.shapeById(id)) api.cmd({ op: "delete_shape", id });
+          else if (api.textById(id)) api.cmd({ op: "delete_text", id });
+          else if (api.partByRef(id)?.placed) api.cmd({ op: "rip", part: id });
+        }
+      })
+    );
+    // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
+    // AttemptFinish's while actively routing -- KiCad's own tool stack
+    // resolves this by context (which tool currently owns the keyboard),
+    // this app's flatter one by only ever registering whichever of the
+    // two applies to the current state.drawState, so useGlobalHotkeys'
+    // first-enabled-candidate search always lands on the right one.
+    if (state.drawState?.kind === "route") {
+      m.set(
+        "pcbnew.InteractiveRouter.AttemptFinish",
+        pcbOnly(() => {
+          const draw = state.drawState;
+          if (draw?.kind === "route") {
+            commitRoute(draw, api.cmd);
+            dispatch({ type: "SET_DRAW_STATE", draw: null });
+          }
+        })
+      );
+    } else {
+      m.set("pcbnew.InteractiveEdit.flip", pcbOnly(() => api.flipSelection()));
+    }
+    m.set(
+      "pcbnew.Control.layerToggle",
+      pcbOnly(() => {
+        const draw = state.drawState;
+        if (draw?.kind !== "route" || !state.board) return;
+        dropViaAndSwitchLayer(draw, state.board, api.cmd).then((next) => dispatch({ type: "SET_DRAW_STATE", draw: next }));
+      })
+    );
+    m.set(
+      "pcbnew.InteractiveRouter.SingleTrack",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "route" ? "select" : "route" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.via",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.zone",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.line",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_segment" ? "select" : "draw_segment" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.arc",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_arc" ? "select" : "draw_arc" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.rectangle",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_rect" ? "select" : "draw_rect" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.circle",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_circle" ? "select" : "draw_circle" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.graphicPolygon",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_polygon" ? "select" : "draw_polygon" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.text",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "text" ? "select" : "text" }))
+    );
     m.set("common.Interactive.undo", () => api.undo());
     m.set("common.Interactive.redo", () => api.redo());
 
@@ -98,7 +185,12 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveMove.move",
       pcbOnly(() => {
-        if (state.selection.size === 0) return;
+        const first = [...state.selection][0];
+        if (!first) return;
+        // Tracks and zones have no move_* Cmd (api/types.ts) -- nothing
+        // for M to do for them, same as they're excluded from dragging
+        // in Canvas.tsx's onPointerDown.
+        if (api.trackById(first) || api.zoneById(first)) return;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
       })
@@ -111,8 +203,16 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveEdit.properties",
       pcbOnly(() => {
-        if (state.selection.size === 0) return;
-        dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+        const ref = [...state.selection][0];
+        if (!ref) return;
+        // "E" opens whichever properties view actually applies to what's
+        // selected -- a real Text gets the full edit_text-backed dialog
+        // (item 6's own "E to edit"); everything else this app models
+        // (a part, or item 7's track/via/zone/shape) is read-only-ish, so
+        // it keeps the existing footprint-properties dialog's pattern.
+        if (api.textById(ref)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id: ref } });
+        else if (api.trackById(ref) || api.viaById(ref) || api.zoneById(ref) || api.shapeById(ref)) dispatch({ type: "SET_ITEM_PROPERTIES_ID", id: ref });
+        else dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
       })
     );
     m.set("pcbnew.DRCTool.runDRC", () => dispatch({ type: "SET_DRC_OPEN", open: true }));

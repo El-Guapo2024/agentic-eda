@@ -5,11 +5,13 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, Part, Pad } from "../../api/types";
-import type { ViewTransform } from "../../state/store";
+import type { BoardState, Part, Pad, Shape } from "../../api/types";
+import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { minimumSpanningTree, padPointsByNet } from "./ratsnest";
+import { posture45 } from "./routing";
+import { snapPoint } from "./gridHelper";
 
 export interface PaintOptions {
   selection: Set<string>;
@@ -24,6 +26,10 @@ export interface PaintOptions {
   gridUm: number;
   gridVisible: boolean;
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+  /** The route/zone/drawing tool currently in progress (Canvas.tsx), and the cursor to rubber-band its next point toward -- null cursor (pointer left the canvas, or hasn't moved yet) just skips the rubber-band, still showing the fixed points so far. */
+  drawState: DrawState | null;
+  cursorUm: { x: number; y: number } | null;
+  activeTool: ToolId;
   /**
    * pcbnew.Control.pad/track/viaDisplayMode ("Sketch Pads/Tracks/Vias"):
    * outline instead of filled. KiCad draws a true unfilled outline (two
@@ -212,6 +218,143 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
   }
 }
 
+/**
+ * Zones as outlines only -- fill isn't computed anywhere in this model
+ * (no polygon-clipping/thermal-relief engine exists), so drawing a solid
+ * copper-colored fill would show area that isn't actually guaranteed
+ * copper. KiCad has the same "outline display mode" for exactly this
+ * situation (a zone whose fill is stale/not yet run).
+ */
+function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
+  if (!board.routing) return;
+  for (const z of board.routing.zones) {
+    const key = copperColorKey(z.layer);
+    const bucket = key === "f_cu" ? "f_cu" : key === "b_cu" ? "b_cu" : "inner";
+    if (bucket !== wantLayer) continue;
+    if (opts.layerVisible[z.layer] === false) continue;
+    if (z.outline.length < 3) continue;
+    const selected = opts.selection.has(z.id);
+    withAlpha(ctx, layerAlpha(opts, z.layer), () => {
+      ctx.beginPath();
+      z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.closePath();
+      ctx.strokeStyle = selected ? layerColor("selection") : layerColor(key);
+      ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
+      ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+}
+
+/** A Shape/Text's own dotted KiCad layer name ("F.SilkS") -> colors.json's real key ("F_SilkS") -- unlike copperColorKey() (which also lowercases, fine for copper's own always-lowercase-safe names but wrong for e.g. "Edge.Cuts" -> "Edge_Cuts"), these carry a real named layer already and just need the punctuation swapped, case preserved. */
+function realLayerKey(layer: string): string {
+  return layer.replace(/\./g, "_");
+}
+
+/** Free-standing board graphics (Place > Line/Arc/Rectangle/Circle/Polygon) -- everything crates/model/src/ir.rs's `Shape` enum can hold, each drawn in its own layer's real color (silkscreen, fab, etc., not just copper). */
+function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  const shapes = board.drawings?.shapes ?? [];
+  for (const s of shapes) {
+    const bucketish = realLayerKey(s.layer);
+    if (opts.layerVisible[s.layer] === false) continue;
+    const selected = opts.selection.has(s.id);
+    ctx.save();
+    ctx.strokeStyle = selected ? layerColor("selection") : layerColor(bucketish);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = Math.max(s.stroke_width, hairlineUm(view, selected ? 2 : 1));
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    drawShapeGeometry(ctx, s);
+    ctx.restore();
+  }
+}
+
+function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape) {
+  ctx.beginPath();
+  switch (s.kind) {
+    case "segment":
+      ctx.moveTo(s.start[0], s.start[1]);
+      ctx.lineTo(s.end[0], s.end[1]);
+      ctx.stroke();
+      return;
+    case "rect":
+      ctx.rect(s.start[0], s.start[1], s.end[0] - s.start[0], s.end[1] - s.start[1]);
+      break;
+    case "circle": {
+      const r = Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]);
+      ctx.arc(s.center[0], s.center[1], r, 0, Math.PI * 2);
+      break;
+    }
+    case "polygon":
+      s.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.closePath();
+      break;
+    case "arc": {
+      // Three points (start/mid/end) on the arc -- the circumcircle
+      // through them gives center+radius, then the start/end angles.
+      const circumcenter = circleThrough(s.start, s.mid, s.end);
+      if (!circumcenter) {
+        ctx.moveTo(s.start[0], s.start[1]);
+        ctx.lineTo(s.end[0], s.end[1]); // degenerate (collinear) points: a straight line is a reasonable fallback, not a crash
+        ctx.stroke();
+        return;
+      }
+      const [cx, cy, r] = circumcenter;
+      const a0 = Math.atan2(s.start[1] - cy, s.start[0] - cx);
+      const aMid = Math.atan2(s.mid[1] - cy, s.mid[0] - cx);
+      const a1 = Math.atan2(s.end[1] - cy, s.end[0] - cx);
+      // Pick whichever sweep direction (CW vs CCW) actually passes through `mid`.
+      const ccw = normalizeSweep(a0, aMid, a1);
+      ctx.arc(cx, cy, r, a0, a1, ccw);
+      ctx.stroke();
+      return;
+    }
+  }
+  if (s.filled) ctx.fill();
+  ctx.stroke();
+}
+
+/** Circumcenter + radius of the circle through three points, or null if they're (nearly) collinear. Exported: viewer3d/scene.ts reuses this to sample the same true arc geometry for the 3D silk stand-in, instead of re-deriving it. */
+export function circleThrough(a: [number, number], b: [number, number], c: [number, number]): [number, number, number] | null {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+  if (Math.abs(d) < 1e-9) return null;
+  const a2 = a[0] * a[0] + a[1] * a[1];
+  const b2 = b[0] * b[0] + b[1] * b[1];
+  const c2 = c[0] * c[0] + c[1] * c[1];
+  const ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d;
+  const uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d;
+  return [ux, uy, Math.hypot(a[0] - ux, a[1] - uy)];
+}
+
+/** True (draw counter-clockwise) if sweeping CCW from `a0` reaches `aMid` before `a1` does -- i.e. whichever winding direction actually visits the arc's own recorded midpoint. Exported for viewer3d/scene.ts, see circleThrough above. */
+export function normalizeSweep(a0: number, aMid: number, a1: number): boolean {
+  const twoPi = Math.PI * 2;
+  const fwd = (x: number) => ((x % twoPi) + twoPi) % twoPi; // 0..2pi, CCW-positive
+  const ccwSpan = fwd(a1 - a0); // CCW distance a0 -> a1
+  const ccwMidSpan = fwd(aMid - a0); // CCW distance a0 -> aMid
+  return ccwMidSpan <= ccwSpan; // mid falls within the CCW sweep from a0 to a1
+}
+
+/** Free-standing board text (Place > Text). No real font-outline rendering exists here either (see viewer3d/scene.ts's own silk simplification) -- Canvas2D's own text metrics are close enough for a 2D top-down view, unlike the 3D view where a plane+texture stands in instead. */
+function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  const texts = board.drawings?.texts ?? [];
+  for (const t of texts) {
+    if (opts.layerVisible[t.layer] === false) continue;
+    const selected = opts.selection.has(t.id);
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    ctx.rotate((-t.angle / 1000) * (Math.PI / 180)); // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
+    if (t.mirror) ctx.scale(-1, 1);
+    ctx.fillStyle = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
+    ctx.font = `${Math.max(t.size, hairlineUm(view, 8))}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.textAlign = t.justify === "left" ? "start" : t.justify === "right" ? "end" : "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(t.content, 0, 0);
+    ctx.restore();
+  }
+}
+
 function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, curved: boolean) {
   const byNet = padPointsByNet(board.parts);
   ctx.strokeStyle = layerColor("ratsnest");
@@ -261,6 +404,67 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
 }
 
 /**
+ * The route/via/zone/drawing tool currently in progress (Canvas.tsx's
+ * state.drawState), rendered as a dashed "not committed yet" preview:
+ * the fixed points so far plus a rubber-band to wherever the next click
+ * would actually land -- the exact same posture45+grid-snap Canvas.tsx's
+ * own click handler applies, so the preview never lies about where a
+ * click will go.
+ */
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, opts: PaintOptions) {
+  const draw = opts.drawState;
+  if (!draw) return;
+  const cursor = opts.cursorUm;
+  const pts = draw.pts.slice();
+  let rubberEnd: [number, number] | null = null;
+  if (cursor) {
+    const last = pts[pts.length - 1]!;
+    const usePosture = draw.kind === "route" || (draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect"));
+    const raw: [number, number] = usePosture ? posture45(last, [cursor.x, cursor.y]) : [cursor.x, cursor.y];
+    rubberEnd = snapPoint(raw[0], raw[1], opts.gridUm);
+  }
+
+  const color = draw.kind === "route" ? layerColor(copperColorKey(draw.layer)) : layerColor("selection");
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = draw.kind === "route" ? Math.max(draw.width, hairlineUm(view, 1)) : hairlineUm(view, 1.5);
+  ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  if (rubberEnd) ctx.lineTo(rubberEnd[0], rubberEnd[1]);
+  if (draw.kind === "zone" && pts.length >= 2) ctx.closePath(); // preview the closing edge back to the start
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // A small dot on every fixed point so far, so the operator can see
+  // exactly where each click landed (especially useful once several
+  // route segments or zone corners are down).
+  for (const [x, y] of pts) {
+    ctx.beginPath();
+    ctx.arc(x, y, hairlineUm(view, 2.5), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */
+function drawViaGhost(ctx: CanvasRenderingContext2D, board: BoardState, opts: PaintOptions) {
+  if (!opts.cursorUm) return;
+  const [x, y] = snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
+  const d = board.board_rules?.via_diameter ?? 600;
+  ctx.save();
+  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = layerColor("via");
+  ctx.beginPath();
+  ctx.arc(x, y, d / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
  * Paints the whole board into `ctx`, which must already have `view`
  * applied (ctx.translate/scale) -- see Canvas.tsx. Iterates GAL layers in
  * `drawOrder()` so moving to WebGL later only means replacing the
@@ -270,13 +474,28 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   const byLayer: Record<string, () => void> = {
     grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm),
     background: () => drawOutline(ctx, view, board.outline),
-    b_cu: () => drawTracksAndVias(ctx, view, board, opts, "b_cu"),
-    in2_cu: () => drawTracksAndVias(ctx, view, board, opts, "inner"),
+    b_cu: () => {
+      drawZones(ctx, view, board, opts, "b_cu");
+      drawTracksAndVias(ctx, view, board, opts, "b_cu");
+    },
+    in2_cu: () => {
+      drawZones(ctx, view, board, opts, "inner");
+      drawTracksAndVias(ctx, view, board, opts, "inner");
+    },
     in1_cu: () => {},
-    f_cu: () => drawTracksAndVias(ctx, view, board, opts, "f_cu"),
+    f_cu: () => {
+      drawZones(ctx, view, board, opts, "f_cu");
+      drawTracksAndVias(ctx, view, board, opts, "f_cu");
+    },
     ratsnest: () => opts.showRatsnest && !board.routing && drawRatsnest(ctx, view, board, opts.ratsnestCurved),
   };
   for (const key of drawOrder()) byLayer[key]?.();
   // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
   for (const part of board.parts) drawFootprint(ctx, view, part, opts);
+  // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
+  drawShapes(ctx, view, board, opts);
+  drawTexts(ctx, view, board, opts);
+  // In-progress route/via/zone/drawing tool preview, on top of everything committed.
+  drawInProgress(ctx, view, opts);
+  if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
 }
