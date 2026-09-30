@@ -112,6 +112,13 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
       <ToolbarButton label="Silkscreen" title="Show/hide silkscreen" active={opts.showSilkscreen} onClick={() => set({ showSilkscreen: !opts.showSilkscreen })} />
       <ToolbarButton label="Solder Mask" title="Show/hide solder mask" active={opts.showSolderMask} onClick={() => set({ showSolderMask: !opts.showSolderMask })} />
       <ToolbarButton label="Components" title="Show/hide the rendered component models" active={opts.showComponents} onClick={() => set({ showComponents: !opts.showComponents })} />
+      <Sep />
+      <ToolbarButton
+        label="KiCad Models"
+        title="Show GET /api/board.glb's real KiCad render (actual 3D models, kicad-cli's own colors) instead of this app's own procedural scene. Falls back to the procedural scene on its own if the GLB hasn't loaded."
+        active={opts.kicadModels}
+        onClick={() => set({ kicadModels: !opts.kicadModels })}
+      />
     </div>
   );
 }

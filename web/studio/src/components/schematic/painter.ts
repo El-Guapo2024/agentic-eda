@@ -17,6 +17,24 @@ import type { Schematic, SchematicWire } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
+import { drawStrokeText } from "../text/strokeFont";
+
+/**
+ * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
+ * ascent/descent metrics; stroke text has no such metric to ask for
+ * (every glyph's y=0 already sits exactly on the baseline, per KiCad's
+ * own FONT_OFFSET convention -- see strokeFont.ts), so vertical
+ * centering here is an approximation: half of a typical cap-height
+ * (measured off the real font data -- 'A' spans baseline to about -0.95
+ * * size), nudged down a bit to not over-shoot for mixed-/lower-case
+ * strings. Applied by shifting the anchor y before calling
+ * drawStrokeText, since the function itself only knows baseline-left.
+ */
+const MIDDLE_OFFSET_FACTOR = 0.35;
+/** A full-height glyph's baseline-to-top span, measured off the real font data (decodeGlyph('A') tops out at y ~= -0.95 * size) -- used to approximate Canvas2D's old textBaseline:"top"/"bottom" behavior now that stroke text only ever anchors at its own baseline. */
+const CAP_HEIGHT = 0.95;
+/** Stroke text has no filled outline to embolden -- a thicker stroke is KiCad's own way of drawing "bold" stroke-font text. */
+const BOLD_THICKNESS_FACTOR = 1 / 5;
 
 export interface SchematicPaintOptions {
   selection: Set<string>;
@@ -129,43 +147,40 @@ function drawSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Resol
       // toggle in this app's model -- each in its own real KiCad color,
       // LAYER_PINNAM/LAYER_PINNUM, not one falling back to the other).
       if (pin.name) {
-        ctx.save();
-        ctx.font = `${PIN_FONT * 1000}px sans-serif`;
-        ctx.fillStyle = layerColor("LAYER_PINNAM");
+        const sizeUm = PIN_FONT * 1000;
+        const color = layerColor("LAYER_PINNAM");
         if (port.side === "left") {
-          ctx.textAlign = "start";
-          ctx.textBaseline = "middle";
-          ctx.fillText(pin.name, lx + pad, ly);
+          drawStrokeText(ctx, pin.name, lx + pad, ly + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "left", color });
         } else if (port.side === "right") {
-          ctx.textAlign = "end";
-          ctx.textBaseline = "middle";
-          ctx.fillText(pin.name, lx - pad, ly);
+          drawStrokeText(ctx, pin.name, lx - pad, ly + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "right", color });
         } else {
-          ctx.textAlign = "center";
-          ctx.textBaseline = port.side === "top" ? "bottom" : "top";
-          ctx.fillText(pin.name, lx, ly + (port.side === "top" ? -pad : pad));
+          // top/bottom: text sits fully above (top-side pin) or fully
+          // below (bottom-side pin) the stub point. Baseline sits close
+          // to a glyph's visual bottom (pin names rarely have
+          // descenders), so anchoring the baseline directly at the
+          // pad point approximates "text bottom here, growing up" for a
+          // top-side pin; for a bottom-side pin the baseline is pushed
+          // down by one cap-height (CAP_HEIGHT) so the text's *top*
+          // lands at the pad point instead.
+          const y = port.side === "top" ? ly - pad : ly + pad + sizeUm * CAP_HEIGHT;
+          drawStrokeText(ctx, pin.name, lx, y, { sizeUm, justify: "center", color });
         }
-        ctx.restore();
       }
       // Pin number: along the stub itself, at its midpoint, offset to
       // sit just above the line (below it for a top-side stub, which
       // points the opposite way) rather than on top of it.
       if (pin.number) {
-        ctx.save();
-        ctx.font = `${PIN_FONT * 0.85 * 1000}px sans-serif`;
-        ctx.fillStyle = layerColor("LAYER_PINNUM");
+        const sizeUm = PIN_FONT * 0.85 * 1000;
+        const color = layerColor("LAYER_PINNUM");
         const mx = (lx + sx) / 2;
         const my = (ly + sy) / 2;
         if (port.side === "left" || port.side === "right") {
-          ctx.textAlign = "center";
-          ctx.textBaseline = "bottom";
-          ctx.fillText(pin.number, mx, my - pad * 0.5);
+          // Sits just above the stub line (bottom-anchored -- see CAP_HEIGHT's comment).
+          drawStrokeText(ctx, pin.number, mx, my - pad * 0.5, { sizeUm, justify: "center", color });
         } else {
-          ctx.textAlign = port.side === "top" ? "end" : "start";
-          ctx.textBaseline = "middle";
-          ctx.fillText(pin.number, mx + (port.side === "top" ? -pad * 0.5 : pad * 0.5), my);
+          const justify = port.side === "top" ? "right" : "left";
+          drawStrokeText(ctx, pin.number, mx + (port.side === "top" ? -pad * 0.5 : pad * 0.5), my + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify, color });
         }
-        ctx.restore();
       }
       // No-connect: a small blue X centered on the stub's free end --
       // LAYER_NOCONNECT, KiCad's real color for this marker.
@@ -185,27 +200,24 @@ function drawSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Resol
     }
   });
 
-  // Ref/value, above/below the box's left edge.
-  ctx.save();
-  ctx.textAlign = "start";
-  ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = layerColor("LAYER_REFERENCEPART");
-  ctx.font = `bold ${REF_FONT * 1000}px sans-serif`;
-  ctx.fillText(symbol.id, 0, -400);
+  // Ref/value, above/below the box's left edge. Stroke text has no
+  // "bold" variant (there's no filled outline to embolden) -- KiCad's
+  // own way of making stroke text heavier is a thicker stroke, so the
+  // reference designator (the one field this app already drew bold)
+  // gets BOLD_THICKNESS_FACTOR instead of the default.
+  const refSizeUm = REF_FONT * 1000;
+  drawStrokeText(ctx, symbol.id, 0, -400, { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
-    ctx.fillStyle = layerColor("LAYER_VALUEPART");
-    ctx.font = `${VALUE_FONT * 1000}px sans-serif`;
-    ctx.fillText(symbol.value ?? symbol.mpn ?? "", 0, height + 1800);
+    const sizeUm = VALUE_FONT * 1000;
+    drawStrokeText(ctx, symbol.value ?? symbol.mpn ?? "", 0, height + 1800, { sizeUm, color: layerColor("LAYER_VALUEPART") });
   }
   // Footprint field: small, LAYER_FIELDS purple -- a real field KiCad
   // draws alongside ref/value (this app has no separate "hide field"
   // flag per field, so it always shows when the symbol has a package).
   if (symbol.package) {
-    ctx.fillStyle = layerColor("LAYER_FIELDS");
-    ctx.font = `${FIELD_FONT * 1000}px sans-serif`;
-    ctx.fillText(symbol.package, 0, height + 1800 + FIELD_FONT * 1150);
+    const sizeUm = FIELD_FONT * 1000;
+    drawStrokeText(ctx, symbol.package, 0, height + 1800 + FIELD_FONT * 1150, { sizeUm, color: layerColor("LAYER_FIELDS") });
   }
-  ctx.restore();
 
   ctx.restore();
 }
@@ -304,12 +316,11 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // Net labels: a small tag at the anchor, colored by rail-vs-signal.
   for (const l of sch.labels) {
     const on = opts.netHighlight === l.net;
+    const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : labelColor(l.net);
+    const sizeUm = 1.3 * 1000;
+    drawStrokeText(ctx, l.net, l.at[0] + 300, l.at[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, italic: true, color });
     ctx.save();
-    ctx.fillStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : labelColor(l.net);
-    ctx.font = `italic ${1.3 * 1000}px sans-serif`;
-    ctx.textAlign = "start";
-    ctx.textBaseline = "middle";
-    ctx.fillText(l.net, l.at[0] + 300, l.at[1]);
+    ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(l.at[0], l.at[1], Math.max(150, hair), 0, Math.PI * 2);
     ctx.fill();

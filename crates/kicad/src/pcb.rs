@@ -491,6 +491,23 @@ fn write_footprint(
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
+    // 3D model reference, identity offset/scale/rotate -- this app has no
+    // per-instance model adjustment to carry (KiCad's own UI lets a user
+    // nudge an individual footprint's model, but nothing here ever sets
+    // one), so every footprint that has a model at all gets the plain,
+    // unmodified reference its library (or the built-in package map)
+    // named. Path is written exactly as stored -- footprint_lib.rs reads
+    // it straight out of the source library file, and footprint::
+    // builtin_model_path already writes it in KiCad's own
+    // `${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step` form.
+    if let Some(model_path) = &footprint.model {
+        writeln!(out, "\t\t(model {}", sexpr_str(model_path)).unwrap();
+        writeln!(out, "\t\t\t(offset\n\t\t\t\t(xyz 0 0 0)\n\t\t\t)").unwrap();
+        writeln!(out, "\t\t\t(scale\n\t\t\t\t(xyz 1 1 1)\n\t\t\t)").unwrap();
+        writeln!(out, "\t\t\t(rotate\n\t\t\t\t(xyz 0 0 0)\n\t\t\t)").unwrap();
+        writeln!(out, "\t\t)").unwrap();
+    }
+
     writeln!(out, "\t)").unwrap();
 }
 

@@ -18,6 +18,7 @@
 // for all of the frame/title-block ink.
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
+import { drawStrokeText } from "../text/strokeFont";
 
 /** A4 landscape, KiCad's default schematic page size -- um (mm * 1000). */
 export const PAGE_WIDTH_UM = 297_000;
@@ -35,6 +36,8 @@ const FRAME_STROKE_UM = 152; // 0.1524mm in the source SVG
 // A4 landscape) -- not "divide evenly into a fixed count".
 const ZONE_PITCH_UM = 50_000;
 const ZONE_LABEL_SIZE_UM = 1_733;
+/** Approximates Canvas2D's old textBaseline:"middle" for stroke text -- see painter.ts's MIDDLE_OFFSET_FACTOR for the same constant and its derivation. */
+const ZONE_LABEL_MIDDLE_OFFSET = 0.35;
 const ZONE_TICK_UM = 2_000; // outer margin (10mm) minus inner margin (12mm) -- the tick spans exactly that gap
 
 // Title block: flush with the inner frame's bottom-right corner.
@@ -98,18 +101,16 @@ export function drawZoneReferences(ctx: CanvasRenderingContext2D, view: ViewTran
   const rows = divisions(innerH, ZONE_PITCH_UM);
 
   frameLine(ctx, hair);
-  ctx.font = `${ZONE_LABEL_SIZE_UM}px sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = layerColor("LAYER_SCHEMATIC_DRAWINGSHEET");
+  const color = layerColor("LAYER_SCHEMATIC_DRAWINGSHEET");
+  const labelY = ZONE_LABEL_SIZE_UM * ZONE_LABEL_MIDDLE_OFFSET;
 
   // Numbers, left-to-right (the real export's "1" sits at the left/near
   // corner, ascending rightward), along the top and bottom edges.
   for (let i = 0; i < cols.length - 1; i++) {
     const cx = OUTER_MARGIN_UM + (cols[i]! + cols[i + 1]!) / 2;
     const label = String(i + 1);
-    ctx.fillText(label, cx, OUTER_MARGIN_UM / 2);
-    ctx.fillText(label, cx, PAGE_HEIGHT_UM - OUTER_MARGIN_UM / 2);
+    drawStrokeText(ctx, label, cx, OUTER_MARGIN_UM / 2 + labelY, { sizeUm: ZONE_LABEL_SIZE_UM, justify: "center", color });
+    drawStrokeText(ctx, label, cx, PAGE_HEIGHT_UM - OUTER_MARGIN_UM / 2 + labelY, { sizeUm: ZONE_LABEL_SIZE_UM, justify: "center", color });
     if (i > 0) {
       const x = OUTER_MARGIN_UM + cols[i]!;
       ctx.beginPath();
@@ -125,8 +126,8 @@ export function drawZoneReferences(ctx: CanvasRenderingContext2D, view: ViewTran
   for (let i = 0; i < rows.length - 1; i++) {
     const cy = OUTER_MARGIN_UM + (rows[i]! + rows[i + 1]!) / 2;
     const label = String.fromCharCode(65 + i);
-    ctx.fillText(label, OUTER_MARGIN_UM / 2, cy);
-    ctx.fillText(label, PAGE_WIDTH_UM - OUTER_MARGIN_UM / 2, cy);
+    drawStrokeText(ctx, label, OUTER_MARGIN_UM / 2, cy + labelY, { sizeUm: ZONE_LABEL_SIZE_UM, justify: "center", color });
+    drawStrokeText(ctx, label, PAGE_WIDTH_UM - OUTER_MARGIN_UM / 2, cy + labelY, { sizeUm: ZONE_LABEL_SIZE_UM, justify: "center", color });
     if (i > 0) {
       const y = OUTER_MARGIN_UM + rows[i]!;
       ctx.beginPath();
@@ -171,15 +172,14 @@ export function drawTitleBlock(ctx: CanvasRenderingContext2D, view: ViewTransfor
   ctx.lineTo(x0 + TB_COL_DATE_REV_SPLIT, y0 + TB_HEIGHT_UM);
   ctx.stroke();
 
-  ctx.fillStyle = layerColor("LAYER_SCHEMATIC_DRAWINGSHEET");
-  ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "start";
+  const tbColor = layerColor("LAYER_SCHEMATIC_DRAWINGSHEET");
 
+  // Stroke text has no bold variant -- a thicker stroke stands in, same
+  // as painter.ts's BOLD_THICKNESS_FACTOR (this module doesn't import
+  // that one to avoid a schematic/schematic cross-import for one
+  // constant; same value, same reasoning).
   const text = (s: string, xOff: number, yOff: number, sizeUm: number, bold = false) => {
-    ctx.save();
-    ctx.font = `${bold ? "bold " : ""}${sizeUm}px sans-serif`;
-    ctx.fillText(s, x0 + xOff, y0 + yOff);
-    ctx.restore();
+    drawStrokeText(ctx, s, x0 + xOff, y0 + yOff, { sizeUm, thicknessUm: bold ? sizeUm / 5 : undefined, color: tbColor });
   };
 
   text(`Sheet: ${info.sheetPath}`, 1_000, TB_ROW_FILESHEET_BOTTOM - 3_750, 2_000);

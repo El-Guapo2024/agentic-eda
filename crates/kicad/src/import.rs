@@ -409,7 +409,13 @@ fn import_footprints(
         // Pad geometry is keyed by lib id and shared across instances (the
         // same library footprint, wherever it is placed); net membership
         // is per-instance and lives in `pin_nets`/`Part.pins` instead.
-        explicit.entry(lib_id.clone()).or_insert_with(|| Footprint { name: lib_id.clone(), pads, courtyard: None });
+        // A board file embeds each placed footprint's own definition in
+        // full (pads, courtyard graphics, and its `(model ...)` 3D
+        // reference) -- reusing footprint_lib's model_from here rather
+        // than re-deriving it keeps the two readers from drifting apart
+        // on what that one line means, same reasoning this module's own
+        // doc comment already gives for sharing parse_pad_geometry.
+        explicit.entry(lib_id.clone()).or_insert_with(|| Footprint { name: lib_id.clone(), pads, courtyard: None, model: crate::footprint_lib::model_from(fp) });
 
         parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(lib_id), pins, body_um: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });

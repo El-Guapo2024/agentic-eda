@@ -660,7 +660,8 @@ impl ConstraintModel {
             }
         }
         for key in [part.footprint.as_deref(), part.package.as_deref()].into_iter().flatten() {
-            if let Some(fp) = footprint::builtin(key) {
+            if let Some(mut fp) = footprint::builtin(key) {
+                fp.model = footprint::builtin_model_path(&footprint::normalize_name(key), &part.reference);
                 return Some(fp);
             }
         }
