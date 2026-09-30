@@ -25,17 +25,6 @@ export interface PaintOptions {
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
 }
 
-/** GND-ish nets green, power rails orange, everything else a stable hash-based hue -- same heuristic the old studio.html used; KiCad instead colors pads by their net class / ratsnest color, which needs net-class data this API doesn't currently expose (see report). */
-function netColor(net: string | null): string {
-  if (!net) return "#6b7480";
-  const n = net.toUpperCase();
-  if (/^(GND|AGND|DGND|PGND|VSS)/.test(n)) return "#4f9a6a";
-  if (/^(VBUS|VIN|VBAT|\+?\d+V\d*|V3V3|3V3|5V|VCC|VDD|\+)/.test(n)) return "#e07a3a";
-  let h = 0;
-  for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) >>> 0;
-  return `hsl(${h % 360} 60% 60%)`;
-}
-
 function layerAlpha(opts: PaintOptions, key: string): number {
   if (opts.activeLayer && opts.highContrast && opts.activeLayer !== key) return 0.25;
   return opts.layerOpacity[key] ?? 1;
@@ -99,10 +88,17 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     });
   }
 
-  // Pads.
+  // Pads. pcb_painter.cpp: "Pad and via copper ... take their color from
+  // the copper layer" -- NOT the net (that heuristic is netColor(),
+  // still used for the ratsnest, which has no layer of its own). A
+  // through-hole pad's hole wall uses via's "golden copper" for contrast
+  // (pcb_painter.cpp's comment, literally); the hole itself would be
+  // background-colored, but this app's Pad has no drill-diameter field
+  // to size it, so only the wall stroke is drawn.
+  const padCopperKey = part.side === "bottom" ? "b_cu" : "f_cu";
   for (const pad of part.pads ?? []) {
     const highlighted = opts.netHighlight && pad.net === opts.netHighlight;
-    const fill = highlighted ? "#ffffff" : netColor(pad.net);
+    const fill = highlighted ? "#ffffff" : layerColor(padCopperKey);
     pathForPad(ctx, pad);
     ctx.fillStyle = fill;
     ctx.fill();

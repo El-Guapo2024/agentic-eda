@@ -38,7 +38,12 @@ const BUCKET_TO_KICAD_KEY: Record<string, string> = {
   b_courtyard: "B_CrtYd",
   f_fab: "F_Fab",
   b_fab: "B_Fab",
-  pad_th: "LAYER_PAD_PLATEDHOLES",
+  // pcb_painter.cpp: "Use via 'golden copper' hole color for pad hole
+  // walls for contrast" -- LAYER_PAD_PLATEDHOLES is the *hole* itself
+  // (colored as background, so it reads as a punched-through hole), not
+  // the through-hole pad's copper wall.
+  pad_th: "LAYER_VIA_HOLES",
+  pad_hole: "LAYER_PAD_PLATEDHOLES",
   pad_netname: "LAYER_PAD_NETNAMES",
   via: "LAYER_VIA_HOLES",
   ratsnest: "LAYER_RATSNEST",
