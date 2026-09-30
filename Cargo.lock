@@ -493,11 +493,26 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "eda",
+ "eda-connectivity",
  "eda-fab",
  "eda-gates",
  "eda-judge",
  "eda-model",
  "eda-ops",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
+name = "eda-connectivity"
+version = "0.1.0"
+dependencies = [
+ "eda-engine",
+ "eda-freeroute",
+ "eda-kicad",
+ "eda-model",
+ "eda-place",
  "serde",
  "serde_json",
  "serde_yaml",

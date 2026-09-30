@@ -1049,6 +1049,11 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             }
             if d.routing.is_some() {
                 ok &= print_checks("routing gates", &check_routing(&d, &cx.model));
+                // KiCad's own DRC type names (`unconnected_items`,
+                // `track_dangling`, `via_dangling`) -- see
+                // `eda_connectivity::check`, ported from
+                // `DRC_TEST_PROVIDER_CONNECTIVITY::Run`.
+                ok &= print_checks("connectivity", &eda_connectivity::check(&d, &cx.model));
             }
             return if ok { Ok(()) } else { Err(vec![CheckResult::fail("check", "design", "gate failures above")]) };
         }
