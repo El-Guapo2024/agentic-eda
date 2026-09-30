@@ -1,0 +1,10 @@
+[package]
+name = "eda-connectivity"
+version = "0.1.0"
+edition = "2021"
+description = "KiCad's connectivity engine and ratsnest (CN_CONNECTIVITY_ALGO / RN_NET), ported"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+eda-model = { path = "../model" }

@@ -504,6 +504,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda-connectivity"
+version = "0.1.0"
+dependencies = [
+ "eda-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "eda-cypress"
 version = "0.1.0"
 dependencies = [
