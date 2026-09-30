@@ -47,7 +47,29 @@ export function useActionRunner() {
 
     m.set("pcbnew.InteractiveEdit.rotateCcw", pcbOnly(() => api.rotateSelection(1)));
     m.set("pcbnew.InteractiveEdit.rotateCw", pcbOnly(() => api.rotateSelection(3)));
-    m.set("common.Interactive.delete", pcbOnly(() => api.ripSelection()));
+    m.set(
+      "common.Interactive.delete",
+      pcbOnly(() => {
+        // One selection can only ever be one kind of thing at a time in
+        // practice (Canvas.tsx's hit-testing always replaces the
+        // selection with a single item; shift-click can still mix kinds
+        // by accumulating them), so this deletes each ref through
+        // whichever Cmd actually matches what it is, rather than
+        // assuming "selection" always means "footprints" the way
+        // ripSelection alone did before tracks/vias/zones/shapes/text
+        // existed to select at all.
+        const refs = [...state.selection];
+        dispatch({ type: "CLEAR_SELECTION" });
+        for (const id of refs) {
+          if (api.trackById(id)) api.cmd({ op: "delete_track", id });
+          else if (api.viaById(id)) api.cmd({ op: "delete_via", id });
+          else if (api.zoneById(id)) api.cmd({ op: "delete_zone", id });
+          else if (api.shapeById(id)) api.cmd({ op: "delete_shape", id });
+          else if (api.textById(id)) api.cmd({ op: "delete_text", id });
+          else if (api.partByRef(id)?.placed) api.cmd({ op: "rip", part: id });
+        }
+      })
+    );
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
     // AttemptFinish's while actively routing -- KiCad's own tool stack
     // resolves this by context (which tool currently owns the keyboard),
@@ -163,7 +185,12 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveMove.move",
       pcbOnly(() => {
-        if (state.selection.size === 0) return;
+        const first = [...state.selection][0];
+        if (!first) return;
+        // Tracks and zones have no move_* Cmd (api/types.ts) -- nothing
+        // for M to do for them, same as they're excluded from dragging
+        // in Canvas.tsx's onPointerDown.
+        if (api.trackById(first) || api.zoneById(first)) return;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
       })
@@ -184,6 +211,7 @@ export function useActionRunner() {
         // (a part, or item 7's track/via/zone/shape) is read-only-ish, so
         // it keeps the existing footprint-properties dialog's pattern.
         if (api.textById(ref)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id: ref } });
+        else if (api.trackById(ref) || api.viaById(ref) || api.zoneById(ref) || api.shapeById(ref)) dispatch({ type: "SET_ITEM_PROPERTIES_ID", id: ref });
         else dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
       })
     );

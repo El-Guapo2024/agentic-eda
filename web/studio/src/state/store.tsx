@@ -137,6 +137,8 @@ export interface StudioState {
   drcDialogOpen: boolean;
   hotkeysDialogOpen: boolean;
   footprintPropertiesOpen: boolean;
+  /** E on a selected track/via/zone/shape: which one's read-only properties dialog is open (null = closed). Text has its own full-edit dialog (textDialog); a part has footprintPropertiesOpen. */
+  itemPropertiesId: string | null;
   /** pcbnew.Control.showNetInspector ("Net Inspector") -- a basic net/pad-count list, not KiCad's full dockable inspector. */
   netInspectorOpen: boolean;
   toast: { message: string; kind: "error" | "info" } | null;
@@ -194,6 +196,7 @@ const initialState: StudioState = {
   drcDialogOpen: false,
   hotkeysDialogOpen: false,
   footprintPropertiesOpen: false,
+  itemPropertiesId: null,
   netInspectorOpen: false,
   toast: null,
   cursorUm: null,
@@ -239,6 +242,7 @@ type Action =
   | { type: "SET_DRC_OPEN"; open: boolean }
   | { type: "SET_HOTKEYS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_FOOTPRINT_PROPERTIES_OPEN"; open: boolean }
+  | { type: "SET_ITEM_PROPERTIES_ID"; id: string | null }
   | { type: "SET_NET_INSPECTOR_OPEN"; open: boolean }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" }
@@ -289,7 +293,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       // this same action, so it has to drop whatever the route/zone/
       // drawing/text tools were in the middle of too, not just a footprint
       // selection/move.
-      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null };
+      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null, itemPropertiesId: null };
     case "SET_HOT":
       return { ...state, hot: new Set(action.refs) };
     case "SET_NET_HIGHLIGHT":
@@ -346,6 +350,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, hotkeysDialogOpen: action.open };
     case "SET_FOOTPRINT_PROPERTIES_OPEN":
       return { ...state, footprintPropertiesOpen: action.open };
+    case "SET_ITEM_PROPERTIES_ID":
+      return { ...state, itemPropertiesId: action.id };
     case "SET_NET_INSPECTOR_OPEN":
       return { ...state, netInspectorOpen: action.open };
     case "TOAST":

@@ -22,6 +22,7 @@ import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
 import { snapPoint } from "./gridHelper";
 import { findRouteAnchor, posture45, commitRoute } from "./routing";
+import { itemHitsAt } from "./itemHitTest";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import "../../styles/canvas.css";
 
@@ -404,6 +405,24 @@ export function Canvas() {
       dragRef.current = { kind: "move", refs, moveKind: "part", startWorld: [wx, wy], moved: false };
       return;
     }
+
+    // Tracks/vias/zones/shapes/text (item 7): tried only once no
+    // footprint is under the click, matching KiCad's own click priority
+    // (a copper/graphic item under a footprint never steals its click).
+    if (board) {
+      const itemHit = itemHitsAt(board, wx, wy, Math.max(150, 6 / state.view.scale))[0];
+      if (itemHit) {
+        const additive = e.shiftKey;
+        if (additive) dispatch({ type: "TOGGLE_SELECTION", ref: itemHit.id });
+        else dispatch({ type: "SET_SELECTION", refs: [itemHit.id] });
+        // Tracks/zones have no move_* Cmd (see api/types.ts) -- selectable, not draggable.
+        if (itemHit.kind === "via" || itemHit.kind === "shape" || itemHit.kind === "text") {
+          dragRef.current = { kind: "move", refs: [itemHit.id], moveKind: itemHit.kind, startWorld: [wx, wy], moved: false };
+        }
+        return;
+      }
+    }
+
     dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], additive: e.shiftKey };
     if (!e.shiftKey) dispatch({ type: "CLEAR_SELECTION" });
   };
@@ -420,7 +439,9 @@ export function Canvas() {
     if (moveMode && state.selection.size > 0) {
       const origin = state.moveOriginUm ?? { x: wx, y: wy };
       const [dx, dy] = snapPoint(wx - origin.x, wy - origin.y, board?.snap ?? state.gridUm);
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], dxUm: dx, dyUm: dy } });
+      const first = [...state.selection][0]!;
+      const kind = api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part";
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: dx, dyUm: dy } });
       return;
     }
 
@@ -432,7 +453,7 @@ export function Canvas() {
     } else if (drag.kind === "move") {
       const [dx, dy] = snapPoint(wx - drag.startWorld[0], wy - drag.startWorld[1], board?.snap ?? state.gridUm);
       if (dx !== 0 || dy !== 0) drag.moved = true;
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, dxUm: dx, dyUm: dy } : null });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: drag.moveKind, dxUm: dx, dyUm: dy } : null });
     } else if (drag.kind === "box") {
       const rect = containerRef.current!.getBoundingClientRect();
       const x0 = drag.startScreen[0] - rect.left,
@@ -449,7 +470,7 @@ export function Canvas() {
     dragRef.current = null;
     if (!drag) return;
     if (drag.kind === "move") {
-      if (drag.moved && state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm);
+      if (drag.moved && state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind);
       else dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
     } else if (drag.kind === "box" && board) {
       const crossing = marquee?.crossing ?? false;
