@@ -3,7 +3,7 @@
     "generated": true,
     "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
     "kicadCommitDate": null,
-    "extractedAt": "2026-09-30T02:51:28.418Z",
+    "extractedAt": "2026-09-30T02:56:05.812Z",
     "sourceFiles": [
       "pcbnew/toolbars_pcb_editor.cpp",
       "pcbnew/tools/pcb_actions.cpp",
@@ -11,7 +11,7 @@
       "pcbnew/router/router_tool.cpp",
       "common/hotkey_store.cpp"
     ],
-    "note": "group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call this script found; auxiliary toolbar combo-box controls are not parsed"
+    "note": "group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call this script found; control labels (CONTROL_LABELS in this script) are this app's own names, not source strings -- AppendControl() only names an enumerator"
   },
   "toolbars": [
     {
@@ -168,6 +168,16 @@
         {
           "type": "action",
           "action": "pcbnew.EditorControl.showEeschema"
+        },
+        {
+          "type": "control",
+          "control": "currentVariant",
+          "label": "currentVariant"
+        },
+        {
+          "type": "control",
+          "control": "ipcScripting",
+          "label": "ipcScripting"
         }
       ]
     },
@@ -438,6 +448,11 @@
       "orientation": "horizontal",
       "items": [
         {
+          "type": "control",
+          "control": "trackWidth",
+          "label": "Track Width"
+        },
+        {
           "type": "action",
           "action": "pcbnew.EditorControl.autoTrackWidth"
         },
@@ -445,7 +460,17 @@
           "type": "separator"
         },
         {
+          "type": "control",
+          "control": "viaDiameter",
+          "label": "Via Size"
+        },
+        {
           "type": "separator"
+        },
+        {
+          "type": "control",
+          "control": "layerSelector",
+          "label": "Layer Pair"
         },
         {
           "type": "action",
@@ -455,10 +480,25 @@
           "type": "separator"
         },
         {
-          "type": "separator"
+          "type": "control",
+          "control": "gridSelect",
+          "label": "Grid"
         },
         {
           "type": "separator"
+        },
+        {
+          "type": "control",
+          "control": "zoomSelect",
+          "label": "Zoom"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "control",
+          "control": "overrideLocks",
+          "label": "Override Locks"
         }
       ]
     }

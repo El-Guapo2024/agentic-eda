@@ -296,6 +296,16 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         "snap": meta.snap_um,
         "parts": parts,
         "rules": model.placement_rules,
+        // Read-only board-wide defaults for the auxiliary toolbar's
+        // track-width/via-size indicators (display-only there: this UI
+        // has no command to change them, just like it has none yet for
+        // drawing a track or via at all).
+        "board_rules": {
+            "track_width": model.board.track_width,
+            "via_drill": model.board.via_drill,
+            "via_diameter": model.board.via_diameter,
+            "clearance": model.board.clearance,
+        },
         "routing": routing,
         "checks": checks,
         "activity": activity,

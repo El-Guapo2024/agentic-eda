@@ -114,11 +114,12 @@ function extractToolbarItems(text, resolve, iconOf) {
     return groupSpans.find((g) => pos >= g.start && pos <= g.end);
   }
 
-  // One combined pass over separators, top-level actions, and group
-  // starts, in source order; skip past a group's whole span once its
-  // start is handled, so its internal `.AddAction`s and any nested
+  // One combined pass over separators, top-level actions, controls, and
+  // group starts, in source order; skip past a group's whole span once
+  // its start is handled, so its internal `.AddAction`s and any nested
   // context-menu lambda aren't also scanned as top-level items.
-  const tokenRe = /\.AppendSeparator\s*\(|\.AppendAction\(\s*(?:PCB_ACTIONS|ACTIONS)::(\w+)|\.AppendGroup\(\s*TOOLBAR_GROUP_CONFIG\(\s*_\(\s*"(?:[^"\\]|\\.)*"/g;
+  const tokenRe =
+    /\.AppendSeparator\s*\(|\.AppendAction\(\s*(?:PCB_ACTIONS|ACTIONS)::(\w+)|\.AppendControl\(\s*(?:PCB_ACTION_TOOLBAR_CONTROLS|ACTION_TOOLBAR_CONTROLS)::(\w+)|\.AppendGroup\(\s*TOOLBAR_GROUP_CONFIG\(\s*_\(\s*"(?:[^"\\]|\\.)*"/g;
   let m;
   while ((m = tokenRe.exec(text))) {
     const region = regionAt(switches, m.index);
@@ -146,10 +147,28 @@ function extractToolbarItems(text, resolve, iconOf) {
       const dotted = resolve(m[1]);
       if (dotted) byRegion[region].push({ type: "action", action: dotted });
       else unresolved.add(m[1]);
+    } else if (m[2]) {
+      byRegion[region].push({ type: "control", control: m[2], label: CONTROL_LABELS[m[2]] ?? m[2] });
     }
   }
   return { byRegion, unresolved };
 }
+
+// AppendControl() calls name a control by its ACTION_TOOLBAR_CONTROLS/
+// PCB_ACTION_TOOLBAR_CONTROLS enumerator, not a display string -- there
+// is no label in the source to extract, so these are this app's own
+// reasonable names for what each one is (confirmed by the factory
+// functions that build them in PCB_EDIT_FRAME::configureToolbars(), a
+// few hundred lines below the enum references, e.g. "Box to display and
+// choose track widths").
+const CONTROL_LABELS = {
+  trackWidth: "Track Width",
+  viaDiameter: "Via Size",
+  layerSelector: "Layer Pair",
+  gridSelect: "Grid",
+  zoomSelect: "Zoom",
+  overrideLocks: "Override Locks",
+};
 
 function main() {
   const { files: actionFiles, actions } = collectAllActions();
@@ -167,7 +186,7 @@ function main() {
   const totalItems = toolbars.reduce((n, t) => n + t.items.length, 0);
   const totalGroups = toolbars.reduce((n, t) => n + t.items.filter((i) => i.type === "group").length, 0);
 
-  const notes = ["group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call this script found; auxiliary toolbar combo-box controls are not parsed"];
+  const notes = ["group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call this script found; control labels (CONTROL_LABELS in this script) are this app's own names, not source strings -- AppendControl() only names an enumerator"];
   if (totalItems === 0) notes.push("matched 0 items -- REGION_MARKERS likely doesn't match this file's real structure");
   if (unresolved.size > 0) notes.push(`${unresolved.size} referenced action symbol(s) did not resolve: ${[...unresolved].slice(0, 20).join(", ")}`);
 
