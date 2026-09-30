@@ -488,7 +488,12 @@ fn hopeless(fails: &[CheckResult]) -> bool {
 /// settings, so try a few seeds here first and only escalate when the
 /// failure says another arrangement will not help.
 fn stage_place_looping(cx: &mut Ctx, schematic: &Design) -> Result<Design, Vec<CheckResult>> {
-    let attempts = cx.model.solver.place_attempts.max(1);
+    // `build` takes no seed and no board floor (seed_outline sizes from
+    // the parts), so a second attempt is the first one again: three
+    // identical boards and three identical failures, reported as if
+    // something different had been tried.
+    let placer = if cx.args.placer.is_empty() { &cx.model.solver.placer } else { &cx.args.placer };
+    let attempts = if placer == "build" { 1 } else { cx.model.solver.place_attempts.max(1) };
     let mut last: Vec<CheckResult> = Vec::new();
     // Lower bound on the fitted board as a fraction of the intent outline.
     // Starts unbounded (shrink as far as the utilisation target wants) and

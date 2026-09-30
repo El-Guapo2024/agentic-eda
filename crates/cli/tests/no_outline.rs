@@ -33,7 +33,7 @@ fn outline(dir: &std::path::Path) -> Vec<serde_json::Value> {
 
 #[test]
 fn pipeline_with_no_flags_fits_a_board_for_an_intent_without_one() {
-    for name in ["nc_pins", "star_net"] {
+    for name in ["nc_pins", "star_net", "ldo", "two_pin_nets"] {
         let out = scratch(name);
         let run = Command::new(env!("CARGO_BIN_EXE_eda"))
             .arg("pipeline")
@@ -50,6 +50,43 @@ fn pipeline_with_no_flags_fits_a_board_for_an_intent_without_one() {
         assert!(log.contains("place greedy:"), "{name}: the default placer was not build:\n{log}");
         assert_eq!(outline(&out).len(), 4, "{name}: no fitted outline in design.json");
     }
+}
+
+/// Every example without an outline, through the default placer's gates.
+///
+/// Once build could size a board, five of the eleven failed its gates,
+/// which the outline bug had hidden since build became the default:
+/// proximity partners placed before the part their rules hang off
+/// (ldo, mixed_track_widths, ldo_proximity_heavy), decoupling caps with
+/// no neighbour to anchor to (mcu_board_30plus), and stubs crossed
+/// because every part lands at rotation 0 (two_pin_nets). Placement
+/// only -- routing mcu_board_30plus alone takes most of 20 seconds.
+#[test]
+fn default_placer_places_every_example_without_an_outline() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("examples/")
+        .filter_map(|e| e.ok()?.path().file_stem()?.to_str().map(String::from))
+        .filter(|n| std::fs::read_to_string(dir.join(format!("{n}.yaml"))).is_ok_and(|t| !t.contains("outline")))
+        .collect();
+    names.sort();
+    assert!(names.len() >= 11, "found only {names:?}; the examples moved?");
+    let failed: Vec<String> = names
+        .iter()
+        .filter_map(|name| {
+            let run = Command::new(env!("CARGO_BIN_EXE_eda"))
+                .arg("place")
+                .arg(no_outline_example(name))
+                .arg("-o")
+                .arg(scratch(&format!("place_{name}")))
+                .args(["--seed", "0"])
+                .output()
+                .expect("run eda");
+            let log = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+            (!run.status.success() || !log.contains("place greedy:")).then(|| format!("{name}:\n{log}"))
+        })
+        .collect();
+    assert!(failed.is_empty(), "{} of {} failed placement:\n{}", failed.len(), names.len(), failed.join("\n"));
 }
 
 #[test]

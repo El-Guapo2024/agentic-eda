@@ -26,7 +26,69 @@
 use crate::{Board, Cmd, Dir, Region};
 use eda_model::ir::Design;
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Which part each rule-bound part should follow onto the board.
+///
+/// A placement rule is only checked once both of its parts are down, so
+/// the order they go down in decides whether it can be met at all. On
+/// ldo, U1 carries both proximity rules (C1 and C2 within 3 mm) and adds
+/// the most wirelength, so the greedy chooser took it last: C1 and C2
+/// were already down beside J1, U1 could sit beside only one of them,
+/// and repair walked it to 3.12 mm of C1 before a collision stopped it.
+///
+/// So a satellite waits for its hub: a proximity partner carrying more
+/// rules than it does, or for a decoupling cap, any IC it decouples.
+///
+/// A decoupling cap also goes down as soon as its IC is, before
+/// anything else takes the room around it: three millimetres is less
+/// than one ring of parts, and on mcu_board_30plus two of twelve caps
+/// otherwise ended at 3.98 mm. Proximity satellites are not hurried the
+/// same way. Their rules carry their own distances, and putting them
+/// first packed each MCU in the ladder with its satellites before its
+/// signal parts -- every gate still passed, but L1 routed with 20% more
+/// copper and L2 with 12 more vias.
+struct Hubs {
+    /// Proximity satellite -> its hubs; it waits for all of them.
+    proximity: BTreeMap<String, BTreeSet<String>>,
+    /// Decoupling cap -> the ICs it decouples; any one of them will do,
+    /// as it does for the gate.
+    decoupling: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl Hubs {
+    fn new(model: &ConstraintModel) -> Self {
+        let mut partners: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for r in &model.placement_rules {
+            if let eda_model::PlacementRule::Proximity { a, b, .. } = r {
+                partners.entry(a).or_default().insert(b);
+                partners.entry(b).or_default().insert(a);
+            }
+        }
+        let degree = |p: &str| partners.get(p).map_or(0, BTreeSet::len);
+        let proximity = partners
+            .iter()
+            .map(|(p, ps)| (p.to_string(), ps.iter().filter(|q| degree(q) > degree(p)).map(|q| q.to_string()).collect::<BTreeSet<_>>()))
+            .filter(|(_, hubs)| !hubs.is_empty())
+            .collect();
+        let mut decoupling: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (cap, ic) in crate::unruled_decoupling_pairs(model) {
+            decoupling.entry(cap).or_default().insert(ic);
+        }
+        Hubs { proximity, decoupling }
+    }
+
+    /// `p` has a hub that is not down yet.
+    fn waits(&self, p: &str, placed: &BTreeSet<String>) -> bool {
+        self.proximity.get(p).is_some_and(|hubs| hubs.iter().any(|h| !placed.contains(h)))
+            || self.decoupling.get(p).is_some_and(|ics| !ics.iter().any(|u| placed.contains(u)))
+    }
+
+    /// `p` is a cap that decouples an IC.
+    fn is_decoupling_cap(&self, p: &str) -> bool {
+        self.decoupling.contains_key(p)
+    }
+}
 
 /// One candidate step: put `part` beside `anchor`, on `side`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,11 +277,12 @@ pub fn build(
         order.push(("unassigned".to_string(), free.into_iter().collect()));
     }
 
+    let hubs = Hubs::new(model);
     for (name, members) in &order {
         if std::env::var("EDA_BUILD_TRACE").is_ok() {
             eprintln!("TRACE block {name}: {:?}", members);
         }
-        if let Err(e) = place_block(&mut b, model, members, chooser, &mut steps, step_budget) {
+        if let Err(e) = place_block(&mut b, model, members, &hubs, chooser, &mut steps, step_budget) {
             // A block that will not go down is worth naming: it is a
             // statement about that part of the circuit, not about the
             // board as a whole.
@@ -439,6 +502,7 @@ fn place_block(
     b: &mut Board,
     model: &ConstraintModel,
     members: &BTreeSet<String>,
+    hubs: &Hubs,
     chooser: &mut dyn Chooser,
     steps: &mut usize,
     budget: usize,
@@ -477,6 +541,19 @@ fn place_block(
             .collect();
         if !inside.is_empty() {
             frontier = inside;
+        }
+        // Satellites after their hub, and decoupling caps straight after
+        // theirs (see [`Hubs`]). Like the preference above, this orders
+        // and never excludes: a block whose satellites are all still
+        // waiting places one anyway rather than stall.
+        let placed = b.placed();
+        let ready: Vec<String> = frontier.iter().filter(|p| !hubs.waits(p, &placed)).cloned().collect();
+        if !ready.is_empty() {
+            frontier = ready;
+        }
+        let caps: Vec<String> = frontier.iter().filter(|p| hubs.is_decoupling_cap(p)).cloned().collect();
+        if !caps.is_empty() {
+            frontier = caps;
         }
         // Immediate feedback, acted on rather than recorded.
         //

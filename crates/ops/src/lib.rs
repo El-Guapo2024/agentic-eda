@@ -42,7 +42,8 @@
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
 use eda_model::ir::{Design, FootprintInstance, LabelSide, Point, Side, Um};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// Which way from the anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -196,6 +197,19 @@ pub struct Board<'a> {
     snap: Um,
     /// Minimum gap left between courtyards when resolving a `Place`.
     spacing: Um,
+    /// [`unruled_decoupling_pairs`] both ways round, computed once: every
+    /// neighbour query reads it.
+    decoupling: Arc<BTreeMap<String, BTreeSet<String>>>,
+}
+
+/// Decoupling pairs `(cap, ic)` that no proximity rule already places --
+/// exactly the caps the decoupling gate judges, since a cap the intent
+/// ties to a part with a rule is judged by that rule instead.
+pub fn unruled_decoupling_pairs(model: &ConstraintModel) -> Vec<(String, String)> {
+    let ruled = |c: &str| {
+        model.placement_rules.iter().any(|r| matches!(r, eda_model::PlacementRule::Proximity { a, b, .. } if a == c || b == c))
+    };
+    eda_model::decoupling_pairs(model).into_iter().filter(|(c, _)| !ruled(c)).collect()
 }
 
 /// What applying a command did to the gate verdict.
@@ -224,7 +238,12 @@ impl Outcome {
 impl<'a> Board<'a> {
     /// An empty board with the given outline.
     pub fn new(design: Design, model: &'a ConstraintModel, snap: Um, spacing: Um) -> Self {
-        Board { model, design, snap, spacing }
+        let mut decoupling: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (cap, ic) in unruled_decoupling_pairs(model) {
+            decoupling.entry(cap.clone()).or_default().insert(ic.clone());
+            decoupling.entry(ic).or_default().insert(cap);
+        }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling) }
     }
 
     pub fn design(&self) -> &Design {
@@ -242,7 +261,13 @@ impl<'a> Board<'a> {
     /// optimiser and the gates drifted apart everywhere else in this
     /// project.
     pub fn fork(&self) -> Board<'a> {
-        Board { model: self.model, design: self.design.clone(), snap: self.snap, spacing: self.spacing }
+        Board {
+            model: self.model,
+            design: self.design.clone(),
+            snap: self.snap,
+            spacing: self.spacing,
+            decoupling: Arc::clone(&self.decoupling),
+        }
     }
 
     pub fn into_design(self) -> Design {
@@ -292,11 +317,16 @@ impl<'a> Board<'a> {
         self.frontier().into_iter().filter(|p| allowed.contains(p)).collect()
     }
 
-    /// Parts sharing a small net or a proximity rule with `r`.
+    /// Parts sharing a small net, a proximity rule or a decoupling pair
+    /// with `r`.
     ///
     /// Power and ground are excluded by the net-size cut: a 40-pin GND
     /// net makes every part everyone's neighbour and the frontier stops
-    /// meaning anything.
+    /// meaning anything. Which is why decoupling pairs are added back by
+    /// name: a decoupling cap sits on nothing but a rail and ground, so
+    /// the cut left it with no neighbour at all -- never on the frontier,
+    /// never anchored to its IC, just seeded wherever a region had room.
+    /// On mcu_board_30plus that put all twelve 7 to 13 mm from the MCU.
     pub fn neighbours_of(&self, r: &str) -> BTreeSet<String> {
         const FANOUT_LIMIT: usize = 6;
         let mut out = BTreeSet::new();
@@ -315,6 +345,9 @@ impl<'a> Board<'a> {
                     out.insert(a.clone());
                 }
             }
+        }
+        if let Some(partners) = self.decoupling.get(r) {
+            out.extend(partners.iter().cloned());
         }
         out
     }
