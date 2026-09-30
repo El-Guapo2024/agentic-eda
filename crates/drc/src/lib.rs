@@ -43,6 +43,7 @@ pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     let mut out = Vec::new();
     out.extend(providers::copper_clearance::check(&b, rules));
     out.extend(providers::track_width::check(&b, rules));
+    out.extend(providers::track_width::check_netclass_conformance(&b, rules));
     out.extend(providers::annular_via::check(&b, rules));
     out.extend(providers::hole::check(&b, rules));
     out.extend(providers::edge_clearance::check(&b, rules));
