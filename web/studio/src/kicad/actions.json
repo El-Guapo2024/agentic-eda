@@ -1,11 +1,6214 @@
 {
   "meta": {
-    "generated": false,
-    "kicadCommit": null,
-    "kicadCommitDate": null,
-    "extractedAt": null,
-    "sourceFiles": ["pcbnew/tools/pcb_actions.cpp", "common/tool/actions.cpp"],
-    "note": "Not yet extracted. This session could not reach ~/ws/kicad-mirror (git access to that repo is blocked in this sandboxed worktree, and the harness's auto-mode classifier denied fetching it over HTTPS as a substitute -- 'Untrusted Code Integration'). Run `node tools/extract-actions.js` from an environment where `git -C ~/ws/kicad-mirror ...` works (a plain terminal, not this worktree-isolated agent session) to populate this file against commit 8303b2ada05226fa603e5ac0420d240fd65ce52b (origin/master, 2026-05-04)."
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": "2026-05-04T07:39:57+03:00",
+    "extractedAt": "2026-09-30T00:52:04.093Z",
+    "sourceFiles": [
+      "pcbnew/tools/pcb_actions.cpp",
+      "common/tool/actions.cpp",
+      "common/hotkey_store.cpp",
+      "pcbnew/router/router_tool.cpp"
+    ]
   },
-  "actions": []
+  "actions": [
+    {
+      "name": "common.API.pluginsReload",
+      "label": "Refresh Plugins",
+      "tooltip": "Reload all python plugins and refresh plugin menus",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "reload",
+      "flags": []
+    },
+    {
+      "name": "common.Checker.excludeMarker",
+      "label": "Exclude Marker",
+      "tooltip": "Mark current violation in Checker window as an exclusion",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "marker_exclude",
+      "flags": []
+    },
+    {
+      "name": "common.Checker.nextMarker",
+      "label": "Next Marker",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "marker_next",
+      "flags": []
+    },
+    {
+      "name": "common.Checker.prevMarker",
+      "label": "Previous Marker",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "marker_previous",
+      "flags": []
+    },
+    {
+      "name": "common.Control.activatePointEditor",
+      "label": "common.Control.activatePointEditor",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.addLibrary",
+      "label": "Add Library...",
+      "tooltip": "Add an existing library folder",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_library",
+      "flags": []
+    },
+    {
+      "name": "common.Control.centerContents",
+      "label": "common.Control.centerContents",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.centerJustify",
+      "label": "Center Justify",
+      "tooltip": "Center-justify fields and text items",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text_align_center",
+      "flags": []
+    },
+    {
+      "name": "common.Control.centerSelection",
+      "label": "Pan to Center Selected Objects",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.collapseAll",
+      "label": "Collapse All",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "down",
+      "flags": []
+    },
+    {
+      "name": "common.Control.cursor45Crosshairs",
+      "label": "45 Degree Crosshairs",
+      "tooltip": "Display full-window crosshairs aligned at 45 and 135 degrees",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cursor_fullscreen45",
+      "flags": []
+    },
+    {
+      "name": "common.Control.cursorClick",
+      "label": "Click",
+      "tooltip": "Performs left mouse button click",
+      "hotkey": "Enter",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_RETURN",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorDblClick",
+      "label": "Double-click",
+      "tooltip": "Performs left mouse button double-click",
+      "hotkey": "End",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_END",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorDown",
+      "label": "Cursor Down",
+      "tooltip": "",
+      "hotkey": "Down",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_DOWN",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorDownFast",
+      "label": "Cursor Down Fast",
+      "tooltip": "",
+      "hotkey": "Ctrl+Down",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + static_cast<int>( WXK_DOWN )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorFullCrosshairs",
+      "label": "Full-Window Crosshairs",
+      "tooltip": "Display full-window crosshairs aligned at 0 and 90 degrees",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cursor_fullscreen",
+      "flags": []
+    },
+    {
+      "name": "common.Control.cursorLeft",
+      "label": "Cursor Left",
+      "tooltip": "",
+      "hotkey": "Left",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_LEFT",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorLeftFast",
+      "label": "Cursor Left Fast",
+      "tooltip": "",
+      "hotkey": "Ctrl+Left",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + static_cast<int>( WXK_LEFT )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorRight",
+      "label": "Cursor Right",
+      "tooltip": "",
+      "hotkey": "Right",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_RIGHT",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorRightFast",
+      "label": "Cursor Right Fast",
+      "tooltip": "",
+      "hotkey": "Ctrl+Right",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + static_cast<int>( WXK_RIGHT )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorSmallCrosshairs",
+      "label": "Small crosshairs",
+      "tooltip": "Use small crosshairs aligned at 0 and 90 degrees",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cursor_shape",
+      "flags": []
+    },
+    {
+      "name": "common.Control.cursorUp",
+      "label": "Cursor Up",
+      "tooltip": "",
+      "hotkey": "Up",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_UP",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.cursorUpFast",
+      "label": "Cursor Up Fast",
+      "tooltip": "",
+      "hotkey": "Ctrl+Up",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + static_cast<int>( WXK_UP )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.ddaddLibrary",
+      "label": "common.Control.ddaddLibrary",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.editGridOrigin",
+      "label": "Grid Origin...",
+      "tooltip": "Set the grid origin point",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "grid_select_axis",
+      "flags": []
+    },
+    {
+      "name": "common.Control.editGrids",
+      "label": "Edit Grids...",
+      "tooltip": "Edit grid definitions",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "grid_select",
+      "flags": []
+    },
+    {
+      "name": "common.Control.expandAll",
+      "label": "Expand All",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "up",
+      "flags": []
+    },
+    {
+      "name": "common.Control.gridFast1",
+      "label": "Switch to Fast Grid 1",
+      "tooltip": "",
+      "hotkey": "Alt+1",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + '1'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.gridFast2",
+      "label": "Switch to Fast Grid 2",
+      "tooltip": "",
+      "hotkey": "Alt+2",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + '2'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.gridFastCycle",
+      "label": "Cycle Fast Grid",
+      "tooltip": "",
+      "hotkey": "Alt+4",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + '4'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.gridNext",
+      "label": "Switch to Next Grid",
+      "tooltip": "",
+      "hotkey": "N",
+      "altHotkey": null,
+      "hotkeyRaw": "'N'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.gridPreset",
+      "label": "common.Control.gridPreset",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.gridPrev",
+      "label": "Switch to Previous Grid",
+      "tooltip": "",
+      "hotkey": "Shift+N",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'N'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.gridResetOrigin",
+      "label": "Reset Grid Origin",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.gridSetOrigin",
+      "label": "Grid Origin",
+      "tooltip": "Place the grid origin point",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "grid_select_axis",
+      "flags": []
+    },
+    {
+      "name": "common.Control.hideLibraryTree",
+      "label": "Hide Library Tree",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "search_tree",
+      "flags": []
+    },
+    {
+      "name": "common.Control.highContrastMode",
+      "label": "Inactive Layer View Mode",
+      "tooltip": "Toggle inactive layers between normal and dimmed",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "contrast_mode",
+      "flags": []
+    },
+    {
+      "name": "common.Control.highContrastModeCycle",
+      "label": "Inactive Layer View Mode (3-state)",
+      "tooltip": "Cycle inactive layers between normal, dimmed, and hidden",
+      "hotkey": "H",
+      "altHotkey": null,
+      "hotkeyRaw": "'H'",
+      "altHotkeyRaw": null,
+      "icon": "contrast_mode",
+      "flags": []
+    },
+    {
+      "name": "common.Control.imperialUnits",
+      "label": "Inches",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "unit_inch",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.leftJustify",
+      "label": "Left Justify",
+      "tooltip": "Left-justify fields and text items",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text_align_left",
+      "flags": []
+    },
+    {
+      "name": "common.Control.libraryTreeSearch",
+      "label": "Focus Library Tree Search Field",
+      "tooltip": "",
+      "hotkey": "Ctrl+L",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'L'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.magneticSnapActiveLayer",
+      "label": "Snap to Objects on the Active Layer Only",
+      "tooltip": "Enables snapping to objects on the active layer only",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.magneticSnapAllLayers",
+      "label": "Snap to Objects on All Layers",
+      "tooltip": "Enables snapping to objects on all visible layers",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.magneticSnapToggle",
+      "label": "Toggle Snapping Between Active and All Layers",
+      "tooltip": "Toggles between snapping on all visible layers and only the active area",
+      "hotkey": "Shift+S",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'S'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.metricUnits",
+      "label": "Millimeters",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "unit_mm",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.mils",
+      "label": "Mils",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "unit_mil",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.new",
+      "label": "New...",
+      "tooltip": "Create a new document in the editor",
+      "hotkey": "Ctrl+N",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'N'",
+      "altHotkeyRaw": null,
+      "icon": "new_generic",
+      "flags": []
+    },
+    {
+      "name": "common.Control.newLibrary",
+      "label": "New Library...",
+      "tooltip": "Create a new library folder",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "new_library",
+      "flags": []
+    },
+    {
+      "name": "common.Control.open",
+      "label": "Open...",
+      "tooltip": "Open existing document",
+      "hotkey": "Ctrl+O",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'O'",
+      "altHotkeyRaw": null,
+      "icon": "directory_open",
+      "flags": []
+    },
+    {
+      "name": "common.Control.openDirectory",
+      "label": "Open in file explorer...",
+      "tooltip": "Open a library file with system file explorer",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "directory_browser",
+      "flags": []
+    },
+    {
+      "name": "common.Control.openWithTextEditor",
+      "label": "Edit in a Text Editor...",
+      "tooltip": "Open a library file with a text editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "editor",
+      "flags": []
+    },
+    {
+      "name": "common.Control.pageSettings",
+      "label": "Page Settings...",
+      "tooltip": "Settings for paper size and title block info",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "sheetset",
+      "flags": []
+    },
+    {
+      "name": "common.Control.panDown",
+      "label": "Pan Down",
+      "tooltip": "",
+      "hotkey": "Shift+Down",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + static_cast<int>( WXK_DOWN )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.panLeft",
+      "label": "Pan Left",
+      "tooltip": "",
+      "hotkey": "Shift+Left",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + static_cast<int>( WXK_LEFT )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.panRight",
+      "label": "Pan Right",
+      "tooltip": "",
+      "hotkey": "Shift+Right",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + static_cast<int>( WXK_RIGHT )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.panUp",
+      "label": "Pan Up",
+      "tooltip": "",
+      "hotkey": "Shift+Up",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + static_cast<int>( WXK_UP )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.pinLibrary",
+      "label": "Pin Library",
+      "tooltip": "Keep the library at the top of the list",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.plot",
+      "label": "Plot...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "plot",
+      "flags": []
+    },
+    {
+      "name": "common.Control.print",
+      "label": "Print...",
+      "tooltip": "",
+      "hotkey": "Ctrl+P",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'P'",
+      "altHotkeyRaw": null,
+      "icon": "print_button",
+      "flags": []
+    },
+    {
+      "name": "common.Control.quit",
+      "label": "Quit",
+      "tooltip": "Close the current editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "exit",
+      "flags": []
+    },
+    {
+      "name": "common.Control.redoZoom",
+      "label": "Redo Last Zoom",
+      "tooltip": "Return zoom to level prior to last zoom undo",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "redo",
+      "flags": []
+    },
+    {
+      "name": "common.Control.refreshPreview",
+      "label": "common.Control.refreshPreview",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.resetLocalCoords",
+      "label": "Reset Local Coordinates",
+      "tooltip": "",
+      "hotkey": " ",
+      "altHotkey": null,
+      "hotkeyRaw": "' '",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.revert",
+      "label": "Revert",
+      "tooltip": "Throw away changes",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "restore_from_file",
+      "flags": []
+    },
+    {
+      "name": "common.Control.rightJustify",
+      "label": "Right Justify",
+      "tooltip": "Right-justify fields and text items",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text_align_right",
+      "flags": []
+    },
+    {
+      "name": "common.Control.save",
+      "label": "Save",
+      "tooltip": "Save changes",
+      "hotkey": "Ctrl+S",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'S'",
+      "altHotkeyRaw": null,
+      "icon": "save",
+      "flags": []
+    },
+    {
+      "name": "common.Control.saveAll",
+      "label": "Save All",
+      "tooltip": "Save all changes",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save_all",
+      "flags": []
+    },
+    {
+      "name": "common.Control.saveAs",
+      "label": "Save As...",
+      "tooltip": "Save current document to another location",
+      "hotkey": "Ctrl+Shift+S",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'S'",
+      "altHotkeyRaw": null,
+      "icon": "save_as",
+      "flags": []
+    },
+    {
+      "name": "common.Control.saveCopy",
+      "label": "Save a Copy...",
+      "tooltip": "Save a copy of the current document to another location",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save_as",
+      "flags": []
+    },
+    {
+      "name": "common.Control.selectColumns",
+      "label": "Select Columns...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.show3DViewer",
+      "label": "3D Viewer",
+      "tooltip": "Show 3D viewer window",
+      "hotkey": "Alt+3",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + '3'",
+      "altHotkeyRaw": null,
+      "icon": "three_d",
+      "flags": []
+    },
+    {
+      "name": "common.Control.showCalculatorTools",
+      "label": "Calculator Tools",
+      "tooltip": "Run component calculations, track width calculations, etc.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "icon_pcbcalculator_24",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.showContextMenu",
+      "label": "Show Context Menu",
+      "tooltip": "Perform the right-mouse-button action",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.showDatasheet",
+      "label": "Show Datasheet",
+      "tooltip": "Open the datasheet in a browser",
+      "hotkey": "D",
+      "altHotkey": null,
+      "hotkeyRaw": "'D'",
+      "altHotkeyRaw": null,
+      "icon": "datasheet",
+      "flags": []
+    },
+    {
+      "name": "common.Control.showFootprintBrowser",
+      "label": "Footprint Library Browser",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library_browser",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.showFootprintEditor",
+      "label": "Footprint Editor",
+      "tooltip": "Create, delete and edit board footprints",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "module_editor",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.showLibraryTree",
+      "label": "Library Tree",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "search_tree",
+      "flags": []
+    },
+    {
+      "name": "common.Control.showProjectManager",
+      "label": "Switch to Project Manager",
+      "tooltip": "Show project window",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "icon_kicad_24",
+      "flags": []
+    },
+    {
+      "name": "common.Control.showProperties",
+      "label": "Properties",
+      "tooltip": "Show/hide the properties manager",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "tools",
+      "flags": []
+    },
+    {
+      "name": "common.Control.showSymbolBrowser",
+      "label": "Symbol Library Browser",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library_browser",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.showSymbolEditor",
+      "label": "Symbol Editor",
+      "tooltip": "Create, delete and edit schematic symbols",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "libedit",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Control.toggleBoundingBoxes",
+      "label": "Draw Bounding Boxes",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "gerbview_show_negative_objects",
+      "flags": []
+    },
+    {
+      "name": "common.Control.toggleCursor",
+      "label": "Always Show Crosshairs",
+      "tooltip": "Display crosshairs even when not drawing objects",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cursor",
+      "flags": []
+    },
+    {
+      "name": "common.Control.toggleGrid",
+      "label": "Show Grid",
+      "tooltip": "Display background grid in the edit window",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "grid",
+      "flags": []
+    },
+    {
+      "name": "common.Control.toggleGridOverrides",
+      "label": "Grid Overrides",
+      "tooltip": "Enables item-specific grids that override the current grid",
+      "hotkey": "Ctrl+Shift+G",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'G'",
+      "altHotkeyRaw": null,
+      "icon": "grid_override",
+      "flags": []
+    },
+    {
+      "name": "common.Control.togglePolarCoords",
+      "label": "Polar Coordinates",
+      "tooltip": "Switch between polar and cartesian coordinate systems",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "polar_coord",
+      "flags": []
+    },
+    {
+      "name": "common.Control.toggleUnits",
+      "label": "Switch units",
+      "tooltip": "Switch between imperial and metric units",
+      "hotkey": "Ctrl+U",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'U'",
+      "altHotkeyRaw": null,
+      "icon": "unit_mm",
+      "flags": []
+    },
+    {
+      "name": "common.Control.undoZoom",
+      "label": "Undo Last Zoom",
+      "tooltip": "Return zoom to level prior to last zoom action",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "undo",
+      "flags": []
+    },
+    {
+      "name": "common.Control.unpinLibrary",
+      "label": "Unpin Library",
+      "tooltip": "No longer keep the library at the top of the list",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.updateFind",
+      "label": "common.Control.updateFind",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.updatePcbFromSchematic",
+      "label": "Update PCB from Schematic...",
+      "tooltip": "Update PCB with changes made to schematic",
+      "hotkey": "F8",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_F8",
+      "altHotkeyRaw": null,
+      "icon": "update_pcb_from_sch",
+      "flags": []
+    },
+    {
+      "name": "common.Control.updatePreferences",
+      "label": "common.Control.updatePreferences",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.updateSchematicFromPCB",
+      "label": "Update Schematic from PCB...",
+      "tooltip": "Update schematic with changes made to PCB",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "update_sch_from_pcb",
+      "flags": []
+    },
+    {
+      "name": "common.Control.updateUnits",
+      "label": "common.Control.updateUnits",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomCenter",
+      "label": "Center on Cursor",
+      "tooltip": "",
+      "hotkey": "F4",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_F4",
+      "altHotkeyRaw": null,
+      "icon": "zoom_center_on_screen",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomFitObjects",
+      "label": "Zoom to All Objects",
+      "tooltip": "Zoom to all objects on screen",
+      "hotkey": "Ctrl+Home",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + static_cast<int>( WXK_HOME )",
+      "altHotkeyRaw": null,
+      "icon": "zoom_fit_to_objects",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomFitScreen",
+      "label": "Zoom to Fit",
+      "tooltip": "Zoom to worksheet area if exists or edited object",
+      "hotkey": "Ctrl+Home",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '0' )\n#else\n        .DefaultHotkey( WXK_HOME )\n#endif\n        .LegacyHotkeyName( \"Zoom Auto\"",
+      "altHotkeyRaw": null,
+      "icon": "zoom_fit_in_page",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomFitSelection",
+      "label": "Zoom to Selected Objects",
+      "tooltip": "Zoom to items currently selected",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zoom_fit_to_objects",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomIn",
+      "label": "Zoom In at Cursor",
+      "tooltip": "",
+      "hotkey": "Ctrl+F1",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '+' )\n#else\n        .DefaultHotkey( WXK_F1 )\n#endif\n        .LegacyHotkeyName( \"Zoom In\"",
+      "altHotkeyRaw": null,
+      "icon": "zoom_in",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomInCenter",
+      "label": "Zoom In",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zoom_in",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomInHorizontally",
+      "label": "Zoom In Horizontally",
+      "tooltip": "Zoom in horizontally the plot area",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zoom_in_horizontally",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomInVertically",
+      "label": "Zoom In Vertically",
+      "tooltip": "Zoom in vertically the plot area",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zoom_in_vertically",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomOut",
+      "label": "Zoom Out at Cursor",
+      "tooltip": "",
+      "hotkey": "Ctrl+F2",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '-' )\n#else\n        .DefaultHotkey( WXK_F2 )\n#endif\n        .LegacyHotkeyName( \"Zoom Out\"",
+      "altHotkeyRaw": null,
+      "icon": "zoom_out",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomOutCenter",
+      "label": "Zoom Out",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zoom_out",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomOutHorizontally",
+      "label": "Zoom Out Horizontally",
+      "tooltip": "Zoom out horizontally the plot area",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zoom_out_horizontally",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomOutVertically",
+      "label": "Zoom Out Vertically",
+      "tooltip": "Zoom out vertically the plot area",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zoom_out_vertically",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomPreset",
+      "label": "common.Control.zoomPreset",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomRedraw",
+      "label": "Refresh",
+      "tooltip": "",
+      "hotkey": "Ctrl+F5",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'R' )\n#else\n        .DefaultHotkey( WXK_F5 )\n#endif\n        .LegacyHotkeyName( \"Zoom Redraw\"",
+      "altHotkeyRaw": null,
+      "icon": "refresh",
+      "flags": []
+    },
+    {
+      "name": "common.Control.zoomTool",
+      "label": "Zoom to Selection Area",
+      "tooltip": "Zoom to an area selection created by a mouse drag",
+      "hotkey": "Ctrl+F5",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + static_cast<int>( WXK_F5 )",
+      "altHotkeyRaw": null,
+      "icon": "zoom_area",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "common.Embed.embededFile",
+      "label": "Embedded Files",
+      "tooltip": "Manage embedded files",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Embed.extractFile",
+      "label": "Extract File",
+      "tooltip": "Extract an embedded file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Embed.removeFile",
+      "label": "Remove File",
+      "tooltip": "Remove an embedded file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Groups.groupProperties",
+      "label": "common.Groups.groupProperties",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Groups.selectNewGroupMember",
+      "label": "common.Groups.selectNewGroupMember",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.addToGroup",
+      "label": "Add Items",
+      "tooltip": "Add items to group",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "group_remove",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.cancel",
+      "label": "Cancel",
+      "tooltip": "Cancel current tool",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cancel",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Interactive.copy",
+      "label": "Copy",
+      "tooltip": "Copy selected item(s) to clipboard",
+      "hotkey": "Ctrl+C",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'C'",
+      "altHotkeyRaw": null,
+      "icon": "copy",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Interactive.copyAsText",
+      "label": "Copy as Text",
+      "tooltip": "Copy selected item(s) to clipboard as text",
+      "hotkey": "Ctrl+Shift+C",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'C'",
+      "altHotkeyRaw": null,
+      "icon": "copy",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Interactive.cut",
+      "label": "Cut",
+      "tooltip": "Cut selected item(s) to clipboard",
+      "hotkey": "Ctrl+X",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'X'",
+      "altHotkeyRaw": null,
+      "icon": "cut",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Interactive.cycleArcEditMode",
+      "label": "Cycle Arc Editing Mode",
+      "tooltip": "Switch to a different method of editing arcs",
+      "hotkey": "Ctrl+ ",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + ' '",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.delete",
+      "label": "Delete",
+      "tooltip": "Delete selected item(s)",
+      "hotkey": "Del",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_BACK )\n#else\n        .DefaultHotkey( WXK_DELETE )\n#endif\n        .LegacyHotkeyName( \"Delete Item\"",
+      "altHotkeyRaw": null,
+      "icon": "trash",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.deleteTool",
+      "label": "Interactive Delete Tool",
+      "tooltip": "Delete clicked items",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "delete_cursor",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "common.Interactive.duplicate",
+      "label": "Duplicate",
+      "tooltip": "Duplicates the selected item(s)",
+      "hotkey": "Ctrl+D",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'D'",
+      "altHotkeyRaw": null,
+      "icon": "duplicate",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.find",
+      "label": "Find",
+      "tooltip": "",
+      "hotkey": "Ctrl+F",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'F'",
+      "altHotkeyRaw": null,
+      "icon": "find",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.findAndReplace",
+      "label": "Find and Replace",
+      "tooltip": "",
+      "hotkey": "Ctrl+Alt+F",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_ALT + 'F'",
+      "altHotkeyRaw": null,
+      "icon": "find_replace",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.findNext",
+      "label": "Find Next",
+      "tooltip": "",
+      "hotkey": "F3",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_F3",
+      "altHotkeyRaw": null,
+      "icon": "find",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.findNextMarker",
+      "label": "Find Next Marker",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+F3",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + static_cast<int>( WXK_F3 )",
+      "altHotkeyRaw": null,
+      "icon": "find",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.findPrevious",
+      "label": "Find Previous",
+      "tooltip": "",
+      "hotkey": "Shift+F3",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + static_cast<int>( WXK_F3 )",
+      "altHotkeyRaw": null,
+      "icon": "find",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.finish",
+      "label": "Finish",
+      "tooltip": "Finish current tool",
+      "hotkey": "End",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_END",
+      "altHotkeyRaw": null,
+      "icon": "checked_ok",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Interactive.group",
+      "label": "Group Items",
+      "tooltip": "Group the selected items so that they are treated as a single item",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "group",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.groupEnter",
+      "label": "Enter Group",
+      "tooltip": "Enter the group to edit items",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "group_enter",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.groupLeave",
+      "label": "Leave Group",
+      "tooltip": "Leave the current group",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "group_leave",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.measureTool",
+      "label": "Measure Tool",
+      "tooltip": "Interactively measure distance between points",
+      "hotkey": "Ctrl+Shift+M",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'M' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Measure Distance (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "measurement",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "common.Interactive.paste",
+      "label": "Paste",
+      "tooltip": "Paste item(s) from clipboard",
+      "hotkey": "Ctrl+V",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'V'",
+      "altHotkeyRaw": null,
+      "icon": "paste",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "common.Interactive.pasteSpecial",
+      "label": "Paste Special...",
+      "tooltip": "Paste item(s) from clipboard with options",
+      "hotkey": "Ctrl+Shift+V",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'V'",
+      "altHotkeyRaw": null,
+      "icon": "paste_special",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.redo",
+      "label": "Redo",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+Z",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'Z' )\n#else\n        .DefaultHotkey( MD_CTRL + 'Y' )\n#endif\n        .LegacyHotkeyName( \"Redo\"",
+      "altHotkeyRaw": null,
+      "icon": "redo",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.removeFromGroup",
+      "label": "Remove Items",
+      "tooltip": "Remove items from group",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "group_remove",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.replaceAll",
+      "label": "Replace All",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "find_replace",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.replaceAndFindNext",
+      "label": "Replace and Find Next",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "find_replace",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.search",
+      "label": "Search",
+      "tooltip": "Show/hide the search panel",
+      "hotkey": "Ctrl+G",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'G'",
+      "altHotkeyRaw": null,
+      "icon": "find",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.selectAll",
+      "label": "Select All",
+      "tooltip": "Select all items on screen",
+      "hotkey": "Ctrl+A",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'A'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.selectSetLasso",
+      "label": "Lasso",
+      "tooltip": "Set selection mode to use polygon lasso",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lasso",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "common.Interactive.selectSetRect",
+      "label": "Rectangle",
+      "tooltip": "Set selection mode to use rectangle",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cursor",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "common.Interactive.undo",
+      "label": "Undo",
+      "tooltip": "",
+      "hotkey": "Ctrl+Z",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'Z'",
+      "altHotkeyRaw": null,
+      "icon": "undo",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.ungroup",
+      "label": "Ungroup Items",
+      "tooltip": "Ungroup any selected groups",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "group_ungroup",
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.unselectAll",
+      "label": "Unselect All",
+      "tooltip": "Unselect all items on screen",
+      "hotkey": "Ctrl+Shift+A",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'A'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.Interactive.updateMenu",
+      "label": "common.Interactive.updateMenu",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractivePicker.pickerSubTool",
+      "label": "common.InteractivePicker.pickerSubTool",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractivePicker.pickerTool",
+      "label": "common.InteractivePicker.pickerTool",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "common.InteractiveSelection",
+      "label": "common.InteractiveSelection",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "common.InteractiveSelection.clear",
+      "label": "common.InteractiveSelection.clear",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.cursor",
+      "label": "common.InteractiveSelection.cursor",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.reselectItem",
+      "label": "common.InteractiveSelection.reselectItem",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.Rows",
+      "label": "Select Row(s)",
+      "tooltip": "Select complete row(s) containing the current selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_select_row",
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.SelectColumns",
+      "label": "Select Column(s)",
+      "tooltip": "Select complete column(s) containing the current selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_select_column",
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.selectionMenu",
+      "label": "common.InteractiveSelection.selectionMenu",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.selectionTool",
+      "label": "Select item(s)",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cursor",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "common.InteractiveSelection.selectItem",
+      "label": "common.InteractiveSelection.selectItem",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.selectItems",
+      "label": "common.InteractiveSelection.selectItems",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.SelectTable",
+      "label": "Select Table",
+      "tooltip": "Select parent table of selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_select",
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.unselectItem",
+      "label": "common.InteractiveSelection.unselectItem",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.InteractiveSelection.unselectItems",
+      "label": "common.InteractiveSelection.unselectItems",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.about",
+      "label": "About KiCad",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "about",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.configurePaths",
+      "label": "Configure Paths...",
+      "tooltip": "Edit path configuration environment variables",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "path",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.donate",
+      "label": "Donate",
+      "tooltip": "Open \"Donate to KiCad\" in a web browser",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.getInvolved",
+      "label": "Get Involved",
+      "tooltip": "Open \"Contribute to KiCad\" in a web browser",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "info",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.gettingStarted",
+      "label": "Getting Started with KiCad",
+      "tooltip": "Open \"Getting Started in KiCad\" guide for beginners",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "help",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.help",
+      "label": "Help",
+      "tooltip": "Open product documentation in a web browser",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "help_online",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.listHotKeys",
+      "label": "List Hotkeys...",
+      "tooltip": "Displays current hotkeys table and corresponding commands",
+      "hotkey": "Ctrl+F1",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + static_cast<int>( WXK_F1 )",
+      "altHotkeyRaw": null,
+      "icon": "hotkeys",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.openPreferences",
+      "label": "Preferences...",
+      "tooltip": "Show preferences for all open tools",
+      "hotkey": "Ctrl+,",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + ','",
+      "altHotkeyRaw": null,
+      "icon": "preference",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.reportBug",
+      "label": "Report Bug",
+      "tooltip": "Report a problem with KiCad",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "bug",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.showDesignBLockLibTable",
+      "label": "Manage Design Block Libraries...",
+      "tooltip": "Edit the global and project design block library lists",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library_table",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.showFootprintLibTable",
+      "label": "Manage Footprint Libraries...",
+      "tooltip": "Edit the global and project footprint library lists",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library_table",
+      "flags": []
+    },
+    {
+      "name": "common.SuiteControl.showSymbolLibTable",
+      "label": "Manage Symbol Libraries...",
+      "tooltip": "Edit the global and project symbol library lists",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library_table",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.addColAfter",
+      "label": "Add Column After",
+      "tooltip": "Insert a new table column after the selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_add_column_after",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.addColBefore",
+      "label": "Add Column Before",
+      "tooltip": "Insert a new table column before the selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_add_column_before",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.addRowAbove",
+      "label": "Add Row Above",
+      "tooltip": "Insert a new table row above the selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_add_row_above",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.addRowBelow",
+      "label": "Add Row Below",
+      "tooltip": "Insert a new table row below the selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_add_row_below",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.deleteColumns",
+      "label": "Delete Column(s)",
+      "tooltip": "Delete columns containing the currently selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_delete_column",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.deleteRows",
+      "label": "Delete Row(s)",
+      "tooltip": "Delete rows containing the currently selected cell(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table_delete_row",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.exportTableCSV",
+      "label": "Export Table to CSV...",
+      "tooltip": "Export table contents to CSV file with resolved text variables",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_file",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.mergeCells",
+      "label": "Merge Cells",
+      "tooltip": "Turn selected table cells into a single cell",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table",
+      "flags": []
+    },
+    {
+      "name": "common.TableEditor.unmergeCell",
+      "label": "Unmerge Cells",
+      "tooltip": "Turn merged table cells back into separate cells.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Interactive.decrementPrimary",
+      "label": "Decrement Primary",
+      "tooltip": "Decrement the primary field of the selected item(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.Interactive.decrementSecondary",
+      "label": "Decrement Secondary",
+      "tooltip": "Decrement the secondary field of the selected item(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.Interactive.increment",
+      "label": "Increment",
+      "tooltip": "Increment the selected item(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.Interactive.incrementPrimary",
+      "label": "Increment Primary",
+      "tooltip": "Increment the primary field of the selected item(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.Interactive.incrementSecondary",
+      "label": "Increment Secondary",
+      "tooltip": "Increment the secondary field of the selected item(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.alignBottom",
+      "label": "Align to Bottom",
+      "tooltip": "Aligns selected items to the bottom edge of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_bottom",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.alignCenterX",
+      "label": "Align to Horizontal Center",
+      "tooltip": "Aligns selected items to the horizontal center of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_middle",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.alignCenterY",
+      "label": "Align to Vertical Center",
+      "tooltip": "Aligns selected items to the vertical center of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_center",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.alignLeft",
+      "label": "Align to Left",
+      "tooltip": "Aligns selected items to the left edge of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_left",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.alignRight",
+      "label": "Align to Right",
+      "tooltip": "Aligns selected items to the right edge of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_right",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.alignTop",
+      "label": "Align to Top",
+      "tooltip": "Aligns selected items to the top edge of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_top",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.distributeHorizontallyCenters",
+      "label": "Distribute Horizontally by Centers",
+      "tooltip": "Distributes selected items between the left-most item and the right-most item ",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "distribute_horizontal_centers",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.distributeHorizontallyGaps",
+      "label": "Distribute Horizontally with Even Gaps",
+      "tooltip": "Distributes selected items between the left-most item and the right-most item ",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "distribute_horizontal_gaps",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.distributeVerticallyCenters",
+      "label": "Distribute Vertically by Centers",
+      "tooltip": "Distributes selected items between the top-most item and the bottom-most item ",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "distribute_vertical_centers",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.AlignAndDistribute.distributeVerticallyGaps",
+      "label": "Distribute Vertically with Even Gaps",
+      "tooltip": "Distributes selected items between the top-most item and the bottom-most item ",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "distribute_vertical_gaps",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Array.createArray",
+      "label": "Create Array...",
+      "tooltip": "",
+      "hotkey": "Ctrl+T",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'T'",
+      "altHotkeyRaw": null,
+      "icon": "array",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.Autoplacer.autoplaceOffboard",
+      "label": "Place Off-Board Footprints",
+      "tooltip": "Performs automatic placement of components outside board area",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Autoplacer.autoplaceSelected",
+      "label": "Place Selected Footprints",
+      "tooltip": "Performs automatic placement of selected components",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.changeTrackLayerNext",
+      "label": "Switch Track to Next Layer",
+      "tooltip": "Switch track to next enabled copper layer",
+      "hotkey": "Ctrl++",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '+'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.changeTrackLayerPrev",
+      "label": "Switch Track to Previous Layer",
+      "tooltip": "Switch track to previous enabled copper layer",
+      "hotkey": "Ctrl+-",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '-'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.DdAppendBoard",
+      "label": "pcbnew.Control.DdAppendBoard",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.ddImportFootprint",
+      "label": "pcbnew.Control.ddImportFootprint",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.flipBoard",
+      "label": "Flip Board View",
+      "tooltip": "View board from the opposite side",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "flip_board",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.fpAutoZoom",
+      "label": "Automatic zoom",
+      "tooltip": "Automatic Zoom on footprint change",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zoom_auto_fit_in_page",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.graphicOutlines",
+      "label": "Sketch Graphic Items",
+      "tooltip": "Show graphic items in outline mode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "show_mod_edge",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.hideDynamicRatsnest",
+      "label": "pcbnew.Control.hideDynamicRatsnest",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.layerAlphaDec",
+      "label": "Decrease Layer Opacity",
+      "tooltip": "Make the current layer more transparent",
+      "hotkey": "{",
+      "altHotkey": null,
+      "hotkeyRaw": "'{' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Decrement Layer Transparency (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "contrast_mode",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.layerAlphaInc",
+      "label": "Increase Layer Opacity",
+      "tooltip": "Make the current layer less transparent",
+      "hotkey": "}",
+      "altHotkey": null,
+      "hotkeyRaw": "'}' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Increment Layer Transparency (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "contrast_mode",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.layerBottom",
+      "label": "Switch to Copper (B.Cu) Layer",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_PAGEDOWN",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerChanged",
+      "label": "pcbnew.Control.layerChanged",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner1",
+      "label": "Switch to Inner Layer 1",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner10",
+      "label": "Switch to Inner Layer 10",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner11",
+      "label": "Switch to Inner Layer 11",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner12",
+      "label": "Switch to Inner Layer 12",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner13",
+      "label": "Switch to Inner Layer 13",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner14",
+      "label": "Switch to Inner Layer 14",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner15",
+      "label": "Switch to Inner Layer 15",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner16",
+      "label": "Switch to Inner Layer 16",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner17",
+      "label": "Switch to Inner Layer 17",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner18",
+      "label": "Switch to Inner Layer 18",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner19",
+      "label": "Switch to Inner Layer 19",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner2",
+      "label": "Switch to Inner Layer 2",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner20",
+      "label": "Switch to Inner Layer 20",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner21",
+      "label": "Switch to Inner Layer 21",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner22",
+      "label": "Switch to Inner Layer 22",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner23",
+      "label": "Switch to Inner Layer 23",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner24",
+      "label": "Switch to Inner Layer 24",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner25",
+      "label": "Switch to Inner Layer 25",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner26",
+      "label": "Switch to Inner Layer 26",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner27",
+      "label": "Switch to Inner Layer 27",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner28",
+      "label": "Switch to Inner Layer 28",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner29",
+      "label": "Switch to Inner Layer 29",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner3",
+      "label": "Switch to Inner Layer 3",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner30",
+      "label": "Switch to Inner Layer 30",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner4",
+      "label": "Switch to Inner Layer 4",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner5",
+      "label": "Switch to Inner Layer 5",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner6",
+      "label": "Switch to Inner Layer 6",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner7",
+      "label": "Switch to Inner Layer 7",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner8",
+      "label": "Switch to Inner Layer 8",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerInner9",
+      "label": "Switch to Inner Layer 9",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerNext",
+      "label": "Switch to Next Layer",
+      "tooltip": "",
+      "hotkey": "+",
+      "altHotkey": null,
+      "hotkeyRaw": "'+'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerPairPresetCycle",
+      "label": "Cycle Layer Pair Presets",
+      "tooltip": "Cycle between preset layer pairs",
+      "hotkey": "Shift+V",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'V'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.layerPrev",
+      "label": "Switch to Previous Layer",
+      "tooltip": "",
+      "hotkey": "-",
+      "altHotkey": null,
+      "hotkeyRaw": "'-'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerToggle",
+      "label": "Toggle Layer",
+      "tooltip": "Switch between layers in active layer pair",
+      "hotkey": "V",
+      "altHotkey": null,
+      "hotkeyRaw": "'V'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.layerTop",
+      "label": "Switch to Component (F.Cu) layer",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_PAGEUP",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.localRatsnestTool",
+      "label": "Local Ratsnest",
+      "tooltip": "Toggle ratsnest display of selected item(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "tool_ratsnest",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.Control.netColorMode",
+      "label": "Net Color Mode (3-state)",
+      "tooltip": "Cycle between using net and netclass colors for all nets, just ratsnests, and none",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.nextFootprint",
+      "label": "Display next footprint",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lib_next",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.padDisplayMode",
+      "label": "Sketch Pads",
+      "tooltip": "Show pads in outline mode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pad_sketch",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.previousFootprint",
+      "label": "Display previous footprint",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lib_previous",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.ratsnestLineMode",
+      "label": "Curved Ratsnest Lines",
+      "tooltip": "Show ratsnest with curved lines",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "curved_ratsnest",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.ratsnestModeCycle",
+      "label": "Ratsnest Mode (3-state)",
+      "tooltip": "Cycle between showing ratsnests for all layers, just visible layers, and none",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.rehatchShapes",
+      "label": "pcbnew.Control.rehatchShapes",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.repairBoard",
+      "label": "Repair Board",
+      "tooltip": "Run various diagnostics and attempt to repair board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "rescue",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.showLayersManager",
+      "label": "Appearance",
+      "tooltip": "Show/hide the appearance manager",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "layers_manager",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.showNetInspector",
+      "label": "Net Inspector",
+      "tooltip": "Show/hide the net inspector",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "tools",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.showPadNumbers",
+      "label": "Show Pad Numbers",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pad_number",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.showRatsnest",
+      "label": "Show Ratsnest",
+      "tooltip": "Show lines/arcs representing missing connections on the board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "general_ratsnest",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.textOutlines",
+      "label": "Sketch Text Items",
+      "tooltip": "Show footprint texts in line mode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text_sketch",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.trackDisplayMode",
+      "label": "Sketch Tracks",
+      "tooltip": "Show tracks in outline mode",
+      "hotkey": "K",
+      "altHotkey": null,
+      "hotkeyRaw": "'K'",
+      "altHotkeyRaw": null,
+      "icon": "showtrack",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.updateLocalRatsnest",
+      "label": "pcbnew.Control.updateLocalRatsnest",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.viaDisplayMode",
+      "label": "Sketch Vias",
+      "tooltip": "Show vias in outline mode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "via_sketch",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.zoneDisplayDisable",
+      "label": "Draw Zone Outlines",
+      "tooltip": "Show only zone boundaries",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "show_zone_disable",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.zoneDisplayEnable",
+      "label": "Draw Zone Fills",
+      "tooltip": "Show filled areas of zones",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "show_zone",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.zoneDisplayOutlines",
+      "label": "Draw Zone Fill Fracture Borders",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "show_zone_outline_only",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.zoneDisplayTesselation",
+      "label": "Draw Zone Fill Triangulation",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "show_zone_triangulation",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.zoneDisplayToggle",
+      "label": "Toggle Zone Display",
+      "tooltip": "Cycle between showing zone fills and just their outlines",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "show_zone",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Control.zonesManager",
+      "label": "Zone Manager...",
+      "tooltip": "Show the zone manager dialog",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "show_zone",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Convert.convertToArc",
+      "label": "Create Arc from Selection",
+      "tooltip": "Creates an arc from the selected line segment",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_arc",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Convert.convertToKeepout",
+      "label": "Create Rule Area from Selection...",
+      "tooltip": "Creates a rule area from the selection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_keepout_area",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Convert.convertToLines",
+      "label": "Create Lines from Selection...",
+      "tooltip": "Creates graphic lines from the selection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_line",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Convert.convertToPoly",
+      "label": "Create Polygon from Selection...",
+      "tooltip": "Creates a graphic polygon from the selection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_graphical_polygon",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Convert.convertToTracks",
+      "label": "Create Tracks from Selection",
+      "tooltip": "Creates tracks from the selected graphic lines",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_tracks",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Convert.convertToZone",
+      "label": "Create Zone from Selection...",
+      "tooltip": "Creates a copper zone from the selection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_zone",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Convert.outsetItems",
+      "label": "Create Outsets from Selection...",
+      "tooltip": "Create outset lines from the selected item",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "outset_from_selection",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.DRCTool.runDRC",
+      "label": "Design Rules Checker",
+      "tooltip": "Show the design rules checker window",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "erc",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.DRETool.drcRuleEditor",
+      "label": "DRC Rule Editor",
+      "tooltip": "Open DRC rule editor window",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.angleSnapModeChanged",
+      "label": "pcbnew.EditorControl.angleSnapModeChanged",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.EditorControl.appendBoard",
+      "label": "Append Board...",
+      "tooltip": "Open another board and append its contents to this board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_board",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.assignNetclass",
+      "label": "Assign Netclass...",
+      "tooltip": "Assign a netclass to nets matching a pattern",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "netlist",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.autoTrackWidth",
+      "label": "Automatically select track width",
+      "tooltip": "When routing from an existing track use its width instead ",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "auto_track_width",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.boardSetup",
+      "label": "Board Setup...",
+      "tooltip": "Edit board setup including layers, design rules and various defaults",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "options_board",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.clearHighlight",
+      "label": "Clear Net Highlighting",
+      "tooltip": "",
+      "hotkey": "~",
+      "altHotkey": null,
+      "hotkeyRaw": "'~'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.collect3DModels",
+      "label": "Collect And Embed 3D Models",
+      "tooltip": "Collect footprint 3D models and embed them into the board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import3d",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.drillOrigin",
+      "label": "Drill/Place File Origin",
+      "tooltip": "Place origin point for drill files and component placement files",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "set_origin",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.EditorControl.drillResetOrigin",
+      "label": "Reset Drill Origin",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.drillSetOrigin",
+      "label": "pcbnew.EditorControl.drillSetOrigin",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.EditFpInFpEditor",
+      "label": "Open in Footprint Editor",
+      "tooltip": "",
+      "hotkey": "Ctrl+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'E'",
+      "altHotkeyRaw": null,
+      "icon": "module_editor",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.EditLibFpInFpEditor",
+      "label": "Edit Library Footprint...",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'E'",
+      "altHotkeyRaw": null,
+      "icon": "module_editor",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.exportFootprintAssociations",
+      "label": "Export Footprint Association (.cmp) File...",
+      "tooltip": "Export footprint association file (*.cmp) for schematic back annotation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_cmp",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.exportFootprints",
+      "label": "Export Footprints...",
+      "tooltip": "Add footprints from board to a new or an existing footprint library\\n",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library_archive",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.exportGenCAD",
+      "label": "Export GenCAD...",
+      "tooltip": "Export GenCAD board representation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_gencad",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.exportHyperlynx",
+      "label": "Hyperlynx...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_step",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.exportIDF",
+      "label": "Export IDFv3...",
+      "tooltip": "Export IDF 3D board representation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_idf",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.exportSpecctraDSN",
+      "label": "Export Specctra DSN...",
+      "tooltip": "Export Specctra DSN routing info",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_dsn",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.exportSTEP",
+      "label": "Export STEP/GLB/BREP/XAO/PLY/STL...",
+      "tooltip": "Export STEP, GLB, BREP, XAO, PLY or STL 3D board representation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_step",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.exportVRML",
+      "label": "Export VRML...",
+      "tooltip": "Export VRML 3D board representation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export3d",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.findByProperties",
+      "label": "Find by Properties...",
+      "tooltip": "Find board items matching property criteria or expressions",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "find",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.generateBOM",
+      "label": "Bill of Materials...",
+      "tooltip": "Create bill of materials from board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_bom",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.generateD356File",
+      "label": "IPC-D-356 Netlist File...",
+      "tooltip": "Generate IPC-D-356 netlist file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_d356",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.generateDrillFiles",
+      "label": "Drill Files (.drl)...",
+      "tooltip": "Generate Excellon drill file(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_drill",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.generateGerbers",
+      "label": "Gerbers (.gbr)...",
+      "tooltip": "Generate Gerbers for fabrication",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_gerber",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.generateIPC2581File",
+      "label": "IPC-2581 File (.xml)...",
+      "tooltip": "Generate an IPC-2581 file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_xml",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.generateODBPPFile",
+      "label": "ODB++ Output File...",
+      "tooltip": "Generate ODB++ output files",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_odb",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.generatePosFile",
+      "label": "Component Placement (.pos, .gbr)...",
+      "tooltip": "Generate component placement file(s) for pick and place",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_compo",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.generateReportFile",
+      "label": "Footprint Report (.rpt)...",
+      "tooltip": "Create report of all footprints from current board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_rpt",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.hideNet",
+      "label": "Hide Net in Ratsnest",
+      "tooltip": "Hide the selected net in the ratsnest of unconnected net lines/arcs",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "hide_ratsnest",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.highlightItem",
+      "label": "pcbnew.EditorControl.highlightItem",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.highlightNet",
+      "label": "Highlight Net",
+      "tooltip": "Highlight net under cursor",
+      "hotkey": "`",
+      "altHotkey": null,
+      "hotkeyRaw": "'`' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Toggle Highlight of Selected Net (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "net_highlight",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.highlightNetSelection",
+      "label": "Highlight Net",
+      "tooltip": "Highlight all copper items on the selected net(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "net_highlight",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.importNetlist",
+      "label": "Import Netlist...",
+      "tooltip": "Read netlist and update board connectivity",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "netlist",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.importSpecctraSession",
+      "label": "Import Specctra Session...",
+      "tooltip": "Import routed Specctra session (*.ses) file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.lineMode45",
+      "label": "Line Modes",
+      "tooltip": "Constrain drawing and dragging to horizontal, vertical, or 45-degree angle motions",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "hv45mode",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.EditorControl.lineModeFree",
+      "label": "Line Modes",
+      "tooltip": "Draw and drag at any angle",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lines_any",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.EditorControl.lineModeNext",
+      "label": "Line Modes",
+      "tooltip": "Switch to next angle snapping mode",
+      "hotkey": "Shift+ ",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + ' '",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.lineModeOrthonal",
+      "label": "Line Modes",
+      "tooltip": "Constrain drawing and dragging to horizontal or vertical motions",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lines90",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.EditorControl.lock",
+      "label": "Lock",
+      "tooltip": "Prevent items from being moved and/or resized on the canvas",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "locked",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.openNonKicadBoard",
+      "label": "Import Non-KiCad Board File...",
+      "tooltip": "Import board file from other applications",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import_brd_file",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.placeFootprint",
+      "label": "Place Footprints",
+      "tooltip": "",
+      "hotkey": "A",
+      "altHotkey": null,
+      "hotkeyRaw": "'A'",
+      "altHotkeyRaw": null,
+      "icon": "module",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.EditorControl.rescueAutosave",
+      "label": "Rescue",
+      "tooltip": "Clear board and get last rescue file automatically saved by PCB editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "rescue",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.showEeschema",
+      "label": "Switch to Schematic Editor",
+      "tooltip": "Open schematic in schematic editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "icon_eeschema_24",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.showNet",
+      "label": "Show Net in Ratsnest",
+      "tooltip": "Show the selected net in the ratsnest of unconnected net lines/arcs",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "show_ratsnest",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.toggleLastNetHighlight",
+      "label": "Toggle Last Net Highlight",
+      "tooltip": "Toggle between last two highlighted nets",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.toggleLock",
+      "label": "Toggle Lock",
+      "tooltip": "Lock or unlock selected items",
+      "hotkey": "L",
+      "altHotkey": null,
+      "hotkeyRaw": "'L'",
+      "altHotkeyRaw": null,
+      "icon": "lock_unlock",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.toggleNetHighlight",
+      "label": "Toggle Net Highlight",
+      "tooltip": "",
+      "hotkey": "Alt+`",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + '`'",
+      "altHotkeyRaw": null,
+      "icon": "net_highlight",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.trackViaSizeChanged",
+      "label": "pcbnew.EditorControl.trackViaSizeChanged",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "pcbnew.EditorControl.trackWidthDec",
+      "label": "Switch Track Width to Previous",
+      "tooltip": "Change track width to previous pre-defined size",
+      "hotkey": "Shift+W",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'W'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.trackWidthInc",
+      "label": "Switch Track Width to Next",
+      "tooltip": "Change track width to next pre-defined size",
+      "hotkey": "W",
+      "altHotkey": null,
+      "hotkeyRaw": "'W'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.unlock",
+      "label": "Unlock",
+      "tooltip": "Allow items to be moved and/or resized on the canvas",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "unlocked",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.viaSizeDec",
+      "label": "Decrease Via Size",
+      "tooltip": "Change via size to previous pre-defined size",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": "'\\\\'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.viaSizeInc",
+      "label": "Increase Via Size",
+      "tooltip": "Change via size to next pre-defined size",
+      "hotkey": "\\",
+      "altHotkey": null,
+      "hotkeyRaw": "'\\''",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.zoneDuplicate",
+      "label": "Duplicate Zone onto Layer...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zone_duplicate",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.zoneMerge",
+      "label": "Merge Zones",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.zonePriorityLower",
+      "label": "Lower",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "small_down",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.zonePriorityMoveToBottom",
+      "label": "Move to Bottom",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "go_down",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.zonePriorityMoveToTop",
+      "label": "Move to Top",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "go_up",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.EditorControl.zonePriorityRaise",
+      "label": "Raise",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "small_up",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.FpWizard.exportFpToEditor",
+      "label": "Export footprint to editor",
+      "tooltip": "Export footprint to editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_footprint_names",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.FpWizard.resetWizardPrms",
+      "label": "Reset wizard parameters",
+      "tooltip": "Reset wizard parameters to default",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "reload",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.FpWizard.showWizards",
+      "label": "Show wizards selector",
+      "tooltip": "Select wizard script to run",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "module_wizard",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.genCacnelEdit",
+      "label": "pcbnew.Generator.genCacnelEdit",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.genFinishEdit",
+      "label": "pcbnew.Generator.genFinishEdit",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.genRemove",
+      "label": "pcbnew.Generator.genRemove",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.genStartEdit",
+      "label": "pcbnew.Generator.genStartEdit",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.genUpdateEdit",
+      "label": "pcbnew.Generator.genUpdateEdit",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.regenerateAll",
+      "label": "Rebuild All Generators",
+      "tooltip": "Rebuilds geometry of all generators",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "refresh",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.regenerateAllTuning",
+      "label": "Update All Tuning Patterns",
+      "tooltip": "Attempt to re-tune existing tuning patterns within their bounds",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "router_len_tuner",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.regenerateSelected",
+      "label": "Rebuild Selected Generators",
+      "tooltip": "Rebuilds geometry of selected generator(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "refresh",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Generator.showManager",
+      "label": "Generators Manager",
+      "tooltip": "Show a manager dialog for Generator objects",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin_table",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.changeFootprint",
+      "label": "Change Footprint...",
+      "tooltip": "Assign a different footprint from the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "exchange",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.changeFootprints",
+      "label": "Change Footprints...",
+      "tooltip": "Assign different footprints from the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "exchange",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.cleanupGraphics",
+      "label": "Cleanup Graphics...",
+      "tooltip": "Cleanup redundant items, etc.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cleanup_graphics",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.cleanupTracksAndVias",
+      "label": "Cleanup Tracks & Vias...",
+      "tooltip": "Cleanup redundant items, shorting items, etc.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cleanup_tracks_and_vias",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.editTeardrops",
+      "label": "Edit Teardrops...",
+      "tooltip": "Add, remove or edit teardrops globally across board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "via",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.editTextAndGraphics",
+      "label": "Edit Text & Graphics Properties...",
+      "tooltip": "Edit Text and graphics properties globally across board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.editTracksAndVias",
+      "label": "Edit Track & Via Properties...",
+      "tooltip": "Edit track and via properties globally across board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "width_track_via",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.globalDeletions",
+      "label": "Global Deletions...",
+      "tooltip": "Delete tracks, footprints and graphic items from board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "general_deletions",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.migrate3DModels",
+      "label": "Migrate 3D Models...",
+      "tooltip": "Replace obsolete WRL 3D model references with current STEP models",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "refresh",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.removeUnusedPads",
+      "label": "Remove Unused Pads...",
+      "tooltip": "Remove or restore the unconnected inner layers on through hole pads and vias",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pads_remove",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.swapLayers",
+      "label": "Swap Layers...",
+      "tooltip": "Move tracks or drawings from one layer to another",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "swap_layer",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.updateFootprint",
+      "label": "Update Footprint...",
+      "tooltip": "Update footprint to include any changes from the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "refresh",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.GlobalEdit.updateFootprints",
+      "label": "Update Footprints from Library...",
+      "tooltip": "Update footprints to include any changes from the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "refresh",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InspectionTool.DiffFootprint",
+      "label": "Compare Footprint with Library",
+      "tooltip": "Show differences between board footprint and its library equivalent",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InspectionTool.InspectClearance",
+      "label": "Clearance Resolution",
+      "tooltip": "Show clearance resolution for the active layer between two selected objects",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mw_add_gap",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InspectionTool.InspectConstraints",
+      "label": "Constraints Resolution",
+      "tooltip": "Show constraints resolution for the selected object",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mw_add_stub",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InspectionTool.ShowBoardStatistics",
+      "label": "Show Board Statistics",
+      "tooltip": "Shows board statistics",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "editor",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InspectionTool.ShowFootprintAssociations",
+      "label": "Show Footprint Associations",
+      "tooltip": "Show footprint library and schematic symbol associations",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit_cmp_symb_links",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.alignedDimension",
+      "label": "Draw Aligned Dimensions",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_aligned_dimension",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.applyDesignBlockLayout",
+      "label": "Apply Design Block Layout",
+      "tooltip": "Apply linked design block layout to selected group",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_component",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.arc",
+      "label": "Draw Arcs",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+A",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'A'",
+      "altHotkeyRaw": null,
+      "icon": "add_arc",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.arcPosture",
+      "label": "Switch Arc Posture",
+      "tooltip": "",
+      "hotkey": "/",
+      "altHotkey": null,
+      "hotkeyRaw": "'/'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.barcode",
+      "label": "Add Barcode",
+      "tooltip": "Add a barcode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_barcode",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.bezier",
+      "label": "Draw Bezier Curve",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+B",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'B'",
+      "altHotkeyRaw": null,
+      "icon": "add_bezier",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.centerDimension",
+      "label": "Draw Center Dimensions",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_center_dimension",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.changeDimensionArrows",
+      "label": "Switch Dimension Arrows",
+      "tooltip": "Switch between inward and outward dimension arrows",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.circle",
+      "label": "Draw Circles",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+C",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'C'",
+      "altHotkeyRaw": null,
+      "icon": "add_circle",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.closeOutline",
+      "label": "Close Outline",
+      "tooltip": "Close the in progress outline",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "checked_ok",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.ddImportGraphics",
+      "label": "pcbnew.InteractiveDrawing.ddImportGraphics",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.decWidth",
+      "label": "Decrease Line Width",
+      "tooltip": "",
+      "hotkey": "Ctrl+-",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '-'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.deleteLastPoint",
+      "label": "Delete Last Point",
+      "tooltip": "Delete the last point added to the current item",
+      "hotkey": "Backspace",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_BACK",
+      "altHotkeyRaw": null,
+      "icon": "undo",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.drawTable",
+      "label": "Draw Tables",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.graphicPolygon",
+      "label": "Draw Polygons",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+P",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'P'",
+      "altHotkeyRaw": null,
+      "icon": "add_graphical_polygon",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.incWidth",
+      "label": "Increase Line Width",
+      "tooltip": "",
+      "hotkey": "Ctrl++",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '+'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.leader",
+      "label": "Draw Leaders",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_leader",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.line",
+      "label": "Draw Lines",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+L",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'L'",
+      "altHotkeyRaw": null,
+      "icon": "add_graphical_segments",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.orthogonalDimension",
+      "label": "Draw Orthogonal Dimensions",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+H",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'H'",
+      "altHotkeyRaw": null,
+      "icon": "add_orthogonal_dimension",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placeCharacteristics",
+      "label": "Add Board Characteristics",
+      "tooltip": "Add a board characteristics table on a graphic layer",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placeDesignBlock",
+      "label": "Place Design Block",
+      "tooltip": "Add selected design block to current board",
+      "hotkey": "Shift+B",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'B'",
+      "altHotkeyRaw": null,
+      "icon": "add_component",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placeImportedGraphics",
+      "label": "Import Graphics...",
+      "tooltip": "Import 2D drawing file",
+      "hotkey": "Ctrl+Shift+F",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'F'",
+      "altHotkeyRaw": null,
+      "icon": "import_vector",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placeLinkedDesignBlock",
+      "label": "Place Linked Design Block",
+      "tooltip": "Place design block linked to selected group",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_component",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placePoint",
+      "label": "Place Point",
+      "tooltip": "Add reference/snap points",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_point",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placeReferenceImage",
+      "label": "Place Reference Images",
+      "tooltip": "Add bitmap images to be used as reference (images will not be included in any output)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "image",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.placeStackup",
+      "label": "Add Stackup Table",
+      "tooltip": "Add a board stackup table on a graphic layer",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.radialDimension",
+      "label": "Draw Radial Dimensions",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_radial_dimension",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.rectangle",
+      "label": "Draw Rectangles",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_rectangle",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.ruleArea",
+      "label": "Draw Rule Areas",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+K",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'K'",
+      "altHotkeyRaw": null,
+      "icon": "add_keepout_area",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.saveToLinkedDesignBlock",
+      "label": "Save to Linked Design Block",
+      "tooltip": "Save selected group to linked design block",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_component",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.setAnchor",
+      "label": "Place the Footprint Anchor",
+      "tooltip": "Set the anchor point of the footprint",
+      "hotkey": "Ctrl+Shift+N",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'N'",
+      "altHotkeyRaw": null,
+      "icon": "anchor",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.similarZone",
+      "label": "Add a Similar Zone",
+      "tooltip": "Add a zone with the same settings as an existing zone",
+      "hotkey": "Ctrl+Shift+.",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + '.'",
+      "altHotkeyRaw": null,
+      "icon": "add_zone",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.text",
+      "label": "Draw Text",
+      "tooltip": "",
+      "hotkey": "Ctrl+Shift+T",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'T'",
+      "altHotkeyRaw": null,
+      "icon": "text",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.textbox",
+      "label": "Draw Text Boxes",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_textbox",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.via",
+      "label": "Place Vias",
+      "tooltip": "Place free-standing vias",
+      "hotkey": "Ctrl+Shift+X",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'X'",
+      "altHotkeyRaw": null,
+      "icon": "add_via",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.zone",
+      "label": "Draw Filled Zones",
+      "tooltip": "",
+      "hotkey": "Ctrl+Alt+Shift+Z",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + 'Z' )\n#else\n        .DefaultHotkey( MD_CTRL + MD_SHIFT + 'Z' )\n#endif\n        .LegacyHotkeyName( \"Add Filled Zone\"",
+      "altHotkeyRaw": null,
+      "icon": "add_zone",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveDrawing.zoneCutout",
+      "label": "Add a Zone Cutout",
+      "tooltip": "Add a cutout to an existing zone or rule area",
+      "hotkey": "Shift+C",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'C'",
+      "altHotkeyRaw": null,
+      "icon": "add_zone_cutout",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.chamferLines",
+      "label": "Chamfer Lines...",
+      "tooltip": "Cut away corners between selected lines",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "chamfer",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.changeTrackWidth",
+      "label": "Change Track Width",
+      "tooltip": "Updates selected track & via sizes",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.deleteFull",
+      "label": "Delete Full Track",
+      "tooltip": "Deletes selected item(s) and copper connections",
+      "hotkey": "Shift+Del",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + static_cast<int>( WXK_DELETE )",
+      "altHotkeyRaw": null,
+      "icon": "delete_cursor",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.dogboneCorners",
+      "label": "Dogbone Corners...",
+      "tooltip": "Add dogbone corners to selected lines",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.duplicateIncrementPads",
+      "label": "Duplicate and Increment",
+      "tooltip": "Duplicates the selected item(s), incrementing pad numbers",
+      "hotkey": "Ctrl+Shift+D",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'D'",
+      "altHotkeyRaw": null,
+      "icon": "duplicate",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.editVertices",
+      "label": "Edit Corners...",
+      "tooltip": "Edit polygon corners using a table",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.extendLines",
+      "label": "Extend Lines to Meet",
+      "tooltip": "Extend lines to meet each other",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.filletLines",
+      "label": "Fillet Lines...",
+      "tooltip": "Adds arcs tangent to the selected lines",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "fillet",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.filletTracks",
+      "label": "Fillet Tracks",
+      "tooltip": "Adds arcs tangent to the selected straight track segments",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.FindMove",
+      "label": "Get and Move Footprint",
+      "tooltip": "Selects a footprint by reference designator and places it under the cursor for moving",
+      "hotkey": "T",
+      "altHotkey": null,
+      "hotkeyRaw": "'T'",
+      "altHotkeyRaw": null,
+      "icon": "move",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.flip",
+      "label": "Change Side / Flip",
+      "tooltip": "Flips selected item(s) to opposite side of board",
+      "hotkey": "F",
+      "altHotkey": null,
+      "hotkeyRaw": "'F'",
+      "altHotkeyRaw": null,
+      "icon": "swap_layer",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.healShapes",
+      "label": "Heal Shapes",
+      "tooltip": "Connect shapes, possibly extending or cutting them, or adding extra geometry",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "heal_shapes",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.intersectPolygons",
+      "label": "Intersect Polygons",
+      "tooltip": "Create the intersection of the selected polygons",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "intersect_polygons",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.mergePolygons",
+      "label": "Merge Polygons",
+      "tooltip": "Merge selected polygons into a single polygon",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "merge_polygons",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.mirrorHoriontally",
+      "label": "Mirror Horizontally",
+      "tooltip": "Mirrors selected item(s) across the Y axis",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mirror_h",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.mirrorVertically",
+      "label": "Mirror Vertically",
+      "tooltip": "Mirrors selected item(s) across the X axis",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mirror_v",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.moveCorner",
+      "label": "Move Corner To...",
+      "tooltip": "Move the active corner to an exact location",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "move_exactly",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.moveExact",
+      "label": "Move Exactly...",
+      "tooltip": "Moves the selected item(s) by an exact amount",
+      "hotkey": "Shift+M",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'M'",
+      "altHotkeyRaw": null,
+      "icon": "move_exactly",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.moveMidpoint",
+      "label": "Move Midpoint To...",
+      "tooltip": "Move the active midpoint to an exact location",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "move_exactly",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.packAndMoveFootprints",
+      "label": "Pack and Move Footprints",
+      "tooltip": "Sorts selected footprints by reference, packs based on size and initiates movement",
+      "hotkey": "P",
+      "altHotkey": null,
+      "hotkeyRaw": "'P'",
+      "altHotkeyRaw": null,
+      "icon": "pack_footprints",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.properties",
+      "label": "Properties...",
+      "tooltip": "",
+      "hotkey": "E",
+      "altHotkey": null,
+      "hotkeyRaw": "'E'",
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.rotateCcw",
+      "label": "Rotate Counterclockwise",
+      "tooltip": "",
+      "hotkey": "R",
+      "altHotkey": null,
+      "hotkeyRaw": "'R'",
+      "altHotkeyRaw": null,
+      "icon": "rotate_ccw",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.rotateCw",
+      "label": "Rotate Clockwise",
+      "tooltip": "",
+      "hotkey": "Shift+R",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'R' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Rotate Item Clockwise (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "rotate_cw",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.simplifyPolygons",
+      "label": "Simplify Polygons",
+      "tooltip": "Simplify polygon outlines, removing superfluous points",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.skip",
+      "label": "Skip",
+      "tooltip": "Skip to next item",
+      "hotkey": "Tab",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_TAB",
+      "altHotkeyRaw": null,
+      "icon": "right",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.subtractPolygons",
+      "label": "Subtract Polygons",
+      "tooltip": "Subtract selected polygons from the last one selected",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "subtract_polygons",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.swap",
+      "label": "Swap",
+      "tooltip": "Swap positions of selected items",
+      "hotkey": "Alt+S",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + 'S'",
+      "altHotkeyRaw": null,
+      "icon": "swap",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.swapGateNets",
+      "label": "Swap Gate Nets",
+      "tooltip": "Swap nets between gates of a footprint and their connected copper",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "swap",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveEdit.swapPadNets",
+      "label": "Swap Pad Nets",
+      "tooltip": "Swap nets between two selected pads and their connected copper",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "swap",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveMove.copyWithReference",
+      "label": "Copy with Reference...",
+      "tooltip": "Copy selected item(s) to clipboard with a specified starting point",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "copy",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveMove.move",
+      "label": "Move",
+      "tooltip": "",
+      "hotkey": "M",
+      "altHotkey": null,
+      "hotkeyRaw": "'M'",
+      "altHotkeyRaw": null,
+      "icon": "move",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveMove.moveIndividually",
+      "label": "Move Individually",
+      "tooltip": "Moves the selected items one-by-one",
+      "hotkey": "Ctrl+M",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'M'",
+      "altHotkeyRaw": null,
+      "icon": "move",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveMove.moveWithReference",
+      "label": "Move with Reference...",
+      "tooltip": "Moves the selected item(s) with a specified starting point",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "move",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.AttemptFinish",
+      "label": "Attempt Finish",
+      "tooltip": "Attempts to complete current route to nearest ratsnest end.",
+      "hotkey": "F",
+      "altHotkey": null,
+      "hotkeyRaw": "'F'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.Autoroute",
+      "label": "Attempt Finish Selected (Autoroute)",
+      "tooltip": "Sequentially attempt to automatically route all selected pads.",
+      "hotkey": "Shift+F",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'F'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.BreakTrack",
+      "label": "Break Track",
+      "tooltip": "Splits the track segment into two segments connected at the cursor position.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "break_line",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.CancelCurrentItem",
+      "label": "Cancel Current Item",
+      "tooltip": "Skip current item and route next selected item.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.ContinueFromEnd",
+      "label": "Route From Other End",
+      "tooltip": "Commits current segments and starts next segment from nearest ratsnest end.",
+      "hotkey": "Ctrl+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'E'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.CycleRouterMode",
+      "label": "Cycle Router Mode",
+      "tooltip": "Cycle router to the next mode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.DiffPair",
+      "label": "Route Differential Pair",
+      "tooltip": "Route differential pairs",
+      "hotkey": "6",
+      "altHotkey": null,
+      "hotkeyRaw": "'6' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Route Differential Pair (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "ps_diff_pair",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.DiffPairDialog",
+      "label": "Differential Pair Dimensions...",
+      "tooltip": "Open Differential Pair Dimension settings",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "ps_diff_pair_gap",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.Drag45Degree",
+      "label": "Drag 45 Degree Mode",
+      "tooltip": "Drags the track segment while keeping connected tracks at 45 degrees.",
+      "hotkey": "D",
+      "altHotkey": null,
+      "hotkeyRaw": "'D'",
+      "altHotkeyRaw": null,
+      "icon": "drag_segment_withslope",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.DragFreeAngle",
+      "label": "Drag Free Angle",
+      "tooltip": "Drags the nearest joint in the track without restricting the track angle.",
+      "hotkey": "G",
+      "altHotkey": null,
+      "hotkeyRaw": "'G'",
+      "altHotkeyRaw": null,
+      "icon": "drag_segment",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.HighlightMode",
+      "label": "Router Highlight Mode",
+      "tooltip": "Switch router to highlight mode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.InlineDrag",
+      "label": "pcbnew.InteractiveRouter.InlineDrag",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.RouteSelected",
+      "label": "Route Selected",
+      "tooltip": "Sequentially route selected items from ratsnest anchor.",
+      "hotkey": "Shift+X",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'X'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.RouteSelectedFromEnd",
+      "label": "Route Selected From Other End",
+      "tooltip": "Sequentially route selected items from other end of ratsnest anchor.",
+      "hotkey": "Shift+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'E'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SelectLayerPair",
+      "label": "Set Layer Pair...",
+      "tooltip": "Change active layer pair for routing",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "select_layer_pair",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SettingsDialog",
+      "label": "Interactive Router Settings...",
+      "tooltip": "Open Interactive Router settings",
+      "hotkey": "Ctrl+<",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '<'",
+      "altHotkeyRaw": null,
+      "icon": "tools",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.ShoveMode",
+      "label": "Router Shove Mode",
+      "tooltip": "Switch router to shove mode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.SingleTrack",
+      "label": "Route Single Track",
+      "tooltip": "Route tracks",
+      "hotkey": "X",
+      "altHotkey": null,
+      "hotkeyRaw": "'X'",
+      "altHotkeyRaw": null,
+      "icon": "add_tracks",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.UndoLastSegment",
+      "label": "Undo Last Segment",
+      "tooltip": "Walks the current track back one segment.",
+      "hotkey": "Backspace",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_BACK",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveRouter.WalkaroundMode",
+      "label": "Router Walkaround Mode",
+      "tooltip": "Switch router to walkaround mode",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.DeselectNet",
+      "label": "Deselect All Tracks in Net",
+      "tooltip": "Deselects all tracks & vias belonging to the same net.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.FilterSelection",
+      "label": "Filter Selected Items...",
+      "tooltip": "Remove items from the selection by type",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "filter",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.GrabUnconnected",
+      "label": "Grab Nearest Unconnected Footprints",
+      "tooltip": "Selects and initiates moving the nearest unconnected footprint on each selected net.",
+      "hotkey": "Shift+O",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'O'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.SelectConnection",
+      "label": "Select/Expand Connection",
+      "tooltip": "Selects a connection or expands an existing selection to junctions, pads, or entire connections",
+      "hotkey": "U",
+      "altHotkey": null,
+      "hotkeyRaw": "'U'",
+      "altHotkeyRaw": null,
+      "icon": "add_tracks",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.SelectNet",
+      "label": "Select All Tracks in Net",
+      "tooltip": "Selects all tracks & vias belonging to the same net.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.SelectOnSchematic",
+      "label": "Select on Schematic",
+      "tooltip": "Selects corresponding items in Schematic editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "select_same_sheet",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.SelectOnSheet",
+      "label": "Sheet",
+      "tooltip": "Selects all footprints and tracks in the schematic sheet",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "select_same_sheet",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.SelectSameSheet",
+      "label": "Items in Same Hierarchical Sheet",
+      "tooltip": "Selects all footprints and tracks in the same schematic sheet",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "select_same_sheet",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.SelectUnconnected",
+      "label": "Select All Unconnected Footprints",
+      "tooltip": "Selects all unconnected footprints belonging to each selected net.",
+      "hotkey": "O",
+      "altHotkey": null,
+      "hotkeyRaw": "'O'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.SyncSelection",
+      "label": "pcbnew.InteractiveSelection.SyncSelection",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.SyncSelectionWithNets",
+      "label": "pcbnew.InteractiveSelection.SyncSelectionWithNets",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.unrouteSegment",
+      "label": "Unroute Segment",
+      "tooltip": "Unroutes segment to the nearest segment.",
+      "hotkey": "Backspace",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_BACK",
+      "altHotkeyRaw": null,
+      "icon": "general_deletions",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.InteractiveSelection.unrouteSelected",
+      "label": "Unroute Selected",
+      "tooltip": "Unroutes selected items to the nearest pad.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "general_deletions",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.lengthTuner.AmplDecrease",
+      "label": "Decrease Amplitude",
+      "tooltip": "Decrease tuning pattern amplitude by one step.",
+      "hotkey": "4",
+      "altHotkey": null,
+      "hotkeyRaw": "'4'",
+      "altHotkeyRaw": null,
+      "icon": "router_len_tuner_amplitude_decr",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.lengthTuner.AmplIncrease",
+      "label": "Increase Amplitude",
+      "tooltip": "Increase tuning pattern amplitude by one step.",
+      "hotkey": "3",
+      "altHotkey": null,
+      "hotkeyRaw": "'3'",
+      "altHotkeyRaw": null,
+      "icon": "router_len_tuner_amplitude_incr",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.LengthTuner.Settings",
+      "label": "Length Tuning Settings...",
+      "tooltip": "Displays tuning pattern properties dialog",
+      "hotkey": "Ctrl+L",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'L' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Length Tuning Settings (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "router_len_tuner_setup",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.lengthTuner.SpacingDecrease",
+      "label": "Decrease Spacing",
+      "tooltip": "Decrease tuning pattern spacing by one step.",
+      "hotkey": "2",
+      "altHotkey": null,
+      "hotkeyRaw": "'2'",
+      "altHotkeyRaw": null,
+      "icon": "router_len_tuner_dist_decr",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.lengthTuner.SpacingIncrease",
+      "label": "Increase Spacing",
+      "tooltip": "Increase tuning pattern spacing by one step.",
+      "hotkey": "1",
+      "altHotkey": null,
+      "hotkeyRaw": "'1'",
+      "altHotkeyRaw": null,
+      "icon": "router_len_tuner_dist_incr",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.LengthTuner.TuneDiffPair",
+      "label": "Tune Length of a Differential Pair",
+      "tooltip": "",
+      "hotkey": "8",
+      "altHotkey": null,
+      "hotkeyRaw": "'8' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Tune Differential Pair Length (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "ps_diff_pair_tune_length",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.LengthTuner.TuneDiffPairSkew",
+      "label": "Tune Skew of a Differential Pair",
+      "tooltip": "",
+      "hotkey": "9",
+      "altHotkey": null,
+      "hotkeyRaw": "'9' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Tune Differential Pair Skew (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "ps_diff_pair_tune_phase",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.LengthTuner.TuneSingleTrack",
+      "label": "Tune Length of a Single Track",
+      "tooltip": "",
+      "hotkey": "7",
+      "altHotkey": null,
+      "hotkeyRaw": "'7' )\n        // Don't be tempted to remove \"Modern Toolset only\".  It's in the legacy property name.\n        .LegacyHotkeyName( \"Tune Single Track (Modern Toolset only)\"",
+      "altHotkeyRaw": null,
+      "icon": "ps_tune_length",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.MicrowaveTool.createFunctionShape",
+      "label": "Draw Microwave Polygonal Shapes",
+      "tooltip": "Create a microwave polygonal shape from a list of vertices",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mw_add_shape",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.MicrowaveTool.createGap",
+      "label": "Draw Microwave Gaps",
+      "tooltip": "Create gap of specified length for microwave applications",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mw_add_gap",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.MicrowaveTool.createLine",
+      "label": "Draw Microwave Lines",
+      "tooltip": "Create line of specified length for microwave applications",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mw_add_line",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.MicrowaveTool.createStub",
+      "label": "Draw Microwave Stubs",
+      "tooltip": "Create stub of specified length for microwave applications",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mw_add_stub",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.MicrowaveTool.createStubArc",
+      "label": "Draw Microwave Arc Stubs",
+      "tooltip": "Create stub (arc) of specified size for microwave applications",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "mw_add_stub_arc",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.ModuleEditor.checkFootprint",
+      "label": "Footprint Checker",
+      "tooltip": "Show the footprint checker window",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "erc",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.copyFootprint",
+      "label": "Copy Footprint",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "copy",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.createFootprint",
+      "label": "Create Footprint...",
+      "tooltip": "Create a new footprint using the Footprint Wizard",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "module_wizard",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.cutFootprint",
+      "label": "Cut Footprint",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cut",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.deleteFootprint",
+      "label": "Delete Footprint from Library",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "trash",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.duplicateFootprint",
+      "label": "Duplicate Footprint",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "duplicate",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.editFootprint",
+      "label": "Edit Footprint",
+      "tooltip": "Show selected footprint on editor canvas",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.exportFootprint",
+      "label": "Export Current Footprint...",
+      "tooltip": "Export edited footprint to file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_module",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.footprintProperties",
+      "label": "Footprint Properties...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "module_options",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.importFootprint",
+      "label": "Import Footprint...",
+      "tooltip": "Import footprint from file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import_module",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.loadFootprintFromBoard",
+      "label": "Load footprint from current PCB",
+      "tooltip": "Load footprint from current board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "load_module_board",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.newFootprint",
+      "label": "New Footprint",
+      "tooltip": "Create a new, empty footprint",
+      "hotkey": "Ctrl+N",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'N'",
+      "altHotkeyRaw": null,
+      "icon": "new_footprint",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.padTable",
+      "label": "Pad Table...",
+      "tooltip": "Displays pad table for bulk editing of pads",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin_table",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.pasteFootprint",
+      "label": "Paste Footprint",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "paste",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.renameFootprint",
+      "label": "Rename Footprint...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.repairFootprint",
+      "label": "Repair Footprint",
+      "tooltip": "Run various diagnostics and attempt to repair footprint",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "rescue",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ModuleEditor.saveFootprintToBoard",
+      "label": "Insert footprint into PCB",
+      "tooltip": "Insert footprint into current board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "insert_module_board",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Multichannel.generatePlacementRuleAreas",
+      "label": "Generate Placement Rule Areas...",
+      "tooltip": "Creates best-fit placement rule areas",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_keepout_area",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.Multichannel.repeatLayout",
+      "label": "Repeat Layout...",
+      "tooltip": "Clones placement & routing across multiple identical channels",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "copy",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PadTool.ApplyPadSettings",
+      "label": "Paste Default Pad Properties to Selected",
+      "tooltip": "Replace the current pad's properties with those copied earlier",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "apply_pad_settings",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PadTool.CopyPadSettings",
+      "label": "Copy Pad Properties to Default",
+      "tooltip": "Copy current pad's properties",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "copy_pad_settings",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PadTool.defaultPadProperties",
+      "label": "Default Pad Properties...",
+      "tooltip": "Edit the pad properties used when creating new pads",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "options_pad",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PadTool.enumeratePads",
+      "label": "Renumber Pads...",
+      "tooltip": "Renumber pads by clicking on them in the desired order",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pad_enumerate",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.PadTool.explodePad",
+      "label": "Edit Pad as Graphic Shapes",
+      "tooltip": "Ungroups a custom-shaped pad for editing as individual graphic shapes",
+      "hotkey": "Ctrl+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'E'",
+      "altHotkeyRaw": null,
+      "icon": "custom_pad_to_primitives",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PadTool.placePad",
+      "label": "Add Pad",
+      "tooltip": "Add a pad",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pad",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "pcbnew.PadTool.PushPadSettings",
+      "label": "Push Pad Properties to Other Pads...",
+      "tooltip": "Copy the current pad's properties to other pads",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "push_pad_settings",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PadTool.recombinePad",
+      "label": "Finish Pad Edit",
+      "tooltip": "Regroups all touching graphic shapes into the edited pad",
+      "hotkey": "Ctrl+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'E'",
+      "altHotkeyRaw": null,
+      "icon": "custom_pad_to_primitives",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PcbDesignBlockControl.deleteDesignBlock",
+      "label": "Delete Design Block",
+      "tooltip": "Remove the selected design block from its library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "trash",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PcbDesignBlockControl.editDesignBlockProperties",
+      "label": "Properties...",
+      "tooltip": "Edit properties of design block",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PcbDesignBlockControl.saveBoardAsDesignBlock",
+      "label": "Save Board as Design Block...",
+      "tooltip": "Create a new design block from the current board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "new_component",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PcbDesignBlockControl.saveSelectionAsDesignBlock",
+      "label": "Save Selection as Design Block...",
+      "tooltip": "Create a new design block from the current selection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "new_component",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PcbDesignBlockControl.showDesignBlockPanel",
+      "label": "Design Blocks",
+      "tooltip": "Show/hide design blocks library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "search_tree",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PcbDesignBlockControl.updateDesignBlockFromBoard",
+      "label": "Update Design Block from Board",
+      "tooltip": "Set design block layout to current board",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PcbDesignBlockControl.updateDesignBlockFromSelection",
+      "label": "Update Design Block from Selection",
+      "tooltip": "Set design block layout to current selection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Picker.selectItemInteractively",
+      "label": "pcbnew.Picker.selectItemInteractively",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.Picker.selectPointInteractively",
+      "label": "pcbnew.Picker.selectPointInteractively",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PointEditor.addCorner",
+      "label": "Create Corner",
+      "tooltip": "Create a corner",
+      "hotkey": "F1",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_F1 )\n#else\n        .DefaultHotkey( WXK_INSERT )\n#endif\n        .FriendlyName( _( \"Create Corner\" )",
+      "altHotkeyRaw": null,
+      "icon": "add_corner",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PointEditor.arcKeepCenter",
+      "label": "Keep Arc Center, Adjust Radius",
+      "tooltip": "Switch arc editing mode to keep center, adjust radius and endpoints",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PointEditor.arcKeepEndpoint",
+      "label": "Keep Arc Endpoints or Direction of Starting Point",
+      "tooltip": "Switch arc editing mode to keep endpoints, or to keep direction of the other point",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PointEditor.arcKeepRadius",
+      "label": "Keep Arc Radius and Center, adjust angle",
+      "tooltip": "Switch arc editing mode to maintaining radius when endpoint are moved",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PointEditor.chamferCorner",
+      "label": "Chamfer Corner",
+      "tooltip": "Chamfer corner",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "chamfer",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PointEditor.removeCorner",
+      "label": "Remove Corner",
+      "tooltip": "Remove corner",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "delete_cursor",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PositionRelative.interactiveOffsetTool",
+      "label": "Interactive Offset Tool",
+      "tooltip": "Interactive tool for offsetting items by exact amounts",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "move_relative",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.PositionRelative.positionRelative",
+      "label": "Position Relative To...",
+      "tooltip": "Positions the selected item(s) by an exact amount relative to another",
+      "hotkey": "Shift+P",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'P'",
+      "altHotkeyRaw": null,
+      "icon": "move_relative",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ReannotateTool.ShowReannotateDialog",
+      "label": "Geographical Reannotate...",
+      "tooltip": "Reannotate PCB in geographical order",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "annotate",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ScriptingTool.pluginsShowFolder",
+      "label": "Reveal Plugin Folder in Finder",
+      "tooltip": "Reveals the plugins folder in a Finder window",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "directory_open",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.TableEditor.editTable",
+      "label": "Edit Table...",
+      "tooltip": "",
+      "hotkey": "Ctrl+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'E'",
+      "altHotkeyRaw": null,
+      "icon": "table_edit",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ZoneFiller.zoneFill",
+      "label": "Draft Fill Selected Zone(s)",
+      "tooltip": "Update copper fill of selected zone(s) without regard to other interacting zones",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "fill_zone",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ZoneFiller.zoneFillAll",
+      "label": "Fill All Zones",
+      "tooltip": "Update copper fill of all zones",
+      "hotkey": "B",
+      "altHotkey": null,
+      "hotkeyRaw": "'B'",
+      "altHotkeyRaw": null,
+      "icon": "fill_zone",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ZoneFiller.zoneFillDirty",
+      "label": "pcbnew.ZoneFiller.zoneFillDirty",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ZoneFiller.zoneUnfill",
+      "label": "Unfill Selected Zone(s)",
+      "tooltip": "Remove copper fill from selected zone(s)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "zone_unfill",
+      "flags": []
+    },
+    {
+      "name": "pcbnew.ZoneFiller.zoneUnfillAll",
+      "label": "Unfill All Zones",
+      "tooltip": "Remove copper fill from all zones",
+      "hotkey": "Ctrl+B",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'B'",
+      "altHotkeyRaw": null,
+      "icon": "zone_unfill",
+      "flags": []
+    }
+  ]
 }

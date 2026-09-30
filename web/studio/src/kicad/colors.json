@@ -1,12 +1,25 @@
 {
   "meta": {
-    "generated": false,
-    "kicadCommit": null,
-    "kicadCommitDate": null,
-    "extractedAt": null,
-    "sourceFiles": ["common/settings/builtin_color_themes.h"],
-    "note": "Not yet extracted -- see actions.json's note for why. Run `node tools/extract-colors.js` from an environment with git access to ~/ws/kicad-mirror. Until then the canvas falls back to src/kicad/placeholderColors.ts, which is hand-picked and explicitly NOT verified against KiCad's source -- do not treat it as accurate."
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": "2026-05-04T07:39:57+03:00",
+    "extractedAt": "2026-09-30T00:52:05.152Z",
+    "sourceFiles": [
+      "common/settings/builtin_color_themes.h"
+    ]
   },
   "themeName": "KiCad Default",
-  "colors": {}
+  "colors": {
+    "LAYER_SELECTION_SHADOWS": "#66b3ffcc",
+    "LAYER_3D_BACKGROUND_BOTTOM": "#666680ff",
+    "LAYER_3D_BACKGROUND_TOP": "#cccce6ff",
+    "LAYER_3D_BOARD": "#332b17e6",
+    "LAYER_3D_COPPER_TOP": "#b39c00ff",
+    "LAYER_3D_SILKSCREEN_BOTTOM": "#e6e6e6ff",
+    "LAYER_3D_SILKSCREEN_TOP": "#e6e6e6ff",
+    "LAYER_3D_SOLDERMASK_BOTTOM": "#143324d4",
+    "LAYER_3D_SOLDERMASK_TOP": "#143324d4",
+    "LAYER_3D_SOLDERPASTE": "#808080ff",
+    "LAYER_VIA_HOLES": "#806600cc"
+  }
 }
