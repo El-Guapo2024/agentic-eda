@@ -159,6 +159,10 @@ fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Optio
             let v = schematic_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/drc") => {
+            let v = drc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -426,4 +430,38 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect();
     let labels: Vec<Value> = sch.labels.iter().map(|l| json!({ "net": l.net, "at": [l.at.x, l.at.y] })).collect();
     Ok(json!({ "symbols": symbols, "wires": wires, "labels": labels }))
+}
+
+/// `GET /api/drc`: the ported KiCad design-rule checker (`eda_drc`), run
+/// fresh on the board's current design/model -- no caching, since DRC is
+/// cheap enough on these board sizes to just run on every request the same
+/// way `/api/state`'s own gate checks do.
+///
+/// Shaped like `kicad-cli pcb drc --format json`'s own report (`type`/
+/// `description`/`severity`/`items`), for the React DRC dialog this feeds
+/// and for anyone cross-checking against the real oracle by eye. One
+/// deliberate difference: positions are this API's own µm integers (every
+/// other endpoint here -- `pads`, `routing.tracks`, `outline` -- already
+/// uses board-space µm, not kicad-cli's millimetres), each as `[x, y]`
+/// rather than kicad-cli's own `{x, y}` mm object.
+fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let found = eda_drc::run(&design, &model);
+    let counts = eda_drc::counts_by_type(&found);
+    let violations: Vec<Value> = found
+        .iter()
+        .map(|v| {
+            json!({
+                "type": v.error_type,
+                "description": v.description,
+                "severity": match v.severity { eda_drc::Severity::Error => "error", eda_drc::Severity::Warning => "warning" },
+                "items": v.items.iter().map(|it| json!({
+                    "description": it.description,
+                    "pos": [it.pos.0, it.pos.1],
+                    "id": it.id,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Ok(json!({ "violations": violations, "counts": counts }))
 }
