@@ -40,7 +40,9 @@
 //! would be indistinguishable from one that worked.
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
-use eda_model::ir::{Design, FootprintInstance, LabelSide, Point, Side, Um};
+use eda_model::ir::{
+    Design, DrawingsSection, FootprintInstance, LabelSide, Millideg, Point, RoutingSection, Shape, Side, Text, TextJustify, Track, Um, Via, Zone,
+};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -171,6 +173,63 @@ pub enum Cmd {
     /// made. Backtracking is a first-class move: a constructive placer
     /// that cannot undo paints itself into a corner at part eighty.
     Rip { part: String },
+    /// Turn a placed part over to the other side of the board. Pad
+    /// positions mirror because `footprint::to_board` reads `side`; the
+    /// courtyard does not move (it is symmetric about the origin), so
+    /// nothing else about the placement needs rechecking.
+    ///
+    /// KiCad keeps a part's tracks attached when it moves (ratsnest
+    /// aside); this codebase does not model that yet, so a `Flip`, like
+    /// every other part edit, clears the board's routing (see
+    /// `Cmd::clears_routing` and the CLI's `step`). Deferred, not fixed
+    /// here -- see the report.
+    Flip { part: String },
+
+    /// Add a hand-drawn copper track. `net` and `layer` are refused if
+    /// they do not name a real net / a real copper layer; whether the
+    /// track's *path* is any good (wrong net touched, clearance violated)
+    /// is left to the routing gates, exactly as it is for the router's own
+    /// output -- see the report.
+    AddTrack { net: String, layer: String, width: Um, pts: Vec<Point> },
+    /// Remove a track by id.
+    DeleteTrack { id: String },
+    /// Widen or narrow a track in place. Its id, net, layer and path do
+    /// not change.
+    SetTrackWidth { id: String, width: Um },
+
+    /// Add a via.
+    AddVia { net: String, x: Um, y: Um, drill: Um, diameter: Um, from_layer: String, to_layer: String },
+    /// Remove a via by id.
+    DeleteVia { id: String },
+    /// Move a via to a new position. Its id, net, drill, diameter and
+    /// layer span do not change.
+    MoveVia { id: String, x: Um, y: Um },
+
+    /// Add a copper pour.
+    AddZone { net: String, layer: String, outline: Vec<Point> },
+    /// Remove a zone by id.
+    DeleteZone { id: String },
+
+    /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
+    /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
+    /// assigned here, the same deterministic way as everywhere else.
+    AddShape { shape: Shape },
+    /// Remove a shape by id.
+    DeleteShape { id: String },
+    /// Translate a shape by `(dx, dy)` -- what dragging it does. A shape
+    /// has no single position the way a via or a text does (its geometry
+    /// is two or more points), so the move is a delta, not a destination.
+    MoveShape { id: String, dx: Um, dy: Um },
+
+    /// Add free text.
+    AddText { text: Text },
+    /// Replace a text's content and styling in place. Its id and position
+    /// do not change (see `MoveText` for that).
+    EditText { id: String, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool },
+    /// Remove a text by id.
+    DeleteText { id: String },
+    /// Move a text to a new position, keeping its id and styling.
+    MoveText { id: String, x: Um, y: Um },
 }
 
 impl Cmd {
@@ -184,9 +243,45 @@ impl Cmd {
             | Cmd::MoveTo { part, .. }
             | Cmd::Nudge { part, .. }
             | Cmd::Rotate { part, .. }
-            | Cmd::Rip { part } => vec![part],
+            | Cmd::Rip { part }
+            | Cmd::Flip { part } => vec![part],
             Cmd::Swap { a, b } => vec![a, b],
+            Cmd::AddTrack { net, .. } | Cmd::AddVia { net, .. } | Cmd::AddZone { net, .. } => vec![net.as_str()],
+            Cmd::DeleteTrack { id }
+            | Cmd::SetTrackWidth { id, .. }
+            | Cmd::DeleteVia { id }
+            | Cmd::MoveVia { id, .. }
+            | Cmd::DeleteZone { id }
+            | Cmd::DeleteShape { id }
+            | Cmd::MoveShape { id, .. }
+            | Cmd::EditText { id, .. }
+            | Cmd::DeleteText { id }
+            | Cmd::MoveText { id, .. } => vec![id.as_str()],
+            Cmd::AddShape { shape } => vec![shape.layer()],
+            Cmd::AddText { text } => vec![text.content.as_str()],
         }
+    }
+
+    /// Whether this command can leave the board's routing stale. True for
+    /// anything that moves, flips or removes a part -- exactly the
+    /// commands the CLI's `step` already cleared routing for -- and false
+    /// for every copper/drawing command, which by construction only adds,
+    /// deletes or restyles the copper/graphics themselves and never moves
+    /// a part out from under them.
+    pub fn clears_routing(&self) -> bool {
+        matches!(
+            self,
+            Cmd::Place { .. }
+                | Cmd::PlaceEdge { .. }
+                | Cmd::PlaceRegion { .. }
+                | Cmd::PlaceAt { .. }
+                | Cmd::MoveTo { .. }
+                | Cmd::Nudge { .. }
+                | Cmd::Rotate { .. }
+                | Cmd::Swap { .. }
+                | Cmd::Rip { .. }
+                | Cmd::Flip { .. }
+        )
     }
 }
 
@@ -377,6 +472,29 @@ impl<'a> Board<'a> {
             Cmd::Rotate { part, quarter_turns } => self.rotate(part, *quarter_turns),
             Cmd::Swap { a, b } => self.swap(a, b),
             Cmd::Rip { part } => self.rip(part),
+            Cmd::Flip { part } => self.flip(part),
+
+            Cmd::AddTrack { net, layer, width, pts } => self.add_track(net, layer, *width, pts),
+            Cmd::DeleteTrack { id } => self.delete_track(id),
+            Cmd::SetTrackWidth { id, width } => self.set_track_width(id, *width),
+
+            Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => self.add_via(net, *x, *y, *drill, *diameter, from_layer, to_layer),
+            Cmd::DeleteVia { id } => self.delete_via(id),
+            Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
+
+            Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
+            Cmd::DeleteZone { id } => self.delete_zone(id),
+
+            Cmd::AddShape { shape } => self.add_shape(shape.clone()),
+            Cmd::DeleteShape { id } => self.delete_shape(id),
+            Cmd::MoveShape { id, dx, dy } => self.move_shape(id, *dx, *dy),
+
+            Cmd::AddText { text } => self.add_text(text.clone()),
+            Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror } => {
+                self.edit_text(id, content.clone(), *angle, layer.clone(), *size_um, *stroke_width, *justify, *mirror)
+            }
+            Cmd::DeleteText { id } => self.delete_text(id),
+            Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
         }
     }
 
@@ -751,6 +869,247 @@ impl<'a> Board<'a> {
     /// produced or two identical layouts would compare unequal.
     fn sort_footprints(&mut self) {
         self.design.placement.as_mut().unwrap().footprints.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+
+    // ---------------------------------------------------------- flip
+
+    fn flip(&mut self, part: &str) -> Result<(), Vec<CheckResult>> {
+        self.require_placed(part)?;
+        let fps = &mut self.design.placement.as_mut().unwrap().footprints;
+        let i = fps.iter().position(|f| f.id == part).expect("caller checked the part is placed");
+        fps[i].side = if fps[i].side == Side::Top { Side::Bottom } else { Side::Top };
+        Ok(())
+    }
+
+    // --------------------------------------------------------- copper
+
+    fn known_net(&self, net: &str) -> Result<(), Vec<CheckResult>> {
+        if self.model.nets.iter().any(|n| n.name == net) {
+            Ok(())
+        } else {
+            Err(vec![CheckResult::fail("ops_unknown_net", net, "no net with this name exists in the model")])
+        }
+    }
+
+    fn known_layer(&self, layer: &str) -> Result<(), Vec<CheckResult>> {
+        if self.model.board.layers.iter().any(|l| l == layer) {
+            Ok(())
+        } else {
+            Err(vec![CheckResult::fail(
+                "ops_unknown_layer",
+                layer,
+                format!("layer is not one of the board's copper layers {:?}", self.model.board.layers),
+            )])
+        }
+    }
+
+    /// The board's routing section, creating an empty one if this is the
+    /// first hand-added piece of copper. Unlike a part edit, adding copper
+    /// must never clear an existing routing section -- see
+    /// `Cmd::clears_routing`.
+    fn routing_mut(&mut self) -> &mut RoutingSection {
+        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![] })
+    }
+
+    /// The board's drawings section, creating an empty one on first use.
+    fn drawings_mut(&mut self) -> &mut DrawingsSection {
+        self.design.drawings.get_or_insert_with(DrawingsSection::default)
+    }
+
+    /// Keep tracks and vias in the same canonical order the router and
+    /// `Design::canonical_bytes` use, so a hand-edited board serialises
+    /// the same way a freshly routed one does.
+    fn sort_routing(&mut self) {
+        if let Some(rt) = self.design.routing.as_mut() {
+            rt.tracks.sort_by(|a, b| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
+            rt.vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
+        }
+    }
+
+    fn add_track(&mut self, net: &str, layer: &str, width: Um, pts: &[Point]) -> Result<(), Vec<CheckResult>> {
+        self.known_net(net)?;
+        self.known_layer(layer)?;
+        if width <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_track", net, "track width must be positive")]);
+        }
+        if pts.len() < 2 {
+            return Err(vec![CheckResult::fail("ops_bad_track", net, "a track needs at least two points")]);
+        }
+        let rt = self.routing_mut();
+        rt.tracks.push(Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width, pts: pts.to_vec() });
+        rt.assign_missing_ids();
+        self.sort_routing();
+        Ok(())
+    }
+
+    fn delete_track(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "the board has no routing yet")])?;
+        let before = rt.tracks.len();
+        rt.tracks.retain(|t| t.id != id);
+        if rt.tracks.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_track", id, "no track with this id")]);
+        }
+        Ok(())
+    }
+
+    fn set_track_width(&mut self, id: &str, width: Um) -> Result<(), Vec<CheckResult>> {
+        if width <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_track", id, "track width must be positive")]);
+        }
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "the board has no routing yet")])?;
+        let t = rt.tracks.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_track", id, "no track with this id")])?;
+        t.width = width;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_via(&mut self, net: &str, x: Um, y: Um, drill: Um, diameter: Um, from_layer: &str, to_layer: &str) -> Result<(), Vec<CheckResult>> {
+        self.known_net(net)?;
+        self.known_layer(from_layer)?;
+        self.known_layer(to_layer)?;
+        if from_layer == to_layer {
+            return Err(vec![CheckResult::fail("ops_bad_via", net, "a via needs two different layers to span")]);
+        }
+        if drill <= 0 || diameter <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_via", net, "via drill and diameter must be positive")]);
+        }
+        if drill >= diameter {
+            return Err(vec![CheckResult::fail(
+                "ops_bad_via",
+                net,
+                format!("drill {drill} um is not smaller than the {diameter} um pad, so the via has no annular ring"),
+            )]);
+        }
+        let rt = self.routing_mut();
+        rt.vias.push(Via { id: String::new(), net: net.into(), at: Point { x, y }, drill, diameter, from_layer: from_layer.into(), to_layer: to_layer.into() });
+        rt.assign_missing_ids();
+        self.sort_routing();
+        Ok(())
+    }
+
+    fn delete_via(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "the board has no routing yet")])?;
+        let before = rt.vias.len();
+        rt.vias.retain(|v| v.id != id);
+        if rt.vias.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_via", id, "no via with this id")]);
+        }
+        Ok(())
+    }
+
+    fn move_via(&mut self, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "the board has no routing yet")])?;
+        let v = rt.vias.iter_mut().find(|v| v.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "no via with this id")])?;
+        v.at = Point { x, y };
+        Ok(())
+    }
+
+    fn add_zone(&mut self, net: &str, layer: &str, outline: &[Point]) -> Result<(), Vec<CheckResult>> {
+        self.known_net(net)?;
+        self.known_layer(layer)?;
+        if outline.len() < 3 {
+            return Err(vec![CheckResult::fail("ops_bad_zone", net, "a zone outline needs at least three points")]);
+        }
+        let rt = self.routing_mut();
+        rt.zones.push(Zone { id: String::new(), net: net.into(), layer: layer.into(), outline: outline.to_vec() });
+        rt.assign_missing_ids();
+        Ok(())
+    }
+
+    fn delete_zone(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
+        let before = rt.zones.len();
+        rt.zones.retain(|z| z.id != id);
+        if rt.zones.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")]);
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------- drawings
+
+    fn add_shape(&mut self, mut shape: Shape) -> Result<(), Vec<CheckResult>> {
+        if shape.layer().is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_shape", "shape", "a shape needs a layer")]);
+        }
+        if let Shape::Polygon { pts, .. } = &shape {
+            if pts.len() < 3 {
+                return Err(vec![CheckResult::fail("ops_bad_shape", "shape", "a polygon needs at least three points")]);
+            }
+        }
+        shape.set_id(String::new()); // ids are ours to assign, never the caller's
+        let dr = self.drawings_mut();
+        dr.shapes.push(shape);
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    fn delete_shape(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
+        let before = dr.shapes.len();
+        dr.shapes.retain(|s| s.id() != id);
+        if dr.shapes.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")]);
+        }
+        Ok(())
+    }
+
+    fn move_shape(&mut self, id: &str, dx: Um, dy: Um) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
+        let s = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])?;
+        s.translate(dx, dy);
+        Ok(())
+    }
+
+    fn add_text(&mut self, mut text: Text) -> Result<(), Vec<CheckResult>> {
+        if text.layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_text", "text", "text needs a layer")]);
+        }
+        if text.size_um <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_text", "text", "text size must be positive")]);
+        }
+        text.id = String::new();
+        let dr = self.drawings_mut();
+        dr.texts.push(text);
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn edit_text(&mut self, id: &str, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool) -> Result<(), Vec<CheckResult>> {
+        if layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_text", id, "text needs a layer")]);
+        }
+        if size_um <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
+        }
+        let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "the board has no drawings yet")])?;
+        let t = dr.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
+        t.content = content;
+        t.angle = angle;
+        t.layer = layer;
+        t.size_um = size_um;
+        t.stroke_width = stroke_width;
+        t.justify = justify;
+        t.mirror = mirror;
+        Ok(())
+    }
+
+    fn delete_text(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "the board has no drawings yet")])?;
+        let before = dr.texts.len();
+        dr.texts.retain(|t| t.id != id);
+        if dr.texts.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")]);
+        }
+        Ok(())
+    }
+
+    fn move_text(&mut self, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+        let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "the board has no drawings yet")])?;
+        let t = dr.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
+        t.at = Point { x, y };
+        Ok(())
     }
 }
 
