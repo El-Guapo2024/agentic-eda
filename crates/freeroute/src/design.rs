@@ -1332,7 +1332,7 @@ mod tests {
     use eda_model::footprint::PadShape as ModelPadShape;
 
     fn pad(x: i64, y: i64, shape: ModelPadShape) -> PlacedPad {
-        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (1000, 1000), through_hole: false, shape }
+        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (1000, 1000), through_hole: false, shape, roundrect_ratio: None }
     }
 
     fn track(pts: &[(i64, i64)]) -> Track {

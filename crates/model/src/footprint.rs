@@ -14,19 +14,28 @@
 //! A part with no resolvable footprint is a hard error for every physical
 //! stage — there is deliberately no synthetic "pins on a line" stand-in.
 
-use crate::ir::{LabelSide, FootprintInstance, Point, Side, Um};
+use crate::ir::{LabelSide, FootprintInstance, Millideg, Point, Side, Um};
 use crate::{ConstraintModel, Part};
 use serde::{Deserialize, Serialize};
 
 /// A pad transformed into board space.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlacedPad {
+    /// Pad numbers are not unique: several pads may share one number (one
+    /// pin, several copper pads -- a connector's shield, a split thermal
+    /// pad). Every caller that maps a "REF.PIN" to a pad must expect more
+    /// than one match and use them all, never just the first.
     pub number: String,
     pub center: Point,
-    /// Full axis-aligned extents in board space (w, h).
+    /// Full axis-aligned extents in board space (w, h). Exact for a pad
+    /// (and footprint) rotation that is a multiple of 90 degrees,
+    /// conservative otherwise -- see `rotated_extent`.
     pub size: (Um, Um),
     pub through_hole: bool,
     pub shape: PadShape,
+    /// Corner ratio for `PadShape::RoundRect`; `None` = KiCad's own
+    /// default (0.25).
+    pub roundrect_ratio: Option<f64>,
 }
 
 impl PlacedPad {
@@ -39,7 +48,7 @@ impl PlacedPad {
     /// of the shorter side), 0 for plain rectangles.
     pub fn corner_radius(&self) -> f64 {
         match self.shape {
-            PadShape::RoundRect => 0.25 * self.size.0.min(self.size.1) as f64,
+            PadShape::RoundRect => self.roundrect_ratio.unwrap_or(0.25) * self.size.0.min(self.size.1) as f64,
             _ => 0.0,
         }
     }
@@ -105,17 +114,31 @@ pub fn to_board(fp: &FootprintInstance, local: (Um, Um)) -> Point {
     Point { x: fp.at.x + (lx * cos - ly * sin).round() as Um, y: fp.at.y + (lx * sin + ly * cos).round() as Um }
 }
 
-/// Axis-aligned board-space extents of a local (w, h) box under `fp`'s
-/// rotation. Exact for multiples of 90°, conservative otherwise.
-pub fn rotated_extent(fp: &FootprintInstance, size: (Um, Um)) -> (Um, Um) {
-    let rad = (fp.rot as f64) / 1000.0 * std::f64::consts::PI / 180.0;
+/// Axis-aligned extents of a local (w, h) box rotated by `rot_millideg`.
+/// Exact for multiples of 90°, conservative otherwise.
+fn rotated_extent_by(rot_millideg: i64, size: (Um, Um)) -> (Um, Um) {
+    let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
     let (sin, cos) = rad.sin_cos();
     let (w, h) = (size.0 as f64, size.1 as f64);
     ((w * cos.abs() + h * sin.abs()).round() as Um, (w * sin.abs() + h * cos.abs()).round() as Um)
 }
 
-/// Every pad of `fp` in board space, sorted by pad number. `None` when the
-/// part has no resolvable footprint.
+/// Axis-aligned board-space extents of a local (w, h) box under `fp`'s
+/// rotation. Exact for multiples of 90°, conservative otherwise.
+///
+/// This is the whole-footprint case (a pad with no rotation of its own);
+/// [`placed_pads`] composes a pad's own rotation with `fp.rot` before
+/// calling the shared [`rotated_extent_by`], since a reflection (mirroring
+/// a bottom-side part) does not change the *magnitude* of a rotated box's
+/// extent, only where the mirrored copy sits -- so the order composition
+/// happens in does not matter for this conservative bound.
+pub fn rotated_extent(fp: &FootprintInstance, size: (Um, Um)) -> (Um, Um) {
+    rotated_extent_by(fp.rot as i64, size)
+}
+
+/// Every pad of `fp` in board space, sorted by pad number -- **not**
+/// necessarily unique: see [`PlacedPad::number`]. `None` when the part has
+/// no resolvable footprint.
 pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance) -> Option<Vec<PlacedPad>> {
     let footprint = model.footprint_of(part)?;
     let mut pads: Vec<PlacedPad> = footprint
@@ -124,9 +147,12 @@ pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance)
         .map(|p| PlacedPad {
             number: p.number.clone(),
             center: to_board(fp, p.at),
-            size: rotated_extent(fp, p.size),
-            through_hole: p.kind == PadKind::ThroughHole,
+            // The pad's own rotation is relative to the footprint, applied
+            // before the footprint's own rotation/mirror -- see `Pad::rot`.
+            size: rotated_extent_by(fp.rot as i64 + p.rot as i64, p.size),
+            through_hole: p.kind != PadKind::Smd,
             shape: p.shape,
+            roundrect_ratio: p.roundrect_ratio,
         })
         .collect();
     pads.sort_by(|a, b| a.number.cmp(&b.number));
@@ -232,7 +258,7 @@ pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInst
     Some((fp.at.x - w / 2, fp.at.y - h / 2, fp.at.x + w / 2, fp.at.y + h / 2))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Footprint {
     pub name: String,
@@ -240,13 +266,23 @@ pub struct Footprint {
     pub pads: Vec<Pad>,
     /// Courtyard half-extents (w, h) in µm, centred on the origin. When
     /// absent the placer derives one from the pad bounding box plus margin.
+    ///
+    /// Always symmetric about the origin: a real footprint's F.CrtYd can be
+    /// off-centre (KiCad has no such restriction), and a library footprint
+    /// loaded with an asymmetric courtyard is conservatively *enclosed* by
+    /// the smallest symmetric box that contains it, not represented
+    /// exactly. Extending this to an offset rect is future work.
     #[serde(default)]
     pub courtyard: Option<(Um, Um)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pad {
+    /// Not unique within a footprint: several pads may share one number --
+    /// one logical pin, several physical copper pads (a connector's
+    /// shield, a split thermal pad). All of them go on that pin's net; see
+    /// `placed_pads`.
     pub number: String,
     /// Centre in the local frame, µm.
     pub at: (Um, Um),
@@ -256,9 +292,24 @@ pub struct Pad {
     pub shape: PadShape,
     #[serde(default)]
     pub kind: PadKind,
-    /// Drill diameter, µm. Only meaningful for `PadKind::ThroughHole`.
+    /// Round drill diameter, µm. Only meaningful for `PadKind::ThroughHole`/
+    /// `NonPlatedHole`, and mutually exclusive with `drill_slot`.
     #[serde(default)]
     pub drill: Option<Um>,
+    /// Slot (oval) drill (width, height), µm -- KiCad's `(drill oval w h)`,
+    /// e.g. a connector shield tab's mounting leg. When set, this pad's
+    /// hole is a slot and `drill` must be absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drill_slot: Option<(Um, Um)>,
+    /// This pad's own rotation, millidegrees, relative to the footprint --
+    /// applied before the footprint's own mirror/rotation. 0 for the
+    /// overwhelming majority of pads.
+    #[serde(default)]
+    pub rot: Millideg,
+    /// Corner ratio for `PadShape::RoundRect`, KiCad's `roundrect_rratio`
+    /// (fraction of the shorter side). `None` = KiCad's own default, 0.25.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roundrect_ratio: Option<f64>,
 }
 
 impl Footprint {
@@ -271,6 +322,11 @@ impl Footprint {
     /// same part shipped a different board depending on which exporter ran,
     /// and neither number came from the part's datasheet. There is no right
     /// value to guess here: the hole is a dimension of the physical lead.
+    ///
+    /// Pad numbers are deliberately *not* checked for uniqueness: KiCad
+    /// itself allows a number to repeat (a connector's shield tab is
+    /// commonly four physical pads named the same pin), and an empty
+    /// number (a mounting hole) is normal too.
     pub fn validate(&self) -> Vec<crate::CheckResult> {
         let mut out = Vec::new();
         let mut bad = |what: &str, why: String| {
@@ -279,27 +335,38 @@ impl Footprint {
         if self.pads.is_empty() {
             bad("pads", "footprint has no pads; nothing connects it to the board".into());
         }
-        let mut seen = std::collections::HashSet::new();
         for p in &self.pads {
-            if !seen.insert(&p.number) {
-                bad("pads", format!("pad {:?} is defined twice", p.number));
-            }
             if p.size.0 <= 0 || p.size.1 <= 0 {
                 bad(&format!("pad {}", p.number), format!("pad is {} x {} um", p.size.0, p.size.1));
             }
-            match (p.kind, p.drill) {
-                (PadKind::ThroughHole, None) => bad(
-                    &format!("pad {}", p.number),
-                    "a through-hole pad with no drill is not a pad; the hole is a dimension of the lead, not something an exporter can derive from the copper".into(),
-                ),
-                (PadKind::ThroughHole, Some(d)) if d <= 0 => {
-                    bad(&format!("pad {}", p.number), format!("through-hole pad drills a {d} um hole"))
+            if let Some(r) = p.roundrect_ratio {
+                if !(0.0..=0.5).contains(&r) {
+                    bad(&format!("pad {}", p.number), format!("roundrect ratio {r} is outside 0.0..=0.5 (a fraction of the shorter side)"));
                 }
-                (PadKind::ThroughHole, Some(d)) if d >= p.size.0.min(p.size.1) => bad(
-                    &format!("pad {}", p.number),
-                    format!("drill {d} um is not smaller than the {} x {} um pad, so there is no annular ring", p.size.0, p.size.1),
-                ),
-                _ => {}
+            }
+            if matches!(p.kind, PadKind::ThroughHole | PadKind::NonPlatedHole) {
+                // A non-plated hole is normal at size == drill (no annular
+                // ring by definition -- there is no copper); only a plated
+                // through-hole needs the drill strictly smaller than the pad.
+                let plated = p.kind == PadKind::ThroughHole;
+                match (p.drill, p.drill_slot) {
+                    (None, None) => bad(
+                        &format!("pad {}", p.number),
+                        "a through-hole or non-plated pad with no drill is not a hole; the hole is a dimension of the lead or fastener, not something an exporter can derive from the copper".into(),
+                    ),
+                    (Some(_), Some(_)) => bad(&format!("pad {}", p.number), "a pad cannot have both a round drill and a slot drill".into()),
+                    (Some(d), None) if d <= 0 => bad(&format!("pad {}", p.number), format!("drills a {d} um hole")),
+                    (Some(d), None) if plated && d >= p.size.0.min(p.size.1) => bad(
+                        &format!("pad {}", p.number),
+                        format!("drill {d} um is not smaller than the {} x {} um pad, so there is no annular ring", p.size.0, p.size.1),
+                    ),
+                    (None, Some((w, h))) if w <= 0 || h <= 0 => bad(&format!("pad {}", p.number), format!("slot drill is {w} x {h} um")),
+                    (None, Some((w, h))) if plated && (w >= p.size.0 || h >= p.size.1) => bad(
+                        &format!("pad {}", p.number),
+                        format!("slot drill {w} x {h} um is not smaller than the {} x {} um pad, so there is no annular ring", p.size.0, p.size.1),
+                    ),
+                    _ => {}
+                }
             }
         }
         if let Some((w, h)) = self.courtyard {
@@ -327,6 +394,11 @@ pub enum PadKind {
     #[default]
     Smd,
     ThroughHole,
+    /// A mechanical hole with no copper and no net -- KiCad's
+    /// `np_thru_hole` (a mounting hole, a connector's locating peg). Still
+    /// occupies space: it counts as a hole for clearance the same way any
+    /// other pad does, via the same generic pad-clearance checks.
+    NonPlatedHole,
 }
 
 impl Footprint {
@@ -392,12 +464,20 @@ pub fn normalize_name(name: &str) -> String {
     s
 }
 
+impl Pad {
+    /// A pad with no per-pad rotation, no slot drill, and KiCad's default
+    /// roundrect ratio -- what every built-in package uses.
+    fn simple(number: impl Into<String>, at: (Um, Um), size: (Um, Um), shape: PadShape, kind: PadKind, drill: Option<Um>) -> Self {
+        Pad { number: number.into(), at, size, shape, kind, drill, drill_slot: None, rot: 0, roundrect_ratio: None }
+    }
+}
+
 fn two_pad(name: &str, pitch: Um, pw: Um, ph: Um) -> Footprint {
     Footprint {
         name: name.into(),
         pads: vec![
-            Pad { number: "1".into(), at: (-pitch / 2, 0), size: (pw, ph), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-            Pad { number: "2".into(), at: (pitch / 2, 0), size: (pw, ph), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+            Pad::simple("1", (-pitch / 2, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
+            Pad::simple("2", (pitch / 2, 0), (pw, ph), PadShape::RoundRect, PadKind::Smd, None),
         ],
         courtyard: None,
     }
@@ -413,24 +493,10 @@ fn dual_row(name: &str, n: usize, pitch: Um, col_x: Um, pw: Um, ph: Um) -> Footp
     let y0 = -((per_col as Um - 1) * pitch) / 2;
     let mut pads = Vec::with_capacity(n);
     for i in 0..per_col {
-        pads.push(Pad {
-            number: (i + 1).to_string(),
-            at: (-col_x, y0 + i as Um * pitch),
-            size: (pw, ph),
-            shape: PadShape::RoundRect,
-            kind: PadKind::Smd,
-            drill: None,
-        });
+        pads.push(Pad::simple((i + 1).to_string(), (-col_x, y0 + i as Um * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
     }
     for i in 0..per_col {
-        pads.push(Pad {
-            number: (per_col + i + 1).to_string(),
-            at: (col_x, y0 + (per_col - 1 - i) as Um * pitch),
-            size: (pw, ph),
-            shape: PadShape::RoundRect,
-            kind: PadKind::Smd,
-            drill: None,
-        });
+        pads.push(Pad::simple((per_col + i + 1).to_string(), (col_x, y0 + (per_col - 1 - i) as Um * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
     }
     Footprint { name: name.into(), pads, courtyard: None }
 }
@@ -439,14 +505,7 @@ fn dual_row(name: &str, n: usize, pitch: Um, col_x: Um, pw: Um, ph: Um) -> Footp
 fn pin_header(name: &str, n: usize) -> Footprint {
     let x0 = -((n as Um - 1) * 2540) / 2;
     let pads = (0..n)
-        .map(|i| Pad {
-            number: (i + 1).to_string(),
-            at: (x0 + i as Um * 2540, 0),
-            size: (1700, 1700),
-            shape: if i == 0 { PadShape::Rect } else { PadShape::Circle },
-            kind: PadKind::ThroughHole,
-            drill: Some(1000),
-        })
+        .map(|i| Pad::simple((i + 1).to_string(), (x0 + i as Um * 2540, 0), (1700, 1700), if i == 0 { PadShape::Rect } else { PadShape::Circle }, PadKind::ThroughHole, Some(1000)))
         .collect();
     Footprint { name: name.into(), pads, courtyard: None }
 }
@@ -482,9 +541,9 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         "SOT-23" | "SOT-23-3" => Footprint {
             name: "SOT-23".into(),
             pads: vec![
-                Pad { number: "1".into(), at: (-938, -950), size: (1475, 600), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "2".into(), at: (-938, 950), size: (1475, 600), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "3".into(), at: (938, 0), size: (1475, 600), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad::simple("1", (-938, -950), (1475, 600), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("2", (-938, 950), (1475, 600), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("3", (938, 0), (1475, 600), PadShape::RoundRect, PadKind::Smd, None),
             ],
             courtyard: None,
         },
@@ -514,9 +573,9 @@ pub fn builtin(name: &str) -> Option<Footprint> {
         "SOT-223" => Footprint {
             name: key.clone(),
             pads: vec![
-                Pad { number: "1".into(), at: (-3150, -2300), size: (2000, 1500), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "2".into(), at: (3150, 0), size: (2000, 3800), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
-                Pad { number: "3".into(), at: (-3150, 2300), size: (2000, 1500), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None },
+                Pad::simple("1", (-3150, -2300), (2000, 1500), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("2", (3150, 0), (2000, 3800), PadShape::RoundRect, PadKind::Smd, None),
+                Pad::simple("3", (-3150, 2300), (2000, 1500), PadShape::RoundRect, PadKind::Smd, None),
             ],
             courtyard: None,
         },
@@ -592,6 +651,83 @@ mod tests {
         let hdr = builtin("PINHEADER-4").unwrap();
         let (x0, _, x1, _) = hdr.pad_bbox();
         assert_eq!(x0, -x1, "headers are centred");
+    }
+
+    fn part_with(name: &str, footprint: Footprint) -> (crate::ConstraintModel, crate::Part) {
+        let part = crate::Part {
+            reference: "U1".into(),
+            mpn: None,
+            value: None,
+            package: Some(name.into()),
+            footprint: Some(name.into()),
+            pins: (1..=footprint.pads.len()).map(|i| crate::Pin { number: i.to_string(), name: None, kind: crate::PinKind::Passive }).collect(),
+            body_um: None,
+            edge: None,
+        };
+        let model = crate::ConstraintModel { parts: vec![part.clone()], footprints: vec![footprint], ..Default::default() };
+        (model, part)
+    }
+
+    fn fp_instance(rot: crate::ir::Millideg, side: Side) -> FootprintInstance {
+        FootprintInstance { id: "U1".into(), at: Point { x: 10_000, y: 10_000 }, rot, side, label: Default::default() }
+    }
+
+    #[test]
+    fn a_pads_own_rotation_composes_with_the_footprints() {
+        // A 2000x800 pad, rotated 90 degrees by itself inside an unrotated
+        // footprint, must present the same board-space extent as an
+        // unrotated pad inside a footprint rotated 90 degrees: rotation
+        // composes additively regardless of which side contributes it.
+        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None };
+        fp.pads[0].rot = 90_000;
+        let (model, part) = part_with("T", fp.clone());
+        let via_pad_rot = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
+
+        fp.pads[0].rot = 0;
+        let (model2, part2) = part_with("T", fp);
+        let via_fp_rot = placed_pads(&model2, &part2, &fp_instance(90_000, Side::Top)).unwrap();
+
+        assert_eq!(via_pad_rot[0].size, (800, 2000));
+        assert_eq!(via_pad_rot[0].size, via_fp_rot[0].size, "a pad's own rotation and its footprint's must compose the same way");
+    }
+
+    #[test]
+    fn placed_pads_keeps_every_pad_of_a_repeated_number() {
+        // Four physical "SH" pads, one logical pin: every one of them must
+        // come back from `placed_pads`, at its own position, not collapsed
+        // to one.
+        let shield = Footprint {
+            name: "CONN".into(),
+            pads: vec![
+                Pad::simple("SH", (-4000, -3000), (1000, 2000), PadShape::Oval, PadKind::ThroughHole, None),
+                Pad::simple("SH", (-4000, 1000), (1000, 1500), PadShape::Oval, PadKind::ThroughHole, None),
+                Pad::simple("SH", (4000, -3000), (1000, 2000), PadShape::Oval, PadKind::ThroughHole, None),
+                Pad::simple("SH", (4000, 1000), (1000, 1500), PadShape::Oval, PadKind::ThroughHole, None),
+            ],
+            courtyard: None,
+        };
+        let (model, part) = part_with("CONN", shield);
+        let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
+        let shs: Vec<_> = pads.iter().filter(|p| p.number == "SH").collect();
+        assert_eq!(shs.len(), 4, "every physical pad of the shared number must survive, not just one");
+        let centers: std::collections::BTreeSet<(Um, Um)> = shs.iter().map(|p| (p.center.x, p.center.y)).collect();
+        assert_eq!(centers.len(), 4, "the four pads must keep their own distinct positions");
+    }
+
+    #[test]
+    fn roundrect_ratio_flows_into_placed_pads() {
+        let fp = Footprint {
+            name: "T".into(),
+            pads: vec![{
+                let mut p = Pad::simple("1", (0, 0), (1000, 2000), PadShape::RoundRect, PadKind::Smd, None);
+                p.roundrect_ratio = Some(0.4);
+                p
+            }],
+            courtyard: None,
+        };
+        let (model, part) = part_with("T", fp);
+        let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
+        assert_eq!(pads[0].corner_radius(), 0.4 * 1000.0);
     }
 }
 
