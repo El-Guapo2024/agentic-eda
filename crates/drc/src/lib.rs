@@ -1,12 +1,18 @@
-//! A Rust port of KiCad's PCB design-rule checker (`pcbnew/drc/`), following
-//! its actual algorithms and error-type strings rather than reinventing
-//! simplified equivalents (see `crates/gates` for this workspace's older,
-//! deliberately-simplified checks, which this crate does not replace).
+//! This workspace's single design-rule authority: a Rust port of KiCad's
+//! PCB design-rule checker (`pcbnew/drc/`), following its actual algorithms
+//! and error-type strings rather than reinventing simplified equivalents,
+//! *plus* the placement-quality checks that have no KiCad equivalent
+//! (proximity, decoupling, board use, net compactness, stub crossings,
+//! edge-connector placement, refdes clearance), folded in as providers of
+//! their own. `eda_gates::pcb` used to own those; see the task report's
+//! gates-mapping table for exactly what moved here, what stayed, and why --
+//! the short version is "no duplicate tools": once a check has a provider
+//! here, `eda_gates` calls this crate instead of re-implementing it.
 //!
 //! Entry point: [`run`], which flattens a `Design`/`ConstraintModel` into a
 //! [`board::DrcBoard`] (this crate's analogue of KiCad's `BOARD`) and runs
 //! every test provider over it in the order KiCad itself runs them for the
-//! checks this port covers.
+//! checks this port covers, then the placement-quality providers last.
 //!
 //! See the task report for the full fidelity/gap list; the short version:
 //! zone *fill* is not modelled (checks against a zone use its outline, as
@@ -23,12 +29,13 @@ pub mod providers;
 
 use eda_model::ir::Design;
 use eda_model::ConstraintModel;
-pub use item::{DrcRefItem, DrcViolation, ErrorType, Severity};
+pub use item::{DrcRefItem, DrcViolation, ErrorType, FixHint, Severity};
 
 /// Run every ported test provider and return every violation found, in the
 /// same provider order the task brief lists them (copper clearance, track
 /// width, via/annular width, hole size & hole-to-hole, edge clearance,
-/// courtyard, silk & mask, text dimensions, dangling items).
+/// courtyard, silk & mask, text dimensions, dangling items), followed by
+/// the placement-quality providers ported in from `eda_gates::pcb`.
 pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     let b = board::build(design, model);
     let rules = &model.board;
@@ -43,6 +50,7 @@ pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     out.extend(providers::silk_mask::check(&b, rules));
     out.extend(providers::text_dims::check(&b, rules));
     out.extend(providers::dangling::check(&b));
+    out.extend(providers::placement_quality::check(design, model));
     out
 }
 
@@ -63,7 +71,7 @@ mod tests {
     use eda_model::{Net, Part, Pin, PinKind};
 
     fn model_two_pads() -> ConstraintModel {
-        let part = |r: &str| Part { reference: r.into(), mpn: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None };
+        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None };
         ConstraintModel { parts: vec![part("R1"), part("R2")], nets: vec![Net { name: "A".into(), pins: vec!["R1.1".into()] }, Net { name: "B".into(), pins: vec!["R2.1".into()] }], ..Default::default() }
     }
 

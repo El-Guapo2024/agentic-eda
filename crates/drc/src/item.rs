@@ -35,6 +35,26 @@ pub enum ErrorType {
     TextThickness,
     TrackDangling,
     ViaDangling,
+
+    // ---- placement-quality checks: no KiCad equivalent, ported from
+    // eda_gates::pcb (see the task report's gates-mapping table). Settings
+    // keys are kept identical to the old `CheckResult::check` strings on
+    // purpose, so eda_gates's compatibility shim can translate a
+    // DrcViolation back into the exact check name existing callers filter
+    // on.
+    PlacementProximity,
+    PlacementDecoupling,
+    PlacementStubCrossings,
+    PlacementBoardUse,
+    PlacementNetCompactness,
+    PlacementEdgeConnector,
+    PlacementRefdesClear,
+    /// Net-class track-width conformance: did the router actually use the
+    /// width its net's class assigns, not just clear KiCad's absolute
+    /// floor (see `ErrorType::TrackWidth`). No KiCad equivalent (KiCad has
+    /// no concept of "the intent asked for this class"); kept under gates'
+    /// original `routing_track_width` name.
+    NetClassTrackWidth,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -71,6 +91,14 @@ impl ErrorType {
             ErrorType::TextThickness => "text_thickness",
             ErrorType::TrackDangling => "track_dangling",
             ErrorType::ViaDangling => "via_dangling",
+            ErrorType::PlacementProximity => "placement_proximity",
+            ErrorType::PlacementDecoupling => "placement_decoupling",
+            ErrorType::PlacementStubCrossings => "placement_stub_crossings",
+            ErrorType::PlacementBoardUse => "placement_board_use",
+            ErrorType::PlacementNetCompactness => "placement_net_compactness",
+            ErrorType::PlacementEdgeConnector => "placement_edge_connector",
+            ErrorType::PlacementRefdesClear => "placement_refdes_clear",
+            ErrorType::NetClassTrackWidth => "routing_track_width",
         }
     }
 
@@ -100,6 +128,14 @@ impl ErrorType {
             ErrorType::TextThickness => "Text thickness out of range",
             ErrorType::TrackDangling => "Track has unconnected end",
             ErrorType::ViaDangling => "Via is not connected or connected on only one layer",
+            ErrorType::PlacementProximity => "Proximity rule violation",
+            ErrorType::PlacementDecoupling => "Decoupling capacitor too far from its IC",
+            ErrorType::PlacementStubCrossings => "Crossing two-pin net stubs",
+            ErrorType::PlacementBoardUse => "Poor board utilization",
+            ErrorType::PlacementNetCompactness => "Net spans too much board for its members",
+            ErrorType::PlacementEdgeConnector => "Edge connector not on the board edge",
+            ErrorType::PlacementRefdesClear => "Reference label overlaps a neighbouring courtyard",
+            ErrorType::NetClassTrackWidth => "Track width does not match its net class",
         }
     }
 
@@ -132,6 +168,27 @@ pub struct DrcRefItem {
     pub id: String,
 }
 
+/// Optional agent-facing repair metadata: KiCad's own DRC has nothing like
+/// this (a human fixes a KiCad violation by hand), but this workspace's
+/// repair loop and AI placer read it today through `CheckResult::detail`/
+/// `hint` for the checks ported from `eda_gates::pcb`'s placement-quality
+/// gates. Carried as a first-class, uniformly-shaped field here instead of
+/// each provider inventing its own JSON, the way `eda_gates` did.
+#[derive(Debug, Clone, Serialize)]
+pub struct FixHint {
+    /// Reference designator of the part a fix would move.
+    pub mover: String,
+    /// What to move it toward: another part's reference, "board center",
+    /// "nearest edge", or similar -- whatever the specific check computed.
+    pub toward: String,
+    /// How much closer (positive) or farther (negative), µm, `mover` needs
+    /// to get to `toward` to clear this violation.
+    pub distance_to_close_um: Um,
+    /// Human-readable next step, the same voice `eda_gates`'s old
+    /// `"suggest"` detail field used.
+    pub suggested_command: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DrcViolation {
     #[serde(rename = "type")]
@@ -139,6 +196,8 @@ pub struct DrcViolation {
     pub description: String,
     pub severity: Severity,
     pub items: Vec<DrcRefItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<FixHint>,
 }
 
 impl DrcViolation {
@@ -150,7 +209,15 @@ impl DrcViolation {
     pub fn new(error_type: ErrorType, detail: impl Into<String>, items: Vec<DrcRefItem>) -> Self {
         let detail = detail.into();
         let description = if detail.is_empty() { error_type.title().to_string() } else { format!("{} ({detail})", error_type.title()) };
-        DrcViolation { error_type: error_type.key(), description, severity: error_type.default_severity(), items }
+        DrcViolation { error_type: error_type.key(), description, severity: error_type.default_severity(), items, fix: None }
+    }
+
+    /// Attach a [`FixHint`] (placement-quality providers only -- nothing in
+    /// the ported KiCad checks needs one, since there's no automated fix
+    /// for "your annular ring is too thin").
+    pub fn with_fix(mut self, fix: FixHint) -> Self {
+        self.fix = Some(fix);
+        self
     }
 }
 
