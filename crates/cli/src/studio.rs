@@ -403,7 +403,17 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let sch = match design.schematic {
         Some(s) => s,
-        None => eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection { symbols: Vec::new(), wires: Vec::new(), labels: Vec::new() }),
+        None => {
+            eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection {
+                power_symbols: vec![],
+                no_connects: vec![],
+                title_block: None,
+                sheets: vec![],
+                symbols: Vec::new(),
+                wires: Vec::new(),
+                labels: Vec::new(),
+            })
+        }
     };
     let symbols: Vec<Value> = sch
         .symbols
@@ -416,7 +426,13 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 // Millideg -> plain degrees, same convention `state()` uses for a PCB part's `rot`.
                 "rot": s.rot as f64 / 1000.0,
                 "mirrored": s.mirrored,
-                "value": part.and_then(|p| p.value.clone()),
+                // KiCad library id this instance draws from ("Device:R", or
+                // the synthetic "eda:<id>" for a part with no resolved real
+                // symbol) -- key into "lib_symbols" below for its graphics.
+                "lib_id": s.lib_id,
+                "value": if s.value.is_empty() { part.and_then(|p| p.value.clone()) } else { Some(s.value.clone()) },
+                "footprint": if s.footprint.is_empty() { None } else { Some(s.footprint.clone()) },
+                "datasheet": if s.datasheet.is_empty() { None } else { Some(s.datasheet.clone()) },
                 "mpn": part.and_then(|p| p.mpn.clone()),
                 "package": part.and_then(|p| p.package.clone()),
                 "pins": part.map(|p| p.pins.iter().map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind })).collect::<Vec<_>>()).unwrap_or_default(),
@@ -424,6 +440,155 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         })
         .collect();
     let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect();
-    let labels: Vec<Value> = sch.labels.iter().map(|l| json!({ "net": l.net, "at": [l.at.x, l.at.y] })).collect();
-    Ok(json!({ "symbols": symbols, "wires": wires, "labels": labels }))
+    let labels: Vec<Value> = sch
+        .labels
+        .iter()
+        .map(|l| {
+            let (scope, shape) = match &l.kind {
+                eda_model::ir::LabelKind::Local => ("local", None),
+                eda_model::ir::LabelKind::Global { shape } => ("global", Some(*shape)),
+                eda_model::ir::LabelKind::Hierarchical { shape } => ("hierarchical", Some(*shape)),
+            };
+            json!({ "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str) })
+        })
+        .collect();
+    let power_symbols: Vec<Value> = sch
+        .power_symbols
+        .iter()
+        .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin }))
+        .collect();
+    let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
+    let title_block = sch.title_block.as_ref().map(|t| json!({ "title": t.title, "date": t.date, "rev": t.rev, "company": t.company, "comments": t.comments }));
+
+    // Resolved library-symbol graphics for every distinct lib_id this sheet
+    // uses, so the frontend can draw KiCad's actual symbols instead of a
+    // generic box -- the same resolution `export_kicad_sch` does, exposed
+    // here as its own small step so studio.rs's other owners are
+    // unaffected by it. Real installed libraries first (already resolved
+    // into `model.symbols` at board-load time), then
+    // `eda_model::symbol::builtin`, then a per-part synthesized generic box
+    // for anything neither covers.
+    let mut lib_ids: Vec<String> = sch.symbols.iter().map(|s| if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() }).collect();
+    lib_ids.extend(sch.power_symbols.iter().map(|p| p.lib_id.clone()));
+    lib_ids.sort();
+    lib_ids.dedup();
+    let lib_symbols: Value = lib_ids
+        .iter()
+        .map(|lib_id| {
+            let resolved = if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) };
+            let value = resolved.unwrap_or_else(|| synthesize_generic_symbol(lib_id, &model));
+            (lib_id.clone(), lib_symbol_json(&value))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into();
+
+    Ok(json!({
+        "symbols": symbols,
+        "wires": wires,
+        "labels": labels,
+        "power_symbols": power_symbols,
+        "no_connects": no_connects,
+        "title_block": title_block,
+        "lib_symbols": lib_symbols,
+    }))
+}
+
+fn label_shape_str(s: eda_model::ir::LabelShape) -> &'static str {
+    use eda_model::ir::LabelShape;
+    match s {
+        LabelShape::Input => "input",
+        LabelShape::Output => "output",
+        LabelShape::Bidirectional => "bidirectional",
+        LabelShape::TriState => "tri_state",
+        LabelShape::Passive => "passive",
+    }
+}
+
+/// A synthesized generic box for a part with no real/built-in library
+/// symbol (most multi-pin ICs), described in `eda_model::LibSymbol`'s own
+/// shape so the frontend has one uniform schema for every symbol
+/// regardless of where it came from. Deliberately *not* the exact
+/// box/port layout `derive_schematic`/`export_kicad_sch` compute (that
+/// algorithm lives in `eda-engine`/`eda-layout`, crates this binary does
+/// not otherwise depend on, and this JSON view is a visual reference for
+/// the frontend, not the authoritative pin geometry -- that authority is
+/// the exported `.kicad_sch` itself): pins are simply spread evenly,
+/// N/S/E/W, in ascending pin-number order. `"eda:<id>"` names exactly one
+/// part (unlike a real lib_id, which can be shared), so this always has a
+/// `Part` to build from.
+fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::ConstraintModel) -> eda_model::LibSymbol {
+    let empty = || eda_model::LibSymbol { lib_id: lib_id.to_string(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), unit_count: 1 };
+    let reference = lib_id.strip_prefix("eda:").unwrap_or(lib_id);
+    let Some(part) = model.part(reference) else { return empty() };
+    let wireable: Vec<&eda_model::Pin> = part.pins.iter().filter(|p| p.kind != eda_model::PinKind::Nc).collect();
+    if wireable.is_empty() {
+        return empty();
+    }
+    // A grid box, sized so a pin-per-side pitch of 2.54mm never crowds:
+    // split the wireable pins into 4 sides round-robin (N,E,S,W,N,E,...).
+    let mut sides: [Vec<&eda_model::Pin>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    for (i, p) in wireable.iter().enumerate() {
+        sides[i % 4].push(p);
+    }
+    let pitch = 2.54;
+    let side_len = |n: usize| (n.max(1) + 1) as f64 * pitch;
+    let width = side_len(sides[0].len().max(sides[2].len())).max(5.08);
+    let height = side_len(sides[1].len().max(sides[3].len())).max(5.08);
+    let graphics = vec![eda_model::SymbolGraphic::Rectangle { unit: 1, start: eda_model::symbol::SPoint::new(0.0, 0.0), end: eda_model::symbol::SPoint::new(width, -height), stroke_mm: 0.254, filled: false }];
+
+    let etype = |k: eda_model::PinKind| match k {
+        eda_model::PinKind::Power | eda_model::PinKind::Ground => "power_in",
+        eda_model::PinKind::Signal => "bidirectional",
+        eda_model::PinKind::Passive => "passive",
+        eda_model::PinKind::Nc => "no_connect",
+    };
+    let mut pins = Vec::new();
+    // (side pins, fixed axis value, varying-axis span, angle, point builder)
+    let place = |i: usize, n: usize, span: f64| (i as f64 + 1.0) / (n as f64 + 1.0) * span;
+    for (i, p) in sides[0].iter().enumerate() {
+        pins.push((p, eda_model::symbol::SPoint::new(place(i, sides[0].len(), width), 0.0), 90.0)); // North
+    }
+    for (i, p) in sides[1].iter().enumerate() {
+        pins.push((p, eda_model::symbol::SPoint::new(width, -place(i, sides[1].len(), height)), 180.0)); // East
+    }
+    for (i, p) in sides[2].iter().enumerate() {
+        pins.push((p, eda_model::symbol::SPoint::new(place(i, sides[2].len(), width), -height), 270.0)); // South
+    }
+    for (i, p) in sides[3].iter().enumerate() {
+        pins.push((p, eda_model::symbol::SPoint::new(0.0, -place(i, sides[3].len(), height)), 0.0)); // West
+    }
+    let lib_pins: Vec<eda_model::LibPin> = pins
+        .into_iter()
+        .map(|(p, at, angle_deg)| eda_model::LibPin { number: p.number.clone(), name: p.name.clone().unwrap_or_default(), electrical_type: etype(p.kind).to_string(), shape: "line".to_string(), at, angle_deg, length_mm: 1.27, unit: 1 })
+        .collect();
+    eda_model::LibSymbol { lib_id: lib_id.to_string(), graphics, pins: lib_pins, power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), unit_count: 1 }
+}
+
+/// One `LibSymbol` as JSON: graphics/pins in the symbol's own local frame,
+/// millimetres, +y **up** (KiCad's own library convention, not this API's
+/// usual +y-down sheet millimetres) -- drawing it in sheet space needs the
+/// same negate-y-then-rotate-then-mirror composition
+/// `eda_kicad::lib::baked_local`'s doc comment spells out.
+fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
+    let pt = |p: eda_model::symbol::SPoint| json!([p.x, p.y]);
+    let graphics: Vec<Value> = s
+        .graphics
+        .iter()
+        .map(|g| {
+            use eda_model::SymbolGraphic::*;
+            match g {
+                Rectangle { unit, start, end, stroke_mm, filled } => json!({ "kind": "rectangle", "unit": unit, "start": pt(*start), "end": pt(*end), "stroke_mm": stroke_mm, "filled": filled }),
+                Polyline { unit, pts, stroke_mm, filled } => json!({ "kind": "polyline", "unit": unit, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "stroke_mm": stroke_mm, "filled": filled }),
+                Circle { unit, center, radius_mm, stroke_mm, filled } => json!({ "kind": "circle", "unit": unit, "center": pt(*center), "radius_mm": radius_mm, "stroke_mm": stroke_mm, "filled": filled }),
+                Arc { unit, start, mid, end, stroke_mm, filled } => json!({ "kind": "arc", "unit": unit, "start": pt(*start), "mid": pt(*mid), "end": pt(*end), "stroke_mm": stroke_mm, "filled": filled }),
+                Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "text": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
+            }
+        })
+        .collect();
+    let pins: Vec<Value> = s
+        .pins
+        .iter()
+        .map(|p| json!({ "number": p.number, "name": p.name, "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit }))
+        .collect();
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description })
 }
