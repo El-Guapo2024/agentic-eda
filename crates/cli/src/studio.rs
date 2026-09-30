@@ -509,11 +509,14 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 ///
 /// Shaped like `kicad-cli pcb drc --format json`'s own report (`type`/
 /// `description`/`severity`/`items`), for the React DRC dialog this feeds
-/// and for anyone cross-checking against the real oracle by eye. One
-/// deliberate difference: positions are this API's own µm integers (every
+/// and for anyone cross-checking against the real oracle by eye. Two
+/// deliberate differences: positions are this API's own µm integers (every
 /// other endpoint here -- `pads`, `routing.tracks`, `outline` -- already
 /// uses board-space µm, not kicad-cli's millimetres), each as `[x, y]`
-/// rather than kicad-cli's own `{x, y}` mm object.
+/// rather than kicad-cli's own `{x, y}` mm object; and an extra `fix` key
+/// (`null` when absent) carrying the placement-quality providers' agent-fix
+/// metadata (see `eda_drc::FixHint`), which kicad-cli's own JSON has no
+/// concept of.
 fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let found = eda_drc::run(&design, &model);
@@ -530,6 +533,7 @@ fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                     "pos": [it.pos.0, it.pos.1],
                     "id": it.id,
                 })).collect::<Vec<_>>(),
+                "fix": v.fix,
             })
         })
         .collect();
