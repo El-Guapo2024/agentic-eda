@@ -7,13 +7,11 @@
 // disabled with "(not ported yet)" in the menu bar and toolbars, which
 // is the correct, honest state for the rest until it's built.
 //
-// Not wired here despite being implemented: pcbnew.InteractiveMove.move
-// ("M") -- its "arm, then click/move to commit" state lives as local
-// component state in components/canvas/Canvas.tsx, not this app's
-// global store, so a menu/toolbar click can't trigger the same flow
-// yet. Its keyboard shortcut still works (Canvas.tsx handles it
-// directly); lifting that state so the registry can reach it too is a
-// follow-up, not done in this pass.
+// pcbnew.InteractiveMove.move's "arm, then click/move to commit" state
+// (state.activeTool) and common.Interactive.cancel's reset both live in
+// the global store now (state/store.tsx) -- a menu/toolbar click reaches
+// the exact same flow the M/Escape keyboard shortcuts do, and
+// Canvas.tsx no longer needs any keydown handling of its own.
 
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -64,6 +62,16 @@ export function useActionRunner() {
 
     m.set("pcbnew.Control.showLayersManager", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "appearance" }));
     m.set("common.Control.showProperties", () => {}); // properties panel is always visible in this layout; a no-op is the correct behavior, not a missing feature
+
+    m.set("pcbnew.InteractiveMove.move", () => {
+      if (state.selection.size === 0) return;
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
+    });
+    m.set("common.Interactive.cancel", () => {
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+      dispatch({ type: "CLEAR_SELECTION" }); // also resets activeTool to "select"
+    });
 
     return m;
   }, [api, dispatch, state]);

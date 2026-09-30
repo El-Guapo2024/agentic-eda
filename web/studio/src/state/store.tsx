@@ -15,6 +15,20 @@ import { STANDARD_LAYERS } from "../components/canvas/layers";
 export type RightDockTab = "appearance" | "filter" | "activity";
 export type EditorTab = "pcb" | "schematic";
 
+/**
+ * A minimal active-tool state -- just enough to give the status bar's
+ * tool-message field (eda_draw_frame.cpp field 6, DisplayToolMsg())
+ * something real to show, and a proper home for Escape/M instead of
+ * component-local state in Canvas.tsx. KiCad's own tool stack is far
+ * deeper (a whole TOOL_MANAGER with push/pop tool states); this is only
+ * as much of that idea as this app's two real modes need.
+ */
+export type ToolId = "select" | "move";
+export const TOOL_MESSAGES: Record<ToolId, string> = {
+  select: "Select item(s)",
+  move: "Move item(s)",
+};
+
 export interface ViewTransform {
   /** Screen pixels per board µm. */
   scale: number;
@@ -45,6 +59,7 @@ export interface StudioState {
   /** An unplaced part ref chosen from the panel, waiting for a canvas click to place it. */
   armed: string | null;
   movePreview: MovePreview | null;
+  activeTool: ToolId;
 
   view: ViewTransform;
   viewInitialized: boolean;
@@ -91,6 +106,7 @@ const initialState: StudioState = {
   netHighlight: null,
   armed: null,
   movePreview: null,
+  activeTool: "select",
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
   units: "mm",
@@ -127,6 +143,7 @@ type Action =
   | { type: "SET_NET_HIGHLIGHT"; net: string | null }
   | { type: "SET_ARMED"; ref: string | null }
   | { type: "SET_MOVE_PREVIEW"; preview: MovePreview | null }
+  | { type: "SET_ACTIVE_TOOL"; tool: ToolId }
   | { type: "SET_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
   | { type: "SET_UNITS"; units: LengthUnit }
@@ -181,7 +198,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, selection: next };
     }
     case "CLEAR_SELECTION":
-      return { ...state, selection: new Set(), armed: null, movePreview: null };
+      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select" };
     case "SET_HOT":
       return { ...state, hot: new Set(action.refs) };
     case "SET_NET_HIGHLIGHT":
@@ -190,6 +207,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, armed: action.ref, selection: new Set() };
     case "SET_MOVE_PREVIEW":
       return { ...state, movePreview: action.preview };
+    case "SET_ACTIVE_TOOL":
+      return { ...state, activeTool: action.tool };
     case "SET_VIEW":
       return { ...state, view: action.view };
     case "MARK_VIEW_INITIALIZED":

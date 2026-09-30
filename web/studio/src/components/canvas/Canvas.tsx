@@ -52,7 +52,7 @@ export function Canvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
-  const [moveMode, setMoveMode] = useState(false);
+  const moveMode = state.activeTool === "move";
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const longPressRef = useRef<{ timer: ReturnType<typeof setTimeout>; startScreen: [number, number] } | null>(null);
@@ -205,7 +205,7 @@ export function Canvas() {
     setContextMenu(null);
 
     if (moveMode) {
-      setMoveMode(false);
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm);
       return;
     }
@@ -366,23 +366,12 @@ export function Canvas() {
     setContextMenu({ x: e.clientX, y: e.clientY, entries });
   };
 
-  // Rotate/delete/undo/redo/net-highlight-toggle are handled by
-  // actions/useGlobalHotkeys.ts now, driven by src/kicad/actions.json's
-  // real extracted hotkeys through the same registry the menu bar and
-  // toolbars use -- this canvas-level handler only keeps the two
-  // shortcuts that need *this component's* local state (moveMode,
-  // marquee), which that registry can't reach yet (see
-  // useActionRunner.ts's header comment on pcbnew.InteractiveMove.move).
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
-      setMoveMode(false);
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-      dispatch({ type: "CLEAR_SELECTION" });
-    } else if ((e.key === "m" || e.key === "M") && state.selection.size > 0) {
-      setMoveMode(true);
-      dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
-    }
-  };
+  // Escape/M/rotate/delete/undo/redo/net-highlight-toggle are all
+  // handled globally now (actions/useGlobalHotkeys.ts), driven by
+  // src/kicad/actions.json's real hotkeys through the same registry the
+  // menu bar and toolbars use, reading/writing the store's activeTool
+  // and cursorUm -- nothing left here needs a canvas-local keydown
+  // handler.
 
   return (
     <div
@@ -393,7 +382,6 @@ export function Canvas() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onWheel={onWheel}
-      onKeyDown={onKeyDown}
       onContextMenu={onContextMenu}
       data-armed={state.armed ? "true" : "false"}
     >

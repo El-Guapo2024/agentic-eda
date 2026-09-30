@@ -1,10 +1,14 @@
-// The status bar. KiCad's shows, left to right, roughly: zoom, cursor
-// position, delta from a reference point, grid size, and units -- this
-// session could not read eda_draw_frame.cpp to confirm the exact field
-// set/order/labels, so the fields below are a best-effort match to what
-// the task text named explicitly ("Z, X/Y, dx/dy/dist, grid, units, and
-// the rest"), not a verified transcription.
-import { useStudioDispatch, useStudioState } from "../state/store";
+// The status bar. eda_draw_frame.cpp: CreateStatusBar(8) -- 8 fields,
+// confirmed by field index for several: 1 = zoom (UpdateStatusBar/
+// GetZoomLevelIndicator), 4 = grid (DisplayGridMsg), 5 = units
+// (DisplayUnitsMsg), 6 = the active tool's message (DisplayToolMsg), 7 =
+// a constraints message (DisplayConstraintsMsg, e.g. grid-snap/ortho
+// state while a tool is running). Fields 0/2/3 weren't pinned down to a
+// specific setter this session (0 is likely a general hint/help string;
+// 2/3 read as cursor position/delta by elimination and by matching the
+// task brief's stated field order) -- not a full transcription, but
+// field 6 (tool message) is real and now backed by state.activeTool.
+import { TOOL_MESSAGES, useStudioDispatch, useStudioState } from "../state/store";
 import type { LengthUnit } from "../state/units";
 import { formatLength, formatXY, toPolar } from "../state/units";
 
@@ -38,6 +42,7 @@ export function StatusBar() {
         <option value="mil">mil</option>
         <option value="in">in</option>
       </select>
+      <span className="field">{TOOL_MESSAGES[state.activeTool]}</span>
       {state.activeLayer && <span className="field">layer {state.activeLayer}</span>}
       <span className="spacer" />
       <label className="toggle" title="Refuse a move/edit that adds gate failures (not a KiCad feature)">
