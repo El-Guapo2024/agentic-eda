@@ -174,14 +174,17 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  /* KiCad's default toolbar icon is 24px (common_settings.cpp
+     appearance.toolbar_icon_size); a few px of padding around it. */
+  width: 30px;
+  height: 30px;
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
   color: var(--chrome-text);
   padding: 0;
   cursor: default;
+  flex-shrink: 0;
 }
 .toolbar-button:hover:not(:disabled) {
   background: var(--chrome-hover);
@@ -195,8 +198,8 @@
   opacity: 0.4;
 }
 .toolbar-button .icon-placeholder {
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   border-radius: 3px;
   background: currentColor;
   opacity: 0.25;

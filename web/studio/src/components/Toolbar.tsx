@@ -17,7 +17,9 @@ function ActionIcon({ iconName }: { iconName: string | null }) {
   const scheme = useColorScheme();
   const file = iconName ? iconsFile.icons[iconName] : null;
   if (!file) return <span className="icon-placeholder" aria-hidden />;
-  return <img src={`/icons/${scheme}/${file}`} width={16} height={16} alt="" draggable={false} />;
+  // KiCad's default toolbar icon size (common/settings/common_settings.cpp:
+  // "appearance.toolbar_icon_size", default 24, options 16/24/32).
+  return <img src={`/icons/${scheme}/${file}`} width={24} height={24} alt="" draggable={false} />;
 }
 
 function ToolbarItemView({ item }: { item: ToolbarItem }) {
