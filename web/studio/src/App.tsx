@@ -15,6 +15,7 @@ import { HotkeysDialog } from "./components/HotkeysDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
+import { TextDialog } from "./components/TextDialog";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
@@ -122,6 +123,7 @@ function StudioFrame() {
       <FootprintPropertiesDialog />
       <NetInspectorDialog />
       <ZoneDialog />
+      <TextDialog />
     </div>
   );
 }

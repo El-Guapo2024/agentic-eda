@@ -176,8 +176,15 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveEdit.properties",
       pcbOnly(() => {
-        if (state.selection.size === 0) return;
-        dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+        const ref = [...state.selection][0];
+        if (!ref) return;
+        // "E" opens whichever properties view actually applies to what's
+        // selected -- a real Text gets the full edit_text-backed dialog
+        // (item 6's own "E to edit"); everything else this app models
+        // (a part, or item 7's track/via/zone/shape) is read-only-ish, so
+        // it keeps the existing footprint-properties dialog's pattern.
+        if (api.textById(ref)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id: ref } });
+        else dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
       })
     );
     m.set("pcbnew.DRCTool.runDRC", () => dispatch({ type: "SET_DRC_OPEN", open: true }));
