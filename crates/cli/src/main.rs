@@ -44,6 +44,9 @@ struct Args {
     judge: bool,
     /// Also write a fabrication package (gerbers, drill, BOM, placement).
     fab: bool,
+    /// Also run the ported KiCad design-rule checker (`eda-drc`) as part of
+    /// `check`.
+    drc: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -58,6 +61,7 @@ fn parse_args() -> Result<Args, String> {
     let mut placer = String::new(); // empty = take the intent's solver.placer
     let mut judge = false;
     let mut fab = false;
+    let mut drc = false;
     while let Some(a) = it.next() {
         match a.as_str() {
             "-o" | "--out" => out = PathBuf::from(it.next().ok_or("-o needs a path")?),
@@ -68,15 +72,16 @@ fn parse_args() -> Result<Args, String> {
             "--placer" => placer = it.next().ok_or("--placer needs anneal|cypress|build|flash")?,
             "--judge" => judge = true,
             "--fab" => fab = true,
+            "--drc" => drc = true,
             s if s.starts_with('-') => return Err(format!("unknown flag {s}")),
             s => intent = Some(PathBuf::from(s)),
         }
     }
-    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl, placer, judge, fab })
+    Ok(Args { cmd, intent: intent.ok_or("missing intent path")?, out, seed, design, use_pcb_cli, pl, placer, judge, fab, drc })
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress|build|flash] [--judge] [--fab] [--pcb-cli]");
+    eprintln!("usage: eda <lint|schematic|place|route|pipeline|solve|export|check|import-pl|judge> <intent> [-o out] [--seed N] [--design design.json] [--pl x.pl] [--placer anneal|cypress|build|flash] [--judge] [--fab] [--drc] [--pcb-cli]");
     ExitCode::from(2)
 }
 
@@ -93,6 +98,25 @@ fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
         }
     }
     fails == 0
+}
+
+/// Run the ported KiCad DRC engine (`eda-drc`) and print a scorecard the
+/// same shape `print_checks` uses. A `warning`-severity item does not fail
+/// the run (matching KiCad's own default severities -- see
+/// `eda_drc::item`); an `error` does.
+fn print_drc(d: &eda_model::ir::Design, model: &ConstraintModel) -> bool {
+    let violations = eda_drc::run(d, model);
+    let errors = violations.iter().filter(|v| v.severity == eda_drc::Severity::Error).count();
+    let warnings = violations.len() - errors;
+    println!("drc: {} violations, {errors} error, {warnings} warning", violations.len());
+    for v in &violations {
+        let refs: Vec<String> = v.items.iter().map(|it| it.description.clone()).collect();
+        println!("  [{:?}] {}: {}", v.severity, v.error_type, v.description);
+        if !refs.is_empty() {
+            println!("      {}", refs.join(" <-> "));
+        }
+    }
+    errors == 0
 }
 
 fn load_model(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>> {
@@ -1049,6 +1073,9 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             }
             if d.routing.is_some() {
                 ok &= print_checks("routing gates", &check_routing(&d, &cx.model));
+            }
+            if cx.args.drc {
+                ok &= print_drc(&d, &cx.model);
             }
             return if ok { Ok(()) } else { Err(vec![CheckResult::fail("check", "design", "gate failures above")]) };
         }
