@@ -40,7 +40,8 @@
 //! so a corpus accumulates from ordinary use rather than from a
 //! separate harness that would drift from the real thing.
 
-use eda_model::{CheckResult, ConstraintModel};
+use eda_model::ir::{Point, Shape, Text, TextJustify};
+use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use eda_ops::{Board, Cmd, Dir, Region};
 use std::path::{Path, PathBuf};
 
@@ -74,11 +75,16 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
             .map_err(|e| fail("board_no_dir", &dir.display().to_string(), format!("no board here: {e}. Start one with `eda board new`.")))?,
     )
     .map_err(|e| fail("board_bad_meta", "board.json", format!("the board's metadata is unreadable: {e}")))?;
-    let design: eda_model::ir::Design = serde_json::from_str(
+    let mut design: eda_model::ir::Design = serde_json::from_str(
         &std::fs::read_to_string(design_path(dir))
             .map_err(|e| fail("board_no_design", "design.json", format!("the board has no design: {e}")))?,
     )
     .map_err(|e| fail("board_bad_design", "design.json", format!("the design is unreadable: {e}")))?;
+    // A design.json written before tracks/vias/zones/shapes/text carried
+    // ids has none; back-fill them the same deterministic way a fresh
+    // route or a hand-add would get, so every board is addressable from
+    // the moment it is opened. A no-op once every id is already set.
+    design.assign_missing_ids();
     let model: ConstraintModel = serde_yaml::from_str(
         &std::fs::read_to_string(&meta.intent)
             .map_err(|e| fail("board_no_intent", &meta.intent, format!("the intent this board came from is gone: {e}")))?,
@@ -213,10 +219,28 @@ pub(crate) fn redo(dir: &Path, by: &str) -> Result<String, Vec<CheckResult>> {
     Ok(msg)
 }
 
+/// Every gate result that bears on this board right now: the placement
+/// gates `Board::checks` already runs, plus the routing gates when there is
+/// any routing to judge. A hand-added track or via goes through
+/// `check_routing` exactly like the router's own output does -- same
+/// clearance test, same wrong-net test, same function -- so `--strict`
+/// refuses a bad one the same way it refuses a bad placement move.
+fn all_checks(board: &Board, model: &ConstraintModel) -> Vec<CheckResult> {
+    let mut out = board.checks();
+    if board.design().routing.is_some() {
+        out.extend(eda_gates::check_routing(board.design(), model));
+    }
+    out
+}
+
+fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
+    all_checks(board, model).iter().filter(|c| matches!(c.status, CheckStatus::Fail)).count()
+}
+
 fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckResult>> {
     let (meta, design, model) = load(dir)?;
     let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
-    let before = board.failures();
+    let before = all_failures(&board, &model);
     let was = board.fork();
 
     // A refused command is not a crash: it is an answer. The caller
@@ -224,15 +248,14 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckRe
     // reason -- which is exactly the signal a decision layer needs.
     board.apply(cmd)?;
 
-    let after = board.failures();
+    let after = all_failures(&board, &model);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
     if strict && after > before {
-        let new: Vec<String> = board
-            .checks()
+        let new: Vec<String> = all_checks(&board, &model)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
-            .filter(|c| !was.checks().iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, eda_model::CheckStatus::Fail)))
+            .filter(|c| !all_checks(&was, &model).iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, eda_model::CheckStatus::Fail)))
             .map(|c| format!("{} @ {}", c.check, c.location.clone().unwrap_or_default()))
             .collect();
         return Err(fail(
@@ -244,7 +267,11 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckRe
 
     let (done, placed, failures) = progress(&board, &model);
     let mut design = board.design().clone();
-    let stale = design.routing.take().is_some();
+    // Adding copper or graphics by hand must not clear the routing the way
+    // a part edit does -- a part edit can move a footprint out from under
+    // a track, a copper/drawing edit cannot invalidate anything by
+    // construction. See `Cmd::clears_routing`.
+    let stale = if cmd.clears_routing() { design.routing.take().is_some() } else { false };
     save(dir, &design)?;
     Ok(format!(
         "{}: {placed}/{} placed ({:.0}%), {failures} failure(s){}{}",
@@ -284,6 +311,7 @@ pub(crate) fn log_activity(dir: &Path, by: &str, line: &str, ok: bool, message: 
 /// The command as it would be typed after `eda board`.
 fn cmd_line(c: &Cmd) -> String {
     let mm = |v: i64| format!("{:.2}", v as f64 / 1000.0);
+    let pts = |pts: &[Point]| pts.iter().map(|p| format!("{},{}", mm(p.x), mm(p.y))).collect::<Vec<_>>().join(" ");
     match c {
         Cmd::Place { part, anchor, side } => format!("place {part} --near {anchor} --side {}", side.as_str()),
         Cmd::PlaceEdge { part, edge, fraction } => format!("place {part} --edge {} --along {fraction}", edge.as_str()),
@@ -294,6 +322,39 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Rotate { part, quarter_turns } => format!("rotate {part} --quarters {quarter_turns}"),
         Cmd::Swap { a, b } => format!("swap {a} {b}"),
         Cmd::Rip { part } => format!("rip {part}"),
+        Cmd::Flip { part } => format!("flip {part}"),
+
+        Cmd::AddTrack { net, layer, width, pts: p } => format!("track add --net {net} --layer {layer} --width {} --pts \"{}\"", mm(*width), pts(p)),
+        Cmd::DeleteTrack { id } => format!("track delete {id}"),
+        Cmd::SetTrackWidth { id, width } => format!("track width {id} --width {}", mm(*width)),
+
+        Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => {
+            format!("via add --net {net} --at {},{} --drill {} --dia {} --from {from_layer} --to-layer {to_layer}", mm(*x), mm(*y), mm(*drill), mm(*diameter))
+        }
+        Cmd::DeleteVia { id } => format!("via delete {id}"),
+        Cmd::MoveVia { id, x, y } => format!("via move {id} --to {},{}", mm(*x), mm(*y)),
+
+        Cmd::AddZone { net, layer, outline } => format!("zone add --net {net} --layer {layer} --pts \"{}\"", pts(outline)),
+        Cmd::DeleteZone { id } => format!("zone delete {id}"),
+
+        Cmd::AddShape { shape } => format!("shape add --kind {} --layer {}", shape_kind(shape), shape.layer()),
+        Cmd::DeleteShape { id } => format!("shape delete {id}"),
+        Cmd::MoveShape { id, dx, dy } => format!("shape move {id} --dx {} --dy {}", mm(*dx), mm(*dy)),
+
+        Cmd::AddText { text } => format!("text add --content {:?} --at {},{} --layer {}", text.content, mm(text.at.x), mm(text.at.y), text.layer),
+        Cmd::EditText { id, content, layer, .. } => format!("text edit {id} --content {content:?} --layer {layer}"),
+        Cmd::DeleteText { id } => format!("text delete {id}"),
+        Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
+    }
+}
+
+fn shape_kind(shape: &Shape) -> &'static str {
+    match shape {
+        Shape::Segment { .. } => "segment",
+        Shape::Arc { .. } => "arc",
+        Shape::Rect { .. } => "rect",
+        Shape::Circle { .. } => "circle",
+        Shape::Polygon { .. } => "polygon",
     }
 }
 
@@ -329,6 +390,12 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::Rotate { .. } => "rotate",
         Cmd::Swap { .. } => "swap",
         Cmd::Rip { .. } => "rip",
+        Cmd::Flip { .. } => "flip",
+        Cmd::AddTrack { .. } | Cmd::DeleteTrack { .. } | Cmd::SetTrackWidth { .. } => "track",
+        Cmd::AddVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } => "via",
+        Cmd::AddZone { .. } | Cmd::DeleteZone { .. } => "zone",
+        Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } => "shape",
+        Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
     }
 }
 
@@ -365,6 +432,74 @@ fn parse_region(s: &str) -> Result<Region, Vec<CheckResult>> {
                 "region must be one of centre, north, south, east, west, north-east, north-west, south-east, south-west",
             )
         })
+}
+
+/// A millimetre value, as every position/size flag below takes it.
+fn mm_arg(s: &str) -> Result<i64, Vec<CheckResult>> {
+    s.trim().parse::<f64>().map(|v| (v * 1000.0).round() as i64).map_err(|_| fail("board_usage", s, "expected a number, in millimetres"))
+}
+
+/// "x,y" in millimetres.
+fn parse_point_mm(s: &str) -> Result<Point, Vec<CheckResult>> {
+    let (x, y) = s.split_once(',').ok_or_else(|| fail("board_usage", s, "expected x,y in millimetres"))?;
+    Ok(Point { x: mm_arg(x)?, y: mm_arg(y)? })
+}
+
+/// A whitespace-separated run of "x,y" pairs, millimetres: `--pts "0,0 10,0 10,10"`.
+fn parse_pts_mm(s: &str) -> Result<Vec<Point>, Vec<CheckResult>> {
+    s.split_whitespace().map(parse_point_mm).collect()
+}
+
+/// Degrees, as typed; stored as millidegrees, wrapped into 0..360000.
+fn parse_angle(s: Option<&str>) -> Result<u32, Vec<CheckResult>> {
+    let deg: f64 = s.unwrap_or("0").trim().parse().map_err(|_| fail("board_usage", "--angle", "expected a number, in degrees"))?;
+    Ok(((deg * 1000.0).round() as i64).rem_euclid(360_000) as u32)
+}
+
+fn parse_shape(kind: &str, layer: String, stroke_width: i64, filled: bool, pts: Vec<Point>) -> Result<Shape, Vec<CheckResult>> {
+    Ok(match kind {
+        "segment" => {
+            let [start, end] = two_pts(&pts, "segment", "start,end")?;
+            Shape::Segment { id: String::new(), layer, stroke_width, filled, start, end }
+        }
+        "arc" => {
+            if pts.len() != 3 {
+                return Err(fail("board_usage", "--pts", "an arc needs exactly 3 points: start,mid,end"));
+            }
+            Shape::Arc { id: String::new(), layer, stroke_width, filled, start: pts[0], mid: pts[1], end: pts[2] }
+        }
+        "rect" => {
+            let [start, end] = two_pts(&pts, "rect", "start,end")?;
+            Shape::Rect { id: String::new(), layer, stroke_width, filled, start, end }
+        }
+        "circle" => {
+            let [center, end] = two_pts(&pts, "circle", "center,end")?;
+            Shape::Circle { id: String::new(), layer, stroke_width, filled, center, end }
+        }
+        "polygon" => {
+            if pts.len() < 3 {
+                return Err(fail("board_usage", "--pts", "a polygon needs at least 3 points"));
+            }
+            Shape::Polygon { id: String::new(), layer, stroke_width, filled, pts }
+        }
+        other => return Err(fail("board_usage", other, "--kind must be segment, arc, rect, circle or polygon")),
+    })
+}
+
+fn two_pts(pts: &[Point], kind: &str, names: &str) -> Result<[Point; 2], Vec<CheckResult>> {
+    if pts.len() != 2 {
+        return Err(fail("board_usage", "--pts", format!("a {kind} needs exactly 2 points: {names}")));
+    }
+    Ok([pts[0], pts[1]])
+}
+
+fn parse_justify(s: Option<&str>) -> Result<TextJustify, Vec<CheckResult>> {
+    Ok(match s.unwrap_or("center") {
+        "left" => TextJustify::Left,
+        "center" | "centre" => TextJustify::Center,
+        "right" => TextJustify::Right,
+        other => return Err(fail("board_usage", other, "--justify must be left, center or right")),
+    })
 }
 
 /// `eda board <verb> ...`
@@ -406,7 +541,7 @@ pub fn run(
         "check" => {
             let (meta, design, model) = load(&dir)?;
             let board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
-            let checks = board.checks();
+            let checks = all_checks(&board, &model);
             let failed: Vec<CheckResult> = checks.iter().filter(|c| matches!(c.status, eda_model::CheckStatus::Fail)).cloned().collect();
             for c in &failed {
                 eprintln!("FAIL {} @ {}: {}", c.check, c.location.clone().unwrap_or_default(), c.hint.clone().unwrap_or_default());
@@ -467,6 +602,120 @@ pub fn run(
             let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "rip", "usage: eda board rip <REF>"))?;
             step(&dir, Cmd::Rip { part }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
+        "flip" => {
+            let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "flip", "usage: eda board flip <REF>"))?;
+            step(&dir, Cmd::Flip { part }, strict, &actor()).map(|s| eprintln!("{s}"))
+        }
+        "track" => match rest.get(1).map(String::as_str).unwrap_or("") {
+            "add" => {
+                let net = flag(rest, "--net").ok_or_else(|| fail("board_usage", "track add", "needs --net N"))?;
+                let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "track add", "needs --layer L"))?;
+                let width = mm_arg(&flag(rest, "--width").ok_or_else(|| fail("board_usage", "track add", "needs --width, mm"))?)?;
+                let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "track add", "needs --pts \"x1,y1 x2,y2 ...\", mm"))?)?;
+                step(&dir, Cmd::AddTrack { net, layer, width, pts }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "delete" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "track delete", "usage: eda board track delete <id>"))?;
+                step(&dir, Cmd::DeleteTrack { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "width" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "track width", "usage: eda board track width <id> --width mm"))?;
+                let width = mm_arg(&flag(rest, "--width").ok_or_else(|| fail("board_usage", "track width", "needs --width, mm"))?)?;
+                step(&dir, Cmd::SetTrackWidth { id, width }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            other => Err(fail("board_usage", other, "usage: eda board track <add|delete|width> ...")),
+        },
+        "via" => match rest.get(1).map(String::as_str).unwrap_or("") {
+            "add" => {
+                let net = flag(rest, "--net").ok_or_else(|| fail("board_usage", "via add", "needs --net N"))?;
+                let Point { x, y } = parse_point_mm(&flag(rest, "--at").ok_or_else(|| fail("board_usage", "via add", "needs --at x,y, mm"))?)?;
+                let drill = mm_arg(&flag(rest, "--drill").ok_or_else(|| fail("board_usage", "via add", "needs --drill, mm"))?)?;
+                let diameter = mm_arg(&flag(rest, "--dia").ok_or_else(|| fail("board_usage", "via add", "needs --dia, mm"))?)?;
+                let from_layer = flag(rest, "--from").ok_or_else(|| fail("board_usage", "via add", "needs --from LAYER"))?;
+                let to_layer = flag(rest, "--to-layer").ok_or_else(|| fail("board_usage", "via add", "needs --to-layer LAYER"))?;
+                step(&dir, Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "delete" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "via delete", "usage: eda board via delete <id>"))?;
+                step(&dir, Cmd::DeleteVia { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "move" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "via move", "usage: eda board via move <id> --to x,y"))?;
+                let Point { x, y } = parse_point_mm(&flag(rest, "--to").ok_or_else(|| fail("board_usage", "via move", "needs --to x,y, mm"))?)?;
+                step(&dir, Cmd::MoveVia { id, x, y }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            other => Err(fail("board_usage", other, "usage: eda board via <add|delete|move> ...")),
+        },
+        "zone" => match rest.get(1).map(String::as_str).unwrap_or("") {
+            "add" => {
+                let net = flag(rest, "--net").ok_or_else(|| fail("board_usage", "zone add", "needs --net N"))?;
+                let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "zone add", "needs --layer L"))?;
+                let outline = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "zone add", "needs --pts \"x1,y1 x2,y2 ...\", mm"))?)?;
+                step(&dir, Cmd::AddZone { net, layer, outline }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "delete" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "zone delete", "usage: eda board zone delete <id>"))?;
+                step(&dir, Cmd::DeleteZone { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            other => Err(fail("board_usage", other, "usage: eda board zone <add|delete> ...")),
+        },
+        "shape" => match rest.get(1).map(String::as_str).unwrap_or("") {
+            "add" => {
+                let kind = flag(rest, "--kind").ok_or_else(|| fail("board_usage", "shape add", "needs --kind segment|arc|rect|circle|polygon"))?;
+                let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "shape add", "needs --layer L"))?;
+                let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
+                let filled = has(rest, "--filled");
+                let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "shape add", "needs --pts \"x,y ...\", mm"))?)?;
+                let shape = parse_shape(&kind, layer, stroke_width, filled, pts)?;
+                step(&dir, Cmd::AddShape { shape }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "delete" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "shape delete", "usage: eda board shape delete <id>"))?;
+                step(&dir, Cmd::DeleteShape { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "move" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "shape move", "usage: eda board shape move <id> --dx mm --dy mm"))?;
+                let dx = mm_arg(&flag(rest, "--dx").ok_or_else(|| fail("board_usage", "shape move", "needs --dx, mm"))?)?;
+                let dy = mm_arg(&flag(rest, "--dy").ok_or_else(|| fail("board_usage", "shape move", "needs --dy, mm"))?)?;
+                step(&dir, Cmd::MoveShape { id, dx, dy }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            other => Err(fail("board_usage", other, "usage: eda board shape <add|delete|move> ...")),
+        },
+        "text" => match rest.get(1).map(String::as_str).unwrap_or("") {
+            "add" => {
+                let content = flag(rest, "--content").ok_or_else(|| fail("board_usage", "text add", "needs --content \"...\""))?;
+                let at = parse_point_mm(&flag(rest, "--at").ok_or_else(|| fail("board_usage", "text add", "needs --at x,y, mm"))?)?;
+                let angle = parse_angle(flag(rest, "--angle").as_deref())?;
+                let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "text add", "needs --layer L"))?;
+                let size_um = mm_arg(&flag(rest, "--size").ok_or_else(|| fail("board_usage", "text add", "needs --size, mm"))?)?;
+                let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
+                let justify = parse_justify(flag(rest, "--justify").as_deref())?;
+                let mirror = has(rest, "--mirror");
+                let text = Text { id: String::new(), content, at, angle, layer, size_um, stroke_width, justify, mirror };
+                step(&dir, Cmd::AddText { text }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "edit" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text edit", "usage: eda board text edit <id> ..."))?;
+                let content = flag(rest, "--content").ok_or_else(|| fail("board_usage", "text edit", "needs --content \"...\""))?;
+                let angle = parse_angle(flag(rest, "--angle").as_deref())?;
+                let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "text edit", "needs --layer L"))?;
+                let size_um = mm_arg(&flag(rest, "--size").ok_or_else(|| fail("board_usage", "text edit", "needs --size, mm"))?)?;
+                let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
+                let justify = parse_justify(flag(rest, "--justify").as_deref())?;
+                let mirror = has(rest, "--mirror");
+                step(&dir, Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "delete" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text delete", "usage: eda board text delete <id>"))?;
+                step(&dir, Cmd::DeleteText { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            "move" => {
+                let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text move", "usage: eda board text move <id> --to x,y"))?;
+                let Point { x, y } = parse_point_mm(&flag(rest, "--to").ok_or_else(|| fail("board_usage", "text move", "needs --to x,y, mm"))?)?;
+                step(&dir, Cmd::MoveText { id, x, y }, strict, &actor()).map(|s| eprintln!("{s}"))
+            }
+            other => Err(fail("board_usage", other, "usage: eda board text <add|edit|delete|move> ...")),
+        },
         "route" => route_board(&dir, &actor()).map(|s| eprintln!("{s}")),
         "undo" => undo(&dir, &actor()).map(|s| eprintln!("{s}")),
         "redo" => redo(&dir, &actor()).map(|s| eprintln!("{s}")),
@@ -478,7 +727,159 @@ pub fn run(
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|swap|rip|route|undo|redo|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|shape|text|route|undo|redo|serve> [-C dir] [--strict]",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side};
+    use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("eda_cli_board_copper_test_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A two-part, two-net board, footprints placed directly (no placer
+    /// involved) at known coordinates, so a hand-added track's endpoints
+    /// can be pointed exactly at a pad. U1 and U2 each have pad 1 on GND
+    /// and pad 2 on VCC; U1's pads sit at board (4000,5000) and
+    /// (6000,5000).
+    fn setup(dir: &Path) {
+        let fp = Footprint {
+            name: "2PAD".into(),
+            pads: vec![
+                Pad { number: "1".into(), at: (-1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None },
+                Pad { number: "2".into(), at: (1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None },
+            ],
+            courtyard: Some((2000, 1000)),
+        };
+        let part = |r: &str| Part {
+            reference: r.into(),
+            mpn: None,
+            value: None,
+            package: Some("2PAD".into()),
+            footprint: Some("2PAD".into()),
+            pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
+            body_um: None,
+            edge: None,
+        };
+        let model = ConstraintModel {
+            parts: vec![part("U1"), part("U2")],
+            nets: vec![Net { name: "GND".into(), pins: vec!["U1.1".into(), "U2.1".into()] }, Net { name: "VCC".into(), pins: vec!["U1.2".into(), "U2.2".into()] }],
+            footprints: vec![fp],
+            ..Default::default()
+        };
+        let intent_path = dir.join("intent.yaml");
+        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
+
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            placement: Some(PlacementSection {
+                outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
+                footprints: vec![
+                    FootprintInstance { id: "U1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "U2".into(), at: Point { x: 15_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                ],
+                modules: vec![],
+            }),
+            routing: None,
+            drawings: None,
+        };
+        save(dir, &design).unwrap();
+        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_hand_added_track_on_the_wrong_net_fails_the_same_gate_autorouted_copper_would() {
+        let dir = scratch("wrong_net");
+        setup(&dir);
+        // U1's pad 2 (VCC) sits at board (6000, 5000); a GND track landed
+        // on it is copper of two different nets touching -- exactly what
+        // `routing_clearance` exists to catch, whoever drew the track.
+        let cmd = Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 5_000 }, Point { x: 6_000, y: 5_000 }] };
+        step(&dir, cmd, false, "test").expect("adding the track itself is legal; only the copper it creates is bad");
+
+        let (meta, design, model) = load(&dir).unwrap();
+        let board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+        let checks = all_checks(&board, &model);
+        assert!(
+            checks.iter().any(|c| c.check == "routing_clearance" && matches!(c.status, CheckStatus::Fail)),
+            "a track landing on a foreign-net pad must fail routing_clearance, same as the router's own output would: {checks:?}"
+        );
+
+        // Same command with --strict: refused up front instead of merely
+        // reported, exactly like a placement move that makes things worse.
+        let dir2 = scratch("wrong_net_strict");
+        setup(&dir2);
+        let cmd = Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 5_000 }, Point { x: 6_000, y: 5_000 }] };
+        let err = step(&dir2, cmd, true, "test").unwrap_err();
+        assert_eq!(err[0].check, "board_worse");
+    }
+
+    #[test]
+    fn adding_copper_does_not_clear_existing_routing_but_moving_a_part_does() {
+        let dir = scratch("copper_persists");
+        setup(&dir);
+        // Below both footprints (courtyards end at y=6000): touches no pad.
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 8_000 }, Point { x: 8_000, y: 8_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 8_000, y: 8_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let rt = design.routing.as_ref().expect("adding a via must not have cleared the track added just before it");
+        assert_eq!(rt.tracks.len(), 1);
+        assert_eq!(rt.vias.len(), 1);
+
+        // A part edit, in contrast, clears routing exactly as it always has.
+        step(&dir, Cmd::MoveTo { part: "U2".into(), x: 16_000, y: 5_000 }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(design.routing.is_none(), "moving a part must still clear routing -- it can move a footprint out from under a track");
+    }
+
+    /// A `design.json` written before tracks/vias carried ids -- no `id`
+    /// key on either -- must still load, and `board::load` must back-fill
+    /// ids the same deterministic way `RoutingSection::assign_missing_ids`
+    /// does anywhere else, so a board created before this change becomes
+    /// addressable the moment it is next opened. Re-saving must not move
+    /// the id a second load already saw.
+    #[test]
+    fn an_old_design_without_ids_loads_gets_ids_and_resaves_stably() {
+        let dir = scratch("old_design_ids");
+        setup(&dir);
+        let old_design_json = serde_json::json!({
+            "schema": 1,
+            "provenance": {"engine_version": "t", "intent_hash": "x", "seed": 0},
+            "placement": {
+                "outline": [{"x": 0, "y": 0}, {"x": 20000, "y": 0}, {"x": 20000, "y": 20000}, {"x": 0, "y": 20000}],
+                "footprints": [
+                    {"id": "U1", "at": {"x": 5000, "y": 5000}, "rot": 0, "side": "top"},
+                    {"id": "U2", "at": {"x": 15000, "y": 5000}, "rot": 0, "side": "top"}
+                ]
+            },
+            "routing": {
+                "tracks": [{"net": "GND", "layer": "F.Cu", "width": 200, "pts": [{"x": 4000, "y": 5000}, {"x": 14000, "y": 5000}]}],
+                "vias": [{"net": "GND", "at": {"x": 9000, "y": 5000}, "drill": 300, "diameter": 600, "from_layer": "F.Cu", "to_layer": "B.Cu"}]
+            }
+        });
+        std::fs::write(design_path(&dir), serde_json::to_string_pretty(&old_design_json).unwrap()).unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let rt = design.routing.as_ref().unwrap();
+        assert!(!rt.tracks[0].id.is_empty(), "load() must back-fill a missing track id");
+        assert!(!rt.vias[0].id.is_empty(), "load() must back-fill a missing via id");
+        let (track_id, via_id) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone());
+
+        save(&dir, &design).unwrap();
+        let (_, reloaded, _) = load(&dir).unwrap();
+        assert_eq!(reloaded.routing.as_ref().unwrap().tracks[0].id, track_id, "re-saving and reloading must not move the id");
+        assert_eq!(reloaded.routing.as_ref().unwrap().vias[0].id, via_id);
     }
 }
