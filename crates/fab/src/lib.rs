@@ -40,9 +40,14 @@ fn mm(um: i64) -> String {
     format!("{:.3}", um as f64 / 1000.0)
 }
 
-/// One line per distinct part, quantity and references grouped.
+/// One line per distinct part, references grouped: JLCPCB's own SMT BOM
+/// template (Comment, Designator, Footprint, "LCSC Part #"). No Quantity
+/// column -- JLCPCB counts designators itself -- and no bare MPN column:
+/// their assembler places from their own catalog by LCSC number, not a
+/// manufacturer's, so a part with no `lcsc` prints a blank cell rather
+/// than the MPN standing in for it (see `Part::lcsc`).
 ///
-/// Grouping is by (mpn, value, package) rather than by mpn alone: two
+/// Grouping is by (value, package, lcsc) rather than by mpn alone: two
 /// parts sharing an mpn but not a package are not interchangeable, and a
 /// BOM that merges them orders the wrong thing.
 pub fn bom_csv(model: &ConstraintModel) -> String {
@@ -50,23 +55,16 @@ pub fn bom_csv(model: &ConstraintModel) -> String {
     let mut groups: BTreeMap<(String, String, String), Vec<&str>> = BTreeMap::new();
     for p in &model.parts {
         let key = (
-            p.mpn.clone().unwrap_or_default(),
             p.value.clone().unwrap_or_default(),
             p.package.clone().or_else(|| p.footprint.clone()).unwrap_or_default(),
+            p.lcsc.clone().unwrap_or_default(),
         );
         groups.entry(key).or_default().push(&p.reference);
     }
-    let mut out = String::from("Comment,Designator,Footprint,Quantity,MPN\n");
-    for ((mpn, value, package), mut refs) in groups {
+    let mut out = String::from("Comment,Designator,Footprint,LCSC Part #\n");
+    for ((value, package, lcsc), mut refs) in groups {
         refs.sort_by(|a, b| natural_ref(a).cmp(&natural_ref(b)));
-        out.push_str(&format!(
-            "{},{},{},{},{}\n",
-            csv(&value),
-            csv(&refs.join(",")),
-            csv(&package),
-            refs.len(),
-            csv(&mpn)
-        ));
+        out.push_str(&format!("{},{},{},{}\n", csv(&value), csv(&refs.join(",")), csv(&package), csv(&lcsc)));
     }
     out
 }
@@ -145,6 +143,26 @@ pub fn check_fab(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
                         ),
                     ));
                 }
+                // Warn, not fail: JLCPCB can still be asked to source a
+                // part from its MPN by hand, so a missing LCSC number does
+                // not make the board unbuildable the way a missing MPN
+                // does. It does leave a blank "LCSC Part #" cell in the
+                // generated BOM, which is worth a flag before ordering.
+                let has_lcsc = p.lcsc.as_deref().is_some_and(|c| !c.trim().is_empty());
+                if !has_lcsc {
+                    out.push(CheckResult {
+                        check: "fab_no_lcsc".into(),
+                        status: eda_model::CheckStatus::Warn,
+                        location: Some(f.id.clone()),
+                        hint: Some(format!(
+                            "{} has no LCSC part number, so its \"LCSC Part #\" cell in the JLCPCB BOM will be blank; \
+                             look one up on jlcpcb.com before ordering{}.",
+                            f.id,
+                            p.mpn.as_deref().map(|m| format!(" (mpn {m})")).unwrap_or_default()
+                        )),
+                        detail: None,
+                    });
+                }
             }
         }
     }
@@ -172,6 +190,7 @@ mod tests {
         Part {
             reference: reference.into(),
             mpn: mpn.map(|s| s.to_string()),
+            lcsc: mpn.map(|_| "C00000".to_string()),
             value: Some("1uF, 16V".into()),
             package: Some("0402".into()),
             footprint: None,
@@ -230,6 +249,20 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_lcsc_number_warns_but_does_not_fail() {
+        // Unlike a missing mpn, a missing LCSC number does not make the
+        // board unbuildable -- JLCPCB can still be asked to source it by
+        // hand -- so it is a warning, not a blocker for the rest of the
+        // package.
+        let (design, mut model) = fixture();
+        model.parts[0].lcsc = None;
+        let checks = check_fab(&design, &model);
+        assert!(fails(&checks).is_empty(), "{checks:?}");
+        let warns: Vec<_> = checks.iter().filter(|c| c.status == CheckStatus::Warn).map(|c| c.check.as_str()).collect();
+        assert_eq!(warns, vec!["fab_no_lcsc"]);
+    }
+
+    #[test]
     fn a_part_that_was_never_placed_fails() {
         // It would be ordered and have nowhere to go.
         let (design, mut model) = fixture();
@@ -268,11 +301,31 @@ mod tests {
     }
 
     #[test]
-    fn identical_parts_are_one_line_with_a_quantity() {
+    fn identical_parts_are_one_line_with_their_lcsc_number() {
+        // JLCPCB's BOM has no Quantity column of its own -- the assembler
+        // counts designators -- so grouping still has to collapse R1/R2/R10
+        // onto one line, just without a count column to show for it.
         let (_, model) = fixture();
         let bom = bom_csv(&model);
         assert_eq!(bom.lines().count(), 2, "header + one grouped line: {bom}");
-        assert!(bom.contains(",3,RC0402"), "{bom}");
+        assert!(bom.contains(",C00000"), "{bom}");
+        assert!(!bom.contains("RC0402"), "the MPN must not stand in for the LCSC column: {bom}");
+    }
+
+    #[test]
+    fn a_part_with_no_lcsc_number_prints_a_blank_cell_not_the_mpn() {
+        let (_, mut model) = fixture();
+        model.parts[0].lcsc = None;
+        model.parts[1].lcsc = None;
+        model.parts[2].lcsc = None;
+        let bom = bom_csv(&model);
+        assert_eq!(bom, "Comment,Designator,Footprint,LCSC Part #\n\"1uF, 16V\",\"R1,R2,R10\",0402,\n");
+    }
+
+    #[test]
+    fn the_bom_header_is_jlcpcbs_own() {
+        let (_, model) = fixture();
+        assert!(bom_csv(&model).starts_with("Comment,Designator,Footprint,LCSC Part #\n"));
     }
 
     #[test]
