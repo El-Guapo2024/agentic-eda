@@ -254,7 +254,8 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
                 return None; // an unused class matches nothing; not worth carrying
             }
             let track_width = sexpr::find(nc, "trace_width").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
-            Some(NetClass { name, nets, track_width, priority: 0 })
+            let clearance = sexpr::find(nc, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+            Some(NetClass { name, nets, track_width, clearance, priority: 0 })
         })
         .collect();
     board
