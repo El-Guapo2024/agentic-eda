@@ -265,6 +265,25 @@ export interface RouteReply {
   message: string;
 }
 
+// ---------------------------------------------------------------- Ratsnest
+//
+// GET /api/ratsnest. Source of truth: crates/cli/src/studio.rs
+// `ratsnest_json()`, crates/connectivity (KiCad's own connectivity +
+// ratsnest algorithm, ported: Delaunay + Kruskal MST between connectivity
+// clusters -- ground-truthed against kicad-cli's own unconnected-item
+// list). Coordinates are integer board µm, same convention as everything
+// else in BoardState.
+
+export interface RatsnestEdge {
+  net: string;
+  from: [Um, Um];
+  to: [Um, Um];
+}
+
+export interface Ratsnest {
+  edges: RatsnestEdge[];
+}
+
 // ---------------------------------------------------------------- Schematic
 //
 // GET /api/schematic. Source of truth: crates/cli/src/studio.rs

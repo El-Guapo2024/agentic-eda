@@ -5,11 +5,10 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, Part, Pad, Shape } from "../../api/types";
+import type { BoardState, Part, Pad, RatsnestEdge, Shape } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
-import { minimumSpanningTree, padPointsByNet } from "./ratsnest";
 import { posture45 } from "./routing";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
@@ -20,6 +19,8 @@ export interface PaintOptions {
   netHighlight: string | null;
   showRatsnest: boolean;
   ratsnestCurved: boolean;
+  /** GET /api/ratsnest's edges (crates/connectivity, KiCad's own ratsnest algorithm) -- null while the first fetch hasn't landed yet, in which case nothing is drawn (no client-side fallback computation anymore). */
+  ratsnestEdges: RatsnestEdge[] | null;
   layerVisible: Record<string, boolean>;
   layerOpacity: Record<string, number>;
   activeLayer: string | null;
@@ -353,31 +354,42 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
   }
 }
 
-function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, curved: boolean) {
-  const byNet = padPointsByNet(board.parts);
-  ctx.strokeStyle = layerColor("ratsnest");
-  ctx.lineWidth = hairlineUm(view, 1);
-  for (const points of byNet.values()) {
-    for (const [a, b] of minimumSpanningTree(points)) {
-      ctx.beginPath();
-      ctx.moveTo(a[0], a[1]);
-      if (curved) {
-        // pcbnew.Control.ratsnestLineMode ("Curved Ratsnest Lines"): a
-        // gentle bow instead of a straight line, bulging perpendicular
-        // to the line by a fraction of its length -- KiCad's own curve
-        // is a proper spline; this is a single quadratic arc, visually
-        // the same "it's a curve, not a wire" cue at this zoom level.
-        const mx = (a[0] + b[0]) / 2,
-          my = (a[1] + b[1]) / 2;
-        const dx = b[0] - a[0],
-          dy = b[1] - a[1];
-        const bulge = 0.06;
-        ctx.quadraticCurveTo(mx - dy * bulge, my + dx * bulge, b[0], b[1]);
-      } else {
-        ctx.lineTo(b[0], b[1]);
-      }
-      ctx.stroke();
+/**
+ * KiCad's own ratsnest (GET /api/ratsnest, crates/connectivity -- real
+ * connectivity clustering + Delaunay/Kruskal MST, not this app's earlier
+ * client-side per-net MST-over-pad-centers approximation). A net that's
+ * fully routed simply has no edges here (the backend only ever reports
+ * airwires between still-unconnected clusters), so unlike the old
+ * approximation this needs no separate "hide once anything is routed"
+ * guard -- each net's ratsnest disappears on its own the moment that net
+ * is finished, exactly like real KiCad's.
+ */
+function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: RatsnestEdge[], curved: boolean, netHighlight: string | null) {
+  const hair = hairlineUm(view, 1);
+  for (const e of edges) {
+    const on = netHighlight === e.net;
+    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("ratsnest");
+    ctx.lineWidth = on ? hairlineUm(view, 2.5) : hair;
+    const [ax, ay] = e.from;
+    const [bx, by] = e.to;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    if (curved) {
+      // pcbnew.Control.ratsnestLineMode ("Curved Ratsnest Lines"): a
+      // gentle bow instead of a straight line, bulging perpendicular
+      // to the line by a fraction of its length -- KiCad's own curve
+      // is a proper spline; this is a single quadratic arc, visually
+      // the same "it's a curve, not a wire" cue at this zoom level.
+      const mx = (ax + bx) / 2,
+        my = (ay + by) / 2;
+      const dx = bx - ax,
+        dy = by - ay;
+      const bulge = 0.06;
+      ctx.quadraticCurveTo(mx - dy * bulge, my + dx * bulge, bx, by);
+    } else {
+      ctx.lineTo(bx, by);
     }
+    ctx.stroke();
   }
 }
 
@@ -485,7 +497,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawZones(ctx, view, board, opts, "f_cu");
       drawTracksAndVias(ctx, view, board, opts, "f_cu");
     },
-    ratsnest: () => opts.showRatsnest && !board.routing && drawRatsnest(ctx, view, board, opts.ratsnestCurved),
+    ratsnest: () => opts.showRatsnest && opts.ratsnestEdges && drawRatsnest(ctx, view, opts.ratsnestEdges, opts.ratsnestCurved, opts.netHighlight),
   };
   for (const key of drawOrder()) byLayer[key]?.();
   // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.

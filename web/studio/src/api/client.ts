@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardState, Cmd, CmdReply, RouteReply, Schematic } from "./types";
+import type { BoardState, Cmd, CmdReply, Ratsnest, RouteReply, Schematic } from "./types";
 
 export class ApiError extends Error {}
 
@@ -35,6 +35,19 @@ export async function fetchSchematic(): Promise<Schematic> {
   const s = await getJson<Schematic & { error?: string }>("/api/schematic");
   if (s.error) throw new ApiError(s.error);
   return s;
+}
+
+/**
+ * KiCad's own ratsnest (crates/connectivity: Delaunay + Kruskal MST
+ * between connectivity clusters, ground-truthed against kicad-cli's own
+ * unconnected-item list) -- replaces this app's earlier client-side
+ * per-net MST-over-pad-centers approximation (components/canvas/
+ * ratsnest.ts, removed) now that the backend computes the real thing.
+ */
+export async function fetchRatsnest(): Promise<Ratsnest> {
+  const r = await getJson<Ratsnest & { error?: string }>("/api/ratsnest");
+  if (r.error) throw new ApiError(r.error);
+  return r;
 }
 
 /**
