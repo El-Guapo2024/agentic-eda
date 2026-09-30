@@ -8,6 +8,7 @@
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { formatXY } from "../../state/units";
 import type { Rule } from "../../api/types";
+import { HierarchyPanel } from "./HierarchyPanel";
 
 /**
  * KiCad picks up an unplaced footprint through the Add Footprint tool's
@@ -113,7 +114,13 @@ export function PropertiesPanel() {
   const board = state.board;
   const refs = [...state.selection];
 
-  if (state.tab === "schematic") return <SchematicProperties />;
+  if (state.tab === "schematic")
+    return (
+      <>
+        <SchematicProperties />
+        <HierarchyPanel />
+      </>
+    );
 
   if (!board || refs.length === 0) {
     return (

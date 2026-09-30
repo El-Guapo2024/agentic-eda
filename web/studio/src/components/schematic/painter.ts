@@ -26,6 +26,7 @@ export interface SchematicPaintOptions {
 const REF_FONT = 1.6;
 const VALUE_FONT = 1.4;
 const PIN_FONT = 1.1;
+const FIELD_FONT = 1.0; // footprint field: small, per the task's "footprint field in purple and small"
 
 /** Net names that read as power/ground rails -- crates/engine/src/geometry.rs `is_power_or_ground_net_name`, ported. */
 function isPowerOrGroundNetName(name: string): boolean {
@@ -122,25 +123,65 @@ function drawSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Resol
     ctx.lineTo(sx, sy);
     ctx.stroke();
     if (pin) {
-      const label = pin.name ?? pin.number;
-      ctx.save();
-      ctx.font = `${PIN_FONT * 1000}px sans-serif`;
-      ctx.fillStyle = layerColor("LAYER_PINNAM");
       const pad = 200;
-      if (port.side === "left") {
-        ctx.textAlign = "start";
-        ctx.textBaseline = "middle";
-        ctx.fillText(label, lx + pad, ly);
-      } else if (port.side === "right") {
-        ctx.textAlign = "end";
-        ctx.textBaseline = "middle";
-        ctx.fillText(label, lx - pad, ly);
-      } else {
-        ctx.textAlign = "center";
-        ctx.textBaseline = port.side === "top" ? "bottom" : "top";
-        ctx.fillText(label, lx, ly + (port.side === "top" ? -pad : pad));
+      // Pin name: just inside the body edge (KiCad shows this and the
+      // number simultaneously by default -- there's no "hide names"
+      // toggle in this app's model -- each in its own real KiCad color,
+      // LAYER_PINNAM/LAYER_PINNUM, not one falling back to the other).
+      if (pin.name) {
+        ctx.save();
+        ctx.font = `${PIN_FONT * 1000}px sans-serif`;
+        ctx.fillStyle = layerColor("LAYER_PINNAM");
+        if (port.side === "left") {
+          ctx.textAlign = "start";
+          ctx.textBaseline = "middle";
+          ctx.fillText(pin.name, lx + pad, ly);
+        } else if (port.side === "right") {
+          ctx.textAlign = "end";
+          ctx.textBaseline = "middle";
+          ctx.fillText(pin.name, lx - pad, ly);
+        } else {
+          ctx.textAlign = "center";
+          ctx.textBaseline = port.side === "top" ? "bottom" : "top";
+          ctx.fillText(pin.name, lx, ly + (port.side === "top" ? -pad : pad));
+        }
+        ctx.restore();
       }
-      ctx.restore();
+      // Pin number: along the stub itself, at its midpoint, offset to
+      // sit just above the line (below it for a top-side stub, which
+      // points the opposite way) rather than on top of it.
+      if (pin.number) {
+        ctx.save();
+        ctx.font = `${PIN_FONT * 0.85 * 1000}px sans-serif`;
+        ctx.fillStyle = layerColor("LAYER_PINNUM");
+        const mx = (lx + sx) / 2;
+        const my = (ly + sy) / 2;
+        if (port.side === "left" || port.side === "right") {
+          ctx.textAlign = "center";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(pin.number, mx, my - pad * 0.5);
+        } else {
+          ctx.textAlign = port.side === "top" ? "end" : "start";
+          ctx.textBaseline = "middle";
+          ctx.fillText(pin.number, mx + (port.side === "top" ? -pad * 0.5 : pad * 0.5), my);
+        }
+        ctx.restore();
+      }
+      // No-connect: a small blue X centered on the stub's free end --
+      // LAYER_NOCONNECT, KiCad's real color for this marker.
+      if (pin.kind === "nc") {
+        ctx.save();
+        ctx.strokeStyle = layerColor("LAYER_NOCONNECT");
+        ctx.lineWidth = Math.max(150, hair);
+        const s = 300;
+        ctx.beginPath();
+        ctx.moveTo(sx - s, sy - s);
+        ctx.lineTo(sx + s, sy + s);
+        ctx.moveTo(sx - s, sy + s);
+        ctx.lineTo(sx + s, sy - s);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
   });
 
@@ -155,6 +196,14 @@ function drawSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Resol
     ctx.fillStyle = layerColor("LAYER_VALUEPART");
     ctx.font = `${VALUE_FONT * 1000}px sans-serif`;
     ctx.fillText(symbol.value ?? symbol.mpn ?? "", 0, height + 1800);
+  }
+  // Footprint field: small, LAYER_FIELDS purple -- a real field KiCad
+  // draws alongside ref/value (this app has no separate "hide field"
+  // flag per field, so it always shows when the symbol has a package).
+  if (symbol.package) {
+    ctx.fillStyle = layerColor("LAYER_FIELDS");
+    ctx.font = `${FIELD_FONT * 1000}px sans-serif`;
+    ctx.fillText(symbol.package, 0, height + 1800 + FIELD_FONT * 1150);
   }
   ctx.restore();
 
