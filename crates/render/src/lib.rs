@@ -103,6 +103,7 @@ pub fn render_schematic(design: &Design, model: &ConstraintModel) -> Result<Stri
     let mut extra_bounds: Vec<geometry::TextBox> = label_obstacles.clone();
     extra_bounds.extend(symbol_boxes.iter().copied());
     extra_bounds.extend(label_extents);
+    extra_bounds.extend(sch.power_symbols.iter().map(power_symbol_extent));
 
     let (min_x, min_y, max_x, max_y) = compute_bounds(&boxes, sch, &extra_bounds);
     let vb_x = min_x - MARGIN_MM;
@@ -134,6 +135,9 @@ pub fn render_schematic(design: &Design, model: &ConstraintModel) -> Result<Stri
     render_junctions(sch, &mut svg);
     for l in &sch.labels {
         render_net_label(l, &mut svg, &mut label_obstacles, &symbol_boxes, &sch.wires);
+    }
+    for p in &sch.power_symbols {
+        render_power_symbol(p, &mut svg);
     }
 
     svg.push_str("</svg>\n");
@@ -761,11 +765,97 @@ fn render_junctions(sch: &SchematicSection, svg: &mut String) {
     }
 }
 
+/// A `PowerSymbol` (a real `power:GND`/`power:<RAIL>`/`power:PWR_FLAG`
+/// instance the engine drops at a pin instead of wiring or labeling it —
+/// see `eda_engine`'s own doc on why power/ground nets get this treatment)
+/// as a small fixed glyph at its own point: the same ground-bars/
+/// power-arrow ink `render_net_label` draws for a *label*, reusing
+/// [`geometry::ground_glyph_points`]/[`geometry::power_glyph_points`]
+/// directly rather than through `geometry::resolve_net_label`'s
+/// obstacle-jogging search — a placed symbol instance doesn't jog to dodge
+/// other ink the way a label does, it sits exactly where the engine (or an
+/// imported file) put it, like any other symbol. `"power:GND"` is the
+/// engine's own exact spelling for a ground symbol (`power_symbol_lib_id`);
+/// everything else (a named rail, or `power:PWR_FLAG`) draws as the
+/// upward power arrow.
+fn render_power_symbol(ps: &eda_model::ir::PowerSymbol, svg: &mut String) {
+    let x = ps.at.x as f64 / 1000.0;
+    let y = ps.at.y as f64 / 1000.0;
+    if ps.lib_id == "power:GND" {
+        let drop = y + 0.5;
+        let [(bx1, _), (bx2, _), (mx1, d2), (mx2, _), (tx1, d3), (tx2, _)] = geometry::ground_glyph_points(x, drop);
+        let ty = d3 + 1.1;
+        let _ = writeln!(
+            svg,
+            r#"<g class="power-symbol gnd-label"><line class="gnd-sym" x1="{x}" y1="{y}" x2="{x}" y2="{drop}"/>
+<line class="gnd-sym" x1="{bx1}" y1="{drop}" x2="{bx2}" y2="{drop}"/>
+<line class="gnd-sym" x1="{mx1}" y1="{d2}" x2="{mx2}" y2="{d2}"/>
+<line class="gnd-sym" x1="{tx1}" y1="{d3}" x2="{tx2}" y2="{d3}"/>
+<text x="{x}" y="{ty}">{net}</text></g>"#,
+            x = fmt_f(x),
+            y = fmt_f(y),
+            drop = fmt_f(drop),
+            bx1 = fmt_f(bx1),
+            bx2 = fmt_f(bx2),
+            d2 = fmt_f(d2),
+            mx1 = fmt_f(mx1),
+            mx2 = fmt_f(mx2),
+            d3 = fmt_f(d3),
+            tx1 = fmt_f(tx1),
+            tx2 = fmt_f(tx2),
+            ty = fmt_f(ty),
+            net = xml_escape(&ps.net),
+        );
+    } else {
+        let stem_top = y - 0.5;
+        let [(ax1, ay), (ax2, _)] = geometry::power_glyph_points(x, stem_top);
+        let ty = stem_top - 0.9;
+        let _ = writeln!(
+            svg,
+            r#"<g class="power-symbol pwr-label"><line class="pwr-sym" x1="{x}" y1="{y}" x2="{x}" y2="{stem_top}"/>
+<path class="pwr-sym" d="M {ax1} {ay} L {x} {stem_top} L {ax2} {ay}"/>
+<text x="{x}" y="{ty}">{net}</text></g>"#,
+            x = fmt_f(x),
+            y = fmt_f(y),
+            stem_top = fmt_f(stem_top),
+            ax1 = fmt_f(ax1),
+            ax2 = fmt_f(ax2),
+            ay = fmt_f(ay),
+            ty = fmt_f(ty),
+            net = xml_escape(&ps.net),
+        );
+    }
+}
+
+/// Full ink extent (mm) of [`render_power_symbol`]'s own fixed glyph, the
+/// same role [`geometry::net_label_extent`] plays for a label — folded into
+/// `render_schematic`'s own bounds union so a power symbol's bars/arrow (and
+/// its net-name text) can never poke past the sheet's `viewBox` and get
+/// clipped, the exact defect that union exists to prevent for labels.
+/// Deliberately approximate (a fixed half-width margin around the text
+/// rather than measuring it): this ink is small and always sits right next
+/// to its own symbol's already-counted box, so a generous fixed pad costs
+/// nothing and keeps this in lock-step with the fixed (non-jogging) glyph
+/// `render_power_symbol` actually draws.
+fn power_symbol_extent(ps: &eda_model::ir::PowerSymbol) -> geometry::TextBox {
+    let x = ps.at.x as f64 / 1000.0;
+    let y = ps.at.y as f64 / 1000.0;
+    let half_w = (ps.net.len() as f64 * 0.7 / 2.0).max(0.9);
+    if ps.lib_id == "power:GND" {
+        geometry::TextBox { x0: x - half_w, y0: y, x1: x + half_w, y1: y + 2.1 }
+    } else {
+        geometry::TextBox { x0: x - half_w, y0: y - 2.1, x1: x + half_w, y1: y }
+    }
+}
+
 /// What counts as "connected", for the NC dead-end marker: a set of
 /// `"REF.PIN"` refs carried by some wire, plus a set of net-label anchor
 /// points (`NetLabel::at`, which the engine places at the port's on-box
 /// attachment point — *not* the stub tip, so this must be compared against
-/// the same on-box point, not the stub tip, when matching a label to a pin).
+/// the same on-box point, not the stub tip, when matching a label to a pin)
+/// or a power symbol's own point (its pin sits exactly there, the same
+/// coincident-point convention `eda_kicad`'s writer and `check_erc` both
+/// use — see `eda_engine::derive_schematic`'s power-symbol placement).
 struct Connected {
     wired_pins: std::collections::HashSet<String>,
     label_points: std::collections::BTreeSet<Point>,
@@ -781,6 +871,9 @@ fn connected_pins(sch: &SchematicSection) -> Connected {
     let mut label_points = std::collections::BTreeSet::new();
     for l in &sch.labels {
         label_points.insert(l.at);
+    }
+    for p in &sch.power_symbols {
+        label_points.insert(p.at);
     }
     Connected { wired_pins, label_points }
 }
@@ -926,16 +1019,18 @@ mod tests {
     fn wire_polyline_matches_design_points() {
         // Only GND is a true rail name on this fixture (see
         // `geometry::is_power_or_ground_net_name`); VIN/VOUT stay ordinary
-        // wires. GND draws no wire — every pin gets a ground-glyph label
-        // anchored exactly at its own port point. Check that instead.
+        // wires. GND draws no wire and no label — every pin gets its own
+        // real `power:GND` symbol instead (see `eda_engine::derive_schematic`).
+        // Check that each one's glyph is anchored exactly at its own point.
         let model = ldo_model();
         let design = ldo_design();
         let svg = render_schematic(&design, &model).unwrap();
         let sch = design.schematic.unwrap();
         assert!(sch.wires.iter().all(|w| w.net != "GND"), "GND is power-style: no wire expected");
-        let gnd_label = sch.labels.iter().find(|l| l.net == "GND").unwrap();
-        let expected_anchor = format!(r#"x1="{}" y1="{}""#, fmt_mm(gnd_label.at.x), fmt_mm(gnd_label.at.y));
-        assert!(svg.contains(&expected_anchor), "expected label anchor {expected_anchor} in SVG:\n{svg}");
+        assert!(sch.labels.iter().all(|l| l.net != "GND"), "GND is power-style: no label expected");
+        let gnd_power = sch.power_symbols.iter().find(|p| p.net == "GND" && p.lib_id == "power:GND").unwrap();
+        let expected_anchor = format!(r#"x1="{}" y1="{}""#, fmt_mm(gnd_power.at.x), fmt_mm(gnd_power.at.y));
+        assert!(svg.contains(&expected_anchor), "expected power symbol anchor {expected_anchor} in SVG:\n{svg}");
     }
 
     #[test]
@@ -973,12 +1068,22 @@ mod tests {
                 assert!(y >= vy && y <= vy + vh);
             }
         }
+        // Every power symbol's own glyph ink (not just its anchor point —
+        // the ground bars/power arrow reach beyond it) must fit too, or
+        // `power_symbol_extent` isn't actually keeping the promise
+        // `render_power_symbol`'s own doc comment makes.
+        for ps in &sch.power_symbols {
+            let b = power_symbol_extent(ps);
+            assert!(b.x0 >= vx && b.x1 <= vx + vw, "power symbol {} x extent out of viewBox", ps.id);
+            assert!(b.y0 >= vy && b.y1 <= vy + vh, "power symbol {} y extent out of viewBox", ps.id);
+        }
     }
 
     #[test]
     fn net_labels_rendered() {
         // Force a dense GND net (>4 pins, all ground) so the engine emits
-        // labels instead of wires.
+        // a real `power:GND` symbol at each pin (not a label or a wire —
+        // see `eda_engine::derive_schematic`'s power/ground handling).
         let mut parts = vec![];
         let mut net_pins = vec![];
         for i in 0..5 {
@@ -992,10 +1097,12 @@ mod tests {
             ..Default::default()
         };
         let design = derive_schematic(&model, &EngineOptions::new(1, "h")).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert!(sch.labels.iter().all(|l| l.net != "GND"), "GND is power-style: no label expected");
         let svg = render_schematic(&design, &model).unwrap();
-        // Dense GND net -> ground-glyph labels, not the plain flag.
-        assert!(svg.contains("class=\"label gnd-label\""));
-        assert!(svg.matches("class=\"label gnd-label\"").count() >= 5);
+        // Dense GND net -> a ground-glyph power symbol per pin, not a label.
+        assert!(svg.contains("class=\"power-symbol gnd-label\""));
+        assert!(svg.matches("class=\"power-symbol gnd-label\"").count() >= 5);
     }
 
     #[test]
