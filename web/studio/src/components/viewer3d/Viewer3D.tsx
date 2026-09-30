@@ -21,12 +21,15 @@
 import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { useStudioState } from "../../state/store";
 import { buildBoardGroup, buildBackgroundTexture, disposeObject3D, presetCameraPose, boardOutlineBounds, type ViewPreset, type OutlineBounds } from "./scene";
 
 const CAMERA_FOV_DEG = 50;
 /** "Orthographic" toggle: this app has no separate OrthographicCamera wired up (Viewer3DApi/applyPreset math is all perspective-FOV-based) -- narrowing the FOV this far while presetCameraPose pulls the camera back to compensate is a well-known way to approximate an orthographic look with a plain PerspectiveCamera, not a real projection swap. */
 const ORTHO_FOV_DEG = 4;
+/** glTF's own unit is meters; every other builder in this file (scene.ts) works in millimetres, so the loaded GLB scene is scaled up to match rather than rescaling everything else down to meters. */
+const GLB_METERS_TO_MM = 1000;
 
 interface ThreeContext {
   renderer: THREE.WebGLRenderer;
@@ -34,6 +37,8 @@ interface ThreeContext {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   boardGroup: THREE.Group;
+  /** GET /api/board.glb's real KiCad-rendered board, loaded into its own group so it can be shown/hidden independently of the procedural boardGroup rather than swapped in and out of the scene (cheaper, and keeps whichever one is hidden ready to reappear instantly). Empty until a GLB successfully loads. */
+  glbGroup: THREE.Group;
 }
 
 /** The imperative handle Viewer3D hands up via `onReady`, for Viewer3DToolbar (or anything else) to drive the camera without owning it. */
@@ -50,6 +55,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const threeRef = useRef<ThreeContext | null>(null);
   const lastFitBoundsRef = useRef<OutlineBounds | null>(null);
   const lastPresetRef = useRef<ViewPreset>("iso");
+  /** Whether glbGroup currently holds a successfully loaded board (as opposed to being empty -- fetch not finished yet, or failed). Read by the visibility-sync effect and by applyPreset (to frame whichever group is actually showing) without needing it in React state. */
+  const glbLoadedRef = useRef(false);
   // `onReady` kept in a ref and read only inside effects, not listed as
   // an effect dependency, so an unstable inline callback from a caller
   // can never tear down and recreate the whole WebGL context on every
@@ -82,7 +89,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     if (!three) return;
     lastPresetRef.current = preset;
     three.camera.fov = viewer3dRef.current.orthographic ? ORTHO_FOV_DEG : CAMERA_FOV_DEG;
-    const box = new THREE.Box3().setFromObject(three.boardGroup);
+    // Frame whichever group is actually visible -- an empty/hidden
+    // boardGroup while the GLB is showing would fit an empty box (no-op)
+    // instead of the board actually on screen.
+    const activeGroup = viewer3dRef.current.kicadModels && glbLoadedRef.current ? three.glbGroup : three.boardGroup;
+    const box = new THREE.Box3().setFromObject(activeGroup);
     const { position, target } = presetCameraPose(box, preset, three.camera.fov, three.camera.aspect);
     three.camera.position.copy(position);
     three.controls.target.copy(target);
@@ -130,8 +141,12 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
 
     const boardGroup = new THREE.Group();
     scene.add(boardGroup);
+    const glbGroup = new THREE.Group();
+    glbGroup.name = "viewer3d-glb";
+    glbGroup.visible = false;
+    scene.add(glbGroup);
 
-    threeRef.current = { renderer, scene, camera, controls, boardGroup };
+    threeRef.current = { renderer, scene, camera, controls, boardGroup, glbGroup };
     onReadyRef.current?.({ setView: applyPreset });
 
     const ro = new ResizeObserver((entries) => {
@@ -158,6 +173,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       controls.dispose();
       disposeObject3D(boardGroup);
       scene.remove(boardGroup);
+      disposeObject3D(glbGroup);
+      scene.remove(glbGroup);
       (scene.background as THREE.Texture | null)?.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) container.removeChild(renderer.domElement);
@@ -212,7 +229,9 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
-    three.boardGroup.rotation.x = state.viewer3d.flipped ? Math.PI : 0;
+    const rot = state.viewer3d.flipped ? Math.PI : 0;
+    three.boardGroup.rotation.x = rot;
+    three.glbGroup.rotation.x = rot;
     applyPreset(lastPresetRef.current);
     // Deliberately only on the flipped flag -- see the orthographic
     // effect below for why lastPresetRef/applyPreset aren't dependencies.
@@ -226,6 +245,70 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     // a ref, and applyPreset already reads viewer3dRef fresh).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.viewer3d.orthographic]);
+
+  // Exactly one of boardGroup/glbGroup is visible at a time: the GLB
+  // when the toggle wants it and one has actually loaded, the procedural
+  // scene otherwise (toggle off, or still loading/failed -- see the
+  // fetch effect below). A ref (not just inline logic where it's used)
+  // because both the GLB-load effect and the toggle-change effect below
+  // need to re-run the exact same decision.
+  const syncActiveGroupRef = useRef<() => void>(() => {});
+  syncActiveGroupRef.current = () => {
+    const three = threeRef.current;
+    if (!three) return;
+    const showGlb = viewer3dRef.current.kicadModels && glbLoadedRef.current;
+    three.glbGroup.visible = showGlb;
+    three.boardGroup.visible = !showGlb;
+  };
+
+  // GET /api/board.glb -- KiCad's own render of the current board (real
+  // 3D models, kicad-cli's own colors/materials), fetched in the
+  // background whenever the board actually changes (state.version, the
+  // same change signal the rest of the app polls for) rather than on
+  // every render. Loaded into its own group (glbGroup, created once at
+  // mount) instead of replacing boardGroup outright, so a slow or failed
+  // fetch never clears what's already on screen -- syncActiveGroupRef
+  // decides which group is actually shown.
+  useEffect(() => {
+    const three = threeRef.current;
+    if (!three) return;
+    let cancelled = false;
+    const loader = new GLTFLoader();
+    loader.load(
+      "/api/board.glb",
+      (gltf) => {
+        if (cancelled) return;
+        disposeObject3D(three.glbGroup);
+        three.glbGroup.clear();
+        gltf.scene.scale.setScalar(GLB_METERS_TO_MM);
+        three.glbGroup.add(gltf.scene);
+        glbLoadedRef.current = true;
+        syncActiveGroupRef.current();
+        applyPreset(lastPresetRef.current);
+      },
+      undefined,
+      () => {
+        // kicad-cli isn't installed, the board failed to export, or the
+        // request was interrupted by a fast board edit -- fall back to
+        // the procedural scene silently (see this file's module doc);
+        // not a UI-visible error, since the procedural scene is a
+        // complete, working view on its own.
+        if (cancelled) return;
+        glbLoadedRef.current = false;
+        syncActiveGroupRef.current();
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.version]);
+
+  useEffect(() => {
+    syncActiveGroupRef.current();
+    applyPreset(lastPresetRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.viewer3d.kicadModels]);
 
   return (
     <div ref={containerRef} className="pcb-canvas-container">

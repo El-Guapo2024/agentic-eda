@@ -73,9 +73,14 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     );
     let job: Job = Arc::new(Mutex::new("idle".into()));
     let schematic: Mutex<Option<(std::time::SystemTime, String)>> = Mutex::new(None);
+    // Cached by the same version string /api/version returns: exporting
+    // to a temp .kicad_pcb and shelling out to kicad-cli on every request
+    // would make the 3D tab's GLB toggle re-run a whole external process
+    // per poll; this only regenerates when the board actually changed.
+    let glb_cache: Mutex<Option<(String, Vec<u8>)>> = Mutex::new(None);
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        if let Err(e) = handle(&mut stream, dir, &job, &schematic, ui_root.as_deref()) {
+        if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_cache, ui_root.as_deref()) {
             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
         }
     }
@@ -165,6 +170,108 @@ fn serve_3dmodel(stream: &mut TcpStream, name: &str) -> Result<(), String> {
     }
 }
 
+/// Where the real `kicad-cli` binary lives -- `EDA_KICAD_CLI` if set
+/// (it is not on PATH in this dev environment), else KiCad's own
+/// default macOS install location. Same "env var, then a sane default"
+/// shape as `kicad_3dmodels_dir`/`ui_dir`.
+fn kicad_cli_path() -> PathBuf {
+    if let Ok(p) = std::env::var("EDA_KICAD_CLI") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")
+}
+
+/// GET /api/board.glb -- the whole board (body, copper, silk, mask, and
+/// every placed footprint's real 3D model) as one binary GLTF file, for
+/// the 3D tab's GLTFLoader to render directly instead of this app's own
+/// procedural boxes-and-planes scene. Built by exporting the current
+/// design to a temp .kicad_pcb (the same writer `eda export` uses,
+/// crates/kicad/src/pcb.rs's write_footprint -- now emitting each
+/// footprint's `(model ...)` when `Footprint::model` is set) and
+/// shelling out to `kicad-cli pcb export glb`, the one thing that can
+/// actually read a STEP model and bake a whole board's geometry into
+/// one file -- there is no Rust STEP/GLTF pipeline in this codebase to
+/// do it directly. Cached by the same version string `/api/version`
+/// already uses, so polling this route (or the 3D tab re-requesting it
+/// after every edit) doesn't shell out to kicad-cli when nothing has
+/// changed -- that process alone typically takes a second or more.
+fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, cache: &Mutex<Option<(String, Vec<u8>)>>) -> Result<(), String> {
+    let ver = version_string(dir, job);
+    if let Some((cached_ver, bytes)) = cache.lock().map_err(|e| e.to_string())?.as_ref() {
+        if *cached_ver == ver {
+            return respond(stream, "200 OK", "model/gltf-binary", bytes);
+        }
+    }
+
+    let (meta, design, model) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
+    };
+    let title = Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
+    let date = eda::now_rfc3339();
+    let pcb_text = match eda::export_kicad_pcb(&design, &model, &eda::ExportMeta { date: &date[..10], title: &title }) {
+        Ok(v) => v,
+        Err(e) => return respond(stream, "500 Internal Server Error", "text/plain", board::reasons(&e).as_bytes()),
+    };
+
+    let tmp_dir = std::env::temp_dir().join(format!("eda-board-glb-{}", std::process::id()));
+    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
+        return respond(stream, "500 Internal Server Error", "text/plain", format!("could not create temp dir: {e}").as_bytes());
+    }
+    let pcb_path = tmp_dir.join(format!("{title}.kicad_pcb"));
+    let glb_path = tmp_dir.join(format!("{title}.glb"));
+    let cleanup = || {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    };
+    if let Err(e) = std::fs::write(&pcb_path, &pcb_text) {
+        cleanup();
+        return respond(stream, "500 Internal Server Error", "text/plain", format!("could not write temp .kicad_pcb: {e}").as_bytes());
+    }
+
+    let run = std::process::Command::new(kicad_cli_path())
+        .args([
+            "pcb",
+            "export",
+            "glb",
+            "--subst-models",
+            "--include-tracks",
+            "--include-pads",
+            "--include-zones",
+            "--include-silkscreen",
+            "--include-soldermask",
+            "-o",
+        ])
+        .arg(&glb_path)
+        .arg(&pcb_path)
+        .output();
+    let output = match run {
+        Ok(o) => o,
+        Err(e) => {
+            cleanup();
+            return respond(stream, "500 Internal Server Error", "text/plain", format!("could not run kicad-cli ({}): {e}", kicad_cli_path().display()).as_bytes());
+        }
+    };
+    if !output.status.success() {
+        cleanup();
+        return respond(stream, "500 Internal Server Error", "text/plain", format!("kicad-cli pcb export glb failed: {}", String::from_utf8_lossy(&output.stderr)).as_bytes());
+    }
+    let bytes = match std::fs::read(&glb_path) {
+        Ok(b) => b,
+        Err(e) => {
+            cleanup();
+            return respond(stream, "500 Internal Server Error", "text/plain", format!("kicad-cli did not produce a readable .glb: {e}").as_bytes());
+        }
+    };
+    cleanup();
+
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((ver, bytes.clone()));
+    }
+    respond(stream, "200 OK", "model/gltf-binary", &bytes)
+}
+
 fn mime_of(path: &Path) -> &'static str {
     match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
         "html" => "text/html; charset=utf-8",
@@ -180,7 +287,14 @@ fn mime_of(path: &Path) -> &'static str {
     }
 }
 
-fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Option<(std::time::SystemTime, String)>>, ui_root: Option<&Path>) -> Result<(), String> {
+fn handle(
+    stream: &mut TcpStream,
+    dir: &Path,
+    job: &Job,
+    schematic: &Mutex<Option<(std::time::SystemTime, String)>>,
+    glb_cache: &Mutex<Option<(String, Vec<u8>)>>,
+    ui_root: Option<&Path>,
+) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line).map_err(|e| e.to_string())?;
@@ -225,6 +339,7 @@ fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Optio
             let v = schematic_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_cache),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -286,9 +401,13 @@ fn stamp(p: PathBuf) -> u128 {
 
 /// Changes whenever the board, its activity or the routing job does, so
 /// the page knows to fetch the state again.
-fn version(dir: &Path, job: &Job) -> Value {
+fn version_string(dir: &Path, job: &Job) -> String {
     let j = job.lock().map(|j| j.clone()).unwrap_or_default();
-    json!(format!("{}-{}-{}", stamp(dir.join("design.json")), stamp(dir.join("activity.jsonl")), j.len() + j.bytes().map(|b| b as usize).sum::<usize>()))
+    format!("{}-{}-{}", stamp(dir.join("design.json")), stamp(dir.join("activity.jsonl")), j.len() + j.bytes().map(|b| b as usize).sum::<usize>())
+}
+
+fn version(dir: &Path, job: &Job) -> Value {
+    json!(version_string(dir, job))
 }
 
 fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {

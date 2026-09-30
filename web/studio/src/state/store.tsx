@@ -83,6 +83,8 @@ export interface Viewer3DOptions {
   flipped: boolean;
   /** True = an orthographic-looking projection (this app has no separate OrthographicCamera wiring -- Viewer3D approximates it by narrowing FOV and pulling the camera back, a well-known trick, not a real projection-matrix swap). */
   orthographic: boolean;
+  /** True = show GET /api/board.glb's real KiCad-rendered board (real 3D models, kicad-cli's own colors/materials) in place of this app's own procedural scene. Viewer3D falls back to the procedural scene regardless of this flag when the GLB hasn't loaded (still fetching, or the board/kicad-cli export failed) -- there's nothing to show otherwise. Defaults on; the user can still turn it off to see the lighter procedural scene. */
+  kicadModels: boolean;
 }
 
 export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
@@ -91,6 +93,7 @@ export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   showSolderMask: true,
   flipped: false,
   orthographic: false,
+  kicadModels: true,
 };
 
 export interface StudioState {
