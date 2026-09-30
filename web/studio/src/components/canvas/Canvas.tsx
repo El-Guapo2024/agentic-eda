@@ -63,16 +63,21 @@ export function Canvas() {
     return () => ro.disconnect();
   }, []);
 
-  // Fit once, the first time a board shows up.
+  // Fit to the container until the user pans/zooms by hand (userMovedRef,
+  // set in the wheel/pointer handlers below) -- same rule the old
+  // studio.html used. Re-running this on every containerSize change (not
+  // just once) matters because the container's true size often isn't
+  // known yet on the very first layout pass (panels/toolbars still
+  // settling), which previously left the view latched to a fit computed
+  // against a too-small box.
+  const userMovedRef = useRef(false);
   useEffect(() => {
-    if (!board?.outline || state.viewInitialized || !containerRef.current) return;
+    if (!board?.outline || userMovedRef.current) return;
     const bounds = boundsOfPoints(board.outline);
-    if (!bounds) return;
-    const { width, height } = containerRef.current.getBoundingClientRect();
-    if (width < 50 || height < 50) return;
-    dispatch({ type: "SET_VIEW", view: fitTransform(bounds, width, height) });
+    if (!bounds || containerSize.width < 50 || containerSize.height < 50) return;
+    dispatch({ type: "SET_VIEW", view: fitTransform(bounds, containerSize.width, containerSize.height) });
     dispatch({ type: "MARK_VIEW_INITIALIZED" });
-  }, [board, state.viewInitialized, dispatch]);
+  }, [board, containerSize, dispatch]);
 
   // Render loop: repaint whenever anything visible changes.
   useEffect(() => {
@@ -212,6 +217,7 @@ export function Canvas() {
     const drag = dragRef.current;
     if (!drag) return;
     if (drag.kind === "pan") {
+      userMovedRef.current = true;
       dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + (e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
     } else if (drag.kind === "move") {
       const [dx, dy] = snapPoint(wx - drag.startWorld[0], wy - drag.startWorld[1], board?.snap ?? state.gridUm);
@@ -259,6 +265,7 @@ export function Canvas() {
 
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
+    userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
     const factor = Math.exp(-e.deltaY * 0.0015);
     dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, e.clientX - rect.left, e.clientY - rect.top, factor) });
