@@ -11,6 +11,7 @@ fn part(reference: &str, npins: usize) -> Part {
     Part {
         reference: reference.into(),
         mpn: None,
+        lcsc: None,
         value: None,
         package: None,
         footprint: Some(format!("LIN{npins}")),
@@ -66,6 +67,7 @@ fn part_th(reference: &str, npins: usize) -> Part {
     Part {
         reference: reference.into(),
         mpn: None,
+        lcsc: None,
         value: None,
         package: None,
         footprint: Some(format!("LINTH{npins}")),

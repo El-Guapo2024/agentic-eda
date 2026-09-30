@@ -257,6 +257,7 @@ mod tests {
         let part = |r: &str, footprint: &str| eda_model::Part {
             reference: r.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: None,
             footprint: Some(footprint.into()),

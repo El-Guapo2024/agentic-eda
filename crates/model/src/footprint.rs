@@ -723,6 +723,7 @@ mod tests {
         let part = crate::Part {
             reference: "U1".into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: Some(name.into()),
             footprint: Some(name.into()),

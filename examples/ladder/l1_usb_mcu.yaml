@@ -3,56 +3,79 @@
 # status LED. This is the minimum viable "hello world" board every later
 # rung in the ladder builds on.
 #
+# First working PCB milestone: every part below carries a real, sourced
+# mpn, and an lcsc catalog number wherever the user picked a specific
+# JLCPCB listing (see `Part::lcsc`); `eda-fab` reads both straight into
+# the JLCPCB-format BOM and CPL. U1 (AMS1117-3.3) has no lcsc: the user
+# did not pick a specific listing for it, so it is left unset rather than
+# guessed -- `check_fab`'s fab_no_lcsc warns on it, and the BOM prints a
+# blank cell. Pick one on jlcpcb.com and fill it in before ordering.
+#
 # Notes on stand-in packages (see crates/model/src/footprint.rs builtin()):
-# - USB-C receptacle has no dedicated built-in footprint, so J1 uses the
-#   generic PINHEADER-16 (16 castellated/through-hole pads) as a
-#   pad-count stand-in per the ladder brief. Real USB-C-2.0 breakouts
-#   commonly expose VBUS/GND/CC1/CC2/D+/D- plus duplicated/NC pins on
-#   a 16-pin THT connector (e.g. GCT USB4105), so 16 pins is realistic.
-# - MCU U2 uses TSSOP-20 (STM32C0-class 20-pin part), a real builtin.
-# - Reset/boot momentary switches (SW1/SW2) have no SPST-button
-#   footprint in the library; the 2-pad "1206" pattern stands in for a
-#   2-pin SMD tactile switch (e.g. Panasonic EVQ-P7).
+# - J1 is the Hroparts TYPE-C-31-M-12, a real SMD receptacle loaded from
+#   KiCad's own library (crates/kicad/src/footprint_lib.rs resolves a
+#   part's `footprint: "Lib:Name"` from KiCad's installed footprints), not
+#   the generic pad-count stand-in this rung used before. Its pins are the
+#   footprint's real pad names (A1..B12, plus the shared "SH" shield pin).
+#   The STM32C011 has no USB peripheral, so the connector's D+/D-/SBU pins
+#   (A6/A7/A8, B6/B7/B8) go to no net at all (kind: nc) -- and so, for the
+#   same reason, do U2's own USB_DP/USB_DM-labelled pins 17/18 below: there
+#   was nothing left on the connector side for them to connect to.
+# - SW1/SW2 are the Omron B3U-1000P, also loaded from KiCad's library; its
+#   two pads are numbered "1"/"2", already matching how these parts are
+#   wired here.
+# - U1 (SOT-223), the passives and U2 (TSSOP-20) still resolve to the
+#   built-in package table: KiCad's real footprints for these are the same
+#   plain rectangle-pad-grid shape the built-ins already model, so only
+#   J1/SW1/SW2 needed a real library footprint to get their actual pad
+#   layout right.
 # Unused expansion GPIOs (PA1-PA7) are marked kind: nc rather than left
 # floating -- lint's source_pin_not_connected gate fails hard on any
 # unconnected signal pin, so unpopulated/reserved pins are declared nc.
 parts:
   - reference: J1
     edge: true
-    mpn: GCT-USB4105-GF-A
+    mpn: TYPE-C-31-M-12  # LCSC C165948 Hroparts, Basic
+    lcsc: C165948
     value: "USB-C receptacle"
-    package: PINHEADER-16
+    footprint: "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12"
     pins:
-      - { number: "1", name: GND, kind: ground }
-      - { number: "2", name: VBUS, kind: power }
-      - { number: "3", name: CC1, kind: signal }
-      - { number: "4", name: CC2, kind: signal }
-      - { number: "5", name: DP1, kind: signal }
-      - { number: "6", name: DM1, kind: signal }
-      - { number: "7", name: SBU1, kind: nc }
-      - { number: "8", name: SBU2, kind: nc }
-      - { number: "9", name: NC1, kind: nc }
-      - { number: "10", name: NC2, kind: nc }
-      - { number: "11", name: NC3, kind: nc }
-      - { number: "12", name: NC4, kind: nc }
-      - { number: "13", name: NC5, kind: nc }
-      - { number: "14", name: NC6, kind: nc }
-      - { number: "15", name: SHIELD1, kind: nc }
-      - { number: "16", name: SHIELD2, kind: nc }
+      - { number: "A1", name: GND, kind: ground }
+      - { number: "A4", name: VBUS, kind: power }
+      - { number: "A5", name: CC1, kind: signal }
+      - { number: "A6", name: USB_DP1, kind: nc }
+      - { number: "A7", name: USB_DM1, kind: nc }
+      - { number: "A8", name: SBU1, kind: nc }
+      - { number: "A9", name: VBUS, kind: power }
+      - { number: "A12", name: GND, kind: ground }
+      - { number: "B1", name: GND, kind: ground }
+      - { number: "B4", name: VBUS, kind: power }
+      - { number: "B5", name: CC2, kind: signal }
+      - { number: "B6", name: USB_DP2, kind: nc }
+      - { number: "B7", name: USB_DM2, kind: nc }
+      - { number: "B8", name: SBU2, kind: nc }
+      - { number: "B9", name: VBUS, kind: power }
+      - { number: "B12", name: GND, kind: ground }
+      - { number: "SH", name: SHIELD, kind: ground }
 
   # USB-C CC1/CC2 5.1k pulldowns advertise a default-power (5V/900mA) sink,
   # per the USB Type-C spec -- without them the board draws no VBUS.
   - reference: R1
+    mpn: 0603WAF5101T5E  # LCSC C23186 UNI-ROYAL, Basic
+    lcsc: C23186
     value: 5.1k
     package: "0603"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: R2
+    mpn: 0603WAF5101T5E  # LCSC C23186 UNI-ROYAL, Basic
+    lcsc: C23186
     value: 5.1k
     package: "0603"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 
   - reference: U1
     mpn: AMS1117-3.3
+    lcsc: C6186
     value: "3.3V LDO"
     package: SOT-223
     pins:
@@ -60,16 +83,21 @@ parts:
       - { number: "2", name: VOUT, kind: power }
       - { number: "3", name: VIN, kind: power }
   - reference: C1
+    mpn: CL21A106KAYNNNE  # LCSC C15850 Samsung, 25V X5R, Basic
+    lcsc: C15850
     value: 10uF
     package: "0805"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: C2
+    mpn: CL21A226MAQNNNE  # LCSC C45783 Samsung, 25V X5R, Basic
+    lcsc: C45783
     value: 22uF
     package: "0805"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 
   - reference: U2
-    mpn: STM32C011F6
+    mpn: STM32C011F6P6  # LCSC C5456198 STMicroelectronics, Extended
+    lcsc: C5456198
     value: MCU
     package: TSSOP-20
     pins:
@@ -89,54 +117,76 @@ parts:
       - { number: "14", name: PA5, kind: nc }
       - { number: "15", name: PA6, kind: nc }
       - { number: "16", name: PA7, kind: nc }
-      - { number: "17", name: USB_DP, kind: signal }
-      - { number: "18", name: USB_DM, kind: signal }
+      # No USB peripheral on the STM32C011, and J1's own D+/D- pads are
+      # wired to no net for the same reason (see the header note) -- so
+      # these have nothing left to connect to either.
+      - { number: "17", name: USB_DP, kind: nc }
+      - { number: "18", name: USB_DM, kind: nc }
       - { number: "19", name: VDD2, kind: power }
       - { number: "20", name: GND2, kind: ground }
 
   - reference: C3
+    mpn: CL05B104KO5NNNC  # LCSC C1525 Samsung, 16V X7R, Basic
+    lcsc: C1525
     value: 100nF
     package: "0402"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: C4
+    mpn: CL05B104KO5NNNC  # LCSC C1525 Samsung, 16V X7R, Basic
+    lcsc: C1525
     value: 100nF
     package: "0402"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: C5
+    mpn: CL21B105KBFNNNE  # LCSC C28323 Samsung, 50V X7R, Basic
+    lcsc: C28323
     value: 1uF
     package: "0805"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 
   - reference: R3
+    mpn: 0603WAF1002T5E  # LCSC C25804 UNI-ROYAL, Basic
+    lcsc: C25804
     value: 10k
     package: "0603"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: SW1
-    mpn: EVQ-P7C01P
+    mpn: B3U-1000P  # LCSC C231329 Omron, Basic
+    lcsc: C231329
     value: "reset button"
-    package: "1206"
+    footprint: "Button_Switch_SMD:SW_SPST_B3U-1000P"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 
   - reference: R4
+    mpn: 0603WAF1002T5E  # LCSC C25804 UNI-ROYAL, Basic
+    lcsc: C25804
     value: 10k
     package: "0603"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: SW2
-    mpn: EVQ-P7C01P
+    mpn: B3U-1000P  # LCSC C231329 Omron, Basic
+    lcsc: C231329
     value: "boot0 button"
-    package: "1206"
+    footprint: "Button_Switch_SMD:SW_SPST_B3U-1000P"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
 
   - reference: R5
+    mpn: 0603WAF3300T5E  # LCSC C23138 UNI-ROYAL, Basic
+    lcsc: C23138
     value: 330
     package: "0603"
     pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
   - reference: D1
+    mpn: KT-0603R  # LCSC C2286 Hubei KENTO red, Basic
+    lcsc: C2286
     value: "status LED"
     package: "0603"
-    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+    footprint: "LED_SMD:LED_0603_1608Metric"
+    pins: [{ number: "1", name: K, kind: passive }, { number: "2", name: A, kind: passive }]
 
   - reference: J2
+    mpn: PZ254V-11-04P  # LCSC C2691448 XFCN 1x4 2.54mm, Extended
+    lcsc: C2691448
     edge: false
     value: "SWD header"
     package: PINHEADER-4
@@ -147,19 +197,17 @@ parts:
       - { number: "4", name: "3V3", kind: power }
 
 nets:
-  - { name: VBUS, pins: [J1.2, U1.3] }
-  - { name: GND, pins: [J1.1, U1.1, C1.2, C2.2, C3.2, C4.2, C5.2, R1.2, R2.2, R4.2, SW1.2, SW2.2, D1.2, J2.3, U2.2, U2.4, U2.20] }
-  - { name: CC1, pins: [J1.3, R1.1] }
-  - { name: CC2, pins: [J1.4, R2.1] }
-  - { name: USB_DP, pins: [J1.5, U2.17] }
-  - { name: USB_DM, pins: [J1.6, U2.18] }
+  - { name: VBUS, pins: [J1.A4, J1.A9, J1.B4, J1.B9, U1.3] }
+  - { name: GND, pins: [J1.A1, J1.A12, J1.B1, J1.B12, J1.SH, U1.1, C1.2, C2.2, C3.2, C4.2, C5.2, R1.2, R2.2, R4.2, SW1.2, SW2.2, D1.1, J2.3, U2.2, U2.4, U2.20] }
+  - { name: CC1, pins: [J1.A5, R1.1] }
+  - { name: CC2, pins: [J1.B5, R2.1] }
   - { name: "3V3", pins: [U1.2, C1.1, C2.1, C3.1, C4.1, C5.1, R3.1, J2.4, U2.1, U2.3, U2.19] }
   - { name: NRST, pins: [U2.5, R3.2, SW1.1] }
   - { name: BOOT0, pins: [U2.6, R4.1, SW2.1] }
   - { name: SWDIO, pins: [U2.7, J2.1] }
   - { name: SWCLK, pins: [U2.8, J2.2] }
   - { name: LED_DRIVE, pins: [U2.9, R5.1] }
-  - { name: LED_A, pins: [R5.2, D1.1] }
+  - { name: LED_A, pins: [R5.2, D1.2] }
 
 placement_rules:
   - { kind: proximity, a: U1, b: C1, max_mm: 3.0 }
@@ -175,6 +223,19 @@ board:
   grid: 254
   track_width: 200
   clearance: 200
+  # J1's CC1/CC2 pads sit in the USB-C receptacle's fine-pitch signal row
+  # (0.5mm nominal pitch on the connector's own tongue); the board's
+  # ordinary 200um track / 200um clearance does not reliably clear that
+  # row's neighbouring pads. This class asks for less room -- to itself
+  # and to everything else it meets, see crates/model/src/lib.rs's
+  # NetClass::clearance -- everywhere CC1/CC2 route, not only at the
+  # connector: 150um track and 150um clearance, both inside JLCPCB's
+  # 2-layer capability.
+  net_classes:
+    - name: cc_escape
+      nets: ["CC1", "CC2"]
+      track_width: 150
+      clearance: 150
   outline:
     - { x: 0, y: 0 }
     - { x: 60000, y: 0 }

@@ -340,6 +340,10 @@ fn handle(
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_cache),
+        ("GET", "/api/ratsnest") => {
+            let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -611,4 +615,18 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect();
     let labels: Vec<Value> = sch.labels.iter().map(|l| json!({ "net": l.net, "at": [l.at.x, l.at.y] })).collect();
     Ok(json!({ "symbols": symbols, "wires": wires, "labels": labels }))
+}
+
+/// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest
+/// display -- every still-missing copper connection, one line per pair,
+/// `from`/`to` in board-space micrometers like every other endpoint here.
+/// Computed by `eda_connectivity` (KiCad's `CN_CONNECTIVITY_ALGO`/`RN_NET`
+/// ported; see `crates/connectivity`), which does its own from-scratch
+/// pass over `design`/`model` each call -- no caching, same as every other
+/// read here.
+fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let report = eda_connectivity::analyze(&design, &model);
+    let edges: Vec<Value> = report.ratsnest.iter().map(|e| json!({ "net": e.net, "from": [e.from.x, e.from.y], "to": [e.to.x, e.to.y] })).collect();
+    Ok(json!({ "edges": edges }))
 }

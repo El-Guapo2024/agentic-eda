@@ -18,3 +18,4 @@ eda-gates = { path = "../gates" }
 eda-ops = { path = "../ops" }
 eda-judge = { path = "../judge" }
 eda-fab = { path = "../fab" }
+eda-connectivity = { path = "../connectivity" }
