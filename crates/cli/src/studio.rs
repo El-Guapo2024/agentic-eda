@@ -29,9 +29,32 @@ const PAGE: &str = include_str!("studio.html");
 /// run ended.
 type Job = Arc<Mutex<String>>;
 
-pub fn serve(dir: &Path, port: u16) -> Result<(), Vec<CheckResult>> {
+/// Where the built React UI lives, in precedence order: `--ui <dir>`,
+/// then `EDA_STUDIO_UI`, then the workspace-relative `web/studio/dist`
+/// this binary was compiled from. `None` from [`built_ui`] means none of
+/// those has an `index.html` yet, so `serve` falls back to the embedded
+/// single-file page.
+fn ui_dir(cli_ui: Option<&Path>) -> PathBuf {
+    if let Some(p) = cli_ui {
+        return p.to_path_buf();
+    }
+    if let Ok(p) = std::env::var("EDA_STUDIO_UI") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/studio/dist")
+}
+
+fn built_ui(cli_ui: Option<&Path>) -> Option<PathBuf> {
+    let dir = ui_dir(cli_ui);
+    dir.join("index.html").is_file().then_some(dir)
+}
+
+pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<CheckResult>> {
     // Fail now, not on the first request, if this is no board.
     board::load(dir)?;
+    let ui_root = built_ui(ui.as_deref());
     // A taken port is usually another studio already showing a board;
     // take the next free one rather than refuse.
     let (listener, got) = (port..port.saturating_add(20))
@@ -40,19 +63,63 @@ pub fn serve(dir: &Path, port: u16) -> Result<(), Vec<CheckResult>> {
     if got != port {
         eprintln!("board: port {port} is taken (another studio open there?), using {got}");
     }
-    eprintln!("board: serving {} at http://127.0.0.1:{got}/", dir.display());
+    eprintln!(
+        "board: serving {} at http://127.0.0.1:{got}/ ({})",
+        dir.display(),
+        match &ui_root {
+            Some(d) => format!("ui: {}", d.display()),
+            None => "ui: embedded studio.html".to_string(),
+        }
+    );
     let job: Job = Arc::new(Mutex::new("idle".into()));
     let schematic: Mutex<Option<(std::time::SystemTime, String)>> = Mutex::new(None);
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        if let Err(e) = handle(&mut stream, dir, &job, &schematic) {
+        if let Err(e) = handle(&mut stream, dir, &job, &schematic, ui_root.as_deref()) {
             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
         }
     }
     Ok(())
 }
 
-fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Option<(std::time::SystemTime, String)>>) -> Result<(), String> {
+/// A file under the built UI's directory, or 404 if it does not resolve
+/// to one (missing, or outside `root` -- no serving `../../etc/passwd`
+/// through a crafted path).
+fn serve_file(stream: &mut TcpStream, root: &Path, rel: &str) -> Result<(), String> {
+    let rel = if rel.is_empty() { "index.html" } else { rel };
+    let candidate = root.join(rel);
+    let resolved = candidate.canonicalize().ok().zip(root.canonicalize().ok()).filter(|(p, r)| p.starts_with(r)).map(|(p, _)| p);
+    match resolved.and_then(|p| std::fs::read(&p).ok().map(|b| (p, b))) {
+        Some((p, bytes)) => respond(stream, "200 OK", mime_of(&p), &bytes),
+        // A client-side route (no file extension) falls back to index.html,
+        // like any single-page app; a genuinely missing asset still 404s.
+        None if !rel.contains('.') => {
+            let index = root.join("index.html");
+            match std::fs::read(&index) {
+                Ok(bytes) => respond(stream, "200 OK", mime_of(&index), &bytes),
+                Err(_) => respond(stream, "404 Not Found", "text/plain", b"not found"),
+            }
+        }
+        None => respond(stream, "404 Not Found", "text/plain", b"not found"),
+    }
+}
+
+fn mime_of(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" | "map" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "ico" => "image/x-icon",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        _ => "application/octet-stream",
+    }
+}
+
+fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Option<(std::time::SystemTime, String)>>, ui_root: Option<&Path>) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line).map_err(|e| e.to_string())?;
@@ -75,7 +142,10 @@ fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Optio
     let path = target.split('?').next().unwrap_or("/");
 
     match (method, path) {
-        ("GET", "/") => respond(stream, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
+        ("GET", "/") => match ui_root {
+            Some(root) => serve_file(stream, root, "index.html"),
+            None => respond(stream, "200 OK", "text/html; charset=utf-8", PAGE.as_bytes()),
+        },
         ("GET", "/api/version") => respond(stream, "200 OK", "application/json", version(dir, job).to_string().as_bytes()),
         ("GET", "/api/state") => {
             let v = state(dir, job).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
@@ -94,6 +164,20 @@ fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Optio
                     Ok(summary) => json!({ "ok": true, "message": summary }),
                     Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
                 },
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
+        ("POST", "/api/undo") => {
+            let reply = match board::undo(dir, "ui") {
+                Ok(summary) => json!({ "ok": true, "message": summary }),
+                Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
+        ("POST", "/api/redo") => {
+            let reply = match board::redo(dir, "ui") {
+                Ok(summary) => json!({ "ok": true, "message": summary }),
+                Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
@@ -116,6 +200,7 @@ fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Optio
             });
             respond(stream, "200 OK", "application/json", json!({ "ok": true, "message": "routing" }).to_string().as_bytes())
         }
+        ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }
 }
@@ -211,6 +296,16 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         "snap": meta.snap_um,
         "parts": parts,
         "rules": model.placement_rules,
+        // Read-only board-wide defaults for the auxiliary toolbar's
+        // track-width/via-size indicators (display-only there: this UI
+        // has no command to change them, just like it has none yet for
+        // drawing a track or via at all).
+        "board_rules": {
+            "track_width": model.board.track_width,
+            "via_drill": model.board.via_drill,
+            "via_diameter": model.board.via_diameter,
+            "clearance": model.board.clearance,
+        },
         "routing": routing,
         "checks": checks,
         "activity": activity,

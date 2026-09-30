@@ -116,15 +116,101 @@ fn print_status(board: &Board, model: &ConstraintModel) -> Result<(), Vec<CheckR
 }
 
 /// Apply one command and report what it cost, logged as `by` did it.
-/// A placement change leaves any routing stale, so it goes.
+/// A placement change leaves any routing stale, so it goes. A
+/// successful edit also pushes the *pre*-edit design onto the undo
+/// stack and clears redo -- the usual "a new edit erases old redos"
+/// rule; a refused command changes nothing, so it pushes nothing.
 pub(crate) fn step(dir: &Path, cmd: Cmd, strict: bool, by: &str) -> Result<String, Vec<CheckResult>> {
     let line = cmd_line(&cmd);
+    let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
     let r = step_quiet(dir, &cmd, strict);
     match &r {
-        Ok(summary) => log_activity(dir, by, &line, true, summary),
+        Ok(summary) => {
+            if let Some(before) = before {
+                let _ = push_snapshot(&undo_dir(dir), &before);
+                clear_dir(&redo_dir(dir));
+            }
+            log_activity(dir, by, &line, true, summary)
+        }
         Err(e) => log_activity(dir, by, &line, false, &reasons(e)),
     }
     r
+}
+
+/// Undo/redo history: two stacks of whole-design snapshots, under the
+/// board's own directory. Small on purpose (see the task notes this was
+/// written from): no diffing, no branching redo tree, just two stacks of
+/// files named by a monotonic nanosecond timestamp so "latest" is a
+/// lexical (and numeric) max with no separate counter to maintain.
+fn history_root(dir: &Path) -> PathBuf {
+    dir.join(".history")
+}
+fn undo_dir(dir: &Path) -> PathBuf {
+    history_root(dir).join("undo")
+}
+fn redo_dir(dir: &Path) -> PathBuf {
+    history_root(dir).join("redo")
+}
+
+fn push_snapshot(stack_dir: &Path, design: &eda_model::ir::Design) -> std::io::Result<()> {
+    std::fs::create_dir_all(stack_dir)?;
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let s = serde_json::to_string(design).unwrap_or_default();
+    std::fs::write(stack_dir.join(format!("{t:020}.json")), s)
+}
+
+/// The most recent snapshot on the stack, removed from it.
+fn pop_snapshot(stack_dir: &Path) -> Option<eda_model::ir::Design> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(stack_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .collect();
+    entries.sort();
+    let last = entries.pop()?;
+    let design = std::fs::read_to_string(&last).ok().and_then(|s| serde_json::from_str(&s).ok())?;
+    let _ = std::fs::remove_file(&last);
+    Some(design)
+}
+
+fn clear_dir(stack_dir: &Path) {
+    let _ = std::fs::remove_dir_all(stack_dir);
+}
+
+/// `eda board undo`: back to the state before the last edit. Routing is
+/// whatever that snapshot had -- if the edit being undone was itself a
+/// route, undo removes the routing along with it, same as any other
+/// change.
+pub(crate) fn undo(dir: &Path, by: &str) -> Result<String, Vec<CheckResult>> {
+    let (_, current, _) = load(dir)?;
+    let Some(previous) = pop_snapshot(&undo_dir(dir)) else {
+        let msg = "nothing to undo".to_string();
+        log_activity(dir, by, "undo", false, &msg);
+        return Err(fail("board_no_undo", "undo", msg));
+    };
+    let _ = push_snapshot(&redo_dir(dir), &current);
+    save(dir, &previous)?;
+    let msg = "undo: reverted the last edit".to_string();
+    log_activity(dir, by, "undo", true, &msg);
+    Ok(msg)
+}
+
+/// `eda board redo`: re-apply the edit the last undo removed. Anything
+/// undone is invalidated the moment a *new* edit happens (see `step`),
+/// same as any other undo/redo stack.
+pub(crate) fn redo(dir: &Path, by: &str) -> Result<String, Vec<CheckResult>> {
+    let (_, current, _) = load(dir)?;
+    let Some(next) = pop_snapshot(&redo_dir(dir)) else {
+        let msg = "nothing to redo".to_string();
+        log_activity(dir, by, "redo", false, &msg);
+        return Err(fail("board_no_redo", "redo", msg));
+    };
+    let _ = push_snapshot(&undo_dir(dir), &current);
+    save(dir, &next)?;
+    let msg = "redo: re-applied the undone edit".to_string();
+    log_activity(dir, by, "redo", true, &msg);
+    Ok(msg)
 }
 
 fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckResult>> {
@@ -382,14 +468,17 @@ pub fn run(
             step(&dir, Cmd::Rip { part }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "route" => route_board(&dir, &actor()).map(|s| eprintln!("{s}")),
+        "undo" => undo(&dir, &actor()).map(|s| eprintln!("{s}")),
+        "redo" => redo(&dir, &actor()).map(|s| eprintln!("{s}")),
         "serve" => {
             let port = flag(rest, "--port").and_then(|p| p.parse().ok()).unwrap_or(8765);
-            crate::studio::serve(&dir, port)
+            let ui = flag(rest, "--ui").map(PathBuf::from);
+            crate::studio::serve(&dir, port, ui)
         }
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|swap|rip|route|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|swap|rip|route|undo|redo|serve> [-C dir] [--strict]",
         )),
     }
 }

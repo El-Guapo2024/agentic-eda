@@ -1,0 +1,634 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": "2026-05-04T07:39:57+03:00",
+    "extractedAt": "2026-09-30T00:52:05.352Z",
+    "sourceFiles": [
+      "include/layer_ids.h",
+      "pcbnew/widgets/appearance_controls.cpp",
+      "pcbnew/pcb_draw_panel_gal.cpp"
+    ],
+    "note": "no layer descriptions matched in pcbnew/widgets/appearance_controls.cpp -- appearance_controls.cpp likely structures these differently; open it and rewrite attachDescriptions(); drawOrder is a heuristic guess (see script comment) -- confirm against pcbnew/pcb_draw_panel_gal.cpp before trusting paint order"
+  },
+  "layers": [
+    {
+      "id": "UNDEFINED_LAYER",
+      "numericId": -1,
+      "name": "UNDEFINED.LAYER",
+      "description": ""
+    },
+    {
+      "id": "UNSELECTED_LAYER",
+      "numericId": -2,
+      "name": "UNSELECTED.LAYER",
+      "description": ""
+    },
+    {
+      "id": "F_Cu",
+      "numericId": 0,
+      "name": "F.Cu",
+      "description": ""
+    },
+    {
+      "id": "B_Cu",
+      "numericId": 2,
+      "name": "B.Cu",
+      "description": ""
+    },
+    {
+      "id": "In1_Cu",
+      "numericId": 4,
+      "name": "In1.Cu",
+      "description": ""
+    },
+    {
+      "id": "In2_Cu",
+      "numericId": 6,
+      "name": "In2.Cu",
+      "description": ""
+    },
+    {
+      "id": "In3_Cu",
+      "numericId": 8,
+      "name": "In3.Cu",
+      "description": ""
+    },
+    {
+      "id": "In4_Cu",
+      "numericId": 10,
+      "name": "In4.Cu",
+      "description": ""
+    },
+    {
+      "id": "In5_Cu",
+      "numericId": 12,
+      "name": "In5.Cu",
+      "description": ""
+    },
+    {
+      "id": "In6_Cu",
+      "numericId": 14,
+      "name": "In6.Cu",
+      "description": ""
+    },
+    {
+      "id": "In7_Cu",
+      "numericId": 16,
+      "name": "In7.Cu",
+      "description": ""
+    },
+    {
+      "id": "In8_Cu",
+      "numericId": 18,
+      "name": "In8.Cu",
+      "description": ""
+    },
+    {
+      "id": "In9_Cu",
+      "numericId": 20,
+      "name": "In9.Cu",
+      "description": ""
+    },
+    {
+      "id": "In10_Cu",
+      "numericId": 22,
+      "name": "In10.Cu",
+      "description": ""
+    },
+    {
+      "id": "In11_Cu",
+      "numericId": 24,
+      "name": "In11.Cu",
+      "description": ""
+    },
+    {
+      "id": "In12_Cu",
+      "numericId": 26,
+      "name": "In12.Cu",
+      "description": ""
+    },
+    {
+      "id": "In13_Cu",
+      "numericId": 28,
+      "name": "In13.Cu",
+      "description": ""
+    },
+    {
+      "id": "In14_Cu",
+      "numericId": 30,
+      "name": "In14.Cu",
+      "description": ""
+    },
+    {
+      "id": "In15_Cu",
+      "numericId": 32,
+      "name": "In15.Cu",
+      "description": ""
+    },
+    {
+      "id": "In16_Cu",
+      "numericId": 34,
+      "name": "In16.Cu",
+      "description": ""
+    },
+    {
+      "id": "In17_Cu",
+      "numericId": 36,
+      "name": "In17.Cu",
+      "description": ""
+    },
+    {
+      "id": "In18_Cu",
+      "numericId": 38,
+      "name": "In18.Cu",
+      "description": ""
+    },
+    {
+      "id": "In19_Cu",
+      "numericId": 40,
+      "name": "In19.Cu",
+      "description": ""
+    },
+    {
+      "id": "In20_Cu",
+      "numericId": 42,
+      "name": "In20.Cu",
+      "description": ""
+    },
+    {
+      "id": "In21_Cu",
+      "numericId": 44,
+      "name": "In21.Cu",
+      "description": ""
+    },
+    {
+      "id": "In22_Cu",
+      "numericId": 46,
+      "name": "In22.Cu",
+      "description": ""
+    },
+    {
+      "id": "In23_Cu",
+      "numericId": 48,
+      "name": "In23.Cu",
+      "description": ""
+    },
+    {
+      "id": "In24_Cu",
+      "numericId": 50,
+      "name": "In24.Cu",
+      "description": ""
+    },
+    {
+      "id": "In25_Cu",
+      "numericId": 52,
+      "name": "In25.Cu",
+      "description": ""
+    },
+    {
+      "id": "In26_Cu",
+      "numericId": 54,
+      "name": "In26.Cu",
+      "description": ""
+    },
+    {
+      "id": "In27_Cu",
+      "numericId": 56,
+      "name": "In27.Cu",
+      "description": ""
+    },
+    {
+      "id": "In28_Cu",
+      "numericId": 58,
+      "name": "In28.Cu",
+      "description": ""
+    },
+    {
+      "id": "In29_Cu",
+      "numericId": 60,
+      "name": "In29.Cu",
+      "description": ""
+    },
+    {
+      "id": "In30_Cu",
+      "numericId": 62,
+      "name": "In30.Cu",
+      "description": ""
+    },
+    {
+      "id": "F_Mask",
+      "numericId": 1,
+      "name": "F.Mask",
+      "description": ""
+    },
+    {
+      "id": "B_Mask",
+      "numericId": 3,
+      "name": "B.Mask",
+      "description": ""
+    },
+    {
+      "id": "F_SilkS",
+      "numericId": 5,
+      "name": "F.SilkS",
+      "description": ""
+    },
+    {
+      "id": "B_SilkS",
+      "numericId": 7,
+      "name": "B.SilkS",
+      "description": ""
+    },
+    {
+      "id": "F_Adhes",
+      "numericId": 9,
+      "name": "F.Adhes",
+      "description": ""
+    },
+    {
+      "id": "B_Adhes",
+      "numericId": 11,
+      "name": "B.Adhes",
+      "description": ""
+    },
+    {
+      "id": "F_Paste",
+      "numericId": 13,
+      "name": "F.Paste",
+      "description": ""
+    },
+    {
+      "id": "B_Paste",
+      "numericId": 15,
+      "name": "B.Paste",
+      "description": ""
+    },
+    {
+      "id": "Dwgs_User",
+      "numericId": 17,
+      "name": "Dwgs.User",
+      "description": ""
+    },
+    {
+      "id": "Cmts_User",
+      "numericId": 19,
+      "name": "Cmts.User",
+      "description": ""
+    },
+    {
+      "id": "Eco1_User",
+      "numericId": 21,
+      "name": "Eco1.User",
+      "description": ""
+    },
+    {
+      "id": "Eco2_User",
+      "numericId": 23,
+      "name": "Eco2.User",
+      "description": ""
+    },
+    {
+      "id": "Edge_Cuts",
+      "numericId": 25,
+      "name": "Edge.Cuts",
+      "description": ""
+    },
+    {
+      "id": "Margin",
+      "numericId": 27,
+      "name": "Margin",
+      "description": ""
+    },
+    {
+      "id": "B_CrtYd",
+      "numericId": 29,
+      "name": "B.CrtYd",
+      "description": ""
+    },
+    {
+      "id": "F_CrtYd",
+      "numericId": 31,
+      "name": "F.CrtYd",
+      "description": ""
+    },
+    {
+      "id": "B_Fab",
+      "numericId": 33,
+      "name": "B.Fab",
+      "description": ""
+    },
+    {
+      "id": "F_Fab",
+      "numericId": 35,
+      "name": "F.Fab",
+      "description": ""
+    },
+    {
+      "id": "Rescue",
+      "numericId": 37,
+      "name": "Rescue",
+      "description": ""
+    },
+    {
+      "id": "User_1",
+      "numericId": 39,
+      "name": "User.1",
+      "description": ""
+    },
+    {
+      "id": "User_2",
+      "numericId": 41,
+      "name": "User.2",
+      "description": ""
+    },
+    {
+      "id": "User_3",
+      "numericId": 43,
+      "name": "User.3",
+      "description": ""
+    },
+    {
+      "id": "User_4",
+      "numericId": 45,
+      "name": "User.4",
+      "description": ""
+    },
+    {
+      "id": "User_5",
+      "numericId": 47,
+      "name": "User.5",
+      "description": ""
+    },
+    {
+      "id": "User_6",
+      "numericId": 49,
+      "name": "User.6",
+      "description": ""
+    },
+    {
+      "id": "User_7",
+      "numericId": 51,
+      "name": "User.7",
+      "description": ""
+    },
+    {
+      "id": "User_8",
+      "numericId": 53,
+      "name": "User.8",
+      "description": ""
+    },
+    {
+      "id": "User_9",
+      "numericId": 55,
+      "name": "User.9",
+      "description": ""
+    },
+    {
+      "id": "User_10",
+      "numericId": 57,
+      "name": "User.10",
+      "description": ""
+    },
+    {
+      "id": "User_11",
+      "numericId": 59,
+      "name": "User.11",
+      "description": ""
+    },
+    {
+      "id": "User_12",
+      "numericId": 61,
+      "name": "User.12",
+      "description": ""
+    },
+    {
+      "id": "User_13",
+      "numericId": 63,
+      "name": "User.13",
+      "description": ""
+    },
+    {
+      "id": "User_14",
+      "numericId": 65,
+      "name": "User.14",
+      "description": ""
+    },
+    {
+      "id": "User_15",
+      "numericId": 67,
+      "name": "User.15",
+      "description": ""
+    },
+    {
+      "id": "User_16",
+      "numericId": 69,
+      "name": "User.16",
+      "description": ""
+    },
+    {
+      "id": "User_17",
+      "numericId": 71,
+      "name": "User.17",
+      "description": ""
+    },
+    {
+      "id": "User_18",
+      "numericId": 73,
+      "name": "User.18",
+      "description": ""
+    },
+    {
+      "id": "User_19",
+      "numericId": 75,
+      "name": "User.19",
+      "description": ""
+    },
+    {
+      "id": "User_20",
+      "numericId": 77,
+      "name": "User.20",
+      "description": ""
+    },
+    {
+      "id": "User_21",
+      "numericId": 79,
+      "name": "User.21",
+      "description": ""
+    },
+    {
+      "id": "User_22",
+      "numericId": 81,
+      "name": "User.22",
+      "description": ""
+    },
+    {
+      "id": "User_23",
+      "numericId": 83,
+      "name": "User.23",
+      "description": ""
+    },
+    {
+      "id": "User_24",
+      "numericId": 85,
+      "name": "User.24",
+      "description": ""
+    },
+    {
+      "id": "User_25",
+      "numericId": 87,
+      "name": "User.25",
+      "description": ""
+    },
+    {
+      "id": "User_26",
+      "numericId": 89,
+      "name": "User.26",
+      "description": ""
+    },
+    {
+      "id": "User_27",
+      "numericId": 91,
+      "name": "User.27",
+      "description": ""
+    },
+    {
+      "id": "User_28",
+      "numericId": 93,
+      "name": "User.28",
+      "description": ""
+    },
+    {
+      "id": "User_29",
+      "numericId": 95,
+      "name": "User.29",
+      "description": ""
+    },
+    {
+      "id": "User_30",
+      "numericId": 97,
+      "name": "User.30",
+      "description": ""
+    },
+    {
+      "id": "User_31",
+      "numericId": 99,
+      "name": "User.31",
+      "description": ""
+    },
+    {
+      "id": "User_32",
+      "numericId": 101,
+      "name": "User.32",
+      "description": ""
+    },
+    {
+      "id": "User_33",
+      "numericId": 103,
+      "name": "User.33",
+      "description": ""
+    },
+    {
+      "id": "User_34",
+      "numericId": 105,
+      "name": "User.34",
+      "description": ""
+    },
+    {
+      "id": "User_35",
+      "numericId": 107,
+      "name": "User.35",
+      "description": ""
+    },
+    {
+      "id": "User_36",
+      "numericId": 109,
+      "name": "User.36",
+      "description": ""
+    },
+    {
+      "id": "User_37",
+      "numericId": 111,
+      "name": "User.37",
+      "description": ""
+    },
+    {
+      "id": "User_38",
+      "numericId": 113,
+      "name": "User.38",
+      "description": ""
+    },
+    {
+      "id": "User_39",
+      "numericId": 115,
+      "name": "User.39",
+      "description": ""
+    },
+    {
+      "id": "User_40",
+      "numericId": 117,
+      "name": "User.40",
+      "description": ""
+    },
+    {
+      "id": "User_41",
+      "numericId": 119,
+      "name": "User.41",
+      "description": ""
+    },
+    {
+      "id": "User_42",
+      "numericId": 121,
+      "name": "User.42",
+      "description": ""
+    },
+    {
+      "id": "User_43",
+      "numericId": 123,
+      "name": "User.43",
+      "description": ""
+    },
+    {
+      "id": "User_44",
+      "numericId": 125,
+      "name": "User.44",
+      "description": ""
+    },
+    {
+      "id": "User_45",
+      "numericId": 127,
+      "name": "User.45",
+      "description": ""
+    },
+    {
+      "id": "PCB_LAYER_ID_COUNT",
+      "numericId": 128,
+      "name": "PCB.LAYER.ID.COUNT",
+      "description": ""
+    }
+  ],
+  "drawOrder": [
+    "LAYER_VIA_THROUGH",
+    "LAYER_VIA_BLIND",
+    "LAYER_VIA_BURIED",
+    "LAYER_VIA_MICROVIA",
+    "LAYER_VIA_HOLES",
+    "LAYER_VIA_HOLEWALLS",
+    "LAYER_PAD_PLATEDHOLES",
+    "LAYER_PAD_HOLEWALLS",
+    "LAYER_NON_PLATEDHOLES",
+    "LAYER_PAD_NETNAMES",
+    "LAYER_VIA_NETNAMES",
+    "LAYER_SELECT_OVERLAY",
+    "LAYER_GP_OVERLAY",
+    "LAYER_RATSNEST",
+    "LAYER_ANCHOR",
+    "LAYER_DRC_HIGHLIGHTED",
+    "LAYER_DRC_ERROR",
+    "LAYER_DRC_WARNING",
+    "LAYER_DRC_EXCLUSION",
+    "LAYER_MARKER_SHADOWS",
+    "LAYER_DRC_SHAPES",
+    "LAYER_CONFLICTS_SHADOW"
+  ]
+}

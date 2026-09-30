@@ -1,0 +1,879 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": null,
+    "extractedAt": "2026-09-30T03:05:02.479Z",
+    "sourceFiles": [
+      "pcbnew/menubar_pcb_editor.cpp",
+      "pcbnew/tools/pcb_actions.cpp",
+      "common/tool/actions.cpp",
+      "pcbnew/router/router_tool.cpp",
+      "common/hotkey_store.cpp"
+    ]
+  },
+  "menus": [
+    {
+      "label": "File",
+      "items": [
+        {
+          "type": "item",
+          "action": "common.Control.new"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.open"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.appendBoard"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.save"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.saveAs"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.saveCopy"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.revert"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.rescueAutosave"
+        },
+        {
+          "type": "submenu",
+          "label": "Import",
+          "items": [
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.importNetlist"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.importSpecctraSession"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.InteractiveDrawing.placeImportedGraphics"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.openNonKicadBoard"
+            },
+            {
+              "type": "separator"
+            }
+          ]
+        },
+        {
+          "type": "submenu",
+          "label": "Export",
+          "items": [
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.exportSpecctraDSN"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.exportGenCAD"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.exportVRML"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.exportIDF"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.exportSTEP"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.exportFootprintAssociations"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.exportHyperlynx"
+            },
+            {
+              "type": "separator"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.exportFootprints"
+            }
+          ]
+        },
+        {
+          "type": "submenu",
+          "label": "Fabrication Outputs",
+          "items": [
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.generateGerbers"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.generateDrillFiles"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.generateIPC2581File"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.generateODBPPFile"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.generatePosFile"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.generateReportFile"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.generateD356File"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.EditorControl.generateBOM"
+            }
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.boardSetup"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.pageSettings"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.print"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.plot"
+        },
+        {
+          "type": "separator"
+        }
+      ]
+    },
+    {
+      "label": "Edit",
+      "items": [
+        {
+          "type": "item",
+          "action": "common.Interactive.undo"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.redo"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.cut"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.copy"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.paste"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.pasteSpecial"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.delete"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "submenu",
+          "label": "Select",
+          "items": [
+            {
+              "type": "item",
+              "action": "common.Interactive.selectAll"
+            },
+            {
+              "type": "item",
+              "action": "common.Interactive.unselectAll"
+            }
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.find"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.findByProperties"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.editTracksAndVias"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.editTextAndGraphics"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.editTeardrops"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.changeFootprints"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.swapLayers"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.editGridOrigin"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.ZoneFiller.zoneFillAll"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.ZoneFiller.zoneUnfillAll"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.Generator.regenerateAllTuning"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.deleteTool"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.globalDeletions"
+        }
+      ]
+    },
+    {
+      "label": "View",
+      "items": [
+        {
+          "type": "submenu",
+          "label": "Panels",
+          "items": [
+            {
+              "type": "item",
+              "action": "common.Control.showProperties"
+            },
+            {
+              "type": "item",
+              "action": "common.Interactive.search"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.showLayersManager"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.showNetInspector"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.PcbDesignBlockControl.showDesignBlockPanel"
+            }
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.showFootprintBrowser"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.show3DViewer"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomInCenter"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomOutCenter"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomFitScreen"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomFitObjects"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomFitSelection"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomTool"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomRedraw"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "submenu",
+          "label": "Drawing Mode",
+          "items": [
+            {
+              "type": "item",
+              "action": "pcbnew.Control.zoneDisplayEnable"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.zoneDisplayDisable"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.zoneDisplayOutlines"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.zoneDisplayTesselation"
+            },
+            {
+              "type": "separator"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.padDisplayMode"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.viaDisplayMode"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.trackDisplayMode"
+            },
+            {
+              "type": "separator"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.graphicOutlines"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.textOutlines"
+            }
+          ]
+        },
+        {
+          "type": "submenu",
+          "label": "Contrast Mode",
+          "items": [
+            {
+              "type": "item",
+              "action": "common.Control.highContrastMode"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.layerAlphaDec"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Control.layerAlphaInc"
+            }
+          ]
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.Control.flipBoard"
+        },
+        {
+          "type": "separator"
+        }
+      ]
+    },
+    {
+      "label": "Place",
+      "items": [
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.placeFootprint"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.via"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.zone"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.ruleArea"
+        },
+        {
+          "type": "submenu",
+          "label": "Draw Microwave Shapes",
+          "items": [
+            {
+              "type": "item",
+              "action": "pcbnew.MicrowaveTool.createLine"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.MicrowaveTool.createGap"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.MicrowaveTool.createStub"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.MicrowaveTool.createStubArc"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.MicrowaveTool.createFunctionShape"
+            }
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.line"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.arc"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.rectangle"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.circle"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.graphicPolygon"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.bezier"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.placeReferenceImage"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.text"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.textbox"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.drawTable"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.placePoint"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.barcode"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "submenu",
+          "label": "Draw Dimensions",
+          "items": [
+            {
+              "type": "item",
+              "action": "pcbnew.InteractiveDrawing.orthogonalDimension"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.InteractiveDrawing.alignedDimension"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.InteractiveDrawing.centerDimension"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.InteractiveDrawing.radialDimension"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.InteractiveDrawing.leader"
+            }
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.placeCharacteristics"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveDrawing.placeStackup"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.drillOrigin"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.drillResetOrigin"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.gridSetOrigin"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.gridResetOrigin"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "submenu",
+          "label": "Auto-Place Footprints",
+          "items": [
+            {
+              "type": "item",
+              "action": "pcbnew.Autoplacer.autoplaceOffboard"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Autoplacer.autoplaceSelected"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "Route",
+      "items": [
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveRouter.SelectLayerPair"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveRouter.SingleTrack"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveRouter.DiffPair"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.LengthTuner.TuneSingleTrack"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.LengthTuner.TuneDiffPair"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.LengthTuner.TuneDiffPairSkew"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InteractiveRouter.SettingsDialog"
+        }
+      ]
+    },
+    {
+      "label": "Inspect",
+      "items": [
+        {
+          "type": "item",
+          "action": "pcbnew.InspectionTool.ShowBoardStatistics"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.measureTool"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.DRCTool.runDRC"
+        },
+        {
+          "type": "item",
+          "action": "common.Checker.prevMarker"
+        },
+        {
+          "type": "item",
+          "action": "common.Checker.nextMarker"
+        },
+        {
+          "type": "item",
+          "action": "common.Checker.excludeMarker"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InspectionTool.InspectClearance"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InspectionTool.InspectConstraints"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InspectionTool.ShowFootprintAssociations"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.InspectionTool.DiffFootprint"
+        }
+      ]
+    },
+    {
+      "label": "Tools",
+      "items": [
+        {
+          "type": "item",
+          "action": "common.Control.updatePcbFromSchematic"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.showEeschema"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.showProjectManager"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.showCalculatorTools"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.DRETool.drcRuleEditor"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.showFootprintEditor"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.updateFootprints"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.migrate3DModels"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.Control.zonesManager"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.Generator.showManager"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.Generator.regenerateAll"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.Generator.regenerateSelected"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.cleanupTracksAndVias"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.removeUnusedPads"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.GlobalEdit.cleanupGraphics"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.Control.repairBoard"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.EditorControl.collect3DModels"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "pcbnew.ReannotateTool.ShowReannotateDialog"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.updateSchematicFromPCB"
+        },
+        {
+          "type": "submenu",
+          "label": "Multi-Channel",
+          "items": [
+            {
+              "type": "item",
+              "action": "pcbnew.Multichannel.generatePlacementRuleAreas"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.Multichannel.repeatLayout"
+            }
+          ]
+        },
+        {
+          "type": "submenu",
+          "label": "External Plugins",
+          "items": [
+            {
+              "type": "item",
+              "action": "common.API.pluginsReload"
+            },
+            {
+              "type": "item",
+              "action": "pcbnew.ScriptingTool.pluginsShowFolder"
+            },
+            {
+              "type": "separator"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "Preferences",
+      "items": [
+        {
+          "type": "item",
+          "action": "common.SuiteControl.configurePaths"
+        },
+        {
+          "type": "item",
+          "action": "common.SuiteControl.showFootprintLibTable"
+        },
+        {
+          "type": "item",
+          "action": "common.SuiteControl.showDesignBLockLibTable"
+        },
+        {
+          "type": "item",
+          "action": "common.SuiteControl.openPreferences"
+        },
+        {
+          "type": "separator"
+        }
+      ]
+    }
+  ]
+}
