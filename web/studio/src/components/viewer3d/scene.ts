@@ -48,8 +48,9 @@
 // needs to be re-applied here -- the backend already baked `part.rot`
 // and the bottom-side mirror into `pads[].x/y` and `courtyard`.
 import * as THREE from "three";
-import type { BoardState, Part, Side } from "../../api/types";
+import type { BoardState, BoardText, Part, Shape, Side } from "../../api/types";
 import { layerColor, copperColorKey } from "../canvas/layers";
+import { circleThrough, normalizeSweep } from "../canvas/painter";
 
 // ---------------------------------------------------------------------
 // Units
@@ -381,6 +382,61 @@ function addTrack(group: THREE.Group, ptsMm: ReadonlyArray<[number, number]>, y:
 }
 
 // ---------------------------------------------------------------------
+// Zones: translucent copper
+// ---------------------------------------------------------------------
+
+/**
+ * Fill isn't computed anywhere in this model (same reason the 2D painter
+ * only draws a zone's outline) -- this renders the *outline polygon
+ * itself* as a flat, translucent copper-colored fill, an honest stand-in
+ * for "the pour would go here" rather than a real clearance-aware fill
+ * shape. Reuses the same per-layer copper color as tracks/pads
+ * (copperColorKey/layerColor) so a zone reads as "the same layer" as the
+ * copper it's on, distinguished from solid copper only by opacity.
+ */
+function zoneMaterial(bucketKey: string): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: hexToColor(layerColor(bucketKey)),
+    transparent: true,
+    opacity: 0.4,
+    // Outline winding (board.routing.zones[].outline) is just as
+    // untrusted as the board outline's -- see buildSlab's comment.
+    // DoubleSide + no depthWrite keeps the translucent tint correct from
+    // either side without needing to inspect the winding.
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    metalness: 0.3,
+    roughness: 0.6,
+  });
+}
+
+/**
+ * Same layer height as `layerY`, nudged a hair toward the board's
+ * vertical center so a track or pad sitting exactly on this layer (very
+ * common -- a zone usually fills in around existing copper on the same
+ * layer) doesn't z-fight with the zone fill beneath it. Cosmetic only,
+ * same convention as JOINT_COPPER_MM/SILK_GAP_MM above.
+ */
+function zoneY(layerName: string, layerOrder: readonly string[]): number {
+  const y = layerY(layerName, layerOrder);
+  const eps = 0.004;
+  if (y > 0) return y - eps;
+  if (y < 0) return y + eps;
+  return y;
+}
+
+function addZoneFill(group: THREE.Group, outlineMm: ReadonlyArray<[number, number]>, y: number, material: THREE.Material): void {
+  const shape = buildOutlineShape(outlineMm);
+  if (!shape) return; // degenerate outline (still being drawn, or <3 points) -- skip rather than fake one
+  const geometry = new THREE.ShapeGeometry(shape);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = Math.PI / 2; // same local-XY -> world-XZ mapping as buildMask
+  mesh.position.y = y;
+  mesh.name = "zone-fill";
+  group.add(mesh);
+}
+
+// ---------------------------------------------------------------------
 // Silkscreen (courtyard-outline stand-in) + part bodies
 // ---------------------------------------------------------------------
 
@@ -415,6 +471,178 @@ function addPartBody(group: THREE.Group, courtyardMm: readonly [number, number, 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.position.set((minX + maxX) / 2, partBodyCenterY(side), (minY + maxY) / 2);
   group.add(mesh);
+}
+
+// ---------------------------------------------------------------------
+// Drawing-tool shapes and text, rendered as silk
+// ---------------------------------------------------------------------
+
+/** Same "B." prefix convention as layerY's own fallback branch above. */
+function silkSide(layerName: string): Side {
+  return layerName.toLowerCase().startsWith("b.") ? "bottom" : "top";
+}
+
+function silkFillMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: REALISTIC_LOOK.silkWhite, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+}
+
+const ARC_SEGMENTS = 24;
+
+/**
+ * mm-space polyline for one drawing-tool shape, plus whether it's a
+ * closed loop (rect/circle/polygon) or open (segment/arc). Arc samples
+ * the *true* circumcircle through start/mid/end -- circleThrough/
+ * normalizeSweep, imported from the 2D painter rather than
+ * re-implemented here -- so this traces the same curve the 2D canvas
+ * draws, not the two-chord stand-in itemHitTest.ts uses for hit-testing
+ * (that one only needs a distance, not a shape to render).
+ */
+function shapePolylinePts(s: Shape): { pts: Array<[number, number]>; closed: boolean } {
+  switch (s.kind) {
+    case "segment":
+      return { pts: [[mm(s.start[0]), mm(s.start[1])], [mm(s.end[0]), mm(s.end[1])]], closed: false };
+    case "rect": {
+      const [x0, y0] = s.start;
+      const [x1, y1] = s.end;
+      return {
+        pts: [[mm(x0), mm(y0)], [mm(x1), mm(y0)], [mm(x1), mm(y1)], [mm(x0), mm(y1)]],
+        closed: true,
+      };
+    }
+    case "circle": {
+      const r = Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]);
+      const pts: Array<[number, number]> = [];
+      for (let i = 0; i < ARC_SEGMENTS; i++) {
+        const a = (i / ARC_SEGMENTS) * Math.PI * 2;
+        pts.push([mm(s.center[0] + r * Math.cos(a)), mm(s.center[1] + r * Math.sin(a))]);
+      }
+      return { pts, closed: true };
+    }
+    case "polygon":
+      return { pts: s.pts.map(([x, y]) => [mm(x), mm(y)] as [number, number]), closed: true };
+    case "arc": {
+      const circle = circleThrough(s.start, s.mid, s.end);
+      if (!circle) {
+        // Degenerate (collinear) points: a straight line is the same
+        // fallback the 2D painter uses.
+        return { pts: [[mm(s.start[0]), mm(s.start[1])], [mm(s.end[0]), mm(s.end[1])]], closed: false };
+      }
+      const [cx, cy, r] = circle;
+      const a0 = Math.atan2(s.start[1] - cy, s.start[0] - cx);
+      const aMid = Math.atan2(s.mid[1] - cy, s.mid[0] - cx);
+      const a1 = Math.atan2(s.end[1] - cy, s.end[0] - cx);
+      const ccw = normalizeSweep(a0, aMid, a1);
+      const twoPi = Math.PI * 2;
+      const fwd = (x: number) => ((x % twoPi) + twoPi) % twoPi;
+      const span = ccw ? fwd(a1 - a0) : -fwd(a0 - a1);
+      const pts: Array<[number, number]> = [];
+      for (let i = 0; i <= ARC_SEGMENTS; i++) {
+        const a = a0 + (span * i) / ARC_SEGMENTS;
+        pts.push([mm(cx + r * Math.cos(a)), mm(cy + r * Math.sin(a))]);
+      }
+      return { pts, closed: false };
+    }
+  }
+}
+
+/**
+ * One drawing-tool shape (Place > Line/Arc/Rectangle/Circle/Polygon),
+ * rendered as silk regardless of its actual `layer` string -- the
+ * drawing tools can place a shape on any layer (whatever's active when
+ * drawn), but per the task spec this view always treats them as
+ * silkscreen artwork, on whichever side the layer name's "B."/"F."
+ * prefix suggests (silkSide), the same simplification already used for
+ * the courtyard-outline stand-in below. A filled shape gets a flat white
+ * fill (real screen-printed silkscreen fills are commonly solid); an
+ * unfilled one gets the same white line-loop/line-strip treatment as the
+ * courtyard outline.
+ */
+function addSilkShape(group: THREE.Group, s: Shape, lineMaterial: THREE.LineBasicMaterial, fillMaterial: THREE.Material): void {
+  const y = silkY(silkSide(s.layer));
+  const { pts, closed } = shapePolylinePts(s);
+  if (pts.length < 2) return;
+  if (s.filled && closed) {
+    const shape = buildOutlineShape(pts);
+    if (shape) {
+      const geometry = new THREE.ShapeGeometry(shape);
+      const mesh = new THREE.Mesh(geometry, fillMaterial);
+      mesh.rotation.x = Math.PI / 2; // same local-XY -> world-XZ mapping as buildMask/addZoneFill
+      mesh.position.y = y;
+      mesh.name = "silk-shape-fill";
+      group.add(mesh);
+      return;
+    }
+  }
+  const points = pts.map(([x, z]) => new THREE.Vector3(x, y, z));
+  const geometry = new THREE.BufferGeometry().setFromPoints(points);
+  const line = closed ? new THREE.LineLoop(geometry, lineMaterial) : new THREE.Line(geometry, lineMaterial);
+  line.name = "silk-shape-line";
+  group.add(line);
+}
+
+/** Texture resolution for silk text -- arbitrary but crisp-enough pixels per mm of text height, not a real font metric (there is no font/glyph data in this model, see below). */
+const TEXT_TEXTURE_PX_PER_MM = 48;
+
+/**
+ * Free-standing board text (Place > Text) in 3D. Like the courtyard
+ * outline below, this data model has no font/stroke glyph outlines to
+ * draw as real vector silkscreen art (same limitation the 2D painter's
+ * own drawTexts notes) -- instead of a bare bounding-box line loop,
+ * though, this renders the actual string into an offscreen canvas and
+ * maps it onto a flat plane in the silk layer, so the label is legible
+ * in the 3D view rather than just a placeholder box.
+ */
+function buildTextMesh(t: BoardText): THREE.Mesh {
+  const side = silkSide(t.layer);
+  const sizeMm = Math.max(mm(t.size), 0.01);
+  const px = Math.max(TEXT_TEXTURE_PX_PER_MM * sizeMm, 1);
+  const font = `${px}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  const content = t.content || " ";
+
+  const canvas = document.createElement("canvas");
+  const measureCtx = canvas.getContext("2d")!;
+  measureCtx.font = font;
+  const textWidthPx = Math.max(measureCtx.measureText(content).width, 1);
+  canvas.width = Math.ceil(textWidthPx) + 8;
+  canvas.height = Math.ceil(px * 1.3);
+  const ctx = canvas.getContext("2d")!; // resizing a canvas resets its context state -- re-fetch and re-set font
+  ctx.font = font;
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(content, 4, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+
+  const widthMm = (canvas.width / px) * sizeMm;
+  const heightMm = (canvas.height / px) * sizeMm;
+  const geometry = new THREE.PlaneGeometry(widthMm, heightMm);
+  // The texture itself was always drawn left-aligned -- anchor (t.x,t.y)
+  // at the plane's left/center/right edge per `justify` by shifting the
+  // geometry in its own local space, before the flatten/yaw below, the
+  // same way the 2D canvas's translate-then-rotate-then-textAlign order
+  // keeps the alignment offset in the text's own (unrotated) frame.
+  const offsetX = t.justify === "left" ? widthMm / 2 : t.justify === "right" ? -widthMm / 2 : 0;
+  geometry.translate(offsetX, 0, 0);
+  // Flatten the plane (local XY, facing local +Z) into this file's
+  // world board plane (X/Z), facing outward from `side` -- the same
+  // local-XY -> world-XZ mapping as buildMask/addZoneFill, mirrored for
+  // the bottom side so the printed face looks outward from the board
+  // rather than into it.
+  geometry.rotateX(side === "top" ? -Math.PI / 2 : Math.PI / 2);
+
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(mm(t.x), silkY(side), mm(t.y));
+  // Millidegrees, CCW-positive in board space -- same conversion and
+  // sign the 2D painter's drawTexts uses for its own (canvas) rotation;
+  // kept consistent here even though this file's world axes are a
+  // separate (if parallel/unmirrored) convention from the 2D canvas's.
+  mesh.rotation.y = -(t.angle / 1000) * (Math.PI / 180);
+  if (t.mirror) mesh.scale.x *= -1;
+  mesh.name = "silk-text";
+  return mesh;
 }
 
 // ---------------------------------------------------------------------
@@ -461,6 +689,22 @@ export function buildBoardGroup(board: BoardState): THREE.Group {
         addVia(group, mm(via.x), mm(via.y), mm(via.d), viaMat);
       }
     }
+    if (board.routing.zones.length > 0) {
+      const zoneMaterials = new Map<string, THREE.MeshStandardMaterial>();
+      const zoneMatFor = (bucketKey: string): THREE.MeshStandardMaterial => {
+        let material = zoneMaterials.get(bucketKey);
+        if (!material) {
+          material = zoneMaterial(bucketKey);
+          zoneMaterials.set(bucketKey, material);
+        }
+        return material;
+      };
+      for (const zone of board.routing.zones) {
+        const y = zoneY(zone.layer, layerOrder);
+        const outlineMm: Array<[number, number]> = zone.outline.map(([x, yy]) => [mm(x), mm(yy)]);
+        addZoneFill(group, outlineMm, y, zoneMatFor(copperColorKey(zone.layer)));
+      }
+    }
   }
 
   const topCuY = layerY("F.Cu", layerOrder);
@@ -483,6 +727,16 @@ export function buildBoardGroup(board: BoardState): THREE.Group {
       const courtyardMm: [number, number, number, number] = [mm(courtyard[0]), mm(courtyard[1]), mm(courtyard[2]), mm(courtyard[3])];
       addSilkOutline(group, courtyardMm, side, silkMat);
       addPartBody(group, courtyardMm, side, isPassivePart(part) ? passiveMat : icMat);
+    }
+  }
+
+  if (board.drawings) {
+    const silkFillMat = silkFillMaterial();
+    for (const s of board.drawings.shapes) {
+      addSilkShape(group, s, silkMat, silkFillMat);
+    }
+    for (const t of board.drawings.texts) {
+      group.add(buildTextMesh(t));
     }
   }
 

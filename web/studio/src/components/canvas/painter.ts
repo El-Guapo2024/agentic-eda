@@ -315,8 +315,8 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape) {
   ctx.stroke();
 }
 
-/** Circumcenter + radius of the circle through three points, or null if they're (nearly) collinear. */
-function circleThrough(a: [number, number], b: [number, number], c: [number, number]): [number, number, number] | null {
+/** Circumcenter + radius of the circle through three points, or null if they're (nearly) collinear. Exported: viewer3d/scene.ts reuses this to sample the same true arc geometry for the 3D silk stand-in, instead of re-deriving it. */
+export function circleThrough(a: [number, number], b: [number, number], c: [number, number]): [number, number, number] | null {
   const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
   if (Math.abs(d) < 1e-9) return null;
   const a2 = a[0] * a[0] + a[1] * a[1];
@@ -327,8 +327,8 @@ function circleThrough(a: [number, number], b: [number, number], c: [number, num
   return [ux, uy, Math.hypot(a[0] - ux, a[1] - uy)];
 }
 
-/** True (draw counter-clockwise) if sweeping CCW from `a0` reaches `aMid` before `a1` does -- i.e. whichever winding direction actually visits the arc's own recorded midpoint. */
-function normalizeSweep(a0: number, aMid: number, a1: number): boolean {
+/** True (draw counter-clockwise) if sweeping CCW from `a0` reaches `aMid` before `a1` does -- i.e. whichever winding direction actually visits the arc's own recorded midpoint. Exported for viewer3d/scene.ts, see circleThrough above. */
+export function normalizeSweep(a0: number, aMid: number, a1: number): boolean {
   const twoPi = Math.PI * 2;
   const fwd = (x: number) => ((x % twoPi) + twoPi) % twoPi; // 0..2pi, CCW-positive
   const ccwSpan = fwd(a1 - a0); // CCW distance a0 -> a1
