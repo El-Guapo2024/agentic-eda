@@ -67,6 +67,19 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 out.push(DrcViolation::new(ErrorType::SilkOverCopper, detail, vec![silk_ref(s), via_item]));
             }
         }
+        // Routed copper on the matching layer -- easy to miss since it postdates
+        // placement (which is what keeps a label clear of *pads*): a track can
+        // freely route underneath a silk label with nothing stopping it.
+        for t in &board.tracks {
+            if t.layer != copper_layer {
+                continue;
+            }
+            if let Some((actual, _)) = s.shape.collides(&t.shape(), silk_clearance.max(0)) {
+                let detail = if silk_clearance > 0 { format!("(clearance {}; actual {})", format_um(silk_clearance), format_um(actual)) } else { String::new() };
+                let track_item = DrcRefItem { description: format!("Track [{}] on {}", t.net.as_deref().unwrap_or("<no net>"), t.layer), pos: (t.a.x, t.a.y), id: t.id.clone() };
+                out.push(DrcViolation::new(ErrorType::SilkOverCopper, detail, vec![silk_ref(s), track_item]));
+            }
+        }
     }
 
     // ---- solder mask bridging: different-net exposed copper touching, at

@@ -21,6 +21,15 @@ fn edge_segments(board: &DrcBoard) -> Vec<Seg> {
     (0..n).map(|i| Seg::new(board.outline[i], board.outline[(i + 1) % n])).collect()
 }
 
+/// KiCad's `SHAPE::Collide` convention (see `kimath::Shape::collides`):
+/// touching/crossing is *always* a violation, even at a configured
+/// clearance of exactly 0 (KiCad's own factory default for silk). A bare
+/// `actual < clearance` would silently never fire at `clearance == 0`,
+/// since `actual` is itself clamped to a 0 minimum.
+fn violates(actual: eda_model::ir::Um, clearance: eda_model::ir::Um) -> bool {
+    actual == 0 || actual < clearance
+}
+
 pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     let mut out = Vec::new();
     let edges = edge_segments(board);
@@ -31,21 +40,21 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     let copper_clearance = constraints::edge_clearance_min(rules);
     for p in &board.pads {
         let (actual, _) = distance_to_open_segments(&p.copper, &edges);
-        if actual < copper_clearance {
+        if violates(actual, copper_clearance) {
             let item = DrcRefItem { description: format!("Pad {} [{}] of {}", p.number, p.net.as_deref().unwrap_or("<no net>"), p.footprint_ref), pos: (p.center.x, p.center.y), id: p.id.clone() };
             out.push(DrcViolation::new(ErrorType::CopperEdgeClearance, format!("(clearance {}; actual {})", format_um(copper_clearance), format_um(actual)), vec![item]));
         }
     }
     for t in &board.tracks {
         let (actual, _) = distance_to_open_segments(&t.shape(), &edges);
-        if actual < copper_clearance {
+        if violates(actual, copper_clearance) {
             let item = DrcRefItem { description: format!("Track [{}] on {}", t.net.as_deref().unwrap_or("<no net>"), t.layer), pos: (t.a.x, t.a.y), id: t.id.clone() };
             out.push(DrcViolation::new(ErrorType::CopperEdgeClearance, format!("(clearance {}; actual {})", format_um(copper_clearance), format_um(actual)), vec![item]));
         }
     }
     for v in &board.vias {
         let (actual, _) = distance_to_open_segments(&v.shape(), &edges);
-        if actual < copper_clearance {
+        if violates(actual, copper_clearance) {
             let item = DrcRefItem { description: format!("Via [{}] on {}-{}", v.net.as_deref().unwrap_or("<no net>"), v.from_layer, v.to_layer), pos: (v.at.x, v.at.y), id: v.id.clone() };
             out.push(DrcViolation::new(ErrorType::CopperEdgeClearance, format!("(clearance {}; actual {})", format_um(copper_clearance), format_um(actual)), vec![item]));
         }
@@ -54,7 +63,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     let silk_clearance = constraints::silk_clearance_min(rules);
     for s in &board.silk_items {
         let (actual, _) = distance_to_open_segments(&s.shape, &edges);
-        if actual < silk_clearance {
+        if violates(actual, silk_clearance) {
             // Each item's own anchor, not the computed collision point --
             // matches kicad-cli's actual reported position for every other
             // item kind here (see `item.rs`'s doc comment on `DrcRefItem`).
