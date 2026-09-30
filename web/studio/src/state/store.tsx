@@ -7,8 +7,8 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, Part } from "../api/types";
-import { fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
+import type { BoardState, Part, Schematic } from "../api/types";
+import { fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 
@@ -63,12 +63,24 @@ export interface StudioState {
 
   view: ViewTransform;
   viewInitialized: boolean;
+  /** Independent pan/zoom for the schematic tab -- a different sheet, a different natural scale. */
+  schematicView: ViewTransform;
   units: LengthUnit;
   polar: boolean;
   gridUm: number;
   gridVisible: boolean;
   fullscreenCrosshair: boolean;
   showRatsnest: boolean;
+  /** pcbnew.Control.ratsnestLineMode ("Curved Ratsnest Lines"). */
+  ratsnestCurved: boolean;
+  /**
+   * pcbnew.Control.padDisplayMode/trackDisplayMode/viaDisplayMode
+   * ("Sketch Pads"/"Sketch Tracks"/"Sketch Vias"): outline-only instead
+   * of filled. All client-side display options -- no board data changes.
+   */
+  sketchPads: boolean;
+  sketchTracks: boolean;
+  sketchVias: boolean;
   /** Active layer for highlight/contrast (null = all layers equally weighted). */
   activeLayer: string | null;
   highContrast: boolean;
@@ -90,11 +102,21 @@ export interface StudioState {
   drcDialogOpen: boolean;
   hotkeysDialogOpen: boolean;
   footprintPropertiesOpen: boolean;
+  /** pcbnew.Control.showNetInspector ("Net Inspector") -- a basic net/pad-count list, not KiCad's full dockable inspector. */
+  netInspectorOpen: boolean;
   toast: { message: string; kind: "error" | "info" } | null;
 
   /** Cursor position in board µm, for the status bar's X/Y/dx/dy/dist. */
   cursorUm: { x: number; y: number } | null;
   moveOriginUm: { x: number; y: number } | null;
+
+  /**
+   * GET /api/schematic (structured symbols/wires/labels, see studio.rs),
+   * fetched only while `tab === "schematic"` -- read-only for now (no
+   * schematic editing verbs exist yet).
+   */
+  schematic: Schematic | null;
+  schematicError: string | null;
 }
 
 const initialState: StudioState = {
@@ -111,12 +133,17 @@ const initialState: StudioState = {
   activeTool: "select",
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
+  schematicView: { scale: 0, x: 0, y: 0 },
   units: "mm",
   polar: false,
   gridUm: 1000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
   gridVisible: true,
   fullscreenCrosshair: false,
   showRatsnest: true,
+  ratsnestCurved: false,
+  sketchPads: false,
+  sketchTracks: false,
+  sketchVias: false,
   activeLayer: null,
   highContrast: false,
   // Copper layers (board.layers, e.g. "F.Cu") are added once the board
@@ -129,9 +156,12 @@ const initialState: StudioState = {
   drcDialogOpen: false,
   hotkeysDialogOpen: false,
   footprintPropertiesOpen: false,
+  netInspectorOpen: false,
   toast: null,
   cursorUm: null,
   moveOriginUm: null,
+  schematic: null,
+  schematicError: null,
 };
 
 type Action =
@@ -149,13 +179,19 @@ type Action =
   | { type: "SET_MOVE_PREVIEW"; preview: MovePreview | null }
   | { type: "SET_ACTIVE_TOOL"; tool: ToolId }
   | { type: "SET_VIEW"; view: ViewTransform }
+  | { type: "SET_SCHEMATIC_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
   | { type: "SET_UNITS"; units: LengthUnit }
   | { type: "TOGGLE_POLAR" }
   | { type: "SET_GRID_UM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
   | { type: "TOGGLE_CROSSHAIR" }
+  | { type: "SET_FULLSCREEN_CROSSHAIR"; value: boolean }
   | { type: "TOGGLE_RATSNEST" }
+  | { type: "TOGGLE_RATSNEST_CURVED" }
+  | { type: "TOGGLE_SKETCH_PADS" }
+  | { type: "TOGGLE_SKETCH_TRACKS" }
+  | { type: "TOGGLE_SKETCH_VIAS" }
   | { type: "SET_ACTIVE_LAYER"; layer: string | null }
   | { type: "TOGGLE_HIGH_CONTRAST" }
   | { type: "SET_LAYER_VISIBLE"; layer: string; visible: boolean }
@@ -165,10 +201,13 @@ type Action =
   | { type: "SET_DRC_OPEN"; open: boolean }
   | { type: "SET_HOTKEYS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_FOOTPRINT_PROPERTIES_OPEN"; open: boolean }
+  | { type: "SET_NET_INSPECTOR_OPEN"; open: boolean }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
-  | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null };
+  | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
+  | { type: "SCHEMATIC_OK"; schematic: Schematic }
+  | { type: "SCHEMATIC_ERR"; message: string };
 
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
@@ -217,6 +256,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, activeTool: action.tool };
     case "SET_VIEW":
       return { ...state, view: action.view };
+    case "SET_SCHEMATIC_VIEW":
+      return { ...state, schematicView: action.view };
     case "MARK_VIEW_INITIALIZED":
       return { ...state, viewInitialized: true };
     case "SET_UNITS":
@@ -229,8 +270,18 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, gridVisible: !state.gridVisible };
     case "TOGGLE_CROSSHAIR":
       return { ...state, fullscreenCrosshair: !state.fullscreenCrosshair };
+    case "SET_FULLSCREEN_CROSSHAIR":
+      return { ...state, fullscreenCrosshair: action.value };
     case "TOGGLE_RATSNEST":
       return { ...state, showRatsnest: !state.showRatsnest };
+    case "TOGGLE_RATSNEST_CURVED":
+      return { ...state, ratsnestCurved: !state.ratsnestCurved };
+    case "TOGGLE_SKETCH_PADS":
+      return { ...state, sketchPads: !state.sketchPads };
+    case "TOGGLE_SKETCH_TRACKS":
+      return { ...state, sketchTracks: !state.sketchTracks };
+    case "TOGGLE_SKETCH_VIAS":
+      return { ...state, sketchVias: !state.sketchVias };
     case "SET_ACTIVE_LAYER":
       return { ...state, activeLayer: action.layer };
     case "TOGGLE_HIGH_CONTRAST":
@@ -249,6 +300,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, hotkeysDialogOpen: action.open };
     case "SET_FOOTPRINT_PROPERTIES_OPEN":
       return { ...state, footprintPropertiesOpen: action.open };
+    case "SET_NET_INSPECTOR_OPEN":
+      return { ...state, netInspectorOpen: action.open };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":
@@ -257,6 +310,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, cursorUm: action.at };
     case "SET_MOVE_ORIGIN":
       return { ...state, moveOriginUm: action.at };
+    case "SCHEMATIC_OK":
+      return { ...state, schematic: action.schematic, schematicError: null };
+    case "SCHEMATIC_ERR":
+      return { ...state, schematicError: action.message };
     default:
       return state;
   }
@@ -294,13 +351,26 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshSchematic = useCallback(async () => {
+    try {
+      const schematic = await fetchSchematic();
+      dispatch({ type: "SCHEMATIC_OK", schematic });
+    } catch (e) {
+      dispatch({ type: "SCHEMATIC_ERR", message: e instanceof Error ? e.message : String(e) });
+    }
+  }, []);
+
   // Poll /api/version (cheap) and only refetch the full /api/state when it
   // changes -- mirrors the old studio.html poll loop so CLI edits and
   // other browser tabs show up here within ~1s without hammering the
-  // single-threaded backend.
+  // single-threaded backend. The schematic is read-only and only ever
+  // shown on the schematic tab, so it piggybacks on the same version
+  // check rather than running its own poll: fetched once on switching to
+  // that tab, and again whenever the board changes while it's showing.
   useEffect(() => {
     let stopped = false;
     let lastVersion: string | null = null;
+    let lastSchematicFetch: string | null = null;
     const tick = async () => {
       try {
         const v = await fetchVersion();
@@ -309,6 +379,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           lastVersion = v;
           dispatch({ type: "VERSION", version: v });
           await refresh();
+        }
+        if (stateRef.current.tab === "schematic" && lastSchematicFetch !== v) {
+          lastSchematicFetch = v;
+          await refreshSchematic();
         }
       } catch {
         // backend restarting or unreachable; try again next tick
@@ -320,7 +394,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       stopped = true;
       clearInterval(id);
     };
-  }, [refresh]);
+  }, [refresh, refreshSchematic]);
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {

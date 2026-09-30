@@ -26,9 +26,9 @@ const OUT = join(__dirname, "..", "src", "kicad", "actions.json");
 
 export const PRIMARY_ACTION_FILES = ["pcbnew/tools/pcb_actions.cpp", "common/tool/actions.cpp"];
 
-/** Any other file under pcbnew/ or common/ that defines TOOL_ACTIONs -- found by content, not guessed by filename. */
+/** Any other file under pcbnew/, common/, or eeschema/ that defines TOOL_ACTIONs -- found by content, not guessed by filename. */
 export function discoverMoreActionFiles() {
-  return discoverFilesContaining("TOOL_ACTION_ARGS()", ["pcbnew", "common"]).filter((f) => !PRIMARY_ACTION_FILES.includes(f));
+  return discoverFilesContaining("TOOL_ACTION_ARGS()", ["pcbnew", "common", "eeschema"]).filter((f) => !PRIMARY_ACTION_FILES.includes(f));
 }
 
 /**

@@ -155,6 +155,10 @@ fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Optio
             Ok(svg) => respond(stream, "200 OK", "image/svg+xml", svg.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
+        ("GET", "/api/schematic") => {
+            let v = schematic_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -334,4 +338,39 @@ fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String
         *c = Some((when, svg.clone()));
     }
     Ok(svg)
+}
+
+/// The same schematic `schematic_svg` draws, but as structured JSON for
+/// the browser UI's own KiCad-style renderer instead of one baked image:
+/// each symbol instance plus its part's pins (a `SymbolInstance` alone
+/// says nothing about what it draws), every wire, and every net label.
+/// No second cache next to `schematic_svg`'s -- these boards are small,
+/// so deriving again on a cache miss costs nothing worth guarding.
+fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let sch = match design.schematic {
+        Some(s) => s,
+        None => eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection { symbols: Vec::new(), wires: Vec::new(), labels: Vec::new() }),
+    };
+    let symbols: Vec<Value> = sch
+        .symbols
+        .iter()
+        .map(|s| {
+            let part = model.part(&s.id);
+            json!({
+                "id": s.id,
+                "at": [s.at.x, s.at.y],
+                // Millideg -> plain degrees, same convention `state()` uses for a PCB part's `rot`.
+                "rot": s.rot as f64 / 1000.0,
+                "mirrored": s.mirrored,
+                "value": part.and_then(|p| p.value.clone()),
+                "mpn": part.and_then(|p| p.mpn.clone()),
+                "package": part.and_then(|p| p.package.clone()),
+                "pins": part.map(|p| p.pins.iter().map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind })).collect::<Vec<_>>()).unwrap_or_default(),
+            })
+        })
+        .collect();
+    let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect();
+    let labels: Vec<Value> = sch.labels.iter().map(|l| json!({ "net": l.net, "at": [l.at.x, l.at.y] })).collect();
+    Ok(json!({ "symbols": symbols, "wires": wires, "labels": labels }))
 }

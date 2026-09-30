@@ -2,13 +2,14 @@
   "meta": {
     "generated": true,
     "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
-    "kicadCommitDate": "2026-05-04T07:39:57+03:00",
-    "extractedAt": "2026-09-30T00:52:04.093Z",
+    "kicadCommitDate": null,
+    "extractedAt": "2026-09-30T04:08:28.333Z",
     "sourceFiles": [
       "pcbnew/tools/pcb_actions.cpp",
       "common/tool/actions.cpp",
+      "pcbnew/router/router_tool.cpp",
       "common/hotkey_store.cpp",
-      "pcbnew/router/router_tool.cpp"
+      "eeschema/tools/sch_actions.cpp"
     ]
   },
   "actions": [
@@ -2100,6 +2101,824 @@
       "flags": []
     },
     {
+      "name": "eeschema.Align.alignBottom",
+      "label": "Align to Bottom",
+      "tooltip": "Aligns selected items to the bottom edge of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_bottom",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.Align.alignCenterX",
+      "label": "Align to Horizontal Center",
+      "tooltip": "Aligns selected items to the horizontal center of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_middle",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.Align.alignCenterY",
+      "label": "Align to Vertical Center",
+      "tooltip": "Aligns selected items to the vertical center of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_center",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.Align.alignLeft",
+      "label": "Align to Left",
+      "tooltip": "Aligns selected items to the left edge of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_left",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.Align.alignRight",
+      "label": "Align to Right",
+      "tooltip": "Aligns selected items to the right edge of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_right",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.Align.alignTop",
+      "label": "Align to Top",
+      "tooltip": "Aligns selected items to the top edge of the item under the cursor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_items_top",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.AlignToGrid",
+      "label": "Align Items to Grid",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "align_elements_to_grid",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.EditorControl.addVariant",
+      "label": "Add Design Variant...",
+      "tooltip": "Add new design variant to the schematic.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.angleSnapModeChanged",
+      "label": "eeschema.EditorControl.angleSnapModeChanged",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_NOTIFY"
+      ]
+    },
+    {
+      "name": "eeschema.EditorControl.annotate",
+      "label": "Annotate Schematic...",
+      "tooltip": "Fill in schematic symbol reference designators",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "annotate",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.annotateAutomatically",
+      "label": "Annotate Automatically",
+      "tooltip": "Toggle automatic annotation of new symbols",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "annotate",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.assignFootprints",
+      "label": "Assign Footprints...",
+      "tooltip": "Run footprint assignment tool",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "icon_cvpcb_24",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.clearHighlight",
+      "label": "Clear Net Highlighting",
+      "tooltip": "Clear any existing net highlighting",
+      "hotkey": "~",
+      "altHotkey": null,
+      "hotkeyRaw": "'~'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.ddAddImage",
+      "label": "eeschema.EditorControl.ddAddImage",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.ddAppendFile",
+      "label": "eeschema.EditorControl.ddAppendFile",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.ddImportGraphics",
+      "label": "eeschema.EditorControl.ddImportGraphics",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.drawSheetOnClipboard",
+      "label": "Export Drawing to Clipboard",
+      "tooltip": "Export drawing of current sheet to clipboard",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "copy",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.editLibSymbolWithSymbolEditor",
+      "label": "Edit Library Symbol...",
+      "tooltip": "Open the library symbol in the Symbol Editor",
+      "hotkey": "Ctrl+Shift+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'E'",
+      "altHotkeyRaw": null,
+      "icon": "libedit",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.editPageNumber",
+      "label": "Edit Sheet Page Number...",
+      "tooltip": "Edit the page number of the current or selected sheet",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.editSymbolFields",
+      "label": "Bulk Edit Symbol Fields...",
+      "tooltip": "Edit a table of fields from all symbols in the schematic",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "spreadsheet",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.editSymbolLibraryLinks",
+      "label": "Bulk Edit Symbol Library Links...",
+      "tooltip": "Edit a table of links between schematic and library symbols",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit_cmp_symb_links",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.editVariantDescription",
+      "label": "Edit Variant Description...",
+      "tooltip": "Edit the description of an existing design variant.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.editWithSymbolEditor",
+      "label": "Edit with Symbol Editor",
+      "tooltip": "Open the selected symbol in the Symbol Editor",
+      "hotkey": "Ctrl+E",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'E'",
+      "altHotkeyRaw": null,
+      "icon": "libedit",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.exportNetlist",
+      "label": "Export Netlist...",
+      "tooltip": "Export file containing netlist in one of several formats",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "netlist",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.exportSymbolsToLibrary",
+      "label": "Export Symbols...",
+      "tooltip": "Add symbols from schematic to a new or an existing symbol library\\n",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library_archive",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.generateBOM",
+      "label": "Generate Bill of Materials...",
+      "tooltip": "Generate a bill of materials for the current schematic",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "post_bom",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.generateBOMExternal",
+      "label": "Generate Bill of Materials (External)...",
+      "tooltip": "Generate a bill of materials for the current schematic using external generator",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.generateBOMLegacy",
+      "label": "Generate Legacy Bill of Materials...",
+      "tooltip": "Generate a bill of materials for the current schematic (Legacy Generator)",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "file_bom",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.highlightNet",
+      "label": "Highlight Net",
+      "tooltip": "Highlight net under cursor",
+      "hotkey": "`",
+      "altHotkey": null,
+      "hotkeyRaw": "'`'",
+      "altHotkeyRaw": null,
+      "icon": "net_highlight_schematic",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.highlightNetTool",
+      "label": "Highlight Nets",
+      "tooltip": "Highlight wires and pins of a net",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "net_highlight_schematic",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.EditorControl.importFPAssignments",
+      "label": "Import Footprint Assignments...",
+      "tooltip": "Import symbol footprint assignments from .cmp file created by board editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import_footprint_names",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.importGraphics",
+      "label": "Import Graphics...",
+      "tooltip": "Import 2D drawing file",
+      "hotkey": "Ctrl+Shift+F",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'F'",
+      "altHotkeyRaw": null,
+      "icon": "import_vector",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.EditorControl.importNonKicadSchematic",
+      "label": "Import Non-KiCad Schematic...",
+      "tooltip": "Replace current schematic sheet with one imported from another application",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import_document",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.incrementAnnotations",
+      "label": "Increment Annotations From...",
+      "tooltip": "Increment a subset of reference designators starting at a particular symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "annotate_increment",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.lineMode45",
+      "label": "Line Mode for Wires and Buses",
+      "tooltip": "Constrain drawing and dragging to horizontal, vertical, or 45-degree angle motions",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "hv45mode",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.EditorControl.lineModeFree",
+      "label": "Line Mode for Wires and Buses",
+      "tooltip": "Draw and drag at any angle",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lines_any",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.EditorControl.lineModeNext",
+      "label": "Line Mode for Wires and Buses",
+      "tooltip": "Switch to next angle snapping mode",
+      "hotkey": "Shift+Space",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + static_cast<int>( WXK_SPACE )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.lineModeOrthonal",
+      "label": "Line Mode for Wires and Buses",
+      "tooltip": "Constrain drawing and dragging to horizontal or vertical motions",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lines90",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.EditorControl.markSimExclusions",
+      "label": "Mark items excluded from simulation",
+      "tooltip": "Draw 'X's over items which have been excluded from simulation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.nextNetItem",
+      "label": "Next Net Item",
+      "tooltip": "Select next item on the current net",
+      "hotkey": "Tab",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_TAB",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.nextUnit",
+      "label": "Next Symbol Unit",
+      "tooltip": "Open the next unit of the symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.previousNetItem",
+      "label": "Previous Net Item",
+      "tooltip": "Select previous item on the current net",
+      "hotkey": "Shift+Tab",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + static_cast<int>( WXK_TAB )",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.previousUnit",
+      "label": "Previous Symbol Unit",
+      "tooltip": "Open the previous unit of the symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.remapSymbols",
+      "label": "Remap Legacy Library Symbols...",
+      "tooltip": "Remap library symbol references in legacy schematics to the symbol library table",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "rescue",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.removeVariant",
+      "label": "Remove Design Variant...",
+      "tooltip": "Remove an existing design variant from the schematic.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.rescueSymbols",
+      "label": "Rescue Symbols...",
+      "tooltip": "Find old symbols in project and rename/rescue them",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "rescue",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.restartMove",
+      "label": "eeschema.EditorControl.restartMove",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.saveCurrSheetCopyAs",
+      "label": "Save Current Sheet Copy As...",
+      "tooltip": "Save a copy of the current sheet to another location or name",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save_as",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.schematicSetup",
+      "label": "Schematic Setup...",
+      "tooltip": "Edit schematic setup including annotation styles and electrical rules",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "options_schematic",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.selectOnPCB",
+      "label": "Select on PCB",
+      "tooltip": "Select corresponding items in PCB editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "select_same_sheet",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.setDNP",
+      "label": "Do not Populate",
+      "tooltip": "Set the do not populate attribute",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.setExcludeFromBoard",
+      "label": "Exclude from Board",
+      "tooltip": "Set the exclude from board attribute",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.setExcludeFromBOM",
+      "label": "Exclude from Bill of Materials",
+      "tooltip": "Set the exclude from bill of materials attribute",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.setExcludeFromSimulation",
+      "label": "Exclude from Simulation",
+      "tooltip": "Set the exclude from simulation attribute",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showDirectiveLabels",
+      "label": "Show Directive Labels",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showERCErrors",
+      "label": "Show ERC Errors",
+      "tooltip": "Show markers for electrical rules checker errors",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showERCExclusions",
+      "label": "Show ERC Exclusions",
+      "tooltip": "Show markers for excluded electrical rules checker violations",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showERCWarnings",
+      "label": "Show ERC Warnings",
+      "tooltip": "Show markers for electrical rules checker warnings",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showHiddenFields",
+      "label": "Show Hidden Fields",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showHiddenPins",
+      "label": "Show Hidden Pins",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "hidden_pin",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showNetNavigator",
+      "label": "Net Navigator",
+      "tooltip": "Show/hide the net navigator",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showOperatingPointCurrents",
+      "label": "Show OP Currents",
+      "tooltip": "Show operating point current data from simulation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showOperatingPointVoltages",
+      "label": "Show OP Voltages",
+      "tooltip": "Show operating point voltage data from simulation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showPcbNew",
+      "label": "Switch to PCB Editor",
+      "tooltip": "Open PCB in board editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "icon_pcbnew_24",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.showSimulator",
+      "label": "Simulator",
+      "tooltip": "Show simulation window for running SPICE or IBIS simulations.",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "simulator",
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.togglePinAltIcons",
+      "label": "Show Pin Alternate Icons",
+      "tooltip": "Show indicator icons for pins with alternate modes",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorControl.updateNetHighlighting",
+      "label": "eeschema.EditorControl.updateNetHighlighting",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.EditorTool.showHierarchy",
+      "label": "Hierarchy Navigator",
+      "tooltip": "Show/hide the schematic sheet hierarchy navigator",
+      "hotkey": "Ctrl+H",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'H'",
+      "altHotkeyRaw": null,
+      "icon": "hierarchy_nav",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InspectionTool.checkSymbol",
+      "label": "Symbol Checker",
+      "tooltip": "Show the symbol checker window",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "erc",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InspectionTool.diffSymbol",
+      "label": "Compare Symbol with Library",
+      "tooltip": "Show differences between schematic symbol and its library equivalent",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InspectionTool.runERC",
+      "label": "Electrical Rules Checker",
+      "tooltip": "Show the electrical rules checker window",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "erc",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InspectionTool.showBusSyntaxHelp",
+      "label": "Show Bus Syntax Help",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "bus_definition_tool",
+      "flags": []
+    },
+    {
       "name": "eeschema.Interactive.decrementPrimary",
       "label": "Decrement Primary",
       "tooltip": "Decrement the primary field of the selected item(s)",
@@ -2152,6 +2971,1818 @@
       "hotkeyRaw": null,
       "altHotkeyRaw": null,
       "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.autoplaceAllSheetPins",
+      "label": "Autoplace All Sheet Pins",
+      "tooltip": "Imports and auto places all sheet pins",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.closeOutline",
+      "label": "Close Outline",
+      "tooltip": "Close the in-progress outline",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "checked_ok",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.deleteLastPoint",
+      "label": "Delete Last Point",
+      "tooltip": "Delete the last point added to the current item",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "undo",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawArc",
+      "label": "Draw Arcs",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_arc",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawBezier",
+      "label": "Draw Bezier Curve",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_bezier",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawCircle",
+      "label": "Draw Circles",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_circle",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawRectangle",
+      "label": "Draw Rectangles",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_rectangle",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawRuleArea",
+      "label": "Draw Rule Areas",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_keepout_area",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawSheet",
+      "label": "Draw Hierarchical Sheets",
+      "tooltip": "",
+      "hotkey": "S",
+      "altHotkey": null,
+      "hotkeyRaw": "'S'",
+      "altHotkeyRaw": null,
+      "icon": "add_hierarchical_subsheet",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawSheetFromDesignBlock",
+      "label": "Draw Sheet from Design Block",
+      "tooltip": "Copy design block into project as a sheet on current sheet",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_hierarchical_subsheet",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawSheetFromFile",
+      "label": "Draw Sheet from File",
+      "tooltip": "Copy sheet into project and draw on current sheet",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_hierarchical_subsheet",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawTable",
+      "label": "Draw Tables",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.drawTextBox",
+      "label": "Draw Text Boxes",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_textbox",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.importSheet",
+      "label": "Import Sheet...",
+      "tooltip": "Import sheet into project",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_hierarchical_subsheet",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeBusWireEntry",
+      "label": "Place Wire to Bus Entries",
+      "tooltip": "",
+      "hotkey": "Z",
+      "altHotkey": null,
+      "hotkeyRaw": "'Z'",
+      "altHotkeyRaw": null,
+      "icon": "add_line2bus",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeClassLabel",
+      "label": "Place Directive Labels",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_class_flag",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeDesignBlock",
+      "label": "Place Design Block",
+      "tooltip": "Add selected design block to current sheet",
+      "hotkey": "Shift+B",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'B'",
+      "altHotkeyRaw": null,
+      "icon": "add_component",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeGlobalLabel",
+      "label": "Place Global Labels",
+      "tooltip": "",
+      "hotkey": "Ctrl+L",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'L'",
+      "altHotkeyRaw": null,
+      "icon": "add_glabel",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeHierarchicalLabel",
+      "label": "Place Hierarchical Labels",
+      "tooltip": "",
+      "hotkey": "H",
+      "altHotkey": null,
+      "hotkeyRaw": "'H'",
+      "altHotkeyRaw": null,
+      "icon": "add_hierarchical_label",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeImage",
+      "label": "Place Images",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "image",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeJunction",
+      "label": "Place Junctions",
+      "tooltip": "",
+      "hotkey": "J",
+      "altHotkey": null,
+      "hotkeyRaw": "'J'",
+      "altHotkeyRaw": null,
+      "icon": "add_junction",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeLabel",
+      "label": "Place Net Labels",
+      "tooltip": "",
+      "hotkey": "L",
+      "altHotkey": null,
+      "hotkeyRaw": "'L'",
+      "altHotkeyRaw": null,
+      "icon": "add_label",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeLinkedDesignBlock",
+      "label": "Place Linked Design Block",
+      "tooltip": "Place design block linked to selected group",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_component",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeNextSymbolUnit",
+      "label": "Place Next Symbol Unit",
+      "tooltip": "Place the next unit of the current symbol that is missing from the schematic",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": [
+        "AF_ACTIVATE )\n        // The symbol to use as a reference for the next unit and optionally the unit number\n        .Parameter<SCH_ACTIONS::PLACE_SYMBOL_UNIT_PARAMS>( {}"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeNoConnect",
+      "label": "Place/Remove No Connect Flags",
+      "tooltip": "",
+      "hotkey": "Q",
+      "altHotkey": null,
+      "hotkeyRaw": "'Q'",
+      "altHotkeyRaw": null,
+      "icon": "noconn",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placePowerSymbol",
+      "label": "Place Power Symbols",
+      "tooltip": "",
+      "hotkey": "P",
+      "altHotkey": null,
+      "hotkeyRaw": "'P'",
+      "altHotkeyRaw": null,
+      "icon": "add_power",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeSchematicText",
+      "label": "Draw Text",
+      "tooltip": "",
+      "hotkey": "T",
+      "altHotkey": null,
+      "hotkeyRaw": "'T'",
+      "altHotkeyRaw": null,
+      "icon": "text",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeSheetPin",
+      "label": "Place Pins from Sheet",
+      "tooltip": "Add sheet pins from existing hierarchical labels found on that sheet",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_hierar_pin",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.placeSymbol",
+      "label": "Place Symbols",
+      "tooltip": "",
+      "hotkey": "A",
+      "altHotkey": null,
+      "hotkeyRaw": "'A'",
+      "altHotkeyRaw": null,
+      "icon": "add_component",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.saveToLinkedDesignBlock",
+      "label": "Save to Linked Design Block",
+      "tooltip": "Save selected group to linked design block",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_component",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.syncAllSheetsPins",
+      "label": "Sync All Sheet Pins...",
+      "tooltip": "Synchronize all sheet pins and hierarchical labels",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import_hierarchical_label",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawing.syncSheetPins",
+      "label": "Sync Selected Sheet Pins...",
+      "tooltip": "Synchronize selected sheet pins and hierarchical labels",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import_hierarchical_label",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawingLineWireBus.drawBuses",
+      "label": "Draw Buses",
+      "tooltip": "",
+      "hotkey": "B",
+      "altHotkey": null,
+      "hotkeyRaw": "'B'",
+      "altHotkeyRaw": null,
+      "icon": "add_bus",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawingLineWireBus.drawLines",
+      "label": "Draw Lines",
+      "tooltip": "",
+      "hotkey": "I",
+      "altHotkey": null,
+      "hotkeyRaw": "'I'",
+      "altHotkeyRaw": null,
+      "icon": "add_graphical_segments",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawingLineWireBus.drawWires",
+      "label": "Draw Wires",
+      "tooltip": "",
+      "hotkey": "W",
+      "altHotkey": null,
+      "hotkeyRaw": "'W'",
+      "altHotkeyRaw": null,
+      "icon": "add_line",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawingLineWireBus.switchPosture",
+      "label": "Switch Segment Posture",
+      "tooltip": "Switches posture of the current segment.",
+      "hotkey": "/",
+      "altHotkey": null,
+      "hotkeyRaw": "'/'",
+      "altHotkeyRaw": null,
+      "icon": "change_entry_orient",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveDrawingLineWireBus.undoLastSegment",
+      "label": "Undo Last Segment",
+      "tooltip": "Walks the current line back one segment.",
+      "hotkey": "Backspace",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_BACK",
+      "altHotkeyRaw": null,
+      "icon": "undo",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveDrawingLineWireBus.unfoldBus",
+      "label": "Unfold from Bus",
+      "tooltip": "Break a wire out of a bus",
+      "hotkey": "C",
+      "altHotkey": null,
+      "hotkeyRaw": "'C'",
+      "altHotkeyRaw": null,
+      "icon": "INVALID_BITMAP",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveEdit.assignNetclass",
+      "label": "Assign Netclass...",
+      "tooltip": "Assign a netclass to nets matching a pattern",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "netlist",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.autoplaceFields",
+      "label": "Autoplace Fields",
+      "tooltip": "Runs the automatic placement algorithm on the symbol's (or sheet's) fields",
+      "hotkey": "O",
+      "altHotkey": null,
+      "hotkeyRaw": "'O'",
+      "altHotkeyRaw": null,
+      "icon": "autoplace_fields",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.breakWire",
+      "label": "Break",
+      "tooltip": "Divide into connected segments",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "break_line",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.changeSymbol",
+      "label": "Change Symbol...",
+      "tooltip": "Assign a different symbol from the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "exchange",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.changeSymbols",
+      "label": "Change Symbols...",
+      "tooltip": "Assign different symbols from the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "exchange",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.cleanupSheetPins",
+      "label": "Cleanup Sheet Pins",
+      "tooltip": "Delete unreferenced sheet pins",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.convertStackedPins",
+      "label": "Convert Stacked Pins",
+      "tooltip": "Convert multiple pins at the same location to a single pin with stacked notation",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.editFootprint",
+      "label": "Edit Footprint...",
+      "tooltip": "",
+      "hotkey": "F",
+      "altHotkey": null,
+      "hotkeyRaw": "'F'",
+      "altHotkeyRaw": null,
+      "icon": "edit_comp_footprint",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.editReference",
+      "label": "Edit Reference Designator...",
+      "tooltip": "",
+      "hotkey": "U",
+      "altHotkey": null,
+      "hotkeyRaw": "'U'",
+      "altHotkeyRaw": null,
+      "icon": "edit_comp_ref",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.editTextAndGraphics",
+      "label": "Edit Text & Graphics Properties...",
+      "tooltip": "Edit text and graphics properties globally across schematic",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.editValue",
+      "label": "Edit Value...",
+      "tooltip": "",
+      "hotkey": "V",
+      "altHotkey": null,
+      "hotkeyRaw": "'V'",
+      "altHotkeyRaw": null,
+      "icon": "edit_comp_value",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.explodeStackedPin",
+      "label": "Explode Stacked Pin",
+      "tooltip": "Convert a pin with stacked notation to multiple individual pins",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.findNetInInspector",
+      "label": "Find in Net Navigator",
+      "tooltip": "Locate the selected net in the net navigator",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.lock",
+      "label": "Lock",
+      "tooltip": "Prevent items from being moved and/or resized on the canvas",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "locked",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.mirrorH",
+      "label": "Mirror Horizontally",
+      "tooltip": "Flips selected item(s) from left to right",
+      "hotkey": "X",
+      "altHotkey": null,
+      "hotkeyRaw": "'X'",
+      "altHotkeyRaw": null,
+      "icon": "mirror_h",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.mirrorV",
+      "label": "Mirror Vertically",
+      "tooltip": "Flips selected item(s) from top to bottom",
+      "hotkey": "Y",
+      "altHotkey": null,
+      "hotkeyRaw": "'Y'",
+      "altHotkeyRaw": null,
+      "icon": "mirror_v",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.pinTable",
+      "label": "Pin Table...",
+      "tooltip": "Displays pin table for bulk editing of pins",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin_table",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.properties",
+      "label": "Properties...",
+      "tooltip": "",
+      "hotkey": "E",
+      "altHotkey": null,
+      "hotkeyRaw": "'E'",
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.repeatDrawItem",
+      "label": "Repeat Last Item",
+      "tooltip": "Duplicates the last drawn item",
+      "hotkey": "F1",
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_F1 )\n#else\n        .DefaultHotkey( WXK_INSERT )\n#endif\n        .LegacyHotkeyName( \"Repeat Last Item\"",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.rotateCCW",
+      "label": "Rotate Counterclockwise",
+      "tooltip": "",
+      "hotkey": "R",
+      "altHotkey": null,
+      "hotkeyRaw": "'R'",
+      "altHotkeyRaw": null,
+      "icon": "rotate_ccw",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.rotateCW",
+      "label": "Rotate Clockwise",
+      "tooltip": "",
+      "hotkey": "Shift+R",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'R'",
+      "altHotkeyRaw": null,
+      "icon": "rotate_cw",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.slice",
+      "label": "Slice",
+      "tooltip": "Divide into unconnected segments",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "slice_line",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.swap",
+      "label": "Swap",
+      "tooltip": "Swap positions of selected items",
+      "hotkey": "Alt+S",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + 'S'",
+      "altHotkeyRaw": null,
+      "icon": "swap",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.swapPinLabels",
+      "label": "Swap Pin Labels",
+      "tooltip": "Swap the labels attached to selected pins",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "swap",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.swapPins",
+      "label": "Swap Pins",
+      "tooltip": "Swap the selected symbol pins' positions",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "swap",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.swapUnitLabels",
+      "label": "Swap Unit Labels",
+      "tooltip": "Swap labels between selected units",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "swap",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.symbolProperties",
+      "label": "Symbol Properties...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "part_properties",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.toCLabel",
+      "label": "Change to Directive Label",
+      "tooltip": "Change existing item to a directive label",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_class_flag",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveEdit.toggleDeMorgan",
+      "label": "Cycle Body Style",
+      "tooltip": "Switch between De Morgan (or other) representations",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "morgan2",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.toggleLock",
+      "label": "Toggle Lock",
+      "tooltip": "Lock or unlock selected items",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lock_unlock",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.toGLabel",
+      "label": "Change to Global Label",
+      "tooltip": "Change existing item to a global label",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_glabel",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveEdit.toHLabel",
+      "label": "Change to Hierarchical Label",
+      "tooltip": "Change existing item to a hierarchical label",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_hierarchical_label",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveEdit.toLabel",
+      "label": "Change to Label",
+      "tooltip": "Change existing item to a label",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_line_label",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveEdit.toText",
+      "label": "Change to Text",
+      "tooltip": "Change existing item to a text comment",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveEdit.toTextBox",
+      "label": "Change to Text Box",
+      "tooltip": "Change existing item to a text box",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_textbox",
+      "flags": [
+        "AF_NONE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveEdit.unlock",
+      "label": "Unlock",
+      "tooltip": "Allow items to be moved and/or resized on the canvas",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "unlocked",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.updateSymbol",
+      "label": "Update Symbol...",
+      "tooltip": "Update symbol to include any changes from the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "refresh",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveEdit.updateSymbols",
+      "label": "Update Symbols from Library...",
+      "tooltip": "Update symbols to include any changes from the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "refresh",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveMove.drag",
+      "label": "Drag",
+      "tooltip": "Move items while keeping their connections",
+      "hotkey": "G",
+      "altHotkey": null,
+      "hotkeyRaw": "'G'",
+      "altHotkeyRaw": null,
+      "icon": "drag",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveMove.move",
+      "label": "Move",
+      "tooltip": "",
+      "hotkey": "M",
+      "altHotkey": null,
+      "hotkeyRaw": "'M'",
+      "altHotkeyRaw": null,
+      "icon": "move",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.InteractiveSelection.SelectConnection",
+      "label": "Select/Expand Connection",
+      "tooltip": "Selects a connection or expands an existing selection to pins, symbols, or entire connections",
+      "hotkey": "Ctrl+4",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + '4'",
+      "altHotkeyRaw": null,
+      "icon": "net_highlight_schematic",
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveSelection.SelectNode",
+      "label": "Select Node",
+      "tooltip": "Select a connection item under the cursor",
+      "hotkey": "Alt+3",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + '3'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.InteractiveSelection.SyncSelection",
+      "label": "eeschema.InteractiveSelection.SyncSelection",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.NavigateTool.back",
+      "label": "Navigate Back",
+      "tooltip": "Move backward in sheet navigation history",
+      "hotkey": "Alt+Left",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + static_cast<int>( WXK_LEFT )",
+      "altHotkeyRaw": null,
+      "icon": "left",
+      "flags": []
+    },
+    {
+      "name": "eeschema.NavigateTool.changeSheet",
+      "label": "Change Sheet",
+      "tooltip": "Change to provided sheet's contents in the schematic editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "enter_sheet",
+      "flags": []
+    },
+    {
+      "name": "eeschema.NavigateTool.enterSheet",
+      "label": "Enter Sheet",
+      "tooltip": "Display the selected sheet's contents in the schematic editor",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "enter_sheet",
+      "flags": []
+    },
+    {
+      "name": "eeschema.NavigateTool.forward",
+      "label": "Navigate Forward",
+      "tooltip": "Move forward in sheet navigation history",
+      "hotkey": "Alt+Right",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + static_cast<int>( WXK_RIGHT )",
+      "altHotkeyRaw": null,
+      "icon": "right",
+      "flags": []
+    },
+    {
+      "name": "eeschema.NavigateTool.leaveSheet",
+      "label": "Leave Sheet",
+      "tooltip": "Display the parent sheet in the schematic editor",
+      "hotkey": "Alt+Backspace",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + static_cast<int>( WXK_BACK )",
+      "altHotkeyRaw": null,
+      "icon": "leave_sheet",
+      "flags": []
+    },
+    {
+      "name": "eeschema.NavigateTool.next",
+      "label": "Next Sheet",
+      "tooltip": "Move to next sheet by number",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_PAGEDOWN",
+      "altHotkeyRaw": null,
+      "icon": "right",
+      "flags": []
+    },
+    {
+      "name": "eeschema.NavigateTool.previous",
+      "label": "Previous Sheet",
+      "tooltip": "Move to previous sheet by number",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": "WXK_PAGEUP",
+      "altHotkeyRaw": null,
+      "icon": "left",
+      "flags": []
+    },
+    {
+      "name": "eeschema.NavigateTool.up",
+      "label": "Navigate Up",
+      "tooltip": "Navigate up one sheet in the hierarchy",
+      "hotkey": "Alt+Up",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_ALT + static_cast<int>( WXK_UP )",
+      "altHotkeyRaw": null,
+      "icon": "up",
+      "flags": []
+    },
+    {
+      "name": "eeschema.PinEditing.pushPinLength",
+      "label": "Push Pin Length",
+      "tooltip": "Copy pin length to other pins in symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin_size_to",
+      "flags": []
+    },
+    {
+      "name": "eeschema.PinEditing.pushPinNameSize",
+      "label": "Push Pin Name Size",
+      "tooltip": "Copy pin name size to other pins in symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin_size_to",
+      "flags": []
+    },
+    {
+      "name": "eeschema.PinEditing.pushPinNumSize",
+      "label": "Push Pin Number Size",
+      "tooltip": "Copy pin number size to other pins in symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin_size_to",
+      "flags": []
+    },
+    {
+      "name": "eeschema.PointEditor.addCorner",
+      "label": "Create Corner",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_corner",
+      "flags": []
+    },
+    {
+      "name": "eeschema.PointEditor.removeCorner",
+      "label": "Remove Corner",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "delete_cursor",
+      "flags": []
+    },
+    {
+      "name": "eeschema.RemoteSymbols.showPanel",
+      "label": "Remote Symbols",
+      "tooltip": "Show/hide the remote symbol panel",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "library_browser",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SchDesignBlockControl.deleteDesignBlock",
+      "label": "Delete Design Block",
+      "tooltip": "Remove the selected design block from its library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "trash",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SchDesignBlockControl.editDesignBlockProperties",
+      "label": "Properties...",
+      "tooltip": "Edit properties of design block",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SchDesignBlockControl.saveSelectionAsDesignBlock",
+      "label": "Save Selection as Design Block...",
+      "tooltip": "Create a new design block from the current selection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "new_component",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SchDesignBlockControl.saveSheetAsDesignBlock",
+      "label": "Save Current Sheet as Design Block...",
+      "tooltip": "Create a new design block from the current sheet",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "new_component",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SchDesignBlockControl.showDesignBlockPanel",
+      "label": "Design Blocks",
+      "tooltip": "Show/hide design blocks library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "search_tree",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SchDesignBlockControl.updateDesignBlockFromSelection",
+      "label": "Update Design Block from Selection",
+      "tooltip": "Set design block schematic to current selection",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SchDesignBlockControl.updateDesignBlockFromSheet",
+      "label": "Update Design Block from Current Sheet",
+      "tooltip": "Set design block schematic to current sheet",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.editUserDefinedSignals",
+      "label": "User-defined Signals...",
+      "tooltip": "Add, edit or delete user-defined simulation signals",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "sim_add_signal",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.newAnalysisTab",
+      "label": "New Analysis Tab...",
+      "tooltip": "Create a new tab containing a simulation analysis",
+      "hotkey": "Ctrl+N",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'N'",
+      "altHotkeyRaw": null,
+      "icon": "sim_add_plot",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.openWorkbook",
+      "label": "Open Workbook...",
+      "tooltip": "Open a saved set of analysis tabs and settings",
+      "hotkey": "Ctrl+O",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'O'",
+      "altHotkeyRaw": null,
+      "icon": "directory_open",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.probe",
+      "label": "Probe Schematic...",
+      "tooltip": "Add a simulator probe",
+      "hotkey": "Shift+P",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'P'",
+      "altHotkeyRaw": null,
+      "icon": "sim_probe",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.runSimulation",
+      "label": "Run Simulation",
+      "tooltip": "",
+      "hotkey": "R",
+      "altHotkey": null,
+      "hotkeyRaw": "'R'",
+      "altHotkeyRaw": null,
+      "icon": "sim_run",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.saveWorkbook",
+      "label": "Save Workbook",
+      "tooltip": "Save the current set of analysis tabs and settings",
+      "hotkey": "Ctrl+S",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'S'",
+      "altHotkeyRaw": null,
+      "icon": "save",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.saveWorkbookAs",
+      "label": "Save Workbook As...",
+      "tooltip": "Save the current set of analysis tabs and settings to another location",
+      "hotkey": "Ctrl+Shift+S",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'S'",
+      "altHotkeyRaw": null,
+      "icon": "sim_add_signal",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.showNetlist",
+      "label": "Show SPICE Netlist",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "netlist",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.simAnalysisProperties",
+      "label": "Edit Analysis Tab...",
+      "tooltip": "Edit the current analysis tab's SPICE command and plot setup",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "sim_command",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.stopSimulation",
+      "label": "Stop Simulation",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "sim_stop",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulation.tune",
+      "label": "Add Tuned Value...",
+      "tooltip": "Select a value to be tuned",
+      "hotkey": "Shift+T",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_SHIFT + 'T'",
+      "altHotkeyRaw": null,
+      "icon": "sim_tune",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.exportCSV",
+      "label": "Export Current Plot as CSV...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_file",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.exportPlotToSchematic",
+      "label": "Export Current Plot to Schematic",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_png",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.exportPNG",
+      "label": "Export Current Plot as PNG...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_png",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.exportToClipboard",
+      "label": "Export Current Plot to Clipboard",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_png",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.toggleDarkModePlots",
+      "label": "Dark Mode Plots",
+      "tooltip": "Draw plots with a black background",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.toggleDottedSecondary",
+      "label": "Dotted Current/Phase",
+      "tooltip": "Draw secondary signal trace (current or phase) with a dotted line",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.toggleLegend",
+      "label": "Show Legend",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text",
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.toggleSimConsole",
+      "label": "Show Simulation Console Panel",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.Simulator.toggleSimSidePanel",
+      "label": "Show Simulation Side Panel",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolDrawing.drawSymbolLines",
+      "label": "Draw Lines",
+      "tooltip": "Draw connected graphic lines",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_graphical_segments",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.SymbolDrawing.drawSymbolPolygon",
+      "label": "Draw Polygons",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_graphical_polygon",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.SymbolDrawing.drawSymbolTextBox",
+      "label": "Draw Text Boxes",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_textbox",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.SymbolDrawing.placeSymbolAnchor",
+      "label": "Move Symbol Anchor",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "anchor",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.SymbolDrawing.placeSymbolPin",
+      "label": "Draw Pins",
+      "tooltip": "",
+      "hotkey": "P",
+      "altHotkey": null,
+      "hotkeyRaw": "'P'",
+      "altHotkeyRaw": null,
+      "icon": "pin",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.SymbolDrawing.placeSymbolText",
+      "label": "Draw Text",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text",
+      "flags": [
+        "AF_ACTIVATE"
+      ]
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.addSymbolToSchematic",
+      "label": "Add Symbol to Schematic",
+      "tooltip": "Add the current symbol to the schematic",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "add_symbol_to_schematic",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.copySymbol",
+      "label": "Copy",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "copy",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.cutSymbol",
+      "label": "Cut",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "cut",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.deleteSymbol",
+      "label": "Delete Symbol",
+      "tooltip": "Remove the selected symbol from its library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "trash",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.deriveFromExistingSymbol",
+      "label": "Derive from Existing Symbol...",
+      "tooltip": "Create a new symbol, derived from an existing symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "new_component",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.duplicateSymbol",
+      "label": "Duplicate Symbol",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "duplicate",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.editSymbol",
+      "label": "Edit Symbol",
+      "tooltip": "Show selected symbol on editor canvas",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.exportSymbol",
+      "label": "Export...",
+      "tooltip": "Export a symbol to a new library file",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_part",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.exportSymbolAsSVG",
+      "label": "Export Symbol as SVG...",
+      "tooltip": "Create SVG file from the current symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_svg",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.exportSymbolView",
+      "label": "Export View as PNG...",
+      "tooltip": "Create PNG file from the current view",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "export_png",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.flattenSymbol",
+      "label": "Flatten Symbol",
+      "tooltip": "Remove inheritance from symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.importSymbol",
+      "label": "Import Symbol...",
+      "tooltip": "Import a symbol to the current library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "import_part",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.newSymbol",
+      "label": "New Symbol...",
+      "tooltip": "Create a new symbol in an existing library",
+      "hotkey": "Ctrl+N",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + 'N'",
+      "altHotkeyRaw": null,
+      "icon": "new_component",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.nextSymbol",
+      "label": "Display next symbol",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lib_next",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.pasteSymbol",
+      "label": "Paste Symbol",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "paste",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.previousSymbol",
+      "label": "Display previous symbol",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "lib_previous",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.renameFootprint",
+      "label": "Rename Symbol...",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "edit",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.saveLibraryAs",
+      "label": "Save Library As...",
+      "tooltip": "Save the current library to a new file",
+      "hotkey": "Ctrl+Shift+S",
+      "altHotkey": null,
+      "hotkeyRaw": "MD_CTRL + MD_SHIFT + 'S'",
+      "altHotkeyRaw": null,
+      "icon": null,
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.saveSymbolAs",
+      "label": "Save As...",
+      "tooltip": "Save the current symbol to a different library or name",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save_as",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.saveSymbolCopyAs",
+      "label": "Save Copy As...",
+      "tooltip": "Save a copy of the current symbol to a different library or name",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "save_as",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.showElectricalTypes",
+      "label": "Show Pin Electrical Types",
+      "tooltip": "Annotate pins with their electrical types",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin_show_etype",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.showHiddenFields",
+      "label": "Show Hidden Fields",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "text_sketch",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.showHiddenPins",
+      "label": "Show Hidden Pins",
+      "tooltip": "",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "hidden_pin",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.showLibraryFieldsTable",
+      "label": "Bulk Edit Symbol Fields...",
+      "tooltip": "Edit a table of fields from all symbols in the library",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.showPinNumbers",
+      "label": "Show Pin Numbers",
+      "tooltip": "Annotate pins with their numbers",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.showRelatedLibraryFieldsTable",
+      "label": "Bulk Edit Related Symbol Fields...",
+      "tooltip": "Edit a table of fields from all symbols related to the selected symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "table",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.toggleSyncedPinsMode",
+      "label": "Synchronized Pins Mode",
+      "tooltip": "Synchronized Pins Mode\\n",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "pin2pin",
+      "flags": []
+    },
+    {
+      "name": "eeschema.SymbolLibraryControl.updateSymbolFields",
+      "label": "Update Symbol Fields...",
+      "tooltip": "Update symbol to match changes made in parent symbol",
+      "hotkey": null,
+      "altHotkey": null,
+      "hotkeyRaw": null,
+      "altHotkeyRaw": null,
+      "icon": "refresh",
       "flags": []
     },
     {

@@ -55,11 +55,65 @@ function ruleLine(rule: Rule, ref: string): string | null {
   }
 }
 
+/**
+ * The schematic tab's own properties view: PCB and schematic share the
+ * same reference-designator identity and the same state.selection (so
+ * clicking U1 in either view cross-probes to the other -- see
+ * SchematicView.tsx), but a schematic symbol has pins/nets, not a PCB
+ * position/side/courtyard, so it gets its own small render rather than
+ * pretending a symbol is a placed PCB part.
+ */
+function SchematicProperties() {
+  const state = useStudioState();
+  const sch = state.schematic;
+  const refs = [...state.selection];
+  if (!sch || refs.length === 0) {
+    return (
+      <div className="panel-section">
+        <h3>Properties</h3>
+        <div className="panel-empty">Nothing selected.</div>
+      </div>
+    );
+  }
+  const sym = sch.symbols.find((s) => s.id === refs[0]);
+  if (!sym) return null;
+  const nets = [...new Set(sch.wires.filter((w) => w.pins.some((p) => p.startsWith(`${sym.id}.`))).map((w) => w.net))];
+  return (
+    <div className="panel-section">
+      <h3>Properties</h3>
+      <div className="kv-grid">
+        <span>Reference</span>
+        <span>{sym.id}</span>
+        <span>Value</span>
+        <span>{sym.value ?? "–"}</span>
+        {sym.package && (
+          <>
+            <span>Footprint</span>
+            <span>{sym.package}</span>
+          </>
+        )}
+        {sym.mpn && (
+          <>
+            <span>MPN</span>
+            <span>{sym.mpn}</span>
+          </>
+        )}
+        <span>Pins</span>
+        <span>{sym.pins.length}</span>
+        <span>Nets</span>
+        <span>{nets.join(", ") || "–"}</span>
+      </div>
+    </div>
+  );
+}
+
 export function PropertiesPanel() {
   const state = useStudioState();
   const api = useStudioApi();
   const board = state.board;
   const refs = [...state.selection];
+
+  if (state.tab === "schematic") return <SchematicProperties />;
 
   if (!board || refs.length === 0) {
     return (

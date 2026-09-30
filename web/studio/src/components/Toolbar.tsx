@@ -13,7 +13,7 @@ import { formatLength } from "../state/units";
 // KiCad's own default grid list (pcbnew/tools/pcb_grid_helper.cpp-
 // adjacent settings) has not been read this session -- these are
 // reasonable common PCB grid steps in µm, not a source-verified list.
-const GRID_OPTIONS_UM = [10, 25, 50, 100, 127, 250, 500, 1000, 2540];
+export const GRID_OPTIONS_UM = [10, 25, 50, 100, 127, 250, 500, 1000, 2540];
 
 // No source-verified "100% = this many px/mm" reference for KiCad's own
 // zoom percentage readout either; this defines 100% as 1 screen px per

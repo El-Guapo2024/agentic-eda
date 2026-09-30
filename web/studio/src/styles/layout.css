@@ -272,7 +272,10 @@
 .status-bar .field {
   white-space: nowrap;
 }
-.status-bar label.toggle {
+/* Generic checkbox+label row -- originally status-bar-only, now reused
+   wherever a dialog needs the same inline "[x] Label" look (e.g. the DRC
+   dialog's Show/options rows). */
+label.toggle {
   display: inline-flex;
   align-items: center;
   gap: 4px;
