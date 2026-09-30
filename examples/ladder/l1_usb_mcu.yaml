@@ -75,6 +75,7 @@ parts:
 
   - reference: U1
     mpn: AMS1117-3.3
+    lcsc: C6186
     value: "3.3V LDO"
     package: SOT-223
     pins:
@@ -180,7 +181,8 @@ parts:
     lcsc: C2286
     value: "status LED"
     package: "0603"
-    pins: [{ number: "1", kind: passive }, { number: "2", kind: passive }]
+    footprint: "LED_SMD:LED_0603_1608Metric"
+    pins: [{ number: "1", name: K, kind: passive }, { number: "2", name: A, kind: passive }]
 
   - reference: J2
     mpn: PZ254V-11-04P  # LCSC C2691448 XFCN 1x4 2.54mm, Extended
@@ -196,7 +198,7 @@ parts:
 
 nets:
   - { name: VBUS, pins: [J1.A4, J1.A9, J1.B4, J1.B9, U1.3] }
-  - { name: GND, pins: [J1.A1, J1.A12, J1.B1, J1.B12, J1.SH, U1.1, C1.2, C2.2, C3.2, C4.2, C5.2, R1.2, R2.2, R4.2, SW1.2, SW2.2, D1.2, J2.3, U2.2, U2.4, U2.20] }
+  - { name: GND, pins: [J1.A1, J1.A12, J1.B1, J1.B12, J1.SH, U1.1, C1.2, C2.2, C3.2, C4.2, C5.2, R1.2, R2.2, R4.2, SW1.2, SW2.2, D1.1, J2.3, U2.2, U2.4, U2.20] }
   - { name: CC1, pins: [J1.A5, R1.1] }
   - { name: CC2, pins: [J1.B5, R2.1] }
   - { name: "3V3", pins: [U1.2, C1.1, C2.1, C3.1, C4.1, C5.1, R3.1, J2.4, U2.1, U2.3, U2.19] }
@@ -205,7 +207,7 @@ nets:
   - { name: SWDIO, pins: [U2.7, J2.1] }
   - { name: SWCLK, pins: [U2.8, J2.2] }
   - { name: LED_DRIVE, pins: [U2.9, R5.1] }
-  - { name: LED_A, pins: [R5.2, D1.1] }
+  - { name: LED_A, pins: [R5.2, D1.2] }
 
 placement_rules:
   - { kind: proximity, a: U1, b: C1, max_mm: 3.0 }
