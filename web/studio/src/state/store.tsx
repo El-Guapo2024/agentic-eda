@@ -74,6 +74,25 @@ export interface MovePreview {
   dyUm: number;
 }
 
+/** The 3D viewer's own view-option toggles -- KiCad's 3D viewer has all of these (View menu / its own toolbar): hide silkscreen, hide solder mask, hide the rendered component models, flip to view the board from the other side, and an orthographic/perspective projection switch. */
+export interface Viewer3DOptions {
+  showComponents: boolean;
+  showSilkscreen: boolean;
+  showSolderMask: boolean;
+  /** True = viewing the board flipped (as if turned over a horizontal hinge) so the bottom side reads right-way-up. A camera/board-orientation toggle, not a geometry edit. */
+  flipped: boolean;
+  /** True = an orthographic-looking projection (this app has no separate OrthographicCamera wiring -- Viewer3D approximates it by narrowing FOV and pulling the camera back, a well-known trick, not a real projection-matrix swap). */
+  orthographic: boolean;
+}
+
+export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
+  showComponents: true,
+  showSilkscreen: true,
+  showSolderMask: true,
+  flipped: false,
+  orthographic: false,
+};
+
 export interface StudioState {
   board: BoardState | null;
   boardError: string | null;
@@ -81,6 +100,7 @@ export interface StudioState {
 
   tab: EditorTab;
   rightDockTab: RightDockTab;
+  viewer3d: Viewer3DOptions;
 
   selection: Set<string>;
   /** Refs to flash/outline because a problem in the panel references them. */
@@ -162,6 +182,7 @@ const initialState: StudioState = {
   version: null,
   tab: "pcb",
   rightDockTab: "appearance",
+  viewer3d: DEFAULT_VIEWER3D_OPTIONS,
   selection: new Set(),
   hot: new Set(),
   netHighlight: null,
@@ -211,6 +232,7 @@ type Action =
   | { type: "VERSION"; version: string }
   | { type: "SET_TAB"; tab: EditorTab }
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
+  | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
   | { type: "SET_SELECTION"; refs: string[] }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
@@ -279,6 +301,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, tab: action.tab };
     case "SET_RIGHT_DOCK_TAB":
       return { ...state, rightDockTab: action.tab };
+    case "SET_VIEWER3D_OPTIONS":
+      return { ...state, viewer3d: { ...state.viewer3d, ...action.options } };
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs), armed: null };
     case "TOGGLE_SELECTION": {

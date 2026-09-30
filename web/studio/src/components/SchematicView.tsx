@@ -11,15 +11,25 @@ import type { Schematic } from "../api/types";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { boundsOfPoints, fitTransform, zoomAbout } from "./canvas/view";
 import { paintSchematic } from "./schematic/painter";
-import { resolveSymbol } from "./schematic/layout";
+import { resolveSymbol, GRID } from "./schematic/layout";
 import { layerColor } from "./canvas/layers";
+import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, PAGE_WIDTH_UM, PAGE_HEIGHT_UM } from "./schematic/drawingSheet";
 import "../styles/canvas.css";
 
 type DragState = { kind: "pan"; startScreen: [number, number]; startView: [number, number] };
 
-/** World-space bounds of every symbol box + wire point, for the initial fit -- schematic sheets have no fixed "outline" the way a PCB does. */
+/**
+ * World-space bounds for the initial fit. KiCad opens a schematic framed
+ * on the whole page, not just whatever's drawn on it (an empty sheet
+ * still shows the full A4 frame) -- so this is always the page rect,
+ * widened to also cover any content that happens to sit outside it
+ * (this app doesn't clip/reflow existing symbol positions to the page).
+ */
 function schematicBounds(sch: Schematic): Array<[number, number]> {
-  const pts: Array<[number, number]> = [];
+  const pts: Array<[number, number]> = [
+    [0, 0],
+    [PAGE_WIDTH_UM, PAGE_HEIGHT_UM],
+  ];
   for (const s of sch.symbols) {
     const r = resolveSymbol(s);
     pts.push([s.at[0], s.at[1]], [s.at[0] + r.width, s.at[1] + r.height]);
@@ -110,10 +120,20 @@ export function SchematicView() {
     ctx.save();
     ctx.translate(state.schematicView.x, state.schematicView.y);
     ctx.scale(state.schematicView.scale || 1, state.schematicView.scale || 1);
+    drawPageAndFrame(ctx, state.schematicView);
+    drawGridDots(ctx, state.schematicView, width, height, GRID);
+    drawZoneReferences(ctx, state.schematicView);
+    drawTitleBlock(ctx, state.schematicView, {
+      title: state.board?.name || "untitled",
+      date: new Date().toISOString().slice(0, 10),
+      rev: "",
+      fileName: `${state.board?.name || "schematic"}.kicad_sch`,
+      sheetPath: "/",
+    });
     paintSchematic(ctx, state.schematicView, sch, { selection: state.selection, netHighlight: state.netHighlight });
     ctx.restore();
     ctx.restore();
-  }, [sch, state.schematicView, state.selection, state.netHighlight, containerSize]);
+  }, [sch, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name]);
 
   // The container+canvas below must always render, loading/error or not:
   // an early return here would swap in a different DOM subtree with no
