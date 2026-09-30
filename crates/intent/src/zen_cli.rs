@@ -214,7 +214,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
                 package: attr_str(inst, "package"),
                 footprint: attr_str(inst, "footprint"),
                 pins,
-                body_um: None,
+                body_um: None, symbol: None, datasheet: None,
                 edge: None,
             }
         })
@@ -274,6 +274,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
         stackup: None,
         impedance_targets: Vec::new(),
         footprints: Vec::new(),
+        symbols: Vec::new(),
         board: Default::default(),
         allow: Default::default(),
         solver: Default::default(),

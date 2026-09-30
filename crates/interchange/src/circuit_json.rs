@@ -431,7 +431,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
-                    body_um: None,
+                    body_um: None, symbol: None, datasheet: None,
                     edge: None,
                 },
                 Part {
@@ -444,7 +444,7 @@ mod tests {
                         Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                         Pin { number: "2".into(), name: None, kind: PinKind::Passive },
                     ],
-                    body_um: None,
+                    body_um: None, symbol: None, datasheet: None,
                     edge: None,
                 },
             ],
@@ -457,10 +457,10 @@ mod tests {
         Design {
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: Some(SchematicSection {
+            schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
                 symbols: vec![
-                    SymbolInstance { id: "R1".into(), at: Point { x: 1_000, y: 2_000 }, rot: 0, mirrored: false },
-                    SymbolInstance { id: "C1".into(), at: Point { x: 3_000, y: 2_000 }, rot: 0, mirrored: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: 1_000, y: 2_000 }, rot: 0, mirrored: false },
+                    SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: 3_000, y: 2_000 }, rot: 0, mirrored: false },
                 ],
                 wires: vec![],
                 labels: vec![],
@@ -528,7 +528,7 @@ mod tests {
             footprint: None,
             package: None,
             pins: vec![],
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         });
         assert_eq!(ftype, "simple_chip");

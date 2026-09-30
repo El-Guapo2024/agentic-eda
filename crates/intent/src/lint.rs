@@ -342,7 +342,7 @@ mod tests {
             package: Some("0603".into()),
             footprint: None,
             pins: (1..=n).map(|i| eda_model::Pin { number: i.to_string(), name: None, kind: eda_model::PinKind::Signal }).collect(),
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -356,7 +356,7 @@ mod tests {
             package: Some("SOT-23".into()),
             footprint: None,
             pins,
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -555,7 +555,7 @@ mod tests {
                 package: Some("SOT-23".into()),
                 footprint: None,
                 pins: vec![Pin { number: "3".into(), name: Some("EN".into()), kind: PinKind::Signal }],
-                body_um: None,
+                body_um: None, symbol: None, datasheet: None,
                 edge: None,
             }],
             nets: vec![],
@@ -580,7 +580,7 @@ mod tests {
                     Pin { number: "1".into(), name: Some("VIN".into()), kind: PinKind::Power },
                     Pin { number: "3".into(), name: Some("EN".into()), kind: PinKind::Signal },
                 ],
-                body_um: None,
+                body_um: None, symbol: None, datasheet: None,
                 edge: None,
             }],
             nets: vec![Net { name: "VIN".into(), pins: vec!["U1.1".into(), "U1.3".into()] }],
@@ -703,7 +703,7 @@ mod pad_tests {
             package: Some(package.into()),
             footprint: None,
             pins: (1..=pins).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         }
     }
@@ -766,7 +766,7 @@ mod body_tests {
             package: Some(package.into()),
             footprint: None,
             pins: vec![],
-            body_um: body,
+            body_um: body, symbol: None, datasheet: None,
             edge: None,
         }
     }

@@ -113,6 +113,33 @@ pub struct SchematicSection {
     /// Net label placements, sorted by (net, at).
     #[serde(default)]
     pub labels: Vec<NetLabel>,
+    /// Power symbols (KiCad's `power:GND`/`power:VCC`/... instances) —
+    /// one per power/ground pin, in place of a wire to a rail. Sorted by
+    /// `id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub power_symbols: Vec<PowerSymbol>,
+    /// No-connect flags (KiCad's `no_connect`): one at every pin the
+    /// intent marks `nc`, so ERC does not report it unconnected. Sorted
+    /// by `at`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub no_connects: Vec<NoConnect>,
+    /// Title block. `None` keeps relying on the caller-supplied
+    /// `ExportMeta` (title/date) the way every export always has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_block: Option<TitleBlock>,
+    /// Child hierarchical sheets. Always empty today (one sheet only) —
+    /// carried so the format can grow into a hierarchy without another
+    /// schema break; the reader accepts and preserves sheets it finds in
+    /// an imported file without descending into their own content.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheets: Vec<SheetInstance>,
+}
+
+fn d_unit_one() -> u32 {
+    1
+}
+fn is_unit_one(u: &u32) -> bool {
+    *u == 1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +151,29 @@ pub struct SymbolInstance {
     pub rot: Millideg,
     #[serde(default)]
     pub mirrored: bool,
+    /// KiCad library id this instance draws from ("Device:R",
+    /// "Regulator_Linear:AMS1117-3.3"), resolved by
+    /// `eda_model::symbol::resolve_lib_id` — see [`crate::Part::symbol`].
+    /// Empty on a `design.json` written before this field existed; the
+    /// exporter treats that the same as the synthetic `"eda:<id>"` form
+    /// (a generic box synthesized from the part's own pins).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lib_id: String,
+    /// KiCad unit index (1-based); multi-unit placement is deferred, so
+    /// this is always 1 for anything this port places.
+    #[serde(default = "d_unit_one", skip_serializing_if = "is_unit_one")]
+    pub unit: u32,
+    /// The instance's own `Value` field — carried here (not just read from
+    /// `ConstraintModel::Part::value`) so a schematic read from a foreign
+    /// `.kicad_sch`, with no accompanying intent, is still self-contained.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub value: String,
+    /// The instance's own `Footprint` field, same reasoning as `value`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub footprint: String,
+    /// The instance's own `Datasheet` field, same reasoning as `value`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub datasheet: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,11 +189,120 @@ pub struct Wire {
     pub pts: Vec<Point>,
 }
 
+/// Local-label shape: unused (locals carry no shape), but a global/
+/// hierarchical label's own signal-flow shape — KiCad's own 5-value
+/// vocabulary, shared with a hierarchical sheet pin's shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelShape {
+    Input,
+    Output,
+    Bidirectional,
+    TriState,
+    #[default]
+    Passive,
+}
+
+/// Which of KiCad's three label kinds a [`NetLabel`] is. Local connects
+/// same-named nets anywhere on *this* sheet (what `derive_schematic`
+/// emits today — a single-sheet design has no need for the other two);
+/// Global connects same-named nets across the whole schematic/hierarchy;
+/// Hierarchical connects a sheet's own net out to a parent sheet's pin of
+/// the same name. Kept as a real enum (not inferred from context) so a
+/// schematic read from a real, hierarchical KiCad file round-trips which
+/// kind each label actually was.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum LabelKind {
+    #[default]
+    Local,
+    Global { shape: LabelShape },
+    Hierarchical { shape: LabelShape },
+}
+
+impl LabelKind {
+    pub fn is_local(&self) -> bool {
+        *self == LabelKind::Local
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetLabel {
     pub net: String,
     pub at: Point,
+    #[serde(default, skip_serializing_if = "LabelKind::is_local")]
+    pub kind: LabelKind,
+}
+
+/// A KiCad power symbol instance (`power:GND`, `power:VCC`, a custom
+/// rail...) — what a power/ground pin gets instead of a wire to a rail.
+/// Placed with its own connection pin exactly on the host pin's stub tip
+/// (KiCad treats two coincident pins as joined with no wire needed), so
+/// this never needs a `Wire` entry of its own.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PowerSymbol {
+    /// Synthetic reference, KiCad's own auto-numbered convention
+    /// ("#PWR01"). Unique within the sheet, but deliberately not a
+    /// `ConstraintModel::Part` reference — a power symbol is not a part.
+    pub id: String,
+    /// "power:GND", "power:VCC", "power:+3V3", ... — see
+    /// `eda_model::symbol::builtin`.
+    pub lib_id: String,
+    pub at: Point,
+    pub rot: Millideg,
+    /// The net this symbol asserts (its own `Value` field in KiCad).
+    pub net: String,
+    /// The real part pin this symbol is attached to, as "REF.PIN" — so
+    /// ERC and any other consumer can tell which physical pin a power
+    /// symbol speaks for without re-deriving it from position.
+    pub pin: String,
+}
+
+/// A KiCad `no_connect` flag: an explicit "this pin is deliberately
+/// unconnected" marker, required at every `nc`-kind pin or KiCad's ERC
+/// reports it unconnected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoConnect {
+    pub at: Point,
+    /// The pin this flag marks, as "REF.PIN".
+    pub pin: String,
+}
+
+/// Title block. Every field optional/empty by default; the exporter falls
+/// back to its `ExportMeta` argument for `title`/`date` when this whole
+/// section is absent, so existing callers are unaffected.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TitleBlock {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub date: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rev: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub company: String,
+    /// KiCad's `comment 1`..`comment 9`, in that order (index 0 = comment 1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<String>,
+}
+
+/// A child hierarchical sheet, as placed on its parent sheet. Deferred:
+/// `derive_schematic` never creates one, and the reader does not descend
+/// into `file` — this only records that a sheet symbol was there (its
+/// name/file/position/size), so re-exporting a file that had one does not
+/// silently drop it, and so the schema has a place to grow into real
+/// hierarchy later.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetInstance {
+    pub name: String,
+    pub file: String,
+    pub at: Point,
+    pub size: (Um, Um),
 }
 
 // ---------- stage 2: placement ----------
@@ -603,6 +762,9 @@ impl Design {
             s.symbols.sort_by(|a, b| a.id.cmp(&b.id));
             s.wires.sort_by(|a, b| (&a.net, a.pts.first()).cmp(&(&b.net, b.pts.first())));
             s.labels.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
+            s.power_symbols.sort_by(|a, b| a.id.cmp(&b.id));
+            s.no_connects.sort_by(|a, b| a.at.cmp(&b.at));
+            s.sheets.sort_by(|a, b| a.name.cmp(&b.name));
         }
         if let Some(p) = &mut d.placement {
             p.footprints.sort_by(|a, b| a.id.cmp(&b.id));
@@ -636,11 +798,15 @@ mod tests {
             },
             schematic: Some(SchematicSection {
                 symbols: vec![
-                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false },
-                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false },
+                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
+                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                 ],
                 wires: vec![Wire { net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }] }],
                 labels: vec![],
+                power_symbols: vec![],
+                no_connects: vec![],
+                title_block: None,
+                sheets: vec![],
             }),
             placement: None,
             routing: None,

@@ -6,8 +6,10 @@ pub mod board;
 pub mod floorplan;
 pub mod footprint;
 pub mod ir;
+pub mod symbol;
 
 pub use footprint::{Footprint, Pad, PadKind, PadShape};
+pub use symbol::{is_synthetic_lib_id, resolve_lib_id, LibPin, LibSymbol, SymbolGraphic};
 
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +32,14 @@ pub struct ConstraintModel {
     /// the built-in package library (`footprint::builtin`).
     #[serde(default)]
     pub footprints: Vec<Footprint>,
+    /// Resolved library symbols, keyed by their own `lib_id`: filled in by
+    /// `eda-kicad`'s symbol-library loader (real installed `.kicad_sym`
+    /// files, falling back to `symbol::builtin`) before the schematic is
+    /// exported, exactly the way `footprints` is filled in by
+    /// `resolve_library_footprints` before placement. A part not covered
+    /// here falls back to a synthesized generic box at export time.
+    #[serde(default)]
+    pub symbols: Vec<LibSymbol>,
     /// Board rules consumed by the placer, router and routing gates.
     #[serde(default)]
     pub board: BoardRules,
@@ -411,6 +421,16 @@ pub struct Part {
     /// KiCad footprint id, e.g. "Capacitor_SMD:C_0402_1005Metric".
     #[serde(default)]
     pub footprint: Option<String>,
+    /// KiCad library symbol id, e.g. "Device:R" or "Regulator_Linear:AMS1117-3.3"
+    /// -- overrides the by-kind default [`symbol::resolve_lib_id`] would
+    /// otherwise pick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// Datasheet URL, carried onto the exported symbol instance's
+    /// `Datasheet` field. Unset falls back to the resolved library
+    /// symbol's own Datasheet property, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datasheet: Option<String>,
     #[serde(default)]
     pub pins: Vec<Pin>,
     /// Physical body size (width, height) in µm, as the distributor
@@ -634,6 +654,18 @@ impl ConstraintModel {
             }
         }
         None
+    }
+    /// Resolve a `lib_id` (`"Device:R"`, `"power:GND"`, ...) to its
+    /// `LibSymbol`: an explicit entry in `self.symbols` first (however it
+    /// got there -- the real-library loader or a hand-written intent),
+    /// then [`symbol::builtin`]. `None` means "no real or built-in
+    /// definition" -- the exporter's cue to synthesize a generic box from
+    /// the part's own pins, exactly as it always has.
+    pub fn symbol_of(&self, lib_id: &str) -> Option<LibSymbol> {
+        if let Some(s) = self.symbols.iter().find(|s| s.lib_id == lib_id) {
+            return Some(s.clone());
+        }
+        symbol::builtin(lib_id)
     }
     /// Simple glob match ('*' wildcard) over net names.
     pub fn nets_matching(&self, pattern: &str) -> Vec<&Net> {

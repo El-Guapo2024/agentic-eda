@@ -671,6 +671,15 @@ fn check_wire_through_symbol(sch: &SchematicSection, geos: &BTreeMap<String, Sym
 fn check_endpoint_off_pin(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo>, out: &mut Vec<CheckResult>) {
     let mut ok = true;
     for w in &sch.wires {
+        // A wire naming no part pins at all isn't a part-to-part wire this
+        // gate can judge -- e.g. the short leg `derive_schematic` draws
+        // from a `PWR_FLAG` to an existing power symbol, neither end of
+        // which is a `Part` pin. Nothing here re-derives *those* two
+        // points' correctness (that's `eda_kicad::erc`'s job on the
+        // exported file), so skip rather than false-fail.
+        if w.pins.is_empty() {
+            continue;
+        }
         let (Some(&first), Some(&last)) = (w.pts.first(), w.pts.last()) else { continue };
         let stub_tips: Vec<LPoint> = w
             .pins
@@ -1439,19 +1448,19 @@ mod tests {
                 Pin { number: "1".into(), name: None, kind: PinKind::Passive },
                 Pin { number: "2".into(), name: None, kind: PinKind::Passive },
             ],
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         };
         ConstraintModel { parts: vec![r1], ..Default::default() }
     }
 
     fn r1_geo(model: &ConstraintModel, at: IrPoint) -> SymGeo<'_> {
-        let sym = SymbolInstance { id: "R1".into(), at, rot: 0, mirrored: false };
+        let sym = SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false };
         SymGeo::build(&sym, model.part("R1").unwrap())
     }
 
     fn r1_symbol(at: IrPoint) -> SymbolInstance {
-        SymbolInstance { id: "R1".into(), at, rot: 0, mirrored: false }
+        SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false }
     }
 
     // ---------------------------------------------------------- offgrid
@@ -1459,7 +1468,7 @@ mod tests {
     #[test]
     fn offgrid_passes_when_everything_on_grid() {
         let model = one_part_model();
-        let sch = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })], wires: vec![], labels: vec![] };
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![], symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })], wires: vec![], labels: vec![] };
         let results = check_schematic(&design(sch), &model);
         assert!(results.iter().any(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Pass));
     }
@@ -1467,7 +1476,7 @@ mod tests {
     #[test]
     fn offgrid_fails_on_off_grid_symbol() {
         let model = one_part_model();
-        let sch = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 100, y: 0 })], wires: vec![], labels: vec![] };
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![], symbols: vec![r1_symbol(IrPoint { x: 100, y: 0 })], wires: vec![], labels: vec![] };
         let results = check_schematic(&design(sch), &model);
         assert!(results.iter().any(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Fail));
     }
@@ -1477,7 +1486,7 @@ mod tests {
     #[test]
     fn orthogonal_passes_for_hv_only_wire() {
         let model = one_part_model();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![Wire { net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }, IrPoint { x: 1270, y: 1270 }] }],
             labels: vec![],
@@ -1489,7 +1498,7 @@ mod tests {
     #[test]
     fn orthogonal_fails_for_diagonal_segment() {
         let model = one_part_model();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![Wire { net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 1270 }] }],
             labels: vec![],
@@ -1503,7 +1512,7 @@ mod tests {
     #[test]
     fn symbol_overlap_passes_when_apart() {
         let model = one_part_model();
-        let sch = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })], wires: vec![], labels: vec![] };
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![], symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })], wires: vec![], labels: vec![] };
         let results = check_schematic(&design(sch), &model);
         assert!(results.iter().any(|r| r.check == "schematic_symbol_overlap" && r.status == CheckStatus::Pass));
     }
@@ -1513,8 +1522,8 @@ mod tests {
         let mut model = one_part_model();
         let r2 = Part { reference: "R2".into(), ..model.parts[0].clone() };
         model.parts.push(r2);
-        let sch = SchematicSection {
-            symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 }), SymbolInstance { id: "R2".into(), at: IrPoint { x: 1270, y: 0 }, rot: 0, mirrored: false }],
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
+            symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 }), SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R2".into(), at: IrPoint { x: 1270, y: 0 }, rot: 0, mirrored: false }],
             wires: vec![],
             labels: vec![],
         };
@@ -1527,7 +1536,7 @@ mod tests {
     #[test]
     fn wire_through_symbol_passes_when_wire_stays_outside_box() {
         let model = one_part_model();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
             wires: vec![Wire { net: "N".into(), pins: vec![], pts: vec![IrPoint { x: -5000, y: -5000 }, IrPoint { x: -5000, y: -6000 }] }],
             labels: vec![],
@@ -1542,7 +1551,7 @@ mod tests {
         let geo = r1_geo(&model, IrPoint { x: 0, y: 0 });
         let (left, right, top, bottom) = geo.bounds();
         let mid_y = (top + bottom) / 2;
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
             wires: vec![Wire { net: "N".into(), pins: vec![], pts: vec![IrPoint { x: left - 100, y: mid_y }, IrPoint { x: right + 100, y: mid_y }] }],
             labels: vec![],
@@ -1564,25 +1573,25 @@ mod tests {
             parts: vec![
                 Part { reference: "J1".into(), mpn: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-                       body_um: None,
+                       body_um: None, symbol: None, datasheet: None,
                        edge: None, },
                 Part { reference: "J2".into(), mpn: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-                       body_um: None,
+                       body_um: None, symbol: None, datasheet: None,
                        edge: None, },
                 Part { reference: "U1".into(), mpn: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-                       body_um: None,
+                       body_um: None, symbol: None, datasheet: None,
                        edge: None, },
             ],
             ..Default::default()
         };
         let model = two_conn_model(());
-        let sch_for = |u1_x: i64| SchematicSection {
+        let sch_for = |u1_x: i64| SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![
-                SymbolInstance { id: "J1".into(), at: IrPoint { x: 0, y: 0 }, rot: 0, mirrored: false },
-                SymbolInstance { id: "J2".into(), at: IrPoint { x: 12700, y: 0 }, rot: 0, mirrored: false },
-                SymbolInstance { id: "U1".into(), at: IrPoint { x: u1_x, y: 0 }, rot: 0, mirrored: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J1".into(), at: IrPoint { x: 0, y: 0 }, rot: 0, mirrored: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: 12700, y: 0 }, rot: 0, mirrored: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: u1_x, y: 0 }, rot: 0, mirrored: false },
             ],
             wires: vec![Wire {
                 net: "SIG".into(),
@@ -1614,7 +1623,7 @@ mod tests {
         let (left, right, top, _bottom) = geo.bounds();
         let w = right - left;
         // A wire stretching the extent out to ~1:1 keeps the sheet in shape.
-        let square = SchematicSection {
+        let square = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
             wires: vec![Wire {
                 net: "N".into(),
@@ -1627,7 +1636,7 @@ mod tests {
         assert!(results.iter().any(|r| r.check == "schematic_sheet_aspect" && r.status == CheckStatus::Pass), "{results:#?}");
 
         // The same extent stretched only downward is a tall ribbon.
-        let ribbon = SchematicSection {
+        let ribbon = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
             wires: vec![Wire {
                 net: "N".into(),
@@ -1648,7 +1657,7 @@ mod tests {
         let geo = r1_geo(&model, IrPoint { x: 0, y: 0 });
         let p1 = geo.stub_tip_for_pin_number("1").unwrap();
         let p2 = geo.stub_tip_for_pin_number("2").unwrap();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
             wires: vec![Wire {
                 net: "N".into(),
@@ -1667,7 +1676,7 @@ mod tests {
         let geo = r1_geo(&model, IrPoint { x: 0, y: 0 });
         let p1 = geo.stub_tip_for_pin_number("1").unwrap();
         let p2 = geo.stub_tip_for_pin_number("2").unwrap();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
             wires: vec![Wire {
                 net: "N".into(),
@@ -1686,7 +1695,7 @@ mod tests {
     #[test]
     fn wire_overlap_passes_for_touching_or_offset_or_crossing_segments() {
         let model = ConstraintModel::default();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
                 // A: horizontal 0..1270 at y=0
@@ -1707,7 +1716,7 @@ mod tests {
     #[test]
     fn wire_overlap_fails_for_collinear_different_net_overlap() {
         let model = ConstraintModel::default();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
                 Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2540, y: 0 }] },
@@ -1723,7 +1732,7 @@ mod tests {
     #[test]
     fn wire_overlap_passes_for_same_net_overlap() {
         let model = ConstraintModel::default();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
                 Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2540, y: 0 }] },
@@ -1740,7 +1749,7 @@ mod tests {
     #[test]
     fn crossing_count_zero_when_no_crossings() {
         let model = ConstraintModel::default();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
                 Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }] },
@@ -1757,7 +1766,7 @@ mod tests {
     #[test]
     fn crossing_count_counts_a_true_crossing_between_different_nets() {
         let model = ConstraintModel::default();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
                 Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: -1270, y: 0 }, IrPoint { x: 1270, y: 0 }] },
@@ -1776,7 +1785,7 @@ mod tests {
     #[test]
     fn empty_schematic_section_is_all_pass() {
         let model = ConstraintModel::default();
-        let sch = SchematicSection { symbols: vec![], wires: vec![], labels: vec![] };
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![], symbols: vec![], wires: vec![], labels: vec![] };
         let results = check_schematic(&design(sch), &model);
         assert!(results.iter().filter(|r| r.check != "schematic_wire_crossing_count").all(|r| r.status == CheckStatus::Pass));
     }
@@ -1786,10 +1795,10 @@ mod tests {
         // Sanity: labels don't participate in any of these checks/panic the
         // gate even when off-grid.
         let model = ConstraintModel::default();
-        let sch = SchematicSection {
+        let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![],
-            labels: vec![NetLabel { net: "GND".into(), at: IrPoint { x: 3, y: 7 } }],
+            labels: vec![NetLabel { kind: eda_model::ir::LabelKind::Local, net: "GND".into(), at: IrPoint { x: 3, y: 7 } }],
         };
         let results = check_schematic(&design(sch), &model);
         assert!(results.iter().all(|r| r.check != "schematic_offgrid" || r.status == CheckStatus::Pass));
@@ -1807,7 +1816,7 @@ mod integration {
     }
 
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: None, package: None, footprint: None, pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, value: None, package: None, footprint: None, pins, body_um: None, symbol: None, datasheet: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {

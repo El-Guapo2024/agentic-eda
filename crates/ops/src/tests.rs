@@ -13,7 +13,7 @@ fn part(r: &str, pkg: &str) -> Part {
             Pin { number: "1".into(), name: None, kind: PinKind::Passive },
             Pin { number: "2".into(), name: None, kind: PinKind::Passive },
         ],
-        body_um: None,
+        body_um: None, symbol: None, datasheet: None,
         edge: None,
     }
 }

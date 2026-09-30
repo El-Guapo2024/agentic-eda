@@ -144,7 +144,7 @@ fn kicad_cli_drc_bottom_side_pads() {
         package: Some(package.into()),
         footprint: Some(package.into()),
         pins: (1..=pins).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_um: None, symbol: None, datasheet: None,
         edge: None,
     };
     let net = |name: &str, pins: &[&str]| Net { name: name.into(), pins: pins.iter().map(|p| p.to_string()).collect() };
@@ -336,7 +336,7 @@ fn kicad_cli_drc_real_footprints() {
         package: None,
         footprint: Some(footprint.into()),
         pins: fp.pads.iter().map(|p| Pin { number: p.number.clone(), name: None, kind: PinKind::Passive }).collect(),
-        body_um: None,
+        body_um: None, symbol: None, datasheet: None,
         edge: None,
     };
     let j1 = make_part("J1", "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12", &usb_c);
