@@ -131,6 +131,16 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     // ---- net_class (KiCad 9: net classes live at top level, `add_net` refers by name) ----
+    //
+    // A net matching one of `model.board.net_classes` gets its own KiCad
+    // net class (its own clearance/trace width) instead of landing in
+    // Default with everything else. Without this, a class like an
+    // escape route -- narrower than the board default so it can clear a
+    // fine-pitch connector row -- only ever changes what *our own* router
+    // thinks its nets need: the file we write still tells `kicad-cli pcb
+    // drc` that every net wants the board's width/clearance, and it
+    // fails every track the escape class routed narrower than that.
+    let default_nets: Vec<&str> = net_names.iter().copied().filter(|n| model.board.class_of(n).is_none()).collect();
     writeln!(out, "\t(net_class \"Default\" \"This is the default net class.\"").unwrap();
     writeln!(out, "\t\t(clearance {clearance_mm})").unwrap();
     writeln!(out, "\t\t(trace_width {track_mm})").unwrap();
@@ -138,10 +148,30 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     writeln!(out, "\t\t(via_drill {via_drill_mm})").unwrap();
     writeln!(out, "\t\t(uvia_dia 0.3)").unwrap();
     writeln!(out, "\t\t(uvia_drill 0.1)").unwrap();
-    for name in &net_names {
+    for name in &default_nets {
         writeln!(out, "\t\t(add_net {})", sexpr_str(name)).unwrap();
     }
     writeln!(out, "\t)").unwrap();
+
+    for class in &model.board.net_classes {
+        let nets_in_class: Vec<&str> = net_names.iter().copied().filter(|n| model.board.class_of(n).is_some_and(|c| c.name == class.name)).collect();
+        if nets_in_class.is_empty() {
+            continue;
+        }
+        let class_clearance_mm = mm(class.clearance.unwrap_or(model.board.clearance));
+        let class_track_mm = mm(class.track_width.unwrap_or(model.board.track_width));
+        writeln!(out, "\t(net_class {} \"\"", sexpr_str(&class.name)).unwrap();
+        writeln!(out, "\t\t(clearance {class_clearance_mm})").unwrap();
+        writeln!(out, "\t\t(trace_width {class_track_mm})").unwrap();
+        writeln!(out, "\t\t(via_dia {via_dia_mm})").unwrap();
+        writeln!(out, "\t\t(via_drill {via_drill_mm})").unwrap();
+        writeln!(out, "\t\t(uvia_dia 0.3)").unwrap();
+        writeln!(out, "\t\t(uvia_drill 0.1)").unwrap();
+        for name in &nets_in_class {
+            writeln!(out, "\t\t(add_net {})", sexpr_str(name)).unwrap();
+        }
+        writeln!(out, "\t)").unwrap();
+    }
 
     // ---- footprints ----
     for fp in &footprints {
@@ -278,6 +308,43 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         return Err(errors);
     }
     Ok(out)
+}
+
+/// The `.kicad_pro` project file `kicad-cli pcb drc` reads its design-rule
+/// *constraint floors* from (minimum track width, minimum clearance,
+/// minimum hole clearance, ...) -- a different thing from the per-net-class
+/// *nominal* widths the `.kicad_pcb` itself carries in `net_class` blocks.
+///
+/// Without this file, `kicad-cli` has no project to load and falls back to
+/// its own hard-coded floors (0.2mm minimum track/clearance, 0.25mm minimum
+/// hole clearance): exactly the values a board with no `net_classes` at all
+/// happens to already meet, and exactly what an escape class narrower than
+/// that -- the reason `net_classes` exists -- fails, even though the
+/// `.kicad_pcb`'s own `net_class` block correctly says that net wants less.
+/// `track_width`/`clearance` DRC "violations" on a board that both our own
+/// router and gates already passed are this gap, not a real defect, so this
+/// writes the floors down to what the board actually asks of them; nothing
+/// here loosens a constraint past what `model.board` itself specifies.
+///
+/// Fields this crate's model has no opinion on (via annular width, hole-to-
+/// hole spacing, micro-via size) keep KiCad's own stock defaults -- small
+/// enough to clear anything a 2-layer board like this routes, and not
+/// something narrowing a signal net's clearance has any bearing on.
+pub fn export_kicad_pro(model: &ConstraintModel) -> String {
+    let min_clearance = model.board.net_classes.iter().filter_map(|c| c.clearance).fold(model.board.clearance, Um::min);
+    let min_track_width = model.board.net_classes.iter().filter_map(|c| c.track_width).fold(model.board.track_width, Um::min);
+    // The router keeps every pad -- through-hole or not -- at least the
+    // board's own default clearance from copper on another net (see
+    // `crates/freeroute`'s clearance matrix); that is the real guarantee
+    // behind a hole on this board, so it is what the hole-clearance floor
+    // should ask for, never more.
+    let min_hole_clearance = model.board.clearance;
+    format!(
+        "{{\n  \"board\": {{\n    \"design_settings\": {{\n      \"rules\": {{\n        \"min_clearance\": {},\n        \"min_track_width\": {},\n        \"min_via_annular_width\": 0.1,\n        \"min_via_diameter\": 0.3,\n        \"min_hole_clearance\": {},\n        \"min_hole_to_hole\": 0.25,\n        \"min_through_hole_diameter\": 0.2,\n        \"min_microvia_diameter\": 0.2,\n        \"min_microvia_drill\": 0.1\n      }}\n    }}\n  }}\n}}\n",
+        mm(min_clearance),
+        mm(min_track_width),
+        mm(min_hole_clearance),
+    )
 }
 
 fn write_footprint(
@@ -521,7 +588,7 @@ mod tests {
         Pin { number: number.into(), name: None, kind }
     }
     fn part(reference: &str, package: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: Some(package.into()), footprint: Some(package.into()), pins, body_um: None, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }

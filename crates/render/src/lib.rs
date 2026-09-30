@@ -854,7 +854,7 @@ mod tests {
     }
 
     fn part(reference: &str, value: Option<&str>, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: value.map(String::from), package: None, footprint: None, pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: value.map(String::from), package: None, footprint: None, pins, body_um: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {

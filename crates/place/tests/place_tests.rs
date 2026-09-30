@@ -6,6 +6,7 @@ fn part(reference: &str, package: &str, npins: usize) -> Part {
     Part {
         reference: reference.into(),
         mpn: None,
+        lcsc: None,
         value: None,
         package: Some(package.into()),
         footprint: None,

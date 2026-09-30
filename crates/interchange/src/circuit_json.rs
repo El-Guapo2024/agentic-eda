@@ -424,6 +424,7 @@ mod tests {
                 Part {
                     reference: "R1".into(),
                     mpn: None,
+                    lcsc: None,
                     value: Some("10k".into()),
                     footprint: None,
                     package: Some("0603".into()),
@@ -437,6 +438,7 @@ mod tests {
                 Part {
                     reference: "C1".into(),
                     mpn: None,
+                    lcsc: None,
                     value: Some("100nF".into()),
                     footprint: None,
                     package: Some("0603".into()),
@@ -524,6 +526,7 @@ mod tests {
         let (ftype, _) = passive_variant(&Part {
             reference: "U1".into(),
             mpn: None,
+                    lcsc: None,
             value: None,
             footprint: None,
             package: None,

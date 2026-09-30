@@ -182,6 +182,11 @@ impl BoardRules {
                     bad("net_classes", format!("net class {:?} sets a track width of {w} µm", c.name));
                 }
             }
+            if let Some(cl) = c.clearance {
+                if cl < 0 {
+                    bad("net_classes", format!("net class {:?} sets a clearance of {cl} µm", c.name));
+                }
+            }
         }
         for p in &self.pours {
             if !self.layers.contains(&p.layer) {
@@ -378,6 +383,12 @@ impl BoardRules {
         self.class_of(net).and_then(|c| c.track_width).unwrap_or(self.track_width)
     }
 
+    /// Clearance `net`'s own copper keeps, to itself and to everything
+    /// else. Absent from the net's class (or no class) = the board default.
+    pub fn clearance_of(&self, net: &str) -> ir::Um {
+        self.class_of(net).and_then(|c| c.clearance).unwrap_or(self.clearance)
+    }
+
     /// Widest track any net on this board can take. The router's clearance
     /// summaries are precomputed for one querying width, so they are built
     /// at this one: conservative for narrow nets, correct for every net.
@@ -404,6 +415,15 @@ pub struct Part {
     pub reference: String,
     #[serde(default)]
     pub mpn: Option<String>,
+    /// LCSC catalog number ("C123456"), JLCPCB's own distributor key.
+    /// Distinct from `mpn` -- a manufacturer part number is not what a
+    /// specific distributor calls it -- and what a JLCPCB-format BOM/CPL
+    /// actually keys the assembler's reels by. `None` prints as a blank
+    /// "LCSC Part #" cell rather than a guess: an assembler cannot fill a
+    /// missing part number from a value string, and a wrong one places the
+    /// wrong part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lcsc: Option<String>,
     #[serde(default)]
     pub value: Option<String>,
     #[serde(default)]
@@ -543,6 +563,17 @@ pub struct NetClass {
     /// Track width for this class. Absent = the board default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_width: Option<ir::Um>,
+    /// Clearance this class's copper keeps -- to itself and to every other
+    /// class's copper alike, not only to its own nets. Absent = the board
+    /// default. An "escape" class asking for less room than the rest of
+    /// the board (a fine-pitch connector row a wider default clearance
+    /// cannot thread) is the reason this is a class-level override rather
+    /// than only a board-wide number: it narrows the gap where one net
+    /// needs it narrowed, and leaves every other net at the board's own
+    /// clearance. See `crates/freeroute/src/design.rs` for how this
+    /// reaches the router's clearance matrix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<ir::Um>,
     /// Routed before lower numbers. Power belongs first: it needs copper,
     /// it sets the return paths, and it is the hardest thing to squeeze in
     /// once signal nets have taken the channels. Default 0; signals sit at
@@ -669,5 +700,23 @@ mod tests {
         let m = ConstraintModel::default();
         let j = serde_json::to_string(&m).unwrap();
         let _: ConstraintModel = serde_json::from_str(&j).unwrap();
+    }
+
+    #[test]
+    fn net_class_clearance_overrides_the_board_default_only_for_its_own_nets() {
+        let mut rules = BoardRules { clearance: 200, ..BoardRules::default() };
+        rules.net_classes.push(NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150), clearance: Some(150), priority: 0 });
+        assert_eq!(rules.clearance_of("CC1"), 150);
+        assert_eq!(rules.clearance_of("CC2"), 150);
+        assert_eq!(rules.clearance_of("GND"), 200, "a net outside the class keeps the board default");
+        assert!(rules.validate().is_empty(), "{:?}", rules.validate());
+    }
+
+    #[test]
+    fn a_negative_net_class_clearance_fails_validation() {
+        let mut rules = BoardRules::default();
+        rules.net_classes.push(NetClass { name: "bad".into(), nets: vec!["X".into()], track_width: None, clearance: Some(-1), priority: 0 });
+        let fails = rules.validate();
+        assert!(fails.iter().any(|c| c.location.as_deref() == Some("board.net_classes")), "{fails:?}");
     }
 }
