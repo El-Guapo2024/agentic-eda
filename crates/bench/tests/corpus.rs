@@ -139,7 +139,14 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
             }
         }
     };
-    let sch_checks = check_schematic(&design, &model);
+    // `check_schematic` (this generator's own auto-layout readability
+    // gates) and `check_erc` (the ported KiCad ERC, judging electrical
+    // correctness exactly as `kicad-cli sch erc` would) are two
+    // complementary authorities -- see `stage_schematic` in `crates/cli`,
+    // which folds both the same way. Folding both in here too keeps this
+    // corpus run the actual safety net for regressions in *either*.
+    let mut sch_checks = check_schematic(&design, &model);
+    sch_checks.extend(check_erc(&design, &model));
     let crossing_hint = sch_checks
         .iter()
         .find(|c| c.check == "schematic_wire_crossing_count")
