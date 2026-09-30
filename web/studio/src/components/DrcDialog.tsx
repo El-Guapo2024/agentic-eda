@@ -4,7 +4,6 @@
 // /api/state's `checks` field, not KiCad's DRC engine. There's no
 // separate "run" step: the backend recomputes checks on every command,
 // so this dialog just reads the latest ones.
-import React from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
 
 export function DrcDialog() {

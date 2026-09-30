@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import { useEffect } from "react";
 import { StudioProvider, useStudioDispatch, useStudioState } from "./state/store";
 import { MenuBar } from "./components/MenuBar";
 import { Toolbar } from "./components/Toolbar";

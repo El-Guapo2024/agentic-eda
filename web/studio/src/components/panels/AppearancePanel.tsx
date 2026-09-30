@@ -6,7 +6,7 @@
 // a smaller, reasonable set of this app's own toggles; presets/viewports
 // are not implemented (see the report's gap list) -- KiCad's exact UI
 // for those needs the source this session couldn't reach.
-import React, { useState } from "react";
+import { useState } from "react";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import { layerColor, copperColorKey } from "../canvas/layers";
 

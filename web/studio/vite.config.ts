@@ -1,6 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// No @types/node in this project (dependency list is closed); this file
+// still runs under Node via Vite, so `process` exists at runtime -- just
+// declare the one shape used below instead of pulling in the package.
+declare const process: { env: Record<string, string | undefined> };
+
 // `eda board serve` (crates/cli/src/studio.rs) is the backend: a tiny
 // single-threaded HTTP server bound to 127.0.0.1, default port 8765
 // (crates/cli/src/board.rs). It owns /api/*; this dev server proxies

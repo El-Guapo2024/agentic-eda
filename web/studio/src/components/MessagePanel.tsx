@@ -4,7 +4,6 @@
 // this session could not read that file, so the field set below is
 // this app's own reasonable approximation from data the API exposes,
 // not a transcription of KiCad's exact fields.
-import React from "react";
 import { useStudioState } from "../state/store";
 import { formatLength, formatXY } from "../state/units";
 

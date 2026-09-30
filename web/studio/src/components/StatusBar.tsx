@@ -4,7 +4,6 @@
 // set/order/labels, so the fields below are a best-effort match to what
 // the task text named explicitly ("Z, X/Y, dx/dy/dist, grid, units, and
 // the rest"), not a verified transcription.
-import React from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import type { LengthUnit } from "../state/units";
 import { formatLength, formatXY, toPolar } from "../state/units";

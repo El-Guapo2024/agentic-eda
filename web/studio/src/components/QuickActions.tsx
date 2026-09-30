@@ -7,7 +7,6 @@
 // tools/extract-actions.js has run and the matching action name is added
 // to the registry -- Route and Inspect > DRC almost certainly correspond
 // to real KiCad actions/menu entries once that happens.
-import React from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
 

@@ -1,7 +1,7 @@
 // The schematic tab: GET /api/schematic.svg, panned/zoomed with plain
 // pointer/wheel handlers (ported from the old studio.html, which did the
 // same -- this is a read-only rendered view, not an editor).
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchSchematicSvg } from "../api/client";
 
 export function SchematicView() {

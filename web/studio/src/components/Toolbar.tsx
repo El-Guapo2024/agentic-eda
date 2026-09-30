@@ -1,7 +1,6 @@
 // Renders one toolbar from src/kicad/toolbars.json (main/options/drawing/
 // auxiliary -- see App.tsx for where each is docked). Data-driven, same
 // as MenuBar: empty until tools/extract-toolbars.js has real output.
-import React from "react";
 import toolbarsData from "../kicad/toolbars.json";
 import actionsData from "../kicad/actions.json";
 import iconsData from "../kicad/icons.json";

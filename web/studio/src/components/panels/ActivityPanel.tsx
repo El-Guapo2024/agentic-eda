@@ -4,7 +4,6 @@
 // comes straight through GET /api/state's `activity` field (already
 // serialized by crates/cli/src/board.rs `log_activity`); no backend
 // change was needed for this panel.
-import React from "react";
 import { useStudioState } from "../../state/store";
 
 export function ActivityPanel() {

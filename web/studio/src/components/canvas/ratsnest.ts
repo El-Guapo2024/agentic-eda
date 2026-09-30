@@ -15,10 +15,13 @@ export function minimumSpanningTree(points: Array<[number, number]>): Array<[[nu
   best[0] = 0;
   for (let k = 0; k < n; k++) {
     let u = -1;
-    for (let i = 0; i < n; i++) if (!inTree[i] && (u < 0 || best[i] < best[u])) u = i;
+    // `best`/`from` are indexed by plain loop counters, always 0..n -- safe
+    // to assert non-null rather than thread `| undefined` through the
+    // classic MST algorithm's arithmetic.
+    for (let i = 0; i < n; i++) if (!inTree[i] && (u < 0 || best[i]! < best[u]!)) u = i;
     if (u < 0) break;
     inTree[u] = true;
-    if (from[u] >= 0) edges.push([points[from[u]]!, points[u]!]);
+    if (from[u]! >= 0) edges.push([points[from[u]!]!, points[u]!]);
     for (let v = 0; v < n; v++) {
       if (inTree[v]) continue;
       const [ux, uy] = points[u]!;

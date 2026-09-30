@@ -5,7 +5,6 @@
 // reasonable approximation (a key/value grid plus the same rotate/rip
 // actions the message panel and canvas expose) rather than a
 // transcription of KiCad's exact grid rows.
-import React from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { formatXY } from "../../state/units";
 import type { Rule } from "../../api/types";

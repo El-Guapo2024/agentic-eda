@@ -6,7 +6,7 @@
 // ~/ws/kicad-mirror, both are empty (see their `meta.note`) and this
 // renders an empty bar with a visible explanation rather than invented
 // menu contents.
-import React, { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import menusData from "../kicad/menus.json";
 import actionsData from "../kicad/actions.json";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";

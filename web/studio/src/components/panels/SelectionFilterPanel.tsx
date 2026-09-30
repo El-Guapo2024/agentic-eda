@@ -4,7 +4,6 @@
 // are shown for shape parity with KiCad's panel but have no effect yet,
 // since track/via selection isn't implemented at all (see state/store.tsx
 // `selectionFilter`'s comment).
-import React from "react";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 
 export function SelectionFilterPanel() {
