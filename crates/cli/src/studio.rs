@@ -10,8 +10,14 @@
 //! verbs, two hands.
 //!
 //! A local tool, so a small one: the standard library's TCP listener,
-//! one request at a time, bound to 127.0.0.1. Routing, the one slow
-//! command, runs on a thread so the page keeps answering meanwhile.
+//! one request at a time, bound to 127.0.0.1. Because requests are
+//! handled one at a time, anything slow has to get off that thread
+//! itself rather than making every other route wait: routing runs on
+//! its own thread (`Job`, below), and so does a GLB export (`GlbJob`,
+//! serve_board_glb) -- the export alone can take minutes on a many-part
+//! board (real STEP models through kicad-cli/OpenCascade), and it once
+//! blocked /api/version and everything else for that long before this
+//! was fixed to run in the background instead.
 
 use crate::board;
 use eda_model::footprint::{placed_courtyard, placed_pads};
@@ -73,14 +79,17 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     );
     let job: Job = Arc::new(Mutex::new("idle".into()));
     let schematic: Mutex<Option<(std::time::SystemTime, String)>> = Mutex::new(None);
-    // Cached by the same version string /api/version returns: exporting
-    // to a temp .kicad_pcb and shelling out to kicad-cli on every request
-    // would make the 3D tab's GLB toggle re-run a whole external process
-    // per poll; this only regenerates when the board actually changed.
-    let glb_cache: Mutex<Option<(String, Vec<u8>)>> = Mutex::new(None);
+    // The kicad-cli export a GLB needs can take minutes on a many-part
+    // board (see GlbBuild's doc comment) -- this server handles one
+    // request at a time, so that export runs on its own background
+    // thread rather than inside handle(), and this slot is how the next
+    // /api/board.glb poll finds out how it's going. Cached by the same
+    // version string /api/version returns, same reasoning as `schematic`
+    // above: an unchanged board should never re-run kicad-cli.
+    let glb_job: GlbJob = Arc::new(Mutex::new(None));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_cache, ui_root.as_deref()) {
+        if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_job, ui_root.as_deref()) {
             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
         }
     }
@@ -183,6 +192,36 @@ fn kicad_cli_path() -> PathBuf {
     PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")
 }
 
+/// What the background GLB-export thread (spawned by [`serve_board_glb`])
+/// is doing for the one version string it was started for. A single
+/// `Option<(String, GlbBuild)>` slot rather than a map keyed by version:
+/// there is never more than one export in flight (see the guard in
+/// `serve_board_glb`), and a new one always replaces whatever the slot
+/// held before, exactly like `glb_job` in the doc comment on `serve`.
+enum GlbBuild {
+    Running,
+    /// `Arc` so a request that finds a `Done` result can clone the
+    /// handle and drop the mutex lock *before* writing the (possibly
+    /// several-MB) body to the socket -- holding the lock across that
+    /// blocking I/O would defeat the whole point of this background-
+    /// thread design by serializing unrelated requests behind a slow
+    /// client again.
+    Done(Arc<Vec<u8>>),
+    Failed(String),
+}
+type GlbJob = Arc<Mutex<Option<(String, GlbBuild)>>>;
+
+/// kicad-cli killed and the export marked failed if it runs longer than
+/// this. Chosen well above what a legitimately large board should take
+/// (a small board with only built-in-package-sized models exports in
+/// single-digit seconds; a board using a handful of large real-library
+/// models -- some run several MB, e.g. Connector_Molex's SlimStack
+/// parts -- measured several times slower still) but well short of "the
+/// server looks hung" -- the whole point of this route is to never
+/// again be the thing that makes the studio look frozen (see GlbBuild's
+/// doc comment on why this races on a thread at all).
+const GLB_EXPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
 /// GET /api/board.glb -- the whole board (body, copper, silk, mask, and
 /// every placed footprint's real 3D model) as one binary GLTF file, for
 /// the 3D tab's GLTFLoader to render directly instead of this app's own
@@ -193,44 +232,144 @@ fn kicad_cli_path() -> PathBuf {
 /// shelling out to `kicad-cli pcb export glb`, the one thing that can
 /// actually read a STEP model and bake a whole board's geometry into
 /// one file -- there is no Rust STEP/GLTF pipeline in this codebase to
-/// do it directly. Cached by the same version string `/api/version`
-/// already uses, so polling this route (or the 3D tab re-requesting it
-/// after every edit) doesn't shell out to kicad-cli when nothing has
-/// changed -- that process alone typically takes a second or more.
-fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, cache: &Mutex<Option<(String, Vec<u8>)>>) -> Result<(), String> {
+/// do it directly.
+///
+/// That export can be slow -- one report measured over two minutes on a
+/// 30-part board -- and it's almost entirely kicad-cli loading STEP
+/// models through OpenCascade: on this dev machine the same 30-part
+/// board with tracks/vias/small built-in-package models re-exports in
+/// 2.5-4.5s, but skipping components entirely (`--no-components`) drops
+/// that to well under a second, and swapping just one small (~150KB)
+/// connector model for a large (~9MB) real one added several more
+/// seconds by itself -- so both "which parts a board uses" and ordinary
+/// machine load can easily stretch this from single-digit seconds to
+/// minutes. This server answers one request at a time (`serve`'s doc
+/// comment), so running the export inline here once blocked every other
+/// route, including /api/version, until it finished: the
+/// whole studio looked frozen for as long as the export ran. Fixed by
+/// never blocking in the request handler at all:
+///  - nothing cached/running yet for the current version -> mark this
+///    version `Running`, spawn it on its own thread, answer 202 at once;
+///  - already `Running` (this version or a stale one -- there is only
+///    ever one export in flight) -> 202 again, still pending;
+///  - `Done` for the *current* version -> the actual GLB, 200;
+///  - `Failed` for the *current* version -> that error, 200 (a
+///    well-formed answer, not a server error) -- and left cached rather
+///    than retried, so a board that reliably fails/times out doesn't
+///    get kicad-cli re-run on every poll; a genuinely new attempt has to
+///    wait for the version to actually change.
+fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, glb: &GlbJob) -> Result<(), String> {
     let ver = version_string(dir, job);
-    if let Some((cached_ver, bytes)) = cache.lock().map_err(|e| e.to_string())?.as_ref() {
-        if *cached_ver == ver {
-            return respond(stream, "200 OK", "model/gltf-binary", bytes);
+    let mut guard = glb.lock().map_err(|e| e.to_string())?;
+    match guard.as_ref() {
+        Some((v, GlbBuild::Done(bytes))) if *v == ver => {
+            let bytes = bytes.clone();
+            drop(guard);
+            respond(stream, "200 OK", "model/gltf-binary", &bytes)
+        }
+        Some((v, GlbBuild::Failed(err))) if *v == ver => {
+            let body = json!({ "status": "failed", "error": err }).to_string();
+            drop(guard);
+            respond(stream, "200 OK", "application/json", body.as_bytes())
+        }
+        // Either this exact version is already being built, or a stale
+        // one is and hasn't been superseded yet -- either way, kicking
+        // off a second kicad-cli process would violate "only one export
+        // at a time", so this request just joins the same wait as
+        // whoever's already polling.
+        Some((_, GlbBuild::Running)) => {
+            drop(guard);
+            respond(stream, "202 Accepted", "application/json", br#"{"status":"pending"}"#)
+        }
+        // Stale Done/Failed for an old version, or nothing at all yet.
+        _ => {
+            *guard = Some((ver.clone(), GlbBuild::Running));
+            drop(guard);
+            let dir = dir.to_path_buf();
+            let glb = glb.clone();
+            std::thread::spawn(move || {
+                let outcome = match build_glb(&dir) {
+                    Ok(bytes) => GlbBuild::Done(Arc::new(bytes)),
+                    Err(e) => GlbBuild::Failed(e),
+                };
+                if let Ok(mut g) = glb.lock() {
+                    *g = Some((ver, outcome));
+                }
+            });
+            respond(stream, "202 Accepted", "application/json", br#"{"status":"pending"}"#)
         }
     }
+}
 
-    let (meta, design, model) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
-    };
+/// Kills kicad-cli's whole process group, not just the one pid
+/// `std::process::Child` knows about. `Child::kill` only signals that
+/// exact process; if it had spawned children of its own, a plain kill
+/// leaves them orphaned and running forever -- confirmed directly while
+/// testing this timeout path against a slow stand-in process, not a
+/// theoretical worry. `build_glb` spawns kicad-cli with
+/// `.process_group(0)`, putting it in a fresh group led by its own pid,
+/// so signalling the *negative* pid here reaches that whole group in
+/// one shot. Shells out to `kill` rather than adding a libc dependency
+/// for one syscall -- consistent with this whole module's existing
+/// approach to anything std doesn't cover (it already shells out to
+/// kicad-cli itself). Unix-only (`process_group`/negative-pid-as-group
+/// is POSIX), matching this file's existing macOS-only assumptions
+/// elsewhere (e.g. kicad_cli_path's default).
+fn kill_process_group(child: &std::process::Child) {
+    let _ = std::process::Command::new("kill").arg("-9").arg("--").arg(format!("-{}", child.id())).status();
+}
+
+/// The actual export: current design -> temp .kicad_pcb -> `kicad-cli
+/// pcb export glb` -> the produced file's bytes. Runs on the background
+/// thread [`serve_board_glb`] spawns, never on the request-handling
+/// thread -- see that function's doc comment for why. `kicad-cli` is
+/// given [`GLB_EXPORT_TIMEOUT`] to finish and killed (not just abandoned
+/// -- [`kill_process_group`] + `wait` so the whole thing is actually
+/// reaped, not left as a zombie/orphan still holding the board's temp
+/// files open) if it runs longer, so a stuck or pathological export can
+/// never pile up processes or run forever even though nothing is
+/// polling its stdout.
+fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
+    let (meta, design, model) = board::load(dir).map_err(|e| board::reasons(&e))?;
     let title = Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
     let date = eda::now_rfc3339();
-    let pcb_text = match eda::export_kicad_pcb(&design, &model, &eda::ExportMeta { date: &date[..10], title: &title }) {
-        Ok(v) => v,
-        Err(e) => return respond(stream, "500 Internal Server Error", "text/plain", board::reasons(&e).as_bytes()),
-    };
+    let pcb_text = eda::export_kicad_pcb(&design, &model, &eda::ExportMeta { date: &date[..10], title: &title }).map_err(|e| board::reasons(&e))?;
 
-    let tmp_dir = std::env::temp_dir().join(format!("eda-board-glb-{}", std::process::id()));
-    if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
-        return respond(stream, "500 Internal Server Error", "text/plain", format!("could not create temp dir: {e}").as_bytes());
-    }
-    let pcb_path = tmp_dir.join(format!("{title}.kicad_pcb"));
-    let glb_path = tmp_dir.join(format!("{title}.glb"));
+    // Unique per call (not just per process, as the old synchronous
+    // version had it): the single-export-at-a-time guard means two of
+    // these never race, but a timed-out export's thread is still
+    // cleaning up its own tmp_dir in the background for a moment after
+    // `build_glb` returns Err to it, and reusing the exact same path for
+    // the *next* export (if the version changed again quickly) would
+    // race that cleanup. Nanosecond timestamp is enough entropy for
+    // "never collides with the previous call from this same process".
+    let unique = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp_dir = std::env::temp_dir().join(format!("eda-board-glb-{}-{unique}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("could not create temp dir: {e}"))?;
     let cleanup = || {
         let _ = std::fs::remove_dir_all(&tmp_dir);
     };
+    let pcb_path = tmp_dir.join(format!("{title}.kicad_pcb"));
+    let glb_path = tmp_dir.join(format!("{title}.glb"));
+    let stderr_path = tmp_dir.join("stderr.log");
     if let Err(e) = std::fs::write(&pcb_path, &pcb_text) {
         cleanup();
-        return respond(stream, "500 Internal Server Error", "text/plain", format!("could not write temp .kicad_pcb: {e}").as_bytes());
+        return Err(format!("could not write temp .kicad_pcb: {e}"));
     }
+    let stderr_file = match std::fs::File::create(&stderr_path) {
+        Ok(f) => f,
+        Err(e) => {
+            cleanup();
+            return Err(format!("could not create temp stderr file: {e}"));
+        }
+    };
 
-    let run = std::process::Command::new(kicad_cli_path())
+    // Its own process group (pgid = its own pid), not this server's --
+    // see kill_process_group's doc comment for why that matters on
+    // timeout.
+    use std::os::unix::process::CommandExt as _;
+    let start = std::time::Instant::now();
+    let mut child = match std::process::Command::new(kicad_cli_path())
         .args([
             "pcb",
             "export",
@@ -245,31 +384,62 @@ fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, cache: &Mutex<
         ])
         .arg(&glb_path)
         .arg(&pcb_path)
-        .output();
-    let output = match run {
-        Ok(o) => o,
+        .stdout(std::process::Stdio::null())
+        // A file, not `Stdio::piped()`: piped output has to be actively
+        // drained or a chatty child can fill the pipe buffer and block
+        // on its own write() -- exactly the kind of stall this whole
+        // change exists to get away from. A file needs no draining.
+        .stderr(std::process::Stdio::from(stderr_file))
+        .process_group(0)
+        .spawn()
+    {
+        Ok(c) => c,
         Err(e) => {
             cleanup();
-            return respond(stream, "500 Internal Server Error", "text/plain", format!("could not run kicad-cli ({}): {e}", kicad_cli_path().display()).as_bytes());
+            return Err(format!("could not run kicad-cli ({}): {e}", kicad_cli_path().display()));
         }
     };
-    if !output.status.success() {
+
+    let deadline = start + GLB_EXPORT_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                kill_process_group(&child);
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(200)),
+            Err(e) => {
+                cleanup();
+                return Err(format!("waiting on kicad-cli failed: {e}"));
+            }
+        }
+    };
+    let elapsed = start.elapsed();
+
+    let Some(status) = status else {
         cleanup();
-        return respond(stream, "500 Internal Server Error", "text/plain", format!("kicad-cli pcb export glb failed: {}", String::from_utf8_lossy(&output.stderr)).as_bytes());
+        return Err(format!("kicad-cli pcb export glb timed out after {}s and was killed", GLB_EXPORT_TIMEOUT.as_secs()));
+    };
+    // Not the report itself (this fn has no request to answer with one),
+    // but the one place that actually knows the number: the server's own
+    // stderr, so `eda board serve`'s own operator can see it too.
+    eprintln!("board: kicad-cli pcb export glb ({title}) took {:.1}s", elapsed.as_secs_f64());
+    if !status.success() {
+        let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+        cleanup();
+        return Err(format!("kicad-cli pcb export glb failed: {stderr}"));
     }
     let bytes = match std::fs::read(&glb_path) {
         Ok(b) => b,
         Err(e) => {
             cleanup();
-            return respond(stream, "500 Internal Server Error", "text/plain", format!("kicad-cli did not produce a readable .glb: {e}").as_bytes());
+            return Err(format!("kicad-cli did not produce a readable .glb: {e}"));
         }
     };
     cleanup();
-
-    if let Ok(mut guard) = cache.lock() {
-        *guard = Some((ver, bytes.clone()));
-    }
-    respond(stream, "200 OK", "model/gltf-binary", &bytes)
+    Ok(bytes)
 }
 
 fn mime_of(path: &Path) -> &'static str {
@@ -292,7 +462,7 @@ fn handle(
     dir: &Path,
     job: &Job,
     schematic: &Mutex<Option<(std::time::SystemTime, String)>>,
-    glb_cache: &Mutex<Option<(String, Vec<u8>)>>,
+    glb_job: &GlbJob,
     ui_root: Option<&Path>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
@@ -339,7 +509,7 @@ fn handle(
             let v = schematic_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
-        ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_cache),
+        ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job),
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())

@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardState, Cmd, CmdReply, Ratsnest, RouteReply, Schematic } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, Ratsnest, RouteReply, Schematic } from "./types";
 
 export class ApiError extends Error {}
 
@@ -48,6 +48,25 @@ export async function fetchRatsnest(): Promise<Ratsnest> {
   const r = await getJson<Ratsnest & { error?: string }>("/api/ratsnest");
   if (r.error) throw new ApiError(r.error);
   return r;
+}
+
+/**
+ * GET /api/board.glb once. Never throws for the "still building" or
+ * "kicad-cli failed" cases -- those are ordinary, well-formed answers
+ * (see BoardGlbResult's doc comment in ./types) -- only for a genuine
+ * transport/HTTP-level problem. Callers that want the export to finish
+ * poll this themselves (see Viewer3D.tsx); this function makes exactly
+ * one request.
+ */
+export async function fetchBoardGlb(): Promise<BoardGlbResult> {
+  const r = await fetch("/api/board.glb", { cache: "no-store" });
+  const contentType = r.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const j = (await r.json()) as { status: "pending" } | { status: "failed"; error: string };
+    return j.status === "pending" ? { status: "pending" } : { status: "failed", error: j.error };
+  }
+  if (!r.ok) throw new ApiError(`/api/board.glb: HTTP ${r.status}`);
+  return { status: "ready", bytes: await r.arrayBuffer() };
 }
 
 /**

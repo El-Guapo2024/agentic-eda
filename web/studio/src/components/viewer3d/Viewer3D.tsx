@@ -22,7 +22,8 @@ import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { useStudioState } from "../../state/store";
+import { fetchBoardGlb } from "../../api/client";
+import { useStudioDispatch, useStudioState } from "../../state/store";
 import { buildBoardGroup, buildBackgroundTexture, disposeObject3D, presetCameraPose, boardOutlineBounds, type ViewPreset, type OutlineBounds } from "./scene";
 
 const CAMERA_FOV_DEG = 50;
@@ -30,6 +31,22 @@ const CAMERA_FOV_DEG = 50;
 const ORTHO_FOV_DEG = 4;
 /** glTF's own unit is meters; every other builder in this file (scene.ts) works in millimetres, so the loaded GLB scene is scaled up to match rather than rescaling everything else down to meters. */
 const GLB_METERS_TO_MM = 1000;
+/** How often to re-poll GET /api/board.glb while the backend reports `{"status":"pending"}`. The export itself can take minutes (see studio.rs's build_glb), so this is deliberately slower than the app's main 700ms state poll (store.tsx) -- there is no reason to hammer the endpoint every tick for something this slow. */
+const GLB_POLL_MS = 1500;
+
+/** Small, unobtrusive corner badge while the background kicad-cli export runs -- the procedural scene stays fully interactive underneath it the whole time (see this file's fetch effect), so this is a status note, not a loading overlay that blocks the view. */
+const GLB_STATUS_BADGE_STYLE: React.CSSProperties = {
+  position: "absolute",
+  left: 10,
+  bottom: 10,
+  padding: "4px 8px",
+  borderRadius: 4,
+  background: "var(--chrome-bg, #1e1e1e)",
+  color: "var(--chrome-text-dim, #999)",
+  font: "11px/1 inherit",
+  border: "1px solid var(--chrome-border, #444)",
+  pointerEvents: "none",
+};
 
 interface ThreeContext {
   renderer: THREE.WebGLRenderer;
@@ -49,6 +66,7 @@ export interface Viewer3DApi {
 
 export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => void }) {
   const state = useStudioState();
+  const dispatch = useStudioDispatch();
   const board = state.board;
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -269,40 +287,76 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   // mount) instead of replacing boardGroup outright, so a slow or failed
   // fetch never clears what's already on screen -- syncActiveGroupRef
   // decides which group is actually shown.
+  //
+  // The backend runs the (potentially multi-minute) kicad-cli export on
+  // its own thread and never blocks on it (studio.rs's serve_board_glb),
+  // answering 202 pending / 200 the GLB / 200 a failure -- see
+  // BoardGlbResult in api/types.ts. This effect mirrors that: it polls
+  // while pending, and stops outright (no retry loop) the moment it
+  // sees either an actual result or a failure for the version it asked
+  // about. Gated on `kicadModels` too, not just `state.version`: with
+  // the toggle off there is no reason to ever start that export at all,
+  // whether or not the 3D tab happens to be open (this whole component
+  // only exists while it is, per App.tsx's `is3d &&` guard).
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
+    if (!state.viewer3d.kicadModels) {
+      // Nothing to poll for and nothing in flight to report on -- match
+      // GlbStatus's doc comment ("idle" = toggle off or never asked).
+      dispatch({ type: "SET_GLB_STATUS", status: "idle" });
+      return;
+    }
     let cancelled = false;
-    const loader = new GLTFLoader();
-    loader.load(
-      "/api/board.glb",
-      (gltf) => {
-        if (cancelled) return;
-        disposeObject3D(three.glbGroup);
-        three.glbGroup.clear();
-        gltf.scene.scale.setScalar(GLB_METERS_TO_MM);
-        three.glbGroup.add(gltf.scene);
-        glbLoadedRef.current = true;
-        syncActiveGroupRef.current();
-        applyPreset(lastPresetRef.current);
-      },
-      undefined,
-      () => {
-        // kicad-cli isn't installed, the board failed to export, or the
-        // request was interrupted by a fast board edit -- fall back to
-        // the procedural scene silently (see this file's module doc);
-        // not a UI-visible error, since the procedural scene is a
-        // complete, working view on its own.
-        if (cancelled) return;
-        glbLoadedRef.current = false;
-        syncActiveGroupRef.current();
-      }
-    );
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    dispatch({ type: "SET_GLB_STATUS", status: "pending" });
+
+    const fail = (error: string) => {
+      if (cancelled) return;
+      glbLoadedRef.current = false;
+      syncActiveGroupRef.current();
+      dispatch({ type: "SET_GLB_STATUS", status: "failed", error });
+    };
+
+    const poll = () => {
+      fetchBoardGlb()
+        .then((result) => {
+          if (cancelled) return;
+          if (result.status === "pending") {
+            timer = setTimeout(poll, GLB_POLL_MS);
+            return;
+          }
+          if (result.status === "failed") {
+            fail(result.error);
+            return;
+          }
+          new GLTFLoader().parse(
+            result.bytes,
+            "",
+            (gltf) => {
+              if (cancelled) return;
+              disposeObject3D(three.glbGroup);
+              three.glbGroup.clear();
+              gltf.scene.scale.setScalar(GLB_METERS_TO_MM);
+              three.glbGroup.add(gltf.scene);
+              glbLoadedRef.current = true;
+              syncActiveGroupRef.current();
+              applyPreset(lastPresetRef.current);
+              dispatch({ type: "SET_GLB_STATUS", status: "loaded" });
+            },
+            (e) => fail(e instanceof ErrorEvent ? e.message : String(e))
+          );
+        })
+        .catch((e) => fail(String(e)));
+    };
+    poll();
+
     return () => {
       cancelled = true;
+      if (timer !== null) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.version]);
+  }, [state.version, state.viewer3d.kicadModels]);
 
   useEffect(() => {
     syncActiveGroupRef.current();
@@ -313,6 +367,9 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   return (
     <div ref={containerRef} className="pcb-canvas-container">
       {!board && <div className="pcb-canvas-empty">{state.boardError ?? "Loading board…"}</div>}
+      {state.viewer3d.kicadModels && state.glbStatus === "pending" && (
+        <div style={GLB_STATUS_BADGE_STYLE}>Loading KiCad models…</div>
+      )}
     </div>
   );
 }

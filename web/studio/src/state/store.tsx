@@ -87,6 +87,15 @@ export interface Viewer3DOptions {
   kicadModels: boolean;
 }
 
+/**
+ * GET /api/board.glb's lifecycle for the version currently on screen --
+ * see api/types.ts's `BoardGlbResult` and studio.rs's `GlbBuild` for the
+ * backend side this mirrors. "idle" covers both "never asked" (toggle
+ * off, or not on the 3D tab) and "not needed" (nothing changed since the
+ * last "loaded"/"failed"); Viewer3D.tsx is the only writer.
+ */
+export type GlbStatus = "idle" | "pending" | "loaded" | "failed";
+
 export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   showComponents: true,
   showSilkscreen: true,
@@ -104,6 +113,9 @@ export interface StudioState {
   tab: EditorTab;
   rightDockTab: RightDockTab;
   viewer3d: Viewer3DOptions;
+  /** See `GlbStatus`. Read by Viewer3D (the "loading models…" badge) and Viewer3DToolbar (the KiCad Models toggle's tooltip after a failure). */
+  glbStatus: GlbStatus;
+  glbError: string | null;
 
   selection: Set<string>;
   /** Refs to flash/outline because a problem in the panel references them. */
@@ -193,6 +205,8 @@ const initialState: StudioState = {
   tab: "pcb",
   rightDockTab: "appearance",
   viewer3d: DEFAULT_VIEWER3D_OPTIONS,
+  glbStatus: "idle",
+  glbError: null,
   selection: new Set(),
   hot: new Set(),
   netHighlight: null,
@@ -244,6 +258,7 @@ type Action =
   | { type: "SET_TAB"; tab: EditorTab }
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
+  | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
   | { type: "SET_SELECTION"; refs: string[] }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
@@ -315,6 +330,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, rightDockTab: action.tab };
     case "SET_VIEWER3D_OPTIONS":
       return { ...state, viewer3d: { ...state.viewer3d, ...action.options } };
+    case "SET_GLB_STATUS":
+      return { ...state, glbStatus: action.status, glbError: action.error ?? null };
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs), armed: null };
     case "TOGGLE_SELECTION": {
