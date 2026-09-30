@@ -33,6 +33,12 @@ pub use footprint_lib::{default_footprint_library_root, find_footprint_file, par
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, find_symbol_library_file, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
+mod erc;
+pub use erc::check_erc;
+
+mod sch_import;
+pub use sch_import::import_kicad_sch;
+
 const STUB_MM: f64 = 1.27;
 
 /// Fixed provenance for the title block. Passed explicitly (never system
@@ -199,13 +205,6 @@ pub fn export_kicad_sch(
     }
 
     // ---- wires (each polyline segment as one KiCad wire) ----
-    let mut junction_hits: BTreeMap<(i64, i64), u32> = BTreeMap::new();
-    for w in &wires {
-        for pair in w.pts.windows(2) {
-            *junction_hits.entry((pair[0].x, pair[0].y)).or_default() += 1;
-            *junction_hits.entry((pair[1].x, pair[1].y)).or_default() += 1;
-        }
-    }
     for (i, w) in wires.iter().enumerate() {
         for (j, pair) in w.pts.windows(2).enumerate() {
             let x1 = mm(pair[0].x);
@@ -221,16 +220,23 @@ pub fn export_kicad_sch(
         }
     }
 
-    // ---- junctions: points where >=3 wire-segment endpoints meet ----
-    for (pt, count) in &junction_hits {
-        if *count >= 3 {
-            let x = mm(pt.0);
-            let y = mm(pt.1);
-            let uuid = duid(&format!("junction:{}:{}", pt.0, pt.1));
-            writeln!(out, "\t(junction (at {x} {y}) (diameter 0) (color 0 0 0 0)").unwrap();
-            writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-            writeln!(out, "\t)").unwrap();
-        }
+    // ---- junctions: every point where 3+ same-net wire-segment endpoints
+    // meet, *including* a T-junction with no shared vertex (one wire's
+    // endpoint landing mid-span on another same-net wire's segment) --
+    // `geometry::wire_junction_points` is the single definition
+    // `eda_render`/`eda_gates` already hold every dot to, so drawing
+    // anything narrower here (the old plain vertex-coincidence count) is
+    // exactly what `schematic_missing_junction` exists to catch: a real
+    // connection real KiCad accepts silently, left with no dot marking it.
+    // Net-scoped (not just by point), so two different nets whose wires
+    // happen to cross at the same coordinate never draw a false short.
+    for (net, pt) in eda_engine::geometry::wire_junction_points(&sch.wires) {
+        let x = mm(pt.x);
+        let y = mm(pt.y);
+        let uuid = duid(&format!("junction:{net}:{}:{}", pt.x, pt.y));
+        writeln!(out, "\t(junction (at {x} {y}) (diameter 0) (color 0 0 0 0)").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        writeln!(out, "\t)").unwrap();
     }
 
     // ---- no-connect flags ----
@@ -871,7 +877,11 @@ mod tests {
         let design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
         let out = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
         let sch = design.schematic.as_ref().unwrap();
-        assert_eq!(out.matches("(symbol (lib_id").count(), sch.symbols.len());
+        // Every part instance *and* every power symbol (a `PWR_FLAG`
+        // included) is written as its own `(symbol (lib_id ...) ...)`
+        // sheet block, so the pattern's count is the sum of both, not
+        // just the part instances.
+        assert_eq!(out.matches("(symbol (lib_id").count(), sch.symbols.len() + sch.power_symbols.len());
         let expected_wire_segments: usize = sch.wires.iter().map(|w| w.pts.len().saturating_sub(1)).sum();
         assert_eq!(out.matches("\t(wire\n").count(), expected_wire_segments);
     }
@@ -914,14 +924,18 @@ mod tests {
     }
 
     #[test]
-    fn power_nets_use_global_label() {
+    fn power_nets_use_power_symbols_not_wires() {
         let model = ldo_model();
+        let design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
         let out = export(&model);
-        // GND is a >=3-pin all-power/ground net, so the engine emits it as
-        // a label (not wires); it must show up as a global_label.
-        if out.contains("\"GND\"") {
-            assert!(out.contains("(global_label \"GND\""), "GND should be a global_label:\n{out}");
-        }
+        // GND is a name-recognized ground net, so the engine drops a real
+        // `power:GND` symbol at each of its pins instead of wiring them or
+        // labeling them — no `global_label`/`label` for GND at all.
+        let sch = design.schematic.as_ref().unwrap();
+        assert!(sch.power_symbols.iter().any(|p| p.net == "GND" && p.lib_id == "power:GND"), "{:#?}", sch.power_symbols);
+        assert!(out.contains("(lib_id \"power:GND\")"), "GND should be a real power symbol:\n{out}");
+        assert!(!out.contains("(global_label \"GND\""));
+        assert!(!out.contains("(label \"GND\""));
     }
 
     #[test]

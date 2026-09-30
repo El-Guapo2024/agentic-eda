@@ -72,7 +72,16 @@ pub fn resolve_symbol(lib_root: &Path, lib_id: &str) -> Option<LibSymbol> {
     }
     let path = find_symbol_library_file(lib_root, lib_name)?;
     let table = load_library_table(&path).ok()?;
-    table.get(symbol_name).cloned()
+    // The table is keyed (and each entry's own `lib_id` initially set) by
+    // the *bare* name a standalone `.kicad_sym` file uses for its `(symbol
+    // "Name" ...)` entries -- unlike an embedded `lib_symbols` block, which
+    // already spells each entry `"Library:Name"` (see `sch_import`'s own
+    // use of `build_symbol_table`, which needs no such fixup). Restore the
+    // fully-qualified id the caller asked for, so a resolved symbol's own
+    // `lib_id` always matches how it was looked up.
+    let mut sym = table.get(symbol_name).cloned()?;
+    sym.lib_id = lib_id.to_string();
+    Some(sym)
 }
 
 fn load_library_table(path: &Path) -> Result<std::sync::Arc<LibraryTable>, String> {
