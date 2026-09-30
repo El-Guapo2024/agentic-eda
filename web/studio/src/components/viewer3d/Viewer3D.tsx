@@ -22,9 +22,11 @@ import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { useStudioState } from "../../state/store";
-import { buildBoardGroup, disposeObject3D, presetCameraPose, boardOutlineBounds, type ViewPreset, type OutlineBounds } from "./scene";
+import { buildBoardGroup, buildBackgroundTexture, disposeObject3D, presetCameraPose, boardOutlineBounds, type ViewPreset, type OutlineBounds } from "./scene";
 
 const CAMERA_FOV_DEG = 50;
+/** "Orthographic" toggle: this app has no separate OrthographicCamera wired up (Viewer3DApi/applyPreset math is all perspective-FOV-based) -- narrowing the FOV this far while presetCameraPose pulls the camera back to compensate is a well-known way to approximate an orthographic look with a plain PerspectiveCamera, not a real projection swap. */
+const ORTHO_FOV_DEG = 4;
 
 interface ThreeContext {
   renderer: THREE.WebGLRenderer;
@@ -47,6 +49,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const containerRef = useRef<HTMLDivElement>(null);
   const threeRef = useRef<ThreeContext | null>(null);
   const lastFitBoundsRef = useRef<OutlineBounds | null>(null);
+  const lastPresetRef = useRef<ViewPreset>("iso");
   // `onReady` kept in a ref and read only inside effects, not listed as
   // an effect dependency, so an unstable inline callback from a caller
   // can never tear down and recreate the whole WebGL context on every
@@ -55,6 +58,12 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
+  // Same ref-not-dependency reasoning for the view-option toggles: read
+  // fresh inside applyPreset (stable, empty deps) rather than closed over.
+  const viewer3dRef = useRef(state.viewer3d);
+  useEffect(() => {
+    viewer3dRef.current = state.viewer3d;
+  }, [state.viewer3d]);
 
   /**
    * Moves the camera to `preset`, framing whatever is currently in the
@@ -71,6 +80,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const applyPreset = useCallback((preset: ViewPreset) => {
     const three = threeRef.current;
     if (!three) return;
+    lastPresetRef.current = preset;
+    three.camera.fov = viewer3dRef.current.orthographic ? ORTHO_FOV_DEG : CAMERA_FOV_DEG;
     const box = new THREE.Box3().setFromObject(three.boardGroup);
     const { position, target } = presetCameraPose(box, preset, three.camera.fov, three.camera.aspect);
     three.camera.position.copy(position);
@@ -90,7 +101,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     if (!container) return;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1e1e1f);
+    scene.background = buildBackgroundTexture();
 
     const camera = new THREE.PerspectiveCamera(CAMERA_FOV_DEG, 1, 0.1, 10000);
     camera.position.set(80, 80, 80);
@@ -147,6 +158,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       controls.dispose();
       disposeObject3D(boardGroup);
       scene.remove(boardGroup);
+      (scene.background as THREE.Texture | null)?.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) container.removeChild(renderer.domElement);
       threeRef.current = null;
@@ -157,17 +169,23 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Rebuild the board group whenever the board data changes, and
-  // re-fit the camera whenever the outline bounds change meaningfully
-  // (or the first time a usable outline appears at all) -- including on
-  // first mount, since `lastFitBoundsRef` starts at null.
+  // Rebuild the board group whenever the board data or a show/hide
+  // option changes, and re-fit the camera whenever the outline bounds
+  // change meaningfully (or the first time a usable outline appears at
+  // all) -- including on first mount, since `lastFitBoundsRef` starts at
+  // null. Toggling a show/hide option alone never changes `board.outline`
+  // (boardOutlineBounds only looks at that), so it rebuilds geometry
+  // without moving the camera -- the same way KiCad's own show/hide
+  // toggles don't reset your view.
+  const { showComponents, showSilkscreen, showSolderMask } = state.viewer3d;
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
 
     disposeObject3D(three.boardGroup);
     three.scene.remove(three.boardGroup);
-    const nextGroup = board ? buildBoardGroup(board) : new THREE.Group();
+    const nextGroup = board ? buildBoardGroup(board, { showComponents, showSilkscreen, showSolderMask }) : new THREE.Group();
+    nextGroup.rotation.x = viewer3dRef.current.flipped ? Math.PI : 0;
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
 
@@ -181,7 +199,33 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         (Math.abs(prev.minX - bounds.minX) > EPS_MM || Math.abs(prev.minZ - bounds.minZ) > EPS_MM || Math.abs(prev.maxX - bounds.maxX) > EPS_MM || Math.abs(prev.maxZ - bounds.maxZ) > EPS_MM));
     lastFitBoundsRef.current = bounds;
     if (boundsChanged) applyPreset("reset");
-  }, [board, applyPreset]);
+  }, [board, showComponents, showSilkscreen, showSolderMask, applyPreset]);
+
+  // Flip/orthographic are camera-or-orientation-only -- no geometry
+  // rebuild needed, just re-pose what's already there. Flip spins the
+  // *board group itself* 180 degrees about the in-plane X axis (like
+  // turning a page over a horizontal hinge: left/right stays put, top
+  // and front/back swap), so the bottom side reads right-way-up rather
+  // than mirrored -- not a new camera preset; the re-fit afterward is
+  // needed because rotating the group changes its world bounding box,
+  // which would otherwise leave the framing from before the flip stale.
+  useEffect(() => {
+    const three = threeRef.current;
+    if (!three) return;
+    three.boardGroup.rotation.x = state.viewer3d.flipped ? Math.PI : 0;
+    applyPreset(lastPresetRef.current);
+    // Deliberately only on the flipped flag -- see the orthographic
+    // effect below for why lastPresetRef/applyPreset aren't dependencies.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.viewer3d.flipped]);
+  useEffect(() => {
+    if (!threeRef.current) return;
+    applyPreset(lastPresetRef.current);
+    // Deliberately only on the orthographic flag: re-applying
+    // lastPresetRef's own preset must not itself become a dependency (it's
+    // a ref, and applyPreset already reads viewer3dRef fresh).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.viewer3d.orthographic]);
 
   return (
     <div ref={containerRef} className="pcb-canvas-container">
