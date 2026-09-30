@@ -475,7 +475,6 @@ dependencies = [
  "eda-place",
  "eda-render",
  "serde_json",
- "serde_yaml",
 ]
 
 [[package]]
@@ -573,7 +572,6 @@ dependencies = [
 name = "eda-gates"
 version = "0.1.0"
 dependencies = [
- "eda-drc",
  "eda-engine",
  "eda-layout",
  "eda-model",
