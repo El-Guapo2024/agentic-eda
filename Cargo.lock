@@ -494,6 +494,7 @@ dependencies = [
  "blake3",
  "eda",
  "eda-connectivity",
+ "eda-drc",
  "eda-fab",
  "eda-gates",
  "eda-judge",
@@ -526,6 +527,20 @@ dependencies = [
  "eda-model",
  "eda-place",
  "serde_json",
+]
+
+[[package]]
+name = "eda-drc"
+version = "0.1.0"
+dependencies = [
+ "eda-engine",
+ "eda-freeroute",
+ "eda-kicad",
+ "eda-model",
+ "eda-place",
+ "serde",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]

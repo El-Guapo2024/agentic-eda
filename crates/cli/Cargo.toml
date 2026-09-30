@@ -18,4 +18,5 @@ eda-gates = { path = "../gates" }
 eda-ops = { path = "../ops" }
 eda-judge = { path = "../judge" }
 eda-fab = { path = "../fab" }
+eda-drc = { path = "../drc" }
 eda-connectivity = { path = "../connectivity" }
