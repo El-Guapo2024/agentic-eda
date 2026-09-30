@@ -13,7 +13,15 @@ import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
-export type EditorTab = "pcb" | "schematic";
+/**
+ * One window, three tabs -- unlike real KiCad, which is a separate
+ * window per editor (pcbnew/eeschema/the 3D viewer). Each tab keeps that
+ * editor's own toolbars/menus/panels (App.tsx), but selection and net
+ * highlight are shared app-wide (this same state.selection/
+ * netHighlight), so cross-probing between PCB and Schematic is just both
+ * views reading the same fields, not a separate sync mechanism.
+ */
+export type EditorTab = "pcb" | "schematic" | "3d";
 
 /**
  * A minimal active-tool state -- just enough to give the status bar's

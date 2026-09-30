@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { StudioProvider, useStudioDispatch, useStudioState } from "./state/store";
+import { EditorTabs } from "./components/EditorTabs";
 import { MenuBar } from "./components/MenuBar";
 import { Toolbar } from "./components/Toolbar";
 import { QuickActions } from "./components/QuickActions";
@@ -12,6 +13,7 @@ import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
 import { HotkeysDialog } from "./components/HotkeysDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
+import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
 import "./styles/global.css";
 import "./styles/layout.css";
@@ -56,6 +58,9 @@ function StudioFrame() {
       <div className="menubar-row">
         <MenuBar />
       </div>
+      <div className="tabs-row">
+        <EditorTabs />
+      </div>
       <div className="main-toolbar-row">
         <Toolbar id="main" />
         <QuickActions />
@@ -73,7 +78,9 @@ function StudioFrame() {
           <Toolbar id="options" />
         </div>
         <div className="canvas-col">
-          {state.tab === "pcb" ? <Canvas /> : <SchematicView />}
+          {state.tab === "pcb" && <Canvas />}
+          {state.tab === "schematic" && <SchematicView />}
+          {state.tab === "3d" && <div className="pcb-canvas-empty">3D viewer — coming next.</div>}
           <Toast />
         </div>
         <div className="drawing-toolbar-col">
@@ -92,6 +99,7 @@ function StudioFrame() {
       <DrcDialog />
       <HotkeysDialog />
       <FootprintPropertiesDialog />
+      <NetInspectorDialog />
     </div>
   );
 }

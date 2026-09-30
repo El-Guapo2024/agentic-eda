@@ -2,6 +2,7 @@
 // auxiliary -- see App.tsx for where each is docked). Data-driven, same
 // as MenuBar: empty until tools/extract-toolbars.js has real output.
 import toolbarsData from "../kicad/toolbars.json";
+import schToolbarsData from "../kicad/sch_toolbars.json";
 import actionsData from "../kicad/actions.json";
 import iconsData from "../kicad/icons.json";
 import type { ToolbarsFile, ToolbarId, ActionsFile, IconsFile, ToolbarItem } from "../kicad/types";
@@ -23,6 +24,13 @@ const ZOOM_PRESET_PERCENTS = [25, 50, 100, 200, 400, 800];
 const scaleForZoomPercent = (pct: number) => (pct / 100) * 0.01;
 
 const toolbarsFile = toolbarsData as ToolbarsFile;
+// eeschema has no auxiliary toolbar at all (toolbars_sch_editor.cpp's
+// TOOLBAR_LOC::TOP_AUX case returns std::nullopt) -- sch_toolbars.json
+// only ever has main/options/drawing, so an "auxiliary" lookup on it
+// naturally falls through to Toolbar's own "not extracted" empty state
+// below, which is the honest thing to show for a toolbar that simply
+// doesn't exist in the editor being viewed.
+const schToolbarsFile = schToolbarsData as ToolbarsFile;
 const actionsFile = actionsData as ActionsFile;
 const iconsFile = iconsData as IconsFile;
 const actionsByName = new Map(actionsFile.actions.map((a) => [a.name, a]));
@@ -156,10 +164,16 @@ function ToolbarItemView({ item }: { item: ToolbarItem }) {
 }
 
 export function Toolbar({ id }: { id: ToolbarId }) {
-  const config = toolbarsFile.toolbars.find((t) => t.id === id);
+  const state = useStudioState();
+  const schematic = state.tab === "schematic";
+  const config = (schematic ? schToolbarsFile : toolbarsFile).toolbars.find((t) => t.id === id);
   const orientation = config?.orientation ?? (id === "options" || id === "drawing" ? "vertical" : "horizontal");
 
   if (!config || config.items.length === 0) {
+    // eeschema genuinely has no auxiliary toolbar (see schToolbarsFile's
+    // comment above) -- render nothing for it, not an "extraction
+    // missing" notice that would be wrong for this editor.
+    if (schematic && id === "auxiliary") return null;
     return (
       <div className={`toolbar${orientation === "vertical" ? " vertical" : ""}`} data-toolbar={id}>
         {id === "main" && <span style={{ color: "var(--chrome-text-dim)", fontStyle: "italic", padding: "0 6px" }}>KiCad toolbar data not extracted yet (tools/extract-toolbars.js)</span>}

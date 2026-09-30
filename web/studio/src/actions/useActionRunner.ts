@@ -16,6 +16,7 @@
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { zoomAbout, fitTransform, boundsOfPoints } from "../components/canvas/view";
+import { GRID_OPTIONS_UM } from "../components/Toolbar";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -89,6 +90,51 @@ export function useActionRunner() {
       dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
     });
     m.set("pcbnew.DRCTool.runDRC", () => dispatch({ type: "SET_DRC_OPEN", open: true }));
+
+    // One window, three tabs (unlike KiCad's separate windows) -- these
+    // just jump tabs; App.tsx swaps each tab's own toolbars/menus/panels.
+    m.set("pcbnew.EditorControl.showEeschema", () => dispatch({ type: "SET_TAB", tab: "schematic" }));
+    m.set("common.Control.show3DViewer", () => dispatch({ type: "SET_TAB", tab: "3d" }));
+
+    // Display-option toggles that were real state but had no menu/
+    // hotkey/toolbar entry point yet (only the Appearance panel's own
+    // checkboxes reached them) -- wiring the real KiCad action name to
+    // the same existing dispatch is what actually surfaces them in the
+    // menu bar and the hotkeys list.
+    m.set("common.Control.toggleGrid", () => dispatch({ type: "TOGGLE_GRID_VISIBLE" }));
+    m.set("pcbnew.Control.showRatsnest", () => dispatch({ type: "TOGGLE_RATSNEST" }));
+    m.set("pcbnew.Control.ratsnestLineMode", () => dispatch({ type: "TOGGLE_RATSNEST_CURVED" }));
+    // The real action is a 3-state cycle (Normal/Dimmed/Off); this app's
+    // high-contrast is a plain on/off, so this simplifies to a toggle
+    // rather than inventing a third state painter.ts doesn't implement.
+    m.set("common.Control.highContrastModeCycle", () => dispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
+    m.set("common.Control.togglePolarCoords", () => dispatch({ type: "TOGGLE_POLAR" }));
+    m.set("common.Control.cursorFullCrosshairs", () => dispatch({ type: "SET_FULLSCREEN_CROSSHAIR", value: true }));
+    m.set("common.Control.cursorSmallCrosshairs", () => dispatch({ type: "SET_FULLSCREEN_CROSSHAIR", value: false }));
+
+    m.set("common.Control.metricUnits", () => dispatch({ type: "SET_UNITS", units: "mm" }));
+    m.set("common.Control.imperialUnits", () => dispatch({ type: "SET_UNITS", units: "in" }));
+    // Real KiCad toggles between its last-used metric/imperial unit; this
+    // app has a third (mil), folded into "imperial" for this one action.
+    m.set("common.Control.toggleUnits", () => dispatch({ type: "SET_UNITS", units: state.units === "mm" ? "in" : "mm" }));
+
+    m.set("pcbnew.Control.padDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_PADS" }));
+    m.set("pcbnew.Control.trackDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_TRACKS" }));
+    m.set("pcbnew.Control.viaDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_VIAS" }));
+
+    const cycleGrid = (dir: 1 | -1) => {
+      const i = GRID_OPTIONS_UM.indexOf(state.gridUm);
+      const next = GRID_OPTIONS_UM[Math.max(0, Math.min(GRID_OPTIONS_UM.length - 1, (i === -1 ? 0 : i) + dir))]!;
+      dispatch({ type: "SET_GRID_UM", um: next });
+    };
+    m.set("common.Control.gridNext", () => cycleGrid(1));
+    m.set("common.Control.gridPrev", () => cycleGrid(-1));
+
+    // common.Interactive.search: this app has no KiCad Search panel --
+    // the task put Search on the non-KiCad Activity tab instead (see
+    // panels/RightDock.tsx), so that's what this jumps to.
+    m.set("common.Interactive.search", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "activity" }));
+    m.set("pcbnew.Control.showNetInspector", () => dispatch({ type: "SET_NET_INSPECTOR_OPEN", open: true }));
 
     return m;
   }, [api, dispatch, state]);
