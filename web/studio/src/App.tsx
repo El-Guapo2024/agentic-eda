@@ -10,6 +10,8 @@ import { StatusBar } from "./components/StatusBar";
 import { Canvas } from "./components/canvas/Canvas";
 import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
+import { HotkeysDialog } from "./components/HotkeysDialog";
+import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
 import "./styles/global.css";
 import "./styles/layout.css";
@@ -88,6 +90,8 @@ function StudioFrame() {
         <StatusBar />
       </div>
       <DrcDialog />
+      <HotkeysDialog />
+      <FootprintPropertiesDialog />
     </div>
   );
 }

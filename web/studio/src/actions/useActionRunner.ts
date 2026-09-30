@@ -55,10 +55,17 @@ export function useActionRunner() {
     };
     m.set("common.Control.zoomInCenter", () => zoomAtCenter(1.5));
     m.set("common.Control.zoomOutCenter", () => zoomAtCenter(1 / 1.5));
-    m.set("common.Control.zoomIn", () => zoomAtCenter(1.5));
-    m.set("common.Control.zoomOut", () => zoomAtCenter(1 / 1.5));
+    // NOT common.Control.zoomIn/zoomOut here: extraction gave both of
+    // those the same "Ctrl+F1"/"Ctrl+F2" hotkeys as zoomInCenter/
+    // zoomOutCenter's near-neighbors in source position, which also
+    // collides with common.SuiteControl.listHotKeys's real Ctrl+F1 --
+    // almost certainly a parser misattribution (regex proximity, not a
+    // real shared binding), and listHotKeys is the one this session is
+    // confident about, so it wins; zoomIn/zoomOut stay unmapped rather
+    // than guess which of the two dubious hotkeys to keep.
     m.set("common.Control.zoomCenter", () => zoomAtCenter(1));
     m.set("common.Control.zoomRedraw", () => zoomAtCenter(1));
+    m.set("common.SuiteControl.listHotKeys", () => dispatch({ type: "SET_HOTKEYS_DIALOG_OPEN", open: true }));
 
     m.set("pcbnew.Control.showLayersManager", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "appearance" }));
     m.set("common.Control.showProperties", () => {}); // properties panel is always visible in this layout; a no-op is the correct behavior, not a missing feature
@@ -72,6 +79,12 @@ export function useActionRunner() {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       dispatch({ type: "CLEAR_SELECTION" }); // also resets activeTool to "select"
     });
+
+    m.set("pcbnew.InteractiveEdit.properties", () => {
+      if (state.selection.size === 0) return;
+      dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+    });
+    m.set("pcbnew.DRCTool.runDRC", () => dispatch({ type: "SET_DRC_OPEN", open: true }));
 
     return m;
   }, [api, dispatch, state]);

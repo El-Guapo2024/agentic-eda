@@ -88,6 +88,8 @@ export interface StudioState {
   strict: boolean;
 
   drcDialogOpen: boolean;
+  hotkeysDialogOpen: boolean;
+  footprintPropertiesOpen: boolean;
   toast: { message: string; kind: "error" | "info" } | null;
 
   /** Cursor position in board µm, for the status bar's X/Y/dx/dy/dist. */
@@ -125,6 +127,8 @@ const initialState: StudioState = {
   selectionFilter: { footprints: true, tracks: true, vias: true },
   strict: true,
   drcDialogOpen: false,
+  hotkeysDialogOpen: false,
+  footprintPropertiesOpen: false,
   toast: null,
   cursorUm: null,
   moveOriginUm: null,
@@ -159,6 +163,8 @@ type Action =
   | { type: "SET_SELECTION_FILTER"; filter: Partial<StudioState["selectionFilter"]> }
   | { type: "SET_STRICT"; strict: boolean }
   | { type: "SET_DRC_OPEN"; open: boolean }
+  | { type: "SET_HOTKEYS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_FOOTPRINT_PROPERTIES_OPEN"; open: boolean }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
@@ -239,6 +245,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, strict: action.strict };
     case "SET_DRC_OPEN":
       return { ...state, drcDialogOpen: action.open };
+    case "SET_HOTKEYS_DIALOG_OPEN":
+      return { ...state, hotkeysDialogOpen: action.open };
+    case "SET_FOOTPRINT_PROPERTIES_OPEN":
+      return { ...state, footprintPropertiesOpen: action.open };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":
