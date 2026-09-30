@@ -1,5 +1,6 @@
 .dock {
   width: 260px;
+  height: 100%;
   background: var(--chrome-bg-raised);
   overflow-y: auto;
   display: flex;

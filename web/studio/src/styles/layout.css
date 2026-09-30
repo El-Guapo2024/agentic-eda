@@ -22,6 +22,17 @@
 .app-frame .menubar-row {
   grid-area: menubar;
 }
+/* Toolbar (a flex row) plus QuickActions' fragment children need to join
+   the SAME horizontal line; without this, QuickActions' block-level
+   separators stack vertically underneath it, ballooning the row. */
+.app-frame .main-toolbar-row,
+.app-frame .aux-toolbar-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+}
 .app-frame .main-toolbar-row {
   grid-area: main-toolbar;
 }
