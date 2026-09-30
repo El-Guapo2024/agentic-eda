@@ -50,25 +50,39 @@
   grid-area: body;
   display: grid;
   grid-template-columns: auto auto 1fr auto auto;
+  /* Without an explicit row track, the single implicit row is `auto`
+     -- sized to the tallest child's *content* height (the Appearance
+     panel's now-longer layer list, in practice) instead of filling the
+     height .app-frame already allocated to "body". That let .canvas-col
+     (and, since it's `position: absolute; inset: 0`, the canvas itself)
+     grow taller than the viewport, which is what made a *correctly
+     centered-within-its-container* fit look like it sat low: the
+     container was never the visible viewport to begin with. */
+  grid-template-rows: minmax(0, 1fr);
   grid-template-areas: "properties options-toolbar canvas drawing-toolbar right-dock";
   min-height: 0;
 }
 .app-body .properties-col {
   grid-area: properties;
+  min-height: 0;
 }
 .app-body .options-toolbar-col {
   grid-area: options-toolbar;
+  min-height: 0;
 }
 .app-body .canvas-col {
   grid-area: canvas;
   min-width: 0;
+  min-height: 0;
   position: relative;
 }
 .app-body .drawing-toolbar-col {
   grid-area: drawing-toolbar;
+  min-height: 0;
 }
 .app-body .right-dock-col {
   grid-area: right-dock;
+  min-height: 0;
 }
 
 /* ---------------------------------------------------------- menu bar */
@@ -165,6 +179,16 @@
   border-bottom: none;
   border-right: 1px solid var(--chrome-border);
   padding: 4px 3px;
+  /* The options (34 items) and drawing (46 items) toolbars are taller
+     than most windows at 30px/button -- KiCad's own real ones scroll or
+     wrap too rather than force the window taller. Without this, the
+     grid item held its content's full height, which (same class of bug
+     as the .app-body row fix above) grew .app-frame past the viewport,
+     which is what actually caused the "fit centers low" symptom: the
+     container being fit to was never the real viewport height. */
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .app-body .drawing-toolbar-col .toolbar.vertical {
   border-right: none;
