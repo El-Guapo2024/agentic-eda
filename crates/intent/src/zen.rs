@@ -89,6 +89,7 @@ fn zen_globals(gb: &mut GlobalsBuilder) {
         b.parts.borrow_mut().push(Part {
             reference,
             mpn,
+            lcsc: None,
             value,
             package,
             footprint: None,

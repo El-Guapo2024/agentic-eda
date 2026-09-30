@@ -764,6 +764,7 @@ mod tests {
         let part = |r: &str| Part {
             reference: r.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: Some("2PAD".into()),
             footprint: Some("2PAD".into()),
