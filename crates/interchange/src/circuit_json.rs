@@ -283,6 +283,11 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
             let mut pads = footprint.pads.clone();
             pads.sort_by(|a, b| a.number.cmp(&b.number));
             for (j, pad) in pads.iter().enumerate() {
+                // Mechanical, no net, no copper: nothing for this
+                // electrical/copper interchange format to carry.
+                if pad.kind == eda_model::PadKind::NonPlatedHole {
+                    continue;
+                }
                 let key = format!("{}.{}", fp.id, pad.number);
                 let lx = pad.at.0 as f64 * mirror;
                 let ly = pad.at.1 as f64;
@@ -307,6 +312,13 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                     _ => "rect",
                 };
                 if pad.kind == eda_model::PadKind::ThroughHole {
+                    // This format has no oval/slot hole shape; a slot's
+                    // narrower dimension is the closer single-diameter
+                    // stand-in (the width a drill/router bit would need).
+                    let hole_diameter = pad
+                        .drill
+                        .or_else(|| pad.drill_slot.map(|(w, h)| w.min(h)))
+                        .expect("Footprint::validate requires a drill on a through-hole pad");
                     elements.push(json!({
                         "type": "pcb_plated_hole",
                         "pcb_plated_hole_id": format!("pcb_plated_hole_{i}_{j}"),
@@ -316,7 +328,7 @@ pub fn to_circuit_json(design: &Design, model: &ConstraintModel) -> Result<Value
                         "y": um_to_mm(y.round() as i64),
                         "shape": "circle",
                         "outer_diameter": um_to_mm(bw.round() as i64),
-                        "hole_diameter": um_to_mm(pad.drill.expect("through-hole pad without a drill passed Footprint::validate")),
+                        "hole_diameter": um_to_mm(hole_diameter),
                         "layers": ["top", "bottom"],
                     }));
                 } else if shape == "circle" {
@@ -593,6 +605,9 @@ mod tests {
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
+                        drill_slot: None,
+                        rot: 0,
+                        roundrect_ratio: None,
                     },
                     eda_model::Pad {
                         number: "2".into(),
@@ -601,6 +616,9 @@ mod tests {
                         shape: eda_model::PadShape::Rect,
                         kind: eda_model::PadKind::Smd,
                         drill: None,
+                        drill_slot: None,
+                        rot: 0,
+                        roundrect_ratio: None,
                     },
                 ],
                 courtyard: None,
