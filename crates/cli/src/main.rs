@@ -323,7 +323,7 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
 /// command-driven placer needs it up front, because every command is
 /// resolved against the board's extent. A design that already carries a
 /// placement keeps its outline.
-fn seed_outline(design: &Design, model: &ConstraintModel, board_floor: f64) -> Result<Design, Vec<CheckResult>> {
+fn seed_outline(design: &Design, model: &ConstraintModel) -> Result<Design, Vec<CheckResult>> {
     if design.placement.as_ref().is_some_and(|p| p.outline.len() >= 3) {
         return Ok(design.clone());
     }
@@ -348,36 +348,16 @@ fn seed_outline(design: &Design, model: &ConstraintModel, board_floor: f64) -> R
         Some(o) if o.len() >= 3 => {
             eda_model::board::sized_for_parts(model, &o, want_density).unwrap_or(o)
         }
-        _ => {
-            // No declared outline: size one from the part areas the same
-            // way the annealer's fitting pass does, so the two placers
-            // are judged on the same board.
-            let fitted = eda_model::board::fit_outline(
-                &with_empty_placement(design),
-                model,
-                model.solver.fit_board_utilization.max(0.25),
-                board_floor,
-            );
-            fitted
-                .placement
-                .map(|p| p.outline)
-                .filter(|o| o.len() >= 3)
-                .ok_or_else(|| vec![CheckResult::fail("build_precondition", "board.outline", "no board outline in the intent and none could be fitted")])?
-        }
+        // No declared outline: a square, sized the same way. This used to
+        // ask fit_outline, which only shrinks an outline that exists --
+        // given none it returned none, and every intent without an outline
+        // failed here from the day this placer became the default.
+        _ => eda_model::board::square_for_parts(model, want_density).ok_or_else(|| {
+            vec![CheckResult::fail("build_precondition", "board.outline", "no board outline in the intent, and no part resolves to a footprint to size one from")]
+        })?,
     };
     d.placement = Some(eda_model::ir::PlacementSection { outline, footprints: Vec::new(), modules: Vec::new() });
     Ok(d)
-}
-
-/// `fit_outline` sizes from a placement, so give it an empty one with
-/// every part stacked at the origin -- it reads the part list, not the
-/// poses.
-fn with_empty_placement(design: &Design) -> Design {
-    let mut d = design.clone();
-    if d.placement.is_none() {
-        d.placement = Some(eda_model::ir::PlacementSection { outline: Vec::new(), footprints: Vec::new(), modules: Vec::new() });
-    }
-    d
 }
 
 fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Result<Design, Vec<CheckResult>> {
@@ -416,7 +396,7 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
         // circuit is. They share all their geometry, so a difference
         // between them is a difference in judgement and nothing else.
         "build" | "flash" => {
-            let seeded = seed_outline(design, &cx.model, board_floor)?;
+            let seeded = seed_outline(design, &cx.model)?;
             let mut greedy = eda_ops::build::Greedy;
             let mut flash = eda_ops::flash::Flash::new();
             let chooser: &mut dyn eda_ops::build::Chooser = match placer.as_str() {
@@ -1088,7 +1068,7 @@ fn main() -> ExitCode {
                 placement: None,
                 routing: None,
             };
-            seed_outline(&empty, model, 0.0)
+            seed_outline(&empty, model)
         });
         return match r {
             Ok(()) => ExitCode::SUCCESS,

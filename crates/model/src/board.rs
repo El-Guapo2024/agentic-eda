@@ -204,3 +204,89 @@ pub fn sized_for_parts(model: &ConstraintModel, like: &[Point], density: f64) ->
         Point { x: x0, y: y0 + nh },
     ])
 }
+
+/// A board for an intent that declares no outline: a square at the origin
+/// sized for the parts at `density`, as [`sized_for_parts`] would size a
+/// declared one, and never narrower than the widest part plus a
+/// millimetre -- sized by area alone, a board holding one long header
+/// could come out shorter than the header.
+///
+/// [`fit_outline`] cannot do this: it shrinks an outline that exists, and
+/// handed a placement with none it returns the placement unchanged.
+pub fn square_for_parts(model: &ConstraintModel, density: f64) -> Option<Vec<Point>> {
+    let unit = [Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 1000 }, Point { x: 0, y: 1000 }];
+    let sized = sized_for_parts(model, &unit, density)?;
+    let widest = model
+        .parts
+        .iter()
+        .filter_map(|p| model.footprint_of(p))
+        .map(|fp| {
+            let (hw, hh) = fp.courtyard_half();
+            2 * hw.max(hh)
+        })
+        .max()
+        .unwrap_or(0);
+    let side = sized[1].x.max((widest + 1000 + 999) / 1000 * 1000);
+    Some(vec![Point { x: 0, y: 0 }, Point { x: side, y: 0 }, Point { x: side, y: side }, Point { x: 0, y: side }])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Part, Pin, PinKind};
+
+    fn model(packages: &[&str]) -> ConstraintModel {
+        let parts = packages
+            .iter()
+            .enumerate()
+            .map(|(i, pkg)| Part {
+                reference: format!("U{i}"),
+                mpn: None,
+                value: None,
+                package: Some((*pkg).into()),
+                footprint: Some((*pkg).into()),
+                pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
+                body_um: None,
+                edge: None,
+            })
+            .collect();
+        ConstraintModel { parts, ..Default::default() }
+    }
+
+    #[test]
+    fn a_board_is_fitted_for_parts_when_the_intent_has_no_outline() {
+        let m = model(&["0603", "0603", "SOT-23", "SOIC-8"]);
+        // The shrink-only fitter has nothing to shrink.
+        let empty = Design {
+            schema: 1,
+            provenance: crate::ir::Provenance { engine_version: "0".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            placement: Some(crate::ir::PlacementSection { outline: Vec::new(), footprints: Vec::new(), modules: Vec::new() }),
+            routing: None,
+        };
+        assert!(fit_outline(&empty, &m, 0.25, 0.0).placement.unwrap().outline.is_empty());
+
+        let o = square_for_parts(&m, 0.25).expect("a square");
+        let side = o[1].x;
+        assert_eq!(o, vec![Point { x: 0, y: 0 }, Point { x: side, y: 0 }, Point { x: side, y: side }, Point { x: 0, y: side }]);
+        assert_eq!(side % 1000, 0, "whole millimetres");
+        // The smallest whole-millimetre square the parts fill no more than a quarter of.
+        let area = intrinsic_part_area(&m);
+        assert!(area / (side as f64).powi(2) <= 0.25, "{side} um is too small");
+        assert!(area / ((side - 1000) as f64).powi(2) > 0.25, "{side} um is bigger than it needs to be");
+    }
+
+    #[test]
+    fn a_fitted_square_holds_its_widest_part() {
+        // One 1x10 header: 25.4 mm long, too little area to need that side.
+        let m = model(&["PINHEADER-10"]);
+        let o = square_for_parts(&m, 0.25).expect("a square");
+        let (hw, hh) = m.footprint_of(&m.parts[0]).unwrap().courtyard_half();
+        assert!(o[1].x >= 2 * hw.max(hh) + 1000, "side {} for a part {} long", o[1].x, 2 * hw.max(hh));
+    }
+
+    #[test]
+    fn nothing_to_size_from_is_none() {
+        assert_eq!(square_for_parts(&ConstraintModel::default(), 0.25), None);
+    }
+}
