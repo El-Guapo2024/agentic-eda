@@ -10,6 +10,7 @@ import React, { createContext, useCallback, useContext, useEffect, useReducer, u
 import type { BoardState, Part } from "../api/types";
 import { fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
+import { STANDARD_LAYERS } from "../components/canvas/layers";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 export type EditorTab = "pcb" | "schematic";
@@ -100,8 +101,11 @@ const initialState: StudioState = {
   showRatsnest: true,
   activeLayer: null,
   highContrast: false,
-  layerVisible: {},
-  layerOpacity: {},
+  // Copper layers (board.layers, e.g. "F.Cu") are added once the board
+  // loads (see BOARD_OK below); the standard non-copper buckets have no
+  // model data to wait for, so they're defaulted here.
+  layerVisible: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, true])),
+  layerOpacity: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, 1])),
   selectionFilter: { footprints: true, tracks: true, vias: true },
   strict: true,
   drcDialogOpen: false,

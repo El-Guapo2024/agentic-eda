@@ -8,9 +8,26 @@
 // for those needs the source this session couldn't reach.
 import { useState } from "react";
 import { useStudioDispatch, useStudioState } from "../../state/store";
-import { layerColor, copperColorKey } from "../canvas/layers";
+import { layerColor, copperColorKey, STANDARD_LAYERS } from "../canvas/layers";
 
 type SubTab = "layers" | "objects" | "nets";
+
+function LayerRow({ layerKey, label, colorKey }: { layerKey: string; label: string; colorKey: string }) {
+  const state = useStudioState();
+  const dispatch = useStudioDispatch();
+  const visible = state.layerVisible[layerKey] ?? true;
+  const opacity = state.layerOpacity[layerKey] ?? 1;
+  return (
+    <div className={`layer-row${state.activeLayer === layerKey ? " active" : ""}`}>
+      <input type="checkbox" checked={visible} onChange={(e) => dispatch({ type: "SET_LAYER_VISIBLE", layer: layerKey, visible: e.target.checked })} />
+      <span className="swatch" style={{ background: layerColor(colorKey) }} />
+      <span className="name" onClick={() => dispatch({ type: "SET_ACTIVE_LAYER", layer: state.activeLayer === layerKey ? null : layerKey })} title="Set as active layer">
+        {label}
+      </span>
+      <input type="range" min={0} max={1} step={0.05} value={opacity} onChange={(e) => dispatch({ type: "SET_LAYER_OPACITY", layer: layerKey, opacity: parseFloat(e.target.value) })} />
+    </div>
+  );
+}
 
 function LayersTab() {
   const state = useStudioState();
@@ -19,21 +36,14 @@ function LayersTab() {
   if (!board) return null;
   return (
     <div>
-      {board.layers.map((layer) => {
-        const key = copperColorKey(layer);
-        const visible = state.layerVisible[layer] ?? true;
-        const opacity = state.layerOpacity[layer] ?? 1;
-        return (
-          <div key={layer} className={`layer-row${state.activeLayer === layer ? " active" : ""}`}>
-            <input type="checkbox" checked={visible} onChange={(e) => dispatch({ type: "SET_LAYER_VISIBLE", layer, visible: e.target.checked })} />
-            <span className="swatch" style={{ background: layerColor(key) }} />
-            <span className="name" onClick={() => dispatch({ type: "SET_ACTIVE_LAYER", layer: state.activeLayer === layer ? null : layer })} title="Set as active layer">
-              {layer}
-            </span>
-            <input type="range" min={0} max={1} step={0.05} value={opacity} onChange={(e) => dispatch({ type: "SET_LAYER_OPACITY", layer, opacity: parseFloat(e.target.value) })} />
-          </div>
-        );
-      })}
+      <h3>Copper Layers</h3>
+      {board.layers.map((layer) => (
+        <LayerRow key={layer} layerKey={layer} label={layer} colorKey={copperColorKey(layer)} />
+      ))}
+      <h3 style={{ marginTop: 10 }}>Technical Layers</h3>
+      {STANDARD_LAYERS.map((l) => (
+        <LayerRow key={l.key} layerKey={l.key} label={l.label} colorKey={l.key} />
+      ))}
       <label className="filter-row" style={{ marginTop: 8 }}>
         <input type="checkbox" checked={state.highContrast} onChange={() => dispatch({ type: "TOGGLE_HIGH_CONTRAST" })} />
         High contrast (dim inactive layers)

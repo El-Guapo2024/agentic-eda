@@ -87,15 +87,17 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
 
   // Courtyard.
   const courtyardKey = part.side === "bottom" ? "b_courtyard" : "f_courtyard";
-  withAlpha(ctx, layerAlpha(opts, courtyardKey), () => {
-    ctx.beginPath();
-    ctx.rect(x0, y0, x1 - x0, y1 - y0);
-    ctx.strokeStyle = selected ? layerColor("selection") : isHot ? "#ef5b5b" : layerColor(courtyardKey);
-    ctx.lineWidth = hairlineUm(view, selected || isHot ? 2 : 1);
-    if (!selected && !isHot) ctx.setLineDash([hairlineUm(view, 3), hairlineUm(view, 2)]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  });
+  if (selected || isHot || opts.layerVisible[courtyardKey] !== false) {
+    withAlpha(ctx, layerAlpha(opts, courtyardKey), () => {
+      ctx.beginPath();
+      ctx.rect(x0, y0, x1 - x0, y1 - y0);
+      ctx.strokeStyle = selected ? layerColor("selection") : isHot ? "#ef5b5b" : layerColor(courtyardKey);
+      ctx.lineWidth = hairlineUm(view, selected || isHot ? 2 : 1);
+      if (!selected && !isHot) ctx.setLineDash([hairlineUm(view, 3), hairlineUm(view, 2)]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
 
   // Pads.
   for (const pad of part.pads ?? []) {
@@ -139,13 +141,15 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     align = "left";
   }
   const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
-  withAlpha(ctx, layerAlpha(opts, silkKey), () => {
-    ctx.fillStyle = layerColor(silkKey);
-    ctx.font = `600 ${fs}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-    ctx.textAlign = align;
-    ctx.textBaseline = "alphabetic";
-    ctx.fillText(part.ref, tx, ty);
-  });
+  if (opts.layerVisible[silkKey] !== false) {
+    withAlpha(ctx, layerAlpha(opts, silkKey), () => {
+      ctx.fillStyle = layerColor(silkKey);
+      ctx.font = `600 ${fs}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+      ctx.textAlign = align;
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(part.ref, tx, ty);
+    });
+  }
 
   ctx.restore();
 }
@@ -164,7 +168,11 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
     // restore it, decayed it toward zero over a route's whole track
     // list (141 tracks * 0.92^141 ~= 1e-6), leaving every draw call
     // AFTER the tracks -- every footprint -- effectively invisible.
-    withAlpha(ctx, layerAlpha(opts, key) * 0.92, () => {
+    // layerAlpha keyed by the model's own layer name ("F.Cu"), matching
+    // how layerVisible/layerOpacity are populated (BOARD_OK in
+    // state/store.tsx) -- `key` above is this app's lowercase paint
+    // bucket ("f_cu"), a different namespace, only used for layerColor().
+    withAlpha(ctx, layerAlpha(opts, t.layer) * 0.92, () => {
       ctx.beginPath();
       t.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.strokeStyle = layerColor(key);

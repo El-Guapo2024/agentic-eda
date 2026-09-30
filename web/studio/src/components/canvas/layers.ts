@@ -77,6 +77,25 @@ export function drawOrder(): string[] {
   return BUCKET_ORDER;
 }
 
+/**
+ * Non-copper layers the Appearance panel lists alongside the model's
+ * copper stackup (board.layers) -- KiCad's real Appearance panel lists
+ * every board layer, not just copper; these are this app's painter
+ * buckets that have no per-copper-layer model equivalent, so they're a
+ * fixed list rather than data-driven.
+ */
+export const STANDARD_LAYERS: Array<{ key: string; label: string }> = [
+  { key: "f_silks", label: "F.SilkS" },
+  { key: "b_silks", label: "B.SilkS" },
+  { key: "f_mask", label: "F.Mask" },
+  { key: "b_mask", label: "B.Mask" },
+  { key: "f_courtyard", label: "F.CrtYd" },
+  { key: "b_courtyard", label: "B.CrtYd" },
+  { key: "f_fab", label: "F.Fab" },
+  { key: "b_fab", label: "B.Fab" },
+  { key: "board_edge", label: "Edge.Cuts" },
+];
+
 export function layerColor(bucketOrRealKey: string): string {
   const realKey = BUCKET_TO_KICAD_KEY[bucketOrRealKey] ?? bucketOrRealKey;
   if (colors.meta.generated) {
