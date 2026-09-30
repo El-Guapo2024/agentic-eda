@@ -1106,6 +1106,34 @@ pub fn net_label_extent(resolved: &ResolvedNetLabel, ink: TextBox) -> TextBox {
     b
 }
 
+/// Local (box-space, um) attach points for a part's `nc`-kind pins, keyed
+/// by pin index: a nib on the box's own south edge, one `GRID` step past
+/// whichever real ports [`build_ports`] already placed there.
+///
+/// An `nc` pin never joins a net (no `Wire` ever names it), so it has no
+/// business in [`build_ports`]'s port list — this is a deliberately
+/// separate, additive function so the *existing* port assignment, and
+/// every box-size/aspect/density/overlap gate built on it, is untouched by
+/// whether a part happens to declare an `nc` pin or how many. What still
+/// has to be true is that the pin is drawn *somewhere* on the symbol (not
+/// simply omitted): a real component's unused pin keeps its real
+/// electrical type and gets an explicit no-connect flag placed on it
+/// (`SchematicSection::no_connects`) — that flag is what tells KiCad's ERC
+/// the dangling pin is intentional, not the pin's type.
+pub fn nc_pin_local_points(part: &Part, width: i64, height: i64) -> Vec<(usize, Point)> {
+    let (ports, _) = build_ports(part, width, height);
+    let south_max_x = ports.iter().filter(|p| p.side == Side::Bottom).map(|p| p.offset).max().unwrap_or(0);
+    let mut x = south_max_x + GRID;
+    let mut out = Vec::new();
+    for (i, p) in part.pins.iter().enumerate() {
+        if p.kind == PinKind::Nc {
+            out.push((i, Point { x, y: height }));
+            x += GRID;
+        }
+    }
+    out
+}
+
 /// Evenly spaces `n` offsets along a side of length `length`, snapped to
 /// `GRID` and clamped to stay strictly within the side (never on a corner).
 pub fn distribute_offsets(n: usize, length: i64) -> Vec<i64> {
