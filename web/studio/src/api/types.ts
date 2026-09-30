@@ -153,3 +153,47 @@ export interface RouteReply {
   ok: boolean;
   message: string;
 }
+
+// ---------------------------------------------------------------- Schematic
+//
+// GET /api/schematic. Source of truth: crates/cli/src/studio.rs
+// `schematic_json()`, crates/model/src/ir.rs `SchematicSection`/
+// `SymbolInstance`/`Wire`/`NetLabel`, crates/model/src/lib.rs `Pin`/`PinKind`.
+
+export type PinKind = "power" | "ground" | "signal" | "passive" | "nc";
+
+export interface SchematicPin {
+  number: string;
+  name: string | null;
+  kind: PinKind;
+}
+
+export interface SchematicSymbol {
+  /** Reference designator ("U1") -- the same id PCB parts use. */
+  id: string;
+  at: [Um, Um];
+  rot: Degrees;
+  mirrored: boolean;
+  value: string | null;
+  mpn: string | null;
+  package: string | null;
+  pins: SchematicPin[];
+}
+
+export interface SchematicWire {
+  net: string;
+  /** "REF.PIN" refs this wire lands on. */
+  pins: string[];
+  pts: [Um, Um][];
+}
+
+export interface SchematicLabel {
+  net: string;
+  at: [Um, Um];
+}
+
+export interface Schematic {
+  symbols: SchematicSymbol[];
+  wires: SchematicWire[];
+  labels: SchematicLabel[];
+}

@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardState, Cmd, CmdReply, RouteReply } from "./types";
+import type { BoardState, Cmd, CmdReply, RouteReply, Schematic } from "./types";
 
 export class ApiError extends Error {}
 
@@ -25,12 +25,16 @@ export async function fetchState(): Promise<BoardState> {
   return s;
 }
 
-/** The schematic view (SVG text), for the "switch to schematic editor" toolbar action. */
-export async function fetchSchematicSvg(): Promise<string> {
-  const r = await fetch("/api/schematic.svg", { cache: "no-store" });
-  const text = await r.text();
-  if (!r.ok) throw new ApiError(text || "no schematic for this board");
-  return text;
+/**
+ * The schematic as structured data (symbols/pins/wires/labels), for the
+ * Schematic Editor's own KiCad-style renderer. /api/schematic.svg (a
+ * single baked image) still exists on the backend but nothing in this
+ * app fetches it anymore.
+ */
+export async function fetchSchematic(): Promise<Schematic> {
+  const s = await getJson<Schematic & { error?: string }>("/api/schematic");
+  if (s.error) throw new ApiError(s.error);
+  return s;
 }
 
 /**
