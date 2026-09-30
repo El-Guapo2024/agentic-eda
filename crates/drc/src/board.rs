@@ -177,19 +177,28 @@ fn pad_center(fp: &eda_model::ir::FootprintInstance, local: (Um, Um)) -> Point {
 fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &eda_model::ir::FootprintInstance) -> Option<Shape> {
     let footprint = model.footprint_of(part)?;
     let (hw, hh) = footprint.courtyard_half();
-    // `eda_kicad::pcb`'s own constants: 300 µm per character of half-width,
-    // a 700 µm gap above/below the courtyard (200 µm beside it), and a
-    // fixed 1 mm/0.15 mm font for every reference label regardless of any
-    // board-level text-size setting.
-    let half_w = 300 * fp.id.chars().count() as Um;
+    // `eda_kicad::pcb`'s own constants, kept exactly for the *anchor
+    // position* (so this item sits where the real label really is): 300 µm
+    // per character of half-width for the Left/Right offset, a 700 µm gap
+    // above/below the courtyard (200 µm beside it).
+    let half_w_offset = 300 * fp.id.chars().count() as Um;
     let local = match fp.label {
         LabelSide::Above => (0, -(hh + 700)),
         LabelSide::Below => (0, hh + 700),
-        LabelSide::Left => (-(hw + 200 + half_w), 0),
-        LabelSide::Right => (hw + 200 + half_w, 0),
+        LabelSide::Left => (-(hw + 200 + half_w_offset), 0),
+        LabelSide::Right => (hw + 200 + half_w_offset, 0),
     };
     let center = pad_center(fp, local);
-    let (w, h) = rotated_extent_by(fp.rot as i64, (half_w * 2, 1000));
+    // The label's own *rendered* extent, for collision purposes, is a
+    // separate (smaller) approximation of KiCad's actual stroke-font glyph
+    // ink at 1 mm nominal size -- not exactly `half_w_offset`/1000 (this
+    // model has no vector glyph outlines to collide against exactly, the
+    // way KiCad's own `DRC_TEST_PROVIDER_SILK_CLEARANCE` does). Calibrated
+    // against the oracle across the example boards (see the task report);
+    // still an approximation, so a residual mismatch against kicad-cli
+    // remains on some boards.
+    let half_w_box = 220 * fp.id.chars().count() as Um;
+    let (w, h) = rotated_extent_by(fp.rot as i64, (half_w_box * 2, 500));
     Some(Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 })
 }
 
