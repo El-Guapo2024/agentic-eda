@@ -41,6 +41,32 @@ pub struct Design {
     /// Filled by loop 3 (E3). Artifact 3 when frozen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<RoutingSection>,
+    /// Free-standing board graphics and text -- KiCad's `PCB_SHAPE` and
+    /// `PCB_TEXT` -- addressable the same way routing items are. Not a
+    /// staged artifact like the three above (nothing freezes it): it exists
+    /// once anything has drawn on the board, whichever stage that happened
+    /// in, so it is its own optional section rather than folded into
+    /// placement or routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawings: Option<DrawingsSection>,
+}
+
+impl Design {
+    /// Backfill `id` on every routing/drawing item that does not have one
+    /// yet (empty string: absent from an old `design.json`, or from a
+    /// `RoutingSection`/`DrawingsSection` built by hand in a test). Ids are
+    /// derived from each item's own content (see `RoutingSection` and
+    /// `DrawingsSection`), so calling this on the same design ever again is
+    /// a no-op, and calling it on two structurally-identical designs gives
+    /// the same ids both times.
+    pub fn assign_missing_ids(&mut self) {
+        if let Some(rt) = &mut self.routing {
+            rt.assign_missing_ids();
+        }
+        if let Some(dr) = &mut self.drawings {
+            dr.assign_missing_ids();
+        }
+    }
 }
 
 /// Every design.json can be traced to exactly what produced it.
@@ -199,6 +225,13 @@ pub struct RoutingSection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Track {
+    /// Stable id (`trk_xxxxxxxxxxxx`). Deterministic from `net`, `layer`
+    /// and `pts` -- not `width`, so `SetTrackWidth` can change the width
+    /// without the id moving out from under a caller holding it. Empty in
+    /// a `design.json` written before ids existed; back-filled the same
+    /// deterministic way by [`Design::assign_missing_ids`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub net: String,
     /// Pad endpoints as "REF.PIN", when the track terminates on pads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -209,9 +242,23 @@ pub struct Track {
     pub pts: Vec<Point>,
 }
 
+impl Track {
+    fn id_seed(&self) -> String {
+        let pts: Vec<String> = self.pts.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
+        format!("{}|{}|{}", self.net, self.layer, pts.join(";"))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Via {
+    /// Stable id (`via_xxxxxxxxxxxx`). Deterministic from every field
+    /// *at creation time* (including `at`), so two vias the router or a
+    /// person adds in the same spot with the same net never collide.
+    /// `MoveVia` afterward changes `at` without touching `id` -- ids are
+    /// assigned once, never recomputed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub net: String,
     pub at: Point,
     pub drill: Um,
@@ -220,12 +267,332 @@ pub struct Via {
     pub to_layer: String,
 }
 
+impl Via {
+    fn id_seed(&self) -> String {
+        format!("{}|{},{}|{}|{}|{}|{}", self.net, self.at.x, self.at.y, self.drill, self.diameter, self.from_layer, self.to_layer)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Zone {
+    /// Stable id (`zone_xxxxxxxxxxxx`). Deterministic from `net`, `layer`
+    /// and `outline`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub net: String,
     pub layer: String,
     pub outline: Vec<Point>,
+}
+
+impl Zone {
+    fn id_seed(&self) -> String {
+        let pts: Vec<String> = self.outline.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
+        format!("{}|{}|{}", self.net, self.layer, pts.join(";"))
+    }
+}
+
+impl RoutingSection {
+    /// Assign a deterministic id to every track/via/zone whose `id` is
+    /// still empty (see the field docs on [`Track`]/[`Via`]/[`Zone`]).
+    /// Processes each kind in its own canonical sort order so that, given
+    /// the same routing, several items needing a fresh id in one call
+    /// always get them in the same order -- which only matters when two
+    /// items hash the same (an exact duplicate) and have to be told apart
+    /// by a `_2`, `_3`, ... suffix.
+    pub fn assign_missing_ids(&mut self) {
+        let mut existing: std::collections::BTreeSet<String> =
+            self.tracks.iter().map(|t| &t.id).chain(self.vias.iter().map(|v| &v.id)).chain(self.zones.iter().map(|z| &z.id)).filter(|s| !s.is_empty()).cloned().collect();
+
+        let mut order: Vec<usize> = (0..self.tracks.len()).collect();
+        order.sort_by(|&a, &b| {
+            let (ta, tb) = (&self.tracks[a], &self.tracks[b]);
+            (&ta.net, &ta.layer, ta.pts.first()).cmp(&(&tb.net, &tb.layer, tb.pts.first()))
+        });
+        for i in order {
+            if self.tracks[i].id.is_empty() {
+                let id = next_item_id("trk", &self.tracks[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.tracks[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.vias.len()).collect();
+        order.sort_by(|&a, &b| (&self.vias[a].net, self.vias[a].at).cmp(&(&self.vias[b].net, self.vias[b].at)));
+        for i in order {
+            if self.vias[i].id.is_empty() {
+                let id = next_item_id("via", &self.vias[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.vias[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.zones.len()).collect();
+        order.sort_by(|&a, &b| (&self.zones[a].net, &self.zones[a].layer).cmp(&(&self.zones[b].net, &self.zones[b].layer)));
+        for i in order {
+            if self.zones[i].id.is_empty() {
+                let id = next_item_id("zone", &self.zones[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.zones[i].id = id;
+            }
+        }
+    }
+}
+
+// ---------- free-standing board graphics & text ----------
+
+/// A KiCad-style graphic primitive drawn directly on the board (its
+/// `PCB_SHAPE`): silkscreen art, fab-layer outlines, courtyard-adjacent
+/// decoration -- anything that is not copper and not a footprint. Modelled
+/// as one enum (tagged `kind`, like [`crate::PlacementRule`]) rather than a
+/// struct wrapping a geometry enum, so every field a caller needs is at the
+/// top level of the JSON object with no nested "geometry" key to unwrap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Shape {
+    Segment {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        /// KiCad layer name ("F.SilkS", "Edge.Cuts", "F.Cu", ...).
+        layer: String,
+        stroke_width: Um,
+        /// Meaningless for a segment (KiCad never fills a line); carried
+        /// for schema uniformity across every `Shape` variant and ignored
+        /// by the exporter for this one, same as `Arc`.
+        #[serde(default)]
+        filled: bool,
+        start: Point,
+        end: Point,
+    },
+    Arc {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        layer: String,
+        stroke_width: Um,
+        #[serde(default)]
+        filled: bool,
+        start: Point,
+        mid: Point,
+        end: Point,
+    },
+    Rect {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        layer: String,
+        stroke_width: Um,
+        #[serde(default)]
+        filled: bool,
+        start: Point,
+        end: Point,
+    },
+    Circle {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        layer: String,
+        stroke_width: Um,
+        #[serde(default)]
+        filled: bool,
+        /// A point on the circumference, KiCad's own way of storing the
+        /// radius (`(circle (center ..) (end ..))`) -- so the file's
+        /// radius survives byte-for-byte instead of round-tripping through
+        /// a computed float.
+        center: Point,
+        end: Point,
+    },
+    Polygon {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        layer: String,
+        stroke_width: Um,
+        #[serde(default)]
+        filled: bool,
+        pts: Vec<Point>,
+    },
+}
+
+impl Shape {
+    pub fn id(&self) -> &str {
+        match self {
+            Shape::Segment { id, .. } | Shape::Arc { id, .. } | Shape::Rect { id, .. } | Shape::Circle { id, .. } | Shape::Polygon { id, .. } => id,
+        }
+    }
+    pub fn set_id(&mut self, new_id: String) {
+        match self {
+            Shape::Segment { id, .. } | Shape::Arc { id, .. } | Shape::Rect { id, .. } | Shape::Circle { id, .. } | Shape::Polygon { id, .. } => *id = new_id,
+        }
+    }
+    pub fn layer(&self) -> &str {
+        match self {
+            Shape::Segment { layer, .. } | Shape::Arc { layer, .. } | Shape::Rect { layer, .. } | Shape::Circle { layer, .. } | Shape::Polygon { layer, .. } => layer,
+        }
+    }
+    /// Every point the geometry is made of, in a stable order -- used both
+    /// to seed the id hash and, in `eda-ops`, to validate the shape has
+    /// enough of them (a polygon needs 3+).
+    pub fn points(&self) -> Vec<Point> {
+        match self {
+            Shape::Segment { start, end, .. } => vec![*start, *end],
+            Shape::Arc { start, mid, end, .. } => vec![*start, *mid, *end],
+            Shape::Rect { start, end, .. } => vec![*start, *end],
+            Shape::Circle { center, end, .. } => vec![*center, *end],
+            Shape::Polygon { pts, .. } => pts.clone(),
+        }
+    }
+    /// Shift every point of the geometry by `(dx, dy)` -- what dragging a
+    /// hand-drawn shape does; there is no single "position" field to set
+    /// the way there is for a via or a text, since a shape's geometry is
+    /// two or more points.
+    pub fn translate(&mut self, dx: Um, dy: Um) {
+        let shift = |p: &mut Point| {
+            p.x += dx;
+            p.y += dy;
+        };
+        match self {
+            Shape::Segment { start, end, .. } | Shape::Rect { start, end, .. } => {
+                shift(start);
+                shift(end);
+            }
+            Shape::Arc { start, mid, end, .. } => {
+                shift(start);
+                shift(mid);
+                shift(end);
+            }
+            Shape::Circle { center, end, .. } => {
+                shift(center);
+                shift(end);
+            }
+            Shape::Polygon { pts, .. } => pts.iter_mut().for_each(shift),
+        }
+    }
+    fn id_seed(&self) -> String {
+        let kind = match self {
+            Shape::Segment { .. } => "segment",
+            Shape::Arc { .. } => "arc",
+            Shape::Rect { .. } => "rect",
+            Shape::Circle { .. } => "circle",
+            Shape::Polygon { .. } => "polygon",
+        };
+        let pts: Vec<String> = self.points().iter().map(|p| format!("{},{}", p.x, p.y)).collect();
+        format!("{kind}|{}|{}", self.layer(), pts.join(";"))
+    }
+}
+
+/// Horizontal text justification, KiCad's `justify left|right` (absent =
+/// centred).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextJustify {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+/// Free-standing board text (KiCad's `PCB_TEXT` / `gr_text`): silkscreen
+/// labels, fab notes -- anything that is not a footprint's own reference or
+/// value field (those stay on `FootprintInstance`/`Part`, exactly as
+/// today).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Text {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub content: String,
+    pub at: Point,
+    #[serde(default)]
+    pub angle: Millideg,
+    /// KiCad layer name ("F.SilkS", "F.Fab", ...).
+    pub layer: String,
+    /// Font size, µm, applied equally to height and width (every text this
+    /// model produces is drawn at a square aspect, like the schematic
+    /// exporter's ref/value labels).
+    pub size_um: Um,
+    pub stroke_width: Um,
+    #[serde(default)]
+    pub justify: TextJustify,
+    /// Read from the back of the board, KiCad's `justify mirror`.
+    #[serde(default)]
+    pub mirror: bool,
+}
+
+impl Text {
+    fn id_seed(&self) -> String {
+        format!("{}|{},{}|{}|{}", self.content, self.at.x, self.at.y, self.angle, self.layer)
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrawingsSection {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shapes: Vec<Shape>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<Text>,
+}
+
+impl DrawingsSection {
+    /// Assign a deterministic id to every shape/text whose `id` is still
+    /// empty. See [`RoutingSection::assign_missing_ids`] -- same contract,
+    /// same reason for a stable per-kind processing order.
+    pub fn assign_missing_ids(&mut self) {
+        let mut existing: std::collections::BTreeSet<String> =
+            self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+
+        let mut order: Vec<usize> = (0..self.shapes.len()).collect();
+        order.sort_by(|&a, &b| (self.shapes[a].layer(), self.shapes[a].points().first().copied()).cmp(&(self.shapes[b].layer(), self.shapes[b].points().first().copied())));
+        for i in order {
+            if self.shapes[i].id().is_empty() {
+                let id = next_item_id("shp", &self.shapes[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.shapes[i].set_id(id);
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.texts.len()).collect();
+        order.sort_by(|&a, &b| (&self.texts[a].content, self.texts[a].at).cmp(&(&self.texts[b].content, self.texts[b].at)));
+        for i in order {
+            if self.texts[i].id.is_empty() {
+                let id = next_item_id("txt", &self.texts[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.texts[i].id = id;
+            }
+        }
+    }
+}
+
+/// Deterministic, dependency-free 64-bit hash (FNV-1a) of a byte string,
+/// hex-encoded. Not cryptographic, and deliberately not
+/// `std::hash::DefaultHasher`: the standard library does not promise that
+/// hasher's algorithm stays the same across releases, and an id that moved
+/// because the toolchain changed would break every caller holding one.
+/// FNV-1a is a fixed, tiny algorithm we own outright.
+fn fnv1a_hex(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// A short, stable id (`<prefix>_<12 hex chars>`) from a content hash of
+/// `seed`, deduplicated against `existing` by appending `_2`, `_3`, ... when
+/// two items hash the same (an exact duplicate, e.g. a hand-add repeated
+/// verbatim) -- so ids are always unique within one design, and, given the
+/// same seed and the same existing set, always the same.
+fn next_item_id(prefix: &str, seed: &str, existing: &std::collections::BTreeSet<String>) -> String {
+    let base = format!("{prefix}_{}", &fnv1a_hex(seed.as_bytes())[..12]);
+    if !existing.contains(&base) {
+        return base;
+    }
+    let mut n = 2u32;
+    loop {
+        let candidate = format!("{base}_{n}");
+        if !existing.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 impl Design {
@@ -245,6 +612,10 @@ impl Design {
                 .sort_by(|a, b| (&a.net, &a.layer, a.pts.first()).cmp(&(&b.net, &b.layer, b.pts.first())));
             r.vias.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
             r.zones.sort_by(|a, b| (&a.net, &a.layer).cmp(&(&b.net, &b.layer)));
+        }
+        if let Some(dr) = &mut d.drawings {
+            dr.shapes.sort_by(|a, b| a.id().cmp(b.id()));
+            dr.texts.sort_by(|a, b| a.id.cmp(&b.id));
         }
         serde_json::to_vec(&d)
     }
@@ -273,6 +644,7 @@ mod tests {
             }),
             placement: None,
             routing: None,
+            drawings: None,
         }
     }
 
@@ -304,5 +676,118 @@ mod tests {
         d.schematic = None;
         let json = serde_json::to_string(&d).unwrap();
         assert!(!json.contains("schematic"));
+    }
+
+    // -------------------------------------------------------- item ids
+
+    fn track(net: &str, layer: &str, pts: &[(Um, Um)]) -> Track {
+        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() }
+    }
+    fn via(net: &str, x: Um, y: Um) -> Via {
+        Via { id: String::new(), net: net.into(), at: Point { x, y }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+    }
+
+    /// A `design.json` written before ids existed: no `id` key on any
+    /// track/via. It must still load (old field simply absent, `#[serde(default)]`
+    /// fills empty), and a normalization pass must then back-fill ids
+    /// deterministically and leave the rest of the document untouched.
+    #[test]
+    fn an_old_design_without_ids_loads_and_backfills_them() {
+        let json = r#"{
+            "schema": 1,
+            "provenance": {"engine_version": "0", "intent_hash": "x", "seed": 0},
+            "routing": {
+                "tracks": [{"net": "GND", "layer": "F.Cu", "width": 200, "pts": [{"x": 0, "y": 0}, {"x": 1000, "y": 0}]}],
+                "vias": [{"net": "GND", "at": {"x": 500, "y": 500}, "drill": 300, "diameter": 600, "from_layer": "F.Cu", "to_layer": "B.Cu"}],
+                "zones": [{"net": "GND", "layer": "B.Cu", "outline": [{"x": 0, "y": 0}, {"x": 1000, "y": 0}, {"x": 1000, "y": 1000}]}]
+            }
+        }"#;
+        let mut d: Design = serde_json::from_str(json).expect("an old design.json with no ids must still parse");
+        let rt = d.routing.as_ref().unwrap();
+        assert!(rt.tracks[0].id.is_empty());
+        assert!(rt.vias[0].id.is_empty());
+        assert!(rt.zones[0].id.is_empty());
+
+        d.assign_missing_ids();
+        let rt = d.routing.as_ref().unwrap();
+        assert!(!rt.tracks[0].id.is_empty());
+        assert!(!rt.vias[0].id.is_empty());
+        assert!(!rt.zones[0].id.is_empty());
+    }
+
+    /// Same routing, assigned twice (independently, e.g. on two different
+    /// machines opening the same old file) -> the same ids. And a second
+    /// call on an already-assigned design changes nothing, so a load ->
+    /// save -> load round trip is stable.
+    #[test]
+    fn id_assignment_is_deterministic_and_stable_on_resave() {
+        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![] };
+
+        let mut a = build();
+        a.assign_missing_ids();
+        let mut b = build();
+        b.assign_missing_ids();
+        assert_eq!(a.tracks[0].id, b.tracks[0].id);
+        assert_eq!(a.tracks[1].id, b.tracks[1].id);
+        assert_eq!(a.vias[0].id, b.vias[0].id);
+
+        let before = a.clone();
+        a.assign_missing_ids(); // second pass: must be a no-op
+        assert_eq!(a.tracks[0].id, before.tracks[0].id);
+        assert_eq!(a.tracks[1].id, before.tracks[1].id);
+    }
+
+    /// Ids come from content, not position in the array: reordering the
+    /// same tracks must not change which id lands on which track.
+    #[test]
+    fn ids_do_not_depend_on_array_order() {
+        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![] };
+        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![] };
+        rt1.assign_missing_ids();
+        rt2.assign_missing_ids();
+        let gnd1 = rt1.tracks.iter().find(|t| t.net == "GND").unwrap();
+        let gnd2 = rt2.tracks.iter().find(|t| t.net == "GND").unwrap();
+        assert_eq!(gnd1.id, gnd2.id);
+    }
+
+    /// Two tracks that happen to be identical (a hand-add repeated
+    /// verbatim) must still get two distinct ids.
+    #[test]
+    fn duplicate_content_gets_distinct_ids() {
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![] };
+        rt.assign_missing_ids();
+        assert_ne!(rt.tracks[0].id, rt.tracks[1].id);
+    }
+
+    /// `SetTrackWidth`-style edits (anything that changes `width` but not
+    /// `net`/`layer`/`pts`) must not change the id that was already
+    /// assigned -- callers (the web UI, `DeleteTrack`) hold onto it.
+    #[test]
+    fn changing_width_after_assignment_does_not_move_the_id() {
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![] };
+        rt.assign_missing_ids();
+        let id = rt.tracks[0].id.clone();
+        rt.tracks[0].width = 500; // what `SetTrackWidth` does
+        assert_eq!(rt.tracks[0].id, id);
+    }
+
+    #[test]
+    fn shape_and_text_ids_backfill_the_same_way() {
+        let mut dr = DrawingsSection {
+            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } }],
+            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+        };
+        dr.assign_missing_ids();
+        assert!(!dr.shapes[0].id().is_empty());
+        assert!(!dr.texts[0].id.is_empty());
+        assert!(dr.shapes[0].id().starts_with("shp_"));
+        assert!(dr.texts[0].id.starts_with("txt_"));
+    }
+
+    #[test]
+    fn shape_translate_moves_every_point() {
+        let mut s = Shape::Rect { id: "shp_1".into(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 100, y: 100 } };
+        s.translate(10, 20);
+        assert_eq!(s.points(), vec![Point { x: 10, y: 20 }, Point { x: 110, y: 120 }]);
     }
 }

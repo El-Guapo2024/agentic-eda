@@ -73,6 +73,7 @@ fn design(outline: Vec<Point>, fps: Vec<FootprintInstance>) -> Design {
         schematic: None,
         placement: Some(PlacementSection { outline, footprints: fps, modules: Vec::new() }),
         routing: None,
+        drawings: None,
     }
 }
 

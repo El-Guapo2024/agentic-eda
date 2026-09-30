@@ -455,6 +455,7 @@ mod tests {
             }),
             placement: None,
             routing: None,
+            drawings: None,
         }
     }
 

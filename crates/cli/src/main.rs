@@ -926,6 +926,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         schematic: None,
         placement: None,
         routing: None,
+        drawings: None,
     };
 
     let design = match cx.args.cmd.as_str() {
@@ -1085,6 +1086,7 @@ fn main() -> ExitCode {
                 schematic: None,
                 placement: None,
                 routing: None,
+                drawings: None,
             };
             seed_outline(&empty, model)
         });

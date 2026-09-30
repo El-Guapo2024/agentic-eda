@@ -1011,6 +1011,7 @@ mod tests {
             schematic: None,
             placement: None,
             routing: None,
+            drawings: None,
         };
         let model = ConstraintModel::default();
         let err = render_schematic(&design, &model).unwrap_err();

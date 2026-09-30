@@ -162,6 +162,7 @@ mod tests {
                 footprints: fps,
                 modules: Vec::new(),
             }),
+            drawings: None,
         }
     }
 
