@@ -9,7 +9,36 @@
 // check -- the task spec is explicit that the gates judge the committed
 // result, not a live preview. What's here is the part of "45°/90°
 // posture and grid snap" a single dragged segment can honestly provide.
-import type { BoardState } from "../../api/types";
+import type { BoardState, Cmd } from "../../api/types";
+import type { DrawState } from "../../state/store";
+
+type RunCmd = (c: Cmd) => Promise<boolean>;
+
+/** Shared by the F ("Attempt Finish") hotkey (useActionRunner.ts, only while routing -- see its own comment on the Flip/AttemptFinish key collision) and Canvas.tsx's Enter/double-click finish, so the two can never commit a route differently. Committing `add_track` needs at least a start and an end. */
+export async function commitRoute(draw: Extract<DrawState, { kind: "route" }>, cmd: RunCmd): Promise<void> {
+  if (draw.pts.length < 2) return;
+  await cmd({ op: "add_track", net: draw.net, layer: draw.layer, width: draw.width, pts: draw.pts.map(([x, y]) => ({ x, y })) });
+}
+
+/** V while routing (pcbnew.Control.layerToggle, "Toggle Layer"): commit what's drawn so far, drop a via at the current end, and restart the route on the *other* board layer from there -- KiCad's own via-mid-route mechanic, ported as two immediate commits instead of one deferred multi-layer track (see this file's header comment on scope). */
+export async function dropViaAndSwitchLayer(draw: Extract<DrawState, { kind: "route" }>, board: BoardState, cmd: RunCmd): Promise<DrawState> {
+  const last = draw.pts[draw.pts.length - 1]!;
+  const otherLayer = board.layers.find((l) => l !== draw.layer) ?? draw.layer;
+  if (draw.pts.length >= 2) {
+    await cmd({ op: "add_track", net: draw.net, layer: draw.layer, width: draw.width, pts: draw.pts.map(([x, y]) => ({ x, y })) });
+  }
+  await cmd({
+    op: "add_via",
+    net: draw.net,
+    x: last[0],
+    y: last[1],
+    drill: board.board_rules?.via_drill ?? 300,
+    diameter: board.board_rules?.via_diameter ?? 600,
+    from_layer: draw.layer,
+    to_layer: otherLayer,
+  });
+  return { kind: "route", net: draw.net, layer: otherLayer, width: draw.width, pts: [last] };
+}
 
 export interface RouteAnchor {
   net: string;

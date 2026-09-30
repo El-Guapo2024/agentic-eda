@@ -6,10 +6,12 @@
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
 import type { BoardState, Part, Pad } from "../../api/types";
-import type { ViewTransform } from "../../state/store";
+import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { minimumSpanningTree, padPointsByNet } from "./ratsnest";
+import { posture45 } from "./routing";
+import { snapPoint } from "./gridHelper";
 
 export interface PaintOptions {
   selection: Set<string>;
@@ -24,6 +26,10 @@ export interface PaintOptions {
   gridUm: number;
   gridVisible: boolean;
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+  /** The route/zone/drawing tool currently in progress (Canvas.tsx), and the cursor to rubber-band its next point toward -- null cursor (pointer left the canvas, or hasn't moved yet) just skips the rubber-band, still showing the fixed points so far. */
+  drawState: DrawState | null;
+  cursorUm: { x: number; y: number } | null;
+  activeTool: ToolId;
   /**
    * pcbnew.Control.pad/track/viaDisplayMode ("Sketch Pads/Tracks/Vias"):
    * outline instead of filled. KiCad draws a true unfilled outline (two
@@ -261,6 +267,67 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
 }
 
 /**
+ * The route/via/zone/drawing tool currently in progress (Canvas.tsx's
+ * state.drawState), rendered as a dashed "not committed yet" preview:
+ * the fixed points so far plus a rubber-band to wherever the next click
+ * would actually land -- the exact same posture45+grid-snap Canvas.tsx's
+ * own click handler applies, so the preview never lies about where a
+ * click will go.
+ */
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, opts: PaintOptions) {
+  const draw = opts.drawState;
+  if (!draw) return;
+  const cursor = opts.cursorUm;
+  const pts = draw.pts.slice();
+  let rubberEnd: [number, number] | null = null;
+  if (cursor) {
+    const last = pts[pts.length - 1]!;
+    const usePosture = draw.kind === "route" || (draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect"));
+    const raw: [number, number] = usePosture ? posture45(last, [cursor.x, cursor.y]) : [cursor.x, cursor.y];
+    rubberEnd = snapPoint(raw[0], raw[1], opts.gridUm);
+  }
+
+  const color = draw.kind === "route" ? layerColor(copperColorKey(draw.layer)) : layerColor("selection");
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = draw.kind === "route" ? Math.max(draw.width, hairlineUm(view, 1)) : hairlineUm(view, 1.5);
+  ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  if (rubberEnd) ctx.lineTo(rubberEnd[0], rubberEnd[1]);
+  if (draw.kind === "zone" && pts.length >= 2) ctx.closePath(); // preview the closing edge back to the start
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // A small dot on every fixed point so far, so the operator can see
+  // exactly where each click landed (especially useful once several
+  // route segments or zone corners are down).
+  for (const [x, y] of pts) {
+    ctx.beginPath();
+    ctx.arc(x, y, hairlineUm(view, 2.5), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */
+function drawViaGhost(ctx: CanvasRenderingContext2D, board: BoardState, opts: PaintOptions) {
+  if (!opts.cursorUm) return;
+  const [x, y] = snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
+  const d = board.board_rules?.via_diameter ?? 600;
+  ctx.save();
+  ctx.globalAlpha = 0.6;
+  ctx.fillStyle = layerColor("via");
+  ctx.beginPath();
+  ctx.arc(x, y, d / 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
  * Paints the whole board into `ctx`, which must already have `view`
  * applied (ctx.translate/scale) -- see Canvas.tsx. Iterates GAL layers in
  * `drawOrder()` so moving to WebGL later only means replacing the
@@ -279,4 +346,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   for (const key of drawOrder()) byLayer[key]?.();
   // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
   for (const part of board.parts) drawFootprint(ctx, view, part, opts);
+  // In-progress route/via/zone/drawing tool preview, on top of everything committed.
+  drawInProgress(ctx, view, opts);
+  if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
 }

@@ -14,19 +14,66 @@
 //     same preview without holding the button, click commits, Esc cancels.
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import type { Part } from "../../api/types";
+import type { CmdShape, Part } from "../../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
+import type { ToolId } from "../../state/store";
 import { boundsOfPoints, fitTransform, screenToWorld, zoomAbout } from "./view";
 import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
 import { snapPoint } from "./gridHelper";
+import { findRouteAnchor, posture45, commitRoute } from "./routing";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import "../../styles/canvas.css";
 
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 6;
+/** A click within this many board um of a pad/via/track-end counts as landing on it -- generous enough to be usable at a typical zoom without needing pixel-perfect precision, same idea as pcb_grid_helper's own anchor snapping (not ported here, see gridHelper.ts). */
+const ANCHOR_SNAP_UM = 500;
+/** No per-board "default graphic line width" setting exists (board_rules only covers track/via) -- a plain 0.15mm default, same order of magnitude as KiCad's own out-of-the-box default (0.15-0.2mm silkscreen line width, by version/theme). */
+const DEFAULT_STROKE_WIDTH_UM = 150;
+/** How many points finish a given drawing-tool shape by itself, once reached, without waiting for an explicit Enter/double-click -- a plain 2-point line/rect/circle doesn't need a third confirmation the way a polygon does. Arc is start/mid/end (3); zone/polygon/route have no auto-finish (arbitrary length). */
+function shapeAutoFinishCount(kind: "segment" | "arc" | "rect" | "circle" | "polygon"): number | null {
+  switch (kind) {
+    case "segment":
+    case "rect":
+    case "circle":
+      return 2;
+    case "arc":
+      return 3;
+    case "polygon":
+      return null;
+  }
+}
 
-type DragState = { kind: "pan"; startScreen: [number, number]; startView: [number, number] } | { kind: "move"; refs: string[]; startWorld: [number, number]; moved: boolean } | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; additive: boolean };
+/** `pts` -> the matching `CmdShape` variant for `add_shape`, or null if there aren't enough points yet -- the IR's own point-count floor per kind (a polygon needs 3+, everything else exactly the fixed count `shapeAutoFinishCount` already enforces before this is ever called with too few). */
+function shapeFromPoints(kind: "segment" | "arc" | "rect" | "circle" | "polygon", pts: [number, number][], layer: string): CmdShape | null {
+  const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
+  switch (kind) {
+    case "segment":
+      return pts.length >= 2 ? { kind: "segment", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: false, start: p(0), end: p(1) } : null;
+    case "rect":
+      return pts.length >= 2 ? { kind: "rect", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: false, start: p(0), end: p(1) } : null;
+    case "circle":
+      return pts.length >= 2 ? { kind: "circle", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: false, center: p(0), end: p(1) } : null;
+    case "arc":
+      return pts.length >= 3 ? { kind: "arc", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
+    case "polygon":
+      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: true, pts: pts.map((_, i) => p(i)) } : null;
+  }
+}
+
+const SHAPE_TOOL_KIND: Partial<Record<ToolId, "segment" | "arc" | "rect" | "circle" | "polygon">> = {
+  draw_segment: "segment",
+  draw_arc: "arc",
+  draw_rect: "rect",
+  draw_circle: "circle",
+  draw_polygon: "polygon",
+};
+
+type DragState =
+  | { kind: "pan"; startScreen: [number, number]; startView: [number, number] }
+  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text"; startWorld: [number, number]; moved: boolean }
+  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; additive: boolean };
 
 /** Every part whose courtyard contains the point, topmost (last drawn) first. */
 function partsAt(parts: Part[], xUm: number, yUm: number): Part[] {
@@ -128,6 +175,9 @@ export function Canvas() {
       sketchPads: state.sketchPads,
       sketchTracks: state.sketchTracks,
       sketchVias: state.sketchVias,
+      drawState: state.drawState,
+      cursorUm: state.cursorUm,
+      activeTool: state.activeTool,
     });
     ctx.restore();
 
@@ -166,7 +216,7 @@ export function Canvas() {
       ctx.stroke();
     }
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, marquee, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, marquee, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -203,10 +253,103 @@ export function Canvas() {
     }
   };
 
+  /** Route/zone/shape tools all share "click adds a point, Enter/double-click finishes" -- this commits whatever's accumulated in state.drawState, per its kind. Shared with the F ("Attempt Finish") hotkey for the route case specifically (useActionRunner.ts) via routing.ts's commitRoute, so the two can never disagree about what finishing a route means. */
+  const finishDraw = useCallback(() => {
+    const draw = state.drawState;
+    if (!draw) return;
+    if (draw.kind === "route") {
+      commitRoute(draw, api.cmd);
+      dispatch({ type: "SET_DRAW_STATE", draw: null });
+    } else if (draw.kind === "zone") {
+      if (draw.pts.length >= 3) {
+        dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      }
+      dispatch({ type: "SET_DRAW_STATE", draw: null });
+    } else if (draw.kind === "shape") {
+      const shape = shapeFromPoints(draw.shapeKind, draw.pts, state.activeLayer ?? "F.SilkS");
+      if (shape) api.cmd({ op: "add_shape", shape });
+      dispatch({ type: "SET_DRAW_STATE", draw: null });
+    }
+  }, [state.drawState, state.activeLayer, api, dispatch]);
+
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
+
+    // Route/via/zone/drawing/text tools: a click either starts, extends,
+    // or (for via/text) completes one placement -- entirely separate
+    // from the select/move flow below, which only applies to the
+    // "select"/"move" tools.
+    if (board && e.button === 0 && !e.altKey) {
+      const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+
+      if (state.activeTool === "via") {
+        const anchor = findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM);
+        if (!anchor) {
+          dispatch({ type: "TOAST", message: "Click a pad, via, or track end -- a via needs a net.", kind: "error" });
+          return;
+        }
+        const rules = board.board_rules;
+        api.cmd({ op: "add_via", net: anchor.net, x: sx, y: sy, drill: rules?.via_drill ?? 300, diameter: rules?.via_diameter ?? 600, from_layer: "F.Cu", to_layer: "B.Cu" });
+        return;
+      }
+
+      if (state.activeTool === "route") {
+        const draw = state.drawState;
+        if (!draw || draw.kind !== "route") {
+          const anchor = findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM);
+          if (!anchor) {
+            dispatch({ type: "TOAST", message: "Start a route from a pad, via, or track end.", kind: "error" });
+            return;
+          }
+          const layer = anchor.layer ?? state.activeLayer ?? board.layers[0] ?? "F.Cu";
+          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "route", net: anchor.net, layer, width: board.board_rules?.track_width ?? 250, pts: [anchor.at] } });
+          return;
+        }
+        const last = draw.pts[draw.pts.length - 1]!;
+        const constrained = posture45(last, [sx, sy]);
+        const [fx, fy] = snapPoint(constrained[0], constrained[1], board.snap ?? state.gridUm);
+        dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, pts: [...draw.pts, [fx, fy]] } });
+        return;
+      }
+
+      if (state.activeTool === "zone") {
+        const draw = state.drawState;
+        const pts: [number, number][] = draw?.kind === "zone" ? [...draw.pts, [sx, sy]] : [[sx, sy]];
+        dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts } });
+        return;
+      }
+
+      const shapeKind = SHAPE_TOOL_KIND[state.activeTool];
+      if (shapeKind) {
+        const draw = state.drawState;
+        const already = draw?.kind === "shape" && draw.shapeKind === shapeKind ? draw.pts : [];
+        let point: [number, number] = [sx, sy];
+        if (already.length > 0 && (shapeKind === "segment" || shapeKind === "rect")) {
+          const last = already[already.length - 1]!;
+          const constrained = posture45(last, [sx, sy]);
+          point = snapPoint(constrained[0], constrained[1], board.snap ?? state.gridUm);
+        }
+        const pts = [...already, point];
+        const finishAt = shapeAutoFinishCount(shapeKind);
+        if (finishAt !== null && pts.length >= finishAt) {
+          const shape = shapeFromPoints(shapeKind, pts, state.activeLayer ?? "F.SilkS");
+          if (shape) api.cmd({ op: "add_shape", shape });
+          dispatch({ type: "SET_DRAW_STATE", draw: null });
+        } else {
+          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "shape", shapeKind, pts } });
+        }
+        return;
+      }
+
+      if (state.activeTool === "text") {
+        dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "add", at: [sx, sy] } });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+        return;
+      }
+    }
 
     if (moveMode) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
@@ -258,7 +401,7 @@ export function Canvas() {
         dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
         refs = [hit.ref];
       }
-      dragRef.current = { kind: "move", refs, startWorld: [wx, wy], moved: false };
+      dragRef.current = { kind: "move", refs, moveKind: "part", startWorld: [wx, wy], moved: false };
       return;
     }
     dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], additive: e.shiftKey };
@@ -352,7 +495,7 @@ export function Canvas() {
     const entries: MenuEntry[] = [
       { label: placedRefs.length > 1 ? `Rotate ${placedRefs.length} Items (R)` : "Rotate Clockwise (Shift+R)", onSelect: () => api.rotateSelection(3), disabled: placedRefs.length === 0 },
       { label: "Rotate Counterclockwise (R)", onSelect: () => api.rotateSelection(1), disabled: placedRefs.length === 0 },
-      { label: "Flip Side (F)", onSelect: () => {}, disabled: true },
+      { label: "Flip Side (F)", onSelect: () => api.flipSelection(), disabled: placedRefs.length === 0 },
       { label: "Delete (Del)", onSelect: () => api.ripSelection(), disabled: refs.length === 0 },
     ];
     if (refs.length === 1) {
@@ -374,8 +517,21 @@ export function Canvas() {
   // handled globally now (actions/useGlobalHotkeys.ts), driven by
   // src/kicad/actions.json's real hotkeys through the same registry the
   // menu bar and toolbars use, reading/writing the store's activeTool
-  // and cursorUm -- nothing left here needs a canvas-local keydown
-  // handler.
+  // and cursorUm. Enter-finishes-the-current-route/zone/shape is the one
+  // interaction left here: it's a plain UI convention this app is
+  // choosing for its own click-to-add-points tools, not a KiCad dotted
+  // action with a real extracted hotkey, so it doesn't belong in that
+  // global registry the way a real one does.
+  const onCanvasKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && state.drawState) {
+      e.preventDefault();
+      finishDraw();
+    }
+  };
+
+  const onDoubleClick = () => {
+    if (state.drawState) finishDraw();
+  };
 
   return (
     <div
@@ -385,6 +541,8 @@ export function Canvas() {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onDoubleClick={onDoubleClick}
+      onKeyDown={onCanvasKeyDown}
       onWheel={onWheel}
       onContextMenu={onContextMenu}
       data-armed={state.armed ? "true" : "false"}

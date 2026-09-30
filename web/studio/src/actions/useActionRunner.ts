@@ -16,6 +16,7 @@
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { zoomAbout, fitTransform, boundsOfPoints } from "../components/canvas/view";
+import { commitRoute, dropViaAndSwitchLayer } from "../components/canvas/routing";
 import { GRID_OPTIONS_UM } from "../components/Toolbar";
 
 function canvasRect(): DOMRect | null {
@@ -47,7 +48,70 @@ export function useActionRunner() {
     m.set("pcbnew.InteractiveEdit.rotateCcw", pcbOnly(() => api.rotateSelection(1)));
     m.set("pcbnew.InteractiveEdit.rotateCw", pcbOnly(() => api.rotateSelection(3)));
     m.set("common.Interactive.delete", pcbOnly(() => api.ripSelection()));
-    m.set("pcbnew.InteractiveEdit.flip", pcbOnly(() => api.flipSelection()));
+    // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
+    // AttemptFinish's while actively routing -- KiCad's own tool stack
+    // resolves this by context (which tool currently owns the keyboard),
+    // this app's flatter one by only ever registering whichever of the
+    // two applies to the current state.drawState, so useGlobalHotkeys'
+    // first-enabled-candidate search always lands on the right one.
+    if (state.drawState?.kind === "route") {
+      m.set(
+        "pcbnew.InteractiveRouter.AttemptFinish",
+        pcbOnly(() => {
+          const draw = state.drawState;
+          if (draw?.kind === "route") {
+            commitRoute(draw, api.cmd);
+            dispatch({ type: "SET_DRAW_STATE", draw: null });
+          }
+        })
+      );
+    } else {
+      m.set("pcbnew.InteractiveEdit.flip", pcbOnly(() => api.flipSelection()));
+    }
+    m.set(
+      "pcbnew.Control.layerToggle",
+      pcbOnly(() => {
+        const draw = state.drawState;
+        if (draw?.kind !== "route" || !state.board) return;
+        dropViaAndSwitchLayer(draw, state.board, api.cmd).then((next) => dispatch({ type: "SET_DRAW_STATE", draw: next }));
+      })
+    );
+    m.set(
+      "pcbnew.InteractiveRouter.SingleTrack",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "route" ? "select" : "route" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.via",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.zone",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.line",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_segment" ? "select" : "draw_segment" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.arc",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_arc" ? "select" : "draw_arc" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.rectangle",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_rect" ? "select" : "draw_rect" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.circle",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_circle" ? "select" : "draw_circle" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.graphicPolygon",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_polygon" ? "select" : "draw_polygon" }))
+    );
+    m.set(
+      "pcbnew.InteractiveDrawing.text",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "text" ? "select" : "text" }))
+    );
     m.set("common.Interactive.undo", () => api.undo());
     m.set("common.Interactive.redo", () => api.redo());
 
