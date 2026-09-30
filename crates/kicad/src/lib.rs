@@ -27,6 +27,9 @@ mod sexpr;
 mod import;
 pub use import::{import_kicad_pcb, ImportNotes};
 
+mod footprint_lib;
+pub use footprint_lib::{default_footprint_library_root, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
+
 const STUB_MM: f64 = 1.27;
 
 /// Fixed provenance for the title block. Passed explicitly (never system
@@ -321,6 +324,33 @@ pub(crate) fn fmt_mm_f(v: f64) -> String {
 
 pub(crate) fn sexpr_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// KiCad stores a pad's drawn rotation as its footprint's own file angle
+/// plus the pad's own -- but mirroring (a bottom-side part) flips the
+/// *sense* of a rotation that is defined, as `Pad::rot` is, on the
+/// footprint's un-mirrored local shape: mirroring a shape that carries its
+/// own rotation of `theta` is the same as mirroring the unrotated shape and
+/// then rotating it by `-theta`. So a pad's own rotation contributes with
+/// the opposite sign on the bottom side; the footprint's own `fp_rot` needs
+/// no such flip (it is applied *after* the mirror, in `to_board`, so its
+/// sign is the same either side).
+///
+/// Returns the pad's absolute file angle, degrees, ready for `(at x y
+/// angle)` -- the same single negation `write_footprint` already applies
+/// to a footprint with no rotated pads.
+pub(crate) fn pad_file_angle(fp_side: eda_model::ir::Side, fp_rot: eda_model::ir::Millideg, pad_rot: eda_model::ir::Millideg) -> String {
+    let effective = if fp_side == eda_model::ir::Side::Bottom { -(pad_rot as i64) } else { pad_rot as i64 };
+    fmt_mm_f(-((fp_rot as i64 + effective) as f64) / 1000.0)
+}
+
+/// Inverse of `pad_file_angle`: recover a pad's own `rot` (relative to its
+/// footprint, our internal convention) from its file angle and its
+/// footprint's own rotation (already imported, `ir::Millideg`).
+pub(crate) fn pad_rot_from_file(fp_side: eda_model::ir::Side, fp_rot: eda_model::ir::Millideg, pad_file_deg: f64) -> eda_model::ir::Millideg {
+    let combined = import::import_rot_millideg(pad_file_deg) as i64;
+    let delta = (combined - fp_rot as i64).rem_euclid(360_000);
+    (if fp_side == eda_model::ir::Side::Bottom { -delta } else { delta }).rem_euclid(360_000) as eda_model::ir::Millideg
 }
 
 /// Deterministic UUID-shaped id derived from a stable string (blake3, not a

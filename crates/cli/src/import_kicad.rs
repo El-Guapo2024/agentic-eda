@@ -80,14 +80,8 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
     if notes.track_arcs_approximated > 0 {
         eprintln!("  {} arc(s) approximated as short straight segments (our model has no arc primitive)", notes.track_arcs_approximated);
     }
-    if notes.npth_pads_skipped > 0 {
-        eprintln!("  {} non-plated mechanical pad(s) skipped (no number/net to carry)", notes.npth_pads_skipped);
-    }
     if notes.non_rect_pad_shapes_approximated > 0 {
         eprintln!("  {} pad(s) with an unsupported shape (trapezoid/custom) approximated as rect", notes.non_rect_pad_shapes_approximated);
-    }
-    if notes.pads_with_independent_rotation > 0 {
-        eprintln!("  {} pad(s) rotated independently of their footprint -- centre only, shape orientation dropped", notes.pads_with_independent_rotation);
     }
     eprintln!("wrote {}", out.join("design.json").display());
     Ok(())

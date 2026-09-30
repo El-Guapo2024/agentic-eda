@@ -305,6 +305,97 @@ fn kicad_cli_drc_shapes_and_text() {
     assert_eq!(in_scope, 0, "shapes/text alone must not create DRC violations: {by_type:?}");
 }
 
+/// The two real footprints this feature exists for -- loaded through the
+/// library loader, not hand-built -- placed, routed by the real router,
+/// exported, and checked against real kicad-cli: the same IN_SCOPE bar
+/// every other DRC test here holds to. This is what proves the slotted
+/// shield pads, the non-plated locating pegs and the repeated "SH" pad
+/// number are not just accepted by our own gates but by KiCad itself.
+#[test]
+#[ignore]
+fn kicad_cli_drc_real_footprints() {
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let root = eda_kicad::default_footprint_library_root();
+    let Some(usb_c_path) = eda_kicad::find_footprint_file(&root, "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12") else {
+        eprintln!("KiCad footprint libraries not found at {}; skipping", root.display());
+        return;
+    };
+    let usb_c_text = std::fs::read_to_string(&usb_c_path).unwrap();
+    let usb_c = eda_kicad::parse_footprint_file(&usb_c_text, "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12").expect("parses");
+    let button_path = eda_kicad::find_footprint_file(&root, "Button_Switch_SMD:SW_SPST_B3U-1000P").expect("ships alongside the connector's library");
+    let button_text = std::fs::read_to_string(&button_path).unwrap();
+    let button = eda_kicad::parse_footprint_file(&button_text, "Button_Switch_SMD:SW_SPST_B3U-1000P").expect("parses");
+
+    let make_part = |r: &str, footprint: &str, fp: &eda_model::Footprint| Part {
+        reference: r.into(),
+        mpn: None,
+        value: None,
+        package: None,
+        footprint: Some(footprint.into()),
+        pins: fp.pads.iter().map(|p| Pin { number: p.number.clone(), name: None, kind: PinKind::Passive }).collect(),
+        body_um: None,
+        edge: None,
+    };
+    let j1 = make_part("J1", "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12", &usb_c);
+    let sw1 = make_part("SW1", "Button_Switch_SMD:SW_SPST_B3U-1000P", &button);
+    let model = ConstraintModel {
+        parts: vec![j1, sw1],
+        // USB-C is reversible, so this connector's real footprint pairs up
+        // A1/B12, A12/B1, A4/B9 and A9/B4 at *exactly* coincident
+        // positions (real KiCad geometry, not an artifact of our reader) --
+        // each pair is one rail, and DRC rightly calls two same-position
+        // pads on different nets a clearance violation, so each pair goes
+        // on its own net here, same as any real design would. The shared
+        // "SH" pin is the interesting one: since all four physical shield
+        // pads carry that one number, this net asks the router to treat
+        // all four as one net and connect every one of them, plus the
+        // button -- the repeated-pad-number contract, on real geometry.
+        // (The signal row's own 0.3-0.5mm pitch pads are packed too
+        // tightly for a 2-layer board to break out of at all -- the
+        // shield walls them in on both layers -- so this test does not
+        // ask the router to cross the row; a real design would need an
+        // inner layer or hand-placed vias for that.)
+        nets: vec![
+            Net { name: "VBUS_A".into(), pins: vec!["J1.A1".into(), "J1.B12".into()] },
+            Net { name: "VBUS_B".into(), pins: vec!["J1.A12".into(), "J1.B1".into()] },
+            Net { name: "GND_A".into(), pins: vec!["J1.A4".into(), "J1.B9".into()] },
+            Net { name: "GND_B".into(), pins: vec!["J1.A9".into(), "J1.B4".into()] },
+            Net { name: "SHIELD".into(), pins: vec!["J1.SH".into(), "SW1.1".into()] },
+        ],
+        footprints: vec![usb_c, button],
+        ..Default::default()
+    };
+
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 40_000, y: 0 }, Point { x: 40_000, y: 30_000 }, Point { x: 0, y: 30_000 }];
+    let footprints = vec![
+        FootprintInstance { id: "J1".into(), at: Point { x: 12_000, y: 8_000 }, rot: 0, side: Side::Top, label: Default::default() },
+        FootprintInstance { id: "SW1".into(), at: Point { x: 30_000, y: 20_000 }, rot: 0, side: Side::Top, label: Default::default() },
+    ];
+    let design = Design {
+        schema: 1,
+        provenance: Provenance { engine_version: "0".into(), intent_hash: "real_footprints".into(), seed: 0, stage_hashes: vec![] },
+        schematic: None,
+        placement: Some(PlacementSection { outline, footprints, modules: Vec::new() }),
+        routing: None,
+        drawings: None,
+    };
+
+    let routed = route(&design, &model, &model.board, 0).unwrap_or_else(|e| panic!("route failed: {e:?}"));
+    let meta = ExportMeta { date: "2026-01-01", title: "real_footprints" };
+    let pcb_text = export_kicad_pcb(&routed, &model, &meta).expect("export_kicad_pcb");
+    let dir = std::env::temp_dir().join("eda_kicad_real_footprints_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pcb_path = dir.join("real_footprints.kicad_pcb");
+    std::fs::write(&pcb_path, &pcb_text).unwrap();
+
+    let by_type = drc_by_type(&cli, &pcb_path);
+    let in_scope: usize = IN_SCOPE.iter().filter_map(|ty| by_type.get(*ty)).map(|v| v.len()).sum();
+    assert_eq!(in_scope, 0, "the real USB-C connector and button, placed and routed, must clear DRC: {by_type:?}");
+}
+
 /// `kicad-cli pcb drc` on `pcb`: its violations and unconnected items
 /// grouped by type, with the counts printed. The report is written next to
 /// the board as drc.json.
