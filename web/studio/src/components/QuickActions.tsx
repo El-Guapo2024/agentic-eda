@@ -27,6 +27,13 @@ export function QuickActions() {
   return (
     <>
       <div className="toolbar-separator" role="separator" />
+      <button className="toolbar-button" title="Undo (Cmd/Ctrl+Z)" onClick={() => api.undo()}>
+        <span aria-hidden>↶</span>
+      </button>
+      <button className="toolbar-button" title="Redo (Cmd/Ctrl+Shift+Z)" onClick={() => api.redo()}>
+        <span aria-hidden>↷</span>
+      </button>
+      <div className="toolbar-separator" role="separator" />
       <button className="toolbar-button" title="Fit board to window" onClick={fit}>
         <span aria-hidden>⇲</span>
       </button>

@@ -245,7 +245,12 @@ export function Canvas() {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "r" || e.key === "R") api.rotateSelection(e.shiftKey ? 3 : 1);
+    const mod = e.metaKey || e.ctrlKey; // Cmd on macOS, Ctrl elsewhere -- see the task's hotkey-mapping note
+    if (mod && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      if (e.shiftKey) api.redo();
+      else api.undo();
+    } else if (e.key === "r" || e.key === "R") api.rotateSelection(e.shiftKey ? 3 : 1);
     else if (e.key === "Delete" || e.key === "Backspace") api.ripSelection();
     else if (e.key === "Escape") {
       setMoveMode(false);

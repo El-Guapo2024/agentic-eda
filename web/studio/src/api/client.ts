@@ -53,3 +53,20 @@ export async function postRoute(): Promise<RouteReply> {
   const r = await fetch("/api/route", { method: "POST" });
   return (await r.json()) as RouteReply;
 }
+
+/**
+ * The backend's own undo/redo (crates/cli/src/board.rs: two snapshot
+ * stacks under the board's directory, see that file's comments) -- the
+ * one piece of backend logic this task allowed beyond serving the app.
+ * `ok: false` just means the stack is empty ("nothing to undo/redo"),
+ * not a failure worth alarming over.
+ */
+export async function postUndo(): Promise<CmdReply> {
+  const r = await fetch("/api/undo", { method: "POST" });
+  return (await r.json()) as CmdReply;
+}
+
+export async function postRedo(): Promise<CmdReply> {
+  const r = await fetch("/api/redo", { method: "POST" });
+  return (await r.json()) as CmdReply;
+}

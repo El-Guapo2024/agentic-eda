@@ -8,7 +8,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { BoardState, Part } from "../api/types";
-import { fetchState, fetchVersion, postCmd, postRoute } from "../api/client";
+import { fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
@@ -238,6 +238,8 @@ export interface StudioApi {
   commitMove: (refs: string[], dxUm: number, dyUm: number) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
   route: () => Promise<void>;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
   partByRef: (ref: string) => Part | undefined;
 }
 
@@ -328,6 +330,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     route: async () => {
       const reply = await postRoute();
       dispatch({ type: "TOAST", message: reply.message, kind: reply.ok ? "info" : "error" });
+      await refresh();
+    },
+    undo: async () => {
+      dispatch({ type: "CLEAR_SELECTION" });
+      const reply = await postUndo();
+      if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
+      await refresh();
+    },
+    redo: async () => {
+      dispatch({ type: "CLEAR_SELECTION" });
+      const reply = await postRedo();
+      if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
     },
   };
