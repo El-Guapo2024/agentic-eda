@@ -167,6 +167,20 @@ fn handle(stream: &mut TcpStream, dir: &Path, job: &Job, schematic: &Mutex<Optio
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
+        ("POST", "/api/undo") => {
+            let reply = match board::undo(dir, "ui") {
+                Ok(summary) => json!({ "ok": true, "message": summary }),
+                Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
+        ("POST", "/api/redo") => {
+            let reply = match board::redo(dir, "ui") {
+                Ok(summary) => json!({ "ok": true, "message": summary }),
+                Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
         ("POST", "/api/route") => {
             let mut j = job.lock().map_err(|e| e.to_string())?;
             if *j == "running" {
