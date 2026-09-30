@@ -240,6 +240,7 @@ export function useActionRunner() {
 
     m.set("common.Control.metricUnits", () => dispatch({ type: "SET_UNITS", units: "mm" }));
     m.set("common.Control.imperialUnits", () => dispatch({ type: "SET_UNITS", units: "in" }));
+    m.set("common.Control.mils", () => dispatch({ type: "SET_UNITS", units: "mil" }));
     // Real KiCad toggles between its last-used metric/imperial unit; this
     // app has a third (mil), folded into "imperial" for this one action.
     m.set("common.Control.toggleUnits", () => dispatch({ type: "SET_UNITS", units: state.units === "mm" ? "in" : "mm" }));
