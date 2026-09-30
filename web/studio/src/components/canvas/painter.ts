@@ -5,7 +5,7 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, Part, Pad } from "../../api/types";
+import type { BoardState, Part, Pad, Shape } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
@@ -247,6 +247,114 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
   }
 }
 
+/** A Shape/Text's own dotted KiCad layer name ("F.SilkS") -> colors.json's real key ("F_SilkS") -- unlike copperColorKey() (which also lowercases, fine for copper's own always-lowercase-safe names but wrong for e.g. "Edge.Cuts" -> "Edge_Cuts"), these carry a real named layer already and just need the punctuation swapped, case preserved. */
+function realLayerKey(layer: string): string {
+  return layer.replace(/\./g, "_");
+}
+
+/** Free-standing board graphics (Place > Line/Arc/Rectangle/Circle/Polygon) -- everything crates/model/src/ir.rs's `Shape` enum can hold, each drawn in its own layer's real color (silkscreen, fab, etc., not just copper). */
+function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  const shapes = board.drawings?.shapes ?? [];
+  for (const s of shapes) {
+    const bucketish = realLayerKey(s.layer);
+    if (opts.layerVisible[s.layer] === false) continue;
+    const selected = opts.selection.has(s.id);
+    ctx.save();
+    ctx.strokeStyle = selected ? layerColor("selection") : layerColor(bucketish);
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = Math.max(s.stroke_width, hairlineUm(view, selected ? 2 : 1));
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    drawShapeGeometry(ctx, s);
+    ctx.restore();
+  }
+}
+
+function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape) {
+  ctx.beginPath();
+  switch (s.kind) {
+    case "segment":
+      ctx.moveTo(s.start[0], s.start[1]);
+      ctx.lineTo(s.end[0], s.end[1]);
+      ctx.stroke();
+      return;
+    case "rect":
+      ctx.rect(s.start[0], s.start[1], s.end[0] - s.start[0], s.end[1] - s.start[1]);
+      break;
+    case "circle": {
+      const r = Math.hypot(s.end[0] - s.center[0], s.end[1] - s.center[1]);
+      ctx.arc(s.center[0], s.center[1], r, 0, Math.PI * 2);
+      break;
+    }
+    case "polygon":
+      s.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.closePath();
+      break;
+    case "arc": {
+      // Three points (start/mid/end) on the arc -- the circumcircle
+      // through them gives center+radius, then the start/end angles.
+      const circumcenter = circleThrough(s.start, s.mid, s.end);
+      if (!circumcenter) {
+        ctx.moveTo(s.start[0], s.start[1]);
+        ctx.lineTo(s.end[0], s.end[1]); // degenerate (collinear) points: a straight line is a reasonable fallback, not a crash
+        ctx.stroke();
+        return;
+      }
+      const [cx, cy, r] = circumcenter;
+      const a0 = Math.atan2(s.start[1] - cy, s.start[0] - cx);
+      const aMid = Math.atan2(s.mid[1] - cy, s.mid[0] - cx);
+      const a1 = Math.atan2(s.end[1] - cy, s.end[0] - cx);
+      // Pick whichever sweep direction (CW vs CCW) actually passes through `mid`.
+      const ccw = normalizeSweep(a0, aMid, a1);
+      ctx.arc(cx, cy, r, a0, a1, ccw);
+      ctx.stroke();
+      return;
+    }
+  }
+  if (s.filled) ctx.fill();
+  ctx.stroke();
+}
+
+/** Circumcenter + radius of the circle through three points, or null if they're (nearly) collinear. */
+function circleThrough(a: [number, number], b: [number, number], c: [number, number]): [number, number, number] | null {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+  if (Math.abs(d) < 1e-9) return null;
+  const a2 = a[0] * a[0] + a[1] * a[1];
+  const b2 = b[0] * b[0] + b[1] * b[1];
+  const c2 = c[0] * c[0] + c[1] * c[1];
+  const ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d;
+  const uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d;
+  return [ux, uy, Math.hypot(a[0] - ux, a[1] - uy)];
+}
+
+/** True (draw counter-clockwise) if sweeping CCW from `a0` reaches `aMid` before `a1` does -- i.e. whichever winding direction actually visits the arc's own recorded midpoint. */
+function normalizeSweep(a0: number, aMid: number, a1: number): boolean {
+  const twoPi = Math.PI * 2;
+  const fwd = (x: number) => ((x % twoPi) + twoPi) % twoPi; // 0..2pi, CCW-positive
+  const ccwSpan = fwd(a1 - a0); // CCW distance a0 -> a1
+  const ccwMidSpan = fwd(aMid - a0); // CCW distance a0 -> aMid
+  return ccwMidSpan <= ccwSpan; // mid falls within the CCW sweep from a0 to a1
+}
+
+/** Free-standing board text (Place > Text). No real font-outline rendering exists here either (see viewer3d/scene.ts's own silk simplification) -- Canvas2D's own text metrics are close enough for a 2D top-down view, unlike the 3D view where a plane+texture stands in instead. */
+function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  const texts = board.drawings?.texts ?? [];
+  for (const t of texts) {
+    if (opts.layerVisible[t.layer] === false) continue;
+    const selected = opts.selection.has(t.id);
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    ctx.rotate((-t.angle / 1000) * (Math.PI / 180)); // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
+    if (t.mirror) ctx.scale(-1, 1);
+    ctx.fillStyle = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
+    ctx.font = `${Math.max(t.size, hairlineUm(view, 8))}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.textAlign = t.justify === "left" ? "start" : t.justify === "right" ? "end" : "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(t.content, 0, 0);
+    ctx.restore();
+  }
+}
+
 function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, curved: boolean) {
   const byNet = padPointsByNet(board.parts);
   ctx.strokeStyle = layerColor("ratsnest");
@@ -384,6 +492,9 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   for (const key of drawOrder()) byLayer[key]?.();
   // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
   for (const part of board.parts) drawFootprint(ctx, view, part, opts);
+  // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
+  drawShapes(ctx, view, board, opts);
+  drawTexts(ctx, view, board, opts);
   // In-progress route/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, opts);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
