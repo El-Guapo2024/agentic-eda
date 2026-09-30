@@ -20,20 +20,28 @@ import { boundsOfPoints, fitTransform, screenToWorld, zoomAbout } from "./view";
 import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
 import { snapPoint } from "./gridHelper";
+import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import "../../styles/canvas.css";
+
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_MOVE_TOLERANCE_PX = 6;
 
 type DragState = { kind: "pan"; startScreen: [number, number]; startView: [number, number] } | { kind: "move"; refs: string[]; startWorld: [number, number]; moved: boolean } | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; additive: boolean };
 
-function partHit(parts: Part[], xUm: number, yUm: number): Part | null {
-  // Topmost = last drawn = iterate back-to-front so an overlapping part on
-  // top wins, matching paintBoard's draw order.
+/** Every part whose courtyard contains the point, topmost (last drawn) first. */
+function partsAt(parts: Part[], xUm: number, yUm: number): Part[] {
+  const hits: Part[] = [];
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i]!;
     if (!p.placed || !p.courtyard) continue;
     const [x0, y0, x1, y1] = p.courtyard;
-    if (xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1) return p;
+    if (xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1) hits.push(p);
   }
-  return null;
+  return hits;
+}
+
+function partHit(parts: Part[], xUm: number, yUm: number): Part | null {
+  return partsAt(parts, xUm, yUm)[0] ?? null;
 }
 
 export function Canvas() {
@@ -46,6 +54,8 @@ export function Canvas() {
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   const [moveMode, setMoveMode] = useState(false);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  const longPressRef = useRef<{ timer: ReturnType<typeof setTimeout>; startScreen: [number, number] } | null>(null);
 
   const board = state.board;
 
@@ -162,9 +172,37 @@ export function Canvas() {
     [state.view]
   );
 
+  /** pcb_selection_tool.cpp: where several items overlap, Alt-click (and, here, a press-and-hold) shows a picker instead of always taking the topmost. */
+  const disambiguate = useCallback(
+    (candidates: Part[], screenX: number, screenY: number) => {
+      if (candidates.length === 0) return;
+      if (candidates.length === 1) {
+        dispatch({ type: "SET_SELECTION", refs: [candidates[0]!.ref] });
+        return;
+      }
+      setContextMenu({
+        x: screenX,
+        y: screenY,
+        entries: candidates.map((p) => ({
+          label: `${p.ref}${p.value ? ` (${p.value})` : ""}`,
+          onSelect: () => dispatch({ type: "SET_SELECTION", refs: [p.ref] }),
+        })),
+      });
+    },
+    [dispatch]
+  );
+
+  const clearLongPress = () => {
+    if (longPressRef.current) {
+      clearTimeout(longPressRef.current.timer);
+      longPressRef.current = null;
+    }
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
     const [wx, wy] = worldAt(e);
+    setContextMenu(null);
 
     if (moveMode) {
       setMoveMode(false);
@@ -181,6 +219,26 @@ export function Canvas() {
       return;
     }
     if (e.button !== 0) return;
+
+    if (e.altKey && board && state.selectionFilter.footprints) {
+      disambiguate(partsAt(board.parts, wx, wy), e.clientX, e.clientY);
+      return;
+    }
+
+    // Long-press: if the pointer stays down here without much movement,
+    // fire the same disambiguation a moment from now, pre-empting
+    // whatever plain click/drag was about to happen.
+    const startScreen: [number, number] = [e.clientX, e.clientY];
+    clearLongPress();
+    longPressRef.current = {
+      startScreen,
+      timer: setTimeout(() => {
+        longPressRef.current = null;
+        dragRef.current = null;
+        setMarquee(null);
+        if (board && state.selectionFilter.footprints) disambiguate(partsAt(board.parts, wx, wy), startScreen[0], startScreen[1]);
+      }, LONG_PRESS_MS),
+    };
 
     const hit = board && state.selectionFilter.footprints ? partHit(board.parts, wx, wy) : null;
     if (hit) {
@@ -206,6 +264,11 @@ export function Canvas() {
   const onPointerMove = (e: React.PointerEvent) => {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
+
+    if (longPressRef.current) {
+      const [sx, sy] = longPressRef.current.startScreen;
+      if (Math.hypot(e.clientX - sx, e.clientY - sy) > LONG_PRESS_MOVE_TOLERANCE_PX) clearLongPress();
+    }
 
     if (moveMode && state.selection.size > 0) {
       const origin = state.moveOriginUm ?? { x: wx, y: wy };
@@ -234,6 +297,7 @@ export function Canvas() {
   };
 
   const onPointerUp = () => {
+    clearLongPress();
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
@@ -271,6 +335,37 @@ export function Canvas() {
     dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, e.clientX - rect.left, e.clientY - rect.top, factor) });
   };
 
+  /** KiCad builds this per-selection from whatever tool/edit actions apply (pcb_selection_tool.cpp/edit_tool.cpp) -- ported here as exactly the actions this app implements, everything else the usual disabled "(not ported yet)". */
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!board) return;
+    const [wx, wy] = worldAt(e);
+    const hit = partHit(board.parts, wx, wy);
+    if (hit && !state.selection.has(hit.ref)) dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
+    const refs = hit ? (state.selection.has(hit.ref) ? [...state.selection] : [hit.ref]) : [...state.selection];
+    const placedRefs = refs.filter((r) => api.partByRef(r)?.placed);
+
+    const entries: MenuEntry[] = [
+      { label: placedRefs.length > 1 ? `Rotate ${placedRefs.length} Items (R)` : "Rotate Clockwise (Shift+R)", onSelect: () => api.rotateSelection(3), disabled: placedRefs.length === 0 },
+      { label: "Rotate Counterclockwise (R)", onSelect: () => api.rotateSelection(1), disabled: placedRefs.length === 0 },
+      { label: "Flip Side (F)", onSelect: () => {}, disabled: true },
+      { label: "Delete (Del)", onSelect: () => api.ripSelection(), disabled: refs.length === 0 },
+    ];
+    if (refs.length === 1) {
+      const part = api.partByRef(refs[0]!);
+      const net = part?.pads?.[0]?.net ?? null;
+      entries.push({ label: state.netHighlight ? "Clear Net Highlight" : "Highlight Net (`)", onSelect: () => dispatch({ type: "SET_NET_HIGHLIGHT", net: state.netHighlight ? null : net }), disabled: !net });
+    }
+    if (!hit && refs.length === 0 && board.outline) {
+      const bounds = boundsOfPoints(board.outline);
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (bounds && rect) {
+        entries.push({ label: "Zoom to Fit (Ctrl+Home)", onSelect: () => dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height) }) });
+      }
+    }
+    setContextMenu({ x: e.clientX, y: e.clientY, entries });
+  };
+
   // Rotate/delete/undo/redo/net-highlight-toggle are handled by
   // actions/useGlobalHotkeys.ts now, driven by src/kicad/actions.json's
   // real extracted hotkeys through the same registry the menu bar and
@@ -299,10 +394,12 @@ export function Canvas() {
       onPointerUp={onPointerUp}
       onWheel={onWheel}
       onKeyDown={onKeyDown}
+      onContextMenu={onContextMenu}
       data-armed={state.armed ? "true" : "false"}
     >
       <canvas ref={canvasRef} />
       {!board && <div className="pcb-canvas-empty">{state.boardError ?? "Loading board…"}</div>}
+      {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} entries={contextMenu.entries} onClose={() => setContextMenu(null)} />}
     </div>
   );
 }
