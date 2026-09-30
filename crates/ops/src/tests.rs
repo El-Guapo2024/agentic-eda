@@ -216,6 +216,32 @@ fn a_power_net_does_not_make_everything_a_neighbour() {
     assert!(b.frontier().is_empty(), "a 10-part net must not anchor the whole board");
 }
 
+#[test]
+fn a_decoupling_cap_is_a_neighbour_of_its_ic_across_the_fanout_cut() {
+    // A decoupling cap sits on nothing but a rail and ground -- the nets
+    // the fanout cut drops -- so it had no neighbour at all: never on the
+    // frontier, never anchored to its IC, seeded wherever a region had
+    // room. It is its IC's neighbour by name now. A cap a proximity rule
+    // already places is left to that rule, as the decoupling gate leaves
+    // it.
+    let mut ic = part("U1", "SOIC-8");
+    ic.pins[0].kind = PinKind::Power;
+    ic.pins[1].kind = PinKind::Ground;
+    let mut parts = vec![ic, part("C1", "0402"), part("C2", "0402"), part("R9", "0402")];
+    parts.extend((1..=6).map(|i| part(&format!("R{i}"), "0402")));
+    let rail = |pin: &str| parts.iter().filter(|p| p.reference != "R9").map(|p| format!("{}.{pin}", p.reference)).collect::<Vec<_>>();
+    let nets = vec![Net { name: "VCC".into(), pins: rail("1") }, Net { name: "GND".into(), pins: rail("2") }];
+    let m = ConstraintModel {
+        parts,
+        nets,
+        placement_rules: vec![PlacementRule::Proximity { a: "C2".into(), b: "R9".into(), max_mm: 2.0, reason: None }],
+        ..Default::default()
+    };
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceEdge { part: "U1".into(), edge: Dir::West, fraction: 0.5 }).unwrap();
+    assert_eq!(b.frontier(), vec!["C1".to_string()], "C1 decouples U1; C2 has its own rule; the rails anchor nothing");
+}
+
 // ------------------------------------------------------------- outcome
 
 #[test]

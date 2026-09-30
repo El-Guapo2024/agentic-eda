@@ -200,11 +200,115 @@ pub fn repair(board: &mut Board, model: &ConstraintModel, max_steps: u32) -> usi
             }
             apply_fix(board, &fix, max_steps);
         }
-        if board.failures() >= before {
+        let uncrossed = uncross(board, model);
+        if board.failures() >= before && !uncrossed {
             break;
         }
     }
     start.saturating_sub(board.failures())
+}
+
+/// Failing gates other than the crossing gate, and the crossing stub
+/// pairs ("N1×N2") that gate names, from one run of the gates.
+fn crossing_pairs(board: &Board) -> (usize, Vec<String>) {
+    let checks = board.checks();
+    let failing = |c: &&CheckResult| matches!(c.status, eda_model::CheckStatus::Fail);
+    let (crossing, other): (Vec<&CheckResult>, Vec<&CheckResult>) =
+        checks.iter().filter(failing).partition(|c| c.check == "placement_stub_crossings");
+    let pairs = crossing
+        .first()
+        .and_then(|c| c.location.as_deref())
+        .map_or_else(Vec::new, |loc| loc.split(',').map(String::from).collect());
+    (other.len(), pairs)
+}
+
+/// Turn or swap the free two-pin parts on crossing stubs until nothing
+/// uncrosses. Returns whether anything did.
+///
+/// A crossing is the one failure a constructive placer makes by
+/// construction: parts go down at rotation 0, so which way round a
+/// resistor's pins face is decided by its footprint, not its nets --
+/// on two_pin_nets, R1's pin 1 faced away from R2 and N1 crossed N2.
+/// Turning R1 half round is the whole fix.
+///
+/// The gate reports one failure however many pairs cross, so the
+/// failure count cannot see one pair of five being fixed. Pairs are
+/// counted instead: a move is kept when it uncrosses something and
+/// fails no other gate that was passing -- re-hanging an LED where it
+/// slides a centimetre along its resistor trades the crossing for a
+/// compactness failure, which is no repair -- and the best such move is
+/// taken each round.
+fn uncross(board: &mut Board, model: &ConstraintModel) -> bool {
+    let pin = pinned(model);
+    let mut improved = false;
+    for _ in 0..32 {
+        let (fails, pairs) = crossing_pairs(board);
+        if pairs.is_empty() {
+            break;
+        }
+        // The parts on either stub of a crossing that are free to move:
+        // each can turn, trade places with another, or go down again on
+        // another side of the part at the far end of its own stub (an
+        // LED re-hung on the other side of its resistor).
+        let mut turn: BTreeSet<String> = BTreeSet::new();
+        let mut trade: BTreeSet<(String, String)> = BTreeSet::new();
+        let mut rehang: BTreeSet<(String, String)> = BTreeSet::new();
+        for pair in &pairs {
+            let stubs: Vec<Vec<String>> = pair
+                .split('×')
+                .filter_map(|net| model.nets.iter().find(|n| n.name == net))
+                .map(|n| n.pins.iter().filter_map(|p| p.split_once('.').map(|(r, _)| r.to_string())).collect())
+                .collect();
+            let free = |r: &String| !pin.contains(r) && model.part(r).is_some_and(eda_model::is_free_two_pin);
+            let parts: Vec<String> = stubs.iter().flatten().filter(|r| free(r)).cloned().collect::<BTreeSet<_>>().into_iter().collect();
+            for (i, p) in parts.iter().enumerate() {
+                turn.insert(p.clone());
+                trade.extend(parts[i + 1..].iter().map(|q| (p.clone(), q.clone())));
+            }
+            for stub in &stubs {
+                for p in stub.iter().filter(|r| free(r)) {
+                    rehang.extend(stub.iter().filter(|q| *q != p).map(|q| (p.clone(), q.clone())));
+                }
+            }
+        }
+        let moves = turn
+            .iter()
+            .flat_map(|p| (1..=3).map(|quarter_turns| vec![Cmd::Rotate { part: p.clone(), quarter_turns }]))
+            .chain(trade.into_iter().map(|(a, b)| vec![Cmd::Swap { a, b }]))
+            .chain(rehang.into_iter().flat_map(|(p, q)| {
+                // Every side, every way round: a part lands at rotation 0,
+                // and turned it may fit where unturned it slid away.
+                Dir::ALL.into_iter().flat_map(move |side| {
+                    let (p, q) = (p.clone(), q.clone());
+                    (0..4u8).map(move |quarter_turns| {
+                        let mut cmds = vec![Cmd::Rip { part: p.clone() }, Cmd::Place { part: p.clone(), anchor: q.clone(), side }];
+                        if quarter_turns > 0 {
+                            cmds.push(Cmd::Rotate { part: p.clone(), quarter_turns });
+                        }
+                        cmds
+                    })
+                })
+            }));
+        let mut best: Option<(Board, (usize, usize), Vec<Cmd>)> = None;
+        for cmds in moves {
+            let mut trial = board.fork();
+            if cmds.iter().any(|c| trial.apply(c).is_err()) {
+                continue;
+            }
+            let (f, p) = crossing_pairs(&trial);
+            let after = (f, p.len());
+            if f <= fails && after.1 < pairs.len() && best.as_ref().is_none_or(|(_, b, _)| after < *b) {
+                best = Some((trial, after, cmds));
+            }
+        }
+        let Some((trial, after, cmds)) = best else { break };
+        if std::env::var("EDA_BUILD_TRACE").is_ok() {
+            eprintln!("TRACE uncross {cmds:?}: {} -> {} crossing pair(s)", pairs.len(), after.1);
+        }
+        *board = trial;
+        improved = true;
+    }
+    improved
 }
 
 /// Errors that could not be read as a fix, for a caller to report.

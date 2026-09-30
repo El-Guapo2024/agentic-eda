@@ -4,12 +4,14 @@
 //! `kicad-cli` is present. `#[ignore]` by default — run with
 //! `cargo test -p eda-kicad --test kicad_cli_drc -- --ignored --nocapture`.
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use eda_engine::{derive_schematic, EngineOptions};
 use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
-use eda_model::ConstraintModel;
+use eda_model::footprint::placed_pads;
+use eda_model::ir::{Design, FootprintInstance, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Um};
+use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
 use eda_place::{place, PlaceOptions};
 
 fn find_kicad_cli() -> Option<PathBuf> {
@@ -88,8 +90,151 @@ fn kicad_cli_drc_ldo_seed3() {
         .expect("failed to run kicad-cli sch erc");
     eprintln!("ERC stdout:\n{}\nERC stderr:\n{}", String::from_utf8_lossy(&erc_out.stdout), String::from_utf8_lossy(&erc_out.stderr));
 
-    let drc_report = dir.join("drc.json");
-    let drc_out = Command::new(&cli)
+    let by_type = drc_by_type(&cli, &pcb_path);
+
+    let mut in_scope_failures = Vec::new();
+    for ty in IN_SCOPE {
+        if let Some(vs) = by_type.get(*ty) {
+            for v in vs {
+                in_scope_failures.push(format!("[{ty}] {}", serde_json::to_string(v).unwrap_or_default()));
+            }
+        }
+    }
+
+    if !in_scope_failures.is_empty() {
+        eprintln!("IN-SCOPE DRC VIOLATIONS ({} total):", in_scope_failures.len());
+        for f in &in_scope_failures {
+            eprintln!("  {f}");
+        }
+    }
+    let out_of_scope: usize = by_type.iter().filter(|(k, _)| !IN_SCOPE.contains(&k.as_str())).map(|(_, v)| v.len()).sum();
+    if out_of_scope > 0 {
+        println!("(also {out_of_scope} out-of-scope violations — not asserted on, see stdout above for detail)");
+    }
+
+    assert!(in_scope_failures.is_empty(), "{} in-scope DRC violations found:\n{}", in_scope_failures.len(), in_scope_failures.join("\n"));
+}
+
+/// A bottom-side part's pads have to land in KiCad where the engine put
+/// them. `eda_model::footprint::to_board` -- under `placed_pads`, so under
+/// the placer, the router and the gates -- mirrors a bottom-side part's
+/// local x before rotating it. KiCad mirrors nothing when it loads a
+/// footprint: it rotates the pad's `(at x y)` by the footprint angle and
+/// translates it, whatever the layer. Exported with the local x as-is, a
+/// bottom SOT-23's pin 1 lands in pin 3's column and a bottom 0603's pins
+/// swap places, nets and all.
+///
+/// The tracks are drawn by hand between `placed_pads` centres, no router,
+/// so the export is the only thing under test: every net has to come out
+/// connected, with no track dangling or running over another net's pad.
+/// The bottom parts' reference and value text has to come out mirrored
+/// and the top parts' not, as KiCad writes a flipped footprint's fields.
+#[test]
+#[ignore]
+fn kicad_cli_drc_bottom_side_pads() {
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+
+    let part = |reference: &str, package: &str, pins: usize| Part {
+        reference: reference.into(),
+        mpn: None,
+        value: None,
+        package: Some(package.into()),
+        footprint: Some(package.into()),
+        pins: (1..=pins).map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect(),
+        body_um: None,
+        edge: None,
+    };
+    let net = |name: &str, pins: &[&str]| Net { name: name.into(), pins: pins.iter().map(|p| p.to_string()).collect() };
+    // Two-pin nets get a track from pad to pad. The one-pin nets give the
+    // pad a routed track would wrongly land on a net of its own, so a
+    // misplaced pad shows up and not just a stray track.
+    let model = ConstraintModel {
+        parts: vec![part("U1", "SOT-23", 3), part("U2", "SOT-23", 3), part("U3", "SOT-23", 3), part("R1", "0603", 2), part("J1", "PINHEADER-2", 2)],
+        nets: vec![
+            // U1: bottom, unrotated. Pins 1 and 2 share a column, pin 3 has the other.
+            net("A", &["U1.1", "U1.2"]),
+            net("B", &["U1.3"]),
+            // U2: bottom and rotated, so the mirror has to come before the rotation.
+            net("C", &["U2.1", "U2.2"]),
+            net("D", &["U2.3"]),
+            // R1: a bottom 0603, whose unmirrored pins swap places. Its far
+            // ends are a top-side through-hole header (reachable on B.Cu),
+            // which does not swap: joined to another bottom 0603 pin to
+            // pin, the swap cancels out and KiCad sees nothing wrong.
+            net("E", &["R1.1", "J1.2"]),
+            net("F", &["R1.2", "J1.1"]),
+            // U3: top and rotated, the control -- the fix must not touch it.
+            net("G", &["U3.1", "U3.2"]),
+            net("H", &["U3.3"]),
+        ],
+        ..Default::default()
+    };
+    let at = |id: &str, x: Um, y: Um, rot, side| FootprintInstance { id: id.into(), at: Point { x, y }, rot, side, label: Default::default() };
+    let footprints = vec![
+        at("U1", 6_000, 6_000, 0, Side::Bottom),
+        at("U2", 14_000, 6_000, 90_000, Side::Bottom),
+        at("U3", 22_000, 6_000, 90_000, Side::Top),
+        at("R1", 6_000, 14_000, 0, Side::Bottom),
+        at("J1", 6_000, 18_000, 0, Side::Top),
+    ];
+
+    let instance = |pin: &str| footprints.iter().find(|f| pin.split_once('.').unwrap().0 == f.id).unwrap();
+    let pad_at = |pin: &str| -> Point {
+        let (reference, number) = pin.split_once('.').unwrap();
+        let pads = placed_pads(&model, model.part(reference).unwrap(), instance(pin)).unwrap();
+        pads.into_iter().find(|p| p.number == number).unwrap().center
+    };
+    // The premise: the engine mirrors a bottom part (U1's pin 1 is at
+    // local x < 0) and leaves a top one alone.
+    assert!(pad_at("U1.1").x > 6_000 && pad_at("R1.1").x > 6_000, "the engine no longer mirrors bottom-side parts");
+    assert!(pad_at("U3.1").y < 6_000, "the engine mirrors a top-side part");
+
+    let tracks: Vec<Track> = model
+        .nets
+        .iter()
+        .filter(|n| n.pins.len() == 2)
+        .map(|n| Track {
+            net: n.name.clone(),
+            pins: n.pins.clone(),
+            layer: if instance(&n.pins[0]).side == Side::Bottom { "B.Cu" } else { "F.Cu" }.into(),
+            width: model.board.track_width,
+            pts: vec![pad_at(&n.pins[0]), pad_at(&n.pins[1])],
+        })
+        .collect();
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 28_000, y: 0 }, Point { x: 28_000, y: 22_000 }, Point { x: 0, y: 22_000 }];
+    let design = Design {
+        schema: 1,
+        provenance: Provenance { engine_version: "0".into(), intent_hash: "bottom_side_pads".into(), seed: 0, stage_hashes: vec![] },
+        schematic: None,
+        placement: Some(PlacementSection { outline, footprints: footprints.clone(), modules: Vec::new() }),
+        routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![] }),
+    };
+
+    let meta = ExportMeta { date: "2026-01-01", title: "bottom_side_pads" };
+    let pcb_text = export_kicad_pcb(&design, &model, &meta).expect("export_kicad_pcb");
+    let dir = std::env::temp_dir().join("eda_kicad_bottom_side_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pcb_path = dir.join("bottom_side_pads.kicad_pcb");
+    std::fs::write(&pcb_path, &pcb_text).unwrap();
+
+    let by_type = drc_by_type(&cli, &pcb_path);
+    let failures: Vec<String> = IN_SCOPE
+        .iter()
+        .chain(&["track_dangling", "nonmirrored_text_on_back_layer", "mirrored_text_on_front_layer"])
+        .flat_map(|ty| by_type.get(*ty).into_iter().flatten().map(move |v| format!("[{ty}] {v}")))
+        .collect();
+    assert!(failures.is_empty(), "{} DRC violations on the bottom-side board:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// `kicad-cli pcb drc` on `pcb`: its violations and unconnected items
+/// grouped by type, with the counts printed. The report is written next to
+/// the board as drc.json.
+fn drc_by_type(cli: &Path, pcb: &Path) -> BTreeMap<String, Vec<serde_json::Value>> {
+    let drc_report = pcb.with_file_name("drc.json");
+    let drc_out = Command::new(cli)
         // --refill-zones: a zone is stored as an outline plus a cached
         // fill, and we export only the outline. Without the refill KiCad
         // checks connectivity against an empty plane and reports every
@@ -97,7 +242,7 @@ fn kicad_cli_drc_ldo_seed3() {
         // about the board.
         .args(["pcb", "drc", "--refill-zones", "--format", "json", "--severity-all", "--exit-code-violations", "--output"])
         .arg(&drc_report)
-        .arg(&pcb_path)
+        .arg(pcb)
         .output()
         .expect("failed to run kicad-cli pcb drc");
     eprintln!(
@@ -130,28 +275,7 @@ fn kicad_cli_drc_ldo_seed3() {
     for (ty, vs) in &by_type {
         println!("  {ty}: {}", vs.len());
     }
-
-    let mut in_scope_failures = Vec::new();
-    for ty in IN_SCOPE {
-        if let Some(vs) = by_type.get(*ty) {
-            for v in vs {
-                in_scope_failures.push(format!("[{ty}] {}", serde_json::to_string(v).unwrap_or_default()));
-            }
-        }
-    }
-
-    if !in_scope_failures.is_empty() {
-        eprintln!("IN-SCOPE DRC VIOLATIONS ({} total):", in_scope_failures.len());
-        for f in &in_scope_failures {
-            eprintln!("  {f}");
-        }
-    }
-    let out_of_scope: usize = by_type.iter().filter(|(k, _)| !IN_SCOPE.contains(&k.as_str())).map(|(_, v)| v.len()).sum();
-    if out_of_scope > 0 {
-        println!("(also {out_of_scope} out-of-scope violations — not asserted on, see stdout above for detail)");
-    }
-
-    assert!(in_scope_failures.is_empty(), "{} in-scope DRC violations found:\n{}", in_scope_failures.len(), in_scope_failures.join("\n"));
+    by_type
 }
 
 /// The design routed by the FreeRouting port, or what it left unrouted.

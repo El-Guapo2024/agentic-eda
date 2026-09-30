@@ -15,7 +15,7 @@ pub use eda_gates::check_schematic;
 pub use eda_intent::{import_zen, import_zen_cli};
 pub use eda_intent::lint::lint;
 pub use eda_render::render_schematic;
-pub use eda_kicad::{export_kicad_pcb, export_kicad_sch, ExportMeta};
+pub use eda_kicad::{export_kicad_pcb, export_kicad_sch, import_kicad_pcb, ExportMeta, ImportNotes};
 pub use eda_interchange::{from_bookshelf_pl, to_bookshelf, to_circuit_json, Bookshelf};
 pub use eda_grid::{check_pours, preflight, RouteRules};
 pub use eda_place::{hpwl, place, Anneal, PlaceOptions, Placer};
