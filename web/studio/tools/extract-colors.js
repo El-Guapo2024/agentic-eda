@@ -1,19 +1,24 @@
 #!/usr/bin/env node
 // Extracts the "KiCad Default" PCB color theme into src/kicad/colors.json.
-// Run from a terminal with git access to ~/ws/kicad-mirror:
 //
-//   node tools/extract-colors.js
+//   KICAD_SRC_DIR=/path/to/plain/checkout node tools/extract-colors.js
 //
-// NOT YET VALIDATED against real KiCad source. This assumes
-// common/settings/builtin_color_themes.h defines the default theme as a
-// brace-initializer list of `{ LAYER_ID, COLOR4D( r, g, b, a ) }` pairs
-// (r/g/b/a as 0..1 floats) -- KiCad's long-standing pattern for this file,
-// but not confirmed for the pinned commit, and there may be more than one
-// theme in the file (the task wants specifically "KiCad Default", not
-// e.g. a "Classic" or high-contrast theme also defined nearby). Run this,
-// check `themeName`/the surrounding C++ for which block was actually
-// matched, and adjust `THEME_START_PATTERN` below if it grabbed the wrong
-// one.
+// common/settings/builtin_color_themes.h defines every built-in theme as
+// a `static const std::map<int, COLOR4D> s_<name>Theme = { ... };`
+// initializer -- "KiCad Default" is `s_defaultTheme` (the first one in
+// the file; "Classic" is `s_classicTheme`, right after it). Each entry is
+// `{ LAYER_ID, CSS_COLOR( r, g, b, a ) }` (r/g/b as 0..255 integers, a as
+// 0..1) or, less often, `{ LAYER_ID, COLOR4D( r, g, b, a ) }` (all 0..1
+// floats) -- both are handled. A couple of entries are wrapped in
+// `#ifdef __WXMAC__ ... #else ... #endif` for a platform-specific value;
+// since this app targets macOS chrome, the __WXMAC__ branch is kept and
+// the #else branch dropped for those.
+//
+// This app's own semantic layer buckets (background/f_cu/b_cu/silks/...,
+// see components/canvas/layers.ts) are NOT the same set as KiCad's
+// PCB_LAYER_ID/GAL_LAYER_ID names this file writes -- the mapping
+// between them lives in layers.ts, not here. This script's only job is
+// a faithful id -> color dump.
 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -23,50 +28,90 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT = join(__dirname, "..", "src", "kicad", "colors.json");
 const SOURCE_FILE = "common/settings/builtin_color_themes.h";
 
-// Matches the *first* named theme variable/comment in the file that looks
-// like the default one. KiCad has named this differently across
-// versions ("g_DefaultTheme", "defaultTheme", a COLOR_SETTINGS with
-// name "KiCad Default", ...) -- try a few, first match wins.
-const THEME_START_PATTERN = /(KiCad Default|g_DefaultTheme|defaultTheme|DEFAULT_THEME)/;
-
-function toHex(floatStr) {
-  const v = Math.round(Math.max(0, Math.min(1, parseFloat(floatStr))) * 255);
-  return v.toString(16).padStart(2, "0");
+/** The exact span of `static const std::map<int, COLOR4D> <mapName> = { ... };`, brace-balanced (entries are themselves `{ ... }` pairs, so a naive first-`}` match would truncate after the first entry). */
+function findMapBody(text, mapName) {
+  const declRe = new RegExp(`std::map<int,\\s*COLOR4D>\\s+${mapName}\\s*=`);
+  const declMatch = declRe.exec(text);
+  if (!declMatch) return null;
+  const braceStart = text.indexOf("{", declMatch.index);
+  if (braceStart === -1) return null;
+  let depth = 0;
+  for (let i = braceStart; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) return text.slice(braceStart, i + 1);
+    }
+  }
+  return null;
 }
 
-function parseColors(fileText) {
-  const startMatch = THEME_START_PATTERN.exec(fileText);
-  const scanFrom = startMatch ? startMatch.index : 0;
-  const section = fileText.slice(scanFrom);
-  // Stop at the next theme-ish marker so a second theme's colors (e.g. a
-  // "Classic" or high-contrast variant) don't get merged in. If none is
-  // found, `end` is +Infinity and we just scan to EOF -- acceptable if
-  // this file only defines one theme, wrong if it defines several after
-  // this point; check the count against pcbnew's known layer count.
-  const nextMarker = THEME_START_PATTERN.exec(section.slice(1));
-  const end = nextMarker ? nextMarker.index + 1 : section.length;
-  const body = section.slice(0, end);
+/** Keep the __WXMAC__ branch of any `#ifdef __WXMAC__ / #else / #endif` block, dropping the #else branch entirely (this app's chrome targets macOS). Any other #if/#ifdef is left as-is (both branches' entries stay, which just means "last one wins" if they share a key -- rare enough in this file not to special-case). */
+function preferMacBranches(text) {
+  const lines = text.split("\n");
+  const out = [];
+  let inMacIf = false;
+  let inMacElse = false;
+  for (const line of lines) {
+    if (/^\s*#ifdef\s+__WXMAC__/.test(line)) {
+      inMacIf = true;
+      continue;
+    }
+    if (inMacIf && /^\s*#else\b/.test(line)) {
+      inMacIf = false;
+      inMacElse = true;
+      continue;
+    }
+    if (inMacElse && /^\s*#endif/.test(line)) {
+      inMacElse = false;
+      continue;
+    }
+    if (inMacElse) continue; // drop the non-mac branch's lines
+    out.push(line);
+  }
+  return out.join("\n");
+}
 
+function clampByte(n) {
+  return Math.max(0, Math.min(255, Math.round(n)));
+}
+function hex2(n) {
+  return clampByte(n).toString(16).padStart(2, "0");
+}
+function hexFromUnit(f) {
+  return hex2(parseFloat(f) * 255);
+}
+
+function parseColorEntries(body) {
   const colors = {};
-  const re = /\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*COLOR4D\s*\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)\s*\}/g;
+  const reCss = /\{\s*([A-Za-z_]\w*)\s*,\s*CSS_COLOR\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)\s*\}/g;
   let m;
-  while ((m = re.exec(body))) {
+  while ((m = reCss.exec(body))) {
     const [, id, r, g, b, a] = m;
-    colors[id] = `#${toHex(r)}${toHex(g)}${toHex(b)}${toHex(a)}`;
+    colors[id] = `#${hex2(r)}${hex2(g)}${hex2(b)}${hexFromUnit(a)}`;
+  }
+  const reColor4d = /\{\s*([A-Za-z_]\w*)\s*,\s*COLOR4D\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)\s*\}/g;
+  while ((m = reColor4d.exec(body))) {
+    const [, id, r, g, b, a] = m;
+    if (colors[id]) continue; // shouldn't collide with a CSS_COLOR entry for the same id; if it does, first (CSS_COLOR) wins
+    colors[id] = `#${hexFromUnit(r)}${hexFromUnit(g)}${hexFromUnit(b)}${hexFromUnit(a)}`;
   }
   return colors;
 }
 
 function main() {
   const text = readKicadFile(SOURCE_FILE);
-  const colors = parseColors(text);
-  const count = Object.keys(colors).length;
-  writeJson(OUT, {
-    meta: meta([SOURCE_FILE], count === 0 ? "No `{ LAYER_ID, COLOR4D(...) }` pairs matched -- the file's actual structure differs from this script's assumption; open it and rewrite parseColors()." : undefined),
-    themeName: "KiCad Default",
-    colors,
-  });
-  console.log(`${count} color(s) from ${SOURCE_FILE}`);
+  const body = findMapBody(text, "s_defaultTheme");
+  const notes = [];
+  let colors = {};
+  if (!body) {
+    notes.push("could not find `std::map<int, COLOR4D> s_defaultTheme = { ... }` -- the declaration shape changed; open the file and update findMapBody()'s regex");
+  } else {
+    colors = parseColorEntries(preferMacBranches(body));
+    if (Object.keys(colors).length === 0) notes.push("found s_defaultTheme but matched 0 CSS_COLOR()/COLOR4D() entries inside it -- check parseColorEntries() against the actual entry syntax");
+  }
+  writeJson(OUT, { meta: meta([SOURCE_FILE], notes.join("; ") || undefined), themeName: "KiCad Default", colors });
+  console.log(`${Object.keys(colors).length} color(s) from ${SOURCE_FILE}`);
 }
 
 main();
