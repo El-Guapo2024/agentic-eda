@@ -1,13 +1,15 @@
 //! Ported from `pcbnew/drc/drc_test_provider_track_width.cpp`.
 //! Generated: `DRCE_TRACK_WIDTH`.
 //!
-//! [`check_netclass_conformance`] is not from KiCad: it is
-//! `eda_gates::pcb`'s old `routing_track_width` (a *different* question --
+//! [`check_netclass_conformance`] is not from KiCad: it is a port of
+//! `eda_gates::pcb`'s own `routing_track_width` (a *different* question --
 //! "did the router use the width the intent's net class asked for", not
 //! KiCad's manufacturability floor). No KiCad equivalent -- KiCad has no
 //! notion of "the intent assigned this net a class" -- so it stays under
 //! its original name/error code rather than folding into `DRCE_TRACK_WIDTH`
-//! above. See the task report's gates-mapping table.
+//! above. `eda_gates::pcb` still carries its own copy too (see this crate's
+//! top-level doc comment on integration status); this is available to call
+//! directly but not yet wired in as its replacement.
 
 use crate::board::DrcBoard;
 use crate::constraints;

@@ -8,10 +8,14 @@
 //! full (a)/(b)/(c) classification this was drawn from.
 //!
 //! Kept under their original `eda_gates` check-name strings (as
-//! `ErrorType::key()`) on purpose: `eda_gates::pcb`'s compatibility shim
-//! translates a [`crate::DrcViolation`] straight back into a `CheckResult`
-//! with the same name, so nothing downstream that filters on it (the
-//! repair loop, tests, the AI placer) has to change.
+//! `ErrorType::key()`) on purpose: a future `eda_gates::pcb` compatibility
+//! shim can translate a [`crate::DrcViolation`] straight back into a
+//! `CheckResult` with the same name, so nothing downstream that filters on
+//! it (the repair loop, tests, the AI placer) has to change. Such a shim
+//! was built and reverted -- see this crate's top-level doc comment -- so
+//! `eda_gates::pcb` still carries its own, independent copy of this logic
+//! today; these providers are available to call directly (`eda check
+//! --drc`, `GET /api/drc`) but are not yet what `check_placement` uses.
 //!
 //! Every numeric threshold (`EDGE_CONNECTOR_MAX_GAP_UM`,
 //! `BOARD_USE_MAX_IMBALANCE`, etc.) is copied verbatim from

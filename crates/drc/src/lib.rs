@@ -1,13 +1,33 @@
-//! This workspace's single design-rule authority: a Rust port of KiCad's
-//! PCB design-rule checker (`pcbnew/drc/`), following its actual algorithms
-//! and error-type strings rather than reinventing simplified equivalents,
-//! *plus* the placement-quality checks that have no KiCad equivalent
-//! (proximity, decoupling, board use, net compactness, stub crossings,
-//! edge-connector placement, refdes clearance), folded in as providers of
-//! their own. `eda_gates::pcb` used to own those; see the task report's
-//! gates-mapping table for exactly what moved here, what stayed, and why --
-//! the short version is "no duplicate tools": once a check has a provider
-//! here, `eda_gates` calls this crate instead of re-implementing it.
+//! Intended as this workspace's single design-rule authority: a Rust port
+//! of KiCad's PCB design-rule checker (`pcbnew/drc/`), following its actual
+//! algorithms and error-type strings rather than reinventing simplified
+//! equivalents, *plus* the placement-quality checks that have no KiCad
+//! equivalent (proximity, decoupling, board use, net compactness, stub
+//! crossings, edge-connector placement, refdes clearance), ported in as
+//! providers of their own -- `eda_gates::pcb` still owns its own copies of
+//! these today.
+//!
+//! **Integration status** (see the task report's gates-mapping table and
+//! migration section for the full story): a compatibility shim making
+//! `eda_gates::check_placement`/`check_routing` call through to this crate
+//! was built and passed its own and `eda_gates`'s unit tests, but the
+//! *workspace* test suite caught a real problem: `eda_gates::
+//! check_placement_partial` (in `crates/gates/src/partial.rs`) re-runs
+//! `check_placement` on a narrowed, partially-placed model at every step of
+//! the constructive ("build") placer and its repair pass, using the
+//! *count* of failures as a search signal. Swapping in this crate's
+//! geometry -- identical to the old code for any *given, fixed* design,
+//! verified directly -- still perturbed that search finely enough to change
+//! which of two candidate layouts two of eleven `examples/*.yaml` boards
+//! converged to, tripping a pre-existing zero-tolerance stub-crossing
+//! check on the new one. That is a search-stability question about
+//! `crates/ops`'s iterative placer, not a correctness defect in the ported
+//! checks, but it is a real regression risk, so the shim was reverted
+//! rather than shipped; `eda_gates::pcb` is unchanged and still the one
+//! `check_placement`/`check_routing` callers get. This crate is fully
+//! functional and oracle-verified on its own (`eda check --drc`,
+//! `GET /api/drc`) -- what remains is making the switch-over safe, not
+//! finishing the engine.
 //!
 //! Entry point: [`run`], which flattens a `Design`/`ConstraintModel` into a
 //! [`board::DrcBoard`] (this crate's analogue of KiCad's `BOARD`) and runs
