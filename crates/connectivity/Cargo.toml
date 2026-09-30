@@ -8,3 +8,10 @@ description = "KiCad's connectivity engine and ratsnest (CN_CONNECTIVITY_ALGO / 
 serde = { workspace = true }
 serde_json = { workspace = true }
 eda-model = { path = "../model" }
+
+[dev-dependencies]
+serde_yaml = { workspace = true }
+eda-engine = { path = "../engine" }
+eda-kicad = { path = "../kicad" }
+eda-place = { path = "../place" }
+eda-freeroute = { path = "../freeroute" }
