@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_layout::{Port, Side};
-use eda_model::ir::{Design, NetLabel, SymbolInstance, Wire};
+use eda_model::ir::{Design, NetLabel, NoConnect, PowerSymbol, SymbolInstance, Wire};
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
@@ -29,6 +29,9 @@ pub use import::{import_kicad_pcb, ImportNotes};
 
 mod footprint_lib;
 pub use footprint_lib::{default_footprint_library_root, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
+
+mod symbol_lib;
+pub use symbol_lib::{default_symbol_library_root, find_symbol_library_file, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
 const STUB_MM: f64 = 1.27;
 
@@ -69,6 +72,18 @@ pub fn export_kicad_sch(
     let mut labels: Vec<&NetLabel> = sch.labels.iter().collect();
     labels.sort_by(|a, b| (&a.net, a.at).cmp(&(&b.net, b.at)));
 
+    let mut power_symbols: Vec<&PowerSymbol> = sch.power_symbols.iter().collect();
+    power_symbols.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut no_connects: Vec<&NoConnect> = sch.no_connects.iter().collect();
+    no_connects.sort_by(|a, b| a.at.cmp(&b.at));
+
+    // ---- resolve every distinct lib_id used, once, into a `lib_symbols`-block entry ----
+    let mut lib_ids: Vec<String> = symbols.iter().map(|s| sym_lib_id(s)).collect();
+    lib_ids.extend(power_symbols.iter().map(|p| p.lib_id.clone()));
+    lib_ids.sort();
+    lib_ids.dedup();
+
     let mut out = String::new();
 
     // ---- header ----
@@ -80,18 +95,40 @@ pub fn export_kicad_sch(
     writeln!(out, "\t(uuid \"{sheet_uuid}\")").unwrap();
     writeln!(out, "\t(paper \"A4\")").unwrap();
     writeln!(out, "\t(title_block").unwrap();
-    writeln!(out, "\t\t(title {})", sexpr_str(meta.title)).unwrap();
-    writeln!(out, "\t\t(date {})", sexpr_str(meta.date)).unwrap();
-    writeln!(out, "\t\t(comment 1 {})", sexpr_str(&format!("engine_version: {}", design.provenance.engine_version))).unwrap();
-    writeln!(out, "\t\t(comment 2 {})", sexpr_str(&format!("intent_hash: {}", design.provenance.intent_hash))).unwrap();
-    writeln!(out, "\t\t(comment 3 {})", sexpr_str(&format!("seed: {}", design.provenance.seed))).unwrap();
+    let tb = sch.title_block.as_ref();
+    let title = tb.map(|t| t.title.as_str()).filter(|s| !s.is_empty()).unwrap_or(meta.title);
+    let date = tb.map(|t| t.date.as_str()).filter(|s| !s.is_empty()).unwrap_or(meta.date);
+    writeln!(out, "\t\t(title {})", sexpr_str(title)).unwrap();
+    writeln!(out, "\t\t(date {})", sexpr_str(date)).unwrap();
+    if let Some(t) = tb.filter(|t| !t.rev.is_empty()) {
+        writeln!(out, "\t\t(rev {})", sexpr_str(&t.rev)).unwrap();
+    }
+    if let Some(t) = tb.filter(|t| !t.company.is_empty()) {
+        writeln!(out, "\t\t(company {})", sexpr_str(&t.company)).unwrap();
+    }
+    if let Some(t) = tb.filter(|t| !t.comments.is_empty()) {
+        for (i, c) in t.comments.iter().enumerate() {
+            writeln!(out, "\t\t(comment {} {})", i + 1, sexpr_str(c)).unwrap();
+        }
+    } else {
+        writeln!(out, "\t\t(comment 1 {})", sexpr_str(&format!("engine_version: {}", design.provenance.engine_version))).unwrap();
+        writeln!(out, "\t\t(comment 2 {})", sexpr_str(&format!("intent_hash: {}", design.provenance.intent_hash))).unwrap();
+        writeln!(out, "\t\t(comment 3 {})", sexpr_str(&format!("seed: {}", design.provenance.seed))).unwrap();
+    }
     writeln!(out, "\t)").unwrap();
 
     // ---- lib_symbols ----
     writeln!(out, "\t(lib_symbols").unwrap();
-    for sym in &symbols {
-        let part = parts_by_ref[sym.id.as_str()];
-        write_lib_symbol(&mut out, sym, part);
+    for lib_id in &lib_ids {
+        if let Some((part, sym)) = symbols.iter().find_map(|s| (sym_lib_id(s) == *lib_id).then(|| (parts_by_ref[s.id.as_str()], *s))) {
+            write_regular_lib_symbol(&mut out, lib_id, sym, part, model);
+        } else {
+            // A power symbol (never a bare part): `model.symbol_of` always
+            // resolves it, real library first, then `symbol::builtin`'s
+            // generic rail fallback for any net name.
+            let resolved = model.symbol_of(lib_id).unwrap_or_else(|| eda_model::symbol::builtin(lib_id).expect("power lib_id always resolves"));
+            write_power_lib_symbol(&mut out, lib_id, &resolved);
+        }
     }
     writeln!(out, "\t)").unwrap();
 
@@ -102,16 +139,25 @@ pub fn export_kicad_sch(
     // token here and kicad-cli refuses to load the file.
     for sym in &symbols {
         let part = parts_by_ref[sym.id.as_str()];
-        let lib_id = format!("eda:{}", sym.id);
+        let lib_id = sym_lib_id(sym);
+        let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
         let x = mm(sym.at.x);
         let y = mm(sym.at.y);
         let uuid = duid(&format!("sym:{}", sym.id));
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit 1)", sexpr_str(&lib_id)).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-        write_property(&mut out, "Reference", &sym.id, 0.0, -2.0);
-        write_property(&mut out, "Value", part.value.as_deref().unwrap_or(&sym.id), 0.0, 2.0);
-        write_property(&mut out, "Footprint", part.footprint.as_deref().unwrap_or(""), 0.0, 4.0);
+        let value = if !sym.value.is_empty() { sym.value.as_str() } else { part.value.as_deref().unwrap_or(&sym.id) };
+        let footprint = if !sym.footprint.is_empty() { sym.footprint.as_str() } else { part.footprint.as_deref().unwrap_or("") };
+        let datasheet = if !sym.datasheet.is_empty() {
+            sym.datasheet.as_str()
+        } else {
+            resolved.as_ref().map(|s| s.datasheet.as_str()).filter(|s| !s.is_empty()).unwrap_or("")
+        };
+        write_property(&mut out, "Reference", &sym.id, 0.0, -2.0, false);
+        write_property(&mut out, "Value", value, 0.0, 2.0, false);
+        write_property(&mut out, "Footprint", footprint, 0.0, 4.0, true);
+        write_property(&mut out, "Datasheet", datasheet, 0.0, 6.0, true);
         for pin in &part.pins {
             let pin_uuid = duid(&format!("pin:{}:{}", sym.id, pin.number));
             writeln!(out, "\t\t(pin {} (uuid \"{pin_uuid}\"))", sexpr_str(&pin.number)).unwrap();
@@ -120,6 +166,31 @@ pub fn export_kicad_sch(
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
         writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\"").unwrap();
         writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&sym.id)).unwrap();
+        writeln!(out, "\t\t\t\t\t(unit 1)").unwrap();
+        writeln!(out, "\t\t\t\t)").unwrap();
+        writeln!(out, "\t\t\t)").unwrap();
+        writeln!(out, "\t\t)").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+
+    // ---- power symbol instances ----
+    for ps in &power_symbols {
+        let x = mm(ps.at.x);
+        let y = mm(ps.at.y);
+        let uuid = duid(&format!("pwr:{}", ps.id));
+        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
+        writeln!(out, "\t\t(exclude_from_sim no) (in_bom no) (on_board no) (dnp no)").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        write_property(&mut out, "Reference", &ps.id, 0.0, -2.0, true);
+        write_property(&mut out, "Value", &ps.net, 0.0, 2.0, false);
+        write_property(&mut out, "Footprint", "", 0.0, 0.0, true);
+        write_property(&mut out, "Datasheet", "", 0.0, 0.0, true);
+        let pin_uuid = duid(&format!("pwrpin:{}", ps.id));
+        writeln!(out, "\t\t(pin \"1\" (uuid \"{pin_uuid}\"))").unwrap();
+        writeln!(out, "\t\t(instances").unwrap();
+        writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
+        writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\"").unwrap();
+        writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&ps.id)).unwrap();
         writeln!(out, "\t\t\t\t\t(unit 1)").unwrap();
         writeln!(out, "\t\t\t\t)").unwrap();
         writeln!(out, "\t\t\t)").unwrap();
@@ -162,22 +233,32 @@ pub fn export_kicad_sch(
         }
     }
 
-    // ---- labels: global_label for power/ground nets, plain label otherwise ----
+    // ---- no-connect flags ----
+    for nc in &no_connects {
+        let x = mm(nc.at.x);
+        let y = mm(nc.at.y);
+        let uuid = duid(&format!("nc:{}:{}", nc.at.x, nc.at.y));
+        writeln!(out, "\t(no_connect (at {x} {y}) (uuid \"{uuid}\"))").unwrap();
+    }
+
+    // ---- labels: local, global or hierarchical, per `NetLabel::kind` ----
     for l in &labels {
         let x = mm(l.at.x);
         let y = mm(l.at.y);
         let uuid = duid(&format!("label:{}:{}:{}", l.net, l.at.x, l.at.y));
-        if is_power_net(&l.net, model) {
-            writeln!(out, "\t(global_label {} (shape input) (at {x} {y} 0)", sexpr_str(&l.net)).unwrap();
-            writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify left))").unwrap();
-            writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-            writeln!(out, "\t)").unwrap();
-        } else {
-            writeln!(out, "\t(label {} (at {x} {y} 0)", sexpr_str(&l.net)).unwrap();
-            writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify left))").unwrap();
-            writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-            writeln!(out, "\t)").unwrap();
+        let (tag, shape) = match &l.kind {
+            eda_model::ir::LabelKind::Local => ("label", None),
+            eda_model::ir::LabelKind::Global { shape } => ("global_label", Some(*shape)),
+            eda_model::ir::LabelKind::Hierarchical { shape } => ("hierarchical_label", Some(*shape)),
+        };
+        write!(out, "\t({tag} {}", sexpr_str(&l.net)).unwrap();
+        if let Some(shape) = shape {
+            write!(out, " (shape {})", label_shape_token(shape)).unwrap();
         }
+        writeln!(out, " (at {x} {y} 0)").unwrap();
+        writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify left))").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        writeln!(out, "\t)").unwrap();
     }
 
     // ---- sheet instances (required by KiCad 9 for a valid project-less sheet) ----
@@ -190,18 +271,84 @@ pub fn export_kicad_sch(
     Ok(out)
 }
 
-fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64) {
-    writeln!(
-        out,
-        "\t\t(property {} {} (at {x} {y} 0)\n\t\t\t(effects (font (size 1.27 1.27)))\n\t\t)",
-        sexpr_str(key),
-        sexpr_str(value)
-    )
-    .unwrap();
+/// A `SymbolInstance`'s lib_id, with the pre-`lib_id`-field
+/// (`design.json` written before this port) fallback to the old synthetic
+/// `"eda:<id>"` form.
+fn sym_lib_id(sym: &SymbolInstance) -> String {
+    if !sym.lib_id.is_empty() {
+        sym.lib_id.clone()
+    } else {
+        format!("eda:{}", sym.id)
+    }
 }
 
-fn write_lib_symbol(out: &mut String, sym: &SymbolInstance, part: &Part) {
-    let lib_id = format!("eda:{}", sym.id);
+fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
+    use eda_model::ir::LabelShape;
+    match shape {
+        LabelShape::Input => "input",
+        LabelShape::Output => "output",
+        LabelShape::Bidirectional => "bidirectional",
+        LabelShape::TriState => "tri_state",
+        LabelShape::Passive => "passive",
+    }
+}
+
+fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide: bool) {
+    if hide {
+        writeln!(
+            out,
+            "\t\t(property {} {} (at {x} {y} 0)\n\t\t\t(effects (font (size 1.27 1.27)) (hide yes))\n\t\t)",
+            sexpr_str(key),
+            sexpr_str(value)
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            out,
+            "\t\t(property {} {} (at {x} {y} 0)\n\t\t\t(effects (font (size 1.27 1.27)))\n\t\t)",
+            sexpr_str(key),
+            sexpr_str(value)
+        )
+        .unwrap();
+    }
+}
+
+/// Which built-in glyph a symbol's body draws instead of the plain
+/// rectangle, chosen from its own resolved `lib_id` — a resistor and a
+/// generic/multi-pin IC or connector both keep the rectangle (a real
+/// `Device:R`'s own body *is* a plain rectangle; so is a real connector's),
+/// but a capacitor/diode/LED reads as a box next to nothing else in the
+/// library, so this project draws their real glyph instead.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GlyphKind {
+    Rect,
+    Capacitor,
+    Diode,
+    Led,
+}
+
+fn glyph_kind_for_lib_id(lib_id: &str) -> GlyphKind {
+    match lib_id {
+        "Device:C" => GlyphKind::Capacitor,
+        "Device:D" => GlyphKind::Diode,
+        "Device:LED" => GlyphKind::Led,
+        _ => GlyphKind::Rect,
+    }
+}
+
+/// Embeds one part-backed symbol's `lib_symbol` definition. Geometry stays
+/// on this project's own synthetic box/port layout regardless of whether a
+/// real library symbol resolved for `lib_id` — `derive_schematic`'s wires
+/// terminate at those synthetic port positions, so drawing anything else
+/// here would strand every wire (see the module doc). What a resolved real
+/// symbol *does* change: each pin's electrical type (matched to the real
+/// symbol's own pin by number — the "map pins by number" this loader
+/// exists for) instead of the coarse `PinKind` guess, and, for a
+/// capacitor/diode/LED-shaped part, a real-looking glyph (see
+/// [`GlyphKind`]) drawn between the two pins' own stub tips instead of a
+/// bounding rectangle.
+fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance, part: &Part, model: &ConstraintModel) {
+    let resolved = if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) };
     let (width, height) = eda_engine::geometry::node_size(part);
     let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height);
     let mut pin_of_port: Vec<Option<usize>> = vec![None; ports.len()];
@@ -211,35 +358,88 @@ fn write_lib_symbol(out: &mut String, sym: &SymbolInstance, part: &Part) {
         }
     }
 
-    writeln!(out, "\t\t(symbol {}", sexpr_str(&lib_id)).unwrap();
+    // KiCad requires a unit/body-style sub-symbol's own name to be
+    // `<bare-name>_<unit>_<style>`, where `<bare-name>` is the *library*
+    // symbol's own name (the part of `lib_id` after its `Library:` prefix)
+    // -- never an instance's reference designator. This matters once a
+    // real `lib_id` like `"Device:C"` is shared by more than one instance
+    // (`CIN` and `COUT` both resolve to it): naming the sub-units after
+    // whichever instance happened to trigger this block (`"CIN_0_1"`)
+    // parses as a name/prefix mismatch and `kicad-cli` refuses to load the
+    // file at all. Confirmed empirically against real `kicad-cli sch erc`.
+    let bare_name = lib_id.rsplit(':').next().unwrap_or(lib_id);
+    writeln!(out, "\t\t(symbol {}", sexpr_str(lib_id)).unwrap();
     writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
-    write_property(out, "Reference", "U", 0.0, 0.0);
-    write_property(out, "Value", &sym.id, 0.0, 0.0);
+    write_property(out, "Reference", "U", 0.0, 0.0, false);
+    write_property(out, "Value", bare_name, 0.0, 0.0, false);
 
-    // ---- unit _0_1: the box outline ----
-    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{}_0_1", sym.id))).unwrap();
-    let corners = [(0.0, 0.0), (width as f64, 0.0), (width as f64, height as f64), (0.0, height as f64), (0.0, 0.0)];
-    write!(out, "\t\t\t\t(polyline\n\t\t\t\t\t(pts").unwrap();
-    for (lx, ly) in corners {
-        let (bx, by) = baked_local(sym, width as f64, lx, ly);
-        write!(out, " (xy {} {})", fmt_mm_f(bx), fmt_mm_f(by)).unwrap();
+    // ---- unit _0_1: the body ----
+    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_0_1"))).unwrap();
+    let glyph = glyph_kind_for_lib_id(lib_id);
+    // Every 2-pin stub-tip-to-stub-tip glyph is drawn in *this* symbol's own
+    // baked-local space, exactly like the box, so it lands correctly under
+    // rotation/mirroring too.
+    let two_pin_tips = (part.pins.len() == 2 && glyph != GlyphKind::Rect).then(|| {
+        let a = &ports[pin_of_port.iter().position(|p| *p == Some(0)).unwrap_or(0)];
+        let (alx, aly) = local_stub_tip(a, local_port_point(a, width, height).0, local_port_point(a, width, height).1);
+        let b_port_idx = (0..ports.len()).find(|&i| pin_of_port[i] == Some(1)).unwrap_or(0);
+        let b = &ports[b_port_idx];
+        let (blx, bly) = local_stub_tip(b, local_port_point(b, width, height).0, local_port_point(b, width, height).1);
+        (baked_local(sym, width as f64, alx, aly), baked_local(sym, width as f64, blx, bly))
+    });
+    match (glyph, two_pin_tips) {
+        (GlyphKind::Capacitor, Some((p1, p2))) => write_capacitor_glyph(out, p1, p2),
+        (GlyphKind::Diode, Some((p1, p2))) => write_diode_glyph(out, p1, p2, false),
+        (GlyphKind::Led, Some((p1, p2))) => write_diode_glyph(out, p1, p2, true),
+        _ => {
+            let corners = [(0.0, 0.0), (width as f64, 0.0), (width as f64, height as f64), (0.0, height as f64), (0.0, 0.0)];
+            write!(out, "\t\t\t\t(polyline\n\t\t\t\t\t(pts").unwrap();
+            for (lx, ly) in corners {
+                let (bx, by) = baked_local(sym, width as f64, lx, ly);
+                write!(out, " (xy {} {})", fmt_mm_f(bx), fmt_mm_f(by)).unwrap();
+            }
+            writeln!(out, ")\n\t\t\t\t\t(stroke (width 0.254) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)").unwrap();
+        }
     }
-    writeln!(out, ")\n\t\t\t\t\t(stroke (width 0.254) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)").unwrap();
     writeln!(out, "\t\t\t)").unwrap();
 
     // ---- unit _1_1: the pins ----
-    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{}_1_1", sym.id))).unwrap();
+    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_1_1"))).unwrap();
     for (port_idx, port) in ports.iter().enumerate() {
         let Some(pin_idx) = pin_of_port[port_idx] else { continue };
         let pin = &part.pins[pin_idx];
         let (plx, ply) = local_port_point(port, width, height);
         let (slx, sly) = local_stub_tip(port, plx, ply);
         let (bx, by) = baked_local(sym, width as f64, slx, sly);
-        let etype = electrical_type(pin.kind);
+        let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
         let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
         writeln!(
             out,
             "\t\t\t\t(pin {etype} line (at {} {} 0) (length {STUB_MM})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+            fmt_mm_f(bx),
+            fmt_mm_f(by),
+            sexpr_str(&name),
+            sexpr_str(&pin.number),
+        )
+        .unwrap();
+    }
+    // `nc`-kind pins carry no `Port` (see `geometry::nc_pin_local_points`);
+    // draw them here too, at the same points `derive_schematic` placed a
+    // `no_connects` marker at, so the instance's own pin-uuid list (every
+    // `part.pins`, unconditionally) always has a matching drawn pin.
+    for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width, height) {
+        let pin = &part.pins[i];
+        // `baked_local` takes um (like every other call site in this
+        // function — `local_stub_tip`'s output, `width`/`height`
+        // themselves) and does its own um->mm division at the end; do not
+        // pre-convert `local` here too, or every nc pin lands 1000x closer
+        // to the origin than intended.
+        let (bx, by) = baked_local(sym, width as f64, local.x as f64, local.y as f64);
+        let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
+        let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
+        writeln!(
+            out,
+            "\t\t\t\t(pin {etype} line (at {} {} 0) (length 0)\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
             fmt_mm_f(bx),
             fmt_mm_f(by),
             sexpr_str(&name),
@@ -252,28 +452,223 @@ fn write_lib_symbol(out: &mut String, sym: &SymbolInstance, part: &Part) {
     writeln!(out, "\t\t)").unwrap();
 }
 
-fn electrical_type(kind: PinKind) -> &'static str {
+fn write_capacitor_glyph(out: &mut String, p1: (f64, f64), p2: (f64, f64)) {
+    let (mx, my) = ((p1.0 + p2.0) / 2.0, (p1.1 + p2.1) / 2.0);
+    // Perpendicular unit vector to the pin-to-pin axis, for the two plates.
+    let (dx, dy) = (p2.0 - p1.0, p2.1 - p1.1);
+    let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+    let (px, py) = (-dy / len, dx / len);
+    let plate_half = 1.5;
+    let gap = 0.5;
+    let (g1x, g1y) = (mx - dx / len * gap, my - dy / len * gap);
+    let (g2x, g2y) = (mx + dx / len * gap, my + dy / len * gap);
+    for (cx, cy) in [(g1x, g1y), (g2x, g2y)] {
+        writeln!(
+            out,
+            "\t\t\t\t(polyline\n\t\t\t\t\t(pts (xy {} {}) (xy {} {}))\n\t\t\t\t\t(stroke (width 0.508) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)",
+            fmt_mm_f(cx - px * plate_half),
+            fmt_mm_f(cy - py * plate_half),
+            fmt_mm_f(cx + px * plate_half),
+            fmt_mm_f(cy + py * plate_half),
+        )
+        .unwrap();
+    }
+}
+
+fn write_diode_glyph(out: &mut String, p1: (f64, f64), p2: (f64, f64), led: bool) {
+    let (mx, my) = ((p1.0 + p2.0) / 2.0, (p1.1 + p2.1) / 2.0);
+    let (dx, dy) = (p2.0 - p1.0, p2.1 - p1.1);
+    let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+    let (ux, uy) = (dx / len, dy / len); // along the pin axis, p1 -> p2
+    let (px, py) = (-uy, ux); // perpendicular
+    let half = 1.27;
+    // Triangle (anode at p1 side) + bar (cathode at p2 side).
+    let tip1 = (mx - ux * half, my - uy * half);
+    let base_a = (mx + ux * half + px * half, my + uy * half + py * half);
+    let base_b = (mx + ux * half - px * half, my + uy * half - py * half);
+    writeln!(
+        out,
+        "\t\t\t\t(polyline\n\t\t\t\t\t(pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {}))\n\t\t\t\t\t(stroke (width 0.254) (type default))\n\t\t\t\t\t(fill (type outline))\n\t\t\t\t)",
+        fmt_mm_f(tip1.0),
+        fmt_mm_f(tip1.1),
+        fmt_mm_f(base_a.0),
+        fmt_mm_f(base_a.1),
+        fmt_mm_f(base_b.0),
+        fmt_mm_f(base_b.1),
+        fmt_mm_f(tip1.0),
+        fmt_mm_f(tip1.1),
+    )
+    .unwrap();
+    let bar_a = (mx + ux * half + px * half, my + uy * half + py * half);
+    let bar_b = (mx + ux * half - px * half, my + uy * half - py * half);
+    writeln!(
+        out,
+        "\t\t\t\t(polyline\n\t\t\t\t\t(pts (xy {} {}) (xy {} {}))\n\t\t\t\t\t(stroke (width 0.254) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)",
+        fmt_mm_f(bar_a.0),
+        fmt_mm_f(bar_a.1),
+        fmt_mm_f(bar_b.0),
+        fmt_mm_f(bar_b.1),
+    )
+    .unwrap();
+    if led {
+        for sign in [-1.0_f64, 1.0] {
+            let start = (bar_a.0 + px * 0.3 * sign * 0.0 + ux * 0.6 + px * (0.9 + 0.6 * (sign + 1.0) / 2.0), bar_a.1 + uy * 0.6);
+            let end = (start.0 + ux * 0.9 - px * 0.4, start.1 + uy * 0.9 - py * 0.4);
+            writeln!(
+                out,
+                "\t\t\t\t(polyline\n\t\t\t\t\t(pts (xy {} {}) (xy {} {}))\n\t\t\t\t\t(stroke (width 0.152) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)",
+                fmt_mm_f(start.0),
+                fmt_mm_f(start.1),
+                fmt_mm_f(end.0),
+                fmt_mm_f(end.1),
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// A power symbol's `lib_symbol`: the resolved definition's real graphics
+/// and pin(s), embedded verbatim (already in the correct on-disk
+/// convention — see [`baked_local`]'s doc comment). One shared definition
+/// per `lib_id`, regardless of how many instances place it.
+fn write_power_lib_symbol(out: &mut String, lib_id: &str, resolved: &eda_model::LibSymbol) {
+    writeln!(out, "\t\t(symbol {}", sexpr_str(lib_id)).unwrap();
+    writeln!(out, "\t\t\t(power)").unwrap();
+    writeln!(out, "\t\t\t(pin_names (offset 0) (hide yes))").unwrap();
+    writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
+    let value = lib_id.strip_prefix("power:").unwrap_or(lib_id);
+    write_property(out, "Reference", "#PWR", 0.0, -2.0, true);
+    write_property(out, "Value", value, 0.0, 2.0, false);
+    write_property(out, "Footprint", "", 0.0, 0.0, true);
+    write_property(out, "Datasheet", &resolved.datasheet, 0.0, 0.0, true);
+
+    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{value}_0_1"))).unwrap();
+    for g in &resolved.graphics {
+        write_symbol_graphic(out, g);
+    }
+    writeln!(out, "\t\t\t)").unwrap();
+
+    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{value}_1_1"))).unwrap();
+    for pin in &resolved.pins {
+        writeln!(
+            out,
+            "\t\t\t\t(pin {} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+            pin.electrical_type,
+            fmt_mm_f(pin.at.x),
+            fmt_mm_f(pin.at.y),
+            fmt_mm_f(pin.angle_deg),
+            fmt_mm_f(pin.length_mm),
+            sexpr_str(&pin.name),
+            sexpr_str(&pin.number),
+        )
+        .unwrap();
+    }
+    writeln!(out, "\t\t\t)").unwrap();
+    writeln!(out, "\t\t)").unwrap();
+}
+
+fn write_symbol_graphic(out: &mut String, g: &eda_model::SymbolGraphic) {
+    use eda_model::SymbolGraphic::*;
+    match g {
+        Rectangle { start, end, stroke_mm, filled, .. } => {
+            writeln!(
+                out,
+                "\t\t\t\t(rectangle\n\t\t\t\t\t(start {} {}) (end {} {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
+                fmt_mm_f(start.x),
+                fmt_mm_f(start.y),
+                fmt_mm_f(end.x),
+                fmt_mm_f(end.y),
+                fmt_mm_f(*stroke_mm),
+                if *filled { "background" } else { "none" },
+            )
+            .unwrap();
+        }
+        Polyline { pts, stroke_mm, filled, .. } => {
+            write!(out, "\t\t\t\t(polyline\n\t\t\t\t\t(pts").unwrap();
+            for p in pts {
+                write!(out, " (xy {} {})", fmt_mm_f(p.x), fmt_mm_f(p.y)).unwrap();
+            }
+            writeln!(
+                out,
+                ")\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
+                fmt_mm_f(*stroke_mm),
+                if *filled { "background" } else { "none" },
+            )
+            .unwrap();
+        }
+        Circle { center, radius_mm, stroke_mm, filled, .. } => {
+            writeln!(
+                out,
+                "\t\t\t\t(circle\n\t\t\t\t\t(center {} {}) (radius {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
+                fmt_mm_f(center.x),
+                fmt_mm_f(center.y),
+                fmt_mm_f(*radius_mm),
+                fmt_mm_f(*stroke_mm),
+                if *filled { "background" } else { "none" },
+            )
+            .unwrap();
+        }
+        Arc { start, mid, end, stroke_mm, filled, .. } => {
+            writeln!(
+                out,
+                "\t\t\t\t(arc\n\t\t\t\t\t(start {} {}) (mid {} {}) (end {} {})\n\t\t\t\t\t(stroke (width {}) (type default))\n\t\t\t\t\t(fill (type {}))\n\t\t\t\t)",
+                fmt_mm_f(start.x),
+                fmt_mm_f(start.y),
+                fmt_mm_f(mid.x),
+                fmt_mm_f(mid.y),
+                fmt_mm_f(end.x),
+                fmt_mm_f(end.y),
+                fmt_mm_f(*stroke_mm),
+                if *filled { "background" } else { "none" },
+            )
+            .unwrap();
+        }
+        Text { text, at, angle_deg, size_mm, .. } => {
+            writeln!(
+                out,
+                "\t\t\t\t(text {} (at {} {} {})\n\t\t\t\t\t(effects (font (size {} {})))\n\t\t\t\t)",
+                sexpr_str(text),
+                fmt_mm_f(at.x),
+                fmt_mm_f(at.y),
+                fmt_mm_f(*angle_deg),
+                fmt_mm_f(*size_mm),
+                fmt_mm_f(*size_mm),
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// A pin's electrical type for the file: the real resolved library
+/// symbol's own pin, matched by number (the "map pins by number" this
+/// port's loader exists for), when one resolved; else the same coarse
+/// `PinKind` mapping this exporter has always used.
+fn resolve_pin_electrical_type(pin: &eda_model::Pin, resolved: Option<&eda_model::LibSymbol>) -> String {
+    if let Some(p) = resolved.and_then(|s| s.pin_by_number(&pin.number)) {
+        return p.electrical_type.clone();
+    }
+    electrical_type(pin.kind, pin.name.as_deref()).to_string()
+}
+
+/// The coarse `PinKind` -> KiCad electrical-type fallback this exporter
+/// uses whenever no real library symbol resolved a pin's real type. A
+/// `Power`-kind pin whose name reads as an output (a regulator's own
+/// VOUT) maps to `power_out`, not `power_in` — the one place this coarse
+/// mapping needs to distinguish a rail's source from its sinks, since
+/// `power_pin_not_driven` (see `eda_kicad::erc`) requires *some*
+/// `power_out` pin on every power net, and nothing else in this project's
+/// model says which `Power`-kind pin, if any, plays that role. Kept in
+/// lockstep with `eda_kicad::erc::ElectricalPinType::from_pin_kind` and
+/// with `eda_engine::derive_schematic`'s own `PWR_FLAG` decision, which
+/// uses the exact same name convention.
+fn electrical_type(kind: PinKind, name: Option<&str>) -> &'static str {
     match kind {
+        PinKind::Power if name.unwrap_or("").to_ascii_uppercase().contains("OUT") => "power_out",
         PinKind::Power | PinKind::Ground => "power_in",
         PinKind::Signal => "bidirectional",
         PinKind::Passive => "passive",
         PinKind::Nc => "no_connect",
     }
-}
-
-fn is_power_net(net_name: &str, model: &ConstraintModel) -> bool {
-    let Some(net) = model.nets.iter().find(|n| n.name == net_name) else { return false };
-    net.pins.iter().any(|pin_ref| {
-        let Some((_, part_ref)) = pin_ref.split_once('.') else { return false };
-        let _ = part_ref;
-        let Some(reference) = pin_ref.split('.').next() else { return false };
-        let Some(number) = pin_ref.rsplit('.').next() else { return false };
-        model
-            .part(reference)
-            .and_then(|p| p.pins.iter().find(|pin| pin.number == number))
-            .map(|pin| matches!(pin.kind, PinKind::Power | PinKind::Ground))
-            .unwrap_or(false)
-    })
 }
 
 /// Local (box-space, um) point for `port`, matching `eda_render::local_port_point`.
@@ -300,12 +695,25 @@ fn local_stub_tip(port: &Port, lx: f64, ly: f64) -> (f64, f64) {
 /// Applies the symbol's mirror+rotation (but NOT translation) to a local
 /// (um) point, exactly matching `eda_render::SymbolBox::to_abs` minus the
 /// final `+ sym.at`. Returns mm.
+/// KiCad's `lib_symbols` graphics/pins live in the *library's own* frame,
+/// which is +y **up**; everything else in a `.kicad_sch` (the sheet itself,
+/// symbol instance `(at ...)`, wires, labels) is +y **down**, matching this
+/// crate's own `ir::Point`. KiCad negates a library symbol's local y when
+/// it composites that symbol onto the sheet (instance position + library
+/// point, with the library point's y flipped) -- so a lib_symbol's own
+/// graphics/pins must be written with y already negated, or the two
+/// negations fail to cancel and KiCad places the *instance's* pins
+/// somewhere our own wires never reach. Confirmed against real
+/// `kicad-cli sch erc`: without this negation, every pin whose local y is
+/// non-zero comes back `pin_not_connected` (and, for a power-style pin,
+/// `power_pin_not_driven` too) even though the wire in the file terminates
+/// at exactly the un-negated point -- KiCad is looking for it at `-y`.
 fn baked_local(sym: &SymbolInstance, width: f64, lx: f64, ly: f64) -> (f64, f64) {
     let lx = if sym.mirrored { width - lx } else { lx };
     let theta = (sym.rot as f64 / 1000.0) * std::f64::consts::PI / 180.0;
     let rx = lx * theta.cos() - ly * theta.sin();
     let ry = lx * theta.sin() + ly * theta.cos();
-    (rx / 1000.0, ry / 1000.0)
+    (rx / 1000.0, -ry / 1000.0)
 }
 
 pub(crate) fn mm(um: i64) -> String {
@@ -379,7 +787,7 @@ mod tests {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), pins, body_um: None, symbol: None, datasheet: None, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }
