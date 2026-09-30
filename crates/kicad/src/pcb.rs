@@ -291,6 +291,11 @@ fn write_footprint(
     writeln!(out, "\t\t(at {x} {y} {rot_deg})").unwrap();
 
     let ref_layer = if fp.side == Side::Bottom { "B.SilkS" } else { "F.SilkS" };
+    // Text on a back layer is read from below, so it is written mirrored:
+    // KiCad's own writer puts `(justify mirror)` after the font for a
+    // flipped footprint's fields (EDA_TEXT::Format), and its DRC flags
+    // back-layer text without it (nonmirrored_text_on_back_layer).
+    let justify = if fp.side == Side::Bottom { " (justify mirror)" } else { "" };
     let ref_uuid = duid(&format!("footprint:{}:ref", fp.id));
     // Label offset from the footprint origin, in the footprint's own frame:
     // just outside the courtyard on the side the placer chose.
@@ -305,7 +310,7 @@ fn write_footprint(
     let (ref_x, ref_y) = (mm(ref_x), mm(ref_y));
     writeln!(
         out,
-        "\t\t(property \"Reference\" {} (at {ref_x} {ref_y} 0) (layer {})\n\t\t\t(uuid \"{ref_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)))\n\t\t)",
+        "\t\t(property \"Reference\" {} (at {ref_x} {ref_y} 0) (layer {})\n\t\t\t(uuid \"{ref_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)){justify})\n\t\t)",
         sexpr_str(&fp.id),
         sexpr_str(ref_layer)
     )
@@ -314,7 +319,7 @@ fn write_footprint(
     let fab_layer = if fp.side == Side::Bottom { "B.Fab" } else { "F.Fab" };
     writeln!(
         out,
-        "\t\t(property \"Value\" {} (at 0 1 0) (layer {})\n\t\t\t(uuid \"{val_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)))\n\t\t)",
+        "\t\t(property \"Value\" {} (at 0 1 0) (layer {})\n\t\t\t(uuid \"{val_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)){justify})\n\t\t)",
         sexpr_str(part.value.as_deref().unwrap_or(&fp.id)),
         sexpr_str(fab_layer)
     )
@@ -581,5 +586,25 @@ mod tests {
         }
         // U1 top SOT-23, C1 bottom 0603, U2 bottom SOT-23.
         assert_eq!(checked, 8);
+    }
+
+    #[test]
+    fn back_side_text_is_mirrored_and_front_side_text_is_not() {
+        // Text on a back layer is read from below, so KiCad writes a
+        // flipped footprint's fields mirrored, and its DRC flags either
+        // side written the other way.
+        let (design, model) = fixture();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let mut lines = out.lines();
+        let mut properties = 0;
+        while let Some(line) = lines.next() {
+            if line.starts_with("\t\t(property ") {
+                let block = std::iter::once(line).chain(lines.by_ref().take_while(|l| *l != "\t\t)")).collect::<Vec<_>>().join("\n");
+                assert_eq!(block.contains("(justify mirror)"), block.contains("(layer \"B."), "{block}");
+                properties += 1;
+            }
+        }
+        // Reference and value of U1 (top) and C1 (bottom).
+        assert_eq!(properties, 4);
     }
 }

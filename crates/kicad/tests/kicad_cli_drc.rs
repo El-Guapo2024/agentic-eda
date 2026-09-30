@@ -127,6 +127,8 @@ fn kicad_cli_drc_ldo_seed3() {
 /// The tracks are drawn by hand between `placed_pads` centres, no router,
 /// so the export is the only thing under test: every net has to come out
 /// connected, with no track dangling or running over another net's pad.
+/// The bottom parts' reference and value text has to come out mirrored
+/// and the top parts' not, as KiCad writes a flipped footprint's fields.
 #[test]
 #[ignore]
 fn kicad_cli_drc_bottom_side_pads() {
@@ -221,10 +223,10 @@ fn kicad_cli_drc_bottom_side_pads() {
     let by_type = drc_by_type(&cli, &pcb_path);
     let failures: Vec<String> = IN_SCOPE
         .iter()
-        .chain(&["track_dangling"])
+        .chain(&["track_dangling", "nonmirrored_text_on_back_layer", "mirrored_text_on_front_layer"])
         .flat_map(|ty| by_type.get(*ty).into_iter().flatten().map(move |v| format!("[{ty}] {v}")))
         .collect();
-    assert!(failures.is_empty(), "{} DRC violations on a board whose tracks end on the engine's pad centres:\n{}", failures.len(), failures.join("\n"));
+    assert!(failures.is_empty(), "{} DRC violations on the bottom-side board:\n{}", failures.len(), failures.join("\n"));
 }
 
 /// `kicad-cli pcb drc` on `pcb`: its violations and unconnected items
