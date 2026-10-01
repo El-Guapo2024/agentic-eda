@@ -33,10 +33,11 @@ export type EditorTab = "pcb" | "schematic" | "3d";
  * deeper (a whole TOOL_MANAGER with push/pop tool states); this is only
  * as much of that idea as this app's two real modes need.
  */
-export type ToolId = "select" | "move" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "wire";
+export type ToolId = "select" | "move" | "drag" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "wire";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
+  drag: "Drag item(s) (keeps wire connections)",
   route: "Route track: click to add a point, V for via, Enter/double-click to finish, Esc to cancel",
   via: "Click to place a via",
   zone: "Zone: click to add points, Enter/double-click to finish, Esc to cancel",
@@ -76,8 +77,8 @@ export interface ViewTransform {
 /** A part being dragged, previewed locally before `move_to` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
 export interface MovePreview {
   refs: string[];
-  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text: their own move_* by id; symbol: schematic move_symbol). Defaults to "part" (every pre-existing caller moves parts). */
-  kind?: "part" | "via" | "shape" | "text" | "symbol";
+  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text: their own move_* by id; symbol: schematic move_symbol; symbol_drag: schematic drag_symbol, see state.dragAttach). Defaults to "part" (every pre-existing caller moves parts). */
+  kind?: "part" | "via" | "shape" | "text" | "symbol" | "symbol_drag";
   dxUm: number;
   dyUm: number;
   /**
@@ -201,6 +202,19 @@ export interface StudioState {
   cursorUm: { x: number; y: number } | null;
   moveOriginUm: { x: number; y: number } | null;
   /**
+   * `G`'s own attachment data: which `(wire index, point index)` pairs
+   * (into `schematic.wires[i].pts`) are glued to which selected symbol's
+   * pin, resolved once when a drag starts -- see
+   * `wireAttachment.ts::computeDragAttachment`'s own doc for why this is
+   * frozen at drag-start rather than recomputed live (same reasoning
+   * `moveOriginUm` itself is only ever set, never explicitly cleared: the
+   * next drag always overwrites it, and it's only ever read while a
+   * "symbol_drag" move/preview is actually active). Read by
+   * SchematicView.tsx (the live rubber-band preview) and `commitMove`'s
+   * own "symbol_drag" branch (the real `Cmd::DragSymbol` call).
+   */
+  dragAttach: Record<string, [number, number][]> | null;
+  /**
    * base_screen.cpp's `m_LocalOrigin` (default (0,0), same as source) --
    * the status bar's dx/dy/dist is always relative to THIS point, set by
    * Space (common.Control.resetLocalCoords, pcb_base_frame.cpp's
@@ -306,6 +320,7 @@ const initialState: StudioState = {
   toast: null,
   cursorUm: null,
   moveOriginUm: null,
+  dragAttach: null,
   localOriginUm: { x: 0, y: 0 },
   autoPanEnabled: false,
   schematic: null,
@@ -366,6 +381,7 @@ export type Action =
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
+  | { type: "SET_DRAG_ATTACH"; attach: Record<string, [number, number][]> | null }
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
   | { type: "TOGGLE_AUTO_PAN" }
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
@@ -514,6 +530,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, cursorUm: action.at };
     case "SET_MOVE_ORIGIN":
       return { ...state, moveOriginUm: action.at };
+    case "SET_DRAG_ATTACH":
+      return { ...state, dragAttach: action.attach };
     case "SET_LOCAL_ORIGIN":
       return { ...state, localOriginUm: action.at };
     case "TOGGLE_AUTO_PAN":
@@ -786,6 +804,20 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           // the move, same reasoning commitMove's own doc comment gives
           // for parts -- rotating about the symbol's own (already-moved)
           // anchor lands on the same final pose as a live in-place spin.
+          if (rotateQuarterTurns) await runCmd({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
+        } else if (kind === "symbol_drag") {
+          // `G`: same as "symbol" above, except the wire endpoints
+          // `state.dragAttach` resolved for this ref at drag-start move
+          // along with it (sch_move_tool.cpp's rubber-band) -- see
+          // `Cmd::DragSymbol`'s own doc. A ref with no recorded attachment
+          // (shouldn't happen -- computeDragAttachment covers every
+          // dragged symbol -- but cheap to default safely) just drags with
+          // nothing glued to it, same as a plain move.
+          const s = api.symbolById(ref);
+          if (s) {
+            const attached = stateRef.current.dragAttach?.[ref] ?? [];
+            await runCmd({ op: "drag_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm, attached_wire_endpoints: attached });
+          }
           if (rotateQuarterTurns) await runCmd({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
         }
       }

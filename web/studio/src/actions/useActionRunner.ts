@@ -21,6 +21,7 @@ import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
 import { GRID_OPTIONS_UM } from "../components/Toolbar";
+import { computeDragAttachment } from "../components/schematic/wireAttachment";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -66,7 +67,7 @@ export function useActionRunner() {
      * PARITY-pcb.md for this narrow, documented gap.
      */
     const tryTransformDuringMove = (addQuarterTurns: number, toggleFlip: boolean): boolean => {
-      const moving = state.activeTool === "move" || state.movePreview != null;
+      const moving = state.activeTool === "move" || state.activeTool === "drag" || state.movePreview != null;
       if (!moving) return false;
       const refs = state.movePreview?.refs ?? [...state.selection];
       if (refs.length === 0) return false;
@@ -75,8 +76,11 @@ export function useActionRunner() {
       // first so a ref that happens to share an id with nothing on the
       // PCB side (every schematic symbol's id IS a part reference, so
       // api.partByRef would also resolve on the Schematic tab) still
-      // lands on "symbol", not "part".
-      const kind = state.movePreview?.kind ?? (state.tab === "schematic" ? "symbol" : api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
+      // lands on "symbol"/"symbol_drag", not "part". `activeTool ===
+      // "drag"` only matters here before the first pointer-move after
+      // arming `G` (state.movePreview still null) -- once a preview
+      // exists it already carries its own correct kind.
+      const kind = state.movePreview?.kind ?? (state.activeTool === "drag" ? "symbol_drag" : state.tab === "schematic" ? "symbol" : api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
       const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0 };
       const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
@@ -527,10 +531,22 @@ export function useActionRunner() {
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
       })
     );
-    // `G` (drag, with wire rubber-banding) isn't ported yet -- see
-    // PARITY-sch.md. Bound to plain Move for now (better than a dead key)
-    // rather than left silently unregistered.
-    m.set("eeschema.InteractiveMove.drag", schematicOnly(() => m.get("eeschema.InteractiveMove.move")?.()));
+    // `G` ("Drag", sch_move_tool.cpp): same arm-then-click-to-drop flow as
+    // `M`, except the wire endpoints attached to the selection's own pins
+    // (computeDragAttachment -- resolved now, before the symbol moves out
+    // from under them) rubber-band along with it instead of being left
+    // dangling. See state.dragAttach's own doc and MovePreview's
+    // "symbol_drag" kind.
+    m.set(
+      "eeschema.InteractiveMove.drag",
+      schematicOnly(() => {
+        const first = [...state.selection][0];
+        if (!first || !api.symbolById(first) || !state.schematic) return;
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
+        dispatch({ type: "SET_DRAG_ATTACH", attach: computeDragAttachment(state.schematic, [...state.selection]) });
+      })
+    );
 
     m.set(
       "eeschema.InteractiveEdit.rotateCCW",

@@ -8,12 +8,19 @@ only where the browser platform genuinely requires it, noted inline),
 KiCad source snapshot read this session: the same `kicad-src` scratchpad
 copy `PARITY-pcb.md` cites (commit `8303b2ad`, version 10.99).
 
-Before this session: 0 of eeschema's 240 cataloged actions were wired
-(read-only viewer, measured ~5% parity in `docs/parity/REPORT.md`). This
-session ports selection/move/rotate/mirror/delete end to end (frontend +
-backend), the ERC dialog (gap #4), and fixes the cross-tab undo bug (gap
-#15). Wire/label/power-symbol drawing tools, a symbol chooser, Annotate's
-dialog, and Properties are not yet wired — see the bottom of each section.
+Before the previous session: 0 of eeschema's 240 cataloged actions were
+wired (read-only viewer, measured ~5% parity in `docs/parity/REPORT.md`).
+That session ported selection/move/rotate/mirror/delete end to end
+(frontend + backend), the ERC dialog (gap #4), and fixed the cross-tab
+undo bug (gap #15). Wire/label/power-symbol drawing tools, a symbol
+chooser, Annotate's dialog, and Properties were not yet wired.
+
+This session ports `G` (drag, with wire rubber-banding -- section 1) and,
+as part of the same change, a plain click-and-drag directly on a symbol
+(no hotkey needed first, defaulting to Drag's rubber-banding, matching
+source's own default). Still not wired: wire/label/power-symbol drawing
+tools, a symbol chooser, Annotate's dialog, and Properties — see the
+bottom of each section.
 
 ## 0. Architecture: the "one netlist" rule
 
@@ -65,7 +72,8 @@ the intent YAML file.
 | Box select: wires (crossing = whole wire if touched at all; enclosed = both endpoints, or one if it's dangling) | missing (wires are not box-selectable yet) | `sch_selection_tool.cpp::SelectMultiple` lines ~2640-2666 — researched this session, not yet ported; see `collectBoxSelection`'s own doc |
 | Pins/junctions win ties over symbol body/wire at an exact hit | missing (no finer-than-symbol hit test yet) | `sch_selection_tool.cpp::GuessSelectionCandidates`/`narrowSelection` |
 | `M`: move (breaks wire connections — a wire's endpoint is a bare coordinate, not a pin reference) | identical | `sch_move_tool.cpp` (`setupItemsForDrag` never adds connected wires in MOVE mode); `Cmd::MoveSymbol`, `SchematicView.tsx`'s `moveMode` branch |
-| `G`: drag (attached wire endpoints rubber-band; new stub at an unselected 3-way junction) | missing — bound to plain Move for now rather than left as a dead key | `sch_move_tool.cpp::getConnectedDragItems`/`ptHasUnselectedJunction`. Backend verb (`Cmd::DragSymbol`, takes caller-resolved `(wire, point)` attachment pairs) exists; no frontend attachment-detection yet |
+| `G`: drag (attached wire endpoints rubber-band) | identical for this app's IR (see the gap noted below for what's left out) | `sch_move_tool.cpp::getConnectedDragItems` (`wireAttachment.ts::attachedWireEndpoints`, same arm-then-click-to-drop flow as `M`, `Cmd::DragSymbol`). A wire here is one polyline (every bend from one `W` session), not a separate `SCH_LINE` per segment, so only its own two true ends are tested for attachment -- matching `pinSnapPoints`'s existing "landing on a pin" convention. Every wire at a junction a dragged pin sits on attaches and moves together |
+| New stub wire at an unselected 3-way junction (source's own fallback when a junction's *other* wires are deliberately not moving) | not applicable to this IR | `ptHasUnselectedJunction`'s branch only matters when a caller can select one wire at a junction independent of the symbol being dragged -- this app's `G` has no such partial case yet (no wire box-select, see item 8 below), so every wire at a junction a dragged pin sits on is always fully attached (previous row) and a stub is never needed |
 | Grid snap during move | identical (grid only) | `edit_tool_move_fct.cpp` (`kicad-port/gridSnap.ts::alignToGrid`, reused) |
 | Anchor/pin snap during move | missing | `ee_grid_helper.cpp` — per-item-category grids + pin-anchor snap not ported; PCB side has the analogous gap too (`PARITY-pcb.md`) |
 | Escape cancels an in-progress move without touching the prior selection | identical | shared `ESCAPE` reducer case (already generic across tabs) |
@@ -80,7 +88,8 @@ the intent YAML file.
 | `Del`: delete wire | identical (wire must already be selected via a modified click — see the box-select gap above) | `Cmd::DeleteWire` |
 | `E` Properties | missing | `sch_edit_tool.cpp::Properties` — dispatches to one of 6 different dialogs by item type; none built this session |
 | `U`/`V`/`F`: quick-edit Reference/Value/Footprint | missing | `sch_edit_tool.cpp::EditField`/`sch_actions.cpp` (confirmed `U` = reference, not "unit" — a wrong guess here would have mis-bound a hotkey) |
-| Click-vs-drag threshold (8px/300ms) | missing (same gap as the PCB side) | `common/tool/tool_dispatcher.cpp` (`DragDistanceThreshold`/`DragTimeThreshold`) |
+| A plain click-and-drag directly on a symbol (no `M`/`G` needed first) | identical in spirit -- defaults to Drag's rubber-banding, matching source's own default for a plain drag (`sch_selection_tool.cpp Main()`'s `IsDrag(BUT_LEFT)` handler: `SCH_ACTIONS::drag` unless the `drag_is_move` preference is set, which this app has no settings UI for); a click on a member of a larger selection keeps the whole group, same `RequestSelection`/`selectionContains` reasoning | `sch_selection_tool.cpp` Main() (`SchematicView.tsx`'s new `DragState` "move" kind, ported from Canvas.tsx's identical PCB-side gesture) |
+| Click-vs-drag threshold (8px/300ms) | partial -- same approximation the PCB side already shipped (Canvas.tsx): "moved" is true once the *snapped* position first changes, not a literal pixel/time timer, so a release before the grid (or a nearby pin) actually moves is still a plain click. Good enough that a modifier-click is unaffected (that path never arms a drag at all) | `common/tool/tool_dispatcher.cpp` (`DragDistanceThreshold`/`DragTimeThreshold`) -- same documented simplification as PARITY-pcb.md's own row for this |
 
 ## 2. Wires, junctions, no-connects (`sch_line_wire_bus_tool.cpp`)
 
@@ -175,3 +184,20 @@ click through:
    confirm the list is non-empty and matches roughly what `cargo run --
    board erc` / `kicad-cli sch erc` would report; click a row and confirm
    it selects a symbol and switches tabs.
+9. Draw a wire (`W`) from one symbol's pin to another's so they're
+   connected, select the first symbol, press `G`, move the mouse — the
+   wire's endpoint at that symbol should visibly track it (rubber-band)
+   while the wire's other end (still on the second symbol's pin) stays
+   put; click to drop, then confirm `GET /api/schematic` shows the wire's
+   point still landing exactly on the moved symbol's new pin position
+   (still connected, not dangling). Compare against `M` on the same setup
+   — the wire should visibly NOT follow, staying dangling where the
+   symbol used to be.
+10. Without pressing `M`/`G` first, click directly on a symbol and drag it
+    (same click, hold, move gesture) — should behave like `G` above
+    (rubber-band) by default by just moving the mouse past the first grid
+    step; releasing without moving the mouse at all should behave like a
+    plain click (select only, nothing committed — check no spurious
+    `/api/cmd` POST in the network tab). With 2+ symbols selected, click
+    and drag one member of the group — the whole group should move
+    together, not just the one clicked.
