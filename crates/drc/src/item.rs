@@ -35,6 +35,10 @@ pub enum ErrorType {
     TextThickness,
     TrackDangling,
     ViaDangling,
+    InvalidOutline,
+    DuplicateFootprint,
+    MissingFootprint,
+    ExtraFootprint,
 
     // ---- placement-quality checks: no KiCad equivalent, ported from
     // eda_gates::pcb (see the task report's gates-mapping table). Settings
@@ -91,6 +95,10 @@ impl ErrorType {
             ErrorType::TextThickness => "text_thickness",
             ErrorType::TrackDangling => "track_dangling",
             ErrorType::ViaDangling => "via_dangling",
+            ErrorType::InvalidOutline => "invalid_outline",
+            ErrorType::DuplicateFootprint => "duplicate_footprints",
+            ErrorType::MissingFootprint => "missing_footprint",
+            ErrorType::ExtraFootprint => "extra_footprint",
             ErrorType::PlacementProximity => "placement_proximity",
             ErrorType::PlacementDecoupling => "placement_decoupling",
             ErrorType::PlacementStubCrossings => "placement_stub_crossings",
@@ -128,6 +136,10 @@ impl ErrorType {
             ErrorType::TextThickness => "Text thickness out of range",
             ErrorType::TrackDangling => "Track has unconnected end",
             ErrorType::ViaDangling => "Via is not connected or connected on only one layer",
+            ErrorType::InvalidOutline => "Invalid board outline",
+            ErrorType::DuplicateFootprint => "Duplicate footprints",
+            ErrorType::MissingFootprint => "Missing footprint",
+            ErrorType::ExtraFootprint => "Extra footprint",
             ErrorType::PlacementProximity => "Proximity rule violation",
             ErrorType::PlacementDecoupling => "Decoupling capacitor too far from its IC",
             ErrorType::PlacementStubCrossings => "Crossing two-pin net stubs",
@@ -143,7 +155,18 @@ impl ErrorType {
     /// every code defaults to `error`; these are the explicit overrides.
     pub fn default_severity(self) -> Severity {
         match self {
-            ErrorType::HoleToHole | ErrorType::HolesCoLocated | ErrorType::SilkEdgeClearance | ErrorType::SilkOverlap | ErrorType::SilkOverCopper | ErrorType::TextHeight | ErrorType::TextThickness | ErrorType::TrackDangling | ErrorType::ViaDangling => Severity::Warning,
+            ErrorType::HoleToHole
+            | ErrorType::HolesCoLocated
+            | ErrorType::SilkEdgeClearance
+            | ErrorType::SilkOverlap
+            | ErrorType::SilkOverCopper
+            | ErrorType::TextHeight
+            | ErrorType::TextThickness
+            | ErrorType::TrackDangling
+            | ErrorType::ViaDangling
+            | ErrorType::DuplicateFootprint
+            | ErrorType::MissingFootprint
+            | ErrorType::ExtraFootprint => Severity::Warning,
             _ => Severity::Error,
         }
     }

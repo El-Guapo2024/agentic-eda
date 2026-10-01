@@ -51,6 +51,7 @@ pub mod constraints;
 pub mod fill;
 pub mod item;
 pub mod kimath;
+pub mod pcbexpr;
 pub mod providers;
 pub mod rtree;
 pub mod stroke_font;
@@ -79,8 +80,47 @@ pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     out.extend(providers::silk_mask::check(&b, rules));
     out.extend(providers::text_dims::check(&b, rules));
     out.extend(providers::dangling::check(&b));
+    out.extend(providers::outline::check(design, model));
+    out.extend(providers::schematic_parity::check(design, model));
     out.extend(providers::placement_quality::check(design, model));
+    apply_rule_severities(&mut out, &rules.rule_severities);
     out
+}
+
+/// Task item 2: apply an imported `.kicad_pro`'s `rule_severities` the same
+/// way KiCad's own engine does -- a type resolved to `"ignore"` is never
+/// reported at all (every `DRC_TEST_PROVIDER` gates on
+/// `m_drcEngine->IsErrorLimitExceeded`/`GetSeverity() == RPT_SEVERITY_IGNORE`
+/// *before* creating the `DRC_ITEM`, not after), and one explicitly set to
+/// `"warning"`/`"error"` reports at that severity instead of this port's
+/// own [`item::ErrorType::default_severity`]. Applied as a single
+/// post-filter here rather than threading the table through every
+/// provider: the net set of reported violations is identical either way,
+/// since nothing in a provider's own logic depends on severity except
+/// whether to report at all -- this port has no custom `.kicad_dru` rule
+/// that could set a *per-constraint* severity different from its type's
+/// global default (see `constraints.rs`'s doc comment on what a parsed
+/// custom rule could still add). A type with no entry in `severities`
+/// (the common case: no sidecar project, or one that never touched that
+/// type's default) is unaffected -- in practice that always includes this
+/// crate's own placement-quality/netclass checks, since a real
+/// `.kicad_pro` has no settings key for a check KiCad doesn't have.
+fn apply_rule_severities(violations: &mut Vec<DrcViolation>, severities: &std::collections::BTreeMap<String, String>) {
+    if severities.is_empty() {
+        return;
+    }
+    violations.retain_mut(|v| match severities.get(v.error_type).map(String::as_str) {
+        Some("ignore") => false,
+        Some("warning") => {
+            v.severity = Severity::Warning;
+            true
+        }
+        Some("error") => {
+            v.severity = Severity::Error;
+            true
+        }
+        _ => true,
+    });
 }
 
 /// Violation counts by KiCad settings-key ("type"), for a quick summary --
@@ -142,5 +182,23 @@ mod tests {
         };
         let violations = run(&design, &model);
         assert!(violations.iter().any(|v| v.error_type == "track_dangling"), "{violations:#?}");
+    }
+
+    #[test]
+    fn rule_severity_ignore_suppresses_a_type_entirely() {
+        let mut v = vec![DrcViolation::new(ErrorType::TrackDangling, "", vec![]), DrcViolation::new(ErrorType::ViaDangling, "", vec![])];
+        let severities = std::collections::BTreeMap::from([("track_dangling".to_string(), "ignore".to_string())]);
+        apply_rule_severities(&mut v, &severities);
+        assert_eq!(v.len(), 1, "{v:#?}");
+        assert_eq!(v[0].error_type, "via_dangling");
+    }
+
+    #[test]
+    fn rule_severity_error_overrides_default_warning() {
+        let mut v = vec![DrcViolation::new(ErrorType::TrackDangling, "", vec![])];
+        assert_eq!(v[0].severity, Severity::Warning, "sanity: default severity for this type");
+        let severities = std::collections::BTreeMap::from([("track_dangling".to_string(), "error".to_string())]);
+        apply_rule_severities(&mut v, &severities);
+        assert_eq!(v[0].severity, Severity::Error);
     }
 }

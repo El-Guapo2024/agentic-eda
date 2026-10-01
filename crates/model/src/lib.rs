@@ -11,6 +11,8 @@ pub mod symbol;
 pub use footprint::{Footprint, Pad, PadKind, PadShape};
 pub use symbol::{is_synthetic_lib_id, resolve_lib_id, LibPin, LibSymbol, SymbolGraphic};
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -147,6 +149,98 @@ pub struct BoardRules {
     /// 0.1 mm default silk text width).
     #[serde(default = "d_min_silk_text_thickness")]
     pub min_silk_text_thickness_um: ir::Um,
+    /// Per-DRC-type severity overrides, imported from a `.kicad_pro`'s
+    /// `board.design_settings.rule_severities` (KiCad 7+ JSON project
+    /// settings -- `BOARD_DESIGN_SETTINGS`'s `rule_severities` `PARAM_LAMBDA`,
+    /// `pcbnew/board_design_settings.cpp`). Keyed by the same settings-key
+    /// string as `eda_drc::ErrorType::key()`; valued `"error"`/`"warning"`/
+    /// `"ignore"` exactly as `SeverityToString`/`SeverityFromString`
+    /// (`common/widgets/ui_common.cpp`) round-trip them. Empty = every type
+    /// keeps this port's own `ErrorType::default_severity()`, matching a
+    /// board with no sidecar project. KiCad always writes the *complete*
+    /// resolved table on save (every known type, not just user-touched
+    /// ones), so this is populated wholesale from the project file, never
+    /// merged key-by-key -- see `eda_kicad::merge_project_rule_severities`.
+    /// A type set to `"ignore"` here means KiCad never even runs that
+    /// check: `eda_drc::run` reports nothing of that type at all, not a
+    /// de-prioritized version of it -- see its own doc comment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rule_severities: BTreeMap<String, String>,
+    /// A `.kicad_dru` custom-rule file found next to an imported board
+    /// (`eda_kicad::parse_custom_rules`, ported from `drc_rule_parser.cpp`),
+    /// kept verbatim (task item 4: "Store rules in the IR (text plus
+    /// parsed); KiCad files stay derived") so a rule this port's evaluator
+    /// subset does not understand is still visible on the model rather than
+    /// silently dropped, even though only [`custom_rules`](Self::custom_rules)
+    /// is actually evaluated. `None` = no sidecar `.kicad_dru` (the
+    /// overwhelming majority of boards).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_rules_text: Option<String>,
+    /// The parsed subset of `custom_rules_text`'s rules -- see
+    /// [`CustomRule`] and `eda_drc::pcbexpr` (the PCBEXPR condition
+    /// evaluator subset that reads `condition` back out at DRC time).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_rules: Vec<CustomRule>,
+    /// Whether `eda_kicad::import_kicad_pcb` found the board outline's
+    /// Edge.Cuts graphics chained into a genuinely closed loop
+    /// (`ImportNotes::outline_open`, negated, carried forward here since
+    /// that struct itself is import-time-only and does not reach
+    /// `eda_drc::run`). `None` = not applicable/not tracked -- a board
+    /// this workspace's own pipeline produced (always a clean closed
+    /// rectangle by construction), an outline reconstructed from a single
+    /// `gr_poly`/`gr_circle` (inherently closed), or a `design.json`
+    /// written before this field existed. Lives on `BoardRules` rather
+    /// than `PlacementSection` (the more obvious home for an outline-shape
+    /// fact) because the latter has no `Default` impl and is built via a
+    /// full field literal in several `crates/pns`/`crates/freeroute`
+    /// router files this task was told to leave alone -- adding a
+    /// required field there would have forced edits across all of them
+    /// for one DRC check. See `providers::outline`'s doc comment for why
+    /// this -- not a guess from the point list alone -- is the only
+    /// faithful way to know this at DRC time: an implicitly-closed polygon
+    /// (first point not repeated as the last, this model's own convention
+    /// for *every* board) and a genuinely broken import-time chain are
+    /// geometrically indistinguishable from the point list by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_closed: Option<bool>,
+}
+
+/// One `(rule ...)` block from a `.kicad_dru` file
+/// (`pcbnew/drc/drc_rule_parser.cpp`'s `DRC_RULE`), reduced to the fields
+/// this port can actually apply. `condition`/`layer` are kept as the raw
+/// PCBEXPR text KiCad itself would store there; `eda_drc::pcbexpr` parses
+/// and evaluates `condition` against a specific item pair at DRC time
+/// (parsed once per rule per run today, not cached -- real `.kicad_dru`
+/// files are a handful of rules, not thousands). A field this parser could
+/// not find in the file is `None`/empty, never a guessed default -- a rule
+/// with no recognized `constraint` type, in particular, is kept (so it is
+/// still visible in `custom_rules_text`) but never matches anything in
+/// `eda_drc`'s application of it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CustomRule {
+    pub name: String,
+    /// KiCad's own constraint-type keyword: `"clearance"`, `"hole_clearance"`,
+    /// `"track_width"`, `"hole_to_hole"`, `"silk_clearance"`,
+    /// `"edge_clearance"`, `"annular_width"`, `"disallow"`, `"assertion"`,
+    /// and others this crate's evaluator does not act on (see
+    /// `eda_drc::custom_rules`'s doc comment for exactly which do).
+    pub constraint_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<ir::Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<ir::Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opt: Option<ir::Um>,
+    /// `(layer "...")`, when the rule restricts itself to one layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    /// The raw PCBEXPR text of `(condition "...")`, unevaluated -- `None`
+    /// means the rule applies unconditionally (matches every pair).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
 }
 
 /// One copper plane: a net flooded across a whole layer.
@@ -494,6 +588,7 @@ impl Default for BoardRules {
             net_classes: Vec::new(), outline: None, refdes_font_um: None, pours: Vec::new(), tuning: RoutingTuning::default(),
             hole_to_hole_min_um: d_hole_to_hole_min(), hole_clearance_um: d_hole_clearance(), silk_clearance_um: d_silk_clearance(),
             annular_width_min_um: d_annular_width_min(), min_silk_text_height_um: d_min_silk_text_height(), min_silk_text_thickness_um: d_min_silk_text_thickness(),
+            rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(), outline_closed: None,
         }
     }
 }

@@ -49,6 +49,16 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
     let pro_path = PathBuf::from(&input).with_extension("kicad_pro");
     if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
         eda::merge_project_net_classes(&mut model, &pro_text);
+        // Same sidecar project, its per-DRC-type severity table (task item
+        // 2) -- see `eda_kicad::merge_project_rule_severities`'s doc
+        // comment for why this is a wholesale replacement, not a merge.
+        eda::merge_project_rule_severities(&mut model, &pro_text);
+    }
+    // A `.kicad_dru` custom-rule file (task item 4) is its own sibling
+    // file, not a section inside `.kicad_pro`.
+    let dru_path = PathBuf::from(&input).with_extension("kicad_dru");
+    if let Ok(dru_text) = std::fs::read_to_string(&dru_path) {
+        eda::merge_custom_rules(&mut model, &dru_text);
     }
 
     std::fs::create_dir_all(&out).map_err(|e| fail("io", &out.display().to_string(), e.to_string()))?;

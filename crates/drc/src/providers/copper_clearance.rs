@@ -13,7 +13,29 @@ use crate::constraints;
 use crate::fill::FillResults;
 use crate::item::{format_um, DrcRefItem, DrcViolation, ErrorType};
 use crate::kimath::Shape;
+use crate::pcbexpr::Facts;
 use eda_model::{BoardRules, PadKind};
+
+/// This item's resolved net-class name, for a `.kicad_dru` condition's
+/// `A.NetClass`/`B.NetClass`/`hasNetclass()` (task item 4) -- `"Default"`
+/// for an unclassed net, matching KiCad's own convention that every net
+/// belongs to at least the implicit default class.
+fn net_class_name<'a>(rules: &'a BoardRules, net: Option<&str>) -> &'a str {
+    net.and_then(|n| rules.class_of(n)).map(|c| c.name.as_str()).unwrap_or("Default")
+}
+
+fn facts_of_pad<'a>(rules: &'a BoardRules, p: &'a DrcPad) -> Facts<'a> {
+    Facts { item_type: "Pad", net_class: net_class_name(rules, p.net.as_deref()), net_name: p.net.as_deref().unwrap_or(""), reference: &p.footprint_ref }
+}
+fn facts_of_track<'a>(rules: &'a BoardRules, t: &'a DrcTrackSeg) -> Facts<'a> {
+    Facts { item_type: "Track", net_class: net_class_name(rules, t.net.as_deref()), net_name: t.net.as_deref().unwrap_or(""), reference: "" }
+}
+fn facts_of_via<'a>(rules: &'a BoardRules, v: &'a DrcVia) -> Facts<'a> {
+    Facts { item_type: "Via", net_class: net_class_name(rules, v.net.as_deref()), net_name: v.net.as_deref().unwrap_or(""), reference: "" }
+}
+fn facts_of_zone<'a>(rules: &'a BoardRules, z: &'a DrcZone) -> Facts<'a> {
+    Facts { item_type: "Zone", net_class: net_class_name(rules, z.net.as_deref()), net_name: z.net.as_deref().unwrap_or(""), reference: "" }
+}
 
 /// A non-plated hole has no copper at all (it is a mechanical hole only),
 /// so it never participates in copper clearance/shorting -- exactly
@@ -46,10 +68,13 @@ fn zone_ref(z: &DrcZone) -> DrcRefItem {
 /// One collision result between two copper items already known to be on
 /// different nets (or one/both netless): clearance/shorting, exactly
 /// `testSingleLayerItemAgainstItem`'s core (minus net-tie exclusions, which
-/// this model has no data for).
+/// this model has no data for). `layer`/`facts_a`/`facts_b` feed task item
+/// 4's custom-rule resolution (`constraints::clearance_with_custom_rules`);
+/// a board with no `.kicad_dru` rules is unaffected (same plain
+/// `constraints::clearance` result).
 #[allow(clippy::too_many_arguments)]
-fn clearance_or_short(rules: &BoardRules, net_a: Option<&str>, net_b: Option<&str>, shape_a: &Shape, shape_b: &Shape, ref_a: DrcRefItem, ref_b: DrcRefItem, out: &mut Vec<DrcViolation>) {
-    let clearance = constraints::clearance(rules, net_a, net_b);
+fn clearance_or_short(rules: &BoardRules, net_a: Option<&str>, net_b: Option<&str>, layer: &str, facts_a: &Facts, facts_b: &Facts, shape_a: &Shape, shape_b: &Shape, ref_a: DrcRefItem, ref_b: DrcRefItem, compiled: &constraints::CompiledClearanceRules, out: &mut Vec<DrcViolation>) {
+    let clearance = constraints::clearance_with_custom_rules(rules, net_a, net_b, layer, facts_a, facts_b, compiled);
     if clearance <= 0 {
         return; // KiCad's own gate: a resolved 0 clearance is never checked.
     }
@@ -64,17 +89,38 @@ fn clearance_or_short(rules: &BoardRules, net_a: Option<&str>, net_b: Option<&st
 
 /// Hole-clearance both ways (each side's hole against the other's copper),
 /// regardless of net -- `testSingleLayerItemAgainstItem`'s hole loop.
+///
+/// Item order in the pushed violation matters for more than cosmetics: the
+/// parity harness's position match (`crates/drc/tests/parity_drc.rs`) reads
+/// `items[0]`'s position only, same as kicad-cli's own JSON. KiCad's
+/// `SetItems(a[ii], b[ii])` for this exact loop
+/// (`drc_test_provider_copper_clearance.cpp`'s `testSingleLayerItemAgainstItem`,
+/// where `a[ii]` carries the copper shape under test and `b[ii]` carries
+/// the hole) always puts the **copper**-bearing side first and the
+/// **hole**-bearing side second -- confirmed against three separate call
+/// sites in that file (`testSingleLayerItemAgainstItem`, `testPadAgainstItem`'s
+/// `doTestHole`), which is the opposite order from its *zone* counterpart,
+/// `testItemAgainstZone` (`SetItems(aItem, aZone)` with `aItem` the hole
+/// owner) -- see [`hole_clearance_zone`], which already had this right.
+/// Getting this backwards here previously meant our `items[0]` was always
+/// the hole owner's own anchor while kicad-cli's was always the copper
+/// owner's -- two different real-world positions that essentially never
+/// land within the match tolerance of each other, which is exactly
+/// GAPS.md #3's "`hole_clearance` ... the *positions* disagree every
+/// time" symptom (0 matched despite hundreds of raw hits on both sides).
 #[allow(clippy::too_many_arguments)]
 fn hole_clearance(rules: &BoardRules, hole_a: Option<&Shape>, copper_a: &Shape, ref_a: &DrcRefItem, hole_b: Option<&Shape>, copper_b: &Shape, ref_b: &DrcRefItem, out: &mut Vec<DrcViolation>) {
     let clearance = constraints::hole_clearance_min(rules);
     if let Some(ha) = hole_a {
+        // a's hole vs b's copper: b is the copper side here, a is the hole side.
         if let Some((actual, _)) = ha.collides(copper_b, clearance.max(0)) {
-            out.push(DrcViolation::new(ErrorType::HoleClearance, format!("(clearance {}; actual {})", format_um(clearance), format_um(actual)), vec![ref_a.clone(), ref_b.clone()]));
+            out.push(DrcViolation::new(ErrorType::HoleClearance, format!("(clearance {}; actual {})", format_um(clearance), format_um(actual)), vec![ref_b.clone(), ref_a.clone()]));
         }
     }
     if let Some(hb) = hole_b {
+        // b's hole vs a's copper: a is the copper side here, b is the hole side.
         if let Some((actual, _)) = hb.collides(copper_a, clearance.max(0)) {
-            out.push(DrcViolation::new(ErrorType::HoleClearance, format!("(clearance {}; actual {})", format_um(clearance), format_um(actual)), vec![ref_b.clone(), ref_a.clone()]));
+            out.push(DrcViolation::new(ErrorType::HoleClearance, format!("(clearance {}; actual {})", format_um(clearance), format_um(actual)), vec![ref_a.clone(), ref_b.clone()]));
         }
     }
 }
@@ -121,6 +167,10 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     // bounds which pairs get tested at all.
     let worst_clearance = constraints::worst_case_clearance(rules);
     let fills = crate::fill::fill_all_zones(board, rules);
+    // Compiled once per board, reused for every pair below -- see
+    // `constraints::CompiledClearanceRules`'s doc comment for why this
+    // matters (a real board resolves clearance for thousands of pairs).
+    let compiled_rules = constraints::CompiledClearanceRules::new(rules);
 
     for layer in &board.layers {
         let pads: Vec<&DrcPad> = board.pads.iter().filter(|p| p.layers.iter().any(|l| l == layer)).collect();
@@ -157,7 +207,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 // test it falls through to -- only run when the resolved
                 // clearance is actually positive; a rule that sets it to
                 // exactly 0 between two nets disables both, not just one.
-                let pair_clearance = constraints::clearance(rules, a.net.as_deref(), b.net.as_deref());
+                let pair_clearance = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a), &facts_of_track(rules, b), &compiled_rules);
                 if pair_clearance > 0 {
                     let (sa, sb) = (crate::kimath::Seg::new(a.a, a.b), crate::kimath::Seg::new(b.a, b.b));
                     if let Some(pt) = sa.intersect(&sb) {
@@ -165,7 +215,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                         continue;
                     }
                 }
-                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), &a.shape(), &b.shape(), track_ref(a), track_ref(b), &mut out);
+                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a), &facts_of_track(rules, b), &a.shape(), &b.shape(), track_ref(a), track_ref(b), &compiled_rules, &mut out);
             }
         }
 
@@ -186,7 +236,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                     continue;
                 }
                 if flashed(p) {
-                    clearance_or_short(rules, t.net.as_deref(), p.net.as_deref(), &t.shape(), &p.copper, track_ref(t), pad_ref(p), &mut out);
+                    clearance_or_short(rules, t.net.as_deref(), p.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_pad(rules, p), &t.shape(), &p.copper, track_ref(t), pad_ref(p), &compiled_rules, &mut out);
                 }
                 hole_clearance(rules, None, &t.shape(), &track_ref(t), p.hole.as_ref(), &p.copper, &pad_ref(p), &mut out);
             }
@@ -195,7 +245,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if t.net.is_some() && t.net.as_deref() == v.net.as_deref() {
                     continue;
                 }
-                clearance_or_short(rules, t.net.as_deref(), v.net.as_deref(), &t.shape(), &v.shape(), track_ref(t), via_ref(v), &mut out);
+                clearance_or_short(rules, t.net.as_deref(), v.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_via(rules, v), &t.shape(), &v.shape(), track_ref(t), via_ref(v), &compiled_rules, &mut out);
                 hole_clearance(rules, None, &t.shape(), &track_ref(t), Some(&v.hole()), &v.shape(), &via_ref(v), &mut out);
             }
         }
@@ -212,7 +262,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 }
                 let same_net = a.net == b.net; // netcode equality, not "both assigned" -- see the track loop above
                 if flashed(a) && flashed(b) && !same_net {
-                    clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), &a.copper, &b.copper, pad_ref(a), pad_ref(b), &mut out);
+                    clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_pad(rules, a), &facts_of_pad(rules, b), &a.copper, &b.copper, pad_ref(a), pad_ref(b), &compiled_rules, &mut out);
                 }
                 // Hole clearance is a *foreign-copper* check (see this
                 // module's doc comment on `flashed`): same-net pads (two
@@ -232,7 +282,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 let a = pads[i];
                 let same_net = a.net.as_deref() == v.net.as_deref();
                 if flashed(a) && !same_net {
-                    clearance_or_short(rules, a.net.as_deref(), v.net.as_deref(), &a.copper, &v.shape(), pad_ref(a), via_ref(v), &mut out);
+                    clearance_or_short(rules, a.net.as_deref(), v.net.as_deref(), layer, &facts_of_pad(rules, a), &facts_of_via(rules, v), &a.copper, &v.shape(), pad_ref(a), via_ref(v), &compiled_rules, &mut out);
                 }
                 if !same_net {
                     hole_clearance(rules, a.hole.as_ref(), &a.copper, &pad_ref(a), Some(&v.hole()), &v.shape(), &via_ref(v), &mut out);
@@ -245,7 +295,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if a.net == b.net {
                     continue;
                 }
-                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), &a.shape(), &b.shape(), via_ref(a), via_ref(b), &mut out);
+                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_via(rules, a), &facts_of_via(rules, b), &a.shape(), &b.shape(), via_ref(a), via_ref(b), &compiled_rules, &mut out);
                 hole_clearance(rules, Some(&a.hole()), &a.shape(), &via_ref(a), Some(&b.hole()), &b.shape(), &via_ref(b), &mut out);
             }
         }
@@ -256,7 +306,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if p.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance(rules, p.net.as_deref(), z.net.as_deref());
+                let c = constraints::clearance_with_custom_rules(rules, p.net.as_deref(), z.net.as_deref(), layer, &facts_of_pad(rules, p), &facts_of_zone(rules, z), &compiled_rules);
                 if flashed(p) && c > 0 {
                     if let Some((actual, _)) = collides_zone(&p.copper, z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![pad_ref(p), zone_ref(z)]));
@@ -268,7 +318,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if t.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance(rules, t.net.as_deref(), z.net.as_deref());
+                let c = constraints::clearance_with_custom_rules(rules, t.net.as_deref(), z.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_zone(rules, z), &compiled_rules);
                 if c > 0 {
                     if let Some((actual, _)) = collides_zone(&t.shape(), z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![track_ref(t), zone_ref(z)]));
@@ -279,7 +329,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if v.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance(rules, v.net.as_deref(), z.net.as_deref());
+                let c = constraints::clearance_with_custom_rules(rules, v.net.as_deref(), z.net.as_deref(), layer, &facts_of_via(rules, v), &facts_of_zone(rules, z), &compiled_rules);
                 if c > 0 {
                     if let Some((actual, _)) = collides_zone(&v.shape(), z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![via_ref(v), zone_ref(z)]));
@@ -299,7 +349,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                         out.push(DrcViolation::new(ErrorType::ZonesIntersect, "(intersecting zones must have distinct priorities)", vec![zone_ref(a), zone_ref(b)]));
                     }
                 } else {
-                    let c = constraints::clearance(rules, a.net.as_deref(), b.net.as_deref());
+                    let c = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_zone(rules, a), &facts_of_zone(rules, b), &compiled_rules);
                     if c > 0 {
                         if let Some((actual, _)) = collides_zone_zone(a, b, &fills, c) {
                             out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![zone_ref(a), zone_ref(b)]));
@@ -396,5 +446,49 @@ mod tests {
         let board = empty_board(vec![seg("t1", Some("A"), (0, 0), (1000, 1000)), seg("t2", Some("B"), (0, 1000), (1000, 0))], vec![]);
         let v = check(&board, &rules);
         assert!(v.is_empty(), "{v:#?}");
+    }
+
+    /// Regression for GAPS.md #3's "`hole_clearance` positions disagree
+    /// every time" symptom: a real `hole_clearance` violation's `items[0]`
+    /// must be the copper-bearing side and `items[1]` the hole-bearing
+    /// side, matching KiCad's own `SetItems` order for this exact check
+    /// (see `hole_clearance`'s doc comment) -- getting it backwards made
+    /// every match attempt compare the wrong item's position against
+    /// kicad-cli's JSON.
+    #[test]
+    fn hole_clearance_item_order_is_copper_then_hole() {
+        let p1 = DrcPad {
+            id: "P1".into(),
+            footprint_ref: "P1".into(),
+            number: "1".into(),
+            net: Some("GND".into()),
+            center: Point { x: 0, y: 0 },
+            side: Side::Top,
+            kind: PadKind::Smd,
+            layers: vec!["F.Cu".into()],
+            copper: Shape::Rect { x0: -200, y0: -200, x1: 200, y1: 200 },
+            hole: None,
+            drill_round: None,
+            drill_slot: None,
+        };
+        let p2 = DrcPad {
+            id: "P2".into(),
+            footprint_ref: "P2".into(),
+            number: "1".into(),
+            net: Some("VCC".into()),
+            center: Point { x: 500, y: 0 },
+            side: Side::Top,
+            kind: PadKind::ThroughHole,
+            layers: vec!["F.Cu".into()],
+            copper: Shape::Circle { c: Point { x: 500, y: 0 }, r: 100 },
+            hole: Some(Shape::Circle { c: Point { x: 500, y: 0 }, r: 90 }),
+            drill_round: Some(180),
+            drill_slot: None,
+        };
+        let board = empty_board(vec![], vec![p1, p2]);
+        let v = check(&board, &BoardRules::default());
+        let hit = v.iter().find(|v| v.error_type == ErrorType::HoleClearance.key()).unwrap_or_else(|| panic!("expected a hole_clearance violation: {v:#?}"));
+        assert_eq!(hit.items[0].id, "P1", "items[0] must be the copper-bearing side; got {hit:#?}");
+        assert_eq!(hit.items[1].id, "P2", "items[1] must be the hole-bearing side; got {hit:#?}");
     }
 }
