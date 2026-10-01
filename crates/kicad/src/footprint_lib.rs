@@ -262,7 +262,7 @@ mod tests {
             package: None,
             footprint: Some(footprint.into()),
             pins: vec![],
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         };
         let mut model = ConstraintModel {

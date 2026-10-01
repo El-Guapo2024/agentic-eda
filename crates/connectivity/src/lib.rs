@@ -113,7 +113,7 @@ pub(crate) mod tests_support {
     /// Two pads on one net, no track between them: exactly one ratsnest
     /// edge, no dangling anything (there is no copper yet to dangle).
     pub(crate) fn two_pad_model() -> (Design, ConstraintModel) {
-        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None };
+        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), symbol: None, datasheet: None, pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None };
         let model = ConstraintModel {
             parts: vec![part("R1"), part("R2")],
             nets: vec![Net { name: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()] }],

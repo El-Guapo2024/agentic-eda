@@ -94,7 +94,7 @@ fn zen_globals(gb: &mut GlobalsBuilder) {
             package,
             footprint: None,
             pins,
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         });
         Ok(NoneType)
@@ -189,6 +189,7 @@ pub fn import_zen(path: &Path) -> Result<ConstraintModel, Vec<CheckResult>> {
         stackup: None,
         impedance_targets: Vec::new(),
         footprints: Vec::new(),
+        symbols: Vec::new(),
         board: Default::default(),
         allow: Default::default(),
         solver: Default::default(),

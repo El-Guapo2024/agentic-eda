@@ -170,6 +170,7 @@ fn load_model_unchecked(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>
         }
     };
     resolve_footprint_libraries(&mut model);
+    resolve_symbol_libraries(&mut model);
     Ok(model)
 }
 
@@ -187,6 +188,23 @@ pub(crate) fn resolve_footprint_libraries(model: &mut ConstraintModel) {
     let root = eda::default_footprint_library_root();
     for w in eda::resolve_library_footprints(model, &root) {
         eprintln!("footprint library: {w}");
+    }
+}
+
+/// For every part whose resolved `lib_id` (`symbol:` in the intent, or a
+/// sensible default by kind -- see `eda_model::symbol::resolve_lib_id`)
+/// names a real KiCad symbol library, try to load it from the installed
+/// libraries (`eda::default_symbol_library_root`, overridable with
+/// `EDA_KICAD_SYMBOLS`) and add it to `model.symbols` -- so the schematic
+/// exporter and the ERC port both see the part's real pin electrical types
+/// and real graphics instead of falling all the way back to a synthesized
+/// generic box. Best-effort, the same as `resolve_footprint_libraries`: a
+/// part that resolves to no real library (most ICs) is untouched here and
+/// stays a synthesized box at export time.
+pub(crate) fn resolve_symbol_libraries(model: &mut ConstraintModel) {
+    let root = eda::default_symbol_library_root();
+    for w in eda::resolve_library_symbols(model, &root) {
+        eprintln!("symbol library: {w}");
     }
 }
 
@@ -348,7 +366,13 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
     let t0 = Instant::now();
     let opts = EngineOptions { seed: cx.args.seed, intent_hash: cx.ihash.clone(), ..Default::default() };
     let design = derive_schematic(&cx.model, &opts)?;
-    let checks = check_schematic(&design, &cx.model);
+    // One engine: `check_erc` is the ported KiCad ERC's electrical checks
+    // *and* this generator's own readability/tidiness checks (grid,
+    // overlap, wire length, ...) folded in as additional tests -- the same
+    // way KiCad's own ERC runs non-electrical checks (similar labels,
+    // off-grid pins) alongside electrical ones, rather than as a second
+    // tool a caller has to remember to also run.
+    let checks = check_erc(&design, &cx.model);
     cx.log.candidate(Stage::Schematic, 0, cx.args.seed, &design, Tier::Geometry, &checks, serde_json::Value::Null).ok();
     // Always persist the candidate: a failed one is what review reads.
     save_design(&cx.args.out, &design)?;
@@ -1071,7 +1095,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "check", "check needs --design")])?;
             let mut ok = true;
             if d.schematic.is_some() {
-                ok &= print_checks("schematic gates", &check_schematic(&d, &cx.model));
+                ok &= print_checks("schematic gates", &check_erc(&d, &cx.model));
             }
             if d.placement.is_some() {
                 ok &= print_checks("placement gates", &{ let mut c = check_placement(&d, &cx.model); c.extend(eda::preflight(&d, &cx.model, &cx.model.board)); c });

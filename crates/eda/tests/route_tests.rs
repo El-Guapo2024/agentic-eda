@@ -18,7 +18,7 @@ fn part(reference: &str, npins: usize) -> Part {
         pins: (1..=npins)
             .map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal })
             .collect(),
-        body_um: None,
+        body_um: None, symbol: None, datasheet: None,
         edge: None,
     }
 }
@@ -74,7 +74,7 @@ fn part_th(reference: &str, npins: usize) -> Part {
         pins: (1..=npins)
             .map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal })
             .collect(),
-        body_um: None,
+        body_um: None, symbol: None, datasheet: None,
         edge: None,
     }
 }

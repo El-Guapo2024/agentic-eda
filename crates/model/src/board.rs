@@ -247,7 +247,7 @@ mod tests {
                 package: Some((*pkg).into()),
                 footprint: Some((*pkg).into()),
                 pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
-                body_um: None,
+                body_um: None, symbol: None, datasheet: None,
                 edge: None,
             })
             .collect();

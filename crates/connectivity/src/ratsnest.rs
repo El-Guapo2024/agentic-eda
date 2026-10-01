@@ -290,7 +290,7 @@ mod tests {
         // Add a third unconnected pad on the same net -- N clusters always
         // need exactly N-1 ratsnest edges to finish, regardless of which
         // valid triangulation produced the candidate edges.
-        model.parts.push(eda_model::Part { reference: "R3".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![eda_model::Pin { number: "1".into(), name: None, kind: eda_model::PinKind::Passive }], body_um: None, edge: None });
+        model.parts.push(eda_model::Part { reference: "R3".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), symbol: None, datasheet: None, pins: vec![eda_model::Pin { number: "1".into(), name: None, kind: eda_model::PinKind::Passive }], body_um: None, edge: None });
         model.nets[0].pins.push("R3.1".into());
         design.placement.as_mut().unwrap().footprints.push(eda_model::ir::FootprintInstance { id: "R3".into(), at: eda_model::ir::Point { x: 10_000, y: 15_000 }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() });
 

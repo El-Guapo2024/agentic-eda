@@ -389,7 +389,7 @@ mod tests {
             package: Some(pkg.into()),
             footprint: None,
             pins: (1..=n).map(|i| Pin { number: i.to_string(), name: None, kind: PinKind::Signal }).collect(),
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         }
     }

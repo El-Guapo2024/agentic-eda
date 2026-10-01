@@ -126,7 +126,7 @@ mod tests {
                 eda_model::Pin { number: "1".into(), name: None, kind: eda_model::PinKind::Passive },
                 eda_model::Pin { number: "2".into(), name: None, kind: eda_model::PinKind::Passive },
             ],
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         }
     }

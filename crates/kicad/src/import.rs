@@ -134,6 +134,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         stackup: None,
         impedance_targets: vec![],
         footprints: explicit_footprints.into_values().collect(),
+        symbols: vec![],
         board,
         allow: Default::default(),
         solver: Default::default(),
@@ -417,7 +418,7 @@ fn import_footprints(
         // doc comment already gives for sharing parse_pad_geometry.
         explicit.entry(lib_id.clone()).or_insert_with(|| Footprint { name: lib_id.clone(), pads, courtyard: None, model: crate::footprint_lib::model_from(fp) });
 
-        parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(lib_id), pins, body_um: None, edge: None });
+        parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(lib_id), pins, body_um: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
     }
 

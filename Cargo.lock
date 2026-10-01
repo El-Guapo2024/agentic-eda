@@ -577,7 +577,6 @@ dependencies = [
  "eda-engine",
  "eda-layout",
  "eda-model",
- "eda-render",
  "serde_json",
  "serde_yaml",
 ]
@@ -636,6 +635,7 @@ dependencies = [
  "eda-layout",
  "eda-model",
  "eda-place",
+ "eda-render",
  "serde",
  "serde_json",
  "serde_yaml",

@@ -1443,6 +1443,8 @@ mod tests {
             value: None,
             package: Some("PAD1".into()),
             footprint: Some("PAD1".into()),
+            symbol: None,
+            datasheet: None,
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Signal }],
             body_um: None,
             edge: None,

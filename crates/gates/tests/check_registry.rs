@@ -50,30 +50,9 @@ const REGISTERED: &[&str] = &[
     "routing_unnecessary_via",
     "routing_via_in_pad",
     "routing_within_outline",
-    // -- schematic --------------------------------------------------
-    "schematic_cluster_split",
-    "schematic_column_overflow",
-    "schematic_content_in_bounds",
-    "schematic_flag_adjacent",
-    "schematic_flow_direction",
-    "schematic_label_far_from_part",
-    "schematic_label_in_symbol",
-    "schematic_label_over_wire",
-    "schematic_missing_junction",
-    "schematic_offgrid",
-    "schematic_power_net_as_wire",
-    "schematic_sheet_aspect",
-    "schematic_sheet_density",
-    "schematic_symbol_overlap",
-    "schematic_text_overlap",
-    "schematic_wire_crossing_count",
-    "schematic_wire_detour",
-    "schematic_wire_endpoint_off_pin",
-    "schematic_wire_ink",
-    "schematic_wire_length",
-    "schematic_wire_not_orthogonal",
-    "schematic_wire_overlap",
-    "schematic_wire_through_symbol",
+    // Schematic checks moved to `eda_kicad::check_erc` (see that crate's
+    // own `tests/erc_check_registry.rs`) -- this crate no longer emits any
+    // `schematic_*` check.
 ];
 
 /// Scrape check-name literals out of the crate source.
@@ -85,7 +64,7 @@ const REGISTERED: &[&str] = &[
 /// scrape is enough for that.
 fn emitted() -> BTreeSet<String> {
     const SOURCES: &[&str] = &[include_str!("../src/lib.rs"), include_str!("../src/pcb.rs")];
-    const PREFIXES: &[&str] = &["placement_", "routing_", "schematic_"];
+    const PREFIXES: &[&str] = &["placement_", "routing_"];
     let mut found = BTreeSet::new();
     for src in SOURCES {
         for (i, _) in src.match_indices('"') {

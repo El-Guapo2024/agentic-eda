@@ -728,7 +728,7 @@ mod tests {
             package: Some(name.into()),
             footprint: Some(name.into()),
             pins: (1..=footprint.pads.len()).map(|i| crate::Pin { number: i.to_string(), name: None, kind: crate::PinKind::Passive }).collect(),
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         };
         let model = crate::ConstraintModel { parts: vec![part.clone()], footprints: vec![footprint], ..Default::default() };

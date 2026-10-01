@@ -8,7 +8,6 @@ serde_json = { workspace = true }
 eda-model = { path = "../model" }
 eda-engine = { path = "../engine" }
 eda-layout = { path = "../layout" }
-eda-render = { path = "../render" }
 eda-drc = { path = "../drc" }
 
 [dev-dependencies]

@@ -91,6 +91,7 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     )
     .map_err(|e| fail("board_bad_intent", &meta.intent, format!("the intent does not parse: {e}")))?;
     crate::resolve_footprint_libraries(&mut model);
+    crate::resolve_symbol_libraries(&mut model);
     Ok((meta, design, model))
 }
 
@@ -521,6 +522,7 @@ pub fn run(
             )
             .map_err(|e| fail("board_bad_intent", intent, e.to_string()))?;
             crate::resolve_footprint_libraries(&mut model);
+            crate::resolve_symbol_libraries(&mut model);
             std::fs::create_dir_all(&out).map_err(|e| fail("board_mkdir", &out.display().to_string(), e.to_string()))?;
             let design = seed_outline(&model)?;
             let abs = std::fs::canonicalize(intent).unwrap_or_else(|_| PathBuf::from(intent));
@@ -770,7 +772,7 @@ mod tests {
             package: Some("2PAD".into()),
             footprint: Some("2PAD".into()),
             pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
-            body_um: None,
+            body_um: None, symbol: None, datasheet: None,
             edge: None,
         };
         let model = ConstraintModel {
