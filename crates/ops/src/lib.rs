@@ -41,11 +41,23 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+
+/// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
+/// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
+/// Cmd with a field selector rather than three near-identical variants --
+/// see `Cmd::PushPinProperty`'s own doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PushPinField {
+    Length,
+    NameSize,
+    NumberSize,
+}
 
 /// `dialog_annotate.cpp`'s own "Order Options": which coordinate breaks
 /// ties first when two symbols would otherwise land in the same spot in
@@ -993,6 +1005,93 @@ pub enum Cmd {
     EditFootprintText { footprint: String, id: String, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool },
     DeleteFootprintText { footprint: String, id: String },
     MoveFootprintText { footprint: String, id: String, x: Um, y: Um },
+
+    // ----------------------------------------------------- symbol editor
+    //
+    // The Symbol Editor tab's own `Domain::SymbolEditor` command set --
+    // every verb here targets `design.symbol_library`, mirroring the
+    // footprint-editor section above field-for-field where the two
+    // editors share a shape (open/delete/edit-properties/update-on-board)
+    // and diverging where a symbol's own content differs (pins instead of
+    // pads, no per-item "layer", positions in mm not um -- a library
+    // symbol's own native unit, see `eda_model::symbol`'s doc).
+    /// Open a symbol for editing, creating `design.symbol_library`'s entry
+    /// for `lib_id` the first time -- from an already-resolved `LibSymbol`
+    /// (a real library file already folded into `ConstraintModel::symbols`,
+    /// the builtin table, or an already-placed instance's own resolution)
+    /// when `lib_id` resolves to one, else a brand-new empty symbol
+    /// (KiCad's "New Symbol" and "Edit Symbol" on an unresolvable name are
+    /// the same verb here, same precedent `OpenFootprintForEdit`'s own doc
+    /// sets). A no-op, not an error, if already open.
+    OpenSymbolForEdit { lib_id: String },
+    /// Remove a symbol definition from the project library entirely.
+    /// Never touches a placed instance naming it -- same "explicit, not
+    /// automatic" rule `DeleteLibraryFootprint` documents.
+    DeleteLibrarySymbol { lib_id: String },
+    /// `dialog_lib_symbol_properties.cpp`'s General + Units&&Body Styles
+    /// tabs -- the whole panel commits together, same shape as
+    /// `EditFootprintProperties`.
+    #[allow(clippy::too_many_arguments)]
+    EditSymbolProperties {
+        lib_id: String,
+        reference_prefix: String,
+        description: String,
+        keywords: String,
+        datasheet: String,
+        power: bool,
+        in_bom: bool,
+        on_board: bool,
+        pin_numbers_hidden: bool,
+        pin_names_hidden: bool,
+        pin_name_offset_mm: f64,
+        unit_count: u32,
+        has_alternate_body_style: bool,
+        footprint_filters: Vec<String>,
+    },
+    /// KiCad's "Update Symbol from Library": every schematic symbol/
+    /// power-symbol instance naming `lib_id` starts resolving its
+    /// graphics/pins from here (`crate::board::load`'s overlay, gated on
+    /// `published`) -- same explicit, user-triggered switch
+    /// `UpdateFootprintOnBoard` already is.
+    UpdateSymbolOnBoard { lib_id: String },
+
+    /// Place a pin (`symbol_editor_pin_tool.cpp`'s `CreatePin`). `pin.id`,
+    /// if the caller sent one, is ignored -- ids are assigned here, same
+    /// as `AddPad`.
+    AddSymbolPin { lib_id: String, pin: LibrarySymbolPin },
+    /// Move a pin to an absolute position in the symbol's own mm frame.
+    MoveSymbolPin { lib_id: String, id: String, x: f64, y: f64 },
+    DeleteSymbolPin { lib_id: String, id: String },
+    /// Pin Properties dialog's OK: replace every field of one pin at once
+    /// (same "whole panel commits together" shape as `EditPad`). `id` on
+    /// `pin`, if the caller sent one, is ignored.
+    EditSymbolPin { lib_id: String, id: String, pin: LibrarySymbolPin },
+    /// `symbol_editor_pin_tool.cpp`'s "Push Pin Length"/"Push Pin Name
+    /// Size"/"Push Pin Number Size" -- source's own three context-menu
+    /// items, each copying exactly one field from the one selected
+    /// (source) pin to every *other* pin on the symbol unconditionally;
+    /// folded into one Cmd with a field selector rather than three
+    /// near-identical variants.
+    PushPinProperty { lib_id: String, source_pin_id: String, field: PushPinField },
+
+    /// Free-standing graphics on a symbol's own unit/body-style, in its
+    /// local mm frame -- same shape/validation spirit as the PCB tab's
+    /// `AddShape`/the footprint editor's `AddFootprintGraphic`.
+    AddSymbolGraphic { lib_id: String, graphic: LibrarySymbolGraphic },
+    DeleteSymbolGraphic { lib_id: String, id: String },
+    MoveSymbolGraphic { lib_id: String, id: String, dx_mm: f64, dy_mm: f64 },
+    /// Shape Properties' editable fields (stroke width, fill) -- geometry
+    /// has no dialog field to edit either, only by dragging its own
+    /// points (no point editor, same gap `EditShape`'s own doc notes for
+    /// the PCB side).
+    EditSymbolGraphic { lib_id: String, id: String, stroke_mm: f64, fill: LibraryFill },
+    /// `LibrarySymbolGraphic::Text`'s own fields (content/angle/size) --
+    /// split from `EditSymbolGraphic` the same way the footprint editor's
+    /// `EditFootprintText` is split from `EditFootprintGraphic` (a
+    /// different field set, not a shape). Position is edited through the
+    /// generic `MoveSymbolGraphic` (text is still one `LibrarySymbolGraphic`
+    /// entry, addressed by the same `id`).
+    EditSymbolText { lib_id: String, id: String, text: String, angle_deg: f64, size_mm: f64 },
 }
 
 /// Which editor a `Cmd` belongs to -- `eeschema`'s `design.schematic`, or
@@ -1014,6 +1113,9 @@ pub enum Domain {
     /// same reasoning `Schematic` already got its own scope for, GAPS.md
     /// #15).
     FootprintEditor,
+    /// The Symbol Editor tab: `design.symbol_library`'s own undo/redo
+    /// scope, same independence `FootprintEditor`'s own doc explains.
+    SymbolEditor,
 }
 
 impl Cmd {
@@ -1064,6 +1166,20 @@ impl Cmd {
             | Cmd::EditFootprintText { .. }
             | Cmd::DeleteFootprintText { .. }
             | Cmd::MoveFootprintText { .. } => Domain::FootprintEditor,
+            Cmd::OpenSymbolForEdit { .. }
+            | Cmd::DeleteLibrarySymbol { .. }
+            | Cmd::EditSymbolProperties { .. }
+            | Cmd::UpdateSymbolOnBoard { .. }
+            | Cmd::AddSymbolPin { .. }
+            | Cmd::MoveSymbolPin { .. }
+            | Cmd::DeleteSymbolPin { .. }
+            | Cmd::EditSymbolPin { .. }
+            | Cmd::PushPinProperty { .. }
+            | Cmd::AddSymbolGraphic { .. }
+            | Cmd::DeleteSymbolGraphic { .. }
+            | Cmd::MoveSymbolGraphic { .. }
+            | Cmd::EditSymbolGraphic { .. }
+            | Cmd::EditSymbolText { .. } => Domain::SymbolEditor,
             _ => Domain::Pcb,
         }
     }
@@ -1156,6 +1272,18 @@ impl Cmd {
             | Cmd::EditFootprintText { footprint, .. }
             | Cmd::DeleteFootprintText { footprint, .. }
             | Cmd::MoveFootprintText { footprint, .. } => vec![footprint.as_str()],
+
+            Cmd::OpenSymbolForEdit { lib_id } | Cmd::DeleteLibrarySymbol { lib_id } | Cmd::EditSymbolProperties { lib_id, .. } | Cmd::UpdateSymbolOnBoard { lib_id } => vec![lib_id.as_str()],
+            Cmd::AddSymbolPin { lib_id, .. }
+            | Cmd::MoveSymbolPin { lib_id, .. }
+            | Cmd::DeleteSymbolPin { lib_id, .. }
+            | Cmd::EditSymbolPin { lib_id, .. }
+            | Cmd::PushPinProperty { lib_id, .. }
+            | Cmd::AddSymbolGraphic { lib_id, .. }
+            | Cmd::DeleteSymbolGraphic { lib_id, .. }
+            | Cmd::MoveSymbolGraphic { lib_id, .. }
+            | Cmd::EditSymbolGraphic { lib_id, .. }
+            | Cmd::EditSymbolText { lib_id, .. } => vec![lib_id.as_str()],
         }
     }
 
@@ -1567,6 +1695,38 @@ impl<'a> Board<'a> {
             }
             Cmd::DeleteFootprintText { footprint, id } => self.delete_footprint_text(footprint, id),
             Cmd::MoveFootprintText { footprint, id, x, y } => self.move_footprint_text(footprint, id, *x, *y),
+
+            Cmd::OpenSymbolForEdit { lib_id } => self.open_symbol_for_edit(lib_id),
+            Cmd::DeleteLibrarySymbol { lib_id } => self.delete_library_symbol(lib_id),
+            Cmd::EditSymbolProperties { lib_id, reference_prefix, description, keywords, datasheet, power, in_bom, on_board, pin_numbers_hidden, pin_names_hidden, pin_name_offset_mm, unit_count, has_alternate_body_style, footprint_filters } => self.edit_symbol_properties(
+                lib_id,
+                reference_prefix.clone(),
+                description.clone(),
+                keywords.clone(),
+                datasheet.clone(),
+                *power,
+                *in_bom,
+                *on_board,
+                *pin_numbers_hidden,
+                *pin_names_hidden,
+                *pin_name_offset_mm,
+                *unit_count,
+                *has_alternate_body_style,
+                footprint_filters.clone(),
+            ),
+            Cmd::UpdateSymbolOnBoard { lib_id } => self.update_symbol_on_board(lib_id),
+
+            Cmd::AddSymbolPin { lib_id, pin } => self.add_symbol_pin(lib_id, pin.clone()),
+            Cmd::MoveSymbolPin { lib_id, id, x, y } => self.move_symbol_pin(lib_id, id, *x, *y),
+            Cmd::DeleteSymbolPin { lib_id, id } => self.delete_symbol_pin(lib_id, id),
+            Cmd::EditSymbolPin { lib_id, id, pin } => self.edit_symbol_pin(lib_id, id, pin.clone()),
+            Cmd::PushPinProperty { lib_id, source_pin_id, field } => self.push_pin_property(lib_id, source_pin_id, *field),
+
+            Cmd::AddSymbolGraphic { lib_id, graphic } => self.add_symbol_graphic(lib_id, graphic.clone()),
+            Cmd::DeleteSymbolGraphic { lib_id, id } => self.delete_symbol_graphic(lib_id, id),
+            Cmd::MoveSymbolGraphic { lib_id, id, dx_mm, dy_mm } => self.move_symbol_graphic(lib_id, id, *dx_mm, *dy_mm),
+            Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, fill } => self.edit_symbol_graphic(lib_id, id, *stroke_mm, *fill),
+            Cmd::EditSymbolText { lib_id, id, text, angle_deg, size_mm } => self.edit_symbol_text(lib_id, id, text.clone(), *angle_deg, *size_mm),
         }
     }
 
@@ -3842,6 +4002,247 @@ impl<'a> Board<'a> {
         let t = fp.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
         t.at = Point { x, y };
         Ok(())
+    }
+
+    // ----------------------------------------------------- symbol editor
+    //
+    // The Symbol Editor tab's own `Domain::SymbolEditor` verbs -- see
+    // `Cmd`'s own "symbol editor" section for what each means; these are
+    // its `Board::apply` targets, mirroring the footprint editor's own
+    // shape immediately above (validate first, mutate
+    // `self.design.symbol_library` second, never the reverse).
+
+    /// `design.symbol_library`, creating an empty one on first use -- same
+    /// pattern as `footprint_library_mut`.
+    fn symbol_library_mut(&mut self) -> &mut SymbolLibrarySection {
+        self.design.symbol_library.get_or_insert_with(SymbolLibrarySection::default)
+    }
+
+    fn library_symbol_mut(&mut self, lib_id: &str) -> Result<&mut LibrarySymbol, Vec<CheckResult>> {
+        self.design
+            .symbol_library
+            .as_mut()
+            .and_then(|l| l.by_lib_id_mut(lib_id))
+            .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])
+    }
+
+    fn open_symbol_for_edit(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
+        if lib_id.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_symbol", "symbol", "a symbol needs a lib_id")]);
+        }
+        if self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).is_some() {
+            return Ok(()); // already open -- never resets in-progress edits
+        }
+        // Same two-tier resolution `ConstraintModel::symbol_of` already
+        // does (explicit list -- real libraries already folded in by
+        // `board::load`'s `resolve_symbol_libraries` pass, then the
+        // builtin table); `ops` cannot read a `.kicad_sym` file directly
+        // (no dependency on `eda-kicad`, same boundary `OpenFootprintForEdit`'s
+        // own doc explains for footprints), so a lib_id naming a real
+        // library symbol *no part in this design already uses* falls
+        // through to a blank symbol, same documented simplification.
+        let mut lib_sym = match self.model.symbol_of(lib_id) {
+            Some(sym) => LibrarySymbol::from_engine_symbol(&sym),
+            None => LibrarySymbol::new_empty(lib_id),
+        };
+        lib_sym.assign_missing_ids();
+        self.symbol_library_mut().symbols.push(lib_sym);
+        Ok(())
+    }
+
+    fn delete_library_symbol(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
+        let lib = self.design.symbol_library.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "the project symbol library is empty")])?;
+        let before = lib.symbols.len();
+        lib.symbols.retain(|s| s.lib_id != lib_id);
+        if lib.symbols.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the library")]);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn edit_symbol_properties(
+        &mut self,
+        lib_id: &str,
+        reference_prefix: String,
+        description: String,
+        keywords: String,
+        datasheet: String,
+        power: bool,
+        in_bom: bool,
+        on_board: bool,
+        pin_numbers_hidden: bool,
+        pin_names_hidden: bool,
+        pin_name_offset_mm: f64,
+        unit_count: u32,
+        has_alternate_body_style: bool,
+        footprint_filters: Vec<String>,
+    ) -> Result<(), Vec<CheckResult>> {
+        if unit_count == 0 {
+            return Err(vec![CheckResult::fail("ops_bad_symbol", lib_id, "a symbol needs at least one unit")]);
+        }
+        let sym = self.library_symbol_mut(lib_id)?;
+        sym.reference_prefix = reference_prefix;
+        sym.description = description;
+        sym.keywords = keywords;
+        sym.datasheet = datasheet;
+        sym.power = power;
+        sym.in_bom = in_bom;
+        sym.on_board = on_board;
+        sym.pin_numbers_hidden = pin_numbers_hidden;
+        sym.pin_names_hidden = pin_names_hidden;
+        sym.pin_name_offset_mm = pin_name_offset_mm;
+        sym.unit_count = unit_count;
+        sym.has_alternate_body_style = has_alternate_body_style;
+        sym.footprint_filters = footprint_filters;
+        Ok(())
+    }
+
+    fn update_symbol_on_board(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
+        self.library_symbol_mut(lib_id)?.published = true;
+        Ok(())
+    }
+
+    /// A pin needs a non-empty number (KiCad allows an empty pin *name*,
+    /// never an empty number) and a non-empty electrical type -- the one
+    /// validation cheap and unambiguous enough to enforce without
+    /// transcribing all of `pin_type.h`'s closed vocabulary (same "keep
+    /// the raw string, round-trip whatever this port doesn't special-case"
+    /// convention `LibPin::electrical_type`'s own doc already accepts).
+    fn validate_pin(pin: &LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
+        if pin.number.trim().is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_pin", "pin", "a pin needs a number")]);
+        }
+        if pin.electrical_type.trim().is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "a pin needs an electrical type")]);
+        }
+        if pin.length_mm < 0.0 {
+            return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "pin length cannot be negative")]);
+        }
+        Ok(())
+    }
+
+    fn find_pin_mut<'b>(sym: &'b mut LibrarySymbol, id: &str) -> Result<&'b mut LibrarySymbolPin, Vec<CheckResult>> {
+        sym.pins.iter_mut().find(|p| p.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_pin", id, "no pin with this id")])
+    }
+
+    fn add_symbol_pin(&mut self, lib_id: &str, mut pin: LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
+        pin.id = String::new(); // ids are ours to assign, never the caller's
+        Self::validate_pin(&pin)?;
+        let sym = self.library_symbol_mut(lib_id)?;
+        sym.pins.push(pin);
+        sym.assign_missing_ids();
+        Ok(())
+    }
+
+    fn move_symbol_pin(&mut self, lib_id: &str, id: &str, x: f64, y: f64) -> Result<(), Vec<CheckResult>> {
+        let sym = self.library_symbol_mut(lib_id)?;
+        Self::find_pin_mut(sym, id)?.at = eda_model::symbol::SPoint { x, y };
+        Ok(())
+    }
+
+    fn delete_symbol_pin(&mut self, lib_id: &str, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sym = self.library_symbol_mut(lib_id)?;
+        let before = sym.pins.len();
+        sym.pins.retain(|p| p.id != id);
+        if sym.pins.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_pin", id, "no pin with this id")]);
+        }
+        Ok(())
+    }
+
+    fn edit_symbol_pin(&mut self, lib_id: &str, id: &str, mut pin: LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
+        pin.id = id.to_string();
+        Self::validate_pin(&pin)?;
+        let sym = self.library_symbol_mut(lib_id)?;
+        let slot = Self::find_pin_mut(sym, id)?;
+        *slot = pin;
+        Ok(())
+    }
+
+    fn push_pin_property(&mut self, lib_id: &str, source_pin_id: &str, field: PushPinField) -> Result<(), Vec<CheckResult>> {
+        let sym = self.library_symbol_mut(lib_id)?;
+        let src = sym.pins.iter().find(|p| p.id == source_pin_id).cloned().ok_or_else(|| vec![CheckResult::fail("ops_unknown_pin", source_pin_id, "no pin with this id")])?;
+        for p in sym.pins.iter_mut().filter(|p| p.id != source_pin_id) {
+            match field {
+                // `symbol_editor_pin_tool.cpp::PushPinProperties`: a length
+                // push is skipped between pins of different body styles
+                // (source's own `if ( eachPin->GetBodyStyle() ==
+                // pin->GetBodyStyle() )` guard); name/number size have no
+                // such guard, confirmed directly against that function.
+                PushPinField::Length if p.body_style == src.body_style => p.length_mm = src.length_mm,
+                PushPinField::Length => {}
+                PushPinField::NameSize => p.name_size_mm = src.name_size_mm,
+                PushPinField::NumberSize => p.number_size_mm = src.number_size_mm,
+            }
+        }
+        Ok(())
+    }
+
+    fn add_symbol_graphic(&mut self, lib_id: &str, mut graphic: LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
+        if let LibrarySymbolGraphic::Polyline { pts, .. } = &graphic {
+            if pts.len() < 2 {
+                return Err(vec![CheckResult::fail("ops_bad_shape", lib_id, "a polyline needs at least two points")]);
+            }
+        }
+        graphic.set_id(String::new());
+        let sym = self.library_symbol_mut(lib_id)?;
+        sym.graphics.push(graphic);
+        sym.assign_missing_ids();
+        Ok(())
+    }
+
+    fn delete_symbol_graphic(&mut self, lib_id: &str, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sym = self.library_symbol_mut(lib_id)?;
+        let before = sym.graphics.len();
+        sym.graphics.retain(|g| g.id() != id);
+        if sym.graphics.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")]);
+        }
+        Ok(())
+    }
+
+    fn find_symbol_graphic_mut<'b>(sym: &'b mut LibrarySymbol, id: &str) -> Result<&'b mut LibrarySymbolGraphic, Vec<CheckResult>> {
+        sym.graphics.iter_mut().find(|g| g.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])
+    }
+
+    fn move_symbol_graphic(&mut self, lib_id: &str, id: &str, dx_mm: f64, dy_mm: f64) -> Result<(), Vec<CheckResult>> {
+        let sym = self.library_symbol_mut(lib_id)?;
+        Self::find_symbol_graphic_mut(sym, id)?.translate(dx_mm, dy_mm);
+        Ok(())
+    }
+
+    fn edit_symbol_graphic(&mut self, lib_id: &str, id: &str, stroke_mm: f64, fill: LibraryFill) -> Result<(), Vec<CheckResult>> {
+        if stroke_mm < 0.0 {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width cannot be negative")]);
+        }
+        let sym = self.library_symbol_mut(lib_id)?;
+        let g = Self::find_symbol_graphic_mut(sym, id)?;
+        match g {
+            LibrarySymbolGraphic::Rectangle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Polyline { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Circle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Arc { stroke_mm: s, fill: f, .. } => {
+                *s = stroke_mm;
+                *f = fill;
+            }
+            LibrarySymbolGraphic::Text { .. } => return Err(vec![CheckResult::fail("ops_bad_shape", id, "this is a text item -- use edit_symbol_text")]),
+        }
+        Ok(())
+    }
+
+    fn edit_symbol_text(&mut self, lib_id: &str, id: &str, text: String, angle_deg: f64, size_mm: f64) -> Result<(), Vec<CheckResult>> {
+        if size_mm <= 0.0 {
+            return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
+        }
+        let sym = self.library_symbol_mut(lib_id)?;
+        let g = Self::find_symbol_graphic_mut(sym, id)?;
+        match g {
+            LibrarySymbolGraphic::Text { text: t, angle_deg: a, size_mm: s, .. } => {
+                *t = text;
+                *a = angle_deg;
+                *s = size_mm;
+                Ok(())
+            }
+            _ => Err(vec![CheckResult::fail("ops_bad_shape", id, "this is not a text item")]),
+        }
     }
 }
 

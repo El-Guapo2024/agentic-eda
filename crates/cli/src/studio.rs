@@ -563,6 +563,27 @@ fn handle(
                 Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
             }
         }
+        // The Symbol Editor tab: same three-route shape the Footprint
+        // Editor section just above already has (one document, one name
+        // list, one derived-file export) -- see each function's own doc.
+        ("GET", "/api/symbol") => {
+            let query = target.split('?').nth(1).unwrap_or("");
+            let lib_id = query.split('&').find_map(|kv| kv.strip_prefix("lib_id=")).unwrap_or("");
+            let v = symbol_edit_json(dir, lib_id).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
+        ("GET", "/api/symbol_editor/names") => {
+            let v = symbol_editor_names_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
+        ("GET", "/api/symbol/export") => {
+            let query = target.split('?').nth(1).unwrap_or("");
+            let lib_id = query.split('&').find_map(|kv| kv.strip_prefix("lib_id=")).unwrap_or("");
+            match symbol_kicad_sym(dir, lib_id) {
+                Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
+                Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
+            }
+        }
         ("GET", "/api/fill") => {
             let v = fill_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -679,6 +700,7 @@ fn request_domain(body: &[u8]) -> Option<eda_ops::Domain> {
     match req.get("domain").and_then(Value::as_str)? {
         "schematic" => Some(eda_ops::Domain::Schematic),
         "footprint_editor" => Some(eda_ops::Domain::FootprintEditor),
+        "symbol_editor" => Some(eda_ops::Domain::SymbolEditor),
         _ => Some(eda_ops::Domain::Pcb),
     }
 }
@@ -1600,6 +1622,54 @@ fn footprint_kicad_mod(dir: &Path, name: &str) -> Result<String, Vec<CheckResult
     Ok(eda_kicad::export_kicad_mod(fp))
 }
 
+/// `GET /api/symbol?lib_id=<id>` -- the Symbol Editor's own open document,
+/// serialized exactly as `design.symbol_library` stores it, same
+/// "no second hand-built shape" contract `footprint_json`'s own doc
+/// explains (the `LibrarySymbolPin`/`LibrarySymbolGraphic` fields a
+/// `Cmd::AddSymbolPin`/`AddSymbolGraphic` sends are what comes back on the
+/// next poll). `lib_id` must already be open (`Cmd::OpenSymbolForEdit`).
+fn symbol_edit_json(dir: &Path, lib_id: &str) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, _) = board::load(dir)?;
+    let sym = design
+        .symbol_library
+        .as_ref()
+        .and_then(|l| l.by_lib_id(lib_id))
+        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])?;
+    serde_json::to_value(sym).map_err(|e| vec![CheckResult::fail("board_bad_design", lib_id, e.to_string())])
+}
+
+/// `GET /api/symbol_editor/names` -- every `lib_id` available to open: the
+/// Symbol Editor's own "Open from Library" picker, mirroring
+/// `footprint_library_json`'s doc. Besides already-opened entries and
+/// every `lib_id` this project's intent already resolved
+/// (`ConstraintModel::symbols`), the small hand-ported `builtin_catalog`
+/// is always offered too (unlike footprints, which have no equivalent
+/// enumeration function) -- so "New Symbol" always has at least
+/// `Device:R`/`C`/`L`/`D`/`LED` to start editing from, even with no real
+/// KiCad install and nothing on the sheet yet.
+fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let mut names: std::collections::BTreeSet<String> = model.symbols.iter().map(|s| s.lib_id.clone()).collect();
+    names.extend(eda_model::symbol::builtin_catalog().into_iter().map(|s| s.lib_id));
+    if let Some(lib) = &design.symbol_library {
+        names.extend(lib.symbols.iter().map(|s| s.lib_id.clone()));
+    }
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>() }))
+}
+
+/// `GET /api/symbol/export?lib_id=<id>` -- the derived, standalone
+/// `.kicad_sym` for one symbol-library entry (Symbol Editor's "Export
+/// .kicad_sym"), same shape as `footprint_kicad_mod`.
+fn symbol_kicad_sym(dir: &Path, lib_id: &str) -> Result<String, Vec<CheckResult>> {
+    let (_, design, _) = board::load(dir)?;
+    let sym = design
+        .symbol_library
+        .as_ref()
+        .and_then(|l| l.by_lib_id(lib_id))
+        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])?;
+    Ok(eda_kicad::export_kicad_sym(sym))
+}
+
 /// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest
 /// display -- every still-missing copper connection, one line per pair,
 /// `from`/`to` in board-space micrometers like every other endpoint here.
@@ -1663,7 +1733,7 @@ mod tests {
             drawings: None,
             footprint_library: None,
             sheet_contents: (!screens.is_empty()).then_some(screens),
-            bus_aliases: vec![],
+            bus_aliases: vec![], symbol_library: None,
         }
     }
 

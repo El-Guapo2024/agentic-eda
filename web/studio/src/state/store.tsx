@@ -29,7 +29,7 @@ export type RightDockTab = "appearance" | "filter" | "activity";
  * domain entirely in `state/footprintEditorStore.tsx` rather than reusing
  * this file's -- see that file's own header comment.
  */
-export type EditorTab = "pcb" | "schematic" | "footprint" | "3d";
+export type EditorTab = "pcb" | "schematic" | "footprint" | "symbol" | "3d";
 
 /**
  * A minimal active-tool state -- just enough to give the status bar's

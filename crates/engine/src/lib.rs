@@ -495,7 +495,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         placement: None,
         routing: None,
         drawings: None,
-        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     })
 }
 

@@ -142,7 +142,7 @@ fn round_trips_shapes_and_text() {
     drawings.assign_missing_ids();
 
     let design = Design {
-        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "drawings_rt".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,

@@ -208,7 +208,7 @@ fn kicad_cli_drc_bottom_side_pads() {
         .collect();
     let outline = vec![Point { x: 0, y: 0 }, Point { x: 28_000, y: 0 }, Point { x: 28_000, y: 22_000 }, Point { x: 0, y: 22_000 }];
     let design = Design {
-        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "bottom_side_pads".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
@@ -284,7 +284,7 @@ fn kicad_cli_drc_shapes_and_text() {
     drawings.assign_missing_ids();
 
     let design = Design {
-        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "shapes_text_drc".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
@@ -380,7 +380,7 @@ fn kicad_cli_drc_real_footprints() {
         FootprintInstance { id: "SW1".into(), at: Point { x: 30_000, y: 20_000 }, rot: 0, side: Side::Top, label: Default::default() },
     ];
     let design = Design {
-        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "real_footprints".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,

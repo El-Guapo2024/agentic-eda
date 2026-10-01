@@ -34,7 +34,7 @@ fn model(parts: Vec<Part>, nets: &[(&str, &[&str])], rules: Vec<PlacementRule>) 
 /// An empty 100x100mm board.
 fn empty_design() -> Design {
     Design {
-        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
@@ -2089,4 +2089,289 @@ fn swap_layers_rejects_an_unknown_destination_layer() {
     let mut b = board(&m);
     let e = b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "In1.Cu".into())] }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_layer");
+}
+
+// ------------------------------------------------------------ symbol editor
+
+fn sym_pin(number: &str, x: f64, y: f64) -> LibrarySymbolPin {
+    LibrarySymbolPin {
+        id: String::new(),
+        number: number.into(),
+        name: String::new(),
+        electrical_type: "passive".into(),
+        shape: "line".into(),
+        at: eda_model::symbol::SPoint::new(x, y),
+        angle_deg: 270.0,
+        length_mm: 2.54,
+        unit: 1,
+        body_style: 1,
+        hidden: false,
+        name_size_mm: Some(1.27),
+        number_size_mm: Some(1.27),
+    }
+}
+
+#[test]
+fn opening_a_new_lib_id_starts_blank_and_is_idempotent() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Blank".into() }).unwrap();
+    let lib = b.design().symbol_library.as_ref().unwrap();
+    let sym = lib.by_lib_id("Test:Blank").unwrap();
+    assert!(sym.pins.is_empty());
+    assert!(!sym.published);
+
+    // Re-opening is a no-op even after an edit -- it must never reset progress.
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Blank".into(), pin: sym_pin("1", 0.0, 3.81) }).unwrap();
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Blank".into() }).unwrap();
+    assert_eq!(b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Blank").unwrap().pins.len(), 1);
+}
+
+#[test]
+fn opening_a_builtin_lib_id_materializes_its_real_pins() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Device:R".into() }).unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Device:R").unwrap();
+    assert_eq!(sym.pins.len(), 2, "Device:R is a two-pin passive");
+    assert!(sym.pins.iter().all(|p| !p.id.is_empty()));
+    assert_eq!(sym.reference_prefix, "R");
+}
+
+#[test]
+fn add_pin_assigns_an_id_and_ignores_a_caller_supplied_one() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    let mut pin = sym_pin("1", 0.0, 3.81);
+    pin.id = "ignored-on-input".into();
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin }).unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    assert_eq!(sym.pins.len(), 1);
+    assert_ne!(sym.pins[0].id, "ignored-on-input");
+    assert!(!sym.pins[0].id.is_empty());
+}
+
+#[test]
+fn add_pin_against_an_unopened_symbol_is_refused() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::AddSymbolPin { lib_id: "Nobody:Opened".into(), pin: sym_pin("1", 0.0, 0.0) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_symbol");
+}
+
+#[test]
+fn add_pin_rejects_an_empty_number() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    let e = b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("", 0.0, 0.0) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_pin");
+}
+
+#[test]
+fn move_edit_and_delete_pin_round_trip() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("1", 0.0, 3.81) }).unwrap();
+    let id = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().pins[0].id.clone();
+
+    b.apply(&Cmd::MoveSymbolPin { lib_id: "Test:Sym".into(), id: id.clone(), x: 1.0, y: 2.0 }).unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    assert_eq!(sym.pins[0].at, eda_model::symbol::SPoint::new(1.0, 2.0));
+
+    let mut edited = sym_pin("2", 1.0, 2.0);
+    edited.electrical_type = "output".into();
+    b.apply(&Cmd::EditSymbolPin { lib_id: "Test:Sym".into(), id: id.clone(), pin: edited }).unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    assert_eq!(sym.pins[0].number, "2");
+    assert_eq!(sym.pins[0].electrical_type, "output");
+    assert_eq!(sym.pins[0].id, id, "edit must keep the pin's own id, not the caller's pin.id");
+
+    b.apply(&Cmd::DeleteSymbolPin { lib_id: "Test:Sym".into(), id }).unwrap();
+    assert!(b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().pins.is_empty());
+}
+
+#[test]
+fn next_pin_number_is_used_for_auto_increment_while_placing_in_sequence() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    for n in 1..=4 {
+        let next = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().next_pin_number();
+        b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin(&next, 0.0, n as f64 * 2.54) }).unwrap();
+    }
+    let numbers: Vec<String> = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().pins.iter().map(|p| p.number.clone()).collect();
+    assert_eq!(numbers, vec!["1", "2", "3", "4"]);
+}
+
+#[test]
+fn push_pin_property_skips_length_across_different_body_styles_but_not_text_sizes() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: { let mut p = sym_pin("1", 0.0, 3.81); p.length_mm = 5.08; p.name_size_mm = Some(2.0); p } }).unwrap();
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: { let mut p = sym_pin("2", 0.0, -3.81); p.body_style = 2; p } }).unwrap();
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("3", 2.54, 0.0) }).unwrap();
+
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    let source_id = sym.pins.iter().find(|p| p.number == "1").unwrap().id.clone();
+
+    b.apply(&Cmd::PushPinProperty { lib_id: "Test:Sym".into(), source_pin_id: source_id, field: PushPinField::Length }).unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    let by_num = |n: &str| sym.pins.iter().find(|p| p.number == n).unwrap();
+    assert_eq!(by_num("3").length_mm, 5.08, "same body style -- length pushed");
+    assert_eq!(by_num("2").length_mm, 2.54, "different body style -- length NOT pushed");
+}
+
+#[test]
+fn add_edit_and_delete_symbol_graphic_round_trip() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    b.apply(&Cmd::AddSymbolGraphic {
+        lib_id: "Test:Sym".into(),
+        graphic: LibrarySymbolGraphic::Rectangle { id: "ignored".into(), unit: 1, body_style: 1, start: eda_model::symbol::SPoint::new(-1.0, -1.0), end: eda_model::symbol::SPoint::new(1.0, 1.0), stroke_mm: 0.254, fill: LibraryFill::None },
+    })
+    .unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    assert_eq!(sym.graphics.len(), 1);
+    let id = sym.graphics[0].id().to_string();
+    assert_ne!(id, "ignored");
+
+    b.apply(&Cmd::MoveSymbolGraphic { lib_id: "Test:Sym".into(), id: id.clone(), dx_mm: 1.0, dy_mm: 1.0 }).unwrap();
+    b.apply(&Cmd::EditSymbolGraphic { lib_id: "Test:Sym".into(), id: id.clone(), stroke_mm: 0.5, fill: LibraryFill::Background }).unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    match &sym.graphics[0] {
+        LibrarySymbolGraphic::Rectangle { start, stroke_mm, fill, .. } => {
+            assert_eq!(*start, eda_model::symbol::SPoint::new(0.0, 0.0));
+            assert_eq!(*stroke_mm, 0.5);
+            assert_eq!(*fill, LibraryFill::Background);
+        }
+        other => panic!("expected a rectangle, got {other:?}"),
+    }
+
+    b.apply(&Cmd::DeleteSymbolGraphic { lib_id: "Test:Sym".into(), id }).unwrap();
+    assert!(b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().graphics.is_empty());
+}
+
+#[test]
+fn edit_symbol_text_changes_content_angle_and_size_but_not_position() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    b.apply(&Cmd::AddSymbolGraphic { lib_id: "Test:Sym".into(), graphic: LibrarySymbolGraphic::Text { id: String::new(), unit: 0, body_style: 0, text: "note".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, size_mm: 1.27 } }).unwrap();
+    let id = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().graphics[0].id().to_string();
+
+    b.apply(&Cmd::EditSymbolText { lib_id: "Test:Sym".into(), id: id.clone(), text: "renamed".into(), angle_deg: 90.0, size_mm: 2.0 }).unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    match &sym.graphics[0] {
+        LibrarySymbolGraphic::Text { text, angle_deg, size_mm, at, .. } => {
+            assert_eq!(text, "renamed");
+            assert_eq!(*angle_deg, 90.0);
+            assert_eq!(*size_mm, 2.0);
+            assert_eq!(*at, eda_model::symbol::SPoint::new(0.0, 0.0), "position is untouched by edit_symbol_text");
+        }
+        other => panic!("expected text, got {other:?}"),
+    }
+
+    // Editing a non-text graphic's text fields (and vice versa) is refused,
+    // not a silent no-op or a panic.
+    b.apply(&Cmd::AddSymbolGraphic { lib_id: "Test:Sym".into(), graphic: LibrarySymbolGraphic::Circle { id: String::new(), unit: 1, body_style: 1, center: eda_model::symbol::SPoint::new(0.0, 0.0), radius_mm: 1.0, stroke_mm: 0.254, fill: LibraryFill::None } }).unwrap();
+    let circle_id = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().graphics.iter().find(|g| matches!(g, LibrarySymbolGraphic::Circle { .. })).unwrap().id().to_string();
+    let e = b.apply(&Cmd::EditSymbolText { lib_id: "Test:Sym".into(), id: circle_id, text: "x".into(), angle_deg: 0.0, size_mm: 1.0 }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_shape");
+}
+
+#[test]
+fn update_symbol_on_board_only_flips_the_explicit_flag() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    assert!(!b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().published);
+    b.apply(&Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("1", 0.0, 3.81) }).unwrap();
+    assert!(!b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().published, "editing pins must never auto-publish");
+
+    b.apply(&Cmd::UpdateSymbolOnBoard { lib_id: "Test:Sym".into() }).unwrap();
+    assert!(b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap().published);
+}
+
+#[test]
+fn edit_symbol_properties_replaces_the_whole_panel() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    b.apply(&Cmd::EditSymbolProperties {
+        lib_id: "Test:Sym".into(),
+        reference_prefix: "U".into(),
+        description: "A test symbol".into(),
+        keywords: "test".into(),
+        datasheet: "http://example.com".into(),
+        power: false,
+        in_bom: true,
+        on_board: true,
+        pin_numbers_hidden: true,
+        pin_names_hidden: false,
+        pin_name_offset_mm: 0.254,
+        unit_count: 2,
+        has_alternate_body_style: true,
+        footprint_filters: vec!["SOIC*".into()],
+    })
+    .unwrap();
+    let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
+    assert_eq!(sym.description, "A test symbol");
+    assert_eq!(sym.unit_count, 2);
+    assert!(sym.has_alternate_body_style);
+    assert!(sym.pin_numbers_hidden);
+    assert_eq!(sym.footprint_filters, vec!["SOIC*".to_string()]);
+}
+
+#[test]
+fn edit_symbol_properties_rejects_zero_units() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    let e = b
+        .apply(&Cmd::EditSymbolProperties {
+            lib_id: "Test:Sym".into(),
+            reference_prefix: "U".into(),
+            description: String::new(),
+            keywords: String::new(),
+            datasheet: String::new(),
+            power: false,
+            in_bom: true,
+            on_board: true,
+            pin_numbers_hidden: false,
+            pin_names_hidden: false,
+            pin_name_offset_mm: 0.508,
+            unit_count: 0,
+            has_alternate_body_style: false,
+            footprint_filters: vec![],
+        })
+        .unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_symbol");
+}
+
+#[test]
+fn delete_library_symbol_removes_the_entry_but_never_a_placed_instance() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() }).unwrap();
+    b.apply(&Cmd::DeleteLibrarySymbol { lib_id: "Test:Sym".into() }).unwrap();
+    assert!(b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").is_none());
+
+    let e = b.apply(&Cmd::DeleteLibrarySymbol { lib_id: "Test:Sym".into() }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_symbol", "deleting an already-gone symbol is refused, not a silent no-op");
+}
+
+#[test]
+fn symbol_editor_commands_are_scoped_to_the_symbol_editor_domain() {
+    for cmd in [
+        Cmd::OpenSymbolForEdit { lib_id: "Test:Sym".into() },
+        Cmd::AddSymbolPin { lib_id: "Test:Sym".into(), pin: sym_pin("1", 0.0, 0.0) },
+        Cmd::DeleteLibrarySymbol { lib_id: "Test:Sym".into() },
+    ] {
+        assert_eq!(cmd.domain(), Domain::SymbolEditor);
+    }
 }

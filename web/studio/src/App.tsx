@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { StudioProvider, useStudioDispatch, useStudioState } from "./state/store";
 import { FootprintEditorProvider } from "./state/footprintEditorStore";
+import { SymbolEditorProvider } from "./state/symbolEditorStore";
 import { useFootprintEditHotkey } from "./actions/useFootprintEditHotkey";
+import { useSymbolEditHotkey } from "./actions/useSymbolEditHotkey";
 import { FootprintEditorView } from "./components/footprint/FootprintEditorView";
+import { SymbolEditorView } from "./components/symbol/SymbolEditorView";
 import { EditorTabs } from "./components/EditorTabs";
 import { MenuBar } from "./components/MenuBar";
 import { Toolbar } from "./components/Toolbar";
@@ -81,6 +84,7 @@ function StudioFrame() {
   const state = useStudioState();
   useGlobalHotkeys();
   useFootprintEditHotkey();
+  useSymbolEditHotkey();
   const [viewer3d, setViewer3d] = useState<Viewer3DApi | null>(null);
   // The 3D tab has no real "own chrome" to extract (3d-viewer/'s source
   // wasn't available this session) and no properties/appearance concept
@@ -96,7 +100,14 @@ function StudioFrame() {
   // even carries a `null` board document, so PropertiesPanel/options-
   // drawing toolbars/RightDock would have nothing real to show here.
   const isFootprint = state.tab === "footprint";
-  const hideBoardChrome = is3d || isFootprint;
+  // The Symbol Editor tab (eeschema's Symbol Editor) is the schematic-side
+  // counterpart of the Footprint Editor tab just above -- its own
+  // complete toolbar+canvas (SymbolEditorView), same reasoning: its own
+  // state/symbolEditorStore.tsx carries a `null` symbol document, so
+  // PropertiesPanel/drawing toolbars/RightDock would have nothing real to
+  // show here either.
+  const isSymbolEditor = state.tab === "symbol";
+  const hideBoardChrome = is3d || isFootprint || isSymbolEditor;
   // eeschema's default AUI layout has no layer/appearance manager at all
   // (that's a pcbnew-only concept -- a schematic has no copper/technical
   // layers to toggle) and no selection-filter-by-item-type panel either
@@ -115,7 +126,7 @@ function StudioFrame() {
       <div className="tabs-row">
         <EditorTabs />
       </div>
-      {!isFootprint && (
+      {!isFootprint && !isSymbolEditor && (
         <div className="main-toolbar-row">
           {is3d ? <Viewer3DToolbar api={viewer3d} /> : <Toolbar id="main" />}
           <QuickActions />
@@ -143,6 +154,7 @@ function StudioFrame() {
           {state.tab === "pcb" && <Canvas />}
           {state.tab === "schematic" && <SchematicView />}
           {isFootprint && <FootprintEditorView />}
+          {isSymbolEditor && <SymbolEditorView />}
           {is3d && <Viewer3D onReady={setViewer3d} />}
           <Toast />
         </div>
@@ -197,7 +209,9 @@ export default function App() {
   return (
     <StudioProvider>
       <FootprintEditorProvider>
-        <StudioFrame />
+        <SymbolEditorProvider>
+          <StudioFrame />
+        </SymbolEditorProvider>
       </FootprintEditorProvider>
     </StudioProvider>
   );

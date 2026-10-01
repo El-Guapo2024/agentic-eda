@@ -386,7 +386,8 @@ function applyFill(ctx: CanvasRenderingContext2D, mode: "none" | "outline" | "ba
   else if (mode === "outline") ctx.fillStyle = strokeColor;
 }
 
-function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphic, strokeColor: string) {
+/** Exported for `components/symbol/symbolPainter.ts` (the Symbol Editor tab): the exact same resolved-graphic drawing logic applies there -- a library symbol's own graphics are this same `ResolvedGraphic` shape, just resolved with an identity transform/no instance offset instead of a placed instance's. */
+export function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphic, strokeColor: string) {
   if (g.kind === "text") {
     drawStrokeText(ctx, g.content, g.at[0], g.at[1], { sizeUm: g.sizeUm, angleRad: -(g.angleDeg * Math.PI) / 180, justify: "center", color: strokeColor });
     return;
@@ -450,8 +451,8 @@ function isHorizontalPin(dir: [number, number]): boolean {
   return dir[1] === 0;
 }
 
-/** The pin-shape decoration geometry -- sch_painter.cpp's `draw(SCH_PIN)`, read directly (formulas for every GRAPHIC_PINSHAPE value, plus the `no_connect` electrical-type override). Operates entirely on `root`/`tip`/`dir`, all already resolved to world space. */
-function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
+/** The pin-shape decoration geometry -- sch_painter.cpp's `draw(SCH_PIN)`, read directly (formulas for every GRAPHIC_PINSHAPE value, plus the `no_connect` electrical-type override). Operates entirely on `root`/`tip`/`dir`, all already resolved to world space. Exported for the Symbol Editor's own canvas (`components/symbol/symbolPainter.ts`) -- same reasoning as `drawRealGraphic`'s own doc. */
+export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
   const { pin, tip: P, root: R, dir } = rp;
   const [dx, dy] = dir;
   const r = PIN_DECOR_UM;
@@ -536,7 +537,7 @@ function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
  * documented consequence of the same missing field, not two separate
  * approximations).
  */
-function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
+export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
   const { pin, tip: P, root: R, dir } = rp;
   if (pin.electrical_type === "no_connect") return;
   const horizontal = isHorizontalPin(dir);

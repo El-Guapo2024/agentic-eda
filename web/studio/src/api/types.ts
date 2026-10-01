@@ -821,7 +821,27 @@ export type Cmd =
   | { op: "add_footprint_text"; footprint: string; text: CmdText }
   | { op: "edit_footprint_text"; footprint: string; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
   | { op: "delete_footprint_text"; footprint: string; id: string }
-  | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um };
+  | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um }
+
+  // ----------------------------------------------------------- symbol editor
+  //
+  // The Symbol Editor tab. crates/ops/src/lib.rs's own "symbol editor" Cmd
+  // section, same order. `Domain::SymbolEditor` (api/client.ts's
+  // `postUndo`/`postRedo` `domain` param) -- its own undo/redo scope.
+  | { op: "open_symbol_for_edit"; lib_id: string }
+  | { op: "delete_library_symbol"; lib_id: string }
+  | ({ op: "edit_symbol_properties"; lib_id: string } & SymbolPropertiesFields)
+  | { op: "update_symbol_on_board"; lib_id: string }
+  | { op: "add_symbol_pin"; lib_id: string; pin: LibrarySymbolPin }
+  | { op: "move_symbol_pin"; lib_id: string; id: string; x: Mm; y: Mm }
+  | { op: "delete_symbol_pin"; lib_id: string; id: string }
+  | { op: "edit_symbol_pin"; lib_id: string; id: string; pin: LibrarySymbolPin }
+  | { op: "push_pin_property"; lib_id: string; source_pin_id: string; field: PushPinField }
+  | { op: "add_symbol_graphic"; lib_id: string; graphic: LibrarySymbolGraphic }
+  | { op: "delete_symbol_graphic"; lib_id: string; id: string }
+  | { op: "move_symbol_graphic"; lib_id: string; id: string; dx_mm: Mm; dy_mm: Mm }
+  | { op: "edit_symbol_graphic"; lib_id: string; id: string; stroke_mm: Mm; fill: LibraryFill }
+  | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
 export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
@@ -1359,6 +1379,102 @@ export interface SymbolLibrary {
   /** Resolved graphics for every entry above, keyed by `lib_id` -- same shape `Schematic.lib_symbols` already uses, so the chooser's live preview reuses the exact same renderer the canvas itself does. */
   lib_symbols: LibSymbols;
 }
+
+// ----------------------------------------------------------- Symbol Editor
+//
+// The Symbol Editor tab. GET /api/symbol?lib_id=... returns
+// `crates/model/src/ir.rs` `LibrarySymbol` serialized exactly as
+// `design.symbol_library` stores it -- the same "no second hand-built
+// shape" contract the Footprint Editor's own types above already follow
+// (see `LibraryFootprint`'s own doc). Coordinates use this file's own `Mm`
+// alias (a library symbol's own native unit, +y **up** -- KiCad's library
+// convention, not this API's usual +y-down sheet/board millimetres) and a
+// plain `{x,y}` point: NOT the `[Mm,Mm]` tuple `LibPin`/`LibGraphic` above
+// use, since those two exist only for the *read-only*, placed-instance
+// rendering path (`lib_symbol_json`'s own hand-built `pt()` helper) --
+// this editor's data instead goes straight through serde's default struct
+// encoding, exactly like `LibraryPad.at`'s own `PointXY` does for the
+// Footprint Editor.
+
+/** `crates/model/src/symbol.rs` `SPoint`, as this editor's own types see it (object form -- see this section's own intro on why). */
+export interface MmPoint {
+  x: Mm;
+  y: Mm;
+}
+
+/** `crates/model/src/ir.rs` `LibraryFill` -- the Shape Properties dialog's own three-way fill choice (KiCad's `color`/hatch modes are real file values but not authorable here, same simplification `crate::symbol::SymbolGraphic`'s single `filled: bool` already made for every other reader of a *resolved* symbol). */
+export type LibraryFill = "none" | "outline" | "background";
+
+/**
+ * `crates/model/src/ir.rs` `LibrarySymbolGraphic` -- one drawn primitive of
+ * a [`LibrarySymbol`], in its own local mm frame. `id` is optional only
+ * for a graphic not yet sent through `add_symbol_graphic` (the backend
+ * always assigns/keeps the real one). `unit`/`body_style`: `0` means
+ * shared by every unit/style, same convention `LibGraphic` above already
+ * documents for the *resolved* type.
+ */
+export type LibrarySymbolGraphic =
+  | { kind: "rectangle"; id?: string; unit: number; body_style: number; start: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
+  | { kind: "polyline"; id?: string; unit: number; body_style: number; pts: MmPoint[]; stroke_mm: Mm; fill: LibraryFill }
+  | { kind: "circle"; id?: string; unit: number; body_style: number; center: MmPoint; radius_mm: Mm; stroke_mm: Mm; fill: LibraryFill }
+  | { kind: "arc"; id?: string; unit: number; body_style: number; start: MmPoint; mid: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
+  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm };
+
+/** `crates/model/src/ir.rs` `LibrarySymbolPin` -- one pin on a [`LibrarySymbol`], addressable (unlike the read-only `LibPin` above) for move/edit/delete. */
+export interface LibrarySymbolPin {
+  id?: string;
+  number: string;
+  name: string;
+  electrical_type: PinElectricalType;
+  shape: PinShape;
+  at: MmPoint;
+  angle_deg: Degrees;
+  length_mm: Mm;
+  unit: number;
+  body_style: number;
+  /** `(hide yes)` -- a hidden pin (almost every power-symbol pin in a real library) draws no line or decoration, only its net-effect on connectivity. */
+  hidden: boolean;
+  name_size_mm: Mm | null;
+  number_size_mm: Mm | null;
+}
+
+/** The fields `edit_symbol_properties` commits all at once (`dialog_lib_symbol_properties.cpp`'s General + Units&&Body Styles tabs) -- factored out so the `Cmd` variant and the Symbol Properties dialog's own form state share one field list, same pattern `FootprintPropertiesFields` already sets. */
+export interface SymbolPropertiesFields {
+  reference_prefix: string;
+  description: string;
+  keywords: string;
+  datasheet: string;
+  power: boolean;
+  in_bom: boolean;
+  on_board: boolean;
+  pin_numbers_hidden: boolean;
+  pin_names_hidden: boolean;
+  pin_name_offset_mm: Mm;
+  unit_count: number;
+  has_alternate_body_style: boolean;
+  footprint_filters: string[];
+}
+
+/**
+ * `crates/model/src/ir.rs` `LibrarySymbol` -- the Symbol Editor's own open
+ * document. `published` mirrors `LibraryFootprint.published`'s own doc:
+ * whether a placed schematic symbol/power-symbol instance naming this
+ * `lib_id` currently resolves its graphics/pins from here.
+ */
+export interface LibrarySymbol extends SymbolPropertiesFields {
+  lib_id: string;
+  graphics: LibrarySymbolGraphic[];
+  pins: LibrarySymbolPin[];
+  published: boolean;
+}
+
+/** `GET /api/symbol_editor/names`'s one field: every `lib_id` available to open (already-opened library entries, every lib_id the project's intent already resolved, and the small builtin catalog), sorted. */
+export interface SymbolEditorNames {
+  names: string[];
+}
+
+/** `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items, folded into one Cmd with a field selector -- see `Cmd`'s own `push_pin_property` doc. */
+export type PushPinField = "length" | "name_size" | "number_size";
 
 // ---------------------------------------------------------------- DRC
 //

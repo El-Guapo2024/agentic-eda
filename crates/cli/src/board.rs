@@ -117,6 +117,21 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
             model.footprints.push(lib_fp.to_engine_footprint());
         }
     }
+    // The Symbol Editor tab's own equivalent overlay: a *published*
+    // symbol-library entry overrides whatever `model.symbol_of` would
+    // otherwise resolve for that `lib_id` -- same "design.json wins over
+    // the frozen intent/real-library resolution" precedent the footprint
+    // overlay just above already sets. Every reader of `model.symbols`
+    // (schematic rendering's `lib_symbols`, ERC, the `.kicad_sch`
+    // exporter) goes through `ConstraintModel::symbol_of`, so this one
+    // overlay is what makes "Update Symbol from Library" actually update
+    // a placed instance -- see `LibrarySymbol::published`'s own doc.
+    if let Some(lib) = &design.symbol_library {
+        for lib_sym in lib.symbols.iter().filter(|s| s.published) {
+            model.symbols.retain(|s| s.lib_id != lib_sym.lib_id);
+            model.symbols.push(lib_sym.to_engine_symbol());
+        }
+    }
     Ok((meta, design, model))
 }
 
@@ -324,6 +339,7 @@ fn domain_tag(d: Domain) -> &'static str {
         Domain::Pcb => "pcb",
         Domain::Schematic => "schematic",
         Domain::FootprintEditor => "footprint_editor",
+        Domain::SymbolEditor => "symbol_editor",
     }
 }
 
@@ -357,6 +373,7 @@ fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<(Domain, eda_
         let domain = match tag {
             "schematic" => Domain::Schematic,
             "footprint_editor" => Domain::FootprintEditor,
+            "symbol_editor" => Domain::SymbolEditor,
             _ => Domain::Pcb,
         };
         (scope.is_none() || scope == Some(domain)).then_some(domain)
@@ -391,7 +408,10 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
         // (or vice versa), which is also why `Pcb`'s arm below now
         // excludes `footprint_library` from what it restores too.
         Some(Domain::FootprintEditor) => eda_model::ir::Design { footprint_library: snapshot.footprint_library, ..current },
-        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, nets: current.nets, footprint_library: current.footprint_library, ..snapshot },
+        // The Symbol Editor tab's own scope, same independence
+        // `FootprintEditor`'s own arm documents.
+        Some(Domain::SymbolEditor) => eda_model::ir::Design { symbol_library: snapshot.symbol_library, ..current },
+        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, nets: current.nets, footprint_library: current.footprint_library, symbol_library: current.symbol_library, ..snapshot },
     }
 }
 
@@ -685,6 +705,24 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditFootprintText { footprint, id, content, layer, .. } => format!("footprint-text edit {footprint:?} {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteFootprintText { footprint, id } => format!("footprint-text delete {footprint:?} {id}"),
         Cmd::MoveFootprintText { footprint, id, x, y } => format!("footprint-text move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
+
+        // The Symbol Editor tab. No real `eda board` CLI subcommand parses
+        // these either, same reasoning as the footprint-editor verbs just
+        // above -- activity.jsonl's human-readable line only.
+        Cmd::OpenSymbolForEdit { lib_id } => format!("symbol open {lib_id:?}"),
+        Cmd::DeleteLibrarySymbol { lib_id } => format!("symbol delete {lib_id:?}"),
+        Cmd::EditSymbolProperties { lib_id, description, .. } => format!("symbol properties {lib_id:?} --description {description:?}"),
+        Cmd::UpdateSymbolOnBoard { lib_id } => format!("symbol update-on-board {lib_id:?}"),
+        Cmd::AddSymbolPin { lib_id, pin } => format!("pin add {lib_id:?} --number {:?} --at {:.2},{:.2}", pin.number, pin.at.x, pin.at.y),
+        Cmd::MoveSymbolPin { lib_id, id, x, y } => format!("pin move {lib_id:?} {id} --to {x:.2},{y:.2}"),
+        Cmd::DeleteSymbolPin { lib_id, id } => format!("pin delete {lib_id:?} {id}"),
+        Cmd::EditSymbolPin { lib_id, id, pin } => format!("pin edit {lib_id:?} {id} --number {:?}", pin.number),
+        Cmd::PushPinProperty { lib_id, source_pin_id, field } => format!("pin push-property {lib_id:?} {source_pin_id} --field {field:?}"),
+        Cmd::AddSymbolGraphic { lib_id, .. } => format!("symbol-shape add {lib_id:?}"),
+        Cmd::DeleteSymbolGraphic { lib_id, id } => format!("symbol-shape delete {lib_id:?} {id}"),
+        Cmd::MoveSymbolGraphic { lib_id, id, dx_mm, dy_mm } => format!("symbol-shape move {lib_id:?} {id} --dx {dx_mm:.2} --dy {dy_mm:.2}"),
+        Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, .. } => format!("symbol-shape edit {lib_id:?} {id} --width {stroke_mm:.2}"),
+        Cmd::EditSymbolText { lib_id, id, text, .. } => format!("symbol-text edit {lib_id:?} {id} --content {text:?}"),
     }
 }
 
@@ -779,6 +817,11 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::RenumberPads { .. } => "pad",
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
+
+        Cmd::OpenSymbolForEdit { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
+        Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
+        Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } => "symbol-shape",
+        Cmd::EditSymbolText { .. } => "symbol-text",
     }
 }
 
@@ -1177,7 +1220,7 @@ mod tests {
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
         let design = Design {
-            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
@@ -1328,7 +1371,7 @@ mod tests {
 
         let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
         let design = Design {
-            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(eda_model::ir::SchematicSection {
@@ -1882,5 +1925,85 @@ mod tests {
         step(&dir, Cmd::UpdateFootprintOnBoard { name: "2PAD".into() }, false, "test").unwrap();
         let (_, _, model) = load(&dir).unwrap();
         assert_eq!(model.footprints.iter().find(|f| f.name == "2PAD").unwrap().pads.len(), 3, "an explicit Update Footprint on Board must republish the edited definition");
+    }
+
+    // ------------------------------------------------------- symbol editor
+
+    /// The Symbol Editor tab's `Domain::SymbolEditor` gets the exact same
+    /// per-tab-undo treatment `undo_redo_are_scoped_to_the_tab_that_asked`/
+    /// `footprint_editor_undo_is_scoped_independently_of_pcb_and_schematic`
+    /// already prove for the other three tabs.
+    #[test]
+    fn symbol_editor_undo_is_scoped_independently_of_pcb_and_schematic() {
+        let dir = scratch("symbol_editor_domain_scoped_undo");
+        setup_both(&dir);
+
+        step(&dir, Cmd::OpenSymbolForEdit { lib_id: "TEST:R".into() }, false, "test").unwrap();
+        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000, y: 10_000 }, false, "test").unwrap();
+
+        let pcb_at = |d: &eda_model::ir::Design| d.placement.as_ref().unwrap().footprints[0].at;
+        let lib_has_sym = |d: &eda_model::ir::Design| d.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("TEST:R").is_some());
+
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 });
+        assert!(lib_has_sym(&design));
+
+        // A Pcb-scoped undo must never touch the symbol library.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(pcb_at(&design), Point { x: 10_000, y: 10_000 }, "the PCB move must revert");
+        assert!(lib_has_sym(&design), "a Pcb-tab undo must never touch the Symbol Editor tab's edit");
+
+        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000, y: 10_000 }, false, "test").unwrap();
+
+        // A SymbolEditor-scoped undo must never touch the PCB tab.
+        undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!lib_has_sym(&design), "the OpenSymbolForEdit must revert");
+        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 }, "a SymbolEditor-tab undo must never touch the PCB tab's edit");
+
+        // Nothing left to undo on this tab: a clean error, not a silent
+        // fallback onto another tab's stack.
+        let err = undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap_err();
+        assert_eq!(err[0].check, "board_no_undo");
+    }
+
+    /// `board::load`'s overlay (mirroring `loading_overlays_only_published_
+    /// footprints_onto_the_model`): a *published* library symbol reaches
+    /// `ConstraintModel::symbols` (so a placed instance naming it resolves
+    /// to the edited pins/graphics); an unpublished one -- the ordinary
+    /// state while still mid-edit -- must not.
+    #[test]
+    fn loading_overlays_only_published_symbols_onto_the_model() {
+        let dir = scratch("symbol_overlay");
+        setup_schematic(&dir);
+        step(&dir, Cmd::OpenSymbolForEdit { lib_id: "TEST:R".into() }, false, "test").unwrap();
+        let pin = eda_model::ir::LibrarySymbolPin {
+            id: String::new(),
+            number: "2".into(),
+            name: String::new(),
+            electrical_type: "passive".into(),
+            shape: "line".into(),
+            at: eda_model::symbol::SPoint::new(0.0, -2.54),
+            angle_deg: 90.0,
+            length_mm: 2.54,
+            unit: 1,
+            body_style: 1,
+            hidden: false,
+            name_size_mm: None,
+            number_size_mm: None,
+        };
+        step(&dir, Cmd::AddSymbolPin { lib_id: "TEST:R".into(), pin }, false, "test").unwrap();
+
+        // Still unpublished: the board-wide model keeps resolving "TEST:R"
+        // to its original one-pin definition, exactly as before this
+        // editor touched it -- a part's pins must not shift while someone
+        // is mid-edit in the Symbol Editor tab.
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!(model.symbol_of("TEST:R").unwrap().pins.len(), 1, "unpublished edits must not reach the board's own model");
+
+        step(&dir, Cmd::UpdateSymbolOnBoard { lib_id: "TEST:R".into() }, false, "test").unwrap();
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!(model.symbol_of("TEST:R").unwrap().pins.len(), 2, "an explicit Update Symbol on Board must republish the edited definition");
     }
 }

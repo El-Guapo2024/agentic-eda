@@ -1,5 +1,12 @@
 # Schematic editor parity with KiCad eeschema
 
+The Symbol Editor (eeschema's own, a separate sub-application from the
+schematic editor this file otherwise covers) now has its own tab and its
+own parity doc: see `PARITY-symedit.md`. `Ctrl+Shift+E` on a placed symbol
+(section 1's `E`/`U`/`V`/`F` row) jumps there -- confirmed against real
+source this session as the genuine `editLibSymbolWithLibEdit` hotkey,
+*not* plain Ctrl+E (that's `pcbnew`'s unrelated Footprint Editor jump).
+
 One row per action. Status is **identical** (same logic/behavior, adapted
 only where the browser platform genuinely requires it, noted inline),
 **partial** (core behavior ported, a real gap remains, noted), or

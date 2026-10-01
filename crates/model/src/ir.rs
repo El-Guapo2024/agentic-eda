@@ -78,6 +78,14 @@ pub struct Design {
     /// name has ever been opened here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footprint_library: Option<FootprintLibrarySection>,
+    /// The Symbol Editor tab's own content: symbol definitions the user
+    /// created or edited here, by `lib_id` -- the exact schematic-side
+    /// counterpart of `footprint_library` above (see `SymbolLibrarySection`'s
+    /// own doc for why it is a distinct section rather than folded into
+    /// `schematic`). Absent on a `design.json` written before this editor
+    /// existed, same convention as every other optional section here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_library: Option<SymbolLibrarySection>,
     /// Every non-root sheet's own drawn content (GAPS.md #6), keyed by its
     /// `SheetInstance::file` name -- KiCad's own "one `SCH_SCREEN` per
     /// unique file" convention: two `SheetInstance`s naming the same file
@@ -118,6 +126,9 @@ impl Design {
             dr.assign_missing_ids();
         }
         if let Some(lib) = &mut self.footprint_library {
+            lib.assign_missing_ids();
+        }
+        if let Some(lib) = &mut self.symbol_library {
             lib.assign_missing_ids();
         }
         if let Some(screens) = &mut self.sheet_contents {
@@ -2258,6 +2269,529 @@ impl FootprintLibrarySection {
     }
 }
 
+// ---------- symbol library (the Symbol Editor's own content) ----------
+//
+// The Symbol Editor tab's editable library content -- same role for
+// `crate::symbol::LibSymbol` that `FootprintLibrarySection` above plays for
+// `crate::footprint::Footprint`: an *editable*, addressable (every graphic/
+// pin has a stable `id`) copy of a symbol, materialized into
+// `design.json` the first time it is opened for editing, with its own
+// undo domain (`eda_ops::Domain::SymbolEditor`). `crate::symbol::LibSymbol`/
+// `SymbolGraphic`/`LibPin` stay exactly as they are -- resolved, read-only
+// geometry used by a dozen call sites outside this editor's scope
+// (`schematic_json`, ERC, the exporter, the builtin table) -- rather than
+// growing an `id`/`body_style` onto them directly, the same reasoning
+// `LibraryPad`'s own doc gives for not touching `crate::footprint::Pad`.
+
+/// Sorted by `lib_id`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolLibrarySection {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbols: Vec<LibrarySymbol>,
+}
+
+impl SymbolLibrarySection {
+    pub fn by_lib_id(&self, lib_id: &str) -> Option<&LibrarySymbol> {
+        self.symbols.iter().find(|s| s.lib_id == lib_id)
+    }
+    pub fn by_lib_id_mut(&mut self, lib_id: &str) -> Option<&mut LibrarySymbol> {
+        self.symbols.iter_mut().find(|s| s.lib_id == lib_id)
+    }
+    pub fn assign_missing_ids(&mut self) {
+        for s in &mut self.symbols {
+            s.assign_missing_ids();
+        }
+    }
+}
+
+/// `FILL_T` as the Shape Properties dialog actually offers it: KiCad's
+/// `color`/hatch modes are real file values but not authorable from this
+/// editor's own dialog -- the same simplification `crate::symbol::
+/// SymbolGraphic`'s single `filled: bool` already makes for every other
+/// caller, just with one more usable state (a filled-with-background-color
+/// shape, e.g. a DeMorgan box, is common enough in real libraries to be
+/// worth the real three-way choice here even though the engine's own type
+/// only ever reads it as "filled or not" -- see `to_engine_graphic`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryFill {
+    #[default]
+    None,
+    Outline,
+    Background,
+}
+
+fn d_body_style_one() -> u32 {
+    1
+}
+fn is_body_style_one(b: &u32) -> bool {
+    *b == 1
+}
+fn d_pin_shape() -> String {
+    "line".to_string()
+}
+fn d_pin_name_offset_mm() -> f64 {
+    0.508 // KiCad's own default (20 mil) -- `TEXT_OFFSET_RATIO` applied to the standard 1.27mm pin length.
+}
+
+/// One drawn primitive of a [`LibrarySymbol`] -- same shapes/fields as
+/// `crate::symbol::SymbolGraphic`, plus a stable `id` (addressing, for
+/// move/edit/delete -- see this section's own intro) and `body_style`
+/// (KiCad's DeMorgan alternate; `SymbolGraphic` has no such field at all,
+/// since no placed-instance renderer in this app resolves one today --
+/// see [`LibrarySymbol::to_engine_symbol`]'s own doc on what that means
+/// here). `unit`/`body_style` keep `SymbolGraphic`'s own "0 = shared by
+/// every unit/style" convention.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LibrarySymbolGraphic {
+    Rectangle {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(default)]
+        unit: u32,
+        #[serde(default = "d_body_style_one", skip_serializing_if = "is_body_style_one")]
+        body_style: u32,
+        start: crate::symbol::SPoint,
+        end: crate::symbol::SPoint,
+        stroke_mm: f64,
+        #[serde(default)]
+        fill: LibraryFill,
+    },
+    Polyline {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(default)]
+        unit: u32,
+        #[serde(default = "d_body_style_one", skip_serializing_if = "is_body_style_one")]
+        body_style: u32,
+        pts: Vec<crate::symbol::SPoint>,
+        stroke_mm: f64,
+        #[serde(default)]
+        fill: LibraryFill,
+    },
+    Circle {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(default)]
+        unit: u32,
+        #[serde(default = "d_body_style_one", skip_serializing_if = "is_body_style_one")]
+        body_style: u32,
+        center: crate::symbol::SPoint,
+        radius_mm: f64,
+        stroke_mm: f64,
+        #[serde(default)]
+        fill: LibraryFill,
+    },
+    Arc {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(default)]
+        unit: u32,
+        #[serde(default = "d_body_style_one", skip_serializing_if = "is_body_style_one")]
+        body_style: u32,
+        start: crate::symbol::SPoint,
+        mid: crate::symbol::SPoint,
+        end: crate::symbol::SPoint,
+        stroke_mm: f64,
+        #[serde(default)]
+        fill: LibraryFill,
+    },
+    Text {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(default)]
+        unit: u32,
+        #[serde(default = "d_body_style_one", skip_serializing_if = "is_body_style_one")]
+        body_style: u32,
+        text: String,
+        at: crate::symbol::SPoint,
+        #[serde(default)]
+        angle_deg: f64,
+        size_mm: f64,
+    },
+}
+
+impl LibrarySymbolGraphic {
+    pub fn id(&self) -> &str {
+        use LibrarySymbolGraphic::*;
+        match self {
+            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } => id,
+        }
+    }
+    pub fn set_id(&mut self, new_id: String) {
+        use LibrarySymbolGraphic::*;
+        match self {
+            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } => *id = new_id,
+        }
+    }
+    pub fn unit(&self) -> u32 {
+        use LibrarySymbolGraphic::*;
+        match self {
+            Rectangle { unit, .. } | Polyline { unit, .. } | Circle { unit, .. } | Arc { unit, .. } | Text { unit, .. } => *unit,
+        }
+    }
+    pub fn body_style(&self) -> u32 {
+        use LibrarySymbolGraphic::*;
+        match self {
+            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } => *body_style,
+        }
+    }
+    /// Every point this graphic touches, local mm -- for `assign_missing_ids`'s seed and a move/translate.
+    pub fn points(&self) -> Vec<crate::symbol::SPoint> {
+        use LibrarySymbolGraphic::*;
+        match self {
+            Rectangle { start, end, .. } => vec![*start, *end],
+            Polyline { pts, .. } => pts.clone(),
+            Circle { center, .. } => vec![*center],
+            Arc { start, mid, end, .. } => vec![*start, *mid, *end],
+            Text { at, .. } => vec![*at],
+        }
+    }
+    pub fn translate(&mut self, dx_mm: f64, dy_mm: f64) {
+        use LibrarySymbolGraphic::*;
+        let t = |p: &mut crate::symbol::SPoint| {
+            p.x += dx_mm;
+            p.y += dy_mm;
+        };
+        match self {
+            Rectangle { start, end, .. } => {
+                t(start);
+                t(end);
+            }
+            Polyline { pts, .. } => pts.iter_mut().for_each(t),
+            Circle { center, .. } => t(center),
+            Arc { start, mid, end, .. } => {
+                t(start);
+                t(mid);
+                t(end);
+            }
+            Text { at, .. } => t(at),
+        }
+    }
+    /// The same graphic as `crate::symbol::SymbolGraphic` -- drops `id`
+    /// and `body_style` (see this type's own doc; a caller that cares
+    /// about body style, i.e. `LibrarySymbol::to_engine_symbol`, filters
+    /// by it *before* calling this) and collapses `fill` down to the
+    /// engine's own `filled: bool` (`Background`/`Outline` both read as
+    /// `true` -- a real difference in real KiCad rendering this port's
+    /// engine-side type has never modeled, same approximation
+    /// `LibraryPad::to_engine_pad`'s shape collapse already documents).
+    pub fn to_engine_graphic(&self) -> crate::symbol::SymbolGraphic {
+        use crate::symbol::SymbolGraphic as EG;
+        let filled = |f: LibraryFill| f != LibraryFill::None;
+        match self {
+            LibrarySymbolGraphic::Rectangle { unit, start, end, stroke_mm, fill, .. } => EG::Rectangle { unit: *unit, start: *start, end: *end, stroke_mm: *stroke_mm, filled: filled(*fill) },
+            LibrarySymbolGraphic::Polyline { unit, pts, stroke_mm, fill, .. } => EG::Polyline { unit: *unit, pts: pts.clone(), stroke_mm: *stroke_mm, filled: filled(*fill) },
+            LibrarySymbolGraphic::Circle { unit, center, radius_mm, stroke_mm, fill, .. } => EG::Circle { unit: *unit, center: *center, radius_mm: *radius_mm, stroke_mm: *stroke_mm, filled: filled(*fill) },
+            LibrarySymbolGraphic::Arc { unit, start, mid, end, stroke_mm, fill, .. } => EG::Arc { unit: *unit, start: *start, mid: *mid, end: *end, stroke_mm: *stroke_mm, filled: filled(*fill) },
+            LibrarySymbolGraphic::Text { unit, text, at, angle_deg, size_mm, .. } => EG::Text { unit: *unit, text: text.clone(), at: *at, angle_deg: *angle_deg, size_mm: *size_mm },
+        }
+    }
+    /// The reverse of `to_engine_graphic`, for materializing an editable
+    /// copy of an already-resolved `crate::symbol::LibSymbol` -- `id`
+    /// starts empty (backfilled by `assign_missing_ids`), `body_style`
+    /// always 1 (the engine type has no alternate-style concept to read
+    /// one back from), `fill` is `None`/`Background` (the engine's
+    /// `filled` has no "outline-only" state of its own to distinguish --
+    /// an edit that re-saves an opened symbol unchanged keeps whichever
+    /// of those two this maps to, a real but narrow fidelity gap, see
+    /// PARITY-symedit.md).
+    pub fn from_engine_graphic(g: &crate::symbol::SymbolGraphic) -> Self {
+        use crate::symbol::SymbolGraphic as EG;
+        let fill = |f: bool| if f { LibraryFill::Background } else { LibraryFill::None };
+        match g {
+            EG::Rectangle { unit, start, end, stroke_mm, filled } => LibrarySymbolGraphic::Rectangle { id: String::new(), unit: *unit, body_style: 1, start: *start, end: *end, stroke_mm: *stroke_mm, fill: fill(*filled) },
+            EG::Polyline { unit, pts, stroke_mm, filled } => LibrarySymbolGraphic::Polyline { id: String::new(), unit: *unit, body_style: 1, pts: pts.clone(), stroke_mm: *stroke_mm, fill: fill(*filled) },
+            EG::Circle { unit, center, radius_mm, stroke_mm, filled } => LibrarySymbolGraphic::Circle { id: String::new(), unit: *unit, body_style: 1, center: *center, radius_mm: *radius_mm, stroke_mm: *stroke_mm, fill: fill(*filled) },
+            EG::Arc { unit, start, mid, end, stroke_mm, filled } => LibrarySymbolGraphic::Arc { id: String::new(), unit: *unit, body_style: 1, start: *start, mid: *mid, end: *end, stroke_mm: *stroke_mm, fill: fill(*filled) },
+            EG::Text { unit, text, at, angle_deg, size_mm } => LibrarySymbolGraphic::Text { id: String::new(), unit: *unit, body_style: 1, text: text.clone(), at: *at, angle_deg: *angle_deg, size_mm: *size_mm },
+        }
+    }
+}
+
+/// One pin of a [`LibrarySymbol`] -- same fields as `crate::symbol::
+/// LibPin`, plus `id` (addressing), `body_style`, and the Pin Properties
+/// dialog's own name/number text-size fields (`LibPin` has none of these
+/// three -- editor-only metadata, same split `LibraryPad`'s own doc
+/// explains for its own overrides).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibrarySymbolPin {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub number: String,
+    #[serde(default)]
+    pub name: String,
+    /// Same raw-string convention as `crate::symbol::LibPin::electrical_type`
+    /// (KiCad's own token, not a closed Rust enum) -- see that field's doc.
+    pub electrical_type: String,
+    #[serde(default = "d_pin_shape")]
+    pub shape: String,
+    pub at: crate::symbol::SPoint,
+    pub angle_deg: f64,
+    pub length_mm: f64,
+    #[serde(default = "d_unit_one", skip_serializing_if = "is_unit_one")]
+    pub unit: u32,
+    #[serde(default = "d_body_style_one", skip_serializing_if = "is_body_style_one")]
+    pub body_style: u32,
+    /// `(hide yes)` -- see `crate::symbol::LibPin`'s own doc (this app's
+    /// read-only resolved type has no such field at all; this editor is
+    /// the only place it is modeled, same as a footprint pad's clearance
+    /// overrides).
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_size_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_size_mm: Option<f64>,
+}
+
+impl LibrarySymbolPin {
+    fn id_seed(&self) -> String {
+        format!("{}|{}|{:.4},{:.4}", self.unit, self.number, self.at.x, self.at.y)
+    }
+    /// The same pin as `crate::symbol::LibPin` -- drops `id`/`hidden`/
+    /// `body_style`/the text-size overrides (see this type's own doc).
+    pub fn to_engine_pin(&self) -> crate::symbol::LibPin {
+        crate::symbol::LibPin { number: self.number.clone(), name: self.name.clone(), electrical_type: self.electrical_type.clone(), shape: self.shape.clone(), at: self.at, angle_deg: self.angle_deg, length_mm: self.length_mm, unit: self.unit }
+    }
+    /// The reverse of `to_engine_pin` -- `id` empty (backfilled), `body_style`
+    /// 1, `hidden`/text sizes at their defaults (the engine type never had
+    /// them to read back).
+    pub fn from_engine_pin(p: &crate::symbol::LibPin) -> Self {
+        LibrarySymbolPin { id: String::new(), number: p.number.clone(), name: p.name.clone(), electrical_type: p.electrical_type.clone(), shape: p.shape.clone(), at: p.at, angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None }
+    }
+}
+
+/// A symbol definition as the Symbol Editor shows/edits it -- the Symbol
+/// Editor tab's own "project symbol library section in the IR" (see this
+/// section's own intro). `lib_id` is both the addressing key (like
+/// `LibraryFootprint::name`) and the string a `SymbolInstance`/
+/// `PowerSymbol::lib_id` names: `"Lib:Name"` when opened from a real/
+/// builtin library or from an already-placed instance, or a bare/`"eda:
+/// <ref>"`-prefixed name for one authored from scratch or opened from an
+/// instance with no resolvable library symbol (see `Cmd::OpenSymbolForEdit`'s
+/// own doc).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibrarySymbol {
+    pub lib_id: String,
+    /// The library's "Reference" field default ("R", "U", "#PWR", ...).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reference_prefix: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub keywords: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub datasheet: String,
+    /// `dialog_lib_symbol_properties.cpp`'s "Define as power symbol".
+    #[serde(default)]
+    pub power: bool,
+    #[serde(default = "d_true")]
+    pub in_bom: bool,
+    #[serde(default = "d_true")]
+    pub on_board: bool,
+    #[serde(default)]
+    pub pin_numbers_hidden: bool,
+    #[serde(default)]
+    pub pin_names_hidden: bool,
+    #[serde(default = "d_pin_name_offset_mm")]
+    pub pin_name_offset_mm: f64,
+    /// How many units this symbol declares (an op-amp's 4 gates, say) --
+    /// same meaning as `crate::symbol::LibSymbol::unit_count`.
+    #[serde(default = "d_unit_one", skip_serializing_if = "is_unit_one")]
+    pub unit_count: u32,
+    /// KiCad's DeMorgan alternate body style -- whether a second
+    /// (`body_style == 2`) set of graphics/pins exists at all. See
+    /// `to_engine_symbol`'s own doc for the real, documented gap in how
+    /// far this app's placed-instance rendering follows it.
+    #[serde(default)]
+    pub has_alternate_body_style: bool,
+    /// `dialog_lib_symbol_properties.cpp`'s Footprint Filters list (glob
+    /// patterns a footprint-chooser would narrow to for this symbol) --
+    /// stored for round-tripping through `.kicad_sym`; nothing in this
+    /// app's own footprint resolution reads it yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint_filters: Vec<String>,
+    /// Sorted by `id`.
+    #[serde(default)]
+    pub graphics: Vec<LibrarySymbolGraphic>,
+    /// Sorted by `id`.
+    #[serde(default)]
+    pub pins: Vec<LibrarySymbolPin>,
+    /// Whether a schematic symbol/power-symbol instance naming this
+    /// `lib_id` should resolve its graphics/pins from here
+    /// (`crate::board::load`'s overlay onto `ConstraintModel::symbols`,
+    /// filtered on this flag) -- KiCad's "Update Symbol from Library",
+    /// same explicit, user-triggered convention `LibraryFootprint::
+    /// published`'s own doc describes. Starts `false`.
+    #[serde(default)]
+    pub published: bool,
+}
+
+impl Default for LibrarySymbol {
+    fn default() -> Self {
+        LibrarySymbol {
+            lib_id: String::new(),
+            reference_prefix: "U".to_string(),
+            description: String::new(),
+            keywords: String::new(),
+            datasheet: String::new(),
+            power: false,
+            in_bom: true,
+            on_board: true,
+            pin_numbers_hidden: false,
+            pin_names_hidden: false,
+            pin_name_offset_mm: d_pin_name_offset_mm(),
+            unit_count: 1,
+            has_alternate_body_style: false,
+            footprint_filters: Vec::new(),
+            graphics: Vec::new(),
+            pins: Vec::new(),
+            published: false,
+        }
+    }
+}
+
+impl LibrarySymbol {
+    /// A brand-new, empty symbol named `lib_id` -- KiCad's "New Symbol"
+    /// and "Edit Symbol" on an unresolvable name are the same verb here,
+    /// same precedent `LibraryFootprint::new_empty`'s own doc explains.
+    pub fn new_empty(lib_id: impl Into<String>) -> Self {
+        LibrarySymbol { lib_id: lib_id.into(), ..Default::default() }
+    }
+
+    /// An editable copy of an already-resolved engine `LibSymbol`
+    /// (real library file, builtin table, or an already-placed instance's
+    /// own resolution) -- what the Symbol Editor materializes the first
+    /// time an edit touches a symbol not already in `SymbolLibrarySection`.
+    pub fn from_engine_symbol(sym: &crate::symbol::LibSymbol) -> Self {
+        LibrarySymbol {
+            lib_id: sym.lib_id.clone(),
+            reference_prefix: sym.reference_prefix.clone(),
+            description: sym.description.clone(),
+            keywords: String::new(),
+            datasheet: sym.datasheet.clone(),
+            power: sym.power,
+            in_bom: sym.in_bom,
+            on_board: sym.on_board,
+            unit_count: sym.unit_count.max(1),
+            graphics: sym.graphics.iter().map(LibrarySymbolGraphic::from_engine_graphic).collect(),
+            pins: sym.pins.iter().map(LibrarySymbolPin::from_engine_pin).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The reverse of `from_engine_symbol`, and the basis for both
+    /// `board::load`'s publish overlay and the derived `.kicad_sym` export:
+    /// this symbol's graphics/pins as the engine's own `LibSymbol`.
+    ///
+    /// Alternate-body-style (`body_style == 2`) items are dropped here,
+    /// not merged in: `crate::symbol::SymbolGraphic`/`LibPin` have no
+    /// `body_style` field at all (see this module's own intro), so the
+    /// only two honest choices are "merge both styles' graphics into one
+    /// unfilterable pile" (visually wrong -- a placed instance would show
+    /// both at once) or "publish the normal style only, alternate stays
+    /// authorable and exports correctly to `.kicad_sym` for real KiCad,
+    /// but this app's own placed-instance rendering never shows it". This
+    /// picks the second, documented in PARITY-symedit.md as a real,
+    /// narrow gap rather than silently drawing a broken double-exposure
+    /// symbol.
+    pub fn to_engine_symbol(&self) -> crate::symbol::LibSymbol {
+        crate::symbol::LibSymbol {
+            lib_id: self.lib_id.clone(),
+            graphics: self.graphics.iter().filter(|g| g.body_style() <= 1).map(|g| g.to_engine_graphic()).collect(),
+            pins: self.pins.iter().filter(|p| p.body_style <= 1).map(|p| p.to_engine_pin()).collect(),
+            power: self.power,
+            in_bom: self.in_bom,
+            on_board: self.on_board,
+            datasheet: self.datasheet.clone(),
+            description: self.description.clone(),
+            reference_prefix: self.reference_prefix.clone(),
+            unit_count: self.unit_count.max(1),
+        }
+    }
+
+    /// Assign a deterministic id to every pin/graphic whose `id` is still
+    /// empty -- same contract as `FootprintLibrarySection`'s own (stable
+    /// per-kind order, content-hash id, `_2`/`_3`... on an exact-content
+    /// collision).
+    pub fn assign_missing_ids(&mut self) {
+        let mut existing: std::collections::BTreeSet<String> = self.pins.iter().map(|p| p.id.clone()).filter(|s| !s.is_empty()).collect();
+        existing.extend(self.graphics.iter().map(|g| g.id().to_string()).filter(|s| !s.is_empty()));
+
+        let mut order: Vec<usize> = (0..self.pins.len()).collect();
+        order.sort_by(|&a, &b| (self.pins[a].unit, &self.pins[a].number, self.pins[a].at.x, self.pins[a].at.y).partial_cmp(&(self.pins[b].unit, &self.pins[b].number, self.pins[b].at.x, self.pins[b].at.y)).unwrap_or(std::cmp::Ordering::Equal));
+        for i in order {
+            if self.pins[i].id.is_empty() {
+                let id = next_item_id("pin", &self.pins[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.pins[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.graphics.len()).collect();
+        order.sort_by(|&a, &b| {
+            let ka = (self.graphics[a].unit(), self.graphics[a].body_style(), self.graphics[a].points().first().map(|p| (p.x, p.y)));
+            let kb = (self.graphics[b].unit(), self.graphics[b].body_style(), self.graphics[b].points().first().map(|p| (p.x, p.y)));
+            ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for i in order {
+            if self.graphics[i].id().is_empty() {
+                let pts: Vec<String> = self.graphics[i].points().iter().map(|p| format!("{:.4},{:.4}", p.x, p.y)).collect();
+                let seed = format!("{}|{}|{}", self.graphics[i].unit(), self.graphics[i].body_style(), pts.join(";"));
+                let id = next_item_id("sym", &seed, &existing);
+                existing.insert(id.clone());
+                self.graphics[i].set_id(id);
+            }
+        }
+    }
+
+    /// `FOOTPRINT::GetNextPadNumber`'s pin-number analogue
+    /// (`SYMBOL_EDITOR_PIN_TOOL`'s own auto-increment while placing pins
+    /// in sequence): split `last` into its non-numeric prefix and
+    /// trailing integer, increment until `prefix+integer` collides with
+    /// no existing pin number *on any unit* of this symbol (KiCad numbers
+    /// pins uniquely across the whole part by default; a deliberately
+    /// interchangeable multi-unit symbol that wants the same number
+    /// reused per unit is not this function's concern -- the dialog can
+    /// still type one by hand).
+    pub fn next_pin_number_after(&self, last: &str) -> String {
+        let digit_count = last.chars().rev().take_while(|c| c.is_ascii_digit()).count();
+        let split_at = last.len() - digit_count;
+        let prefix = &last[..split_at];
+        let mut num: u64 = last[split_at..].parse().unwrap_or(0);
+        let used: std::collections::BTreeSet<&str> = self.pins.iter().map(|p| p.number.as_str()).collect();
+        loop {
+            num += 1;
+            let candidate = format!("{prefix}{num}");
+            if !used.contains(candidate.as_str()) {
+                return candidate;
+            }
+        }
+    }
+
+    /// `next_pin_number_after`, seeded from this symbol's own
+    /// highest-numbered existing pin -- `"1"` for the first pin on a
+    /// blank symbol, same convention `next_pad_number`'s own doc explains.
+    pub fn next_pin_number(&self) -> String {
+        let last = self
+            .pins
+            .iter()
+            .max_by_key(|p| {
+                let n = p.number.as_str();
+                let digit_count = n.chars().rev().take_while(|c| c.is_ascii_digit()).count();
+                n[n.len() - digit_count..].parse::<u64>().unwrap_or(0)
+            })
+            .map(|p| p.number.as_str())
+            .unwrap_or("0");
+        self.next_pin_number_after(last)
+    }
+}
+
 /// Deterministic, dependency-free 64-bit hash (FNV-1a) of a byte string,
 /// hex-encoded. Not cryptographic, and deliberately not
 /// `std::hash::DefaultHasher`: the standard library does not promise that
@@ -2365,7 +2899,7 @@ mod tests {
             drawings: None,
             footprint_library: None,
             sheet_contents: None,
-            bus_aliases: vec![],
+            bus_aliases: vec![], symbol_library: None,
         }
     }
 
@@ -2622,5 +3156,100 @@ mod tests {
         assert!(d.footprint_library.is_none());
         d.assign_missing_ids();
         assert!(d.footprint_library.is_none(), "assign_missing_ids must not create a section that was never there");
+    }
+
+    // ---------------------------------------------------- symbol library
+
+    fn lib_pin(number: &str, unit: u32, x: f64, y: f64) -> LibrarySymbolPin {
+        LibrarySymbolPin {
+            id: String::new(),
+            number: number.into(),
+            name: String::new(),
+            electrical_type: "passive".into(),
+            shape: "line".into(),
+            at: crate::symbol::SPoint::new(x, y),
+            angle_deg: 270.0,
+            length_mm: 2.54,
+            unit,
+            body_style: 1,
+            hidden: false,
+            name_size_mm: None,
+            number_size_mm: None,
+        }
+    }
+
+    #[test]
+    fn symbol_library_pin_and_graphic_ids_are_assigned_and_stable() {
+        let mut sym = LibrarySymbol::new_empty("Test:Lib");
+        sym.pins = vec![lib_pin("1", 1, 0.0, 3.81), lib_pin("2", 1, 0.0, -3.81)];
+        sym.graphics = vec![LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: 1, start: crate::symbol::SPoint::new(-1.0, -1.0), end: crate::symbol::SPoint::new(1.0, 1.0), stroke_mm: 0.254, fill: LibraryFill::None }];
+        sym.assign_missing_ids();
+        assert!(sym.pins.iter().all(|p| !p.id.is_empty()), "{:?}", sym.pins);
+        assert!(sym.graphics.iter().all(|g| !g.id().is_empty()));
+        assert_ne!(sym.pins[0].id, sym.pins[1].id);
+        let ids_before: Vec<String> = sym.pins.iter().map(|p| p.id.clone()).collect();
+        sym.assign_missing_ids(); // a second pass must be a no-op
+        let ids_after: Vec<String> = sym.pins.iter().map(|p| p.id.clone()).collect();
+        assert_eq!(ids_before, ids_after);
+    }
+
+    #[test]
+    fn next_pin_number_increments_and_skips_collisions() {
+        let empty = LibrarySymbol::new_empty("Test:Lib");
+        assert_eq!(empty.next_pin_number(), "1");
+
+        let mut sym = LibrarySymbol::new_empty("Test:Lib");
+        sym.pins = vec![lib_pin("1", 1, 0.0, 3.81), lib_pin("2", 1, 0.0, -3.81)];
+        assert_eq!(sym.next_pin_number(), "3");
+
+        // A manually-added "4" alongside a hole left at "3" must still
+        // skip the now-occupied "4" when continuing from "3".
+        sym.pins.push(lib_pin("4", 1, 2.54, 0.0));
+        assert_eq!(sym.next_pin_number_after("3"), "5");
+    }
+
+    #[test]
+    fn symbol_library_round_trips_through_engine_symbol() {
+        let engine = crate::symbol::builtin("Device:R").unwrap();
+        let lib = LibrarySymbol::from_engine_symbol(&engine);
+        assert_eq!(lib.pins.len(), engine.pins.len());
+        assert!(lib.pins.iter().all(|p| p.id.is_empty()));
+        assert!(!lib.published, "opening a symbol must never auto-publish it to the board");
+        let mut lib = lib;
+        lib.assign_missing_ids();
+        let back = lib.to_engine_symbol();
+        assert_eq!(back.pins.len(), engine.pins.len());
+        assert_eq!(back.graphics.len(), engine.graphics.len());
+        assert_eq!(back.reference_prefix, engine.reference_prefix);
+    }
+
+    #[test]
+    fn symbol_library_to_engine_drops_alternate_body_style_only() {
+        // `to_engine_symbol` is the publish path a placed instance's
+        // rendering actually reads (`board::load`'s overlay) -- an
+        // alternate (DeMorgan, body_style 2) pin/graphic must not leak
+        // into it (see that method's own doc for why), while the normal
+        // (body_style 1) and common-to-both (0) items must survive.
+        let mut sym = LibrarySymbol::new_empty("Test:Lib");
+        sym.has_alternate_body_style = true;
+        sym.pins = vec![lib_pin("1", 1, 0.0, 3.81), {
+            let mut alt = lib_pin("1", 1, 0.0, 3.81);
+            alt.body_style = 2;
+            alt
+        }];
+        let back = sym.to_engine_symbol();
+        assert_eq!(back.pins.len(), 1, "only the normal body style publishes");
+    }
+
+    #[test]
+    fn symbol_library_section_is_additive_on_an_old_design() {
+        // A `design.json` written before this editor existed has no
+        // `symbol_library` key at all; it must still load, and a
+        // normalization pass must not invent one out of thin air.
+        let json = r#"{"schema": 1, "provenance": {"engine_version": "0", "intent_hash": "x", "seed": 0}}"#;
+        let mut d: Design = serde_json::from_str(json).expect("an old design.json with no symbol_library must still parse");
+        assert!(d.symbol_library.is_none());
+        d.assign_missing_ids();
+        assert!(d.symbol_library.is_none(), "assign_missing_ids must not create a section that was never there");
     }
 }

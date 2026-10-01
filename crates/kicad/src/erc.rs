@@ -1633,7 +1633,7 @@ mod tests {
             placement: None,
             routing: None,
             drawings: None,
-            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
         }
     }
 
@@ -1740,7 +1740,7 @@ mod tests {
             drawings: None,
             footprint_library: None,
             sheet_contents: (!screens.is_empty()).then_some(screens),
-            bus_aliases: vec![],
+            bus_aliases: vec![], symbol_library: None,
         }
     }
 
