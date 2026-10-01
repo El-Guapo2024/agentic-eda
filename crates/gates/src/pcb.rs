@@ -174,33 +174,8 @@ fn first_item_is_track_or_via(v: &eda_drc::DrcViolation) -> bool {
     is_track_or_via(v.items.first())
 }
 
-/// Same as [`first_item_is_track_or_via`] but for a violation's *second*
-/// item -- `silk_over_copper`'s own shape is `[silk label, copper item]`,
-/// so the copper side to test is `items[1]`. Used for `routing_over_refdes`,
-/// whose old scope was tracks/vias under a refdes label only (a pad under
-/// one is normal: the label is placed clear of its *own* footprint's pads,
-/// but nothing stopped a bait fixture from placing an unrelated pad there).
-fn second_item_is_track_or_via(v: &eda_drc::DrcViolation) -> bool {
-    is_track_or_via(v.items.get(1))
-}
-
 fn is_track_or_via(item: Option<&eda_drc::DrcRefItem>) -> bool {
     item.is_some_and(|it| it.description.starts_with("Track ") || it.description.starts_with("Via "))
-}
-
-/// Like [`drc_check`] but for a check-name that now aggregates *several*
-/// `eda_drc` error types under one legacy name (`routing_clearance` used to
-/// be a single from-scratch pass over clearance, hole clearance, track
-/// crossings, shorting and zone intersection alike).
-fn drc_check_any(drc: &[eda_drc::DrcViolation], error_types: &[&str], check_name: &str, out: &mut Vec<CheckResult>) {
-    let mut any = false;
-    for v in drc.iter().filter(|v| error_types.contains(&v.error_type)) {
-        any = true;
-        out.push(from_drc(v, check_name));
-    }
-    if !any {
-        out.push(CheckResult::pass(check_name));
-    }
 }
 
 // ------------------------------------------------------------- placement
@@ -286,11 +261,20 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
     // proximity rules are now eda_drc's job (DRCE_EDGE_CLEARANCE /
     // DRCE_OVERLAPPING_FOOTPRINTS / placement_refdes_clear /
     // placement_proximity providers) -- see the task report's gates-mapping
-    // table. One `eda_drc::run` covers all four; at this point in the
-    // pipeline `design.routing` is normally still absent, so
-    // `copper_edge_clearance` naturally reduces to pads only, exactly what
-    // this gate always checked.
-    let drc = eda_drc::run(design, model);
+    // table. One `eda_drc::run` covers all four.
+    //
+    // Routing is stripped before that call, not just left to "normally
+    // still be absent": none of these four providers look at a track, via
+    // or zone, so this is free on the hot path (`design.routing` already
+    // is `None` there) and a real fix the one time it is not -- a caller
+    // on an already-routed design (`gate_speed_bench.rs` benchmarks
+    // exactly this). Without it, `eda_drc::run` pays the full cost of
+    // scanning every track/via/zone just to discard the result, *and*
+    // `copper_edge_clearance` stops reducing to pads only, so this gate
+    // would start double-reporting a track's edge clearance that
+    // `routing_edge_clearance` already covers.
+    let placement_only = Design { routing: None, ..design.clone() };
+    let drc = eda_drc::run(&placement_only, model);
     drc_check(&drc, "copper_edge_clearance", "placement_pad_edge_clearance", &mut out);
     drc_check(&drc, "courtyards_overlap", "placement_courtyard_overlap", &mut out);
     drc_check(&drc, "placement_refdes_clear", "placement_refdes_clear", &mut out);
@@ -454,21 +438,99 @@ pub fn check_placement_locality(design: &Design, model: &ConstraintModel) -> Vec
         out.push(CheckResult::pass("placement_isolation"));
     }
 
-    // Edge-connector placement, board-use, decoupling distance, net
-    // compactness and stub crossings are now eda_drc's job (placement-
-    // quality providers ported from this module's own former
-    // `placement_edge_connector`/`placement_board_use`/
-    // `placement_decoupling`/`placement_net_compactness`/
-    // `placement_stub_crossings`, logic unchanged) -- see the task report's
-    // gates-mapping table.
+    // Edge-connector placement, board-use, decoupling distance and net
+    // compactness are now eda_drc's job (placement-quality providers ported
+    // from this module's own former `placement_edge_connector`/
+    // `placement_board_use`/`placement_decoupling`/`placement_net_compactness`,
+    // logic unchanged) -- see the task report's gates-mapping table. Routing
+    // stripped before the call for the same reason as `check_placement`'s
+    // own `eda_drc::run` above: none of these four look at a track, via or
+    // zone, so there is nothing to gain and real cost to lose by handing
+    // eda_drc a fully-routed design to re-scan.
     let _ = (&courtyards, bb); // still built above for `placement_isolation`; eda_drc recomputes its own
-    let drc = eda_drc::run(design, model);
+    let placement_only = Design { routing: None, ..design.clone() };
+    let drc = eda_drc::run(&placement_only, model);
     drc_check(&drc, "placement_edge_connector", "placement_edge_connector", &mut out);
     drc_check(&drc, "placement_board_use", "placement_board_use", &mut out);
     drc_check(&drc, "placement_decoupling", "placement_decoupling", &mut out);
     drc_check(&drc, "placement_net_compactness", "placement_net_compactness", &mut out);
-    drc_check(&drc, "placement_stub_crossings", "placement_stub_crossings", &mut out);
+
+    // `placement_stub_crossings`: NOT shimmed onto eda_drc's own ported
+    // copy, unlike its four neighbours above. Tried it (see the task
+    // report): this check's job is specifically to steer the build
+    // placer's own per-step search away from a bad choice, and the two
+    // implementations -- provably identical on any *finished* design --
+    // can still disagree by one or two crossing pairs on an *unfinished*
+    // one simply because `eda_drc::run` recomputes the whole board (every
+    // pad, every courtyard) from scratch each call, rather than sharing
+    // this module's already-built `courtyards` map above; on
+    // `two_pin_nets` and `mcu_board_30plus` that was enough to tip which
+    // of two legal candidate poses the search picked, same failure mode
+    // as the `check_placement`/`check_routing` shim this exact report
+    // documents reverting earlier, just surfacing one check at a time
+    // instead of all at once. Kept as this module's own implementation
+    // until the search itself no longer depends on this check's count
+    // matching bit-for-bit between implementations on a half-built board.
+    placement_stub_crossings(pl, model, &mut out);
     out
+}
+
+/// Two-pin net stubs that cross: a layout smell the router has to detour
+/// or via around. Ported into [`crate::providers::placement_quality`] too
+/// (verbatim) and exposed there as `eda_drc::ErrorType::
+/// PlacementStubCrossings` -- kept here as well, independently, as the
+/// implementation `check_placement` actually calls; see this function's
+/// call site for why the two are not unified yet.
+fn placement_stub_crossings(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel, out: &mut Vec<CheckResult>) {
+    let mut centers: HashMap<String, Point> = HashMap::new();
+    for fp in &pl.footprints {
+        let Some(part) = model.part(&fp.id) else { continue };
+        if let Some(pads) = placed_pads(model, part, fp) {
+            for pad in pads {
+                centers.insert(format!("{}.{}", fp.id, pad.number), pad.center);
+            }
+        }
+    }
+    // (name, a, b, free): `free` -- one end is a free 2-pin part.
+    let mut stubs: Vec<(&str, Point, Point, bool)> = Vec::new();
+    for net in &model.nets {
+        if net.pins.len() != 2 {
+            continue;
+        }
+        let (Some(ra), Some(rb)) = (net.pins[0].split_once('.'), net.pins[1].split_once('.')) else { continue };
+        if ra.0 == rb.0 {
+            continue;
+        }
+        let (Some(&a), Some(&b)) = (centers.get(&net.pins[0]), centers.get(&net.pins[1])) else { continue };
+        let free = [ra.0, rb.0].iter().any(|r| model.part(r).is_some_and(is_free_two_pin));
+        stubs.push((net.name.as_str(), a, b, free));
+    }
+    let mut crossings = Vec::new();
+    for i in 0..stubs.len() {
+        for j in i + 1..stubs.len() {
+            let (s, t) = (&stubs[i], &stubs[j]);
+            if !(s.3 && t.3) {
+                continue;
+            }
+            // Proper crossings only: two stubs fanning out of one part
+            // share no pad, so touching/collinear cases are pad-pitch
+            // artefacts, not a swap waiting to happen.
+            let o = [orient(s.1, s.2, t.1).signum(), orient(s.1, s.2, t.2).signum(), orient(t.1, t.2, s.1).signum(), orient(t.1, t.2, s.2).signum()];
+            if o.iter().all(|v| *v != 0) && o[0] != o[1] && o[2] != o[3] {
+                crossings.push(format!("{}×{}", s.0, t.0));
+            }
+        }
+    }
+    let allowed = (STUB_CROSSING_MAX_RATIO * stubs.len() as f64).floor() as usize;
+    if crossings.len() > allowed {
+        out.push(CheckResult::fail(
+            "placement_stub_crossings",
+            crossings.join(","),
+            format!("{} crossing pair(s) of 2-pin net stubs among {} nets (max {allowed})", crossings.len(), stubs.len()),
+        ));
+    } else {
+        out.push(CheckResult::pass("placement_stub_crossings"));
+    }
 }
 
 /// Max gap, µm, between an edge connector's courtyard and the nearest
@@ -675,17 +737,25 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     // Connectivity: nodes = pads, track vertices, vias.
     check_connectivity(rt, &pads, model, rules.track_width, &mut out);
 
-    // Clearance: eda_drc's copper-clearance provider now owns this (see the
-    // task report's gates-mapping table) -- one from-scratch pass here used
-    // to cover clearance, hole clearance, track crossings, shorting and
-    // zone intersection alike under this one name; it still does, just
-    // computed by the shared engine instead of a second implementation.
-    drc_check_any(&drc, &["clearance", "hole_clearance", "tracks_crossing", "shorting_items", "zones_intersect"], "routing_clearance", &mut out);
+    // Clearance: NOT shimmed onto eda_drc's copper-clearance provider.
+    // Tried it (see the task report): eda_drc's `hole_clearance` is a real,
+    // separate KiCad rule this from-scratch check never enforced (plain
+    // copper-to-copper gap only, `rules.clearance`, never compared against
+    // a drill) -- faithful to KiCad, but `crates/freeroute` was never
+    // taught that a hole needs *more* room than a NON-hole-clearance's own
+    // copper gap: on `examples/ladder/l1_usb_mcu.yaml`, the router produced
+    // a (correctly) `rules.clearance`-clean board that `hole_clearance`
+    // still failed by 46 µm, tripping `engine_router_gate_disagreement`.
+    // Teaching the router about a second clearance floor is a
+    // `crates/freeroute` change, out of scope here; kept as this module's
+    // own plain-clearance check, which the router's own model matches by
+    // construction, until that lands.
+    check_clearance(rt, &pads, rules.clearance, &mut out);
 
     // Workmanship: things a human reviewer sends back even when DRC is
     // clean (pass-through pads, via-in-pad, threading between SMD pads,
     // copper under a refdes label).
-    check_workmanship(design, rt, &pads, &outer_top, &outer_bot, &drc, &mut out);
+    check_workmanship(design, model, rt, &pads, &outer_top, &outer_bot, &drc, &mut out);
 
     out
 }
@@ -723,15 +793,11 @@ pub fn refdes_box(model: &ConstraintModel, pl: &eda_model::ir::PlacementSection,
 #[allow(clippy::too_many_arguments)]
 fn check_workmanship(
     design: &Design,
+    model: &ConstraintModel,
     rt: &eda_model::ir::RoutingSection,
     pads: &[PadItem],
-    // Passed in rather than re-derived: this used to guess "F.Cu"/"B.Cu"
-    // when the board declared no stackup, which is a board the caller now
-    // rejects outright. No longer used directly here (eda_drc's providers
-    // re-derive layers themselves) but kept for the doc comment's sake and
-    // in case a future ours-only workmanship check needs it.
-    _outer_top: &str,
-    _outer_bot: &str,
+    outer_top: &str,
+    outer_bot: &str,
     drc: &[eda_drc::DrcViolation],
     out: &mut Vec<CheckResult>,
 ) {
@@ -844,13 +910,55 @@ fn check_workmanship(
         out.push(CheckResult::pass("routing_between_smd_pads"));
     }
 
-    // Copper-to-board-edge and track/via-over-refdes-label are now eda_drc's
-    // job (DRCE_EDGE_CLEARANCE / silk_over_copper providers) -- see the task
-    // report's gates-mapping table. Filtered to tracks/vias only, exactly
-    // the old scope: pads are `placement_pad_edge_clearance`'s job, checked
-    // at placement time before routing exists.
+    // Copper-to-board-edge is now eda_drc's job (DRCE_EDGE_CLEARANCE) -- see
+    // the task report's gates-mapping table. Filtered to tracks/vias only,
+    // exactly the old scope: pads are `placement_pad_edge_clearance`'s job,
+    // checked at placement time before routing exists.
     drc_check_filtered(drc, "copper_edge_clearance", "routing_edge_clearance", first_item_is_track_or_via, &mut *out);
-    drc_check_filtered(drc, "silk_over_copper", "routing_over_refdes", second_item_is_track_or_via, &mut *out);
+
+    // Refdes label boxes: NOT shimmed onto eda_drc's silk_over_copper.
+    // Tried it (see the task report): eda_drc's silk geometry is a
+    // calibrated bounding-box approximation (no vector glyph outlines to
+    // collide against exactly, unlike KiCad's own DRC), tuned to track the
+    // real kicad-cli oracle reasonably closely in aggregate (59 found vs
+    // 35 real, across 14 oracle boards) -- fine for a report, but far too
+    // noisy to gate on: wiring it in here made `routing_over_refdes` fire
+    // on nearly every board in `crates/bench`'s corpus (dense_small_outline,
+    // ldo, mcu_board_30plus, opamp_filter, ... every seed), each a false
+    // positive the real kicad-cli does not report for a hand-verified
+    // placement. This from-scratch box (`refdes_box`) is coarser
+    // geometrically but has no such false-positive problem for this
+    // specific, already-well-tested gate; kept as-is rather than traded for
+    // a shim that is a net regression for its actual callers (the build
+    // placer's per-step gate, `eda board check`). Real silk-vs-copper
+    // fidelity is still available, honestly, via `eda check --drc`/
+    // `GET /api/drc` and the oracle suite -- just not as this gate's
+    // implementation until the font-glyph work noted in the report lands.
+    let pl = design.placement.as_ref().expect("checked at function entry");
+    let mut n_refdes = 0usize;
+    for fp in &pl.footprints {
+        let Some((bx, side)) = refdes_box(model, pl, fp) else { continue };
+        let layer = if side == Side::Top { outer_top } else { outer_bot };
+        for (ti, t) in rt.tracks.iter().enumerate() {
+            if t.layer != layer {
+                continue;
+            }
+            let half = (t.width / 2) as f64;
+            if t.pts.windows(2).any(|w| seg_rect_dist(w[0], w[1], &bx) - half < 0.0) {
+                n_refdes += 1;
+                out.push(CheckResult::fail("routing_over_refdes", format!("{}#{ti}/{}", t.net, fp.id), "track runs under the refdes label (max 0)"));
+            }
+        }
+        for (vi, v) in rt.vias.iter().enumerate() {
+            if bx.gap(&Rect::centered(v.at, (0, 0))) - ((v.diameter / 2) as f64) < 0.0 {
+                n_refdes += 1;
+                out.push(CheckResult::fail("routing_over_refdes", format!("via:{}#{vi}/{}", v.net, fp.id), "via sits under the refdes label (max 0)"));
+            }
+        }
+    }
+    if n_refdes == 0 {
+        out.push(CheckResult::pass("routing_over_refdes"));
+    }
 }
 
 /// Intersection point of two properly crossing segments (rounded to µm).
@@ -1136,6 +1244,113 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
     }
     if ok {
         out.push(CheckResult::pass("routing_connectivity"));
+    }
+}
+
+/// Plain copper-to-copper clearance between different nets (tracks, vias,
+/// pads -- exact edge-to-edge against one flat `clearance` floor,
+/// `rules.clearance`). Kept as this module's own implementation rather
+/// than eda_drc's copper-clearance provider -- see `check_routing`'s call
+/// site for why: eda_drc's `hole_clearance` is a real, separate, stricter
+/// KiCad rule this never enforced, and `crates/freeroute` was never taught
+/// to leave extra room for it.
+fn check_clearance(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], clearance: Um, out: &mut Vec<CheckResult>) {
+    let mut ok = true;
+    let cl = clearance as f64;
+    let mut fail = |a: String, b: String, gap: f64| {
+        ok = false;
+        out.push(CheckResult::fail("routing_clearance", format!("{a}/{b}"), format!("copper gap {gap:.0} µm < {clearance} µm")));
+    };
+
+    // Segments with their half-width.
+    struct Seg<'a> {
+        net: &'a str,
+        layer: &'a str,
+        a: Point,
+        b: Point,
+        half: f64,
+        id: String,
+    }
+    let mut segs: Vec<Seg> = Vec::new();
+    for (i, t) in rt.tracks.iter().enumerate() {
+        for k in 0..t.pts.len().saturating_sub(1) {
+            segs.push(Seg { net: &t.net, layer: &t.layer, a: t.pts[k], b: t.pts[k + 1], half: (t.width / 2) as f64, id: format!("{}#{i}", t.net) });
+        }
+    }
+
+    // seg-seg
+    for i in 0..segs.len() {
+        for j in i + 1..segs.len() {
+            let (s, o) = (&segs[i], &segs[j]);
+            if s.net == o.net || s.layer != o.layer {
+                continue;
+            }
+            let gap = seg_seg_dist(s.a, s.b, o.a, o.b) - s.half - o.half;
+            if gap < cl {
+                fail(s.id.clone(), o.id.clone(), gap);
+            }
+        }
+    }
+    // seg-pad
+    for s in &segs {
+        for p in pads {
+            if s.net == p.net || !p.layers.iter().any(|l| l == s.layer) {
+                continue;
+            }
+            let gap = seg_rect_dist(s.a, s.b, &p.rect) - s.half;
+            if gap < cl {
+                fail(s.id.clone(), p.refpin.clone(), gap);
+            }
+        }
+    }
+    // via-seg, via-pad, via-via (vias span all layers in v1)
+    for (vi, v) in rt.vias.iter().enumerate() {
+        let vr = (v.diameter / 2) as f64;
+        let vid = format!("via:{}#{vi}", v.net);
+        for s in &segs {
+            if s.net == v.net {
+                continue;
+            }
+            let gap = seg_point_dist(s.a, s.b, v.at) - s.half - vr;
+            if gap < cl {
+                fail(vid.clone(), s.id.clone(), gap);
+            }
+        }
+        for p in pads {
+            if p.net == v.net {
+                continue;
+            }
+            let gap = p.rect.gap(&Rect::centered(v.at, (0, 0))) - vr;
+            if gap < cl {
+                fail(vid.clone(), p.refpin.clone(), gap);
+            }
+        }
+        for (wi, w) in rt.vias.iter().enumerate().skip(vi + 1) {
+            if w.net == v.net {
+                continue;
+            }
+            let d = (((v.at.x - w.at.x) as f64).powi(2) + ((v.at.y - w.at.y) as f64).powi(2)).sqrt();
+            let gap = d - vr - (w.diameter / 2) as f64;
+            if gap < cl {
+                fail(vid.clone(), format!("via:{}#{wi}", w.net), gap);
+            }
+        }
+    }
+    // pad-pad (different nets)
+    for i in 0..pads.len() {
+        for j in i + 1..pads.len() {
+            let (p, q) = (&pads[i], &pads[j]);
+            if p.net == q.net || !p.layers.iter().any(|l| q.layers.contains(l)) {
+                continue;
+            }
+            let gap = p.rect.gap(&q.rect);
+            if gap < cl {
+                fail(p.refpin.clone(), q.refpin.clone(), gap);
+            }
+        }
+    }
+    if ok {
+        out.push(CheckResult::pass("routing_clearance"));
     }
 }
 
