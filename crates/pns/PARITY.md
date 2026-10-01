@@ -237,12 +237,76 @@ attached tracks in real KiCad either -- see `PARITY-pcb.md` section 4's
 "Move: connected track ends follow the dragged footprint" row -- so there
 is no gap here to close, just a premise the task brief got wrong.
 
+## Stage 6 -- router fidelity gaps (settings dialog, loop removal, highlight-collisions mode)
+
+**"Highlight collisions" mode needed no new backend code at all.** It's
+not a distinct concept from what this port already calls
+`Mode::MarkObstacles` -- `router_tool.cpp`'s own status-bar summary
+literally labels `RM_MarkObstacles` as `"Highlight collisions"`. That mode
+was already fully implemented (Stage 1) and already accepted over the
+wire (`POST /api/route/start`'s `mode: "mark_obstacles"`); the actual gap
+was that **nothing in the frontend ever let a person choose it** --
+`startInteractiveRoute` hardcoded `"walkaround"` and `drag_start` never
+read a mode from its request body at all. Fixed below, alongside the
+settings dialog the task asked for.
+
+**Loop removal (`RemoveLoops`/`FindLinesBetweenJoints`) -- now
+implemented.** `RoutingSettings::remove_loops` already existed as a field
+(defaulting `true`, matching upstream) but nothing read it; the real
+behavior was entirely missing. `Node::find_lines_between_joints` (new,
+`src/node.rs`) is `NODE::FindLinesBetweenJoints` narrowed to this port's
+one caller: every distinct pre-existing same-net line already in the node
+whose two endpoints exactly match a given pair of points.
+`LinePlacer::finish` (new `remove_loops` method, called when
+`settings.remove_loops` and the route reached a real same-net end -- same
+gate as upstream's own `reachesEnd && aEndItem`) checks whether the whole
+just-finished connection's two outer endpoints are also joined by some
+*other* pre-existing path, and if so marks every one of that path's
+source tracks for removal (skipping any with a locked segment, matching
+upstream's own rule) via the same `displaced_tracks` map shove already
+uses for "remove and don't replace" (an empty `Line` as the sentinel --
+`point_count() < 2` already means "no replacement" to
+`Router::build_commit`). Deliberately coarser than upstream in one way:
+checked once for the whole finished connection (its true start to its
+real end), not per internal segment/joint the way upstream's own
+per-`JOINT` loop does -- matching this crate's existing "one commit per
+whole finished line" adaptation (Stage 4's own doc comment) rather than
+upstream's per-segment model. The new route's own runs are never
+inserted into `node` while routing at all (module doc comment, same
+reason same-net items never need collision exclusion here), so every
+match this finds is guaranteed to be a genuinely different, already-
+committed line -- never the one just placed. 3 new tests in
+`line_placer.rs` (redundant path removed, locked path left alone, the
+setting turned off is a no-op). Drag sessions don't get this treatment --
+upstream's own `DRAGGER` never calls `removeLoops` either.
+
+**Frontend: `RouterSettingsDialog.tsx` (`Ctrl+<`,
+`pcbnew.InteractiveRouter.SettingsDialog`)**, backing `state.routerSettings
+= { mode, removeLoops }` -- see `web/studio/PARITY-pcb.md` for the full
+field-by-field scope (deliberately narrower than upstream's own dialog:
+only `mode` and `removeLoops` have any real effect in this crate, so only
+those two are exposed as working controls; Free Angle Mode is shown
+disabled with its reason rather than omitted, since the task named it
+explicitly). `POST /api/route/start` gained `remove_loops`;
+`POST /api/route/drag_start` gained `mode` (previously silently always
+`Mode::Walkaround` regardless of what a route session was using -- a
+small, real inconsistency this closes in passing). A setting change takes
+effect on the *next* `X`/`D` session, not a live one already in progress
+-- this app starts a brand new `Router`/session per route or drag (no
+persistent one to push a live update into the way upstream's own dialog
+does), a deliberate, documented adaptation rather than a gap.
+
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
 - `MERGE_OBTUSE`, `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes (`src/
   optimizer.rs` only ports `MERGE_SEGMENTS`/`MERGE_COLINEAR`, the two every
   plain interactive route and post-shove cleanup actually uses by
-  default).
+  default). `RoutingSettings::smart_pads` exists as a field but, like
+  `shove_vias`/`jump_over_obstacles`/`optimizer_effort`/
+  `fix_all_segments`/`walkaround_hug_length_threshold`, is never read by
+  any routing code in this crate -- struct-shape parity only, not
+  implemented behavior (confirmed by grepping for each field's use
+  outside `settings.rs` itself: none).
 - `KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints
   (every candidate is still collision-checked, which is the one
   constraint that must never be skipped; the others are refinements).
@@ -251,6 +315,10 @@ is no gap here to close, just a premise the task brief got wrong.
 - `VIA::PushoutForce`'s iterative lead-direction search for via lead-in
   while routing (`buildInitialLine`'s via-placement path uses a simpler
   direct placement -- see `line_placer.rs`).
-- Loop removal (`RemoveLoops`/`FindLinesBetweenJoints`) -- not implemented;
-  a route that reconnects to an existing same-net path leaves both in
-  place rather than deleting the redundant one.
+- `MOUSE_TRAIL_TRACER` (posture guessed from the swept mouse trail) and
+  springback (an incremental undo stack so backing the cursor up reverts
+  shove/walkaround decisions instead of recomputing from scratch) --
+  still not implemented; see `line_placer.rs`'s own module doc comment
+  (point 1) and `shove.rs`'s Stage 3 doc comment above for why, and
+  `docs/parity/GAPS.md` for this task's own priority ranking of what's
+  left in gap #7.

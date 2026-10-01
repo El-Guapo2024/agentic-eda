@@ -467,7 +467,7 @@ export function Canvas() {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
           const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
-          void startInteractiveRoute(sx, sy, layer, width, dispatch);
+          void startInteractiveRoute(sx, sy, layer, width, state.routerSettings, dispatch);
           return;
         }
         void fixInteractiveRoute(sx, sy, draw, dispatch, api);

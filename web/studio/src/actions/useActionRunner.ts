@@ -250,9 +250,14 @@ export function useActionRunner() {
           dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
           return;
         }
-        void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, dispatch);
+        void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings.mode, dispatch);
       })
     );
+    // `Ctrl+<` (dialog_pns_settings.cpp): mode/remove-redundant-tracks,
+    // read fresh by the next `X`/`D` session start -- see
+    // `state.routerSettings`'s own doc comment on why this isn't live
+    // mid-route the way upstream's dialog is.
+    m.set("pcbnew.InteractiveRouter.SettingsDialog", pcbOnly(() => dispatch({ type: "SET_ROUTER_SETTINGS_DIALOG_OPEN", open: true })));
     m.set(
       "pcbnew.InteractiveDrawing.via",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))

@@ -264,8 +264,12 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
-export function routeStart(x: Um, y: Um, layer: string, width: Um, mode: RouteMode): Promise<RoutePreview> {
-  return postJson("/api/route/start", { x, y, layer, width, mode });
+/** `removeLoops` (`RoutingSettings::RemoveLoops`, default `true`, see
+ * `components/RouterSettingsDialog.tsx`): delete a pre-existing, now-
+ * redundant same-net path once this route finishes by joining the same two
+ * points another way. Omit to keep the backend's own default. */
+export function routeStart(x: Um, y: Um, layer: string, width: Um, mode: RouteMode, removeLoops?: boolean): Promise<RoutePreview> {
+  return postJson("/api/route/start", { x, y, layer, width, mode, remove_loops: removeLoops });
 }
 
 /** `flipPosture`/`width` fold in the `/` and `W` hotkeys -- see
@@ -296,14 +300,18 @@ export function routeCancel(): Promise<{ ok: boolean }> {
 }
 
 // `D`: drag an existing track segment/corner or via, keeping its
-// connections (gap #7 stage 5). Not yet wired into Canvas.tsx's move tool
-// (see docs/parity/GAPS.md #7's own tracking note) -- these three calls
-// are the full backend surface a future drag-tool integration needs;
-// `routeCancel` above already ends a drag session too (it's the same
-// backend session as a route, see `RoutePreview`'s own doc comment).
+// connections (gap #7 stage 5) -- wired into Canvas.tsx's own drag tool,
+// see components/canvas/dragging.ts. `routeCancel` above already ends a
+// drag session too (it's the same backend session as a route, see
+// `RoutePreview`'s own doc comment).
 
-export function routeDragStart(x: Um, y: Um, layer: string): Promise<DragPreview> {
-  return postJson("/api/route/drag_start", { x, y, layer });
+/** `mode` (`RoutingSettings::Mode`, see `components/RouterSettingsDialog.tsx`):
+ * `eda_pns::dragger::Dragger` reuses the exact same walkaround/shove/
+ * mark-obstacles modes a route session does. Omit to keep the backend's
+ * own default (`Mode::Walkaround`). No `removeLoops` here -- upstream's own
+ * `DRAGGER` never calls `removeLoops` either, a route-only concept. */
+export function routeDragStart(x: Um, y: Um, layer: string, mode?: RouteMode): Promise<DragPreview> {
+  return postJson("/api/route/drag_start", { x, y, layer, mode });
 }
 
 export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {

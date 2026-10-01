@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, LabelScope, Part, Ratsnest, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, LabelScope, Part, Ratsnest, RouteMode, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -509,6 +509,23 @@ export interface StudioState {
   clipboard: ClipboardContents | null;
   /** Shift+M "Move Exactly..." dialog -- open with the selection's own default anchor/bbox already resolved (components/MoveExactDialog.tsx computes the rest). Null = closed. */
   moveExactDialogOpen: boolean;
+  /** `Ctrl+<` "Interactive Router Settings..." (dialog_pns_settings.cpp) -- components/RouterSettingsDialog.tsx. */
+  routerSettingsDialogOpen: boolean;
+  /**
+   * `eda_pns::RoutingSettings`, the subset this app's router actually
+   * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
+   * most of upstream's own `DIALOG_PNS_SETTINGS` fields -- shove vias,
+   * jump-over-obstacles/back-pressure, smart pads, smooth dragged
+   * segments, auto posture, suggest ending -- exist on the Rust struct
+   * (or don't exist at all) but are never actually read by any routing
+   * code, so there is nothing real for a toggle to do yet; only `mode`
+   * and `removeLoops` have a genuine effect). Read fresh by `X`/`D`'s own
+   * session start (`routeStart`/`routeDragStart`) -- this app's "start a
+   * fresh session every time" architecture (PARITY.md's own doc on why)
+   * means a setting changed here takes effect on the *next* route/drag,
+   * not one already in progress, unlike upstream's live mid-route dialog.
+   */
+  routerSettings: { mode: RouteMode; removeLoops: boolean };
 }
 
 const initialState: StudioState = {
@@ -590,6 +607,9 @@ const initialState: StudioState = {
   ercSelected: null,
   clipboard: null,
   moveExactDialogOpen: false,
+  routerSettingsDialogOpen: false,
+  // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
+  routerSettings: { mode: "walkaround", removeLoops: true },
 };
 
 export type Action =
@@ -672,7 +692,9 @@ export type Action =
   | { type: "SET_SYMBOL_PROPERTIES"; value: StudioState["symbolProperties"] }
   | { type: "SET_ANNOTATE_DIALOG_OPEN"; open: boolean }
   | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
-  | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean };
+  | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] };
 
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
@@ -911,6 +933,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, clipboard: action.clipboard };
     case "SET_MOVE_EXACT_DIALOG_OPEN":
       return { ...state, moveExactDialogOpen: action.open };
+    case "SET_ROUTER_SETTINGS_DIALOG_OPEN":
+      return { ...state, routerSettingsDialogOpen: action.open };
+    case "SET_ROUTER_SETTINGS":
+      return { ...state, routerSettings: action.settings };
     default:
       return state;
   }

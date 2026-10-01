@@ -4,7 +4,7 @@
 // cursor, turn a click/move into the right `/api/route/drag_*` call and
 // `DrawState` update), not a second copy of `eda_pns::dragger::Dragger`'s
 // own algorithm.
-import type { BoardState } from "../../api/types";
+import type { BoardState, RouteMode } from "../../api/types";
 import { routeDragFinish, routeDragStart } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
@@ -61,9 +61,11 @@ export function findDraggableAt(
 /** `D`: grab `hit` at `(x, y)` and arm the drag tool. Shows an error toast
  * and leaves `drawState` untouched if the backend refuses (e.g. the item
  * named by `hit` no longer exists -- a stale client-side hit against a
- * board that changed a moment ago). */
-export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, dispatch: Dispatch<Action>): Promise<void> {
-  const preview = await routeDragStart(x, y, hit.layer);
+ * board that changed a moment ago). `mode` is `state.routerSettings.mode`
+ * (`Ctrl+<`'s dialog) -- `Dragger` honors the same walkaround/shove/
+ * mark-obstacles choice a route session does. */
+export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, mode: RouteMode, dispatch: Dispatch<Action>): Promise<void> {
+  const preview = await routeDragStart(x, y, hit.layer, mode);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Nothing to drag there.", kind: "error" });
     return;

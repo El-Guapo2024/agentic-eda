@@ -386,12 +386,66 @@ impl LinePlacer {
             return None;
         }
         self.absorb_displacement(&preview);
+        let real_end = preview.snapped_end.is_some();
         if preview.head.point_count() >= 2 {
             self.runs.push(preview.head);
         }
         self.idle = true;
         self.placement_correct = !self.runs.is_empty();
+        if settings.remove_loops && real_end {
+            self.remove_loops(node);
+        }
         Some(self.runs.clone())
+    }
+
+    /// `LINE_PLACER::removeLoops`, adapted to this port's "one commit per
+    /// whole finished connection" granularity (`crate::router`'s own doc
+    /// comment on why a multi-run, via-switching session still becomes one
+    /// undo step): once the connection reaches a real end (lands on a
+    /// same-net anchor), check whether its own two endpoints -- the
+    /// route's true start (the very first point of its first run) and the
+    /// anchor it just landed on -- are *also* already joined by some
+    /// other, pre-existing same-net path (`Node::find_lines_between_joints`).
+    /// If so, that other path is now a redundant parallel connection
+    /// between the same two electrical points and gets deleted, same as
+    /// upstream -- unless any of its segments are locked (upstream's own
+    /// "don't remove locked tracks" rule). This session's own runs are
+    /// never inserted into `node` while routing (see the module doc
+    /// comment), so every match `find_lines_between_joints` returns here
+    /// is necessarily a *different*, already-committed line, never the one
+    /// just placed.
+    ///
+    /// Deliberately coarser than upstream, which re-checks per internal
+    /// segment of the new line (each one can itself be a `JOINT` if the
+    /// new route happened to touch an intermediate branch point) -- this
+    /// checks only the whole connection's two outer endpoints, matching
+    /// the "whole finished line is the unit" adaptation the rest of this
+    /// crate's commit model already makes. The common case (a route
+    /// finished directly between two points already connected by one
+    /// redundant pre-existing path) behaves identically; a new route that
+    /// also happens to graze a third, unrelated branch point partway
+    /// through is not specially handled.
+    fn remove_loops(&mut self, node: &Node) {
+        let (Some(start), Some(end)) = (self.runs.first().and_then(|r| r.first()), self.runs.last().and_then(|r| r.last())) else { return };
+        if start == end {
+            return;
+        }
+        for line in node.find_lines_between_joints(start, end, &self.net) {
+            let has_locked_segment = line.segment_ids.iter().any(|id| matches!(node.get(*id), Some(Item::Segment(s)) if s.locked));
+            if has_locked_segment {
+                continue;
+            }
+            let mut track_ids: Vec<String> = line.segment_ids.iter().filter_map(|id| match node.get(*id) { Some(Item::Segment(s)) => s.source_track.as_ref().map(|(t, _)| t.clone()), _ => None }).collect();
+            track_ids.sort_unstable();
+            track_ids.dedup();
+            for track_id in track_ids {
+                // An empty replacement (`point_count() < 2`) tells the
+                // eventual caller (`crate::router::Router::build_commit`)
+                // "remove this track, nothing replaces it" -- the same
+                // convention a fully-retracted shove already relies on.
+                self.displaced_tracks.insert(track_id, Line::new(self.net.clone(), self.current_layer, 0));
+            }
+        }
     }
 
     /// Every other track this session's shove (if any) displaced, by
@@ -515,5 +569,55 @@ mod tests {
         let displaced: Vec<_> = placer.displaced_tracks().collect();
         assert_eq!(displaced.len(), 1);
         assert_eq!(displaced[0].0, "trkA");
+    }
+
+    #[test]
+    fn finishing_a_route_onto_an_already_connected_same_net_anchor_removes_the_redundant_old_path() {
+        use crate::item::Segment;
+        let mut node = Node::new();
+        // A pre-existing direct connection between (0,0) and (3000,0),
+        // same net as the new route below -- once the new route also joins
+        // those same two points, this one becomes a redundant parallel
+        // path and should be deleted (`RoutingSettings::remove_loops`
+        // defaults `true`, matching upstream).
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 3000, y: 0 }, width: 200, source_track: Some(("trkOld".into(), 0)), locked: false }));
+        let rules = rules();
+        let settings = RoutingSettings::default();
+        assert!(settings.remove_loops, "sanity: the default this test exercises");
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+
+        let outcome = placer.finish(&node, &rules, &settings, Point { x: 3000, y: 0 }).expect("must finish onto the old track's own endpoint");
+        assert_eq!(outcome.len(), 1, "the new connection itself is still placed");
+
+        let displaced: Vec<_> = placer.displaced_tracks().collect();
+        assert_eq!(displaced.len(), 1);
+        assert_eq!(displaced[0].0, "trkOld");
+        assert!(displaced[0].1.point_count() < 2, "no replacement geometry -- the old track is simply removed, not moved");
+    }
+
+    #[test]
+    fn remove_loops_leaves_a_locked_redundant_path_alone() {
+        use crate::item::Segment;
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 3000, y: 0 }, width: 200, source_track: Some(("trkOld".into(), 0)), locked: true }));
+        let rules = rules();
+        let settings = RoutingSettings::default();
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+
+        placer.finish(&node, &rules, &settings, Point { x: 3000, y: 0 }).expect("must finish");
+        assert!(placer.displaced_tracks().next().is_none(), "a locked redundant path must never be removed, matching upstream");
+    }
+
+    #[test]
+    fn remove_loops_is_a_no_op_when_the_setting_is_off() {
+        use crate::item::Segment;
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 3000, y: 0 }, width: 200, source_track: Some(("trkOld".into(), 0)), locked: false }));
+        let rules = rules();
+        let settings = RoutingSettings { remove_loops: false, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+
+        placer.finish(&node, &rules, &settings, Point { x: 3000, y: 0 }).expect("must finish");
+        assert!(placer.displaced_tracks().next().is_none(), "remove_loops: false must leave the redundant path in place");
     }
 }

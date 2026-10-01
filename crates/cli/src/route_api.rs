@@ -47,6 +47,20 @@ fn err(message: impl Into<String>) -> Value {
     json!({ "ok": false, "message": message.into() })
 }
 
+/// `req.mode` ("mark_obstacles" | "walkaround" | "shove"), defaulting to
+/// `Mode::Walkaround` when absent or unrecognized -- KiCad's own default,
+/// and shared by `start`/`drag_start` so a route session and a drag
+/// session read the one `RoutingSettings::Mode` field the same way (see
+/// `web/studio/src/components/RouterSettingsDialog.tsx`, the frontend's
+/// one place that actually lets a person choose it).
+fn mode_of(req: &Value) -> Mode {
+    match req.get("mode").and_then(Value::as_str) {
+        Some("mark_obstacles") => Mode::MarkObstacles,
+        Some("shove") => Mode::Shove,
+        _ => Mode::Walkaround,
+    }
+}
+
 fn preview_json(router: &Router, preview: &Preview) -> Value {
     json!({
         "ok": true,
@@ -69,9 +83,11 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
     })
 }
 
-/// `POST /api/route/start`: `{x, y, layer, width?, mode?}`. `mode` is one
-/// of `"mark_obstacles" | "walkaround" | "shove"` (default `"walkaround"`,
-/// matching KiCad's own default -- see `eda_pns::settings::Mode`).
+/// `POST /api/route/start`: `{x, y, layer, width?, mode?, remove_loops?}`.
+/// `mode` is one of `"mark_obstacles" | "walkaround" | "shove"` (default
+/// `"walkaround"`, matching KiCad's own default -- see
+/// `eda_pns::settings::Mode`); `remove_loops` defaults to `true`
+/// (`RoutingSettings::default()`'s own default).
 pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
@@ -79,11 +95,8 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         Err(e) => return err(board::reasons(&e)),
     };
     let mut router = Router::new(&design, &model);
-    router.settings.mode = match req.get("mode").and_then(Value::as_str) {
-        Some("mark_obstacles") => Mode::MarkObstacles,
-        Some("shove") => Mode::Shove,
-        _ => Mode::Walkaround,
-    };
+    router.settings.mode = mode_of(&req);
+    router.settings.remove_loops = req.get("remove_loops").and_then(Value::as_bool).unwrap_or(true);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     let width = num(&req, "width", model.board.track_width);
@@ -209,9 +222,13 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
     })
 }
 
-/// `POST /api/route/drag_start`: `{x, y, layer}`. Builds a fresh `Router`
-/// from the board as it stands right now, same as `start` -- a drag reads
-/// the live board just as much as a route does.
+/// `POST /api/route/drag_start`: `{x, y, layer, mode?}`. Builds a fresh
+/// `Router` from the board as it stands right now, same as `start` -- a
+/// drag reads the live board just as much as a route does. `mode` is the
+/// same `Mode` a route session takes (`mode_of`'s own doc comment) --
+/// `eda_pns::dragger::Dragger` reuses it exactly as upstream's `DRAGGER`
+/// reuses `SHOVE`/`WALKAROUND`; no `remove_loops` here, a route-only
+/// concept upstream's own `DRAGGER` never touches either.
 pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
@@ -219,6 +236,7 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         Err(e) => return err(board::reasons(&e)),
     };
     let mut router = Router::new(&design, &model);
+    router.settings.mode = mode_of(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     match router.drag_start(at, layer) {

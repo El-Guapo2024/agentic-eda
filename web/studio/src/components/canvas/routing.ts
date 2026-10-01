@@ -10,7 +10,7 @@
 // below is unrelated to the route tool now; it remains the plain-45-
 // degree-snap helper the shape tools (segment/rect) still use for their
 // own, much simpler, single-segment preview.
-import type { BoardState } from "../../api/types";
+import type { BoardState, RouteMode } from "../../api/types";
 import { routeCancel, routeFinish, routeFix, routeStart } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
@@ -19,14 +19,18 @@ import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/rout
 /** `X` / the first click after arming the route tool: start a session from
  * whatever pad/via/track-end is at `(x, y)`. Shows an error toast and
  * leaves `drawState` untouched if there's nothing routable there --
- * `isStartingPointRoutable`'s own refusal, ported. */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, dispatch: Dispatch<Action>): Promise<void> {
-  const preview = await routeStart(x, y, layer, width, "walkaround");
+ * `isStartingPointRoutable`'s own refusal, ported. `settings` is
+ * `state.routerSettings` (`Ctrl+<`'s own dialog, components/
+ * RouterSettingsDialog.tsx) -- read fresh at the start of every session,
+ * same as every other "current pick" this app's route/via tools read
+ * (track width, via preset). */
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: { mode: RouteMode; removeLoops: boolean }, dispatch: Dispatch<Action>): Promise<void> {
+  const preview = await routeStart(x, y, layer, width, settings.mode, settings.removeLoops);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
     return;
   }
-  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced };
+  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias };
   dispatch({ type: "SET_DRAW_STATE", draw });
 }
 
