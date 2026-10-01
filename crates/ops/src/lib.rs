@@ -48,6 +48,18 @@ use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// `dialog_annotate.cpp`'s own "Order Options": which coordinate breaks
+/// ties first when two symbols would otherwise land in the same spot in
+/// the sort. `YThenX` ("sort by Y position") is KiCad's own default and
+/// what this project's `annotate` already did before this field existed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnotateOrder {
+    #[default]
+    YThenX,
+    XThenY,
+}
+
 /// Which way from the anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -389,11 +401,22 @@ pub enum Cmd {
     /// `Ctrl+A` (Annotate): assign reference designators to every
     /// not-yet-annotated symbol (an `id` this project synthesizes as
     /// `"U?1"`/`"U?2"`/... when `AddSymbol` is given a blank prefix+number
-    /// -- see `sch_drawing_tools`' own symbol-chooser flow), in `order`
-    /// (top-to-bottom sheet position, left-to-right as the tiebreak,
-    /// matching `dialog_annotate.cpp`'s default). `reset_existing` mirrors
-    /// the dialog's "Clear and re-annotate" vs "Keep existing" modes.
-    Annotate { reset_existing: bool },
+    /// -- see `sch_drawing_tools`' own symbol-chooser flow), sorted by
+    /// `order` (`dialog_annotate.cpp`'s "Order Options", default top to
+    /// bottom). `reset_existing` mirrors the dialog's "Clear and
+    /// re-annotate" vs "Keep existing" modes. `ids`, when given, is
+    /// `dialog_annotate.cpp`'s own "Selection" scope -- only symbols named
+    /// here are reset/renumbered, everything else on the sheet is left
+    /// exactly as it is; `None` is the dialog's "Schematic"/"Sheet" scope
+    /// (this project's IR has no sheet hierarchy to tell those two apart,
+    /// so there's only one "whole sheet" scope here, not source's three).
+    Annotate {
+        reset_existing: bool,
+        #[serde(default)]
+        order: AnnotateOrder,
+        #[serde(default)]
+        ids: Option<Vec<String>>,
+    },
 }
 
 /// Which editor a `Cmd` belongs to -- `eeschema`'s `design.schematic`, or
@@ -769,7 +792,7 @@ impl<'a> Board<'a> {
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
-            Cmd::Annotate { reset_existing } => self.annotate(*reset_existing),
+            Cmd::Annotate { reset_existing, order, ids } => self.annotate(*reset_existing, *order, ids.as_deref()),
         }
     }
 
@@ -1755,10 +1778,20 @@ impl<'a> Board<'a> {
     /// `reset_existing` first strips every symbol's id back to
     /// "<prefix>?" (dialog's "Reset existing annotations"), so the whole
     /// sheet renumbers from scratch instead of only filling gaps.
-    fn annotate(&mut self, reset_existing: bool) -> Result<(), Vec<CheckResult>> {
+    fn annotate(&mut self, reset_existing: bool, order: AnnotateOrder, ids: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
         let sch = self.schematic_mut()?;
+        // Scope snapshot, by index, taken before any id mutates: `ids`
+        // names symbols by the id the caller/selection saw them under,
+        // which `reset_existing` below is about to change for exactly the
+        // ones in scope -- re-checking membership against the *new* id
+        // after that would wrongly drop them back out of scope.
+        let in_scope: Vec<bool> = sch.symbols.iter().map(|s| ids.is_none_or(|list| list.iter().any(|want| want == &s.id))).collect();
+
         if reset_existing {
-            for s in &mut sch.symbols {
+            for (i, s) in sch.symbols.iter_mut().enumerate() {
+                if !in_scope[i] {
+                    continue;
+                }
                 let prefix: String = s.id.chars().take_while(|c| c.is_alphabetic()).collect();
                 if !prefix.is_empty() {
                     s.id = format!("{prefix}?");
@@ -1775,9 +1808,16 @@ impl<'a> Board<'a> {
             let e = next.entry(prefix).or_insert(0);
             *e = (*e).max(num);
         }
-        let mut order: Vec<usize> = (0..sch.symbols.len()).filter(|&i| sch.symbols[i].id.ends_with('?')).collect();
-        order.sort_by(|&a, &b| (sch.symbols[a].at.y, sch.symbols[a].at.x).cmp(&(sch.symbols[b].at.y, sch.symbols[b].at.x)));
-        for i in order {
+        let mut to_number: Vec<usize> = (0..sch.symbols.len()).filter(|&i| sch.symbols[i].id.ends_with('?') && in_scope[i]).collect();
+        to_number.sort_by(|&a, &b| {
+            let (ya, xa) = (sch.symbols[a].at.y, sch.symbols[a].at.x);
+            let (yb, xb) = (sch.symbols[b].at.y, sch.symbols[b].at.x);
+            match order {
+                AnnotateOrder::YThenX => (ya, xa).cmp(&(yb, xb)),
+                AnnotateOrder::XThenY => (xa, ya).cmp(&(xb, yb)),
+            }
+        });
+        for i in to_number {
             let prefix = sch.symbols[i].id.trim_end_matches('?').to_string();
             let prefix = if prefix.is_empty() { "U".to_string() } else { prefix };
             let n = next.entry(prefix.clone()).or_insert(0);

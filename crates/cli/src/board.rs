@@ -541,7 +541,15 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
-        Cmd::Annotate { reset_existing } => format!("schematic annotate{}", if *reset_existing { " --reset" } else { "" }),
+        Cmd::Annotate { reset_existing, order, ids } => format!(
+            "schematic annotate{}{}{}",
+            if *reset_existing { " --reset" } else { "" },
+            match order {
+                eda_ops::AnnotateOrder::XThenY => " --order x-then-y",
+                eda_ops::AnnotateOrder::YThenX => "",
+            },
+            ids.as_ref().map(|v| format!(" --selection {}", v.join(","))).unwrap_or_default(),
+        ),
     }
 }
 
@@ -1395,6 +1403,70 @@ mod tests {
         assert_eq!(r1.value, "10k", "the second edit (footprint only) must not have reset the first edit's value");
         assert_eq!(r1.footprint, "Resistor_SMD:R_0603");
         assert_eq!(r1.datasheet, "", "never touched, stays at its default");
+    }
+
+    /// `dialog_annotate.cpp`'s "Order Options": Y-then-X is the default
+    /// (top to bottom, left to right as the tiebreak) -- same numbering
+    /// this project always did before `AnnotateOrder` existed, confirmed
+    /// with two points chosen so the two orders actually disagree (A is
+    /// left-of and below B: Y-then-X puts B first, X-then-Y puts A
+    /// first).
+    #[test]
+    fn annotate_order_default_is_y_then_x_and_x_then_y_is_the_opposite_here() {
+        let dir = scratch("sch_annotate_order");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            // Neither point may collide with setup_schematic's own R1
+            // (10_000,10_000)/R2 (20_000,10_000) -- `.find(|s| s.at == ...)`
+            // below would silently match the wrong symbol otherwise.
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 5_000, y: 50_000 }, rot: 0, mirrored: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "A": further left, further down
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 60_000, y: 40_000 }, rot: 0, mirrored: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "B": further right, further up
+        }
+        save(&dir, &design).unwrap();
+
+        step(&dir, Cmd::Annotate { reset_existing: false, order: eda_ops::AnnotateOrder::YThenX, ids: None }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
+        let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000, y: 40_000 }).unwrap();
+        assert_eq!(b.id, "C1", "Y-then-X: B (lower Y) is numbered first");
+        assert_eq!(a.id, "C2");
+
+        // Reset and redo with X-then-Y -- the order must flip.
+        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::XThenY, ids: None }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
+        let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000, y: 40_000 }).unwrap();
+        assert_eq!(a.id, "C1", "X-then-Y: A (lower X) is numbered first -- the opposite of the Y-then-X result above");
+        assert_eq!(b.id, "C2");
+    }
+
+    /// `dialog_annotate.cpp`'s "Selection" scope: only the named symbols
+    /// are reset/renumbered, everything else on the sheet is left alone
+    /// even if `reset_existing` is set.
+    #[test]
+    fn annotate_with_an_explicit_id_list_only_touches_those_symbols() {
+        let dir = scratch("sch_annotate_selection");
+        setup_schematic(&dir);
+        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new() }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: 40_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new() }, false, "test").unwrap();
+
+        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]) }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert!(sch.symbols.iter().any(|s| s.id == "R1") && sch.symbols.iter().any(|s| s.id == "R2"), "R1/R2 were never in scope -- must be untouched");
+        assert!(sch.symbols.iter().any(|s| s.id == "R4"), "R4 was never in scope either, even though it's the same prefix as the one being reset");
+        // R3 was in scope: reset to "R?", then renumbered to the next free
+        // "R" number -- which is 5, not 3, since R4 (number 4, untouched
+        // and out of scope) is still on the sheet contributing to "next
+        // free" -- `annotate` fills the next free slot, it does not
+        // backfill gaps, same as before this field existed.
+        assert_eq!(sch.symbols.iter().find(|s| s.at == Point { x: 30_000, y: 10_000 }).unwrap().id, "R5");
+        assert!(!sch.symbols.iter().any(|s| s.id.ends_with('?')), "nothing should be left unannotated after the pass");
     }
 
     /// GAPS.md #15: "pressing Ctrl+Z while viewing the Schematic tab

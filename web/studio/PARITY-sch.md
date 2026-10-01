@@ -23,10 +23,11 @@ label/no-connect/power-symbol/text placement, plus a new minimal
 `SchematicText` IR for `T`), and `A`'s symbol chooser (section 3 --
 `SymbolChooserDialog.tsx`, a new `GET /api/symbol_library` endpoint, and
 a new `LibSymbol::reference_prefix` field so a placed symbol gets a real
-reference immediately instead of a "U?" placeholder), and `E`/`U`/`V`/`F`
+reference immediately instead of a "U?" placeholder), `E`/`U`/`V`/`F`
 (section 1 -- `SymbolPropertiesDialog.tsx`, new `Cmd::RenameSymbol`/
-`EditSymbolFields`). Still not wired: `J` junction and Annotate's dialog
-— see the bottom of each section.
+`EditSymbolFields`), and Annotate's dialog (section 5 --
+`AnnotateDialog.tsx`, new `Cmd::Annotate.order`/`.ids`). Still not wired:
+`J` junction — see the bottom of each section.
 
 **Found and fixed while wiring `E`/`U`/`V`/`F`'s hotkeys**: several
 physical keys are double-booked by one `pcbnew.*` and one `eeschema.*`
@@ -188,10 +189,18 @@ covers *placing* them, matching this pass's scope.
 
 ## 5. Annotate
 
+`Ctrl+A` now opens `AnnotateDialog.tsx` instead of calling `Cmd::Annotate`
+directly -- scope, order and reset are all real choices, confirmed by
+three new `crates/cli` tests (default order vs. the opposite order,
+explicit-selection scope leaving everything else untouched).
+
 | Action | Status | KiCad file:function |
 |---|---|---|
-| Assign reference designators to unannotated (`"U?"`-style) symbols, top-to-bottom then left-to-right | partial — wired to a menu item (`eeschema.EditorControl.annotate`) with no dialog: always whole-sheet, always "keep existing" (`reset_existing: false`), no scope/sort-order/numbering-scheme choices | `dialog_annotate.cpp` (`INCREMENTAL_BY_REF`, `SORT_BY_Y_POSITION` default — this project's numbering starts at 1 per prefix, not KiCad's configurable start-at-0 default) |
-| "Reset existing annotations" mode | backend only (`Cmd::Annotate { reset_existing: true }` implemented, unreachable from the UI — no dialog to offer the choice) | same |
+| Assign reference designators to unannotated (`"U?"`-style) symbols | identical for the one scope this IR actually has | `dialog_annotate.cpp` (`INCREMENTAL_BY_REF` -- this project's numbering starts at 1 per prefix, not KiCad's configurable start-at-0 default, unchanged from before this session) |
+| Scope: whole sheet / current selection | partial — source's own three (Schematic/Sheet/Selection) collapse to two here: this IR has no sheet hierarchy, so "Schematic" and "Sheet" are the same "whole sheet" scope `Cmd::Annotate`'s new `ids: None` already was; "Selection" is new (`ids: Some(selected symbol ids)`) | `dialog_annotate.cpp`'s scope radio group; `new Cmd::Annotate.ids` |
+| Order: sort by Y then X (default) / X then Y | identical | `dialog_annotate.cpp`'s order radio group (`SORT_BY_Y_POSITION` default); `new Cmd::Annotate.order`/`AnnotateOrder` |
+| Numbering scheme: First Free / Sheet x100 / Sheet x1000 | not applicable — all three only differ for a multi-sheet hierarchy numbering each sheet into its own block; this IR has exactly one sheet, so there is nothing for this control to choose between (left out of the dialog entirely rather than shown as a dead control) | `dialog_annotate.cpp`'s numbering-scheme radio group |
+| "Clear and re-annotate" (reset existing) vs "Keep existing" | identical, and now reachable from the UI | `Cmd::Annotate.reset_existing`, already implemented; `AnnotateDialog.tsx`'s checkbox |
 
 ## 6. Cross-tab undo/redo (gap #15)
 
@@ -321,3 +330,14 @@ click through:
     directly (no `E` first) on a selected symbol -- confirm the same
     dialog opens with the right field pre-selected/highlighted for
     immediate typing.
+18. Place a couple of unannotated symbols (e.g. via `A`'s chooser, or
+    `E`'s Reference field renamed to end in `?`), then press Ctrl+`A` --
+    Annotate Schematic should open with "Whole sheet" selected (nothing
+    was selected) and "Sort by Y" the default. Confirm -- both get real
+    references. Select one symbol first, reopen the dialog -- "Selection
+    only (1 symbol)" should now be the default and the whole-sheet radio
+    still pickable; rename that one symbol's reference to end in `?`
+    again (via `E`), check "Selection only", confirm -- only that one
+    symbol should renumber, everything else on the sheet untouched. Try
+    "Clear and re-annotate" with "Sort by X" on the whole sheet and
+    confirm the numbering order visibly follows X position instead of Y.
