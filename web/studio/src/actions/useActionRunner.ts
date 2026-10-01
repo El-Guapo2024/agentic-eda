@@ -716,6 +716,15 @@ export function useActionRunner() {
 
     // dialog_board_setup.cpp -- see BoardSetupDialog.tsx.
     m.set("pcbnew.EditorControl.boardSetup", pcbOnly(() => dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: true })));
+    // Task item 4: opens the same Board Setup dialog, landing on its new
+    // Teardrops page directly instead of making the user click there.
+    m.set(
+      "pcbnew.GlobalEdit.editTeardrops",
+      pcbOnly(() => {
+        dispatch({ type: "SET_BOARD_SETUP_INITIAL_PAGE", page: "teardrops" });
+        dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: true });
+      })
+    );
 
     // File > Fabrication Outputs -- dialog_plot.cpp / dialog_gendrill.cpp /
     // dialog_gen_footprint_position.cpp, see PlotDialog.tsx/

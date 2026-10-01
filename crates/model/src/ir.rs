@@ -829,6 +829,101 @@ pub struct RoutingSection {
     /// `track_width_presets`, for the via-size cycling hotkey.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_presets: Vec<ViaPreset>,
+    /// Task item 4: `TEARDROP_PARAMETERS` -- Board Setup > Teardrops.
+    /// Lives here (not `BoardRules`) for the same reason `track_width_presets`
+    /// does: the studio needs to *write* it through a `Cmd`, and `BoardRules`
+    /// is the read-only intent-derived model. Additive: absent in an older
+    /// `design.json` reads as KiCad's own real factory defaults (disabled).
+    #[serde(default)]
+    pub teardrop_settings: TeardropSettings,
+}
+
+/// `TEARDROP_PARAMETERS` + the subset of `TEARDROP_PARAMETERS_LIST` this
+/// port models (`pcbnew/teardrop/teardrop_parameters.h`). KiCad keeps three
+/// separate `TEARDROP_PARAMETERS` (round/rect/track targets) plus a
+/// `TEARDROP_PARAMETERS_LIST`'s own per-target-kind enable flags; this port
+/// collapses that into one settings block (round shapes only -- see
+/// `eda_connectivity::teardrop`'s own doc for why) with one set of size
+/// ratios shared by every target kind, since this model has no per-target-
+/// kind size tuning need yet. `m_CurvedEdges`, `m_AllowUseTwoTracks` and
+/// `m_TdOnPadsInZones` are not modeled at all (no curved/Bezier edges, no
+/// multi-segment-track extension, no in-zone pad filter -- see that
+/// module's doc for the full scope).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TeardropSettings {
+    /// `TEARDROP_PARAMETERS::m_Enabled` -- collapsed from upstream's three
+    /// per-target-kind (round/rect/track) enables into one, since this
+    /// port shares one `TEARDROP_PARAMETERS` block across every kind (see
+    /// this struct's own doc).
+    #[serde(default)]
+    pub enabled: bool,
+    /// `TEARDROP_PARAMETERS_LIST::m_TargetVias`.
+    #[serde(default = "default_td_target")]
+    pub target_vias: bool,
+    /// `TEARDROP_PARAMETERS_LIST::m_TargetPTHPads`.
+    #[serde(default = "default_td_target")]
+    pub target_pth_pads: bool,
+    /// `TEARDROP_PARAMETERS_LIST::m_TargetSMDPads`. In practice this only
+    /// ever matches a *round* SMD pad -- see `eda_connectivity::teardrop`'s
+    /// doc on why non-round shapes aren't ported.
+    #[serde(default = "default_td_target")]
+    pub target_smd_pads: bool,
+    /// `TEARDROP_PARAMETERS::m_BestLengthRatio`.
+    #[serde(default = "default_td_length_ratio")]
+    pub best_length_ratio: f64,
+    /// `TEARDROP_PARAMETERS::m_BestWidthRatio`.
+    #[serde(default = "default_td_width_ratio")]
+    pub best_width_ratio: f64,
+    /// `m_TdMaxLen`, µm. <= 0 disables the constraint.
+    #[serde(default = "default_td_max_len")]
+    pub max_len_um: Um,
+    /// `m_TdMaxWidth`, µm. <= 0 disables the constraint.
+    #[serde(default = "default_td_max_width")]
+    pub max_width_um: Um,
+    /// `m_WidthtoSizeFilterRatio`: a track narrower than
+    /// `anchor_diameter * this` gets a teardrop; 1.0 = always, 0.0 = never.
+    #[serde(default = "default_td_width_to_size_ratio")]
+    pub width_to_size_filter_ratio: f64,
+}
+
+fn default_td_target() -> bool {
+    true // TEARDROP_PARAMETERS_LIST() ctor: every target kind on by default
+}
+fn default_td_length_ratio() -> f64 {
+    0.5
+}
+fn default_td_width_ratio() -> f64 {
+    1.0
+}
+fn default_td_max_len() -> Um {
+    1000 // TEARDROP_PARAMETERS() ctor: pcbIUScale.mmToIU(1.0)
+}
+fn default_td_max_width() -> Um {
+    2000 // ctor: pcbIUScale.mmToIU(2.0)
+}
+fn default_td_width_to_size_ratio() -> f64 {
+    0.9
+}
+
+impl Default for TeardropSettings {
+    /// `TEARDROP_PARAMETERS()`/`TEARDROP_PARAMETERS_LIST()`'s own ctor
+    /// defaults: every target kind enabled, but globally disabled until
+    /// the user turns Teardrops on (`m_Enabled` starts `false` upstream
+    /// too).
+    fn default() -> Self {
+        TeardropSettings {
+            enabled: false,
+            target_vias: default_td_target(),
+            target_pth_pads: default_td_target(),
+            target_smd_pads: default_td_target(),
+            best_length_ratio: default_td_length_ratio(),
+            best_width_ratio: default_td_width_ratio(),
+            max_len_um: default_td_max_len(),
+            max_width_um: default_td_max_width(),
+            width_to_size_filter_ratio: default_td_width_to_size_ratio(),
+        }
+    }
 }
 
 /// One entry of `RoutingSection::via_presets`.
@@ -1048,6 +1143,20 @@ pub struct Zone {
     /// `GetDoNotAllowFootprints()`.
     #[serde(default)]
     pub keepout_footprints: bool,
+
+    /// Task item 4: true for a teardrop this app generated
+    /// (`eda_connectivity::teardrop::generate_teardrops`), false for an
+    /// ordinary user-drawn zone. KiCad stores a teardrop as a real `ZONE`
+    /// too (`TEARDROP_MANAGER::createTeardrop`) -- this is the one bit this
+    /// port needs beyond that to find and replace its own generated set on
+    /// demand (`Cmd::AddAllTeardrops`/`RemoveAllTeardrops`) without
+    /// disturbing a zone the user drew by hand. A teardrop's `outline` is
+    /// its own final shape already (an exact-tangent pentagon against its
+    /// round anchor) -- it is rendered and exported as solid copper
+    /// directly, never run through the knockout/thermal-relief fill
+    /// pipeline the way a drawn zone's settings fields describe.
+    #[serde(default)]
+    pub teardrop: bool,
 }
 
 impl Zone {
@@ -1089,6 +1198,7 @@ impl Default for Zone {
             keepout_pads: false,
             keepout_copper_pour: false,
             keepout_footprints: false,
+            teardrop: false,
         }
     }
 }
@@ -2076,7 +2186,7 @@ mod tests {
     /// save -> load round trip is stable.
     #[test]
     fn id_assignment_is_deterministic_and_stable_on_resave() {
-        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
 
         let mut a = build();
         a.assign_missing_ids();
@@ -2096,8 +2206,8 @@ mod tests {
     /// same tracks must not change which id lands on which track.
     #[test]
     fn ids_do_not_depend_on_array_order() {
-        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
-        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt1.assign_missing_ids();
         rt2.assign_missing_ids();
         let gnd1 = rt1.tracks.iter().find(|t| t.net == "GND").unwrap();
@@ -2109,7 +2219,7 @@ mod tests {
     /// verbatim) must still get two distinct ids.
     #[test]
     fn duplicate_content_gets_distinct_ids() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         assert_ne!(rt.tracks[0].id, rt.tracks[1].id);
     }
@@ -2119,7 +2229,7 @@ mod tests {
     /// assigned -- callers (the web UI, `DeleteTrack`) hold onto it.
     #[test]
     fn changing_width_after_assignment_does_not_move_the_id() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         let id = rt.tracks[0].id.clone();
         rt.tracks[0].width = 500; // what `SetTrackWidth` does

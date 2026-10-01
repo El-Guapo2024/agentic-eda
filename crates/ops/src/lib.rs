@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -342,6 +342,23 @@ pub enum Cmd {
         #[serde(default)]
         keepout_footprints: bool,
     },
+
+    /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
+    /// replace, same "no per-field Cmd" spirit `SetTrackWidthPresets`/
+    /// `SetViaPresets` already use.
+    SetTeardropSettings { settings: TeardropSettings },
+    /// "Add Teardrops" (the dialog's own apply button, not a per-item
+    /// tool): regenerate the board's whole teardrop set from the current
+    /// settings, tracks, vias and pads -- `eda_connectivity::teardrop::
+    /// generate_teardrops`. Replaces (not appends to) whatever this
+    /// command's own previous run left behind, so running it twice in a
+    /// row is idempotent; a user-drawn zone is never touched (only zones
+    /// with `Zone::teardrop == true` are replaced).
+    AddAllTeardrops,
+    /// "Remove All Teardrops": drop every zone with `Zone::teardrop ==
+    /// true`. Does not disable the feature (`TeardropSettings::enabled`
+    /// is untouched) -- same split upstream's own dialog buttons have.
+    RemoveAllTeardrops,
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -884,6 +901,8 @@ impl Cmd {
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTextAndGraphics { shape_ids, text_ids, .. } => shape_ids.iter().chain(text_ids.iter()).map(String::as_str).collect(),
+            Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
+            Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -1174,6 +1193,9 @@ impl<'a> Board<'a> {
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
             Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),
+            Cmd::SetTeardropSettings { settings } => self.set_teardrop_settings(*settings),
+            Cmd::AddAllTeardrops => self.add_all_teardrops(),
+            Cmd::RemoveAllTeardrops => self.remove_all_teardrops(),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
@@ -1726,7 +1748,7 @@ impl<'a> Board<'a> {
     /// must never clear an existing routing section -- see
     /// `Cmd::clears_routing`.
     fn routing_mut(&mut self) -> &mut RoutingSection {
-        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] })
+        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() })
     }
 
     /// The board's drawings section, creating an empty one on first use.
@@ -2093,6 +2115,46 @@ impl<'a> Board<'a> {
         z.keepout_pads = keepout_pads;
         z.keepout_copper_pour = keepout_copper_pour;
         z.keepout_footprints = keepout_footprints;
+        Ok(())
+    }
+
+    // ------------------------------------------------------- teardrops
+
+    /// `Cmd::SetTeardropSettings`. Ratios are fractions of a KiCad
+    /// `0.0..=1.0` slider (`m_BestLengthRatio`/`m_BestWidthRatio`/
+    /// `m_WidthtoSizeFilterRatio`); a value outside that range has no
+    /// sensible meaning (a >100% width ratio would ask for a teardrop
+    /// wider than its own anchor) and is refused rather than silently
+    /// clamped.
+    fn set_teardrop_settings(&mut self, settings: TeardropSettings) -> Result<(), Vec<CheckResult>> {
+        let in_unit_range = |v: f64| (0.0..=1.0).contains(&v);
+        if !in_unit_range(settings.best_length_ratio) || !in_unit_range(settings.best_width_ratio) || !in_unit_range(settings.width_to_size_filter_ratio) {
+            return Err(vec![CheckResult::fail("ops_bad_teardrop_settings", "teardrop_settings", "length/width/filter ratios must be between 0.0 and 1.0")]);
+        }
+        self.routing_mut().teardrop_settings = settings;
+        Ok(())
+    }
+
+    /// `Cmd::AddAllTeardrops`: regenerate the board's whole teardrop set.
+    /// A no-op (not a refusal) when teardrops aren't enabled or nothing
+    /// qualifies -- same as KiCad's own "Update Teardrops" finding nothing
+    /// to do.
+    fn add_all_teardrops(&mut self) -> Result<(), Vec<CheckResult>> {
+        let settings = self.design.routing.as_ref().map(|r| r.teardrop_settings).unwrap_or_default();
+        let fresh = eda_connectivity::generate_teardrops(&self.design, self.model, &settings);
+        let rt = self.routing_mut();
+        rt.zones.retain(|z| !z.teardrop);
+        rt.zones.extend(fresh);
+        rt.assign_missing_ids();
+        self.sort_routing();
+        Ok(())
+    }
+
+    /// `Cmd::RemoveAllTeardrops`.
+    fn remove_all_teardrops(&mut self) -> Result<(), Vec<CheckResult>> {
+        if let Some(rt) = self.design.routing.as_mut() {
+            rt.zones.retain(|z| !z.teardrop);
+        }
         Ok(())
     }
 

@@ -672,6 +672,7 @@ mod tests {
                 zones: vec![],
                 track_width_presets: vec![],
                 via_presets: vec![],
+                teardrop_settings: Default::default(),
             }),
             drawings: None,
         };

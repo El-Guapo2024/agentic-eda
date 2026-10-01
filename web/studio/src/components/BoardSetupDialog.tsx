@@ -3,8 +3,10 @@
 // ~15 panel_setup_*.cpp pages. Pages below map onto what this app's
 // constraint model (crates/model/src/lib.rs `BoardRules`) actually holds;
 // a page with no IR backing at all (vias/zones-only panels already
-// covered by their own dialogs, teardrops, tuning patterns, custom
-// DRC-rule text) is left out entirely rather than faked.
+// covered by their own dialogs, tuning patterns, custom DRC-rule text) is
+// left out entirely rather than faked. Teardrops (task item 4) now has
+// real IR backing (`RoutingSection.teardrop_settings`) and is a genuinely
+// editable page, like Track Widths & Vias.
 //
 // A hard split runs through every page here: `BoardRules` (net classes,
 // hole/clearance/text defaults, stackup) lives on the *intent*-derived
@@ -12,24 +14,37 @@
 // `load`) -- there is no `Cmd` that can change it, because doing so needs
 // a second edit/undo path into the intent file this session did not build
 // (GAPS.md #10 sizes that "L", same as the custom-rule-language page would
-// be). Only `RoutingSection.track_width_presets`/`via_presets` (new this
-// session) live on the editable `design.json` IR, so only the "Track
-// Widths & Vias" page is genuinely editable; every other page is a
-// read-only mirror, same "no command exists for this field yet"
-// convention this app's other dialogs already use.
+// be). `RoutingSection.track_width_presets`/`via_presets`/
+// `teardrop_settings` live on the editable `design.json` IR, so those
+// pages are genuinely editable; every other page is a read-only mirror,
+// same "no command exists for this field yet" convention this app's
+// other dialogs already use.
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
-import type { Um } from "../api/types";
+import type { TeardropSettings, Um } from "../api/types";
 
-type Page = "classes" | "tracks_vias" | "rules" | "text_graphics" | "stackup";
+type Page = "classes" | "tracks_vias" | "teardrops" | "rules" | "text_graphics" | "stackup";
 const PAGES: { id: Page; label: string }[] = [
   { id: "classes", label: "Net Classes" },
   { id: "tracks_vias", label: "Track Widths & Vias" },
+  { id: "teardrops", label: "Teardrops" },
   { id: "rules", label: "Design Rules" },
   { id: "text_graphics", label: "Text & Graphics" },
   { id: "stackup", label: "Layer Stackup" },
 ];
+
+const DEFAULT_TEARDROP_SETTINGS: TeardropSettings = {
+  enabled: false,
+  target_vias: true,
+  target_pth_pads: true,
+  target_smd_pads: true,
+  best_length_ratio: 0.5,
+  best_width_ratio: 1.0,
+  max_len_um: 1000,
+  max_width_um: 2000,
+  width_to_size_filter_ratio: 0.9,
+};
 
 export function BoardSetupDialog() {
   const state = useStudioState();
@@ -43,6 +58,9 @@ export function BoardSetupDialog() {
 
   const [widths, setWidths] = useState<number[]>([]);
   const [vias, setVias] = useState<{ diameter: number; drill: number }[]>([]);
+  const [td, setTd] = useState<TeardropSettings>(DEFAULT_TEARDROP_SETTINGS);
+  const [tdBusy, setTdBusy] = useState(false);
+  const [tdMessage, setTdMessage] = useState<string | null>(null);
 
   // (Re)seed the editable lists from the board every time the dialog
   // opens -- not on every render, so mid-edit keystrokes survive the
@@ -51,6 +69,12 @@ export function BoardSetupDialog() {
     if (!open) return;
     setWidths(routing?.track_width_presets ?? []);
     setVias(routing?.via_presets ?? []);
+    setTd(routing?.teardrop_settings ?? DEFAULT_TEARDROP_SETTINGS);
+    setTdMessage(null);
+    if (state.boardSetupInitialPage) {
+      setPage(state.boardSetupInitialPage as Page);
+      dispatch({ type: "SET_BOARD_SETUP_INITIAL_PAGE", page: null });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -60,6 +84,42 @@ export function BoardSetupDialog() {
   const applyTrackVia = async () => {
     await api.cmd({ op: "set_track_width_presets", widths });
     await api.cmd({ op: "set_via_presets", presets: vias });
+  };
+
+  const setTdField = <K extends keyof TeardropSettings>(key: K, value: TeardropSettings[K]) => setTd((s) => ({ ...s, [key]: value }));
+
+  const applyTeardropSettings = async () => {
+    setTdBusy(true);
+    setTdMessage(null);
+    try {
+      const ok = await api.cmd({ op: "set_teardrop_settings", settings: td });
+      if (!ok) setTdMessage("Could not save -- check the ratios are between 0 and 1.");
+    } finally {
+      setTdBusy(false);
+    }
+  };
+
+  const addAllTeardrops = async () => {
+    setTdBusy(true);
+    setTdMessage(null);
+    try {
+      await api.cmd({ op: "set_teardrop_settings", settings: td }); // save first, so "Add All" reflects the fields on screen
+      const ok = await api.cmd({ op: "add_all_teardrops" });
+      setTdMessage(ok ? "Teardrops added." : "Could not add teardrops.");
+    } finally {
+      setTdBusy(false);
+    }
+  };
+
+  const removeAllTeardrops = async () => {
+    setTdBusy(true);
+    setTdMessage(null);
+    try {
+      const ok = await api.cmd({ op: "remove_all_teardrops" });
+      setTdMessage(ok ? "All teardrops removed." : "Could not remove teardrops.");
+    } finally {
+      setTdBusy(false);
+    }
   };
 
   return (
@@ -180,6 +240,88 @@ export function BoardSetupDialog() {
                   Apply
                 </button>
               </div>
+            </>
+          )}
+
+          {page === "teardrops" && (
+            <>
+              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
+                `pcbnew/teardrop/*` (task item 4). Round anchors only -- a via, or a round through-hole/SMD pad; a rectangular or round-rect pad never gets one (see `eda_connectivity::teardrop`'s own
+                doc for the full scope: straight edges only, single track segment only, no track-to-track teardrops).
+              </p>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="checkbox" checked={td.enabled} onChange={(e) => setTdField("enabled", e.target.checked)} /> Enable teardrops
+              </label>
+
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Apply to</p>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="checkbox" checked={td.target_vias} onChange={(e) => setTdField("target_vias", e.target.checked)} /> Vias
+              </label>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="checkbox" checked={td.target_pth_pads} onChange={(e) => setTdField("target_pth_pads", e.target.checked)} /> Through-hole pads (round only)
+              </label>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="checkbox" checked={td.target_smd_pads} onChange={(e) => setTdField("target_smd_pads", e.target.checked)} /> SMD pads (round only)
+              </label>
+
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Shape</p>
+              <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
+                <span>Best length ratio (of anchor size)</span>
+                <input type="number" step="0.05" min={0} max={1} value={td.best_length_ratio} onChange={(e) => setTdField("best_length_ratio", Number(e.target.value))} style={{ width: 90 }} />
+                <span>Best width ratio (of anchor size)</span>
+                <input type="number" step="0.05" min={0} max={1} value={td.best_width_ratio} onChange={(e) => setTdField("best_width_ratio", Number(e.target.value))} style={{ width: 90 }} />
+                <span>Maximum length</span>
+                <span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={umTo(td.max_len_um, units)}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (Number.isFinite(n)) setTdField("max_len_um", Math.round(umFrom(n, units)));
+                    }}
+                    style={{ width: 90 }}
+                  />{" "}
+                  {units}
+                </span>
+                <span>Maximum width</span>
+                <span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={umTo(td.max_width_um, units)}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (Number.isFinite(n)) setTdField("max_width_um", Math.round(umFrom(n, units)));
+                    }}
+                    style={{ width: 90 }}
+                  />{" "}
+                  {units}
+                </span>
+                <span>Width-to-size filter ratio</span>
+                <input
+                  type="number"
+                  step="0.05"
+                  min={0}
+                  max={1}
+                  value={td.width_to_size_filter_ratio}
+                  onChange={(e) => setTdField("width_to_size_filter_ratio", Number(e.target.value))}
+                  style={{ width: 90 }}
+                />
+              </div>
+
+              <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+                <button className="primary" disabled={tdBusy} onClick={applyTeardropSettings}>
+                  Apply Settings
+                </button>
+                <button disabled={tdBusy} onClick={addAllTeardrops}>
+                  Add All Teardrops
+                </button>
+                <button disabled={tdBusy} onClick={removeAllTeardrops}>
+                  Remove All Teardrops
+                </button>
+              </div>
+              {tdMessage && <p style={{ fontSize: 11, marginTop: 8 }}>{tdMessage}</p>}
             </>
           )}
 

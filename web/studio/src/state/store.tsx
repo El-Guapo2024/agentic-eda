@@ -399,6 +399,13 @@ export interface StudioState {
   zoneDisplayMode: "filled" | "outline";
   /** Board Setup... (dialog_board_setup.cpp) -- net classes/track-via sizing/rules/etc, see BoardSetupDialog.tsx. */
   boardSetupDialogOpen: boolean;
+  /** Which `BoardSetupDialog.tsx` page to land on next time it opens --
+   * `pcbnew.GlobalEdit.editTeardrops` (task item 4) sets this to
+   * `"teardrops"` before opening, so it lands straight on that page
+   * instead of making the user click there themselves; `null` leaves
+   * whatever page was last selected alone. Consumed once by the dialog's
+   * own open effect, then reset. */
+  boardSetupInitialPage: string | null;
   /** File > Fabrication Outputs > Gerbers... (dialog_plot.cpp), see PlotDialog.tsx. */
   plotDialogOpen: boolean;
   /** File > Fabrication Outputs > Drill Files... (dialog_gendrill.cpp), see GenerateDrillDialog.tsx. */
@@ -617,6 +624,7 @@ const initialState: StudioState = {
   zoneFill: null,
   zoneDisplayMode: "filled",
   boardSetupDialogOpen: false,
+  boardSetupInitialPage: null,
   plotDialogOpen: false,
   generateDrillDialogOpen: false,
   footprintPositionDialogOpen: false,
@@ -750,6 +758,7 @@ export type Action =
   | { type: "CLEAR_ZONE_FILL" }
   | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" }
   | { type: "SET_BOARD_SETUP_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_BOARD_SETUP_INITIAL_PAGE"; page: string | null }
   | { type: "SET_PLOT_DIALOG_OPEN"; open: boolean }
   | { type: "SET_GENERATE_DRILL_DIALOG_OPEN"; open: boolean }
   | { type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN"; open: boolean }
@@ -980,6 +989,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, zoneDisplayMode: action.mode };
     case "SET_BOARD_SETUP_DIALOG_OPEN":
       return { ...state, boardSetupDialogOpen: action.open };
+    case "SET_BOARD_SETUP_INITIAL_PAGE":
+      return { ...state, boardSetupInitialPage: action.page };
     case "SET_PLOT_DIALOG_OPEN":
       return { ...state, plotDialogOpen: action.open };
     case "SET_GENERATE_DRILL_DIALOG_OPEN":

@@ -146,6 +146,8 @@ export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   id: string;
   net: string;
   layer: string;
+  /** Task item 4: true for a generated teardrop (`eda_model::ir::Zone::teardrop`), never a hand-drawn zone. */
+  teardrop: boolean;
   outline: [Um, Um][];
 }
 
@@ -163,6 +165,21 @@ export interface Routing {
   track_width_presets: Um[];
   /** `m_ViaSizeList` -- same idea, for the via-size cycle. */
   via_presets: ViaPreset[];
+  /** Task item 4: Board Setup > Teardrops. */
+  teardrop_settings: TeardropSettings;
+}
+
+/** `crates/model/src/ir.rs` `TeardropSettings` -- `pcbnew/teardrop/teardrop_parameters.h`'s `TEARDROP_PARAMETERS`/`TEARDROP_PARAMETERS_LIST`, collapsed into one shared settings block (round anchors only -- see `eda_connectivity::teardrop`'s own doc for the full scope). */
+export interface TeardropSettings {
+  enabled: boolean;
+  target_vias: boolean;
+  target_pth_pads: boolean;
+  target_smd_pads: boolean;
+  best_length_ratio: number;
+  best_width_ratio: number;
+  max_len_um: Um;
+  max_width_um: Um;
+  width_to_size_filter_ratio: number;
 }
 
 // ---------------------------------------------------------------- drawings
@@ -539,6 +556,12 @@ export type Cmd =
    * buried distinction, no padstack/annular-ring concept).
    */
   | { op: "edit_tracks_and_vias"; ids: string[]; track_width?: SizeSpec | null; via_size?: ViaSizeSpec | null; layer?: string | null }
+  /** Board Setup > Teardrops (task item 4): whole-struct replace. */
+  | { op: "set_teardrop_settings"; settings: TeardropSettings }
+  /** Regenerate the board's whole teardrop set from the current settings/tracks/vias/pads -- replaces, never appends to, this command's own previous output. */
+  | { op: "add_all_teardrops" }
+  /** Drop every generated teardrop zone; leaves `teardrop_settings.enabled` untouched. */
+  | { op: "remove_all_teardrops" }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**

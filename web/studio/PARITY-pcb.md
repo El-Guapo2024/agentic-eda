@@ -512,3 +512,42 @@ key); the new `providers/disallow.rs` (8 tests); one new line in `lib.rs`'s
 `zoneToCmd` (copy/paste/duplicate fidelity), `painter.ts`'s `drawRuleArea`,
 `useActionRunner.ts`'s `ruleArea` action, `state.nextZoneIsRuleArea`
 (`store.tsx`).
+
+## 15. Teardrops
+
+Port of `pcbnew/teardrop/*` (task item 4): the teardrop polygon
+generator, Board Setup > Teardrops' settings, and "Add All Teardrops" /
+"Remove All Teardrops". A teardrop is a `Zone` with `teardrop: true`
+(the task brief's own instruction -- "KiCad stores teardrops as special
+zones, so store them the same way in the IR, regenerated on demand"),
+computed fresh from the board's current tracks/vias/pads and replaced
+wholesale on every "Add All Teardrops", never hand-edited.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| IR: `Zone::teardrop` marker; `RoutingSection::teardrop_settings` (`TeardropSettings`), additive | identical | `eda_model::ir::{Zone, TeardropSettings}` |
+| Generated pentagon shape: 2 points on the track, 2 on the anchor's own circle, 1 behind the anchor's centre | ported via a closed-form exact-tangent-on-circle construction instead of source's general convex-hull-over-clipped-polygon algorithm -- see `eda_connectivity::teardrop`'s own doc for why (round anchors only, as a result) | `teardrop_utils.cpp`'s `computeAnchorPoints`/`findAnchorPointsOnTrack`/`computeTeardropPolygon` |
+| Settings: best length/width ratio, max length/width, width-to-size filter ratio, per-target-kind (vias/PTH pads/SMD pads) enable | ported, collapsed from upstream's 3 separate `TEARDROP_PARAMETERS` (round/rect/track) into one shared block (this port never builds a rect-anchor or track-to-track teardrop at all, so there is nothing for the other two to tune separately) | `TEARDROP_PARAMETERS`/`TEARDROP_PARAMETERS_LIST` -- `BoardSetupDialog.tsx`'s new Teardrops page |
+| "Add All Teardrops" / "Remove All Teardrops" | ported as whole-board regenerate/clear (`Cmd::AddAllTeardrops`/`RemoveAllTeardrops`); idempotent (a second "Add All" replaces, never duplicates, the generated set, since a teardrop's content-derived id is stable across an identical regeneration) | `TEARDROP_MANAGER::UpdateTeardrops`/`RemoveTeardrops`'s whole-board entry points (`GLOBAL_EDIT_TOOL`'s "Add/Remove Teardrops" actions) |
+| Rendering: a teardrop always draws as solid copper, independent of `zoneDisplayMode` (it has no separate "fill" to toggle -- the outline already is the final shape) | ported | `pcb_painter.cpp`'s zone paint -- `painter.ts`'s new teardrop branch in `drawZones` |
+| Curved (Bezier) edges (`m_CurvedEdges`) | not ported -- always the straight-edge shape, which is also upstream's own factory default | `computeCurvedForRoundShape`/`computeCurvedForRectShape` |
+| Rectangular/round-rect/custom pad anchors (`TARGET_RECT`, non-round SMD pads) | not ported -- only a via or a *circular* pad (`PadShape::Circle`) is a usable anchor; this port behaves as if `m_UseRoundShapesOnly` were always on | `computeCurvedForRectShape`, `computeAnchorPoints`'s non-round branch |
+| Track-to-track teardrops (`TARGET_TRACK`/`TD_TRACKEND`, two different-width tracks joined end to end) | not ported -- `m_TargetTrack2Track` defaults off upstream too | `AddTeardropsOnTracks`, `teardrop_types.h`'s `TD_TRACKEND` |
+| Borrowing length from a second track segment when the first is too short (`m_AllowUseTwoTracks`) | not ported -- a track shorter than the requested teardrop length is simply skipped | `findAnchorPointsOnTrack`'s two-segment extension |
+| Excluding a pad already covered by a same-net zone fill (`m_TdOnPadsInZones`) | not ported | `areItemsInSameZone` |
+| Incremental updates (only regenerating teardrops near a just-edited item, `RemoveTeardrops`/`UpdateTeardrops`'s `dirtyPadsAndVias`/`dirtyTracks` lists) | not ported -- "Add All Teardrops" always recomputes the whole board from scratch, same "nothing cached, nothing stale" philosophy this app's zone fills already use | `TEARDROP_MANAGER`'s dirty-item tracking |
+| `.kicad_pcb` export/import of a teardrop zone | not ported, same documented gap as section 14's rule areas | `crates/kicad/src/pcb.rs` |
+
+Rust: `crates/model/src/ir.rs` (`Zone::teardrop`, `TeardropSettings`, on
+`RoutingSection` -- a genuinely large mechanical ripple fixing every
+`RoutingSection` literal across the workspace, since that struct has no
+`Default` impl; zero behavior change to any of them). New
+`crates/connectivity/src/teardrop.rs` (`generate_teardrops`, 7 unit
+tests, including a shoelace point-in-polygon check that the anchor's own
+centre really lands inside the generated pentagon). `crates/ops/src/lib.rs`:
+`Cmd::SetTeardropSettings`/`AddAllTeardrops`/`RemoveAllTeardrops`
+(new `eda-connectivity` dependency), 4 new tests. Frontend:
+`TeardropSettings` in `api/types.ts`, `BoardSetupDialog.tsx`'s new
+Teardrops page (settings + both buttons), `painter.ts`'s teardrop
+render branch, `pcbnew.GlobalEdit.editTeardrops` wired to open Board
+Setup landed on that page (`state.boardSetupInitialPage`).

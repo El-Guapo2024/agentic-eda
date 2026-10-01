@@ -190,11 +190,11 @@ fn pad_geoms(design: &Design, model: &ConstraintModel) -> Vec<PadGeom> {
 
 fn working_design(base: &Design, tracks: &[Track], vias: &[Via]) -> Design {
     let mut d = base.clone();
-    let (zones, track_width_presets, via_presets) = match &d.routing {
-        Some(rt) => (rt.zones.clone(), rt.track_width_presets.clone(), rt.via_presets.clone()),
-        None => (Vec::new(), Vec::new(), Vec::new()),
+    let (zones, track_width_presets, via_presets, teardrop_settings) = match &d.routing {
+        Some(rt) => (rt.zones.clone(), rt.track_width_presets.clone(), rt.via_presets.clone(), rt.teardrop_settings),
+        None => (Vec::new(), Vec::new(), Vec::new(), Default::default()),
     };
-    d.routing = Some(RoutingSection { tracks: tracks.to_vec(), vias: vias.to_vec(), zones, track_width_presets, via_presets });
+    d.routing = Some(RoutingSection { tracks: tracks.to_vec(), vias: vias.to_vec(), zones, track_width_presets, via_presets, teardrop_settings });
     d
 }
 

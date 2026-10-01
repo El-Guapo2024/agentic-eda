@@ -34,12 +34,14 @@ pub mod geom;
 pub mod grid;
 pub mod items;
 pub mod ratsnest;
+pub mod teardrop;
 
 pub use algo::{build_graph, search_clusters, Cluster, ConnGraph};
 pub use cleanup::{compute_cleanup, CleanupChange, CleanupKind, CleanupOptions, CleanupReport};
 pub use dangling::{dangling_tracks_and_vias, DanglingItem, DanglingKind};
 pub use items::{CnItem, ItemRef};
 pub use ratsnest::{compute_ratsnest, RatsnestEdge};
+pub use teardrop::generate_teardrops;
 
 use eda_model::ir::Design;
 use eda_model::{CheckResult, ConstraintModel};
@@ -141,7 +143,7 @@ pub(crate) mod tests_support {
                 ],
                 modules: vec![],
             }),
-            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] }),
+            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         (design, model)

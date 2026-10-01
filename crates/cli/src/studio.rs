@@ -801,6 +801,9 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 "is_rule_area": z.is_rule_area, "keepout_tracks": z.keepout_tracks,
                 "keepout_vias": z.keepout_vias, "keepout_pads": z.keepout_pads,
                 "keepout_copper_pour": z.keepout_copper_pour, "keepout_footprints": z.keepout_footprints,
+                // Task item 4: true for a generated teardrop, never a
+                // hand-drawn zone -- see `eda_model::ir::Zone::teardrop`.
+                "teardrop": z.teardrop,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable
@@ -811,6 +814,18 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             // entry, not repeated in these lists.
             "track_width_presets": r.track_width_presets,
             "via_presets": r.via_presets.iter().map(|p| json!({ "diameter": p.diameter, "drill": p.drill })).collect::<Vec<_>>(),
+            // Board Setup > Teardrops (task item 4).
+            "teardrop_settings": json!({
+                "enabled": r.teardrop_settings.enabled,
+                "target_vias": r.teardrop_settings.target_vias,
+                "target_pth_pads": r.teardrop_settings.target_pth_pads,
+                "target_smd_pads": r.teardrop_settings.target_smd_pads,
+                "best_length_ratio": r.teardrop_settings.best_length_ratio,
+                "best_width_ratio": r.teardrop_settings.best_width_ratio,
+                "max_len_um": r.teardrop_settings.max_len_um,
+                "max_width_um": r.teardrop_settings.max_width_um,
+                "width_to_size_filter_ratio": r.teardrop_settings.width_to_size_filter_ratio,
+            }),
         })
     });
     let drawings = design.drawings.as_ref().map(|d| {

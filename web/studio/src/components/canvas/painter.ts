@@ -352,6 +352,26 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
       drawRuleArea(ctx, view, z, selected);
       continue;
     }
+    if (z.teardrop) {
+      // A teardrop's own outline already *is* its final filled shape
+      // (task item 4's generator computes the exact pentagon, no
+      // knockout/thermal-relief pipeline applies) -- draw it solid
+      // unconditionally, regardless of `zoneDisplayMode`, same as its
+      // anchor pad/via is never shown as an "outline only" shape either.
+      withAlpha(ctx, layerAlpha(opts, z.layer), () => {
+        ctx.beginPath();
+        z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        ctx.closePath();
+        ctx.fillStyle = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
+        ctx.fill();
+        if (selected) {
+          ctx.strokeStyle = layerColor("selection");
+          ctx.lineWidth = hairlineUm(view, 2.5);
+          ctx.stroke();
+        }
+      });
+      continue;
+    }
     const copperColor = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
     const fill = opts.zoneFill?.zones.find((f) => f.id === z.id);
     withAlpha(ctx, layerAlpha(opts, z.layer), () => {

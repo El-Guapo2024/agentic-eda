@@ -1428,6 +1428,7 @@ mod tests {
             zones: vec![],
             track_width_presets: vec![],
             via_presets: vec![],
+            teardrop_settings: Default::default(),
         }
     }
 
@@ -1457,7 +1458,7 @@ mod tests {
     #[test]
     fn pass_through_pad_fails_when_track_crosses_own_net_pad() {
         // R1.2 -> C1.2 straight through C1.1 (same net) without stopping.
-        let rt = RoutingSection { tracks: vec![track("A", &[(5825, 5000), (10825, 5000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let rt = RoutingSection { tracks: vec![track("A", &[(5825, 5000), (10825, 5000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         let (d, m) = wfixture(rt);
         let f = fails(&d, &m, "routing_pass_through_pad");
         assert_eq!(f.len(), 1, "{f:?}");

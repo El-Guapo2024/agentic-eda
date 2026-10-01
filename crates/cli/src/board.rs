@@ -588,6 +588,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteText { id } => format!("text delete {id}"),
         Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::EditTextAndGraphics { shape_ids, text_ids, .. } => format!("global-edit text-and-graphics --shapes {} --texts {}", shape_ids.len(), text_ids.len()),
+        Cmd::SetTeardropSettings { .. } => "board-setup teardrops".to_string(),
+        Cmd::AddAllTeardrops => "teardrops add-all".to_string(),
+        Cmd::RemoveAllTeardrops => "teardrops remove-all".to_string(),
 
         Cmd::Duplicate { ids } => format!("duplicate {}", ids.join(" ")),
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
@@ -726,6 +729,9 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } | Cmd::EditShape { .. } => "shape",
         Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
         Cmd::EditTextAndGraphics { .. } => "global-edit-text-and-graphics",
+        Cmd::SetTeardropSettings { .. } => "board-setup-teardrops",
+        Cmd::AddAllTeardrops => "teardrops-add-all",
+        Cmd::RemoveAllTeardrops => "teardrops-remove-all",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::MoveExact { .. } => "move-exact",

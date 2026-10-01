@@ -736,6 +736,77 @@ fn set_zone_outline_replaces_the_outline_only() {
     assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline }).unwrap_err()[0].check, "ops_unknown_zone");
 }
 
+// ----------------------------------------------------------- teardrops
+
+fn via_and_track_board() -> (ConstraintModel, Point, Point) {
+    let m = net_model();
+    let via_at = Point { x: 40_000, y: 40_000 };
+    let far = Point { x: via_at.x + 5000, y: via_at.y };
+    (m, via_at, far)
+}
+
+#[test]
+fn add_all_teardrops_is_a_no_op_when_disabled() {
+    let (m, via_at, far) = via_and_track_board();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![via_at, far] }).unwrap();
+
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    assert!(b.design().routing.as_ref().unwrap().zones.is_empty(), "teardrop_settings.enabled defaults false");
+}
+
+#[test]
+fn add_all_teardrops_generates_once_and_is_idempotent() {
+    let (m, via_at, far) = via_and_track_board();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![via_at, far] }).unwrap();
+    b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { enabled: true, ..Default::default() } }).unwrap();
+
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    let zones = b.design().routing.as_ref().unwrap().zones.clone();
+    assert_eq!(zones.len(), 1, "{zones:?}");
+    assert!(zones[0].teardrop);
+    let first_id = zones[0].id.clone();
+
+    // Running it again must replace, not duplicate, the generated set.
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    let zones2 = b.design().routing.as_ref().unwrap().zones.clone();
+    assert_eq!(zones2.len(), 1, "a second run must not accumulate teardrops: {zones2:?}");
+    assert_eq!(zones2[0].id, first_id, "regenerating an identical shape must land on the same deterministic id");
+}
+
+#[test]
+fn add_all_teardrops_never_touches_a_user_drawn_zone() {
+    let (m, via_at, far) = via_and_track_board();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![via_at, far] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    let user_zone_id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { enabled: true, ..Default::default() } }).unwrap();
+
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    let zones = b.design().routing.as_ref().unwrap().zones.clone();
+    assert_eq!(zones.len(), 2, "{zones:?}");
+    assert!(zones.iter().any(|z| z.id == user_zone_id && !z.teardrop), "the hand-drawn zone must survive untouched");
+
+    b.apply(&Cmd::RemoveAllTeardrops).unwrap();
+    let zones = b.design().routing.as_ref().unwrap().zones.clone();
+    assert_eq!(zones.len(), 1, "{zones:?}");
+    assert_eq!(zones[0].id, user_zone_id, "only the generated teardrop should be gone");
+}
+
+#[test]
+fn set_teardrop_settings_rejects_a_ratio_outside_zero_to_one() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { best_width_ratio: 1.5, ..Default::default() } }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_teardrop_settings");
+    assert_eq!(b.design().routing.as_ref().map(|r| r.teardrop_settings), None, "a refused settings change must not touch the board at all (routing section not even created)");
+}
+
 // -------------------------------------------------------------- shapes
 
 #[test]

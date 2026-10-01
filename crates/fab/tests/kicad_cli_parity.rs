@@ -114,6 +114,7 @@ fn fixture() -> (Design, ConstraintModel) {
         }],
         track_width_presets: vec![],
         via_presets: vec![],
+        teardrop_settings: Default::default(),
     };
 
     let design = Design {
