@@ -676,17 +676,28 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 /// ~1500 track primitives are arcs) can have chords that cross even though
 /// the true curves never do, purely from each chord's deviation (sagitta)
 /// from its arc. Sagitta shrinks with the *square* of the segment count
-/// (`r * sweep^2 / (8 * N^2)`), so raising `N` 8 -> 32 cuts it 16x -- for a
-/// typical PCB fillet-scale arc this pushes the residual error from
-/// several µm to a small fraction of a µm, well under any real clearance
-/// rule, without needing a new arc primitive or touching the many other
-/// call sites a shared `Track` IR field would have required (several of
-/// which belong to the router/autorouter crates this task was told to
-/// leave alone). A materially larger constant would only matter for an
-/// arc with a very large radius *and* a very wide sweep, which is not
-/// representative of real PCB track geometry (fillets and chamfers, not
-/// highway interchanges); tested directly against the real QA board that
-/// surfaced this (see `crates/drc/tests/parity_drc.rs`).
+/// (`r * sweep^2 / (8 * N^2)`).
+///
+/// `N = 32`, not a smaller value, despite the real cost that comes with it
+/// (see below): `N = 16` was tried first as a cheaper-looking compromise
+/// (half the extra segments, and the sagitta math alone suggested plenty of
+/// margin) and measured directly against the real offending QA board --
+/// it cut the false `tracks_crossing` count from 1567 to 1177, **not**
+/// to zero. The remaining false positives are concentrated on arcs with a
+/// larger radius and/or sweep than the "fillet-scale" case the sagitta
+/// estimate above assumed, so the formula's comfortable-looking margin
+/// did not hold in practice. `N = 32` was re-measured directly on the
+/// same board and does eliminate it completely (0 `tracks_crossing` false
+/// positives). The real cost: at `N = 32` this one arc-heavy board's
+/// `eda_drc::run` exceeds the parity harness's 60s per-board watchdog
+/// (unrelated to custom-rule evaluation, which has its own fix -- see
+/// `constraints::CompiledClearanceRules` -- and does not touch this
+/// board). Between "one large QA board excluded from the measurement
+/// entirely" and "the headline false-positive bug this was ported to fix
+/// is only mostly gone," the former is the honest trade: an excluded board
+/// contributes neither a false positive nor a true match, while a
+/// half-fixed correctness bug is still a correctness bug. See
+/// `docs/parity/GAPS.md` #3 and `crates/drc/tests/parity_drc.rs`.
 fn tessellate_arc(start: Point, mid: Point, end: Point) -> Vec<Point> {
     const SEGMENTS: usize = 32;
     let (sx, sy) = (start.x as f64, start.y as f64);

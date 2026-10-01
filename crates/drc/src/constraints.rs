@@ -13,10 +13,15 @@
 //!   `EvalRules` fast-path around `m_netclassClearances`): [`clearance`]
 //!   below is that fast path -- `max` of the two nets' resolved class
 //!   clearance, board default when a net has no class or no override.
-//! - Local per-item clearance overrides, net ties, diff pairs, creepage,
-//!   tuning profiles, keepout zones, and anything driven by a parsed
-//!   `.kicad_dru` rule file are **not** ported: our model has no fields for
-//!   any of them. See the task report for the full gap list.
+//! - A parsed `.kicad_dru` rule file's `clearance` constraints *are* ported
+//!   (task item 4): [`clearance_with_custom_rules`] layers
+//!   `BoardRules::custom_rules` on top of the netclass fast path, evaluated
+//!   by `crate::pcbexpr`'s condition-evaluator subset. Every other
+//!   constraint type a custom rule can set (`hole_clearance`, `track_width`,
+//!   `annular_width`, `disallow`, `assertion`, ...), local per-item
+//!   clearance overrides, net ties, diff pairs, creepage, tuning profiles,
+//!   and keepout zones are **not** ported: our model has no fields for any
+//!   of them. See the task report for the full gap list.
 
 use eda_model::ir::Um;
 use eda_model::BoardRules;
@@ -60,23 +65,60 @@ pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Um {
 /// overrides and footprint net-tie exclusions that take precedence over
 /// even an explicit rule -- this model has no field for either, so they
 /// are simply never in play, same as before custom rules existed.
-pub fn clearance_with_custom_rules(rules: &BoardRules, a_net: Option<&str>, b_net: Option<&str>, layer: &str, a: &crate::pcbexpr::Facts, b: &crate::pcbexpr::Facts) -> Um {
+///
+/// Takes `compiled` (see [`CompiledClearanceRules`]) rather than reading
+/// `rules.custom_rules` directly and tokenizing each condition on the fly:
+/// a real board resolves clearance for thousands of pairs, and
+/// re-tokenizing/re-parsing the same handful of condition strings from
+/// scratch on every single one of them is a real cost, not a
+/// micro-optimization -- measured directly on a real QA-corpus board
+/// (`issue11814`, which pairs a `.kicad_dru` with a lot of copper) blowing
+/// the parity harness's own per-board watchdog. Compile once per board
+/// (`CompiledClearanceRules::new`), reuse for every pair.
+pub fn clearance_with_custom_rules(rules: &BoardRules, a_net: Option<&str>, b_net: Option<&str>, layer: &str, a: &crate::pcbexpr::Facts, b: &crate::pcbexpr::Facts, compiled: &CompiledClearanceRules) -> Um {
     let mut value = clearance(rules, a_net, b_net);
-    for rule in &rules.custom_rules {
-        if rule.constraint_type != "clearance" {
-            continue;
-        }
-        let Some(min) = rule.min else { continue };
-        if let Some(pat) = &rule.layer {
+    for entry in &compiled.0 {
+        if let Some(pat) = &entry.layer {
             if !eda_model::glob_match(pat, layer) {
                 continue;
             }
         }
-        if crate::pcbexpr::matches(rule.condition.as_deref(), a, b) {
-            value = min;
+        if crate::pcbexpr::matches_compiled(entry.condition.as_ref(), a, b) {
+            value = entry.min;
         }
     }
     value
+}
+
+/// `rules.custom_rules`, filtered to the `clearance`-constraint entries
+/// [`clearance_with_custom_rules`] can actually apply and with each one's
+/// `condition` tokenized once -- see that function's doc comment for why
+/// this exists as a separate compile-once step rather than reading
+/// `BoardRules` directly per pair. Build one of these per `eda_drc::run`
+/// call (cheap: real `.kicad_dru` files are a handful of rules), not per
+/// pair.
+pub struct CompiledClearanceRules(Vec<CompiledClearanceRule>);
+
+struct CompiledClearanceRule {
+    min: Um,
+    layer: Option<String>,
+    condition: Option<crate::pcbexpr::CompiledCondition>,
+}
+
+impl CompiledClearanceRules {
+    pub fn new(rules: &BoardRules) -> Self {
+        CompiledClearanceRules(
+            rules
+                .custom_rules
+                .iter()
+                .filter(|r| r.constraint_type == "clearance")
+                .filter_map(|r| {
+                    let min = r.min?;
+                    Some(CompiledClearanceRule { min, layer: r.layer.clone(), condition: r.condition.as_deref().and_then(crate::pcbexpr::compile) })
+                })
+                .collect(),
+        )
+    }
 }
 
 /// The largest clearance value *any* pair on this board could possibly
@@ -191,10 +233,11 @@ mod tests {
             ..BoardRules::default()
         };
         let (a, b) = (facts("Pad", "Default", "GND"), facts("Pad", "Default", "GND"));
+        let compiled = CompiledClearanceRules::new(&r);
         // Same class -> the rule matches and *replaces* the board default,
         // even though 50um here is smaller than it (an explicit rule can
         // loosen a default too -- see this function's doc comment).
-        assert_eq!(clearance_with_custom_rules(&r, Some("GND"), Some("GND"), "F.Cu", &a, &b), 50);
+        assert_eq!(clearance_with_custom_rules(&r, Some("GND"), Some("GND"), "F.Cu", &a, &b, &compiled), 50);
     }
 
     #[test]
@@ -204,7 +247,8 @@ mod tests {
             ..BoardRules::default()
         };
         let (a, b) = (facts("Pad", "power", "VIN"), facts("Pad", "signal", "SIG"));
-        assert_eq!(clearance_with_custom_rules(&r, Some("VIN"), Some("SIG"), "F.Cu", &a, &b), clearance(&r, Some("VIN"), Some("SIG")), "different classes -> condition does not match -> plain default");
+        let compiled = CompiledClearanceRules::new(&r);
+        assert_eq!(clearance_with_custom_rules(&r, Some("VIN"), Some("SIG"), "F.Cu", &a, &b, &compiled), clearance(&r, Some("VIN"), Some("SIG")), "different classes -> condition does not match -> plain default");
     }
 
     #[test]
@@ -214,8 +258,9 @@ mod tests {
             ..BoardRules::default()
         };
         let (a, b) = (facts("Pad", "Default", "A"), facts("Pad", "Default", "B"));
-        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "F.Cu", &a, &b), clearance(&r, Some("A"), Some("B")), "rule is scoped to B.Cu, this pair is on F.Cu");
-        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "B.Cu", &a, &b), 50, "same pair, matching layer");
+        let compiled = CompiledClearanceRules::new(&r);
+        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "F.Cu", &a, &b, &compiled), clearance(&r, Some("A"), Some("B")), "rule is scoped to B.Cu, this pair is on F.Cu");
+        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "B.Cu", &a, &b, &compiled), 50, "same pair, matching layer");
     }
 
     #[test]
@@ -228,6 +273,7 @@ mod tests {
             ..BoardRules::default()
         };
         let (a, b) = (facts("Pad", "Default", "A"), facts("Pad", "Default", "B"));
-        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "F.Cu", &a, &b), 400, "both match unconditionally; the later rule in file order wins");
+        let compiled = CompiledClearanceRules::new(&r);
+        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "F.Cu", &a, &b, &compiled), 400, "both match unconditionally; the later rule in file order wins");
     }
 }

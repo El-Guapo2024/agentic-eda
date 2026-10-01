@@ -302,13 +302,38 @@ fn values_match(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// A condition's token stream, tokenized once and reused across every pair
+/// it is evaluated against -- see [`compile`]'s doc comment for why this
+/// exists as its own type instead of just re-tokenizing the source string
+/// per call.
+pub struct CompiledCondition(Vec<Tok>);
+
+/// Tokenize `condition` once, for a caller that will evaluate the same
+/// `.kicad_dru` rule against many item pairs (every clearance-family
+/// provider in `crate::providers::copper_clearance`, in practice). A
+/// board's custom rules are few, but the pairs they are checked against are
+/// not (thousands, on a real routed board) -- re-tokenizing and
+/// re-(hand-)parsing the same condition string from scratch on every one of
+/// those pairs measurably slowed real boards (`issue11814` in the QA
+/// corpus, which has both a `.kicad_dru` and a lot of copper) enough to
+/// blow the parity harness's own per-board watchdog. `None` means the same
+/// as it would for [`matches`]: this condition is outside the subset's
+/// grammar and so never matches anything.
+pub fn compile(condition: &str) -> Option<CompiledCondition> {
+    tokenize(condition).map(CompiledCondition)
+}
+
 /// Evaluate `condition` (a `.kicad_dru` rule's raw PCBEXPR text) for one
 /// specific `(a, b)` pair. `None` (unparseable, or outside this subset's
 /// grammar) is treated as "does not match" by [`matches`] -- never as
 /// "matches unconditionally".
 fn eval(condition: &str, a: &Facts, b: &Facts) -> Option<bool> {
     let toks = tokenize(condition)?;
-    let mut p = Parser { toks: &toks, pos: 0, a, b };
+    eval_toks(&toks, a, b)
+}
+
+fn eval_toks(toks: &[Tok], a: &Facts, b: &Facts) -> Option<bool> {
+    let mut p = Parser { toks, pos: 0, a, b };
     let v = p.or()?;
     if p.pos != p.toks.len() {
         return None; // trailing tokens: outside this subset's grammar
@@ -335,6 +360,17 @@ pub fn matches(condition: Option<&str>, a: &Facts, b: &Facts) -> bool {
     }
 }
 
+/// Same as [`matches`], but against an already-[`compile`]d condition --
+/// the hot-path version every real DRC call site uses (see `compile`'s doc
+/// comment for why re-tokenizing per pair was a real cost, not a
+/// micro-optimization).
+pub fn matches_compiled(condition: Option<&CompiledCondition>, a: &Facts, b: &Facts) -> bool {
+    match condition {
+        None => true,
+        Some(c) => eval_toks(&c.0, a, b).unwrap_or(false) || eval_toks(&c.0, b, a).unwrap_or(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +390,18 @@ mod tests {
         assert!(matches(Some("A.NetClass == B.NetClass"), &a, &b));
         let c = pad("signal", "SIG", "R1");
         assert!(!matches(Some("A.NetClass == B.NetClass"), &a, &c));
+    }
+
+    #[test]
+    fn compiled_matches_agree_with_uncompiled() {
+        let a = pad("power", "VIN", "C1");
+        let b = pad("power", "VOUT", "C2");
+        let cond = "A.NetClass == B.NetClass";
+        let compiled = compile(cond).expect("valid condition compiles");
+        assert_eq!(matches(Some(cond), &a, &b), matches_compiled(Some(&compiled), &a, &b));
+        let c = pad("signal", "SIG", "R1");
+        assert_eq!(matches(Some(cond), &a, &c), matches_compiled(Some(&compiled), &a, &c));
+        assert!(!matches_compiled(Some(&compiled), &a, &c));
     }
 
     #[test]

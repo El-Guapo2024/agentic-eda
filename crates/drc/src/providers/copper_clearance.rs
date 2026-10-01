@@ -73,8 +73,8 @@ fn zone_ref(z: &DrcZone) -> DrcRefItem {
 /// a board with no `.kicad_dru` rules is unaffected (same plain
 /// `constraints::clearance` result).
 #[allow(clippy::too_many_arguments)]
-fn clearance_or_short(rules: &BoardRules, net_a: Option<&str>, net_b: Option<&str>, layer: &str, facts_a: &Facts, facts_b: &Facts, shape_a: &Shape, shape_b: &Shape, ref_a: DrcRefItem, ref_b: DrcRefItem, out: &mut Vec<DrcViolation>) {
-    let clearance = constraints::clearance_with_custom_rules(rules, net_a, net_b, layer, facts_a, facts_b);
+fn clearance_or_short(rules: &BoardRules, net_a: Option<&str>, net_b: Option<&str>, layer: &str, facts_a: &Facts, facts_b: &Facts, shape_a: &Shape, shape_b: &Shape, ref_a: DrcRefItem, ref_b: DrcRefItem, compiled: &constraints::CompiledClearanceRules, out: &mut Vec<DrcViolation>) {
+    let clearance = constraints::clearance_with_custom_rules(rules, net_a, net_b, layer, facts_a, facts_b, compiled);
     if clearance <= 0 {
         return; // KiCad's own gate: a resolved 0 clearance is never checked.
     }
@@ -167,6 +167,10 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     // bounds which pairs get tested at all.
     let worst_clearance = constraints::worst_case_clearance(rules);
     let fills = crate::fill::fill_all_zones(board, rules);
+    // Compiled once per board, reused for every pair below -- see
+    // `constraints::CompiledClearanceRules`'s doc comment for why this
+    // matters (a real board resolves clearance for thousands of pairs).
+    let compiled_rules = constraints::CompiledClearanceRules::new(rules);
 
     for layer in &board.layers {
         let pads: Vec<&DrcPad> = board.pads.iter().filter(|p| p.layers.iter().any(|l| l == layer)).collect();
@@ -203,7 +207,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 // test it falls through to -- only run when the resolved
                 // clearance is actually positive; a rule that sets it to
                 // exactly 0 between two nets disables both, not just one.
-                let pair_clearance = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a), &facts_of_track(rules, b));
+                let pair_clearance = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a), &facts_of_track(rules, b), &compiled_rules);
                 if pair_clearance > 0 {
                     let (sa, sb) = (crate::kimath::Seg::new(a.a, a.b), crate::kimath::Seg::new(b.a, b.b));
                     if let Some(pt) = sa.intersect(&sb) {
@@ -211,7 +215,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                         continue;
                     }
                 }
-                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a), &facts_of_track(rules, b), &a.shape(), &b.shape(), track_ref(a), track_ref(b), &mut out);
+                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a), &facts_of_track(rules, b), &a.shape(), &b.shape(), track_ref(a), track_ref(b), &compiled_rules, &mut out);
             }
         }
 
@@ -232,7 +236,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                     continue;
                 }
                 if flashed(p) {
-                    clearance_or_short(rules, t.net.as_deref(), p.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_pad(rules, p), &t.shape(), &p.copper, track_ref(t), pad_ref(p), &mut out);
+                    clearance_or_short(rules, t.net.as_deref(), p.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_pad(rules, p), &t.shape(), &p.copper, track_ref(t), pad_ref(p), &compiled_rules, &mut out);
                 }
                 hole_clearance(rules, None, &t.shape(), &track_ref(t), p.hole.as_ref(), &p.copper, &pad_ref(p), &mut out);
             }
@@ -241,7 +245,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if t.net.is_some() && t.net.as_deref() == v.net.as_deref() {
                     continue;
                 }
-                clearance_or_short(rules, t.net.as_deref(), v.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_via(rules, v), &t.shape(), &v.shape(), track_ref(t), via_ref(v), &mut out);
+                clearance_or_short(rules, t.net.as_deref(), v.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_via(rules, v), &t.shape(), &v.shape(), track_ref(t), via_ref(v), &compiled_rules, &mut out);
                 hole_clearance(rules, None, &t.shape(), &track_ref(t), Some(&v.hole()), &v.shape(), &via_ref(v), &mut out);
             }
         }
@@ -258,7 +262,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 }
                 let same_net = a.net == b.net; // netcode equality, not "both assigned" -- see the track loop above
                 if flashed(a) && flashed(b) && !same_net {
-                    clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_pad(rules, a), &facts_of_pad(rules, b), &a.copper, &b.copper, pad_ref(a), pad_ref(b), &mut out);
+                    clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_pad(rules, a), &facts_of_pad(rules, b), &a.copper, &b.copper, pad_ref(a), pad_ref(b), &compiled_rules, &mut out);
                 }
                 // Hole clearance is a *foreign-copper* check (see this
                 // module's doc comment on `flashed`): same-net pads (two
@@ -278,7 +282,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 let a = pads[i];
                 let same_net = a.net.as_deref() == v.net.as_deref();
                 if flashed(a) && !same_net {
-                    clearance_or_short(rules, a.net.as_deref(), v.net.as_deref(), layer, &facts_of_pad(rules, a), &facts_of_via(rules, v), &a.copper, &v.shape(), pad_ref(a), via_ref(v), &mut out);
+                    clearance_or_short(rules, a.net.as_deref(), v.net.as_deref(), layer, &facts_of_pad(rules, a), &facts_of_via(rules, v), &a.copper, &v.shape(), pad_ref(a), via_ref(v), &compiled_rules, &mut out);
                 }
                 if !same_net {
                     hole_clearance(rules, a.hole.as_ref(), &a.copper, &pad_ref(a), Some(&v.hole()), &v.shape(), &via_ref(v), &mut out);
@@ -291,7 +295,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if a.net == b.net {
                     continue;
                 }
-                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_via(rules, a), &facts_of_via(rules, b), &a.shape(), &b.shape(), via_ref(a), via_ref(b), &mut out);
+                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_via(rules, a), &facts_of_via(rules, b), &a.shape(), &b.shape(), via_ref(a), via_ref(b), &compiled_rules, &mut out);
                 hole_clearance(rules, Some(&a.hole()), &a.shape(), &via_ref(a), Some(&b.hole()), &b.shape(), &via_ref(b), &mut out);
             }
         }
@@ -302,7 +306,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if p.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance_with_custom_rules(rules, p.net.as_deref(), z.net.as_deref(), layer, &facts_of_pad(rules, p), &facts_of_zone(rules, z));
+                let c = constraints::clearance_with_custom_rules(rules, p.net.as_deref(), z.net.as_deref(), layer, &facts_of_pad(rules, p), &facts_of_zone(rules, z), &compiled_rules);
                 if flashed(p) && c > 0 {
                     if let Some((actual, _)) = collides_zone(&p.copper, z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![pad_ref(p), zone_ref(z)]));
@@ -314,7 +318,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if t.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance_with_custom_rules(rules, t.net.as_deref(), z.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_zone(rules, z));
+                let c = constraints::clearance_with_custom_rules(rules, t.net.as_deref(), z.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_zone(rules, z), &compiled_rules);
                 if c > 0 {
                     if let Some((actual, _)) = collides_zone(&t.shape(), z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![track_ref(t), zone_ref(z)]));
@@ -325,7 +329,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if v.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance_with_custom_rules(rules, v.net.as_deref(), z.net.as_deref(), layer, &facts_of_via(rules, v), &facts_of_zone(rules, z));
+                let c = constraints::clearance_with_custom_rules(rules, v.net.as_deref(), z.net.as_deref(), layer, &facts_of_via(rules, v), &facts_of_zone(rules, z), &compiled_rules);
                 if c > 0 {
                     if let Some((actual, _)) = collides_zone(&v.shape(), z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![via_ref(v), zone_ref(z)]));
@@ -345,7 +349,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                         out.push(DrcViolation::new(ErrorType::ZonesIntersect, "(intersecting zones must have distinct priorities)", vec![zone_ref(a), zone_ref(b)]));
                     }
                 } else {
-                    let c = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_zone(rules, a), &facts_of_zone(rules, b));
+                    let c = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_zone(rules, a), &facts_of_zone(rules, b), &compiled_rules);
                     if c > 0 {
                         if let Some((actual, _)) = collides_zone_zone(a, b, &fills, c) {
                             out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![zone_ref(a), zone_ref(b)]));
