@@ -66,6 +66,16 @@ function StudioFrame() {
   // nothing real to say for this tab. Its view-preset toolbar takes the
   // normal <Toolbar id="main"/> row's place instead.
   const is3d = state.tab === "3d";
+  // eeschema's default AUI layout has no layer/appearance manager at all
+  // (that's a pcbnew-only concept -- a schematic has no copper/technical
+  // layers to toggle) and no selection-filter-by-item-type panel either
+  // (pcbnew's exists because tracks/zones/vias/footprints overlap on
+  // different layers; a schematic sheet has no such overlap problem).
+  // Its right-hand dock is just the drawing/placement toolbar
+  // (drawing-toolbar-col below, already tab-aware via Toolbar's own
+  // schToolbarsFile lookup) -- so the tabbed Appearance/Filter/Activity
+  // dock only makes sense on the PCB tab.
+  const showRightDock = state.tab === "pcb";
   return (
     <div className="app-frame">
       <div className="menubar-row">
@@ -107,7 +117,7 @@ function StudioFrame() {
             <Toolbar id="drawing" />
           </div>
         )}
-        {!is3d && (
+        {showRightDock && (
           <div className="right-dock-col">
             <RightDock />
           </div>

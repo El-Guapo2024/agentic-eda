@@ -189,6 +189,13 @@ struct PlanClass {
     name: String,
     /// Board units.
     half_width: i64,
+    /// Board units, the rounding margin in (same scale as `Plan::clearance`).
+    /// This class's own clearance -- to itself and to every other class's
+    /// copper alike. Equal to `Plan::clearance` for a class with no
+    /// override, which is the overwhelming majority: only an "escape"
+    /// class asking for less room than the board default gives this a
+    /// different value.
+    clearance: i64,
 }
 
 /// A keep-out for traces and vias on one layer: a refdes label, or the
@@ -379,14 +386,20 @@ impl Plan {
                 continue;
             }
             class_no[c] = classes.len();
-            let (name, width) = match c {
-                0 => ("kicad_default".to_string(), rules.track_width),
-                _ => (format!("class_{c}"), rules.net_classes[c - 1].track_width.unwrap_or(rules.track_width)),
+            let (name, width, clearance_um) = match c {
+                0 => ("kicad_default".to_string(), rules.track_width, rules.clearance),
+                _ => {
+                    let nc = &rules.net_classes[c - 1];
+                    (format!("class_{c}"), nc.track_width.unwrap_or(rules.track_width), nc.clearance.unwrap_or(rules.clearance))
+                }
             };
             if width <= 0 {
                 return Err(format!("net class {name} has track width {width} um"));
             }
-            classes.push(PlanClass { name, half_width: width * UNITS_PER_UM / 2 });
+            if clearance_um < 0 {
+                return Err(format!("net class {name} has clearance {clearance_um} um"));
+            }
+            classes.push(PlanClass { name, half_width: width * UNITS_PER_UM / 2, clearance: clearance_um * UNITS_PER_UM + ROUNDING_MARGIN_UM * UNITS_PER_UM });
         }
         // Nets by number: FreeRouting makes a plane's net as it reads the
         // plane, before the netlist, so poured nets come first.
@@ -643,6 +656,29 @@ impl Matrix {
         }
         k
     }
+
+    /// A class that keeps `clearance` from *itself and from the default
+    /// class alike* -- an "escape" net class, asking for less room than
+    /// the board default wherever its copper turns up, not only from its
+    /// own nets. Unlike [`Matrix::add_default_pair`] (which only spaces
+    /// the new class from the default one, leaving its self-clearance at
+    /// whatever the default's happened to be), this also sets the class's
+    /// clearance to itself -- both directions matter here, since a trace
+    /// squeezing past a fine-pitch neighbour needs the *smaller* number on
+    /// both sides of that gap. Its relation to any class appended before
+    /// it other than the default (edge, keepout) is left at whatever
+    /// [`Matrix::append_class`] copied from the default row, which is the
+    /// conservative board-wide value -- board-edge and keep-out clearance
+    /// are not part of what an escape class relaxes.
+    fn add_own_clearance_class(&mut self, clearance: i64) -> usize {
+        let k = self.append_class();
+        for l in 0..self.layers {
+            self.set(k, k, l, clearance);
+            self.set(k, 1, l, clearance);
+            self.set(1, k, l, clearance);
+        }
+        k
+    }
 }
 
 /// `Math.round` of a positive double.
@@ -771,6 +807,16 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     matrix.set_default(plan.clearance);
     let edge_class = matrix.add_default_pair(plan.edge_clearance) as i32;
     let keepout_class = matrix.add_default_pair(plan.keepout_clearance) as i32;
+    // One matrix class per distinct clearance value among `plan.classes`
+    // that differs from the board default -- see `add_own_clearance_class`.
+    // Classes that do not override clearance are left sharing class 1 (the
+    // default), exactly as before this existed.
+    let mut own_clearance_class: BTreeMap<i64, i32> = BTreeMap::new();
+    for class in &plan.classes {
+        if class.clearance != plan.clearance {
+            own_clearance_class.entry(class.clearance).or_insert_with(|| matrix.add_own_clearance_class(class.clearance) as i32);
+        }
+    }
     let padstacks: Vec<Padstack> = plan
         .padstacks
         .iter()
@@ -804,7 +850,8 @@ pub fn board_from_design(design: &Design, model: &ConstraintModel, rules: &Board
     let mut net_classes = vec![default_class.clone()];
     for class in &plan.classes {
         via_rules.push(vec![0]);
-        net_classes.push(NetClass { via_rule: Some(via_rules.len() - 1), trace_half_width: vec![class.half_width; layer_count], ..default_class.clone() });
+        let trace_clearance_class = own_clearance_class.get(&class.clearance).copied().unwrap_or(1);
+        net_classes.push(NetClass { via_rule: Some(via_rules.len() - 1), trace_half_width: vec![class.half_width; layer_count], trace_clearance_class, ..default_class.clone() });
     }
     let mut clearance = ClearanceMatrix::new(matrix.classes(), layer_count);
     for i in 0..matrix.classes() {
@@ -1370,5 +1417,92 @@ mod tests {
         let tracks = vec![track(&[(0, 0), (0, 2000)]), track(&[(0, 2000), (300, 300)])];
         let via = IrVia { id: String::new(), net: "A".into(), at: IrPoint { x: 0, y: 2000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
         assert_eq!(drop_pad_loops(tracks, &[via], &gate_pads(&pads)).len(), 2);
+    }
+
+    /// A net class with its own `clearance` -- an "escape" class narrower
+    /// than the board default -- must reach the router's clearance matrix
+    /// as its own class, both to itself and to the default class, not
+    /// silently collapse onto the board-wide value the way a class with
+    /// only a custom `track_width` already did before `clearance` existed
+    /// on `NetClass`.
+    #[test]
+    fn a_net_classs_own_clearance_reaches_the_router_matrix() {
+        use eda_model::ir::{FootprintInstance, PlacementSection, Provenance};
+        use eda_model::{Footprint, Net, NetClass, Pad, PadKind, Part, Pin, PinKind};
+
+        let pad1 = Footprint {
+            name: "PAD1".into(),
+            pads: vec![Pad { number: "1".into(), at: (0, 0), size: (1000, 1000), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
+            courtyard: None,
+            model: None,
+        };
+        let part = |r: &str| Part {
+            reference: r.into(),
+            mpn: None,
+            lcsc: None,
+            value: None,
+            package: Some("PAD1".into()),
+            footprint: Some("PAD1".into()),
+            symbol: None,
+            datasheet: None,
+            pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Signal }],
+            body_um: None,
+            edge: None,
+        };
+        let model = ConstraintModel {
+            parts: vec![part("P1"), part("P2"), part("P3")],
+            nets: vec![
+                Net { name: "A".into(), pins: vec!["P1.1".into()] },
+                Net { name: "CC1".into(), pins: vec!["P2.1".into()] },
+                Net { name: "CC2".into(), pins: vec!["P3.1".into()] },
+            ],
+            footprints: vec![pad1],
+            board: BoardRules {
+                clearance: 200,
+                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150), clearance: Some(150), priority: 0 }],
+                ..BoardRules::default()
+            },
+            ..Default::default()
+        };
+        let placement = PlacementSection {
+            outline: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 10_000, y: 0 }, IrPoint { x: 10_000, y: 10_000 }, IrPoint { x: 0, y: 10_000 }],
+            footprints: vec![
+                FootprintInstance { id: "P1".into(), at: IrPoint { x: 1_000, y: 1_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P2".into(), at: IrPoint { x: 3_000, y: 1_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                FootprintInstance { id: "P3".into(), at: IrPoint { x: 5_000, y: 1_000 }, rot: 0, side: Side::Top, label: Default::default() },
+            ],
+            modules: Vec::new(),
+        };
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            placement: Some(placement),
+            routing: None,
+            drawings: None,
+        };
+        let plan = Plan::of(&design, &model, &model.board).expect("plan builds");
+        let board = board_from_design(&design, &model, &model.board).expect("board builds");
+
+        // `net_classes[0]` is the router's own structural default, added
+        // regardless of the rules; `net_classes[1..]` mirror `plan.classes`
+        // in order (see `board_from_design`), so a `PlanNet.class` index
+        // shifts by one to land on the matching `NetClass`.
+        let class_for = |net: &str| {
+            let plan_net = plan.nets.iter().find(|n| n.name == net).expect("net placed");
+            board.rules.net_classes[plan_net.class + 1].trace_clearance_class
+        };
+        let default_trace_class = class_for("A");
+        let escape_trace_class = class_for("CC1");
+        assert_eq!(escape_trace_class, class_for("CC2"), "CC1 and CC2 share the escape class");
+        assert_ne!(escape_trace_class, default_trace_class, "the escape class must not collapse onto the default's clearance row");
+
+        let layer = 0;
+        // Both raw values carry `Plan`'s own rounding margin (see
+        // `ROUNDING_MARGIN_UM`), the same way `plan.clearance` itself does.
+        let escape_um = |raw: i64| raw / UNITS_PER_UM - ROUNDING_MARGIN_UM;
+        assert_eq!(escape_um(board.rules.clearance.get(escape_trace_class, escape_trace_class, layer)), 150, "the escape class's clearance to its own copper");
+        assert_eq!(escape_um(board.rules.clearance.get(escape_trace_class, default_trace_class, layer)), 150, "and to the default class's copper -- this is what lets it actually escape past a neighbour on the default class");
+        assert_eq!(escape_um(board.rules.clearance.get(default_trace_class, default_trace_class, layer)), 200, "the default class keeps the board's own clearance, untouched by the escape class existing");
     }
 }

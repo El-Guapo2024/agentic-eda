@@ -480,6 +480,7 @@ mod tests {
         Part {
             reference: reference.into(),
             mpn: mpn.map(String::from),
+            lcsc: None,
             value: None,
             package: None,
             footprint: None,
@@ -566,8 +567,9 @@ mod tests {
     #[test]
     fn roundtrip_serde() {
         let sym = device_r();
-        let json = serde_json::to_string(&sym).unwrap();
-        let back: LibSymbol = serde_json::from_str(&json).unwrap();
+        let value = serde_json::to_value(&sym).unwrap();
+        let back: LibSymbol = serde_json::from_value(value).unwrap();
         assert_eq!(back.pins.len(), 2);
+        assert_eq!(back.pins[0].at, sym.pins[0].at);
     }
 }

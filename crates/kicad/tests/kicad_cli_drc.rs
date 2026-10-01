@@ -140,6 +140,7 @@ fn kicad_cli_drc_bottom_side_pads() {
     let part = |reference: &str, package: &str, pins: usize| Part {
         reference: reference.into(),
         mpn: None,
+        lcsc: None,
         value: None,
         package: Some(package.into()),
         footprint: Some(package.into()),
@@ -332,6 +333,7 @@ fn kicad_cli_drc_real_footprints() {
     let make_part = |r: &str, footprint: &str, fp: &eda_model::Footprint| Part {
         reference: r.into(),
         mpn: None,
+        lcsc: None,
         value: None,
         package: None,
         footprint: Some(footprint.into()),

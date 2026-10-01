@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/eda","crates/model", "crates/intent", "crates/kicad", "crates/logger", "crates/cli", "crates/layout", "crates/engine", "crates/render", "crates/gates", "crates/interchange", "crates/grid", "crates/place", "crates/bench", "crates/cypress", "crates/judge", "crates/fab", "crates/ops", "crates/freeroute"]
+    "crates/eda","crates/model", "crates/intent", "crates/kicad", "crates/logger", "crates/cli", "crates/layout", "crates/engine", "crates/render", "crates/gates", "crates/interchange", "crates/grid", "crates/place", "crates/bench", "crates/cypress", "crates/judge", "crates/fab", "crates/ops", "crates/freeroute", "crates/connectivity"]
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

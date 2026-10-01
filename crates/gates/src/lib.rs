@@ -1441,6 +1441,7 @@ mod tests {
         let r1 = Part {
             reference: "R1".into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: None,
             footprint: None,
@@ -1571,15 +1572,15 @@ mod tests {
     fn flow_direction_ignores_other_connectors_but_still_judges_driven_parts() {
         let two_conn_model = |_: ()| ConstraintModel {
             parts: vec![
-                Part { reference: "J1".into(), mpn: None, value: None, package: None, footprint: None,
+                Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
                        body_um: None, symbol: None, datasheet: None,
                        edge: None, },
-                Part { reference: "J2".into(), mpn: None, value: None, package: None, footprint: None,
+                Part { reference: "J2".into(), mpn: None, lcsc: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
                        body_um: None, symbol: None, datasheet: None,
                        edge: None, },
-                Part { reference: "U1".into(), mpn: None, value: None, package: None, footprint: None,
+                Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: None,
                        pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
                        body_um: None, symbol: None, datasheet: None,
                        edge: None, },
@@ -1816,7 +1817,7 @@ mod integration {
     }
 
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: None, package: None, footprint: None, pins, body_um: None, symbol: None, datasheet: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, pins, body_um: None, symbol: None, datasheet: None, edge: None }
     }
 
     fn net(name: &str, pins: &[&str]) -> Net {

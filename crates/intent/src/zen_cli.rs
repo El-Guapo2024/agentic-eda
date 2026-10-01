@@ -210,6 +210,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
             Part {
                 reference,
                 mpn: attr_str(inst, "mpn"),
+                lcsc: attr_str(inst, "lcsc"),
                 value: attr_str(inst, "value"),
                 package: attr_str(inst, "package"),
                 footprint: attr_str(inst, "footprint"),

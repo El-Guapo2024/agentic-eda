@@ -77,7 +77,19 @@ pub fn parse_footprint_file(text: &str, name: &str) -> Result<Footprint, String>
         return Err("footprint has no pads this reader could place (missing at/size?)".into());
     }
 
-    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root) })
+    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root) })
+}
+
+/// The `(model "...")` path, verbatim (KiCad writes it with its own
+/// `${KICADn_3DMODEL_DIR}`-style variable already in place, which this
+/// reader passes straight through rather than resolving -- resolving it
+/// is `kicad-cli`'s job when it later exports this data, not this
+/// import path's). A footprint can have more than one `(model ...)`
+/// (rare, but real -- some parts ship separate models per variant); the
+/// first one is enough for this app's purposes, same as how it already
+/// only keeps one courtyard box rather than every graphic.
+pub(crate) fn model_from(root: &[Sexpr]) -> Option<String> {
+    sexpr::find(root, "model").and_then(|m| sexpr::txt(m, 1)).map(str::to_string)
 }
 
 /// A symmetric-about-origin courtyard half-extent enclosing every
@@ -245,6 +257,7 @@ mod tests {
         let part = |r: &str, footprint: &str| eda_model::Part {
             reference: r.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: None,
             footprint: Some(footprint.into()),

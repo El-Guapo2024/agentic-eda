@@ -1529,6 +1529,7 @@ mod tests {
         Part {
             reference: reference.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: Some(package.into()),
             footprint: None,

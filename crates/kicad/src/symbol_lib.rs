@@ -412,6 +412,7 @@ mod tests {
         let part = |r: &str, sym: Option<&str>, pins: usize| eda_model::Part {
             reference: r.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: None,
             footprint: None,

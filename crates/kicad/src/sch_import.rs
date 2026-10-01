@@ -116,6 +116,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         parts.push(Part {
             reference: reference.clone(),
             mpn: None,
+            lcsc: None,
             value: (!value.is_empty()).then(|| value.clone()),
             package: None,
             footprint: (!footprint.is_empty()).then(|| footprint.clone()),
@@ -477,7 +478,7 @@ mod tests {
         Pin { number: number.into(), name: Some(name.into()), kind }
     }
     fn part(reference: &str, pins: Vec<Pin>) -> Part {
-        Part { reference: reference.into(), mpn: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), symbol: None, datasheet: None, pins, body_um: None, edge: None }
+        Part { reference: reference.into(), mpn: None, lcsc: None, value: Some(format!("{reference}_val")), package: None, footprint: Some("Foo:Bar".into()), symbol: None, datasheet: None, pins, body_um: None, edge: None }
     }
     fn net(name: &str, pins: &[&str]) -> Net {
         Net { name: name.into(), pins: pins.iter().map(|s| s.to_string()).collect() }

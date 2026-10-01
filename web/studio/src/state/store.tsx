@@ -7,8 +7,8 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, Cmd, Part, Schematic, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
-import { fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
+import type { BoardState, Cmd, Part, Ratsnest, Schematic, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
+import { fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 
@@ -74,6 +74,37 @@ export interface MovePreview {
   dyUm: number;
 }
 
+/** The 3D viewer's own view-option toggles -- KiCad's 3D viewer has all of these (View menu / its own toolbar): hide silkscreen, hide solder mask, hide the rendered component models, flip to view the board from the other side, and an orthographic/perspective projection switch. */
+export interface Viewer3DOptions {
+  showComponents: boolean;
+  showSilkscreen: boolean;
+  showSolderMask: boolean;
+  /** True = viewing the board flipped (as if turned over a horizontal hinge) so the bottom side reads right-way-up. A camera/board-orientation toggle, not a geometry edit. */
+  flipped: boolean;
+  /** True = an orthographic-looking projection (this app has no separate OrthographicCamera wiring -- Viewer3D approximates it by narrowing FOV and pulling the camera back, a well-known trick, not a real projection-matrix swap). */
+  orthographic: boolean;
+  /** True = show GET /api/board.glb's real KiCad-rendered board (real 3D models, kicad-cli's own colors/materials) in place of this app's own procedural scene. Viewer3D falls back to the procedural scene regardless of this flag when the GLB hasn't loaded (still fetching, or the board/kicad-cli export failed) -- there's nothing to show otherwise. Defaults on; the user can still turn it off to see the lighter procedural scene. */
+  kicadModels: boolean;
+}
+
+/**
+ * GET /api/board.glb's lifecycle for the version currently on screen --
+ * see api/types.ts's `BoardGlbResult` and studio.rs's `GlbBuild` for the
+ * backend side this mirrors. "idle" covers both "never asked" (toggle
+ * off, or not on the 3D tab) and "not needed" (nothing changed since the
+ * last "loaded"/"failed"); Viewer3D.tsx is the only writer.
+ */
+export type GlbStatus = "idle" | "pending" | "loaded" | "failed";
+
+export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
+  showComponents: true,
+  showSilkscreen: true,
+  showSolderMask: true,
+  flipped: false,
+  orthographic: false,
+  kicadModels: true,
+};
+
 export interface StudioState {
   board: BoardState | null;
   boardError: string | null;
@@ -81,6 +112,10 @@ export interface StudioState {
 
   tab: EditorTab;
   rightDockTab: RightDockTab;
+  viewer3d: Viewer3DOptions;
+  /** See `GlbStatus`. Read by Viewer3D (the "loading models…" badge) and Viewer3DToolbar (the KiCad Models toggle's tooltip after a failure). */
+  glbStatus: GlbStatus;
+  glbError: string | null;
 
   selection: Set<string>;
   /** Refs to flash/outline because a problem in the panel references them. */
@@ -154,6 +189,13 @@ export interface StudioState {
    */
   schematic: Schematic | null;
   schematicError: string | null;
+
+  /**
+   * GET /api/ratsnest (crates/connectivity's real KiCad-matching
+   * ratsnest, see api/client.ts's fetchRatsnest) -- fetched only while
+   * `tab === "pcb"`, the only tab that ever draws it.
+   */
+  ratsnest: Ratsnest | null;
 }
 
 const initialState: StudioState = {
@@ -162,6 +204,9 @@ const initialState: StudioState = {
   version: null,
   tab: "pcb",
   rightDockTab: "appearance",
+  viewer3d: DEFAULT_VIEWER3D_OPTIONS,
+  glbStatus: "idle",
+  glbError: null,
   selection: new Set(),
   hot: new Set(),
   netHighlight: null,
@@ -203,6 +248,7 @@ const initialState: StudioState = {
   moveOriginUm: null,
   schematic: null,
   schematicError: null,
+  ratsnest: null,
 };
 
 type Action =
@@ -211,6 +257,8 @@ type Action =
   | { type: "VERSION"; version: string }
   | { type: "SET_TAB"; tab: EditorTab }
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
+  | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
+  | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
   | { type: "SET_SELECTION"; refs: string[] }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
@@ -250,6 +298,7 @@ type Action =
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
   | { type: "SCHEMATIC_ERR"; message: string }
+  | { type: "RATSNEST_OK"; ratsnest: Ratsnest }
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] };
@@ -279,6 +328,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, tab: action.tab };
     case "SET_RIGHT_DOCK_TAB":
       return { ...state, rightDockTab: action.tab };
+    case "SET_VIEWER3D_OPTIONS":
+      return { ...state, viewer3d: { ...state.viewer3d, ...action.options } };
+    case "SET_GLB_STATUS":
+      return { ...state, glbStatus: action.status, glbError: action.error ?? null };
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs), armed: null };
     case "TOGGLE_SELECTION": {
@@ -366,6 +419,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, schematic: action.schematic, schematicError: null };
     case "SCHEMATIC_ERR":
       return { ...state, schematicError: action.message };
+    case "RATSNEST_OK":
+      return { ...state, ratsnest: action.ratsnest };
     case "SET_DRAW_STATE":
       return { ...state, drawState: action.draw };
     case "SET_ZONE_PENDING":
@@ -426,17 +481,29 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshRatsnest = useCallback(async () => {
+    try {
+      const ratsnest = await fetchRatsnest();
+      dispatch({ type: "RATSNEST_OK", ratsnest });
+    } catch {
+      // backend restarting, board mid-edit, etc -- keep showing the last
+      // good ratsnest rather than clearing it; try again next tick.
+    }
+  }, []);
+
   // Poll /api/version (cheap) and only refetch the full /api/state when it
   // changes -- mirrors the old studio.html poll loop so CLI edits and
   // other browser tabs show up here within ~1s without hammering the
-  // single-threaded backend. The schematic is read-only and only ever
-  // shown on the schematic tab, so it piggybacks on the same version
-  // check rather than running its own poll: fetched once on switching to
-  // that tab, and again whenever the board changes while it's showing.
+  // single-threaded backend. The schematic and ratsnest are each read-only
+  // and only ever shown on their own tab, so they piggyback on the same
+  // version check rather than running their own poll: fetched once on
+  // switching to that tab, and again whenever the board changes while
+  // it's showing.
   useEffect(() => {
     let stopped = false;
     let lastVersion: string | null = null;
     let lastSchematicFetch: string | null = null;
+    let lastRatsnestFetch: string | null = null;
     const tick = async () => {
       try {
         const v = await fetchVersion();
@@ -450,6 +517,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           lastSchematicFetch = v;
           await refreshSchematic();
         }
+        if (stateRef.current.tab === "pcb" && lastRatsnestFetch !== v) {
+          lastRatsnestFetch = v;
+          await refreshRatsnest();
+        }
       } catch {
         // backend restarting or unreachable; try again next tick
       }
@@ -460,7 +531,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       stopped = true;
       clearInterval(id);
     };
-  }, [refresh, refreshSchematic]);
+  }, [refresh, refreshSchematic, refreshRatsnest]);
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {

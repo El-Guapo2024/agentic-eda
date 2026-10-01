@@ -338,6 +338,7 @@ mod tests {
         eda_model::Part {
             reference: reference.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: Some("0603".into()),
             footprint: None,
@@ -352,6 +353,7 @@ mod tests {
         Part {
             reference: reference.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: Some("SOT-23".into()),
             footprint: None,
@@ -551,6 +553,7 @@ mod tests {
             parts: vec![Part {
                 reference: "U1".into(),
                 mpn: None,
+                lcsc: None,
                 value: None,
                 package: Some("SOT-23".into()),
                 footprint: None,
@@ -573,6 +576,7 @@ mod tests {
             parts: vec![Part {
                 reference: "U1".into(),
                 mpn: None,
+                lcsc: None,
                 value: None,
                 package: Some("SOT-23".into()),
                 footprint: None,
@@ -699,6 +703,7 @@ mod pad_tests {
         Part {
             reference: reference.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: Some(package.into()),
             footprint: None,
@@ -762,6 +767,7 @@ mod body_tests {
         Part {
             reference: reference.into(),
             mpn: Some("X".into()),
+            lcsc: None,
             value: None,
             package: Some(package.into()),
             footprint: None,

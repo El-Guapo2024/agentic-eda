@@ -118,6 +118,7 @@ mod tests {
         Part {
             reference: r.into(),
             mpn: None,
+            lcsc: None,
             value: None,
             package: Some("0805".into()),
             footprint: None,

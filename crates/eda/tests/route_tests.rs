@@ -11,6 +11,7 @@ fn part(reference: &str, npins: usize) -> Part {
     Part {
         reference: reference.into(),
         mpn: None,
+        lcsc: None,
         value: None,
         package: None,
         footprint: Some(format!("LIN{npins}")),
@@ -30,6 +31,7 @@ fn lin(n: usize) -> Footprint {
             .map(|i| Pad { number: (i + 1).to_string(), at: (i as i64 * 1000, 0), size: (500, 500), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None })
             .collect(),
         courtyard: None,
+        model: None,
     }
 }
 
@@ -57,6 +59,7 @@ fn lin_th(n: usize) -> Footprint {
             })
             .collect(),
         courtyard: None,
+        model: None,
     }
 }
 
@@ -64,6 +67,7 @@ fn part_th(reference: &str, npins: usize) -> Part {
     Part {
         reference: reference.into(),
         mpn: None,
+        lcsc: None,
         value: None,
         package: None,
         footprint: Some(format!("LINTH{npins}")),
