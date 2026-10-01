@@ -507,6 +507,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda-clipper2"
+version = "0.1.0"
+
+[[package]]
 name = "eda-connectivity"
 version = "0.1.0"
 dependencies = [
@@ -703,6 +707,20 @@ dependencies = [
  "eda-layout",
  "eda-model",
  "roxmltree",
+]
+
+[[package]]
+name = "eda-shape-poly-set"
+version = "0.1.0"
+dependencies = [
+ "eda-clipper2",
+]
+
+[[package]]
+name = "eda-zone-filler"
+version = "0.1.0"
+dependencies = [
+ "eda-clipper2",
 ]
 
 [[package]]

@@ -1,0 +1,8 @@
+[package]
+name = "eda-shape-poly-set"
+version = "0.1.0"
+edition = "2021"
+description = "placeholder, filled in stage 2"
+
+[dependencies]
+eda-clipper2 = { path = "../clipper2" }
