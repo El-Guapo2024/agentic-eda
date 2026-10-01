@@ -171,7 +171,7 @@ fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut Constrain
         let lib = resolve(&sym.lib_id, model).unwrap_or_else(|| crate::studio::synthesize_generic_symbol(&format!("eda:{}", sym.id), model));
         let angle_deg = sym.rot as f64 / 1000.0;
         for p in &lib.pins {
-            let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored);
+            let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
             pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
         }
     }
@@ -522,6 +522,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DragSymbol { id, x, y, .. } => format!("schematic drag {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::RotateSymbol { id, quarter_turns } => format!("schematic rotate {id} --quarters {quarter_turns}"),
         Cmd::MirrorSymbol { id } => format!("schematic mirror {id}"),
+        Cmd::MirrorSymbolVertical { id } => format!("schematic mirror-vertical {id}"),
         Cmd::DeleteSymbol { id } => format!("schematic delete-symbol {id}"),
         Cmd::AddWire { pts: p } => format!("schematic wire --pts \"{}\"", pts(p)),
         Cmd::DeleteWire { id } => format!("schematic delete-wire {id}"),
@@ -607,6 +608,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
         Cmd::RotateSymbol { .. } => "schematic-rotate",
         Cmd::MirrorSymbol { .. } => "schematic-mirror",
+        Cmd::MirrorSymbolVertical { .. } => "schematic-mirror-vertical",
         Cmd::DeleteSymbol { .. } => "schematic-delete-symbol",
         Cmd::AddWire { .. } | Cmd::DeleteWire { .. } => "schematic-wire",
         Cmd::AddNoConnect { .. } | Cmd::DeleteNoConnect { .. } => "schematic-no-connect",
@@ -1156,7 +1158,7 @@ mod tests {
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
-        let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
+        let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
         let design = Design {
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
@@ -1387,6 +1389,35 @@ mod tests {
         step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R1".into() }, false, "test").unwrap();
     }
 
+    /// `X`/`Y`: KiCad's own symbols never carry both mirror flags at once
+    /// (only 3 states: none, X, Y) -- turning one axis on must turn the
+    /// other off, the same way a real `SetOrientation` call replaces the
+    /// whole orientation rather than adding a flag.
+    #[test]
+    fn mirror_x_and_mirror_y_are_mutually_exclusive() {
+        let dir = scratch("sch_mirror_exclusive");
+        setup_schematic(&dir);
+
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let r1 = |d: &eda_model::ir::Design| d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R1").unwrap().clone();
+        assert!(r1(&design).mirrored && !r1(&design).mirror_y, "X alone sets mirrored");
+
+        step(&dir, Cmd::MirrorSymbolVertical { id: "R1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!r1(&design).mirrored && r1(&design).mirror_y, "Y must clear the X flag it replaces, not add to it");
+
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(r1(&design).mirrored && !r1(&design).mirror_y, "and X must clear Y back, symmetrically");
+
+        // Each hotkey is still its own toggle: pressing the same one twice
+        // returns to "no mirror", not a stuck state.
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!r1(&design).mirrored && !r1(&design).mirror_y);
+    }
+
     /// `E`/`V`/`F`: each field is independently settable -- editing just
     /// the footprint must not reset a value set by an earlier, separate
     /// edit back to blank.
@@ -1421,8 +1452,8 @@ mod tests {
             // Neither point may collide with setup_schematic's own R1
             // (10_000,10_000)/R2 (20_000,10_000) -- `.find(|s| s.at == ...)`
             // below would silently match the wrong symbol otherwise.
-            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 5_000, y: 50_000 }, rot: 0, mirrored: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "A": further left, further down
-            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 60_000, y: 40_000 }, rot: 0, mirrored: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "B": further right, further up
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 5_000, y: 50_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "A": further left, further down
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 60_000, y: 40_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "B": further right, further up
         }
         save(&dir, &design).unwrap();
 

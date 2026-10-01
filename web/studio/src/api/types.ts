@@ -302,6 +302,7 @@ export type Cmd =
   | { op: "drag_symbol"; id: string; x: Um; y: Um; attached_wire_endpoints: [number, number][] }
   | { op: "rotate_symbol"; id: string; quarter_turns: number }
   | { op: "mirror_symbol"; id: string }
+  | { op: "mirror_symbol_vertical"; id: string }
   | { op: "delete_symbol"; id: string }
   | { op: "add_wire"; pts: PointXY[] }
   | { op: "delete_wire"; id: string }

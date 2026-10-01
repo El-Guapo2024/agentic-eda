@@ -87,7 +87,18 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         let Some(at) = sexpr::find(item, "at") else { continue };
         let (Some(x_mm), Some(y_mm)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
         let angle_deg = sexpr::num(at, 3).unwrap_or(0.0);
-        let mirrored = sexpr::find(item, "mirror").is_some();
+        // `(mirror x)` -> `SYM_MIRROR_X` -> this app's `mirror_y` (negate
+        // local Y); `(mirror y)` -> `SYM_MIRROR_Y` -> this app's `mirrored`
+        // (negate local X) -- confirmed directly against
+        // sch_io_kicad_sexpr_parser.cpp's own `T_mirror` handling, not
+        // guessed (the file token matches the internal enum's own suffix
+        // verbatim, so it would have been an easy, wrong-rendering guess
+        // to get backwards). `.is_some()` alone (no x/y distinction) was
+        // this project's pre-`mirror_y` placeholder; see `Cmd::
+        // MirrorSymbolVertical`'s own doc for why both fields are needed.
+        let mirror_tag = sexpr::find(item, "mirror").and_then(|m| sexpr::txt(m, 1));
+        let mirrored = mirror_tag == Some("y");
+        let mirror_y = mirror_tag == Some("x");
         let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0) as u32;
         let at_um = Point { x: crate::import::mm_to_um(x_mm), y: crate::import::mm_to_um(y_mm) };
         let rot = import_rot_millideg_sch(angle_deg);
@@ -99,7 +110,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
         if resolved.power {
             let pin_local = resolved.pins.first().map(|p| p.at).unwrap_or(SPoint::new(0.0, 0.0));
-            let world = transform_local_point(pin_local, angle_deg, mirrored);
+            let world = transform_local_point(pin_local, angle_deg, mirrored, mirror_y);
             let at_pin = Point { x: at_um.x + crate::import::mm_to_um(world.x), y: at_um.y + crate::import::mm_to_um(world.y) };
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
             continue;
@@ -107,7 +118,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
         let mut pins: Vec<Pin> = Vec::with_capacity(resolved.pins.len());
         for p in &resolved.pins {
-            let world = transform_local_point(p.at, angle_deg, mirrored);
+            let world = transform_local_point(p.at, angle_deg, mirrored, mirror_y);
             let at_pin = Point { x: at_um.x + crate::import::mm_to_um(world.x), y: at_um.y + crate::import::mm_to_um(world.y) };
             pin_world.insert(format!("{reference}.{}", p.number), at_pin);
             let kind = if nc_points.contains(&at_pin) { eda_model::PinKind::Nc } else { pin_kind_from_electrical_type(&p.electrical_type, &p.name) };
@@ -126,7 +137,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
             body_um: None,
             edge: None,
         });
-        symbols.push(SymbolInstance { id: reference, at: at_um, rot, mirrored, lib_id: lib_id.to_string(), unit, value, footprint, datasheet });
+        symbols.push(SymbolInstance { id: reference, at: at_um, rot, mirrored, mirror_y, lib_id: lib_id.to_string(), unit, value, footprint, datasheet });
     }
 
     let mut wires: Vec<Wire> = Vec::new();
@@ -293,8 +304,22 @@ fn import_rot_millideg_sch(file_deg: f64) -> eda_model::ir::Millideg {
 /// -- everything `eda_kicad::lib::baked_local` does, run forward instead of
 /// pre-baked: negate y (library +y-up -> sheet +y-down, see
 /// `baked_local`'s own doc comment), mirror, then rotate.
-pub fn transform_local_point(local: SPoint, angle_deg: f64, mirrored: bool) -> SPoint {
-    let ly = -local.y;
+///
+/// `mirror_y` (KiCad's `SYM_MIRROR_X`, "Mirror Vertically") does *not*
+/// negate `local.y` a second time on top of the always-applied library
+/// flip above -- it *cancels* that flip instead, leaving the raw file Y
+/// unchanged. Ported from, and cross-checked numerically against,
+/// `transform.ts`'s own matrix table (`symbolTransformMatrix`/
+/// `resolveLibPoint`, ported line-for-line from `sch_symbol.cpp::
+/// SetOrientation` in the same session this function was last touched):
+/// at `angle_deg == 0`, `mirror_y` alone must reproduce the point
+/// completely unflipped, which only holds if the two negations cancel
+/// rather than compound. `mirrored` and `mirror_y` are never both true at
+/// once in a real symbol (same "one axis or none" rule `transform.ts`'s
+/// own header comment states) -- the composition below is only defined
+/// for that case, like source's own.
+pub fn transform_local_point(local: SPoint, angle_deg: f64, mirrored: bool, mirror_y: bool) -> SPoint {
+    let ly = if mirror_y { local.y } else { -local.y };
     let lx = if mirrored { -local.x } else { local.x };
     let theta = angle_deg.to_radians();
     let rx = lx * theta.cos() - ly * theta.sin();
@@ -512,6 +537,72 @@ mod tests {
         let cin = part("CIN", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Ground)]);
         let cout = part("COUT", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Ground)]);
         ConstraintModel { parts: vec![u1, cin, cout], nets: vec![net("VIN", &["U1.1", "CIN.1"]), net("VOUT", &["U1.4", "COUT.1"]), net("GND", &["U1.2", "CIN.2", "COUT.2"])], ..Default::default() }
+    }
+
+    /// `transform_local_point`'s `mirror_y` branch, cross-checked
+    /// numerically against `transform.ts`'s own matrix table (ported
+    /// line-for-line from `sch_symbol.cpp::SetOrientation` on the frontend)
+    /// rather than re-derived from a description: at every one of the 4
+    /// right-angle rotations, `mirror_y` alone must land exactly where
+    /// `symbolTransformMatrix(rot, "x")` (the frontend's own name for this
+    /// same axis) does, and `mirrored` alone (the pre-existing axis) must
+    /// keep matching `symbolTransformMatrix(rot, "y")` the same way it
+    /// already did before this field existed.
+    #[test]
+    fn transform_local_point_mirror_y_matches_the_frontends_matrix_table() {
+        let p = SPoint::new(3.0, 5.0);
+        // (angle_deg, mirrored, mirror_y, expected (x, y)) -- expected
+        // values hand-computed from transform.ts's MATRICES table (see
+        // transform_local_point's own doc comment for the derivation).
+        let cases = [
+            (0.0, false, true, (3.0, 5.0)), // mirror_y alone at rot 0: unchanged from the raw point
+            (0.0, true, false, (-3.0, -5.0)), // mirrored alone at rot 0 (pre-existing, must not regress)
+            (90.0, false, true, (-5.0, 3.0)),
+            (90.0, true, false, (5.0, -3.0)),
+            (180.0, false, true, (-3.0, -5.0)), // 180+mirror_y == 0+mirrored (transform.ts's own documented equivalence)
+            (180.0, true, false, (3.0, 5.0)),
+            (270.0, false, true, (5.0, -3.0)),
+            (270.0, true, false, (-5.0, 3.0)),
+        ];
+        for (angle_deg, mirrored, mirror_y, (ex, ey)) in cases {
+            let got = transform_local_point(p, angle_deg, mirrored, mirror_y);
+            assert!(
+                (got.x - ex).abs() < 1e-9 && (got.y - ey).abs() < 1e-9,
+                "angle={angle_deg} mirrored={mirrored} mirror_y={mirror_y}: got ({}, {}), want ({ex}, {ey})",
+                got.x,
+                got.y
+            );
+        }
+    }
+
+    /// `(mirror x)`/`(mirror y)` in a real `.kicad_sch` file must land on
+    /// the *opposite*-named field here (`sch_io_kicad_sexpr_parser.cpp`'s
+    /// own `T_mirror` handling: `(mirror x)` -> `SYM_MIRROR_X`, which this
+    /// app calls `mirror_y`; `(mirror y)` -> `SYM_MIRROR_Y`, this app's
+    /// pre-existing `mirrored` -- see `transform_local_point`'s own doc).
+    /// This app's own exporter never emits the tag at all (it bakes
+    /// mirror/rotation into bytes directly instead -- `baked_local`'s own
+    /// doc), so this test hand-injects the tag into our own round-trip
+    /// export rather than being able to exercise it through `parses_our_
+    /// own_export` directly.
+    #[test]
+    fn mirror_x_and_mirror_y_tags_read_back_to_the_opposite_named_field() {
+        let model = ldo_model();
+        let design = derive_schematic(&model, &EngineOptions::new(1, "mirror_roundtrip")).unwrap();
+        let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "mirror_roundtrip" }).unwrap();
+        assert!(!text.contains("(mirror "), "sanity: our own exporter never emits a mirror tag on the instance (it bakes the transform instead)");
+
+        let with_mirror_x = text.replacen("(lib_id \"eda:U1\") (at ", "(lib_id \"eda:U1\") (mirror x) (at ", 1);
+        let (design_x, _, _) = import_kicad_sch(&with_mirror_x).expect("parses with an injected (mirror x)");
+        let u1_x = design_x.schematic.unwrap().symbols.into_iter().find(|s| s.id == "U1").unwrap();
+        assert!(u1_x.mirror_y, "(mirror x) must set mirror_y");
+        assert!(!u1_x.mirrored, "(mirror x) must not also set mirrored");
+
+        let with_mirror_y = text.replacen("(lib_id \"eda:U1\") (at ", "(lib_id \"eda:U1\") (mirror y) (at ", 1);
+        let (design_y, _, _) = import_kicad_sch(&with_mirror_y).expect("parses with an injected (mirror y)");
+        let u1_y = design_y.schematic.unwrap().symbols.into_iter().find(|s| s.id == "U1").unwrap();
+        assert!(u1_y.mirrored, "(mirror y) must set mirrored");
+        assert!(!u1_y.mirror_y, "(mirror y) must not also set mirror_y");
     }
 
     #[test]

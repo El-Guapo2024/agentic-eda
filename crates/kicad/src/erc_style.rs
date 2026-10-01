@@ -1455,12 +1455,12 @@ mod tests {
     }
 
     fn r1_geo(model: &ConstraintModel, at: IrPoint) -> SymGeo<'_> {
-        let sym = SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false };
+        let sym = SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false, mirror_y: false };
         SymGeo::build(&sym, model.part("R1").unwrap(), model)
     }
 
     fn r1_symbol(at: IrPoint) -> SymbolInstance {
-        SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false }
+        SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at, rot: 0, mirrored: false, mirror_y: false }
     }
 
     // ---------------------------------------------------------- offgrid
@@ -1523,7 +1523,7 @@ mod tests {
         let r2 = Part { reference: "R2".into(), ..model.parts[0].clone() };
         model.parts.push(r2);
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![], texts: vec![],
-            symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 }), SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R2".into(), at: IrPoint { x: 1270, y: 0 }, rot: 0, mirrored: false }],
+            symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 }), SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R2".into(), at: IrPoint { x: 1270, y: 0 }, rot: 0, mirrored: false, mirror_y: false }],
             wires: vec![],
             labels: vec![],
         };
@@ -1589,9 +1589,9 @@ mod tests {
         let model = two_conn_model(());
         let sch_for = |u1_x: i64| SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![], texts: vec![],
             symbols: vec![
-                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J1".into(), at: IrPoint { x: 0, y: 0 }, rot: 0, mirrored: false },
-                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: 12700, y: 0 }, rot: 0, mirrored: false },
-                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: u1_x, y: 0 }, rot: 0, mirrored: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J1".into(), at: IrPoint { x: 0, y: 0 }, rot: 0, mirrored: false, mirror_y: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: 12700, y: 0 }, rot: 0, mirrored: false, mirror_y: false },
+                SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: u1_x, y: 0 }, rot: 0, mirrored: false, mirror_y: false },
             ],
             wires: vec![Wire { id: String::new(),
                 net: "SIG".into(),

@@ -708,8 +708,10 @@ export interface StudioApi {
   schTextById: (id: string) => SchematicText | undefined;
   /** R/Shift+R on the Schematic tab: rotate a symbol in place (quarterTurns: 1 = CCW/'R', 3 = CW/Shift+R, matching sch_edit_tool.cpp's own default). */
   rotateSymbol: (id: string, quarterTurns: number) => Promise<void>;
-  /** X on the Schematic tab ("Mirror Horizontally") -- see `Cmd::MirrorSymbol`'s own doc on why this is the one axis wired. */
+  /** X on the Schematic tab ("Mirror Horizontally"). */
   mirrorSymbol: (id: string) => Promise<void>;
+  /** Y on the Schematic tab ("Mirror Vertically") -- mutually exclusive with `mirrorSymbol` on the backend (Cmd::MirrorSymbolVertical's own doc). */
+  mirrorSymbolVertical: (id: string) => Promise<void>;
   /** Del on the Schematic tab: removes the symbol instance; any wire landed on its pins is left dangling, same as real eeschema. */
   deleteSymbol: (id: string) => Promise<void>;
   /** Any other Cmd this file doesn't have a named wrapper for (the delete_ ops, set_track_width, edit_text, ...) -- returns whether the backend accepted it, same as every named wrapper's underlying runCmd. */
@@ -870,6 +872,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     mirrorSymbol: async (id) => {
       await runCmd({ op: "mirror_symbol", id });
+    },
+    mirrorSymbolVertical: async (id) => {
+      await runCmd({ op: "mirror_symbol_vertical", id });
     },
     deleteSymbol: async (id) => {
       dispatch({ type: "CLEAR_SELECTION" });

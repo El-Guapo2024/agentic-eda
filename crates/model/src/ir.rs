@@ -172,8 +172,22 @@ pub struct SymbolInstance {
     pub id: String,
     pub at: Point,
     pub rot: Millideg,
+    /// `X` ("Mirror Horizontally", KiCad's `SYM_MIRROR_Y`): negates local X
+    /// before rotation. See [`Cmd::MirrorSymbol`](../../eda_ops/enum.Cmd.html)'s
+    /// own doc.
     #[serde(default)]
     pub mirrored: bool,
+    /// `Y` ("Mirror Vertically", KiCad's `SYM_MIRROR_X`): the other axis --
+    /// never both at once in practice (KiCad's own symbols never carry two
+    /// mirror flags; `transform_local_point` composes them as "cancel the
+    /// library Y-up/Y-down flip instead of negating local X" rather than
+    /// a true second negation, see its own doc comment for why). Added
+    /// after `mirrored` already existed and was widely depended on, so
+    /// this is a new, separate field rather than widening `mirrored` into
+    /// an enum -- see PARITY-sch.md's own note on why that was deferred
+    /// originally.
+    #[serde(default)]
+    pub mirror_y: bool,
     /// KiCad library id this instance draws from ("Device:R",
     /// "Regulator_Linear:AMS1117-3.3"), resolved by
     /// `eda_model::symbol::resolve_lib_id` — see [`crate::Part::symbol`].
@@ -940,8 +954,8 @@ mod tests {
             },
             schematic: Some(SchematicSection {
                 symbols: vec![
-                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
-                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
+                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
+                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                 ],
                 wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }] }],
                 labels: vec![],

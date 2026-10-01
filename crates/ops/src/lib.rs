@@ -311,14 +311,19 @@ pub enum Cmd {
     /// `R`: quarter turns, same convention as `Rotate`.
     RotateSymbol { id: String, quarter_turns: u8 },
     /// `X` ("Mirror Horizontally", KiCad's `SYM_MIRROR_Y` / negate-X):
-    /// toggles `SymbolInstance::mirrored`, the one axis this project's
-    /// schematic IR currently models (confirmed against
-    /// `transform_local_point`: `mirrored` already negates X, matching
-    /// this hotkey exactly). `Y` ("Mirror Vertically" / negate-Y) has no
-    /// field to toggle yet -- see `PARITY-sch.md`'s eeschema row for that
-    /// gap; left unwired rather than overloading this one flag with a
-    /// second meaning.
+    /// toggles `SymbolInstance::mirrored` (confirmed against
+    /// `transform_local_point`: `mirrored` negates X, matching this
+    /// hotkey exactly).
     MirrorSymbol { id: String },
+    /// `Y` ("Mirror Vertically", KiCad's `SYM_MIRROR_X`): toggles
+    /// `SymbolInstance::mirror_y`, clearing `mirrored` if it was set --
+    /// KiCad's own symbols never carry both mirror flags at once (there
+    /// are only 3 mirror states: none, X, Y -- see `transform.ts`'s own
+    /// header comment on the frontend, ported from `sch_symbol.cpp::
+    /// SetOrientation`), so toggling one axis on always means toggling
+    /// the other off, same as a real `SetOrientation` call replaces the
+    /// whole orientation rather than adding a flag.
+    MirrorSymbolVertical { id: String },
     /// `Del` on a symbol: removes the instance (and its synthesized
     /// `Part`, if `reconcile_schematic` had added one for a symbol with no
     /// intent counterpart) from the sheet. Matches real eeschema: wires
@@ -442,6 +447,7 @@ impl Cmd {
             | Cmd::DragSymbol { .. }
             | Cmd::RotateSymbol { .. }
             | Cmd::MirrorSymbol { .. }
+            | Cmd::MirrorSymbolVertical { .. }
             | Cmd::DeleteSymbol { .. }
             | Cmd::AddWire { .. }
             | Cmd::DeleteWire { .. }
@@ -497,6 +503,7 @@ impl Cmd {
             | Cmd::DragSymbol { id, .. }
             | Cmd::RotateSymbol { id, .. }
             | Cmd::MirrorSymbol { id }
+            | Cmd::MirrorSymbolVertical { id }
             | Cmd::DeleteSymbol { id }
             | Cmd::AddSymbol { id, .. }
             | Cmd::EditSymbolFields { id, .. }
@@ -778,6 +785,7 @@ impl<'a> Board<'a> {
             Cmd::DragSymbol { id, x, y, attached_wire_endpoints } => self.drag_symbol(id, *x, *y, attached_wire_endpoints),
             Cmd::RotateSymbol { id, quarter_turns } => self.rotate_symbol(id, *quarter_turns),
             Cmd::MirrorSymbol { id } => self.mirror_symbol(id),
+            Cmd::MirrorSymbolVertical { id } => self.mirror_symbol_vertical(id),
             Cmd::DeleteSymbol { id } => self.delete_symbol(id),
             Cmd::AddWire { pts } => self.add_wire(pts.clone()),
             Cmd::DeleteWire { id } => self.delete_wire(id),
@@ -1581,13 +1589,27 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// `X` ("Mirror Horizontally") -- see `Cmd::MirrorSymbol`'s doc on why
-    /// this is the one axis the IR models.
+    /// `X` ("Mirror Horizontally").
     fn mirror_symbol(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
         self.find_symbol(id)?;
         let sch = self.schematic_mut()?;
         let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
         s.mirrored = !s.mirrored;
+        if s.mirrored {
+            s.mirror_y = false; // see Cmd::MirrorSymbolVertical's doc -- never both at once
+        }
+        Ok(())
+    }
+
+    /// `Y` ("Mirror Vertically") -- see `Cmd::MirrorSymbolVertical`'s doc.
+    fn mirror_symbol_vertical(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        self.find_symbol(id)?;
+        let sch = self.schematic_mut()?;
+        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        s.mirror_y = !s.mirror_y;
+        if s.mirror_y {
+            s.mirrored = false;
+        }
         Ok(())
     }
 
@@ -1713,7 +1735,7 @@ impl<'a> Board<'a> {
         if sch.symbols.iter().any(|s| s.id == id) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, "a symbol with this reference is already on the sheet")]);
         }
-        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, lib_id: lib_id.into(), unit: 1, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
+        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit: 1, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
         Ok(())
     }
 

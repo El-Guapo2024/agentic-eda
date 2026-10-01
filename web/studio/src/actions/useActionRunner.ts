@@ -565,13 +565,18 @@ export function useActionRunner() {
         if (id && api.symbolById(id)) api.rotateSymbol(id, 3);
       })
     );
-    // `Y` (Mirror Vertically) has no IR field to toggle yet -- see
-    // `Cmd::MirrorSymbol`'s own doc -- so only `X` is wired.
     m.set(
       "eeschema.InteractiveEdit.mirrorH",
       schematicOnly(() => {
         const id = [...state.selection][0];
         if (id && api.symbolById(id)) api.mirrorSymbol(id);
+      })
+    );
+    m.set(
+      "eeschema.InteractiveEdit.mirrorV",
+      schematicOnly(() => {
+        const id = [...state.selection][0];
+        if (id && api.symbolById(id)) api.mirrorSymbolVertical(id);
       })
     );
 

@@ -814,6 +814,18 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 "at": [s.at.x, s.at.y],
                 // Millideg -> plain degrees, same convention `state()` uses for a PCB part's `rot`.
                 "rot": s.rot as f64 / 1000.0,
+                // `mirror`: the two-axis form the frontend's own renderer
+                // (schematic/transform.ts, ported from `sch_symbol.cpp::
+                // SetOrientation` before this field existed on this side)
+                // has always expected -- `mirrored`/`mirror_y` are never
+                // both true at once (`mirror_symbol`/`mirror_symbol_
+                // vertical` each clear the other), so this is a clean
+                // three-way choice, not a lossy collapse. `mirrored` is
+                // also still sent, for api/client.ts's own legacy-shim
+                // fallback (`sym.mirror ?? (legacy.mirrored ? "y" : null)`) --
+                // redundant once this field exists, but harmless to leave
+                // both until that shim is itself cleaned up.
+                "mirror": if s.mirrored { Some("y") } else if s.mirror_y { Some("x") } else { None },
                 "mirrored": s.mirrored,
                 // KiCad library id this instance draws from ("Device:R", or
                 // the synthetic "eda:<id>" for a part with no resolved real

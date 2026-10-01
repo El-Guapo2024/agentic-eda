@@ -262,6 +262,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             at: Point { x: at.x, y: at.y },
             rot: 0,
             mirrored: false,
+            mirror_y: false,
             lib_id: resolve_lib_id(part),
             unit: 1,
             value: part.value.clone().unwrap_or_default(),

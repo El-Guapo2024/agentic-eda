@@ -25,9 +25,11 @@ label/no-connect/power-symbol/text placement, plus a new minimal
 a new `LibSymbol::reference_prefix` field so a placed symbol gets a real
 reference immediately instead of a "U?" placeholder), `E`/`U`/`V`/`F`
 (section 1 -- `SymbolPropertiesDialog.tsx`, new `Cmd::RenameSymbol`/
-`EditSymbolFields`), and Annotate's dialog (section 5 --
-`AnnotateDialog.tsx`, new `Cmd::Annotate.order`/`.ids`). Still not wired:
-`J` junction — see the bottom of each section.
+`EditSymbolFields`), Annotate's dialog (section 5 --
+`AnnotateDialog.tsx`, new `Cmd::Annotate.order`/`.ids`), and `Y` mirror
+(section 1 -- new `SymbolInstance::mirror_y`, `Cmd::MirrorSymbolVertical`,
+mutually exclusive with `X`/`mirrored`). Still not wired: `J` junction —
+see the bottom of each section.
 
 **Found and fixed while wiring `E`/`U`/`V`/`F`'s hotkeys**: several
 physical keys are double-booked by one `pcbnew.*` and one `eeschema.*`
@@ -113,7 +115,8 @@ the intent YAML file.
 | R/Shift+R during an active move updates the live preview instead of committing separately | identical | `sch_move_tool.cpp::handleMoveToolActions` (`tryTransformDuringMove`, shared helper, now tab-aware) |
 | Rotate pivot: own anchor (single item) / collective bbox center (multi-select) | partial — only single-selection rotate is wired (one symbol id) | `sch_edit_tool.cpp::Rotate` |
 | `X`: mirror horizontally (negate-X, KiCad's `SYM_MIRROR_Y`) | identical | `sch_edit_tool.cpp::Mirror` (`mirrorH`); `Cmd::MirrorSymbol`, toggles `SymbolInstance::mirrored` |
-| `Y`: mirror vertically (negate-Y, `SYM_MIRROR_X`) | missing — the IR models one mirror axis only (`SymbolInstance::mirrored`, confirmed against `transform_local_point` to be the X/negate-X one) | `sch_edit_tool.cpp::Mirror` (`mirrorV`). Needs a second bool on `SymbolInstance` plus an axis-aware `transform_local_point`/painter.ts change — deferred to avoid widening a function `sch_import.rs` also depends on, under this session's time budget |
+| `Y`: mirror vertically (`SYM_MIRROR_X`) | identical | `sch_edit_tool.cpp::Mirror` (`mirrorV`); new `SymbolInstance::mirror_y` + `Cmd::MirrorSymbolVertical`, mutually exclusive with `mirrored`/`MirrorSymbol` (toggling one clears the other, same as a real `SetOrientation` call replaces the whole orientation -- KiCad's own symbols never carry both at once). `transform_local_point` (reconcile's/import's pin-world resolution) extended to the second axis and cross-checked numerically against `transform.ts`'s own matrix table (already correct on the frontend, which was built two-axis-ready ahead of this field existing -- see its own "Found while wiring..." note two rows down) rather than re-derived from a description: `mirror_y` *cancels* the always-applied library-Y-up/sheet-Y-down flip instead of negating local X the way `mirrored` does, confirmed by a unit test matching all 4 rotations against the frontend's matrices, plus a real `.kicad_sch`-level round-trip test (`(mirror x)`/`(mirror y)` tags reading back to the correctly-opposite-named field -- `sch_io_kicad_sexpr_parser.cpp`'s own token names don't match this app's own field names 1:1, an easy, wrong-rendering mistake to make without checking source directly). `export_kicad_sch`'s own generic-box baking (`baked_local`, used only for a *synthesized*, non-library-resolved symbol) is **not** extended to the new axis -- a narrower, documented gap, since that function's local-box mirror math is a different convention than `transform_local_point`'s and real/library-resolved symbols (the common case) are unaffected |
+| **Found while wiring this**: `api/types.ts`'s `SchematicSymbol.mirror: "x"\|"y"\|null` and the renderer that reads it (`transform.ts`, `libSymbol.ts`) were already fully two-axis, written *ahead of* this backend field by the session that merged the Eeschema-port itself -- the backend was only ever sending the single legacy `mirrored` boolean, so `X` mirroring only ever rendered at all because `api/client.ts`'s `fetchSchematic` already had a same-session compatibility shim (`sym.mirror ?? (legacy.mirrored ? "y" : null)`). `schematic_json` now sends a real `"mirror": "x"\|"y"\|null` field (plus `"mirrored"`, redundant but harmless, for that same shim), so the fallback is now dead code but was never a bug to fix -- no frontend rendering changes were needed for either axis | n/a | n/a |
 | Mirror during an active move | missing | `sch_edit_tool.cpp::Mirror`'s own `IsMoving()` branch (asymmetric from Rotate's in source itself — no `updateStoredPositions()` call) |
 | `Del`: delete symbol, wires left dangling (no cascade) | identical | `sch_edit_tool.cpp::DoDelete` (confirmed: wires are never auto-deleted); `Cmd::DeleteSymbol`, `common.Interactive.delete`'s schematic branch |
 | `Del`: delete wire | identical (wire must already be selected via a modified click — see the box-select gap above) | `Cmd::DeleteWire` |
@@ -341,3 +344,13 @@ click through:
     symbol should renumber, everything else on the sheet untouched. Try
     "Clear and re-annotate" with "Sort by X" on the whole sheet and
     confirm the numbering order visibly follows X position instead of Y.
+19. Select a symbol with real `lib_symbols` graphics (not a generic box),
+    press `X` -- confirm it flips left-right, as before. Press `X` again
+    to undo it, then press `Y` -- confirm it flips top-bottom instead
+    (not left-right). With `Y` still active, press `X` -- confirm it
+    switches to the `X` flip cleanly (not both at once, not a no-op).
+    After a `Y` flip, draw a wire (`W`) to one of the now-vertically-
+    mirrored symbol's pins and confirm it snaps exactly onto the pin's
+    *visually drawn* position, not where it would be pre-mirror -- this
+    is the real correctness check (pin-snap and the renderer must agree
+    on where a Y-mirrored pin actually is).
