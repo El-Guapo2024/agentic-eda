@@ -36,7 +36,15 @@ use eda_model::BoardRules;
 pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Um {
     let ca = a.map(|n| rules.clearance_of(n)).unwrap_or(0);
     let cb = b.map(|n| rules.clearance_of(n)).unwrap_or(0);
-    ca.max(cb)
+    // `bds.m_MinClearance`: an absolute board-wide floor maxed in on top of
+    // the netclass value -- `EvalRules`'s final `CLEARANCE_CONSTRAINT`
+    // special case ("Board minimum clearance"), applied whenever the
+    // winning rule (if any) was implicit. A board with the factory-default
+    // `min_clearance` of 0 sees no change here; [`clearance_with_custom_rules`]
+    // layers explicit `.kicad_dru` rules on top of *this* value by full
+    // replacement, matching KiCad's early-return-before-the-floor behavior
+    // for an explicit match (see that function's doc comment).
+    ca.max(cb).max(rules.min_clearance_um)
 }
 
 /// [`clearance`], then applying any matching `.kicad_dru` custom rules on
@@ -121,6 +129,75 @@ impl CompiledClearanceRules {
     }
 }
 
+/// `rules.custom_rules`'s `track_width`-constraint entries, condition
+/// tokenized once -- the `track_width` analogue of
+/// [`CompiledClearanceRules`] (see that type's doc comment for why this is
+/// a compile-once step). A real QA-corpus example of why this matters:
+/// `multinetclasses_drc.kicad_dru` caps each net class at its own
+/// `(constraint track_width (max ...))` -- KiCad has no native per-class
+/// *maximum* width, so a custom rule is the only way a real project
+/// expresses one, and it is common enough to be worth porting alongside
+/// the `min` side of this same constraint type.
+///
+/// KiCad evaluates `TRACK_WIDTH_CONSTRAINT` as a one-item condition
+/// (`EvalRules(TRACK_WIDTH_CONSTRAINT, item, nullptr, layer)` --
+/// `drc_test_provider_track_width.cpp`'s `Run()`), so every real rule's
+/// `condition` for this constraint type only ever references `A.*`; this
+/// port evaluates it by passing the same [`crate::pcbexpr::Facts`] for
+/// both sides of [`crate::pcbexpr::matches_compiled`], which is exact for
+/// an `A`-only condition, not an approximation.
+pub struct CompiledWidthRules(Vec<CompiledWidthRule>);
+
+struct CompiledWidthRule {
+    min: Option<Um>,
+    max: Option<Um>,
+    layer: Option<String>,
+    condition: Option<crate::pcbexpr::CompiledCondition>,
+}
+
+impl CompiledWidthRules {
+    pub fn new(rules: &BoardRules) -> Self {
+        CompiledWidthRules(
+            rules
+                .custom_rules
+                .iter()
+                .filter(|r| r.constraint_type == "track_width")
+                .filter(|r| r.min.is_some() || r.max.is_some())
+                .map(|r| CompiledWidthRule { min: r.min, max: r.max, layer: r.layer.clone(), condition: r.condition.as_deref().and_then(crate::pcbexpr::compile) })
+                .collect(),
+        )
+    }
+}
+
+/// `(min, max)` bounds for one track/arc's width: [`track_width_min`]'s
+/// board floor as `min`, `None` for `max`, then any matching `.kicad_dru`
+/// `track_width` rule applied on top of *both*, independently -- last
+/// match wins, same winner-take-all precedence as
+/// [`clearance_with_custom_rules`] (only the fields a given rule's
+/// constraint actually sets are overwritten, matching
+/// `DRC_ENGINE::EvalRules`'s `applyConstraint`, which touches `Min`/`Opt`/
+/// `Max` independently of one another).
+pub fn track_width_bounds(rules: &BoardRules, layer: &str, a: &crate::pcbexpr::Facts, compiled: &CompiledWidthRules) -> (Um, Option<Um>) {
+    let mut min = track_width_min(rules);
+    let mut max = None;
+    for entry in &compiled.0 {
+        if let Some(pat) = &entry.layer {
+            if !eda_model::glob_match(pat, layer) {
+                continue;
+            }
+        }
+        if crate::pcbexpr::matches_compiled(entry.condition.as_ref(), a, a) {
+            if let Some(m) = entry.min {
+                min = m;
+            }
+            if entry.max.is_some() {
+                max = entry.max;
+            }
+        }
+    }
+    (min, max)
+}
+
 /// The largest clearance value *any* pair on this board could possibly
 /// resolve to -- `BOARD::GetMaxClearanceValue()` / `m_DRCMaxClearance` in
 /// `drc_cache_generator.cpp`, used there to size how far a `DRC_RTREE`
@@ -130,7 +207,7 @@ impl CompiledClearanceRules {
 /// netclass's own clearance override (the only per-net source this port
 /// resolves -- see [`clearance`]'s own doc comment on what's out of scope).
 pub fn worst_case_clearance(rules: &BoardRules) -> Um {
-    let base = rules.clearance.max(rules.hole_clearance_um);
+    let base = rules.clearance.max(rules.hole_clearance_um).max(rules.min_clearance_um);
     rules.net_classes.iter().filter_map(|c| c.clearance).fold(base, Um::max)
 }
 
@@ -138,21 +215,28 @@ pub fn worst_case_clearance(rules: &BoardRules) -> Um {
 /// net class (a netclass's own `track_width` only ever sets the *nominal*
 /// value KiCad's router aims for -- see `loadImplicitRules`'s
 /// `constraint.Value().SetMin(bds.m_TrackMinWidth); constraint.Value().
-/// SetOpt(nc->GetTrackWidth())`, min always the global setting).
+/// SetOpt(nc->GetTrackWidth())`, min always the global setting). See
+/// [`BoardRules::track_width_min_um`]'s own doc comment for the GAPS.md
+/// #10 bug this used to have (reading the net-class nominal width here
+/// instead of the real board floor).
 pub fn track_width_min(rules: &BoardRules) -> Um {
-    rules.track_width
+    rules.track_width_min_um
 }
 
-/// `bds.m_ViasMinSize`.
+/// `bds.m_ViasMinSize` -- see [`track_width_min`]'s doc comment for why
+/// this is a dedicated field now rather than the net class's own nominal
+/// [`BoardRules::via_diameter`].
 pub fn via_diameter_min(rules: &BoardRules) -> Um {
-    rules.via_diameter
+    rules.via_diameter_min_um
 }
 
 /// `bds.m_MinThroughDrill` (round-hole pads and standard vias; this port
 /// does not model micro-vias, so `DRCE_MICROVIA_DRILL_OUT_OF_RANGE` never
-/// applies).
+/// applies) -- see [`track_width_min`]'s doc comment for why this reads a
+/// dedicated field rather than the net class's own nominal
+/// [`BoardRules::via_drill`].
 pub fn hole_size_min(rules: &BoardRules) -> Um {
-    rules.via_drill
+    rules.via_drill_min_um
 }
 
 /// `bds.m_ViasMinAnnularWidth`.
@@ -275,5 +359,83 @@ mod tests {
         let (a, b) = (facts("Pad", "Default", "A"), facts("Pad", "Default", "B"));
         let compiled = CompiledClearanceRules::new(&r);
         assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "F.Cu", &a, &b, &compiled), 400, "both match unconditionally; the later rule in file order wins");
+    }
+
+    /// GAPS.md #10's actual regression test: a net class whose own nominal
+    /// width is set well *above* the board's real minimum must not raise
+    /// the enforced floor -- that nominal value is only ever the `Opt` a
+    /// router aims for, never a DRC `Min` (see `track_width_min`'s doc
+    /// comment). This is exactly the issue11814 shape: a `0.1016mm` board
+    /// minimum against a `0.1524mm` "Default" net class nominal width.
+    #[test]
+    fn track_width_min_ignores_the_netclass_nominal_width() {
+        let r = BoardRules { track_width: 1524, track_width_min_um: 1016, ..BoardRules::default() };
+        assert_eq!(track_width_min(&r), 1016, "the board's real floor, not the net class's much larger nominal width");
+    }
+
+    #[test]
+    fn via_and_hole_minimums_ignore_the_netclass_nominal_values() {
+        let r = BoardRules { via_diameter: 9999, via_diameter_min_um: 450, via_drill: 9999, via_drill_min_um: 200, ..BoardRules::default() };
+        assert_eq!(via_diameter_min(&r), 450);
+        assert_eq!(hole_size_min(&r), 200);
+    }
+
+    #[test]
+    fn board_minimum_clearance_floors_the_netclass_value() {
+        let r = BoardRules { clearance: 100, min_clearance_um: 150, ..BoardRules::default() };
+        assert_eq!(clearance(&r, Some("A"), Some("B")), 150, "board floor beats a smaller netclass/default value");
+        let r2 = BoardRules { clearance: 300, min_clearance_um: 150, ..BoardRules::default() };
+        assert_eq!(clearance(&r2, Some("A"), Some("B")), 300, "netclass value already clears the floor");
+    }
+
+    #[test]
+    fn default_min_clearance_is_a_no_op() {
+        // Factory default (`rules.min_clearance` = 0mm) must not change
+        // existing behavior for the overwhelming majority of boards.
+        let r = BoardRules::default();
+        assert_eq!(clearance(&r, None, None), 0);
+    }
+
+    #[test]
+    fn track_width_bounds_defaults_to_the_board_floor_with_no_max() {
+        let r = BoardRules { track_width_min_um: 150, ..BoardRules::default() };
+        let compiled = CompiledWidthRules::new(&r);
+        let a = facts("Track", "Default", "SIG");
+        assert_eq!(track_width_bounds(&r, "F.Cu", &a, &compiled), (150, None));
+    }
+
+    /// Real QA-corpus shape (`multinetclasses_drc.kicad_dru`): a custom
+    /// rule caps a specific net class's width with `(max ...)` and never
+    /// touches `(min ...)` at all -- the board floor must survive
+    /// untouched alongside the newly-applied cap.
+    #[test]
+    fn custom_track_width_rule_adds_a_max_without_disturbing_the_floor() {
+        let r = BoardRules {
+            track_width_min_um: 100,
+            custom_rules: vec![eda_model::CustomRule { name: "cap".into(), constraint_type: "track_width".into(), min: None, max: Some(254), opt: None, layer: None, severity: None, condition: Some("A.hasNetclass('CLASS2')".into()) }],
+            ..BoardRules::default()
+        };
+        let compiled = CompiledWidthRules::new(&r);
+        let class2 = facts("Track", "CLASS2", "N1");
+        assert_eq!(track_width_bounds(&r, "F.Cu", &class2, &compiled), (100, Some(254)), "min untouched, max newly applied");
+        let other = facts("Track", "Default", "N2");
+        assert_eq!(track_width_bounds(&r, "F.Cu", &other, &compiled), (100, None), "condition doesn't match -> no cap");
+    }
+
+    #[test]
+    fn last_matching_custom_track_width_rule_wins_per_field() {
+        let r = BoardRules {
+            track_width_min_um: 100,
+            custom_rules: vec![
+                eda_model::CustomRule { name: "a".into(), constraint_type: "track_width".into(), min: Some(120), max: None, opt: None, layer: None, severity: None, condition: None },
+                eda_model::CustomRule { name: "b".into(), constraint_type: "track_width".into(), min: None, max: Some(500), opt: None, layer: None, severity: None, condition: None },
+            ],
+            ..BoardRules::default()
+        };
+        let compiled = CompiledWidthRules::new(&r);
+        let a = facts("Track", "Default", "N1");
+        // Rule "a" raises min to 120; rule "b" (unconditional, later) only
+        // sets max, so it must not reset min back to the board floor.
+        assert_eq!(track_width_bounds(&r, "F.Cu", &a, &compiled), (120, Some(500)));
     }
 }

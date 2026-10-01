@@ -149,6 +149,45 @@ pub struct BoardRules {
     /// 0.1 mm default silk text width).
     #[serde(default = "d_min_silk_text_thickness")]
     pub min_silk_text_thickness_um: ir::Um,
+    /// `bds.m_TrackMinWidth`: the board-wide absolute track-width floor
+    /// (KiCad's `rules.min_track_width` in a `.kicad_pro`, or the legacy
+    /// `(setup (trace_min ...))` token in a bare `.kicad_pcb`), factory
+    /// default 0.2 mm. Independent of any net class: a net class's own
+    /// `track_width` (on [`NetClass`], falling back to this struct's own
+    /// [`track_width`](Self::track_width)) is only ever the *nominal*
+    /// width a new route is drawn at -- `nc->GetTrackWidth()` becomes a
+    /// constraint's advisory `Opt`, never its `Min`, in
+    /// `DRC_ENGINE::loadImplicitRules` (`pcbnew/drc/drc_engine.cpp`, read
+    /// directly from the source: every per-netclass `TRACK_WIDTH_CONSTRAINT`
+    /// rule sets `Min` to this same board-wide floor, never to the class's
+    /// own width). Conflating the two -- checking every track against its
+    /// net class's nominal width as if it were this floor -- was GAPS.md
+    /// #10, responsible for ~2900 false positives on a single QA board
+    /// (`issue11814`) alone; see `eda_drc::constraints::track_width_min`.
+    #[serde(default = "d_track_width_min")]
+    pub track_width_min_um: ir::Um,
+    /// `bds.m_MinClearance`: an absolute board-wide copper clearance floor
+    /// that applies on top of every net-class clearance value (KiCad's
+    /// `rules.min_clearance`; factory default 0, a no-op on most boards,
+    /// but real projects do raise it). Distinct from
+    /// [`clearance`](Self::clearance), which is the *netclass* default/
+    /// fallback value (itself a real `CLEARANCE_CONSTRAINT`, not merely
+    /// advisory, unlike track width) -- see `eda_drc::constraints::clearance`.
+    #[serde(default)]
+    pub min_clearance_um: ir::Um,
+    /// `bds.m_ViasMinSize`: the absolute via-diameter floor (KiCad's
+    /// `rules.min_via_diameter`), independent of any net class's own
+    /// nominal via size ([`via_diameter`](Self::via_diameter)/
+    /// `NetClass::via_diameter`) -- same nominal-vs-minimum distinction as
+    /// [`track_width_min_um`](Self::track_width_min_um).
+    #[serde(default = "d_via_diameter_min")]
+    pub via_diameter_min_um: ir::Um,
+    /// `bds.m_MinThroughDrill`: the absolute through-hole/via-drill floor
+    /// (KiCad's `rules.min_through_hole_diameter`), independent of any net
+    /// class's own nominal drill ([`via_drill`](Self::via_drill)/
+    /// `NetClass::via_drill`).
+    #[serde(default = "d_via_drill_min")]
+    pub via_drill_min_um: ir::Um,
     /// Per-DRC-type severity overrides, imported from a `.kicad_pro`'s
     /// `board.design_settings.rule_severities` (KiCad 7+ JSON project
     /// settings -- `BOARD_DESIGN_SETTINGS`'s `rule_severities` `PARAM_LAMBDA`,
@@ -511,6 +550,9 @@ fn d_silk_clearance() -> ir::Um { 0 }
 fn d_annular_width_min() -> ir::Um { 100 }
 fn d_min_silk_text_height() -> ir::Um { 800 }
 fn d_min_silk_text_thickness() -> ir::Um { 80 }
+fn d_track_width_min() -> ir::Um { 200 }
+fn d_via_diameter_min() -> ir::Um { 500 }
+fn d_via_drill_min() -> ir::Um { 300 }
 impl BoardRules {
     /// The class owning `net`, if any: first match wins.
     pub fn class_of(&self, net: &str) -> Option<&NetClass> {
@@ -588,6 +630,7 @@ impl Default for BoardRules {
             net_classes: Vec::new(), outline: None, refdes_font_um: None, pours: Vec::new(), tuning: RoutingTuning::default(),
             hole_to_hole_min_um: d_hole_to_hole_min(), hole_clearance_um: d_hole_clearance(), silk_clearance_um: d_silk_clearance(),
             annular_width_min_um: d_annular_width_min(), min_silk_text_height_um: d_min_silk_text_height(), min_silk_text_thickness_um: d_min_silk_text_thickness(),
+            track_width_min_um: d_track_width_min(), min_clearance_um: 0, via_diameter_min_um: d_via_diameter_min(), via_drill_min_um: d_via_drill_min(),
             rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(), outline_closed: None,
         }
     }
