@@ -103,6 +103,20 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     if let Some(nets) = design.nets.clone() {
         model.nets = nets;
     }
+    // GAPS.md #8: a *published* footprint-library entry overrides whatever
+    // the intent/real-library resolution would otherwise give that name --
+    // the same "design.json wins over the frozen intent" precedent `nets`
+    // above already sets. Un-published entries (the overwhelming common
+    // case while a footprint is still being edited) are deliberately left
+    // out of `model.footprints` entirely: `Cmd::UpdateFootprintOnBoard` is
+    // the one explicit switch that makes an edit visible to anything
+    // already on the board -- see `LibraryFootprint::published`'s own doc.
+    if let Some(lib) = &design.footprint_library {
+        for lib_fp in lib.footprints.iter().filter(|f| f.published) {
+            model.footprints.retain(|f| f.name != lib_fp.name);
+            model.footprints.push(lib_fp.to_engine_footprint());
+        }
+    }
     Ok((meta, design, model))
 }
 
@@ -301,6 +315,7 @@ fn domain_tag(d: Domain) -> &'static str {
     match d {
         Domain::Pcb => "pcb",
         Domain::Schematic => "schematic",
+        Domain::FootprintEditor => "footprint_editor",
     }
 }
 
@@ -331,7 +346,11 @@ fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<(Domain, eda_
     let matches = |p: &Path| -> Option<Domain> {
         let name = p.file_stem()?.to_str()?; // "<timestamp>.<tag>"
         let tag = name.rsplit('.').next()?;
-        let domain = if tag == "schematic" { Domain::Schematic } else { Domain::Pcb };
+        let domain = match tag {
+            "schematic" => Domain::Schematic,
+            "footprint_editor" => Domain::FootprintEditor,
+            _ => Domain::Pcb,
+        };
         (scope.is_none() || scope == Some(domain)).then_some(domain)
     };
     let (idx, domain) = entries.iter().enumerate().rev().find_map(|(i, p)| matches(p).map(|d| (i, d)))?;
@@ -358,7 +377,13 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
     match scope {
         None => snapshot,
         Some(Domain::Schematic) => eda_model::ir::Design { schematic: snapshot.schematic, nets: snapshot.nets, ..current },
-        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, nets: current.nets, ..snapshot },
+        // GAPS.md #8: the Footprint Editor's own scope touches only
+        // `footprint_library`, same reasoning `Schematic`'s own arm
+        // documents -- an undo on that tab must never revert a PCB edit
+        // (or vice versa), which is also why `Pcb`'s arm below now
+        // excludes `footprint_library` from what it restores too.
+        Some(Domain::FootprintEditor) => eda_model::ir::Design { footprint_library: snapshot.footprint_library, ..current },
+        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, nets: current.nets, footprint_library: current.footprint_library, ..snapshot },
     }
 }
 
@@ -610,6 +635,30 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids } => {
             format!("route: +{} track(s) +{} via(s), -{} track(s) -{} via(s)", tracks.len(), vias.len(), remove_track_ids.len(), remove_via_ids.len())
         }
+
+        // GAPS.md #8. No real `eda board` CLI subcommand parses these
+        // either (same reasoning the schematic verbs' own comment above
+        // gives) -- activity.jsonl's human-readable line only.
+        Cmd::OpenFootprintForEdit { name } => format!("footprint open {name:?}"),
+        Cmd::DeleteLibraryFootprint { name } => format!("footprint delete {name:?}"),
+        Cmd::EditFootprintProperties { name, description, .. } => format!("footprint properties {name:?} --description {description:?}"),
+        Cmd::SetFootprintAnchor { name, at } => format!("footprint anchor {name:?} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::UpdateFootprintOnBoard { name } => format!("footprint update-on-board {name:?}"),
+        Cmd::AddPad { footprint, pad } => format!("pad add {footprint:?} --number {:?} --at {},{}", pad.number, mm(pad.at.x), mm(pad.at.y)),
+        Cmd::MovePad { footprint, id, x, y } => format!("pad move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::RotatePad { footprint, id, quarter_turns } => format!("pad rotate {footprint:?} {id} --quarters {quarter_turns}"),
+        Cmd::DeletePad { footprint, id } => format!("pad delete {footprint:?} {id}"),
+        Cmd::EditPad { footprint, id, pad } => format!("pad edit {footprint:?} {id} --number {:?}", pad.number),
+        Cmd::PushPadProperties { footprint, source_pad_id, .. } => format!("pad push-properties {footprint:?} {source_pad_id}"),
+        Cmd::RenumberPads { footprint, start, prefix, step } => format!("pad renumber {footprint:?} --start {start} --prefix {prefix:?} --step {step}"),
+        Cmd::AddFootprintGraphic { footprint, shape } => format!("footprint-shape add {footprint:?} --kind {} --layer {}", shape_kind(shape), shape.layer()),
+        Cmd::DeleteFootprintGraphic { footprint, id } => format!("footprint-shape delete {footprint:?} {id}"),
+        Cmd::MoveFootprintGraphic { footprint, id, dx, dy } => format!("footprint-shape move {footprint:?} {id} --dx {} --dy {}", mm(*dx), mm(*dy)),
+        Cmd::EditFootprintGraphic { footprint, id, layer, stroke_width, filled } => format!("footprint-shape edit {footprint:?} {id} --layer {layer} --width {} --filled {filled}", mm(*stroke_width)),
+        Cmd::AddFootprintText { footprint, text } => format!("footprint-text add {footprint:?} --content {:?} --at {},{}", text.content, mm(text.at.x), mm(text.at.y)),
+        Cmd::EditFootprintText { footprint, id, content, layer, .. } => format!("footprint-text edit {footprint:?} {id} --content {content:?} --layer {layer}"),
+        Cmd::DeleteFootprintText { footprint, id } => format!("footprint-text delete {footprint:?} {id}"),
+        Cmd::MoveFootprintText { footprint, id, x, y } => format!("footprint-text move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
     }
 }
 
@@ -682,6 +731,11 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
         Cmd::RenameSymbol { .. } => "schematic-rename",
         Cmd::Annotate { .. } => "schematic-annotate",
+
+        Cmd::OpenFootprintForEdit { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
+        Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::RenumberPads { .. } => "pad",
+        Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
+        Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
     }
 }
 
@@ -1080,6 +1134,7 @@ mod tests {
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
         let design = Design {
+            footprint_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
@@ -1230,6 +1285,7 @@ mod tests {
 
         let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
         let design = Design {
+            footprint_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(eda_model::ir::SchematicSection {
@@ -1666,5 +1722,92 @@ mod tests {
         let (_, design, _) = load(&dir).unwrap();
         assert_eq!(sch_at(&design), Point { x: 25_000, y: 10_000 });
         assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 });
+    }
+
+    // ---------------------------------------------------- footprint editor
+
+    /// GAPS.md #8's `Domain::FootprintEditor` gets the exact same
+    /// per-tab-undo treatment `undo_redo_are_scoped_to_the_tab_that_asked`
+    /// already proves for Pcb/Schematic: a footprint-library edit and a
+    /// PCB edit land in the same session, and each tab's undo must touch
+    /// only its own.
+    #[test]
+    fn footprint_editor_undo_is_scoped_independently_of_pcb_and_schematic() {
+        let dir = scratch("footprint_editor_domain_scoped_undo");
+        setup(&dir);
+
+        step(&dir, Cmd::OpenFootprintForEdit { name: "Test:FP".into() }, false, "test").unwrap();
+        step(&dir, Cmd::MoveTo { part: "U1".into(), x: 6_000, y: 5_000 }, false, "test").unwrap();
+
+        let pcb_at = |d: &eda_model::ir::Design| d.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().at;
+        let lib_has_fp = |d: &eda_model::ir::Design| d.footprint_library.as_ref().is_some_and(|l| l.by_name("Test:FP").is_some());
+
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(pcb_at(&design), Point { x: 6_000, y: 5_000 });
+        assert!(lib_has_fp(&design));
+
+        // A Pcb-scoped undo must never touch the footprint library.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(pcb_at(&design), Point { x: 5_000, y: 5_000 }, "the PCB move must revert");
+        assert!(lib_has_fp(&design), "a Pcb-tab undo must never touch the Footprint Editor tab's edit");
+
+        step(&dir, Cmd::MoveTo { part: "U1".into(), x: 6_000, y: 5_000 }, false, "test").unwrap();
+
+        // A FootprintEditor-scoped undo must never touch the PCB tab.
+        undo(&dir, "test", Some(Domain::FootprintEditor)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!lib_has_fp(&design), "the OpenFootprintForEdit must revert");
+        assert_eq!(pcb_at(&design), Point { x: 6_000, y: 5_000 }, "a FootprintEditor-tab undo must never touch the PCB tab's edit");
+
+        // Nothing left to undo on this tab: a clean error, not a silent
+        // fallback onto the PCB tab's stack -- the exact GAPS.md #15 bug
+        // this scoping exists to prevent, now also for the third tab.
+        let err = undo(&dir, "test", Some(Domain::FootprintEditor)).unwrap_err();
+        assert_eq!(err[0].check, "board_no_undo");
+    }
+
+    /// `board::load`'s overlay (GAPS.md #8): a *published* library
+    /// footprint reaches `ConstraintModel::footprints` (so a part naming
+    /// it resolves to the edited pads); an unpublished one -- the ordinary
+    /// state while still mid-edit -- must not, keeping "Update Footprint
+    /// from Library" an explicit, observable step rather than automatic.
+    #[test]
+    fn loading_overlays_only_published_footprints_onto_the_model() {
+        let dir = scratch("footprint_overlay");
+        setup(&dir);
+        step(&dir, Cmd::OpenFootprintForEdit { name: "2PAD".into() }, false, "test").unwrap();
+        let pad = eda_model::ir::LibraryPad {
+            id: String::new(),
+            number: "3".into(),
+            at: Point { x: 0, y: 2000 },
+            offset: Point { x: 0, y: 0 },
+            size: (800, 800),
+            shape: eda_model::ir::LibraryPadShape::Rect,
+            kind: PadKind::Smd,
+            drill: None,
+            drill_slot: None,
+            rot: 0,
+            roundrect_ratio: None,
+            trapezoid_delta: None,
+            chamfer_ratio: None,
+            chamfer_corners: eda_model::ir::ChamferCorners::default(),
+            layers: vec!["F.Cu".into()],
+            clearance_override: None,
+            thermal_gap_override: None,
+            thermal_spoke_width_override: None,
+        };
+        step(&dir, Cmd::AddPad { footprint: "2PAD".into(), pad }, false, "test").unwrap();
+
+        // Still unpublished: the board-wide model keeps resolving "2PAD" to
+        // its original two-pad definition, exactly as before this editor
+        // touched it -- a part's pads on the PCB tab must not shift while
+        // someone is mid-edit in the Footprint Editor tab.
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!(model.footprints.iter().find(|f| f.name == "2PAD").unwrap().pads.len(), 2, "unpublished edits must not reach the board's own model");
+
+        step(&dir, Cmd::UpdateFootprintOnBoard { name: "2PAD".into() }, false, "test").unwrap();
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!(model.footprints.iter().find(|f| f.name == "2PAD").unwrap().pads.len(), 3, "an explicit Update Footprint on Board must republish the edited definition");
     }
 }

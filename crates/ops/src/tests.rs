@@ -34,6 +34,7 @@ fn model(parts: Vec<Part>, nets: &[(&str, &[&str])], rules: Vec<PlacementRule>) 
 /// An empty 100x100mm board.
 fn empty_design() -> Design {
     Design {
+        footprint_library: None,
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
@@ -964,4 +965,325 @@ fn move_exact_rejects_an_empty_part_list() {
     let mut b = board(&m);
     let e = b.apply(&Cmd::MoveExact { parts: vec![], dx: 0, dy: 0, rotate_millideg: 0, pivot: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_move_exact");
+}
+
+// -------------------------------------------------- footprint editor (GAPS.md #8)
+
+fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
+    LibraryPad {
+        id: String::new(),
+        number: number.into(),
+        at: Point { x, y },
+        offset: Point { x: 0, y: 0 },
+        size: (1000, 1000),
+        shape: eda_model::ir::LibraryPadShape::RoundRect,
+        kind: eda_model::PadKind::Smd,
+        drill: None,
+        drill_slot: None,
+        rot: 0,
+        roundrect_ratio: Some(0.25),
+        trapezoid_delta: None,
+        chamfer_ratio: None,
+        chamfer_corners: eda_model::ir::ChamferCorners::default(),
+        layers: vec!["F.Cu".into(), "F.Paste".into(), "F.Mask".into()],
+        clearance_override: None,
+        thermal_gap_override: None,
+        thermal_spoke_width_override: None,
+    }
+}
+
+#[test]
+fn opening_a_new_name_starts_blank_and_is_idempotent() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:Blank".into() }).unwrap();
+    let lib = b.design().footprint_library.as_ref().unwrap();
+    let fp = lib.by_name("Test:Blank").unwrap();
+    assert!(fp.pads.is_empty());
+    assert!(!fp.published);
+
+    // Re-opening is a no-op even after an edit -- it must never reset progress.
+    b.apply(&Cmd::AddPad { footprint: "Test:Blank".into(), pad: fp_pad("1", 0, 0) }).unwrap();
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:Blank".into() }).unwrap();
+    assert_eq!(b.design().footprint_library.as_ref().unwrap().by_name("Test:Blank").unwrap().pads.len(), 1);
+}
+
+#[test]
+fn opening_a_builtin_name_materializes_its_real_pads() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "0603".into() }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("0603").unwrap();
+    assert_eq!(fp.pads.len(), 2, "0603 is a two-pad passive");
+    assert!(fp.pads.iter().all(|p| !p.id.is_empty()));
+}
+
+#[test]
+fn add_pad_assigns_an_id_and_ignores_a_caller_supplied_one() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    let mut pad = fp_pad("1", 0, 0);
+    pad.id = "ignored-on-input".into();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.pads.len(), 1);
+    assert_ne!(fp.pads[0].id, "ignored-on-input");
+    assert!(!fp.pads[0].id.is_empty());
+}
+
+#[test]
+fn add_pad_against_an_unopened_footprint_is_refused() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::AddPad { footprint: "Nobody:Opened".into(), pad: fp_pad("1", 0, 0) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_footprint");
+}
+
+#[test]
+fn add_pad_rejects_a_zero_sized_pad() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    let mut pad = fp_pad("1", 0, 0);
+    pad.size = (0, 1000);
+    let e = b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_pad");
+}
+
+#[test]
+fn add_pad_reuses_footprint_validate_for_a_through_hole_with_no_drill() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    let mut pad = fp_pad("1", 0, 0);
+    pad.kind = eda_model::PadKind::ThroughHole;
+    pad.drill = None;
+    let e = b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad }).unwrap_err();
+    assert_eq!(e[0].check, "footprint", "reused straight from Footprint::validate, not a second copy of the rule");
+}
+
+#[test]
+fn move_rotate_and_delete_pad_round_trip_by_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", 0, 0) }).unwrap();
+    let id = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads[0].id.clone();
+
+    b.apply(&Cmd::MovePad { footprint: "Test:FP".into(), id: id.clone(), x: 500, y: -500 }).unwrap();
+    b.apply(&Cmd::RotatePad { footprint: "Test:FP".into(), id: id.clone(), quarter_turns: 1 }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.pads[0].at, Point { x: 500, y: -500 });
+    assert_eq!(fp.pads[0].rot, 90_000);
+
+    b.apply(&Cmd::DeletePad { footprint: "Test:FP".into(), id }).unwrap();
+    assert!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads.is_empty());
+}
+
+#[test]
+fn rotate_pad_wraps_at_a_full_turn() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", 0, 0) }).unwrap();
+    let id = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads[0].id.clone();
+    for _ in 0..4 {
+        b.apply(&Cmd::RotatePad { footprint: "Test:FP".into(), id: id.clone(), quarter_turns: 1 }).unwrap();
+    }
+    assert_eq!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads[0].rot, 0, "four quarter turns is a full turn, back to 0");
+}
+
+#[test]
+fn edit_pad_replaces_every_field_but_keeps_the_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", 0, 0) }).unwrap();
+    let id = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads[0].id.clone();
+
+    let mut edited = fp_pad("1A", 1000, 2000);
+    edited.size = (2000, 3000);
+    b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: id.clone(), pad: edited }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.pads[0].id, id, "the id names which pad to replace -- it never changes underneath the caller");
+    assert_eq!(fp.pads[0].number, "1A");
+    assert_eq!(fp.pads[0].size, (2000, 3000));
+}
+
+#[test]
+fn next_pad_number_matches_what_add_pad_actually_produces() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    for n in 1..=3 {
+        let next = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().next_pad_number();
+        assert_eq!(next, n.to_string());
+        b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad(&next, n as Um * 1000, 0) }).unwrap();
+    }
+}
+
+#[test]
+fn push_pad_properties_only_touches_filtered_matches() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    // Pad 1 (source): round, SMD. Pad 2: round, SMD (matches). Pad 3: rotated 90 (orientation mismatch).
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", 0, 0) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("2", 1000, 0) }).unwrap();
+    let mut pad3 = fp_pad("3", 2000, 0);
+    pad3.rot = 90_000;
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: pad3 }).unwrap();
+
+    let ids: Vec<String> = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().pads.iter().map(|p| p.id.clone()).collect();
+    // Change pad 1's size, then push with the orientation filter on.
+    b.apply(&Cmd::EditPad { footprint: "Test:FP".into(), id: ids[0].clone(), pad: { let mut p = fp_pad("1", 0, 0); p.size = (3000, 3000); p } }).unwrap();
+    b.apply(&Cmd::PushPadProperties {
+        footprint: "Test:FP".into(),
+        source_pad_id: ids[0].clone(),
+        filter_shape: false,
+        filter_orientation: true,
+        filter_layers: false,
+        filter_type: false,
+    })
+    .unwrap();
+
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    let by_id = |id: &str| fp.pads.iter().find(|p| p.id == id).unwrap();
+    assert_eq!(by_id(&ids[1]).size, (3000, 3000), "pad 2 shares the source's orientation (0) -- it must receive the push");
+    assert_eq!(by_id(&ids[2]).size, (1000, 1000), "pad 3 is rotated 90 degrees -- the orientation filter must exclude it");
+    assert_eq!(by_id(&ids[2]).number, "3", "push never touches number/position");
+}
+
+#[test]
+fn renumber_pads_orders_by_position_not_by_current_number() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    // Placed right-to-left but numbered in placement order (1, 2, 3) --
+    // a reading-order renumber must reverse them to (10, 11, 12).
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", 4000, 0) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("2", 2000, 0) }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("3", 0, 0) }).unwrap();
+
+    b.apply(&Cmd::RenumberPads { footprint: "Test:FP".into(), start: 10, prefix: String::new(), step: 1 }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    let at_x = |x: Um| fp.pads.iter().find(|p| p.at.x == x).unwrap().number.clone();
+    assert_eq!(at_x(0), "10");
+    assert_eq!(at_x(2000), "11");
+    assert_eq!(at_x(4000), "12");
+}
+
+#[test]
+fn set_footprint_anchor_translates_every_pad_graphic_and_text_so_the_click_point_becomes_zero() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", 1000, 1000) }).unwrap();
+    b.apply(&Cmd::AddFootprintGraphic {
+        footprint: "Test:FP".into(),
+        shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 1000, y: 1000 }, end: Point { x: 2000, y: 1000 } },
+    })
+    .unwrap();
+    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "REF**".into(), at: Point { x: 1000, y: 500 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } })
+        .unwrap();
+
+    b.apply(&Cmd::SetFootprintAnchor { name: "Test:FP".into(), at: Point { x: 1000, y: 1000 } }).unwrap();
+
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.pads[0].at, Point { x: 0, y: 0 }, "the clicked point is now the origin");
+    assert_eq!(fp.graphics[0].points()[0], Point { x: 0, y: 0 });
+    assert_eq!(fp.texts[0].at, Point { x: 0, y: -500 });
+}
+
+#[test]
+fn update_footprint_on_board_only_flips_the_explicit_flag() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    assert!(!b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().published);
+    b.apply(&Cmd::AddPad { footprint: "Test:FP".into(), pad: fp_pad("1", 0, 0) }).unwrap();
+    assert!(!b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().published, "editing pads must never auto-publish");
+
+    b.apply(&Cmd::UpdateFootprintOnBoard { name: "Test:FP".into() }).unwrap();
+    assert!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().published);
+}
+
+#[test]
+fn edit_footprint_properties_replaces_the_whole_panel() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::EditFootprintProperties {
+        name: "Test:FP".into(),
+        description: "A test footprint".into(),
+        keywords: "test smd".into(),
+        attributes: FootprintAttributes { smd: true, ..Default::default() },
+        reference_visible: false,
+        value_visible: true,
+        model: Some("${KICAD10_3DMODEL_DIR}/x.step".into()),
+    })
+    .unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.description, "A test footprint");
+    assert!(fp.attributes.smd);
+    assert!(!fp.reference_visible);
+    assert_eq!(fp.model.as_deref(), Some("${KICAD10_3DMODEL_DIR}/x.step"));
+}
+
+#[test]
+fn delete_library_footprint_removes_it_and_refuses_an_unknown_name() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::DeleteLibraryFootprint { name: "Test:FP".into() }).unwrap();
+    assert!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").is_none());
+    let e = b.apply(&Cmd::DeleteLibraryFootprint { name: "Test:FP".into() }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_footprint");
+}
+
+#[test]
+fn footprint_graphic_and_text_add_move_edit_delete_round_trip() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    b.apply(&Cmd::AddFootprintGraphic {
+        footprint: "Test:FP".into(),
+        shape: Shape::Rect { id: "ignored".into(), layer: "F.Fab".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 1000 } },
+    })
+    .unwrap();
+    let gid = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().graphics[0].id().to_string();
+    assert_ne!(gid, "ignored");
+    b.apply(&Cmd::MoveFootprintGraphic { footprint: "Test:FP".into(), id: gid.clone(), dx: 10, dy: 20 }).unwrap();
+    b.apply(&Cmd::EditFootprintGraphic { footprint: "Test:FP".into(), id: gid.clone(), layer: "F.SilkS".into(), stroke_width: 200, filled: true }).unwrap();
+    {
+        let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+        assert_eq!(fp.graphics[0].layer(), "F.SilkS");
+        assert_eq!(fp.graphics[0].points()[0], Point { x: 10, y: 20 });
+    }
+    b.apply(&Cmd::DeleteFootprintGraphic { footprint: "Test:FP".into(), id: gid }).unwrap();
+    assert!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().graphics.is_empty());
+
+    b.apply(&Cmd::AddFootprintText { footprint: "Test:FP".into(), text: Text { id: String::new(), content: "VAL**".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    let tid = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().texts[0].id.clone();
+    b.apply(&Cmd::MoveFootprintText { footprint: "Test:FP".into(), id: tid.clone(), x: 500, y: 500 }).unwrap();
+    b.apply(&Cmd::EditFootprintText { footprint: "Test:FP".into(), id: tid.clone(), content: "V2".into(), angle: 900, layer: "F.SilkS".into(), size_um: 800, stroke_width: 120, justify: TextJustify::Left, mirror: true }).unwrap();
+    {
+        let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+        assert_eq!(fp.texts[0].at, Point { x: 500, y: 500 });
+        assert_eq!(fp.texts[0].content, "V2");
+        assert!(fp.texts[0].mirror);
+    }
+    b.apply(&Cmd::DeleteFootprintText { footprint: "Test:FP".into(), id: tid }).unwrap();
+    assert!(b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().texts.is_empty());
+}
+
+#[test]
+fn footprint_editor_commands_are_their_own_undo_domain() {
+    assert_eq!(Cmd::AddPad { footprint: "x".into(), pad: fp_pad("1", 0, 0) }.domain(), Domain::FootprintEditor);
+    assert_eq!(Cmd::OpenFootprintForEdit { name: "x".into() }.domain(), Domain::FootprintEditor);
+    assert_eq!(Cmd::UpdateFootprintOnBoard { name: "x".into() }.domain(), Domain::FootprintEditor);
+    // Sanity: the other two domains are unaffected by this addition.
+    assert_eq!(Cmd::MoveTo { part: "U1".into(), x: 0, y: 0 }.domain(), Domain::Pcb);
+    assert_eq!(Cmd::AddWire { pts: vec![] }.domain(), Domain::Schematic);
 }

@@ -73,6 +73,7 @@ mod tests {
         let model = ConstraintModel { parts: vec![part_a.clone()], ..Default::default() };
         let fp = FootprintInstance { id: "U1".into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above };
         let design = Design {
+            footprint_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,

@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { StudioProvider, useStudioDispatch, useStudioState } from "./state/store";
+import { FootprintEditorProvider } from "./state/footprintEditorStore";
+import { useFootprintEditHotkey } from "./actions/useFootprintEditHotkey";
+import { FootprintEditorView } from "./components/footprint/FootprintEditorView";
 import { EditorTabs } from "./components/EditorTabs";
 import { MenuBar } from "./components/MenuBar";
 import { Toolbar } from "./components/Toolbar";
@@ -70,6 +73,7 @@ function Toast() {
 function StudioFrame() {
   const state = useStudioState();
   useGlobalHotkeys();
+  useFootprintEditHotkey();
   const [viewer3d, setViewer3d] = useState<Viewer3DApi | null>(null);
   // The 3D tab has no real "own chrome" to extract (3d-viewer/'s source
   // wasn't available this session) and no properties/appearance concept
@@ -78,6 +82,14 @@ function StudioFrame() {
   // nothing real to say for this tab. Its view-preset toolbar takes the
   // normal <Toolbar id="main"/> row's place instead.
   const is3d = state.tab === "3d";
+  // The Footprint Editor tab (GAPS.md #8) is a genuinely separate little
+  // editor with its own complete toolbar+canvas (FootprintEditorView),
+  // same reasoning the 3D tab already gets dropped out of this frame's
+  // own PCB-shaped chrome for -- its own state/footprintEditorStore.tsx
+  // even carries a `null` board document, so PropertiesPanel/options-
+  // drawing toolbars/RightDock would have nothing real to show here.
+  const isFootprint = state.tab === "footprint";
+  const hideBoardChrome = is3d || isFootprint;
   // eeschema's default AUI layout has no layer/appearance manager at all
   // (that's a pcbnew-only concept -- a schematic has no copper/technical
   // layers to toggle) and no selection-filter-by-item-type panel either
@@ -96,24 +108,26 @@ function StudioFrame() {
       <div className="tabs-row">
         <EditorTabs />
       </div>
-      <div className="main-toolbar-row">
-        {is3d ? <Viewer3DToolbar api={viewer3d} /> : <Toolbar id="main" />}
-        <QuickActions />
-      </div>
-      {!is3d && (
+      {!isFootprint && (
+        <div className="main-toolbar-row">
+          {is3d ? <Viewer3DToolbar api={viewer3d} /> : <Toolbar id="main" />}
+          <QuickActions />
+        </div>
+      )}
+      {!hideBoardChrome && (
         <div className="aux-toolbar-row">
           <Toolbar id="auxiliary" />
         </div>
       )}
       <div className="app-body">
-        {!is3d && (
+        {!hideBoardChrome && (
           <div className="properties-col">
             <div className="dock">
               <PropertiesPanel />
             </div>
           </div>
         )}
-        {!is3d && (
+        {!hideBoardChrome && (
           <div className="options-toolbar-col">
             <Toolbar id="options" />
           </div>
@@ -121,10 +135,11 @@ function StudioFrame() {
         <div className="canvas-col">
           {state.tab === "pcb" && <Canvas />}
           {state.tab === "schematic" && <SchematicView />}
+          {isFootprint && <FootprintEditorView />}
           {is3d && <Viewer3D onReady={setViewer3d} />}
           <Toast />
         </div>
-        {!is3d && (
+        {!hideBoardChrome && (
           <div className="drawing-toolbar-col">
             <Toolbar id="drawing" />
           </div>
@@ -167,7 +182,9 @@ function StudioFrame() {
 export default function App() {
   return (
     <StudioProvider>
-      <StudioFrame />
+      <FootprintEditorProvider>
+        <StudioFrame />
+      </FootprintEditorProvider>
     </StudioProvider>
   );
 }

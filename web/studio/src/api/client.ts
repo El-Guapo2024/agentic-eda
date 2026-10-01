@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DragPreview, DrcReport, ErcReport, FillReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, Um } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, Um } from "./types";
 
 export class ApiError extends Error {}
 
@@ -153,17 +153,19 @@ export async function postRoute(): Promise<RouteReply> {
  * `ok: false` just means the stack is empty ("nothing to undo/redo"),
  * not a failure worth alarming over.
  *
- * `domain` scopes which tab's last edit this reverts/replays ("pcb" or
- * "schematic") -- store.tsx's `api.undo`/`redo` always pass the current
- * tab, so Ctrl+Z on the Schematic tab can no longer silently undo a PCB
- * edit (GAPS.md #15; see `board::undo`'s own doc for the full mechanism).
+ * `domain` scopes which tab's last edit this reverts/replays -- store.tsx's
+ * `api.undo`/`redo` always pass the current tab, so Ctrl+Z on the
+ * Schematic tab can no longer silently undo a PCB edit (GAPS.md #15), and
+ * the Footprint Editor tab (GAPS.md #8) gets the same independent scope
+ * ("footprint_editor") -- see `board::undo`'s own doc for the full
+ * mechanism.
  */
-export async function postUndo(domain: "pcb" | "schematic"): Promise<CmdReply> {
+export async function postUndo(domain: "pcb" | "schematic" | "footprint_editor"): Promise<CmdReply> {
   const r = await fetch("/api/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
   return (await r.json()) as CmdReply;
 }
 
-export async function postRedo(domain: "pcb" | "schematic"): Promise<CmdReply> {
+export async function postRedo(domain: "pcb" | "schematic" | "footprint_editor"): Promise<CmdReply> {
   const r = await fetch("/api/redo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
   return (await r.json()) as CmdReply;
 }
@@ -206,6 +208,48 @@ export function postFabPos(opts: FabPosOptions): Promise<FabReply> {
 
 export function postFabBom(): Promise<FabReply> {
   return postJson<FabReply>("/api/fab/bom", {});
+}
+
+// ---------------------------------------------------------- footprint editor
+//
+// GAPS.md #8. `fetchFootprint` polls the one footprint currently open the
+// same way `fetchState`/`fetchSchematic` poll their own tab's document;
+// `fetchFootprintLibraryNames` is the "Open from Library" picker's list.
+
+export async function fetchFootprint(name: string): Promise<LibraryFootprint> {
+  const f = await getJson<LibraryFootprint & { error?: string }>(`/api/footprint?name=${encodeURIComponent(name)}`);
+  if (f.error) throw new ApiError(f.error);
+  return f;
+}
+
+export async function fetchFootprintLibraryNames(): Promise<FootprintLibraryNames> {
+  const r = await getJson<FootprintLibraryNames & { error?: string }>("/api/footprint_library");
+  if (r.error) throw new ApiError(r.error);
+  return r;
+}
+
+/**
+ * `GET /api/footprint/export?name=...`'s derived `.kicad_mod` text
+ * (`eda_kicad::export_kicad_mod`, GAPS.md #8 step 6) saved as a browser
+ * download -- a `Blob` + synthetic anchor click, since the backend route
+ * itself returns plain `text/plain` with no `Content-Disposition` (same
+ * convention as every other GET route in this file; see studio.rs's own
+ * doc on that route).
+ */
+export async function downloadFootprintKicadMod(name: string): Promise<void> {
+  const r = await fetch(`/api/footprint/export?name=${encodeURIComponent(name)}`, { cache: "no-store" });
+  if (!r.ok) throw new ApiError(await r.text());
+  const text = await r.text();
+  const blob = new Blob([text], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const fileName = name.includes(":") ? name.split(":").slice(1).join(":") : name;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${fileName}.kicad_mod`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 // ------------------------------------------------------- interactive router

@@ -39,9 +39,9 @@
 //! the model has never heard of. A command that silently did nothing
 //! would be indistinguishable from one that worked.
 
-use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
+use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, DrawingsSection, ErcExclusion, FillMode, FootprintInstance, IslandRemovalMode, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -512,6 +512,116 @@ pub enum Cmd {
         #[serde(default)]
         ids: Option<Vec<String>>,
     },
+
+    // -------------------------------------------------- footprint editor
+    //
+    // GAPS.md #8. A `Domain::FootprintEditor` command set (see `Cmd::
+    // domain`): every verb here targets `design.footprint_library`, never
+    // `design.placement`/`routing` directly -- editing a footprint
+    // definition never touches anything already on the board on its own.
+    // `UpdateFootprintOnBoard` is the one explicit exception, and even
+    // that only flips a flag `crate::board::load`'s overlay reads (see
+    // `LibraryFootprint::published`'s own doc in eda-model) rather than
+    // reaching into `design.placement` itself.
+    /// Open a footprint for editing, creating `design.footprint_library`'s
+    /// entry for `name` the first time -- from an already-resolved engine
+    /// footprint (a loaded `.kicad_mod` library file, an intent-declared
+    /// one, or the builtin table) when `name` resolves to one, else a
+    /// brand-new empty footprint (KiCad's "New Footprint" and "Edit
+    /// Footprint" are the same verb here: naming something nothing has
+    /// defined yet just starts blank). A no-op, not an error, if this
+    /// footprint is already in the library -- re-opening never resets
+    /// in-progress edits.
+    OpenFootprintForEdit { name: String },
+    /// Remove a footprint definition from the project library entirely.
+    /// Never touches a board instance naming it (same "explicit, not
+    /// automatic" rule `UpdateFootprintOnBoard` documents) -- an instance
+    /// left pointing at a now-undefined name simply falls back to the
+    /// builtin table/intent resolution, exactly as if this editor had
+    /// never touched it.
+    DeleteLibraryFootprint { name: String },
+    /// `dialog_footprint_properties_fp_editor.cpp`'s General tab -- the
+    /// whole panel commits together, same shape as `EditZone`.
+    EditFootprintProperties {
+        name: String,
+        description: String,
+        keywords: String,
+        attributes: FootprintAttributes,
+        reference_visible: bool,
+        value_visible: bool,
+        /// `(model "...")` 3D model path; `None` clears it.
+        model: Option<String>,
+    },
+    /// `PCB_ACTIONS::setAnchor` ("Place Footprint Anchor"): `at` (in the
+    /// footprint's current local frame) becomes the new origin -- every
+    /// pad/graphic/text is translated by `-at` so it does, matching
+    /// `FOOTPRINT::MoveAnchorPosition`'s own "rewrite every child's local
+    /// coordinate" behavior. This editor has no board position for the
+    /// anchor to stay fixed relative to the way source's board-pulled
+    /// footprint does (see PARITY-fpedit.md).
+    SetFootprintAnchor { name: String, at: Point },
+    /// KiCad's "Update Footprint from Library", kept an explicit action
+    /// (see this section's own doc) -- every board instance naming `name`
+    /// starts resolving its pads/courtyard from this library entry from
+    /// here on (`crate::board::load`'s overlay, gated on `published`).
+    UpdateFootprintOnBoard { name: String },
+
+    /// Place a pad (`pad_tool.cpp`'s `PlacePad`). `pad.id`, if the caller
+    /// sent one, is ignored -- ids are assigned here, same as `AddShape`.
+    AddPad { footprint: String, pad: LibraryPad },
+    /// Move a pad to an absolute position in the footprint's local frame
+    /// -- a pad has one center point, like a via or text (see `MoveVia`/
+    /// `MoveText`), not `MoveShape`'s delta form.
+    MovePad { footprint: String, id: String, x: Um, y: Um },
+    /// Quarter turns about the pad's own center, same convention as
+    /// `Cmd::Rotate`. KiCad's own pad rotation step is the generic
+    /// `EDIT_TOOL`'s configurable `PCBNEW_SETTINGS::m_RotationAngle`
+    /// (defaults to 90 degrees); this app's R/Shift+R convention
+    /// everywhere else is a fixed quarter turn, kept here too rather than
+    /// adding a second rotation-step setting just for pads.
+    RotatePad { footprint: String, id: String, quarter_turns: u8 },
+    DeletePad { footprint: String, id: String },
+    /// Pad Properties dialog's OK: replace every field of one pad at once
+    /// (same "whole panel commits together" shape as `EditZone`). `id` on
+    /// `pad`, if the caller sent one, is ignored -- the pad keeps the id
+    /// this Cmd's own `id` field names.
+    EditPad { footprint: String, id: String, pad: LibraryPad },
+    /// `pad_tool.cpp`'s "Push Pad Properties": copy shape/size/drill/
+    /// layers/overrides (never number, position, or rotation) from
+    /// `source_pad_id` to every *other* pad in the same footprint, each
+    /// `filter_*` flag restricting the targets to pads whose current
+    /// value of that one property already matches the source (an unset
+    /// filter applies to every pad regardless of that property) --
+    /// source's own four independent filter checkboxes.
+    PushPadProperties {
+        footprint: String,
+        source_pad_id: String,
+        filter_shape: bool,
+        filter_orientation: bool,
+        filter_layers: bool,
+        filter_type: bool,
+    },
+    /// `pad_tool.cpp`'s "Renumber Pads" (`DIALOG_ENUM_PADS`), simplified:
+    /// source numbers pads in click/drag order; this orders them by
+    /// position (top-to-bottom, then left-to-right -- reading order,
+    /// matching `Annotate`'s own sort) since this editor has no
+    /// interactive click-sequence tool of its own (see PARITY-fpedit.md).
+    /// `prefix` + (`start` + `step` * index).
+    RenumberPads { footprint: String, start: u32, prefix: String, step: u32 },
+
+    /// Free-standing graphics on a footprint's own silkscreen/fab/
+    /// courtyard layers, in its local frame -- same `Shape` type and the
+    /// same id-assignment/validation rules as the PCB tab's `AddShape`.
+    AddFootprintGraphic { footprint: String, shape: Shape },
+    DeleteFootprintGraphic { footprint: String, id: String },
+    MoveFootprintGraphic { footprint: String, id: String, dx: Um, dy: Um },
+    EditFootprintGraphic { footprint: String, id: String, layer: String, stroke_width: Um, filled: bool },
+    /// Free-standing text on a footprint, same `Text` type as the PCB
+    /// tab's `AddText`.
+    AddFootprintText { footprint: String, text: Text },
+    EditFootprintText { footprint: String, id: String, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool },
+    DeleteFootprintText { footprint: String, id: String },
+    MoveFootprintText { footprint: String, id: String, x: Um, y: Um },
 }
 
 /// Which editor a `Cmd` belongs to -- `eeschema`'s `design.schematic`, or
@@ -527,6 +637,12 @@ pub enum Cmd {
 pub enum Domain {
     Pcb,
     Schematic,
+    /// GAPS.md #8's Footprint Editor tab: `design.footprint_library`'s own
+    /// undo/redo scope, independent of whatever the PCB/Schematic tabs are
+    /// doing (so Ctrl+Z there never undoes a board edit, or vice versa --
+    /// same reasoning `Schematic` already got its own scope for, GAPS.md
+    /// #15).
+    FootprintEditor,
 }
 
 impl Cmd {
@@ -555,6 +671,26 @@ impl Cmd {
             | Cmd::EditSymbolFields { .. }
             | Cmd::RenameSymbol { .. }
             | Cmd::Annotate { .. } => Domain::Schematic,
+            Cmd::OpenFootprintForEdit { .. }
+            | Cmd::DeleteLibraryFootprint { .. }
+            | Cmd::EditFootprintProperties { .. }
+            | Cmd::SetFootprintAnchor { .. }
+            | Cmd::UpdateFootprintOnBoard { .. }
+            | Cmd::AddPad { .. }
+            | Cmd::MovePad { .. }
+            | Cmd::RotatePad { .. }
+            | Cmd::DeletePad { .. }
+            | Cmd::EditPad { .. }
+            | Cmd::PushPadProperties { .. }
+            | Cmd::RenumberPads { .. }
+            | Cmd::AddFootprintGraphic { .. }
+            | Cmd::DeleteFootprintGraphic { .. }
+            | Cmd::MoveFootprintGraphic { .. }
+            | Cmd::EditFootprintGraphic { .. }
+            | Cmd::AddFootprintText { .. }
+            | Cmd::EditFootprintText { .. }
+            | Cmd::DeleteFootprintText { .. }
+            | Cmd::MoveFootprintText { .. } => Domain::FootprintEditor,
             _ => Domain::Pcb,
         }
     }
@@ -616,6 +752,25 @@ impl Cmd {
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
             Cmd::Annotate { .. } => vec!["annotate"],
+
+            Cmd::OpenFootprintForEdit { name } | Cmd::DeleteLibraryFootprint { name } | Cmd::EditFootprintProperties { name, .. } | Cmd::SetFootprintAnchor { name, .. } | Cmd::UpdateFootprintOnBoard { name } => {
+                vec![name.as_str()]
+            }
+            Cmd::AddPad { footprint, .. }
+            | Cmd::MovePad { footprint, .. }
+            | Cmd::RotatePad { footprint, .. }
+            | Cmd::DeletePad { footprint, .. }
+            | Cmd::EditPad { footprint, .. }
+            | Cmd::PushPadProperties { footprint, .. }
+            | Cmd::RenumberPads { footprint, .. }
+            | Cmd::AddFootprintGraphic { footprint, .. }
+            | Cmd::DeleteFootprintGraphic { footprint, .. }
+            | Cmd::MoveFootprintGraphic { footprint, .. }
+            | Cmd::EditFootprintGraphic { footprint, .. }
+            | Cmd::AddFootprintText { footprint, .. }
+            | Cmd::EditFootprintText { footprint, .. }
+            | Cmd::DeleteFootprintText { footprint, .. }
+            | Cmd::MoveFootprintText { footprint, .. } => vec![footprint.as_str()],
         }
     }
 
@@ -952,6 +1107,35 @@ impl<'a> Board<'a> {
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::Annotate { reset_existing, order, ids } => self.annotate(*reset_existing, *order, ids.as_deref()),
+
+            Cmd::OpenFootprintForEdit { name } => self.open_footprint_for_edit(name),
+            Cmd::DeleteLibraryFootprint { name } => self.delete_library_footprint(name),
+            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model } => {
+                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone())
+            }
+            Cmd::SetFootprintAnchor { name, at } => self.set_footprint_anchor(name, *at),
+            Cmd::UpdateFootprintOnBoard { name } => self.update_footprint_on_board(name),
+
+            Cmd::AddPad { footprint, pad } => self.add_pad(footprint, pad.clone()),
+            Cmd::MovePad { footprint, id, x, y } => self.move_pad(footprint, id, *x, *y),
+            Cmd::RotatePad { footprint, id, quarter_turns } => self.rotate_pad(footprint, id, *quarter_turns),
+            Cmd::DeletePad { footprint, id } => self.delete_pad(footprint, id),
+            Cmd::EditPad { footprint, id, pad } => self.edit_pad(footprint, id, pad.clone()),
+            Cmd::PushPadProperties { footprint, source_pad_id, filter_shape, filter_orientation, filter_layers, filter_type } => {
+                self.push_pad_properties(footprint, source_pad_id, *filter_shape, *filter_orientation, *filter_layers, *filter_type)
+            }
+            Cmd::RenumberPads { footprint, start, prefix, step } => self.renumber_pads(footprint, *start, prefix, *step),
+
+            Cmd::AddFootprintGraphic { footprint, shape } => self.add_footprint_graphic(footprint, shape.clone()),
+            Cmd::DeleteFootprintGraphic { footprint, id } => self.delete_footprint_graphic(footprint, id),
+            Cmd::MoveFootprintGraphic { footprint, id, dx, dy } => self.move_footprint_graphic(footprint, id, *dx, *dy),
+            Cmd::EditFootprintGraphic { footprint, id, layer, stroke_width, filled } => self.edit_footprint_graphic(footprint, id, layer, *stroke_width, *filled),
+            Cmd::AddFootprintText { footprint, text } => self.add_footprint_text(footprint, text.clone()),
+            Cmd::EditFootprintText { footprint, id, content, angle, layer, size_um, stroke_width, justify, mirror } => {
+                self.edit_footprint_text(footprint, id, content.clone(), *angle, layer.clone(), *size_um, *stroke_width, *justify, *mirror)
+            }
+            Cmd::DeleteFootprintText { footprint, id } => self.delete_footprint_text(footprint, id),
+            Cmd::MoveFootprintText { footprint, id, x, y } => self.move_footprint_text(footprint, id, *x, *y),
         }
     }
 
@@ -2202,6 +2386,349 @@ impl<'a> Board<'a> {
             *n += 1;
             sch.symbols[i].id = format!("{prefix}{n}");
         }
+        Ok(())
+    }
+
+    // -------------------------------------------------- footprint editor
+    //
+    // GAPS.md #8. See `Cmd`'s own "footprint editor" section for what each
+    // verb means; these are its `Board::apply` targets, following the same
+    // shape every PCB-domain verb above already does (validate first,
+    // mutate `self.design.footprint_library` second, never the reverse).
+
+    /// `design.footprint_library`, creating an empty one on first use --
+    /// same pattern as `routing_mut`/`drawings_mut`.
+    fn footprint_library_mut(&mut self) -> &mut FootprintLibrarySection {
+        self.design.footprint_library.get_or_insert_with(FootprintLibrarySection::default)
+    }
+
+    fn library_footprint_mut(&mut self, name: &str) -> Result<&mut LibraryFootprint, Vec<CheckResult>> {
+        self.design
+            .footprint_library
+            .as_mut()
+            .and_then(|l| l.by_name_mut(name))
+            .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])
+    }
+
+    /// The same two-tier lookup `ConstraintModel::footprint_of` does
+    /// (explicit list by exact/normalized name, then the builtin table),
+    /// keyed by a bare name instead of a `Part` -- this editor opens a
+    /// footprint by name directly, with no board instance necessarily
+    /// involved yet. Does not stamp a builtin's 3D model path the way
+    /// `footprint_of` does (that needs a part reference letter to pick
+    /// the R/C/D library, which a bare name has no equivalent of); the
+    /// Footprint Properties dialog's own 3D Models field covers it.
+    fn resolve_named_footprint(&self, name: &str) -> Option<Footprint> {
+        if let Some(fp) = self.model.footprints.iter().find(|f| f.name == name) {
+            return Some(fp.clone());
+        }
+        let norm = eda_model::footprint::normalize_name(name);
+        if let Some(fp) = self.model.footprints.iter().find(|f| eda_model::footprint::normalize_name(&f.name) == norm) {
+            return Some(fp.clone());
+        }
+        eda_model::footprint::builtin(name)
+    }
+
+    fn open_footprint_for_edit(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
+        if name.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_footprint", "footprint", "a footprint needs a name")]);
+        }
+        if self.design.footprint_library.as_ref().and_then(|l| l.by_name(name)).is_some() {
+            return Ok(()); // already open -- never resets in-progress edits
+        }
+        let mut lib_fp = match self.resolve_named_footprint(name) {
+            Some(fp) => LibraryFootprint::from_engine_footprint(&fp),
+            None => LibraryFootprint::new_empty(name),
+        };
+        lib_fp.assign_missing_ids();
+        self.footprint_library_mut().footprints.push(lib_fp);
+        Ok(())
+    }
+
+    fn delete_library_footprint(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
+        let lib = self
+            .design
+            .footprint_library
+            .as_mut()
+            .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "the project footprint library is empty")])?;
+        let before = lib.footprints.len();
+        lib.footprints.retain(|f| f.name != name);
+        if lib.footprints.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_footprint", name, "no footprint with this name in the library")]);
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn edit_footprint_properties(
+        &mut self,
+        name: &str,
+        description: String,
+        keywords: String,
+        attributes: FootprintAttributes,
+        reference_visible: bool,
+        value_visible: bool,
+        model: Option<String>,
+    ) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(name)?;
+        fp.description = description;
+        fp.keywords = keywords;
+        fp.attributes = attributes;
+        fp.reference_visible = reference_visible;
+        fp.value_visible = value_visible;
+        fp.model = model;
+        Ok(())
+    }
+
+    fn set_footprint_anchor(&mut self, name: &str, at: Point) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(name)?;
+        let (dx, dy) = (-at.x, -at.y);
+        for p in &mut fp.pads {
+            p.at = Point { x: p.at.x + dx, y: p.at.y + dy };
+        }
+        for g in &mut fp.graphics {
+            g.translate(dx, dy);
+        }
+        for t in &mut fp.texts {
+            t.at = Point { x: t.at.x + dx, y: t.at.y + dy };
+        }
+        Ok(())
+    }
+
+    fn update_footprint_on_board(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
+        self.library_footprint_mut(name)?.published = true;
+        Ok(())
+    }
+
+    /// `pad.size` must be positive and, for a through-hole/non-plated
+    /// kind, the drill must actually leave an annular ring -- reuses
+    /// `Footprint::validate`'s own rules (the same ones a placed board
+    /// footprint is checked against) on a one-pad probe footprint, rather
+    /// than re-deriving a second copy of those rules here.
+    fn validate_pad(pad: &LibraryPad) -> Result<(), Vec<CheckResult>> {
+        if pad.size.0 <= 0 || pad.size.1 <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_pad", &pad.number, "pad size must be positive")]);
+        }
+        let probe = Footprint { name: "probe".into(), pads: vec![pad.to_engine_pad()], courtyard: None, model: None };
+        let errs = probe.validate();
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(errs)
+        }
+    }
+
+    fn find_pad_mut<'b>(fp: &'b mut LibraryFootprint, id: &str) -> Result<&'b mut LibraryPad, Vec<CheckResult>> {
+        fp.pads.iter_mut().find(|p| p.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_pad", id, "no pad with this id")])
+    }
+
+    fn add_pad(&mut self, footprint: &str, mut pad: LibraryPad) -> Result<(), Vec<CheckResult>> {
+        pad.id = String::new(); // ids are ours to assign, never the caller's
+        Self::validate_pad(&pad)?;
+        let fp = self.library_footprint_mut(footprint)?;
+        fp.pads.push(pad);
+        fp.assign_missing_ids();
+        Ok(())
+    }
+
+    fn move_pad(&mut self, footprint: &str, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        Self::find_pad_mut(fp, id)?.at = Point { x, y };
+        Ok(())
+    }
+
+    fn rotate_pad(&mut self, footprint: &str, id: &str, quarter_turns: u8) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        let pad = Self::find_pad_mut(fp, id)?;
+        let delta = (quarter_turns as u32 % 4) * 90_000;
+        pad.rot = (pad.rot + delta) % 360_000;
+        Ok(())
+    }
+
+    fn delete_pad(&mut self, footprint: &str, id: &str) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        let before = fp.pads.len();
+        fp.pads.retain(|p| p.id != id);
+        if fp.pads.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_pad", id, "no pad with this id")]);
+        }
+        Ok(())
+    }
+
+    fn edit_pad(&mut self, footprint: &str, id: &str, mut pad: LibraryPad) -> Result<(), Vec<CheckResult>> {
+        pad.id = id.to_string();
+        Self::validate_pad(&pad)?;
+        let fp = self.library_footprint_mut(footprint)?;
+        let slot = Self::find_pad_mut(fp, id)?;
+        *slot = pad;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_pad_properties(&mut self, footprint: &str, source_pad_id: &str, filter_shape: bool, filter_orientation: bool, filter_layers: bool, filter_type: bool) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        let src = fp
+            .pads
+            .iter()
+            .find(|p| p.id == source_pad_id)
+            .cloned()
+            .ok_or_else(|| vec![CheckResult::fail("ops_unknown_pad", source_pad_id, "no pad with this id")])?;
+        for p in fp.pads.iter_mut().filter(|p| p.id != source_pad_id) {
+            if filter_shape && p.shape != src.shape {
+                continue;
+            }
+            if filter_orientation && p.rot != src.rot {
+                continue;
+            }
+            if filter_layers && p.layers != src.layers {
+                continue;
+            }
+            if filter_type && p.kind != src.kind {
+                continue;
+            }
+            p.size = src.size;
+            p.offset = src.offset;
+            p.shape = src.shape;
+            p.drill = src.drill;
+            p.drill_slot = src.drill_slot;
+            p.roundrect_ratio = src.roundrect_ratio;
+            p.trapezoid_delta = src.trapezoid_delta;
+            p.chamfer_ratio = src.chamfer_ratio;
+            p.chamfer_corners = src.chamfer_corners;
+            p.layers = src.layers.clone();
+            p.clearance_override = src.clearance_override;
+            p.thermal_gap_override = src.thermal_gap_override;
+            p.thermal_spoke_width_override = src.thermal_spoke_width_override;
+        }
+        Ok(())
+    }
+
+    fn renumber_pads(&mut self, footprint: &str, start: u32, prefix: &str, step: u32) -> Result<(), Vec<CheckResult>> {
+        if step == 0 {
+            return Err(vec![CheckResult::fail("ops_bad_renumber", footprint, "step must be at least 1")]);
+        }
+        let fp = self.library_footprint_mut(footprint)?;
+        let mut order: Vec<usize> = (0..fp.pads.len()).collect();
+        // Reading order: top-to-bottom (y), then left-to-right (x) -- see
+        // `Cmd::RenumberPads`'s own doc on why this substitutes for
+        // source's click/drag-order tool.
+        order.sort_by(|&a, &b| (fp.pads[a].at.y, fp.pads[a].at.x).cmp(&(fp.pads[b].at.y, fp.pads[b].at.x)));
+        for (i, idx) in order.into_iter().enumerate() {
+            fp.pads[idx].number = format!("{prefix}{}", start + i as u32 * step);
+        }
+        Ok(())
+    }
+
+    fn add_footprint_graphic(&mut self, footprint: &str, mut shape: Shape) -> Result<(), Vec<CheckResult>> {
+        if shape.layer().is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_shape", footprint, "a shape needs a layer")]);
+        }
+        if let Shape::Polygon { pts, .. } = &shape {
+            if pts.len() < 3 {
+                return Err(vec![CheckResult::fail("ops_bad_shape", footprint, "a polygon needs at least three points")]);
+            }
+        }
+        shape.set_id(String::new());
+        let fp = self.library_footprint_mut(footprint)?;
+        fp.graphics.push(shape);
+        fp.assign_missing_ids();
+        Ok(())
+    }
+
+    fn delete_footprint_graphic(&mut self, footprint: &str, id: &str) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        let before = fp.graphics.len();
+        fp.graphics.retain(|s| s.id() != id);
+        if fp.graphics.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")]);
+        }
+        Ok(())
+    }
+
+    fn find_footprint_graphic_mut<'b>(fp: &'b mut LibraryFootprint, id: &str) -> Result<&'b mut Shape, Vec<CheckResult>> {
+        fp.graphics.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])
+    }
+
+    fn move_footprint_graphic(&mut self, footprint: &str, id: &str, dx: Um, dy: Um) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        Self::find_footprint_graphic_mut(fp, id)?.translate(dx, dy);
+        Ok(())
+    }
+
+    fn edit_footprint_graphic(&mut self, footprint: &str, id: &str, layer: &str, stroke_width: Um, filled: bool) -> Result<(), Vec<CheckResult>> {
+        if layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "a shape needs a layer")]);
+        }
+        if stroke_width <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width must be positive")]);
+        }
+        let fp = self.library_footprint_mut(footprint)?;
+        let s = Self::find_footprint_graphic_mut(fp, id)?;
+        s.set_layer(layer.into());
+        s.set_stroke_width(stroke_width);
+        s.set_filled(filled);
+        Ok(())
+    }
+
+    fn add_footprint_text(&mut self, footprint: &str, mut text: Text) -> Result<(), Vec<CheckResult>> {
+        if text.layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_text", footprint, "text needs a layer")]);
+        }
+        if text.size_um <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_text", footprint, "text size must be positive")]);
+        }
+        text.id = String::new();
+        let fp = self.library_footprint_mut(footprint)?;
+        fp.texts.push(text);
+        fp.assign_missing_ids();
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn edit_footprint_text(
+        &mut self,
+        footprint: &str,
+        id: &str,
+        content: String,
+        angle: Millideg,
+        layer: String,
+        size_um: Um,
+        stroke_width: Um,
+        justify: TextJustify,
+        mirror: bool,
+    ) -> Result<(), Vec<CheckResult>> {
+        if layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_text", id, "text needs a layer")]);
+        }
+        if size_um <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
+        }
+        let fp = self.library_footprint_mut(footprint)?;
+        let t = fp.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
+        t.content = content;
+        t.angle = angle;
+        t.layer = layer;
+        t.size_um = size_um;
+        t.stroke_width = stroke_width;
+        t.justify = justify;
+        t.mirror = mirror;
+        Ok(())
+    }
+
+    fn delete_footprint_text(&mut self, footprint: &str, id: &str) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        let before = fp.texts.len();
+        fp.texts.retain(|t| t.id != id);
+        if fp.texts.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")]);
+        }
+        Ok(())
+    }
+
+    fn move_footprint_text(&mut self, footprint: &str, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        let t = fp.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
+        t.at = Point { x, y };
         Ok(())
     }
 }

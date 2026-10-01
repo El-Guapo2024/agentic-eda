@@ -535,6 +535,24 @@ fn handle(
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/footprint") => {
+            let query = target.split('?').nth(1).unwrap_or("");
+            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
+            let v = footprint_json(dir, name).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
+        ("GET", "/api/footprint_library") => {
+            let v = footprint_library_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
+        ("GET", "/api/footprint/export") => {
+            let query = target.split('?').nth(1).unwrap_or("");
+            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
+            match footprint_kicad_mod(dir, name) {
+                Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
+                Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
+            }
+        }
         ("GET", "/api/fill") => {
             let v = fill_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -617,17 +635,20 @@ fn handle(
     }
 }
 
-/// `POST /api/undo`/`/api/redo`'s own `{"domain": "pcb" | "schematic"}`
-/// body -- which tab asked, so `board::undo`/`redo` can scope to it
-/// (GAPS.md #15: Ctrl+Z on the Schematic tab must never revert the PCB
-/// tab's last edit, or vice versa). Absent, unparseable, or a genuinely
-/// empty body (the CLI never sends one; nothing else hits this route)
-/// falls back to `None` -- the original, unscoped "most recent edit of
-/// any kind" behavior -- rather than refusing the request.
+/// `POST /api/undo`/`/api/redo`'s own
+/// `{"domain": "pcb" | "schematic" | "footprint_editor"}` body -- which
+/// tab asked, so `board::undo`/`redo` can scope to it (GAPS.md #15: Ctrl+Z
+/// on the Schematic tab must never revert the PCB tab's last edit, or vice
+/// versa; GAPS.md #8 gives the Footprint Editor tab the same treatment).
+/// Absent, unparseable, or a genuinely empty body (the CLI never sends
+/// one; nothing else hits this route) falls back to `None` -- the
+/// original, unscoped "most recent edit of any kind" behavior -- rather
+/// than refusing the request.
 fn request_domain(body: &[u8]) -> Option<eda_ops::Domain> {
     let req: Value = serde_json::from_slice(body).ok()?;
     match req.get("domain").and_then(Value::as_str)? {
         "schematic" => Some(eda_ops::Domain::Schematic),
+        "footprint_editor" => Some(eda_ops::Domain::FootprintEditor),
         _ => Some(eda_ops::Domain::Pcb),
     }
 }
@@ -674,6 +695,16 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "block": block_of.get(&part.reference),
             "placed": fp.is_some(),
             "size": size,
+            // GAPS.md #8: the name `ConstraintModel::footprint_of` actually
+            // resolved this part's pads from (`Part::footprint` first, then
+            // `package` -- same precedence, same key) -- not just `package`,
+            // which can disagree with it (an explicit `footprint: "Lib:Name"`
+            // naming a real library footprint while `package` is still a
+            // generic bare name like "0603"). `Ctrl+E` ("Edit Footprint")
+            // opens *this* name in the Footprint Editor, so it is editing
+            // the actual definition the board uses, not a same-shaped but
+            // different builtin.
+            "footprint": part.footprint.clone().or_else(|| part.package.clone()),
         });
         if let Some(fp) = fp {
             let pads: Vec<Value> = placed_pads(&model, part, fp)
@@ -1254,6 +1285,63 @@ fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         })
         .collect();
     Ok(json!({ "violations": violations, "counts": counts }))
+}
+
+/// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document
+/// (GAPS.md #8), serialized exactly as `design.footprint_library` stores
+/// it. Unlike `/api/state`'s hand-built display JSON, there is no second
+/// shape to keep in sync here: the same `LibraryPad`/`Shape`/`Text` fields
+/// a `Cmd::AddPad`/`AddFootprintGraphic`/`AddFootprintText` sends are what
+/// comes back on the next poll. `name` must already be open (`Cmd::
+/// OpenFootprintForEdit`, issued once when the tab/footprint opens,
+/// through the ordinary `/api/cmd` route) -- this route never
+/// materializes one on its own, matching every other GET route here being
+/// a pure read of `design.json`. `name` is sent unencoded in the query
+/// string, same convention (and the same reasoning -- a real footprint
+/// name is plain ASCII letters/digits/`_.:-`, nothing a query string needs
+/// to escape) as `/api/3dmodel?name=...`.
+fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, _) = board::load(dir)?;
+    let fp = design
+        .footprint_library
+        .as_ref()
+        .and_then(|l| l.by_name(name))
+        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
+    serde_json::to_value(fp).map_err(|e| vec![CheckResult::fail("board_bad_design", name, e.to_string())])
+}
+
+/// `GET /api/footprint_library` -- every footprint name available to open:
+/// already-opened library entries plus the intent/real-library-resolved
+/// names `ConstraintModel::footprints` carries, deduplicated and sorted.
+/// The Footprint Editor's own "Open from Library" picker; see
+/// `footprint_json`'s doc on why opening one is a separate `Cmd`, not a
+/// side effect of listing them.
+fn footprint_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let mut names: std::collections::BTreeSet<String> = model.footprints.iter().map(|f| f.name.clone()).collect();
+    if let Some(lib) = &design.footprint_library {
+        names.extend(lib.footprints.iter().map(|f| f.name.clone()));
+    }
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>() }))
+}
+
+/// `GET /api/footprint/export?name=<name>` -- a derived, standalone
+/// `.kicad_mod` for `name` (GAPS.md #8 step 6), via `eda_kicad::
+/// export_kicad_mod`. `name` must already be open in `design.
+/// footprint_library`, same requirement `footprint_json` documents (this
+/// route exports the library's own current copy, not a fresh re-resolve
+/// of the intent/builtin table). The frontend turns the returned text
+/// into a browser download client-side (a `Blob` + synthetic anchor
+/// click) -- this route itself only ever returns `text/plain`, no
+/// `Content-Disposition`, matching every other GET route here.
+fn footprint_kicad_mod(dir: &Path, name: &str) -> Result<String, Vec<CheckResult>> {
+    let (_, design, _) = board::load(dir)?;
+    let fp = design
+        .footprint_library
+        .as_ref()
+        .and_then(|l| l.by_name(name))
+        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
+    Ok(eda_kicad::export_kicad_mod(fp))
 }
 
 /// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest

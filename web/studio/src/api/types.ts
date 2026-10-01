@@ -35,6 +35,15 @@ export interface Part {
   value: string | null;
   package: string | null;
   mpn: string | null;
+  /**
+   * The name `ConstraintModel::footprint_of` actually resolved this
+   * part's pads from (`Part::footprint` if set, else `package`) -- GAPS.md
+   * #8's Ctrl+E ("Edit Footprint") opens exactly this name, since it can
+   * differ from `package` (an explicit "Lib:Name" vs. a generic bare
+   * package string). `null` only for a part with neither set, which has
+   * no resolvable footprint at all.
+   */
+  footprint: string | null;
   /** Floorplan block this part belongs to, if any. */
   block: string | null;
   placed: boolean;
@@ -183,6 +192,118 @@ export interface BoardText {
 export interface Drawings {
   shapes: Shape[];
   texts: BoardText[];
+}
+
+// ------------------------------------------------------- Footprint Editor
+//
+// GAPS.md #8. GET /api/footprint?name=... returns `crates/model/src/ir.rs`
+// `LibraryFootprint` serialized exactly as `design.json` stores it -- no
+// second hand-built display shape the way `BoardState`'s `Part`/`Pad` is
+// for `ConstraintModel`'s `Footprint`/`Pad` (see that type's own doc on
+// why: this editor's whole job IS that IR, there is nothing further to
+// project). `graphics`/`texts` reuse `CmdShape`/`CmdText` (not `Shape`/
+// `BoardText`): the IR's `Shape`/`Text` types serialize their points as
+// `PointXY` ({x,y}) in *every* context, board-level or footprint-local --
+// `Shape`/`BoardText` above are `state()`'s own hand-built `[x,y]`-pair
+// display shape, which only /api/state uses.
+
+/** `crates/model/src/ir.rs` `LibraryPadShape` (`PAD_SHAPE`, minus KiCad's custom/primitive-based shape -- see that enum's own doc on why). */
+export type LibraryPadShape = "circle" | "rect" | "oval" | "round_rect" | "trapezoid" | "chamfered_rect";
+
+/** `crates/model/src/footprint.rs` `PadKind`. */
+export type PadKind = "smd" | "through_hole" | "non_plated_hole";
+
+/** `crates/model/src/ir.rs` `ChamferCorners` -- `PAD::SetChamferPositions`'s four corner flags, pad-local (un-rotated). */
+export interface ChamferCorners {
+  top_left: boolean;
+  top_right: boolean;
+  bottom_left: boolean;
+  bottom_right: boolean;
+}
+
+/**
+ * `crates/model/src/ir.rs` `LibraryPad` -- one pad on a [`LibraryFootprint`],
+ * in the footprint's own local frame (origin at `LibraryFootprint.anchor`).
+ * `id` is optional only for a pad not yet sent through `add_pad`/`edit_pad`
+ * (the backend always assigns/keeps the real one -- same convention
+ * `CmdShape`/`CmdText`'s own `id?` already uses).
+ */
+export interface LibraryPad {
+  id?: string;
+  number: string;
+  at: PointXY;
+  /** `PAD::SetOffset` -- the copper shape's center relative to `at`; `{x:0,y:0}` for the overwhelming majority of pads. */
+  offset: PointXY;
+  size: [Um, Um];
+  shape: LibraryPadShape;
+  kind: PadKind;
+  drill: Um | null;
+  drill_slot: [Um, Um] | null;
+  rot: Degrees;
+  roundrect_ratio: number | null;
+  /** `(dx, dy)` -- KiCad's own convention of only ever one axis non-zero. */
+  trapezoid_delta: [Um, Um] | null;
+  /** Fraction of the shorter side, same shape as `roundrect_ratio`. Only meaningful for `"chamfered_rect"`. */
+  chamfer_ratio: number | null;
+  chamfer_corners: ChamferCorners;
+  /** KiCad layer names this pad occupies ("F.Cu", "F.Paste", "F.Mask", "*.Cu", ...) -- the Pad Properties dialog's layer-preset buttons fill this in; empty means "not set yet". */
+  layers: string[];
+  /** `None`/`null` = inherit the board/footprint default, KiCad's own 0-means-inherit convention. */
+  clearance_override: Um | null;
+  thermal_gap_override: Um | null;
+  thermal_spoke_width_override: Um | null;
+}
+
+/** `crates/model/src/ir.rs` `FootprintAttributes` (`FOOTPRINT_ATTR_T` plus the dialog's two related non-attribute-bit checkboxes). */
+export interface FootprintAttributes {
+  smd: boolean;
+  through_hole: boolean;
+  exclude_from_bom: boolean;
+  exclude_from_position_files: boolean;
+  board_only: boolean;
+  dnp: boolean;
+  allow_missing_courtyard: boolean;
+  allow_soldermask_bridges: boolean;
+}
+
+/** `crates/model/src/ir.rs` `FootprintField` -- a custom field beyond the built-in Reference/Value. */
+export interface FootprintField {
+  name: string;
+  value: string;
+  visible: boolean;
+}
+
+/** The fields `edit_footprint_properties` commits all at once (dialog_footprint_properties_fp_editor.cpp's General tab) -- factored out so the `Cmd` variant and `FootprintPropertiesDialog`'s own form state share one field list. */
+export interface FootprintPropertiesFields {
+  description: string;
+  keywords: string;
+  attributes: FootprintAttributes;
+  reference_visible: boolean;
+  value_visible: boolean;
+  model: string | null;
+}
+
+/**
+ * `crates/model/src/ir.rs` `LibraryFootprint` -- the Footprint Editor's
+ * own open document. `published` mirrors the field of the same name:
+ * whether a board instance naming this footprint currently resolves its
+ * pads from here (`Cmd::UpdateFootprintOnBoard`'s own explicit switch,
+ * never automatic).
+ */
+export interface LibraryFootprint extends FootprintPropertiesFields {
+  name: string;
+  pads: LibraryPad[];
+  graphics: CmdShape[];
+  texts: CmdText[];
+  fields: FootprintField[];
+  courtyard: [Um, Um] | null;
+  anchor: PointXY;
+  published: boolean;
+}
+
+/** `GET /api/footprint_library`'s one field: every footprint name available to open (already-opened library entries plus intent/real-library-resolved ones), sorted. */
+export interface FootprintLibraryNames {
+  names: string[];
 }
 
 export interface Check {
@@ -445,7 +566,34 @@ export type Cmd =
   | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[] }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
   | { op: "add_erc_exclusion"; check: string; location: string }
-  | { op: "delete_erc_exclusion"; check: string; location: string };
+  | { op: "delete_erc_exclusion"; check: string; location: string }
+
+  // -------------------------------------------------- footprint editor
+  //
+  // GAPS.md #8. crates/ops/src/lib.rs's own "footprint editor" Cmd
+  // section, same order. `Domain::FootprintEditor` (api/client.ts's
+  // `postUndo`/`postRedo` `domain` param) -- its own undo/redo scope,
+  // independent of "pcb"/"schematic".
+  | { op: "open_footprint_for_edit"; name: string }
+  | { op: "delete_library_footprint"; name: string }
+  | ({ op: "edit_footprint_properties"; name: string } & FootprintPropertiesFields)
+  | { op: "set_footprint_anchor"; name: string; at: PointXY }
+  | { op: "update_footprint_on_board"; name: string }
+  | { op: "add_pad"; footprint: string; pad: LibraryPad }
+  | { op: "move_pad"; footprint: string; id: string; x: Um; y: Um }
+  | { op: "rotate_pad"; footprint: string; id: string; quarter_turns: number }
+  | { op: "delete_pad"; footprint: string; id: string }
+  | { op: "edit_pad"; footprint: string; id: string; pad: LibraryPad }
+  | { op: "push_pad_properties"; footprint: string; source_pad_id: string; filter_shape: boolean; filter_orientation: boolean; filter_layers: boolean; filter_type: boolean }
+  | { op: "renumber_pads"; footprint: string; start: number; prefix: string; step: number }
+  | { op: "add_footprint_graphic"; footprint: string; shape: CmdShape }
+  | { op: "delete_footprint_graphic"; footprint: string; id: string }
+  | { op: "move_footprint_graphic"; footprint: string; id: string; dx: Um; dy: Um }
+  | { op: "edit_footprint_graphic"; footprint: string; id: string; layer: string; stroke_width: Um; filled: boolean }
+  | { op: "add_footprint_text"; footprint: string; text: CmdText }
+  | { op: "edit_footprint_text"; footprint: string; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
+  | { op: "delete_footprint_text"; footprint: string; id: string }
+  | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
 export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
