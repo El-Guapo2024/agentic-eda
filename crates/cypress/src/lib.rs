@@ -1062,12 +1062,11 @@ pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o
     let base_model = model;
     // Seed design: the outline from the intent (or the existing placement)
     // with every part at the centre, the shape `to_bookshelf_fixed` reads.
-    let model = base_model;
     let mut seed_design = design.clone();
     if seed_design.placement.is_none() {
         // Same reasoning: a seed design centred on the origin of a board
         // that has no shape is not a starting point, it is a pile.
-        let outline = model.board.outline.clone().unwrap_or_default();
+        let outline = base_model.board.outline.clone().unwrap_or_default();
         assert!(outline.len() >= 3, "cypress needs a board outline, got {} point(s)", outline.len());
         let c = Point {
             x: (outline.iter().map(|p| p.x).min().expect("outline non-empty") + outline.iter().map(|p| p.x).max().expect("outline non-empty")) / 2,
@@ -1075,7 +1074,7 @@ pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o
         };
         seed_design.placement = Some(eda_model::ir::PlacementSection {
             outline,
-            footprints: model.parts.iter().map(|p| eda_model::ir::FootprintInstance { id: p.reference.clone(), at: c, rot: 0, side: eda_model::ir::Side::Top, label: LabelSide::Above }).collect(),
+            footprints: base_model.parts.iter().map(|p| eda_model::ir::FootprintInstance { id: p.reference.clone(), at: c, rot: 0, side: eda_model::ir::Side::Top, label: LabelSide::Above }).collect(),
             modules: Vec::new(),
         });
     }
@@ -1084,7 +1083,7 @@ pub fn place_with_cypress(design: &Design, model: &ConstraintModel, seed: u64, o
     // when the edge connectors do not fit along its edges.
     let mut scale_floor = 0.0;
     let mut placed = loop {
-        let fitted = fit_outline(&seed_design, model, o.fit_board_utilization, scale_floor);
+        let fitted = fit_outline(&seed_design, base_model, o.fit_board_utilization, scale_floor);
         let bs = to_bookshelf_fixed(&fitted, base_model, name, UNIT_UM, o.proximity_weight, &none)?;
         let (pl, _) = run_cypress(&bs, seed, o, "free")?;
         let free = from_bookshelf_pl_fixed(&pl, &fitted, base_model, UNIT_UM, &none)?;
