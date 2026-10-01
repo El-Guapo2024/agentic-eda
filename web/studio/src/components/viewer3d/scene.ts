@@ -1,8 +1,11 @@
 // Pure Three.js geometry builders for the KiCad-style 3D PCB viewer.
 // No React, no DOM access beyond THREE's own APIs -- Viewer3D.tsx owns
-// the renderer/scene/camera/controls lifecycle and just calls into here
-// to (re)build the "board group" whenever `state.board` changes, and to
-// compute a camera pose for each of the 8 toolbar view presets.
+// the renderer/scene/camera lifecycle and just calls into here to
+// (re)build the "board group" whenever `state.board` changes, and to get
+// the board outline's own bounds (boardOutlineBounds, below) to re-home
+// the camera (kicad-port/camera3d.ts -- NOT this file; the actual camera
+// state/math is a faithful port of KiCad's own CAMERA/TRACK_BALL classes,
+// dependency-free on purpose, see that file's header comment).
 //
 // -------------------------------------------------------------- units
 //
@@ -894,73 +897,6 @@ export function disposeObject3D(root: THREE.Object3D): void {
       }
     }
   });
-}
-
-// ---------------------------------------------------------------------
-// Camera view presets
-// ---------------------------------------------------------------------
-
-export type ViewPreset = "top" | "bottom" | "front" | "back" | "left" | "right" | "iso" | "reset";
-
-// Exact KiCad 3D-viewer view-preset semantics, per the task spec: each
-// snaps the camera to look straight along that axis at the board.
-// Front/Back/Left/Right are this file's own (necessarily arbitrary --
-// nothing in the board data names a "front" edge) but internally
-// consistent choice: +Z/-Z/-X/+X respectively, in this file's own
-// world-axis convention (see the header comment). Iso and Reset use the
-// same classic 3/4 isometric-ish direction -- Reset is just the name
-// used for the initial/on-demand re-fit (also what gets called on first
-// mount), Iso the toolbar button; their effect is identical, same as
-// KiCad's own two actions.
-const PRESET_DIRECTIONS: Record<ViewPreset, THREE.Vector3> = {
-  top: new THREE.Vector3(0, 1, 0),
-  bottom: new THREE.Vector3(0, -1, 0),
-  front: new THREE.Vector3(0, 0, 1),
-  back: new THREE.Vector3(0, 0, -1),
-  left: new THREE.Vector3(-1, 0, 0),
-  right: new THREE.Vector3(1, 0, 0),
-  iso: new THREE.Vector3(1, 1, 1).normalize(),
-  reset: new THREE.Vector3(1, 1, 1).normalize(),
-};
-
-/** Used only when there is nothing yet to frame (empty board group) so the camera still gets a sane, finite pose instead of NaN/Infinity. */
-const EMPTY_BOX_HALF_EXTENT_MM = 10;
-
-/**
- * Camera position + look-at target for `preset`, framing `box` (the
- * whole board group's world-space bounds) from a distance that keeps
- * box's circumscribing sphere fully inside the camera's frustum on
- * *both* axes (accounts for `aspect`, so a narrow/tall viewport doesn't
- * clip a wide board or vice versa), for any of the 8 preset directions
- * -- including the diagonal Iso/Reset view, which a purely
- * per-axis-projected fit would under-size for.
- *
- * Never mutates `box`. Pure and independent of any live Three.js scene
- * state, so it's trivially callable both for the initial auto-fit and
- * for every toolbar button.
- */
-export function presetCameraPose(box: THREE.Box3, preset: ViewPreset, fovDeg: number, aspect: number): { position: THREE.Vector3; target: THREE.Vector3 } {
-  const safeBox = box.isEmpty()
-    ? new THREE.Box3(
-        new THREE.Vector3(-EMPTY_BOX_HALF_EXTENT_MM, -EMPTY_BOX_HALF_EXTENT_MM, -EMPTY_BOX_HALF_EXTENT_MM),
-        new THREE.Vector3(EMPTY_BOX_HALF_EXTENT_MM, EMPTY_BOX_HALF_EXTENT_MM, EMPTY_BOX_HALF_EXTENT_MM)
-      )
-    : box;
-
-  const center = safeBox.getCenter(new THREE.Vector3());
-  const size = safeBox.getSize(new THREE.Vector3());
-  // Half the box's diagonal: the radius of a sphere that contains the
-  // whole box from *any* viewing angle, not just the 6 axis-aligned ones
-  // -- needed for Iso/Reset, which view it diagonally.
-  const radius = Math.max(size.length() / 2, 1);
-
-  const vFov = (fovDeg * Math.PI) / 180;
-  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * Math.max(aspect, 1e-6));
-  const margin = 1.25; // headroom so the board doesn't touch the viewport edges
-  const distance = Math.max(radius / Math.sin(vFov / 2), radius / Math.sin(hFov / 2)) * margin;
-
-  const position = center.clone().addScaledVector(PRESET_DIRECTIONS[preset], distance);
-  return { position, target: center };
 }
 
 // ---------------------------------------------------------------------

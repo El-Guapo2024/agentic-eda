@@ -23,18 +23,25 @@
 // properties, since this task may only create/edit the three viewer3d/
 // files, not add a new stylesheet.
 import { useStudioDispatch, useStudioState } from "../../state/store";
-import type { Viewer3DApi } from "./Viewer3D";
-import type { ViewPreset } from "./scene";
+import type { Viewer3DApi, ViewPreset } from "./Viewer3D";
 
-const PRESET_BUTTONS: ReadonlyArray<{ preset: ViewPreset; label: string }> = [
-  { preset: "top", label: "Top" },
-  { preset: "bottom", label: "Bottom" },
-  { preset: "front", label: "Front" },
-  { preset: "back", label: "Back" },
-  { preset: "left", label: "Left" },
-  { preset: "right", label: "Right" },
-  { preset: "iso", label: "Iso" },
-  { preset: "reset", label: "Reset" },
+// KiCad's own hotkeys for these (eda_3d_viewer/tools/eda_3d_actions.cpp):
+// Y/Shift+Y (front/back), X/Shift+X (right/left), Z/Shift+Z (top/bottom),
+// Home (reset/"home view" -- observably identical to Top, see
+// camera3d.ts's reset() doc comment). Real KiCad has no "Iso" action at
+// all in the interactive 3D viewer toolbar/menu/hotkeys -- dropped here
+// too (see PARITY-3d.md); these 7 buttons are this app's own UI addition
+// for mouse-only discoverability (KiCad reaches the 6 face views only via
+// hotkey or its right-click context menu, neither of which this toolbar
+// replaces).
+const PRESET_BUTTONS: ReadonlyArray<{ preset: ViewPreset; label: string; title: string }> = [
+  { preset: "top", label: "Top", title: "View Top (Z)" },
+  { preset: "bottom", label: "Bottom", title: "View Bottom (Shift+Z)" },
+  { preset: "front", label: "Front", title: "View Front (Y)" },
+  { preset: "back", label: "Back", title: "View Back (Shift+Y)" },
+  { preset: "left", label: "Left", title: "View Left (Shift+X)" },
+  { preset: "right", label: "Right", title: "View Right (X)" },
+  { preset: "reset", label: "Reset", title: "Home View (Home)" },
 ];
 
 const BUTTON_STYLE: React.CSSProperties = {
@@ -111,8 +118,8 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
 
   return (
     <div className="toolbar" data-toolbar="viewer3d" style={{ display: "flex" }}>
-      {PRESET_BUTTONS.map(({ preset, label }) => (
-        <ToolbarButton key={preset} label={label} title={`${label} view`} enabled={!!api} onClick={() => api?.setView(preset)} />
+      {PRESET_BUTTONS.map(({ preset, label, title }) => (
+        <ToolbarButton key={preset} label={label} title={title} enabled={!!api} onClick={() => api?.setView(preset)} />
       ))}
       <Sep />
       <ToolbarButton label="Flip Board" title="View the board flipped to the other side" active={opts.flipped} onClick={() => set({ flipped: !opts.flipped })} />
