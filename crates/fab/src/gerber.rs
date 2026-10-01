@@ -635,8 +635,13 @@ fn plot_copper(
     let mut cur_dcode: Option<u32> = None;
 
     // ---- pads ----
+    // On an outer layer, the usual side rule (SMD on its own side,
+    // through-hole/non-plated on both). An inner layer carries neither
+    // SMD copper nor solder mask -- only a through-hole/non-plated pad's
+    // own hole passes through it at all, regardless of which side the
+    // footprint sits on.
     for (fp, _part, pads) in fp_pads {
-        let included: Vec<&PlacedPadFull> = pads.iter().filter(|p| !is_outer || pad_on_side(p.kind, fp.side, side)).collect();
+        let included: Vec<&PlacedPadFull> = pads.iter().filter(|p| if is_outer { pad_on_side(p.kind, fp.side, side) } else { p.kind != PadKind::Smd }).collect();
         if included.is_empty() {
             continue;
         }
