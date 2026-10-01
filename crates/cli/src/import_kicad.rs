@@ -53,6 +53,11 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
         // 2) -- see `eda_kicad::merge_project_rule_severities`'s doc
         // comment for why this is a wholesale replacement, not a merge.
         eda::merge_project_rule_severities(&mut model, &pro_text);
+        // Board-wide minimum constraints (`rules.min_*`, task item 1) --
+        // distinct from the net classes merged just above, which only ever
+        // carry nominal/default values, never a DRC minimum. See
+        // `eda_kicad::merge_project_design_rules`'s doc comment (GAPS.md #10).
+        eda::merge_project_design_rules(&mut model, &pro_text);
     }
     // A `.kicad_dru` custom-rule file (task item 4) is its own sibling
     // file, not a section inside `.kicad_pro`.

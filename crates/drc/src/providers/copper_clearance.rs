@@ -20,14 +20,20 @@ use eda_model::{BoardRules, PadKind};
 /// `A.NetClass`/`B.NetClass`/`hasNetclass()` (task item 4) -- `"Default"`
 /// for an unclassed net, matching KiCad's own convention that every net
 /// belongs to at least the implicit default class.
-fn net_class_name<'a>(rules: &'a BoardRules, net: Option<&str>) -> &'a str {
+pub(crate) fn net_class_name<'a>(rules: &'a BoardRules, net: Option<&str>) -> &'a str {
     net.and_then(|n| rules.class_of(n)).map(|c| c.name.as_str()).unwrap_or("Default")
 }
 
 fn facts_of_pad<'a>(rules: &'a BoardRules, p: &'a DrcPad) -> Facts<'a> {
     Facts { item_type: "Pad", net_class: net_class_name(rules, p.net.as_deref()), net_name: p.net.as_deref().unwrap_or(""), reference: &p.footprint_ref }
 }
-fn facts_of_track<'a>(rules: &'a BoardRules, t: &'a DrcTrackSeg) -> Facts<'a> {
+/// Also used by `providers::track_width` to build the `A`-only `Facts` a
+/// `.kicad_dru` `track_width` rule's condition is evaluated against (task
+/// item 1) -- see `constraints::CompiledWidthRules`'s doc comment for why a
+/// track/arc built the same way a clearance-family rule's condition sees it
+/// is exactly what KiCad's own one-item `TRACK_WIDTH_CONSTRAINT` evaluation
+/// needs.
+pub(crate) fn facts_of_track<'a>(rules: &'a BoardRules, t: &'a DrcTrackSeg) -> Facts<'a> {
     Facts { item_type: "Track", net_class: net_class_name(rules, t.net.as_deref()), net_name: t.net.as_deref().unwrap_or(""), reference: "" }
 }
 fn facts_of_via<'a>(rules: &'a BoardRules, v: &'a DrcVia) -> Facts<'a> {

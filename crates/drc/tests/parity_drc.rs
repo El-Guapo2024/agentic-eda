@@ -540,6 +540,12 @@ fn process_qa_board(cli: &Path, pcb: &Path) -> BoardResult {
             if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
                 eda_kicad::merge_project_net_classes(&mut model, &pro_text);
                 eda_kicad::merge_project_rule_severities(&mut model, &pro_text);
+                // Board-wide minimum constraints (`rules.min_*`, task item
+                // 1) -- distinct from the net classes merged just above,
+                // which only ever carry nominal/default values, never a DRC
+                // minimum. See `eda_kicad::merge_project_design_rules`'s
+                // doc comment (GAPS.md #10).
+                eda_kicad::merge_project_design_rules(&mut model, &pro_text);
             }
             // `.kicad_dru` (task item 4) is its own sibling file, not a
             // `.kicad_pro` section.
