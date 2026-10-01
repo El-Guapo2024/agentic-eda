@@ -38,6 +38,11 @@ fn scores_meet_their_recorded_floor() {
     let mut failures = Vec::new();
     for m in metrics {
         let name = m.get("name").and_then(|n| n.as_str()).unwrap_or("<unnamed>").to_string();
+        // `"ratchet": false` marks a metric as informational: still
+        // reported, never a gate -- see its `note` in scores.json.
+        if m.get("ratchet").and_then(|v| v.as_bool()) == Some(false) {
+            continue;
+        }
         let current = m.get("current").and_then(|v| v.as_f64());
         let floor = m.get("floor").and_then(|v| v.as_f64());
         let (Some(current), Some(floor)) = (current, floor) else {

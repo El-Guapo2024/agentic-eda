@@ -140,7 +140,13 @@ def merge_scores(metrics):
             floor = prior["floor"]  # never auto-lowered; see module docstring
         else:
             floor = current  # first time this metric is seen: seed the floor at today's level
-        out.append({"name": name, "current": current, "floor": floor})
+        entry = {"name": name, "current": current, "floor": floor}
+        # An informational metric (`"ratchet": false`) stays on the record
+        # with its reason; parity_ratchet.rs doesn't gate on it.
+        for key in ("ratchet", "note"):
+            if prior and key in prior:
+                entry[key] = prior[key]
+        out.append(entry)
     return {"generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "metrics": out}
 
 
