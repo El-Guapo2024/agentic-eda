@@ -94,6 +94,19 @@ instead the propagation stack has a hard iteration cap and simply fails
 (falls back to walkaround) rather than looping, which is the same outcome
 KiCad's own iteration-limit path produces.
 
+`shove.rs` operates on its own scratch branch internally (it must -- shoving
+genuinely mutates the board) and returns only the diff (`ShoveOutcome`'s
+`displaced_lines`/`displaced_vias`); `LinePlacer` stays stateless for
+`preview()` the same way it already was for walkaround (every call re-runs
+shove fresh from the real world), and only `fix()`/`finish()` absorb an
+accepted call's displacement into the session's running
+`displaced_tracks()`/`displaced_vias()` for the eventual commit. One real
+bug surfaced here too: pushing a via whose centre sits exactly on the
+pusher's own centreline (common -- a straight route running directly
+through a stitching via) produced a zero-length, direction-less push
+vector that never actually moved it; fixed by falling back to a direction
+perpendicular to the pusher's own heading in that degenerate case.
+
 ## Stage 4 -- API + frontend
 
 `pns_router.{h,cpp}` -> `src/router.rs`; `router_tool.cpp`'s interaction

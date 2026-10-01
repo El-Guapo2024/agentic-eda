@@ -49,10 +49,12 @@ use crate::layer::LayerRange;
 use crate::line::Line;
 use crate::node::Node;
 use crate::settings::{Mode, RoutingSettings};
+use crate::shove::{DisplacedLine, DisplacedVia};
 use crate::{optimizer, walkaround};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Um};
 use eda_model::BoardRules;
+use std::collections::HashMap;
 
 /// `ANCHOR_SNAP_UM`-equivalent: how close the cursor must be to a same-net
 /// pad/via/track-end to snap onto it and offer to finish the route there.
@@ -78,6 +80,21 @@ pub struct Preview {
     /// A same-net anchor near the cursor the route would snap onto and
     /// finish at, if committed now (`Move()`'s end-item snapping).
     pub snapped_end: Option<Point>,
+    /// Other tracks/vias `Mode::Shove` would displace if this preview were
+    /// accepted right now -- empty in every other mode. Transient, exactly
+    /// like `head`: nothing here is real until `fix`/`finish` absorbs it.
+    pub displaced_lines: Vec<DisplacedLine>,
+    pub displaced_vias: Vec<DisplacedVia>,
+}
+
+/// [`LinePlacer::build_head`]'s result: the resolved point list, whether
+/// it (or the pending via) still collides, and -- `Mode::Shove` only --
+/// whatever else had to move to make room for it.
+struct HeadResult {
+    pts: Vec<Point>,
+    colliding: bool,
+    displaced_lines: Vec<DisplacedLine>,
+    displaced_vias: Vec<DisplacedVia>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +121,10 @@ pub struct LinePlacer {
     pub current_layer: i32,
     pub idle: bool,
     pub placement_correct: bool,
+    /// Accumulated across every accepted (`fix`/`finish`-absorbed) shove
+    /// this session, keyed by source id -- see [`Self::displaced_tracks`].
+    displaced_tracks: HashMap<String, Line>,
+    displaced_vias: HashMap<String, Point>,
 }
 
 impl LinePlacer {
@@ -118,7 +139,7 @@ impl LinePlacer {
             Some(Item::Segment(s)) if s.b == p => Direction45::from_seg(s.a, s.b),
             _ => Direction45::N,
         };
-        LinePlacer { net, width, origin: p, direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false }
+        LinePlacer { net, width, origin: p, direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: HashMap::new(), displaced_vias: HashMap::new() }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -138,14 +159,37 @@ impl LinePlacer {
 
     /// `LINE_PLACER::buildInitialLine` + `routeHead`: the raw 45-degree
     /// candidate from the last fixed point to `p`, then resolved per the
-    /// active routing mode. Pure -- never mutates `self`.
-    fn build_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> (Vec<Point>, bool) {
+    /// active routing mode. Pure -- never mutates `self`, including in
+    /// `Mode::Shove`: a successful shove's displaced items are reported
+    /// back in the result for the caller ([`Self::preview`]/[`Self::fix`])
+    /// to decide whether and when to actually keep them.
+    fn build_head(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> HeadResult {
         let start = self.fixed_start();
         if start == p {
-            return (vec![start], false);
+            return HeadResult { pts: vec![start], colliding: false, displaced_lines: Vec::new(), displaced_vias: Vec::new() };
         }
         let raw = self.direction.build_initial_trace(start, p, false, CornerMode::Mitered45);
         let exclude = self.exclude();
+
+        if settings.mode == Mode::Shove {
+            // `rhShoveOnly`: try shove first; a failed shove (locked item,
+            // a pad in the way, iteration limit) falls back to walkaround
+            // for this call, exactly like upstream.
+            if let Some(outcome) = crate::shove::shove_line(node, &raw, &self.net, self.current_layer, self.width, rules, settings) {
+                let line = Line::from_points(self.net.clone(), self.current_layer, self.width, outcome.head);
+                // Optimizing against the *original* node is deliberately
+                // conservative: it doesn't know about this call's own
+                // displaced items, so it will never propose a shortcut that
+                // only looks clear because something was just pushed out of
+                // its way (that would re-introduce the very collision shove
+                // just resolved, since nothing here tracks the displaced
+                // items' NEW positions as obstacles the optimizer must also
+                // avoid). Safe, at the cost of occasionally leaving a
+                // slightly less-optimized head than upstream would.
+                let optimized = optimizer::optimize(&line, node, rules, &exclude);
+                return HeadResult { pts: optimized.pts, colliding: false, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias };
+            }
+        }
 
         match settings.mode {
             Mode::MarkObstacles => {
@@ -153,22 +197,17 @@ impl LinePlacer {
                     let shape = Shape::Stadium { a: w[0], b: w[1], r: self.width / 2 };
                     node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &exclude).is_some()
                 });
-                (raw, colliding)
+                HeadResult { pts: raw, colliding, displaced_lines: Vec::new(), displaced_vias: Vec::new() }
             }
             Mode::Walkaround | Mode::Shove => {
-                // Shove mode falls back to walkaround here until stage 3's
-                // `crate::shove` is wired in at the router layer (it calls
-                // shove first and only reaches this as its own fallback,
-                // exactly mirroring `rhShoveOnly`'s "shove failed -> walk"
-                // path in upstream KiCad).
                 let wr = walkaround::route(&raw, node, &self.net, self.current_layer, self.width, rules, &exclude, settings.walkaround_iteration_limit as u32);
                 match wr.best() {
                     Some(path) => {
                         let line = Line::from_points(self.net.clone(), self.current_layer, self.width, path.clone());
                         let optimized = optimizer::optimize(&line, node, rules, &exclude);
-                        (optimized.pts, false)
+                        HeadResult { pts: optimized.pts, colliding: false, displaced_lines: Vec::new(), displaced_vias: Vec::new() }
                     }
-                    None => (raw, true), // ST_STUCK: show the direct line, flagged violating
+                    None => HeadResult { pts: raw, colliding: true, displaced_lines: Vec::new(), displaced_vias: Vec::new() }, // ST_STUCK: show the direct line, flagged violating
                 }
             }
         }
@@ -202,12 +241,16 @@ impl LinePlacer {
     }
 
     /// `LINE_PLACER::Move`: the live preview, including end-of-route
-    /// snapping onto a same-net anchor near `p`. Never mutates `self`.
+    /// snapping onto a same-net anchor near `p`. Never mutates `self` --
+    /// not even in `Mode::Shove`, where the shove this computes is always
+    /// disposable until [`Self::fix`]/[`Self::finish`] actually accepts it
+    /// (see the module doc comment).
     pub fn preview(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Preview {
         let snapped_end = node.nearest_anchor(p, LayerRange::single(self.current_layer), SNAP_UM, Some(&self.net)).map(|(_, a)| a);
         let target = snapped_end.unwrap_or(p);
-        let (pts, mut colliding) = self.build_head(node, rules, settings, target);
-        let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, pts);
+        let head_result = self.build_head(node, rules, settings, target);
+        let mut colliding = head_result.colliding;
+        let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
         head.simplify();
         let via = if self.placing_via {
             let via_pos = head.last().unwrap_or(target);
@@ -220,7 +263,7 @@ impl LinePlacer {
         } else {
             None
         };
-        Preview { runs: self.runs.clone(), head, colliding, via, snapped_end }
+        Preview { runs: self.runs.clone(), head, colliding, via, snapped_end, displaced_lines: head_result.displaced_lines, displaced_vias: head_result.displaced_vias }
     }
 
     /// `LINE_PLACER::FixRoute`'s own `!Settings().AllowDRCViolations()`
@@ -229,6 +272,21 @@ impl LinePlacer {
     /// still-colliding head must never be committed.
     fn may_commit_despite_collision(settings: &RoutingSettings) -> bool {
         settings.mode == Mode::MarkObstacles
+    }
+
+    /// Merge a just-accepted preview's shoved items into this session's
+    /// running displacement set -- keyed by source id, so a later call that
+    /// re-shoves (or un-shoves, by no longer touching) the same track only
+    /// ever contributes its most recent position to the final commit.
+    fn absorb_displacement(&mut self, preview: &Preview) {
+        for d in &preview.displaced_lines {
+            if let Some(id) = &d.source_track {
+                self.displaced_tracks.insert(id.clone(), d.line.clone());
+            }
+        }
+        for d in &preview.displaced_vias {
+            self.displaced_vias.insert(d.source_via.clone(), d.pos);
+        }
     }
 
     /// `LINE_PLACER::FixRoute` for an intermediate click: commit the
@@ -247,6 +305,7 @@ impl LinePlacer {
         }
         let real_end = preview.snapped_end.is_some();
         self.direction = preview.head.pts.windows(2).rev().find(|w| w[0] != w[1]).map(|w| Direction45::from_seg(w[0], w[1])).unwrap_or(self.direction);
+        self.absorb_displacement(&preview);
         self.runs.push(preview.head);
         self.placement_correct = true;
         FixOutcome::Fixed { real_end }
@@ -258,9 +317,17 @@ impl LinePlacer {
     /// position on `new_layer`.
     #[allow(clippy::too_many_arguments)] // the query context (node/rules/settings/p) plus the via's own (layer, diameter, drill) -- splitting either group into its own type would just move the count, not reduce it.
     pub fn switch_layer(&mut self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point, new_layer: i32, diameter: Um, drill: Um) {
-        let (pts, _) = self.build_head(node, rules, settings, p);
-        let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, pts);
+        let head_result = self.build_head(node, rules, settings, p);
+        let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
         head.simplify();
+        for d in &head_result.displaced_lines {
+            if let Some(id) = &d.source_track {
+                self.displaced_tracks.insert(id.clone(), d.line.clone());
+            }
+        }
+        for d in &head_result.displaced_vias {
+            self.displaced_vias.insert(d.source_via.clone(), d.pos);
+        }
         let via_pos = self.place_via(node, rules, head.last().unwrap_or(p), new_layer);
         if head.point_count() >= 2 {
             self.runs.push(head);
@@ -318,12 +385,28 @@ impl LinePlacer {
         if preview.colliding && !Self::may_commit_despite_collision(settings) {
             return None;
         }
+        self.absorb_displacement(&preview);
         if preview.head.point_count() >= 2 {
             self.runs.push(preview.head);
         }
         self.idle = true;
         self.placement_correct = !self.runs.is_empty();
         Some(self.runs.clone())
+    }
+
+    /// Every other track this session's shove (if any) displaced, by
+    /// source `Track::id`, keyed so the latest position for a given track
+    /// across however many fix/finish calls touched it wins -- the
+    /// caller's final commit must remove and re-add each of these
+    /// alongside this session's own new runs, in the same undo step
+    /// (`crate::router`/`Cmd::CommitRoute`).
+    pub fn displaced_tracks(&self) -> impl Iterator<Item = (&str, &Line)> {
+        self.displaced_tracks.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// Every via this session's shove moved, by source `Via::id`.
+    pub fn displaced_vias(&self) -> impl Iterator<Item = (&str, Point)> {
+        self.displaced_vias.iter().map(|(k, &v)| (k.as_str(), v))
     }
 }
 
@@ -410,5 +493,27 @@ mod tests {
         assert_eq!(placer.origin, Point { x: 1000, y: 0 });
         let pv = placer.preview(&node, &rules, &settings, Point { x: 2000, y: 0 });
         assert_eq!(pv.head.layer, 1);
+    }
+
+    #[test]
+    fn shove_mode_pushes_a_crossing_track_and_records_it_for_commit() {
+        use crate::item::Segment;
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 2500, y: -2000 }, b: Point { x: 2500, y: 2000 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+
+        let pv = placer.preview(&node, &rules, &settings, Point { x: 5000, y: 0 });
+        assert!(!pv.colliding, "shove must resolve the crossing, not just report it");
+        assert_eq!(pv.head.pts, vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }], "shove moves the obstacle, not the pusher");
+        assert_eq!(pv.displaced_lines.len(), 1);
+        assert!(placer.displaced_tracks().next().is_none(), "preview alone must not persist anything");
+
+        let outcome = placer.finish(&node, &rules, &settings, Point { x: 5000, y: 0 }).expect("collision-free shoved finish must succeed");
+        assert_eq!(outcome.len(), 1);
+        let displaced: Vec<_> = placer.displaced_tracks().collect();
+        assert_eq!(displaced.len(), 1);
+        assert_eq!(displaced[0].0, "trkA");
     }
 }
