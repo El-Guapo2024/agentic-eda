@@ -66,6 +66,23 @@ pub struct ImportNotes {
     pub zones_skipped: usize,
     pub track_arcs_approximated: usize,
     pub non_rect_pad_shapes_approximated: usize,
+    /// A `(pad ...)` whose own `(layers ...)` list names no copper layer at
+    /// all (no `F.Cu`/`B.Cu`/`*.Cu`/inner `.Cu`) -- dropped on import rather
+    /// than kept as a phantom copper pad. Real boards use this for a
+    /// paste-stencil-only or mask-only auxiliary "pad" (a generator's way to
+    /// carry extra paste/mask geometry, e.g. a thermal pad split into
+    /// solder-paste quadrants for a QFN/SON "PullBack" footprint): it has no
+    /// electrical role and, critically, no copper to collide with anything,
+    /// so flashing it on the footprint's copper layer anyway (this crate's
+    /// old, kind-only convention: every `smd` pad flashes on `F.Cu`/`B.Cu`)
+    /// fabricated foreign-looking copper that doesn't exist, which was
+    /// GAPS.md #3's third over-firing source (confirmed on `issue11814`'s
+    /// U4, a WSON-8-1EP: its thermal pad "9" is real `F.Cu`, but the four
+    /// unnumbered `F.Paste`-only quadrant pads sitting on top of it are not,
+    /// and were being tested for clearance/shorting against pad 9 and a
+    /// nearby via as if they were).
+    #[serde(default)]
+    pub non_copper_pads_skipped: usize,
     /// How the board outline was reconstructed: "poly" (one closed
     /// `gr_poly`), "circle" (one `gr_circle`), "lines" (chained
     /// `gr_line`/`gr_rect`/`gr_arc` edges), or "none" (nothing found).
@@ -593,6 +610,19 @@ pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, note
             PadShape::Rect
         }
     };
+
+    // A pad with a `(layers ...)` list naming no copper layer at all has no
+    // copper to flash anywhere -- see `ImportNotes::non_copper_pads_skipped`.
+    // An absent `(layers ...)` (never real on a board pad, but harmless to
+    // tolerate) is not treated as "no copper": only an explicit, entirely
+    // non-copper list skips the pad.
+    if let Some(layers) = sexpr::find(pad, "layers") {
+        let names: Vec<&str> = layers.iter().skip(1).filter_map(Sexpr::text).collect();
+        if !names.is_empty() && !names.iter().any(|l| *l == "*.Cu" || l.ends_with(".Cu")) {
+            notes.non_copper_pads_skipped += 1;
+            return None;
+        }
+    }
 
     let pad_at = sexpr::find(pad, "at")?;
     let (px, py) = (sexpr::num(pad_at, 1)?, sexpr::num(pad_at, 2)?);
@@ -1299,6 +1329,37 @@ mod tests {
         // it rather than growing a new one every time.
         assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &top_pads), lib_id);
         assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &bottom_pads), key_bottom);
+    }
+
+    /// GAPS.md #3's third over-firing source, pinned to `issue11814`'s U4
+    /// (`WSON-8-1EP_..._PullBack`): a thermal pad split into real copper
+    /// (pad "9", `F.Cu`) plus four unnumbered, netless `F.Paste`-only
+    /// quadrant pads layered on top for paste-stencil control. Before this
+    /// fix, every one of those four was imported as if it flashed real
+    /// copper (this crate's old kind-only layer convention), so it was
+    /// clearance/shorting-tested against pad 9 and a nearby via sitting at
+    /// the exact same spot -- a 100% false positive, since a paste aperture
+    /// has no copper to short or crowd anything.
+    #[test]
+    fn paste_only_pad_has_no_copper_and_is_dropped() {
+        let mut notes = ImportNotes::default();
+        let paste_only = sexpr::parse(r#"(pad "" smd roundrect (at -0.3 -0.375 180) (size 0.48 0.6) (layers "F.Paste") (roundrect_rratio 0.25))"#).unwrap();
+        assert!(parse_pad_geometry(paste_only.as_list().unwrap(), Side::Top, 0, &mut notes).is_none(), "an F.Paste-only pad has no copper and must not become a phantom copper pad");
+        assert_eq!(notes.non_copper_pads_skipped, 1);
+
+        // A real copper pad (even one that also carries F.Paste/F.Mask)
+        // must be unaffected.
+        let mut notes2 = ImportNotes::default();
+        let real = sexpr::parse(r#"(pad "9" smd rect (at 0 0 180) (size 1.2 1.5) (layers "F.Cu" "F.Paste" "F.Mask") (net 2 "GND"))"#).unwrap();
+        assert!(parse_pad_geometry(real.as_list().unwrap(), Side::Top, 0, &mut notes2).is_some());
+        assert_eq!(notes2.non_copper_pads_skipped, 0);
+
+        // A through-hole pad's `(layers "*.Cu" "*.Mask")` must count as
+        // copper via the wildcard, not just a literal `F.Cu`/`B.Cu`.
+        let mut notes3 = ImportNotes::default();
+        let th = sexpr::parse(r#"(pad "1" thru_hole circle (at 0 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (net 1 "GND"))"#).unwrap();
+        assert!(parse_pad_geometry(th.as_list().unwrap(), Side::Top, 0, &mut notes3).is_some());
+        assert_eq!(notes3.non_copper_pads_skipped, 0);
     }
 
     #[test]
