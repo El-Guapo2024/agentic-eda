@@ -128,6 +128,7 @@ fn fixture() -> (Design, ConstraintModel) {
         drawings: Some(DrawingsSection {
             shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 1_000, y: 13_000 }, end: Point { x: 19_000, y: 13_000 } }],
             texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 10_000, y: 13_800 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            ..Default::default()
         }),
     };
     (design, model)

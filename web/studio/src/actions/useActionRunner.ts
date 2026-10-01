@@ -370,6 +370,30 @@ export function useActionRunner() {
     m.set("common.Interactive.duplicate", pcbOnly(() => api.duplicateSelection()));
     m.set("common.Interactive.copy", pcbOnly(() => api.copySelection()));
     m.set("common.Interactive.paste", pcbOnly(() => api.pasteClipboard()));
+    // Task item 5: common/tool/group_tool.cpp (Ctrl+G/Ctrl+Shift+G -- see
+    // useGlobalHotkeys.ts's own special-cased binding for why those two
+    // hotkeys are hardcoded there instead of read from actions.json).
+    m.set("common.Interactive.group", pcbOnly(() => api.groupSelection()));
+    m.set("common.Interactive.ungroup", pcbOnly(() => api.ungroupSelection()));
+    // `EnterGroup`: only fires for a single selected group, matching
+    // source's own `selection.GetSize() == 1 && selection[0]->Type() ==
+    // PCB_GROUP_T` guard. `LeaveGroup`: re-selects the group itself,
+    // matching `ExitGroup(true /* Select the group */)`.
+    m.set(
+      "common.Interactive.groupEnter",
+      pcbOnly(() => {
+        const refs = [...state.selection];
+        if (refs.length === 1 && api.groupById(refs[0]!)) dispatch({ type: "SET_ENTERED_GROUP", id: refs[0]! });
+      })
+    );
+    m.set(
+      "common.Interactive.groupLeave",
+      pcbOnly(() => {
+        const leftId = state.enteredGroupId;
+        dispatch({ type: "SET_ENTERED_GROUP", id: null });
+        if (leftId) dispatch({ type: "SET_SELECTION", refs: [leftId] });
+      })
+    );
     m.set(
       "pcbnew.InteractiveEdit.moveExact",
       pcbOnly(() => {

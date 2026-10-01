@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -359,6 +359,38 @@ pub enum Cmd {
     /// true`. Does not disable the feature (`TeardropSettings::enabled`
     /// is untouched) -- same split upstream's own dialog buttons have.
     RemoveAllTeardrops,
+
+    // ------------------------------------------------------------ groups
+    //
+    // Task item 5: `common/tool/group_tool.cpp` -- see `eda_model::ir::
+    // Group`'s own doc for the storage choice and the no-nested-groups
+    // scope.
+    /// Ctrl+G: create a new group from `ids` (parts, tracks, vias, zones,
+    /// shapes, texts). Refused with fewer than 2 ids -- a one-item "group"
+    /// is meaningless, matching source's own `ACTIONS::group.Enable(
+    /// selectionCount >= 2)`. Any named id that is itself an existing
+    /// group is flattened into the new one (its own members are pulled in
+    /// and it is deleted) rather than nested, since this model has no
+    /// group-of-groups concept.
+    Group { ids: Vec<String> },
+    /// Ctrl+Shift+G: dissolve every named group, releasing its members
+    /// (which stay on the board, exactly where they are, just no longer
+    /// grouped). An id that does not name a group is silently skipped,
+    /// not refused -- the dialog's own context menu only ever sends real
+    /// group ids, but a stale id from a since-changed board should not
+    /// abort the rest of the batch.
+    Ungroup { ids: Vec<String> },
+    /// `ACTIONS::addToGroup`: add `ids` to an existing group, pulling each
+    /// one out of whatever other group it already belonged to first (an
+    /// item is only ever in one group at a time, matching the no-nested-
+    /// groups scope).
+    AddToGroup { group_id: String, ids: Vec<String> },
+    /// `ACTIONS::removeFromGroup`: remove `ids` from whatever group each
+    /// currently belongs to (a no-op for one that isn't in any group). A
+    /// group left with fewer than 2 members is dissolved entirely --
+    /// `GROUP_TOOL::RemoveFromGroup`'s own `if (group->GetItems().size() <
+    /// 2) group->RemoveAll()` rule, ported exactly.
+    RemoveFromGroup { ids: Vec<String> },
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -903,6 +935,8 @@ impl Cmd {
             Cmd::EditTextAndGraphics { shape_ids, text_ids, .. } => shape_ids.iter().chain(text_ids.iter()).map(String::as_str).collect(),
             Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
             Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
+            Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
+            Cmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -1011,6 +1045,15 @@ impl Outcome {
     pub fn level(&self) -> bool {
         self.after == self.before
     }
+}
+
+/// A group with fewer than 2 members is meaningless and dissolves --
+/// `GROUP_TOOL::RemoveFromGroup`'s own rule (`task item 5`), applied
+/// uniformly everywhere a group's membership can shrink: explicit
+/// `RemoveFromGroup`, and a member getting pulled into a different group
+/// via `Group`/`AddToGroup`.
+fn prune_empty_groups(dr: &mut DrawingsSection) {
+    dr.groups.retain(|g| g.member_ids.len() >= 2);
 }
 
 impl<'a> Board<'a> {
@@ -1196,6 +1239,10 @@ impl<'a> Board<'a> {
             Cmd::SetTeardropSettings { settings } => self.set_teardrop_settings(*settings),
             Cmd::AddAllTeardrops => self.add_all_teardrops(),
             Cmd::RemoveAllTeardrops => self.remove_all_teardrops(),
+            Cmd::Group { ids } => self.group_items(ids),
+            Cmd::Ungroup { ids } => self.ungroup_items(ids),
+            Cmd::AddToGroup { group_id, ids } => self.add_to_group(group_id, ids),
+            Cmd::RemoveFromGroup { ids } => self.remove_from_group(ids),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
@@ -2154,6 +2201,84 @@ impl<'a> Board<'a> {
     fn remove_all_teardrops(&mut self) -> Result<(), Vec<CheckResult>> {
         if let Some(rt) = self.design.routing.as_mut() {
             rt.zones.retain(|z| !z.teardrop);
+        }
+        Ok(())
+    }
+
+    // ----------------------------------------------------------- groups
+
+    /// `Cmd::Group`: create a new group, flattening in any selected
+    /// existing group's own members (see `Cmd::Group`'s own doc on why --
+    /// no nested groups). An item pulled in that belonged to some other,
+    /// untouched group leaves that group (one group per item at a time).
+    fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        if ids.len() < 2 {
+            return Err(vec![CheckResult::fail("ops_bad_group", "group", "a group needs at least two items")]);
+        }
+        let dr = self.drawings_mut();
+        let mut members: Vec<String> = Vec::new();
+        let mut flattened: Vec<String> = Vec::new();
+        for id in ids {
+            if let Some(g) = dr.groups.iter().find(|g| &g.id == id) {
+                members.extend(g.member_ids.iter().cloned());
+                flattened.push(id.clone());
+            } else {
+                members.push(id.clone());
+            }
+        }
+        dr.groups.retain(|g| !flattened.contains(&g.id));
+
+        let mut seen = BTreeSet::new();
+        members.retain(|m| seen.insert(m.clone()));
+
+        for g in dr.groups.iter_mut() {
+            g.member_ids.retain(|m| !members.contains(m));
+        }
+        prune_empty_groups(dr);
+
+        dr.groups.push(Group { id: String::new(), name: String::new(), member_ids: members });
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    /// `Cmd::Ungroup`: dissolve every named group. An id not naming a
+    /// group is silently skipped -- see `Cmd::Ungroup`'s own doc.
+    fn ungroup_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        if let Some(dr) = self.design.drawings.as_mut() {
+            dr.groups.retain(|g| !ids.iter().any(|id| id == &g.id));
+        }
+        Ok(())
+    }
+
+    /// `Cmd::AddToGroup`.
+    fn add_to_group(&mut self, group_id: &str, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        let dr = self.drawings_mut();
+        if !dr.groups.iter().any(|g| g.id == group_id) {
+            return Err(vec![CheckResult::fail("ops_unknown_group", group_id, "no group with this id")]);
+        }
+        for g in dr.groups.iter_mut().filter(|g| g.id != group_id) {
+            g.member_ids.retain(|m| !ids.contains(m));
+        }
+        prune_empty_groups(dr);
+        // `group_id`'s own group is never itself a candidate for pruning
+        // above (its membership only grows here), so it is always still
+        // present to find and extend.
+        let g = dr.groups.iter_mut().find(|g| g.id == group_id).expect("group_id was checked present and is never pruned by this function");
+        for id in ids {
+            if !g.member_ids.contains(id) {
+                g.member_ids.push(id.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// `Cmd::RemoveFromGroup`.
+    fn remove_from_group(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        if let Some(dr) = self.design.drawings.as_mut() {
+            for g in dr.groups.iter_mut() {
+                g.member_ids.retain(|m| !ids.contains(m));
+            }
+            prune_empty_groups(dr);
         }
         Ok(())
     }

@@ -1453,6 +1453,42 @@ impl Text {
     }
 }
 
+/// Task item 5: `common/tool/group_tool.cpp` / `pcbnew/pcb_group.cpp`'s
+/// `PCB_GROUP` -- a named set of member item ids, no geometry of its own
+/// (its on-screen box is always derived from its members). Lives on
+/// `DrawingsSection` rather than a new top-level `Design` field purely
+/// for the lowest construction-site ripple (`DrawingsSection` already
+/// derives `Default` and every existing literal already spreads it); a
+/// group can reference a footprint/track/via/zone/shape/text id, not
+/// just a drawing, so this is a storage-convenience choice, not a claim
+/// that a group *is* a drawing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Group {
+    /// Stable id (`grp_xxxxxxxxxxxx`). Deterministic from the member id
+    /// set (sorted, so member order never matters) -- see `Track`/`Zone`'s
+    /// own docs for why every id here is content-derived, never random.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// `PCB_GROUP::GetName()`. Empty = unnamed (KiCad's own default).
+    #[serde(default)]
+    pub name: String,
+    /// Ids of every direct member -- a part reference, or a track/via/
+    /// zone/shape/text id. Never another group's id: this model has no
+    /// nested-group concept (`eda_group.h`'s `EDA_GROUP` allows a group of
+    /// groups upstream; out of scope here, see `eda_ops::group_items`'s
+    /// own doc).
+    pub member_ids: Vec<String>,
+}
+
+impl Group {
+    fn id_seed(&self) -> String {
+        let mut members = self.member_ids.clone();
+        members.sort();
+        members.join(",")
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DrawingsSection {
@@ -1460,15 +1496,17 @@ pub struct DrawingsSection {
     pub shapes: Vec<Shape>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<Text>,
+    /// Task item 5. See [`Group`]'s own doc for why it lives here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
 }
 
 impl DrawingsSection {
-    /// Assign a deterministic id to every shape/text whose `id` is still
-    /// empty. See [`RoutingSection::assign_missing_ids`] -- same contract,
-    /// same reason for a stable per-kind processing order.
+    /// Assign a deterministic id to every shape/text/group whose `id` is
+    /// still empty. See [`RoutingSection::assign_missing_ids`] -- same
+    /// contract, same reason for a stable per-kind processing order.
     pub fn assign_missing_ids(&mut self) {
-        let mut existing: std::collections::BTreeSet<String> =
-            self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
 
         let mut order: Vec<usize> = (0..self.shapes.len()).collect();
         order.sort_by(|&a, &b| (self.shapes[a].layer(), self.shapes[a].points().first().copied()).cmp(&(self.shapes[b].layer(), self.shapes[b].points().first().copied())));
@@ -1487,6 +1525,16 @@ impl DrawingsSection {
                 let id = next_item_id("txt", &self.texts[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.texts[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.groups.len()).collect();
+        order.sort_by(|&a, &b| self.groups[a].id_seed().cmp(&self.groups[b].id_seed()));
+        for i in order {
+            if self.groups[i].id.is_empty() {
+                let id = next_item_id("grp", &self.groups[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.groups[i].id = id;
             }
         }
     }
@@ -2241,6 +2289,7 @@ mod tests {
         let mut dr = DrawingsSection {
             shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } }],
             texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            ..Default::default()
         };
         dr.assign_missing_ids();
         assert!(!dr.shapes[0].id().is_empty());

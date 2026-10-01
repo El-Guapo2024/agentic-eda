@@ -137,6 +137,7 @@ fn round_trips_shapes_and_text() {
             Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 90_000, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
             Text { id: String::new(), content: "made in eda".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 800, stroke_width: 120, justify: TextJustify::Center, mirror: false },
         ],
+        ..Default::default()
     };
     drawings.assign_missing_ids();
 

@@ -7,7 +7,7 @@
 
 import type { BoardState, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
-import { hairlineUm } from "./view";
+import { boundsOfPoints, hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { posture45 } from "./routing";
 import { snapPoint } from "./gridHelper";
@@ -837,9 +837,86 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // draggable handles, shown only in the plain Select tool (same as
   // source only activating the point editor over the selection tool).
   if (opts.activeTool === "select") drawZoneHandles(ctx, view, board, opts);
+  // Task item 5: a selected group's own bounding box, same tier as the
+  // zone corner handles above (a selection-mode indicator, not board
+  // content).
+  if (opts.activeTool === "select") drawSelectedGroups(ctx, view, board, opts);
   // DRC markers last of all -- an overlay above every board layer and
   // the in-progress tool preview, matching real KiCad.
   if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected);
+}
+
+/** The geometry points of a free-standing graphic, for bounding purposes only (not a faithful outline -- an arc's `mid` stands in for its sweep, a circle's `end` for its radius -- see `drawShapeGeometry` for the real rendering). */
+function shapePointsOf(s: Shape): Array<[number, number]> {
+  switch (s.kind) {
+    case "segment":
+    case "rect":
+      return [s.start, s.end];
+    case "arc":
+      return [s.start, s.mid, s.end];
+    case "circle":
+      return [s.center, s.end];
+    case "polygon":
+      return s.pts;
+  }
+}
+
+/**
+ * Task item 5: a selected group draws as a dashed box around the union of
+ * its members' geometry -- this model's stand-in for `PCB_GROUP::
+ * ViewBBox()` (also just the union of its members' own boxes upstream).
+ * Member kinds this model doesn't have yet (schematic symbols/wires) are
+ * simply never found by the lookups below and contribute nothing, rather
+ * than erroring.
+ */
+function drawSelectedGroups(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  const groups = board.drawings?.groups ?? [];
+  for (const g of groups) {
+    if (!opts.selection.has(g.id)) continue;
+
+    const pts: Array<[number, number]> = [];
+    for (const id of g.member_ids) {
+      const part = board.parts.find((p) => p.ref === id);
+      if (part) {
+        if (part.courtyard) pts.push([part.courtyard[0], part.courtyard[1]], [part.courtyard[2], part.courtyard[3]]);
+        else if (part.at) pts.push(part.at);
+        continue;
+      }
+      const track = board.routing?.tracks.find((t) => t.id === id);
+      if (track) {
+        pts.push(...track.pts);
+        continue;
+      }
+      const via = board.routing?.vias.find((v) => v.id === id);
+      if (via) {
+        pts.push([via.x - via.d / 2, via.y - via.d / 2], [via.x + via.d / 2, via.y + via.d / 2]);
+        continue;
+      }
+      const zone = board.routing?.zones.find((z) => z.id === id);
+      if (zone) {
+        pts.push(...zone.outline);
+        continue;
+      }
+      const shape = board.drawings?.shapes.find((s) => s.id === id);
+      if (shape) {
+        pts.push(...shapePointsOf(shape));
+        continue;
+      }
+      const text = board.drawings?.texts.find((t) => t.id === id);
+      if (text) pts.push([text.x, text.y]);
+    }
+
+    const b = boundsOfPoints(pts);
+    if (!b) continue;
+    const pad = hairlineUm(view, 12);
+    ctx.save();
+    ctx.strokeStyle = layerColor("selection");
+    ctx.lineWidth = hairlineUm(view, 2);
+    ctx.setLineDash([hairlineUm(view, 8), hairlineUm(view, 5)]);
+    ctx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2);
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
 }
 
 /**

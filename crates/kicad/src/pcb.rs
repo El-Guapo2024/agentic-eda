@@ -728,6 +728,7 @@ mod tests {
                 Text { id: "t1".into(), content: "REV A".into(), at: Point { x: 1000, y: 2000 }, angle: 90_000, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Left, mirror: true },
                 Text { id: "t2".into(), content: "centred".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Fab".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false },
             ],
+            ..Default::default()
         });
         let a = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let b = export_kicad_pcb(&design, &model, &meta()).unwrap();

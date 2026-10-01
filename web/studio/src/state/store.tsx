@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -363,6 +363,11 @@ export interface StudioState {
   glbError: string | null;
 
   selection: Set<string>;
+  /** `common.Interactive.groupEnter`/`groupLeave` (task item 5): the one
+   * group, if any, currently "entered" -- while inside it, clicking one of
+   * its own members selects that member alone instead of the whole group
+   * (see `withGroupSubstitution` in this file). `null` outside any group. */
+  enteredGroupId: string | null;
   /** Refs to flash/outline because a problem in the panel references them. */
   hot: Set<string>;
   netHighlight: string | null;
@@ -613,6 +618,7 @@ const initialState: StudioState = {
   glbStatus: "idle",
   glbError: null,
   selection: new Set(),
+  enteredGroupId: null,
   hot: new Set(),
   netHighlight: null,
   armed: null,
@@ -703,6 +709,7 @@ export type Action =
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
   | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
   | { type: "SET_SELECTION"; refs: string[] }
+  | { type: "SET_ENTERED_GROUP"; id: string | null }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -784,6 +791,25 @@ export type Action =
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN"; open: boolean };
 
+/**
+ * `pcb_selection_tool.cpp`'s "clicking a group member selects the group"
+ * rule (task item 5): any ref that is a member of a group becomes that
+ * group's own id instead, *unless* `enteredGroupId` names that same group
+ * (`common.Interactive.groupEnter` -- see `StudioState.enteredGroupId`'s
+ * own doc), in which case the ref passes through unchanged so individual
+ * members can be picked while "inside" the group. A ref naming a group
+ * directly, or not in any group, also passes through unchanged.
+ */
+function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
+  if (!groups || groups.length === 0) return refs;
+  const byMember = new Map<string, string>();
+  for (const g of groups) for (const m of g.member_ids) byMember.set(m, g.id);
+  return refs.map((id) => {
+    const groupId = byMember.get(id);
+    return groupId && groupId !== enteredGroupId ? groupId : id;
+  });
+}
+
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
     case "BOARD_OK": {
@@ -816,7 +842,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
     case "SET_SELECTION":
-      return { ...state, selection: new Set(action.refs), armed: null };
+      return { ...state, selection: new Set(withGroupSubstitution(action.refs, state.board?.drawings?.groups, state.enteredGroupId)), armed: null };
+    case "SET_ENTERED_GROUP":
+      return { ...state, enteredGroupId: action.id };
     case "TOGGLE_SELECTION": {
       const next = new Set(state.selection);
       if (next.has(action.ref)) next.delete(action.ref);
@@ -877,7 +905,16 @@ function reducer(state: StudioState, action: Action): StudioState {
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
       }
-      // Idle, nothing selected: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
+      // Task item 5: nothing selected but still inside a group -- source's
+      // own next `else if` tier, `ExitGroup()` (re-selecting the group
+      // itself, `ExitGroup(true)`'s default -- matches
+      // `common.Interactive.groupLeave`'s own `SET_SELECTION` in
+      // useActionRunner.ts).
+      if (state.enteredGroupId != null) {
+        const leftId = state.enteredGroupId;
+        return { ...state, enteredGroupId: null, selection: new Set([leftId]) };
+      }
+      // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
       return { ...state, netHighlight: null };
     }
     case "SET_HOT":
@@ -1068,6 +1105,8 @@ export interface StudioApi {
   zoneById: (id: string) => Zone | undefined;
   shapeById: (id: string) => Shape | undefined;
   textById: (id: string) => BoardText | undefined;
+  /** Task item 5. */
+  groupById: (id: string) => Group | undefined;
   symbolById: (id: string) => SchematicSymbol | undefined;
   wireById: (id: string) => SchematicWire | undefined;
   schTextById: (id: string) => SchematicText | undefined;
@@ -1089,6 +1128,10 @@ export interface StudioApi {
    * handing straight off to doMoveSelection in source.
    */
   duplicateSelection: () => Promise<void>;
+  /** Ctrl+G: group the current selection (2+ items), then select the new group as a unit. */
+  groupSelection: () => Promise<void>;
+  /** Ctrl+Shift+G: dissolve every group named in the current selection, then select their former members. */
+  ungroupSelection: () => Promise<void>;
   /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
   copySelection: () => void;
   /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
@@ -1263,6 +1306,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     trackById: (id) => stateRef.current.board?.routing?.tracks.find((t) => t.id === id),
     viaById: (id) => stateRef.current.board?.routing?.vias.find((v) => v.id === id),
     zoneById: (id) => stateRef.current.board?.routing?.zones.find((z) => z.id === id),
+    groupById: (id) => stateRef.current.board?.drawings?.groups.find((g) => g.id === id),
     shapeById: (id) => stateRef.current.board?.drawings?.shapes.find((s) => s.id === id),
     textById: (id) => stateRef.current.board?.drawings?.texts.find((t) => t.id === id),
     symbolById: (id) => stateRef.current.schematic?.symbols.find((s) => s.id === id),
@@ -1483,6 +1527,33 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
+    },
+    // `common.Interactive.group`/`ungroup` (task item 5). `state.selection`
+    // already holds whatever `withGroupSubstitution` resolved a click to
+    // (a group's own id for any of its members), so a multi-select here is
+    // already "the right set of things to act on" with no extra lookup.
+    groupSelection: async () => {
+      const board = stateRef.current.board;
+      if (!board) return;
+      const ids = [...stateRef.current.selection];
+      if (ids.length < 2) return;
+      const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
+      const ok = await runCmd({ op: "group", ids });
+      if (!ok) return;
+      const after = stateRef.current.board;
+      const newGroupId = (after?.drawings?.groups ?? []).map((g) => g.id).find((id) => !before.has(id));
+      if (newGroupId) dispatch({ type: "SET_SELECTION", refs: [newGroupId] });
+    },
+    ungroupSelection: async () => {
+      const groupIds = [...stateRef.current.selection].filter((id) => api.groupById(id));
+      if (groupIds.length === 0) return;
+      // Capture members before they're released, so the resulting
+      // selection is "whatever was inside" -- source's own Ungroup
+      // selects the released members, not nothing.
+      const members = groupIds.flatMap((id) => api.groupById(id)?.member_ids ?? []);
+      const ok = await runCmd({ op: "ungroup", ids: groupIds });
+      if (!ok) return;
+      dispatch({ type: "SET_SELECTION", refs: members });
     },
     addZone: async (net, layer, outline, settings) => {
       const board = stateRef.current.board;

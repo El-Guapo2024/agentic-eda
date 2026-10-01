@@ -999,10 +999,9 @@ export function Canvas() {
   /**
    * pcb_selection_tool.cpp Main()'s IsDblClick handler: if nothing's
    * selected yet, selectPoint() at the click first; a single selected
-   * group enters it, anything else runs PCB_ACTIONS::properties. This
-   * app has no groups, so double-click always opens the clicked (or
-   * already-selected single) item's properties view -- the same
-   * dispatch useActionRunner.ts's "E" hotkey uses (properties.ts).
+   * group enters it (task item 5's `common.Interactive.groupEnter`,
+   * `EnterGroup()`), anything else runs PCB_ACTIONS::properties -- the
+   * same dispatch useActionRunner.ts's "E" hotkey uses (properties.ts).
    */
   const onDoubleClick = (e: React.MouseEvent) => {
     if (state.drawState) {
@@ -1039,7 +1038,23 @@ export function Canvas() {
       refs = [candidates[0]!.id];
       dispatch({ type: "SET_SELECTION", refs });
     }
-    if (refs.length === 1) openPropertiesFor(refs[0]!, api, dispatch);
+    if (refs.length === 1) {
+      // `refs[0]` may already be a group's own id (SET_SELECTION's own
+      // substitution, state/store.tsx's `withGroupSubstitution`, already
+      // ran for anything picked from a pre-existing `state.selection`), or
+      // still a raw member id (the empty-selection branch just above,
+      // whose dispatch hasn't re-rendered yet) -- checked the same way
+      // either case. Re-entering the group already entered falls through
+      // to properties instead, same as double-clicking a member while
+      // already inside its own group.
+      const groups = board.drawings?.groups ?? [];
+      const hitGroup = groups.find((g) => g.id === refs[0] || g.member_ids.includes(refs[0]!));
+      if (hitGroup && hitGroup.id !== state.enteredGroupId) {
+        dispatch({ type: "SET_ENTERED_GROUP", id: hitGroup.id });
+        return;
+      }
+      openPropertiesFor(refs[0]!, api, dispatch);
+    }
   };
 
   return (

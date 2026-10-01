@@ -37,6 +37,15 @@ export function useGlobalHotkeys() {
       add(hotkey, a.name);
       add(altHotkey, a.name);
     }
+    // Task item 5: common.Interactive.group/ungroup's extracted hotkey is
+    // null (same extraction gap group_tool.cpp's own default-hotkey
+    // registration apparently hits -- every other common.Groups.*/
+    // common.Interactive.*Group* action is null too), but the task brief
+    // names Ctrl+G/Ctrl+Shift+G explicitly, matching real KiCad's actual
+    // shipped defaults; added directly here rather than guessed at in the
+    // extractor.
+    add("Ctrl+G", "common.Interactive.group");
+    add("Ctrl+Shift+G", "common.Interactive.ungroup");
     return idx;
   }, []);
 

@@ -279,6 +279,7 @@ fn kicad_cli_drc_shapes_and_text() {
             justify: eda_model::ir::TextJustify::Center,
             mirror: false,
         }],
+        ..Default::default()
     };
     drawings.assign_missing_ids();
 

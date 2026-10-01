@@ -841,6 +841,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 },
                 "mirror": t.mirror,
             })).collect::<Vec<_>>(),
+            // Task item 5 -- see `eda_model::ir::Group`'s own doc.
+            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).collect::<Vec<_>>(),
         })
     });
     Ok(json!({

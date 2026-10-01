@@ -551,3 +551,48 @@ centre really lands inside the generated pentagon). `crates/ops/src/lib.rs`:
 Teardrops page (settings + both buttons), `painter.ts`'s teardrop
 render branch, `pcbnew.GlobalEdit.editTeardrops` wired to open Board
 Setup landed on that page (`state.boardSetupInitialPage`).
+
+## 16. Groups
+
+Port of `common/tool/group_tool.cpp` and the entered-group half of
+`pcbnew/tools/pcb_selection_tool.cpp` (task item 5): group/ungroup
+(Ctrl+G / Ctrl+Shift+G), selecting a group as a single unit, and
+entering/leaving one. A group is its own IR type (`Group`: id, name,
+`member_ids`), not a special item flag on something else -- matching
+`PCB_GROUP` being a real, separate item type upstream too.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| IR: `Group { id, name, member_ids }`, additive, stored on `DrawingsSection` | identical in shape; stored on `DrawingsSection` purely for the lowest construction-site ripple (see `Group`'s own doc) -- a member id can name a part, track, via, zone, shape or text, not just a drawing | `pcbnew/pcb_group.h`'s `PCB_GROUP` |
+| Ctrl+G: group the current selection (2+ items) | identical in effect | `group_tool.cpp`'s `Group()`, `ACTIONS::group.Enable(selectionCount >= 2)` |
+| Ctrl+Shift+G: ungroup, releasing members in place | identical in effect | `group_tool.cpp`'s `Ungroup()` |
+| Grouping a selection that includes an existing group flattens that group's members into the new one instead of nesting | ported as the model's defined behavior, not a compatibility shim -- this IR has no group-of-groups concept at all (`EDA_GROUP` allows nesting upstream; out of scope here) | `eda_model::ir::Group`'s own doc, `eda_ops`'s `group_items` |
+| An item belongs to at most one group; joining a new group (or `AddToGroup`) silently leaves whatever group it was already in; a group left with fewer than 2 members is dissolved | identical in effect | `GROUP_TOOL::Group`/`AddToGroup`/`RemoveFromGroup`'s own `if (group->GetItems().size() < 2) group->RemoveAll()` rule |
+| `AddToGroup`/`RemoveFromGroup` as `Cmd`s | ported in the ops layer (both tested) but not reachable from the UI -- no context-menu entry or hotkey calls them; only `Group`/`Ungroup` (hotkeys) and whole-group selection/dissolution are wired today | `ACTIONS::addToGroup`/`removeFromGroup` -- normally a context-menu-only pair upstream too, just not ported here |
+| Selecting any member selects the whole group instead (unless you're inside it) | ported as one substitution choke point in the `SET_SELECTION` reducer case (`withGroupSubstitution`, `state/store.tsx`) rather than touching every selection call site in `Canvas.tsx` | `PCB_SELECTION_TOOL::SelectPoint`'s own promote-to-top-level-group step |
+| Entering a group (double-click a single selected group) lets you select/edit its members directly | ported: `Canvas.tsx`'s `onDoubleClick` checks the clicked/selected id against `board.drawings.groups` (by own id or membership) and dispatches `SET_ENTERED_GROUP` instead of opening properties, mirroring source's `m_selection.GetSize() == 1 && Type() == PCB_GROUP_T -> EnterGroup()` ordering exactly | `pcb_selection_tool.cpp`'s `Main()` dblclick handler, `EnterGroup()` |
+| Leaving a group: Escape | ported as a new tier in the existing `ESCAPE` reducer case, slotted exactly where source puts it -- selection-non-empty still wins first, then entered-group-exit, then idle net-highlight-clear last | `pcb_selection_tool.cpp`'s `IsCancel()` handler, `ExitGroup()`'s `aSelectGroup` default (re-selects the group) |
+| Leaving a group: click/click-elsewhere outside its bounding box; explicit "Leave Group" context-menu action | not ported -- `common.Interactive.groupLeave` exists and is correctly wired in `useActionRunner.ts` (dispatches the same re-select-the-group behavior Escape now also triggers) but nothing in the UI calls it yet, since there's no group entry in the right-click menu; Escape is the only exit path today | `pcb_selection_tool.cpp`'s bounding-box auto-exit check, `PCB_ACTIONS::groupLeave` |
+| Visual: dashed bounding-box outline around a selected group | ported, a simplified stand-in for source's real selection-halo rendering | `painter.ts`'s `drawSelectedGroups` (`boundsOfPoints` over every member's own points) |
+| Visual: "entered group" dimming/overlay of everything outside it; a named group's own label | not ported -- entering a group changes selection/selectability semantics only, with no distinct rendering of the entered state yet | `pcb_selection_tool.cpp`'s `m_enteredGroupOverlay`, `pcb_painter.cpp`'s group name paint |
+| Group-aware move/rotate/flip/delete (acting on every member as a unit when the group itself is "selected") | not ported -- today's whole-group "selection" is a set of individual member ids under the hood (via substitution at read time), and the existing per-kind edit `Cmd`s have no group-aware bulk path; moving/rotating/deleting "a group" in this app means doing so to each member id already present in `state.selection`, not a single group-level operation | `GROUP_TOOL`'s interaction with `EDIT_TOOL`/`PCB_ACTIONS::move` et al. acting on `PCB_GROUP` as one item |
+| Nested groups (a group containing another group) | not ported, by design -- see the flattening row above | `EDA_GROUP`'s recursive member list |
+| `.kicad_pcb` export/import of a `(group ...)` block | not ported, same documented gap as sections 14-15 | `crates/kicad/src/pcb.rs` |
+
+Rust: `crates/model/src/ir.rs`'s `Group` struct and `DrawingsSection::groups`
+(chosen over `Design` or `RoutingSection` purely on construction-site count,
+documented in `Group`'s own doc comment; `DrawingsSection::assign_missing_ids`
+extended to id groups too, `"grp_"`-prefixed, content-derived from the
+sorted member-id set). `crates/ops/src/lib.rs`: `Cmd::Group`/`Ungroup`/
+`AddToGroup`/`RemoveFromGroup`, `group_items`/`ungroup_items`/`add_to_group`/
+`remove_from_group`/`prune_empty_groups`, 6 new tests in
+`crates/ops/src/tests.rs`. Frontend: `Group` in `api/types.ts`, `Group[]` on
+`Drawings`, `state.enteredGroupId` + `SET_ENTERED_GROUP` + the `ESCAPE`
+reducer's new tier + `withGroupSubstitution` (`state/store.tsx`),
+`groupSelection`/`ungroupSelection`/`groupById` API methods (same
+before/after-diff undo pattern as `duplicateSelection`), hardcoded Ctrl+G/
+Ctrl+Shift+G bindings in `useGlobalHotkeys.ts` (the extraction's own
+hotkeys for these two are null, same gap already noted there for Escape),
+`common.Interactive.group/ungroup/groupEnter/groupLeave` in
+`useActionRunner.ts`, `Canvas.tsx`'s `onDoubleClick` group-enter check,
+`painter.ts`'s `drawSelectedGroups`.

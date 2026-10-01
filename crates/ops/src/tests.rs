@@ -934,6 +934,99 @@ fn edit_text_and_graphics_refuses_empty_input_and_bad_values() {
     assert_eq!(e[0].check, "ops_bad_text");
 }
 
+// -------------------------------------------------------------- groups
+
+#[test]
+fn group_needs_at_least_two_items() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::Group { ids: vec!["U1".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_group");
+}
+
+#[test]
+fn group_then_ungroup_round_trips() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert!(!groups[0].id.is_empty());
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "U1".to_string()]);
+
+    b.apply(&Cmd::Ungroup { ids: vec![groups[0].id.clone()] }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().groups.is_empty());
+}
+
+#[test]
+fn grouping_an_existing_group_flattens_instead_of_nesting() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    let inner_id = b.design().drawings.as_ref().unwrap().groups[0].id.clone();
+
+    b.apply(&Cmd::Group { ids: vec![inner_id.clone(), "C2".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "the inner group must be flattened away, not nested: {groups:?}");
+    assert_ne!(groups[0].id, inner_id, "a flattened-and-rebuilt group gets a fresh id");
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()]);
+}
+
+#[test]
+fn an_item_can_only_belong_to_one_group_at_a_time() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    let first_group_id = b.design().drawings.as_ref().unwrap().groups[0].id.clone();
+
+    // Pulling C1 into a brand new group with C2 must remove it from the
+    // first group -- which then has only 1 member left and dissolves.
+    b.apply(&Cmd::Group { ids: vec!["C1".into(), "C2".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "the now-single-member first group must dissolve: {groups:?}");
+    assert_ne!(groups[0].id, first_group_id);
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "C2".to_string()]);
+}
+
+#[test]
+fn add_to_group_and_remove_from_group_round_trip() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    let group_id = b.design().drawings.as_ref().unwrap().groups[0].id.clone();
+
+    b.apply(&Cmd::AddToGroup { group_id: group_id.clone(), ids: vec!["C2".into()] }).unwrap();
+    let mut members = b.design().drawings.as_ref().unwrap().groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()]);
+
+    let e = b.apply(&Cmd::AddToGroup { group_id: "grp_nope".into(), ids: vec!["U1".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_group");
+
+    // Removing two of the three members leaves only one -- the group must dissolve.
+    b.apply(&Cmd::RemoveFromGroup { ids: vec!["C1".into(), "C2".into()] }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().groups.is_empty(), "{:?}", b.design().drawings.as_ref().unwrap().groups);
+}
+
+#[test]
+fn removing_from_a_group_that_stays_above_two_members_keeps_it_alive() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into(), "C2".into()] }).unwrap();
+    b.apply(&Cmd::RemoveFromGroup { ids: vec!["C1".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C2".to_string(), "U1".to_string()], "C1 should be gone, the other two still grouped");
+}
+
 // ---------------------------------------------------- clears_routing
 
 #[test]

@@ -591,6 +591,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetTeardropSettings { .. } => "board-setup teardrops".to_string(),
         Cmd::AddAllTeardrops => "teardrops add-all".to_string(),
         Cmd::RemoveAllTeardrops => "teardrops remove-all".to_string(),
+        Cmd::Group { ids } => format!("group {}", ids.join(" ")),
+        Cmd::Ungroup { ids } => format!("ungroup {}", ids.join(" ")),
+        Cmd::AddToGroup { group_id, ids } => format!("group add-to {group_id} {}", ids.join(" ")),
+        Cmd::RemoveFromGroup { ids } => format!("group remove-from {}", ids.join(" ")),
 
         Cmd::Duplicate { ids } => format!("duplicate {}", ids.join(" ")),
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
@@ -732,6 +736,10 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetTeardropSettings { .. } => "board-setup-teardrops",
         Cmd::AddAllTeardrops => "teardrops-add-all",
         Cmd::RemoveAllTeardrops => "teardrops-remove-all",
+        Cmd::Group { .. } => "group",
+        Cmd::Ungroup { .. } => "ungroup",
+        Cmd::AddToGroup { .. } => "group-add-to",
+        Cmd::RemoveFromGroup { .. } => "group-remove-from",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::MoveExact { .. } => "move-exact",

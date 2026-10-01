@@ -228,6 +228,15 @@ export interface BoardText {
 export interface Drawings {
   shapes: Shape[];
   texts: BoardText[];
+  /** Task item 5 -- `crates/model/src/ir.rs` `Group`. Lives here purely for the lowest construction-site ripple (see that struct's own doc); a group can reference any item kind, not just a drawing. */
+  groups: Group[];
+}
+
+/** `crates/model/src/ir.rs` `Group` (task item 5) -- `PCB_GROUP`: a named set of member item ids (a part reference, or a track/via/zone/shape/text id), no geometry of its own. No nested groups in this model. */
+export interface Group {
+  id: string;
+  name: string;
+  member_ids: string[];
 }
 
 // ------------------------------------------------------- Footprint Editor
@@ -562,6 +571,14 @@ export type Cmd =
   | { op: "add_all_teardrops" }
   /** Drop every generated teardrop zone; leaves `teardrop_settings.enabled` untouched. */
   | { op: "remove_all_teardrops" }
+  /** Ctrl+G: create a new group from `ids` (2+ required). An id naming an existing group is flattened into the new one, not nested. */
+  | { op: "group"; ids: string[] }
+  /** Ctrl+Shift+G: dissolve every named group; an id not naming a group is silently skipped. */
+  | { op: "ungroup"; ids: string[] }
+  /** Add `ids` to an existing group, pulling each out of whatever group it was already in. */
+  | { op: "add_to_group"; group_id: string; ids: string[] }
+  /** Remove `ids` from whatever group each belongs to; a group left with fewer than 2 members dissolves. */
+  | { op: "remove_from_group"; ids: string[] }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**
