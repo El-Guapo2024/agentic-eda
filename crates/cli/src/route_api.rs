@@ -47,6 +47,20 @@ fn err(message: impl Into<String>) -> Value {
     json!({ "ok": false, "message": message.into() })
 }
 
+/// `req.mode` ("mark_obstacles" | "walkaround" | "shove"), defaulting to
+/// `Mode::Walkaround` when absent or unrecognized -- KiCad's own default,
+/// and shared by `start`/`drag_start` so a route session and a drag
+/// session read the one `RoutingSettings::Mode` field the same way (see
+/// `web/studio/src/components/RouterSettingsDialog.tsx`, the frontend's
+/// one place that actually lets a person choose it).
+fn mode_of(req: &Value) -> Mode {
+    match req.get("mode").and_then(Value::as_str) {
+        Some("mark_obstacles") => Mode::MarkObstacles,
+        Some("shove") => Mode::Shove,
+        _ => Mode::Walkaround,
+    }
+}
+
 fn preview_json(router: &Router, preview: &Preview) -> Value {
     json!({
         "ok": true,
@@ -58,12 +72,22 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
         "via": preview.via.map(|(p, diameter, drill)| json!({ "x": p.x, "y": p.y, "diameter": diameter, "drill": drill })),
         "snapped_end": preview.snapped_end.map(|p| json!([p.x, p.y])),
         "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
+        // `Preview::displaced_vias` existed on the Rust side since stage 3
+        // (shove) but was never actually serialized here -- a shove-mode
+        // route preview that would push a via out of the way never showed
+        // that via moving until the route was actually finished. The
+        // board still carries that via's real diameter/drill (it isn't
+        // removed until commit), so the frontend looks those up by id
+        // itself rather than this needing to repeat them.
+        "displaced_vias": preview.displaced_vias.iter().map(|d| json!({ "source_via": d.source_via, "x": d.pos.x, "y": d.pos.y })).collect::<Vec<_>>(),
     })
 }
 
-/// `POST /api/route/start`: `{x, y, layer, width?, mode?}`. `mode` is one
-/// of `"mark_obstacles" | "walkaround" | "shove"` (default `"walkaround"`,
-/// matching KiCad's own default -- see `eda_pns::settings::Mode`).
+/// `POST /api/route/start`: `{x, y, layer, width?, mode?, remove_loops?}`.
+/// `mode` is one of `"mark_obstacles" | "walkaround" | "shove"` (default
+/// `"walkaround"`, matching KiCad's own default -- see
+/// `eda_pns::settings::Mode`); `remove_loops` defaults to `true`
+/// (`RoutingSettings::default()`'s own default).
 pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
@@ -71,11 +95,8 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         Err(e) => return err(board::reasons(&e)),
     };
     let mut router = Router::new(&design, &model);
-    router.settings.mode = match req.get("mode").and_then(Value::as_str) {
-        Some("mark_obstacles") => Mode::MarkObstacles,
-        Some("shove") => Mode::Shove,
-        _ => Mode::Walkaround,
-    };
+    router.settings.mode = mode_of(&req);
+    router.settings.remove_loops = req.get("remove_loops").and_then(Value::as_bool).unwrap_or(true);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     let width = num(&req, "width", model.board.track_width);
@@ -191,12 +212,23 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
         "colliding": preview.colliding,
         "pts": pts_json(&preview.pts),
         "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
+        // See `preview_json`'s matching comment -- same previously-dropped field.
+        "displaced_vias": preview.displaced_vias.iter().map(|d| json!({ "source_via": d.source_via, "x": d.pos.x, "y": d.pos.y })).collect::<Vec<_>>(),
+        // `DragKind::Via` only: the attached tracks' own live stretched
+        // shape, so the frontend can draw them following the via while
+        // the drag is still in progress (see `DragPreview::fanout`'s own
+        // doc comment) -- empty for a corner drag.
+        "fanout": preview.fanout.iter().map(|l| json!({ "layer": router.layer_name(l.layer), "width": l.width, "pts": pts_json(&l.pts) })).collect::<Vec<_>>(),
     })
 }
 
-/// `POST /api/route/drag_start`: `{x, y, layer}`. Builds a fresh `Router`
-/// from the board as it stands right now, same as `start` -- a drag reads
-/// the live board just as much as a route does.
+/// `POST /api/route/drag_start`: `{x, y, layer, mode?}`. Builds a fresh
+/// `Router` from the board as it stands right now, same as `start` -- a
+/// drag reads the live board just as much as a route does. `mode` is the
+/// same `Mode` a route session takes (`mode_of`'s own doc comment) --
+/// `eda_pns::dragger::Dragger` reuses it exactly as upstream's `DRAGGER`
+/// reuses `SHOVE`/`WALKAROUND`; no `remove_loops` here, a route-only
+/// concept upstream's own `DRAGGER` never touches either.
 pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
@@ -204,6 +236,7 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         Err(e) => return err(board::reasons(&e)),
     };
     let mut router = Router::new(&design, &model);
+    router.settings.mode = mode_of(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     match router.drag_start(at, layer) {
@@ -235,6 +268,108 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let at = point_of(&req);
     let Some(commit) = router.drag_finish(at) else {
         return json!({ "ok": false, "message": "drag target still collides; left uncommitted" });
+    };
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
+    match board::step(dir, cmd, true, "ui") {
+        Ok(summary) => json!({ "ok": true, "message": summary }),
+        Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+    }
+}
+
+// --------------------------------------------------------------- differential pairs (stage 6)
+//
+// `6` on a recognized diff-pair net: route two parallel, gap-matched lines
+// at once (`eda_pns::diff_pair::DiffPairPlacer`, driven through
+// `eda_pns::router::Router`'s `*_diff_pair` methods). Shares `RouteCell`/
+// `Router` with the route/drag sessions above -- `Router` itself keeps all
+// three mutually exclusive -- and the existing `cancel` above already ends
+// a diff-pair session too (it just drops the whole cell, session kind
+// notwithstanding).
+
+fn dp_preview_json(router: &Router, preview: &eda_pns::diff_pair::DiffPairPreview) -> Value {
+    let (net_a, net_b) = router.diff_pair_nets().unwrap_or((None, None));
+    let layer_name = router.layer_name(preview.layer);
+    json!({
+        "ok": true,
+        "net_a": net_a,
+        "net_b": net_b,
+        "layer": layer_name,
+        "width": preview.width,
+        "colliding": preview.colliding,
+        "head_a": pts_json(&preview.head_a.pts),
+        "head_b": pts_json(&preview.head_b.pts),
+        "runs_a": preview.runs_a.iter().map(|r| json!({ "layer": layer_name, "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
+        "runs_b": preview.runs_b.iter().map(|r| json!({ "layer": layer_name, "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
+        "snapped_end": preview.snapped_end,
+    })
+}
+
+/// `POST /api/route/dp_start`: `{x, y, layer}`.
+pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let (_, design, model) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let mut router = Router::new(&design, &model);
+    let at = point_of(&req);
+    let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
+    match router.start_diff_pair(at, layer) {
+        Ok(()) => {
+            let reply = router.diff_pair_preview(at).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
+            reply
+        }
+        Err(message) => err(message),
+    }
+}
+
+/// `POST /api/route/dp_move`: `{x, y, flip_posture?}`.
+pub fn dp_move(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    if req.get("flip_posture").and_then(Value::as_bool).unwrap_or(false) {
+        router.flip_diff_pair_posture();
+    }
+    let at = point_of(&req);
+    router.diff_pair_preview(at).map(|p| dp_preview_json(router, &p)).unwrap_or_else(|| err("not routing a diff pair"))
+}
+
+/// `POST /api/route/dp_fix`: `{x, y}`.
+pub fn dp_fix(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    let at = point_of(&req);
+    match router.fix_diff_pair(at) {
+        Some(FixOutcome::Fixed { real_end }) => {
+            let preview = router.diff_pair_preview(at).map(|p| dp_preview_json(router, &p)).unwrap_or_else(|| json!({}));
+            json!({ "ok": true, "blocked": false, "real_end": real_end, "preview": preview })
+        }
+        Some(FixOutcome::Blocked) => json!({ "ok": true, "blocked": true, "message": "still colliding; not fixed" }),
+        None => err("not routing a diff pair"),
+    }
+}
+
+/// `POST /api/route/dp_undo_segment` (Backspace): no body.
+pub fn dp_undo_segment(cell: &RouteCell) -> Value {
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    let popped = router.undo_diff_pair_segment();
+    json!({ "ok": true, "popped": popped })
+}
+
+/// `POST /api/route/dp_finish`: `{x, y}`.
+pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut router = match cell.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        Some(r) => r,
+        None => return err("not routing a diff pair"),
+    };
+    let at = point_of(&req);
+    let Some(commit) = router.finish_diff_pair(at) else {
+        return json!({ "ok": false, "message": "final segment still collides; diff pair left uncommitted" });
     };
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
     match board::step(dir, cmd, true, "ui") {

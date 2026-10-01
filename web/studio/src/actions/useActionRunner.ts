@@ -18,8 +18,11 @@ import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "..
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { finishInteractiveRoute, cancelInteractiveRoute } from "../components/canvas/routing";
-import { routeMove, routeToggleVia, routeUndoSegment } from "../api/client";
+import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment } from "../api/client";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
+import { dpStateFromPreview } from "../kicad-port/dpTool";
+import { finishDiffPairRoute } from "../components/canvas/diffPairRouting";
+import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
@@ -219,6 +222,26 @@ export function useActionRunner() {
       };
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleWidth(1)));
       m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleWidth(-1)));
+    } else if (state.drawState?.kind === "diffpair") {
+      // Same shape as the route branch above, scoped down to what this
+      // port's diff pair actually supports (no via/layer-switch, no width
+      // cycling -- see crates/pns/src/diff_pair.rs's own doc comment).
+      const draw = state.drawState;
+      const cursor = state.cursorUm ?? { x: draw.ptsA[draw.ptsA.length - 1]?.[0] ?? 0, y: draw.ptsA[draw.ptsA.length - 1]?.[1] ?? 0 };
+      m.set(
+        "pcbnew.InteractiveRouter.AttemptFinish",
+        pcbOnly(() => void finishDiffPairRoute(cursor.x, cursor.y, dispatch, api))
+      );
+      m.set(
+        "pcbnew.InteractiveRouter.UndoLastSegment",
+        pcbOnly(() => {
+          dpUndoSegment().then(() =>
+            dpMove(cursor.x, cursor.y).then((preview) => {
+              if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, preview) });
+            })
+          );
+        })
+      );
     } else {
       m.set(
         "pcbnew.InteractiveEdit.flip",
@@ -230,6 +253,51 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveRouter.SingleTrack",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "route" ? "select" : "route" }))
+    );
+    // `6`: same toggle-arm shape as `X` above.
+    m.set(
+      "pcbnew.InteractiveRouter.DiffPair",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "diffpair" ? "select" : "diffpair" }))
+    );
+    // `D` (ROUTER_TOOL::InlineDrag): a one-shot action, not a toggle-arm
+    // like `X` above -- grab whatever's under the cursor right now (or,
+    // failing that, a single already-selected track/via -- see
+    // dragging.ts's `findDraggableAt`) and start dragging it immediately.
+    // Refuses while another click-to-place session (route/zone/shape/wire/
+    // measure) is already mid-flight (`state.drawState`), same as real
+    // pcbnew's tool stack never overlapping two interactive placements.
+    m.set(
+      "pcbnew.InteractiveRouter.Drag45Degree",
+      pcbOnly(() => {
+        if (!state.board || !state.cursorUm || state.drawState) return;
+        const toleranceUm = Math.max(150, 6 / state.view.scale);
+        const onePixelUm = 1 / state.view.scale;
+        const hit = findDraggableAt(state.board, state.selection, state.cursorUm.x, state.cursorUm.y, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+        if (!hit) {
+          dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
+          return;
+        }
+        void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings.mode, dispatch);
+      })
+    );
+    // `Ctrl+<` (dialog_pns_settings.cpp): mode/remove-redundant-tracks,
+    // read fresh by the next `X`/`D` session start -- see
+    // `state.routerSettings`'s own doc comment on why this isn't live
+    // mid-route the way upstream's dialog is.
+    m.set("pcbnew.InteractiveRouter.SettingsDialog", pcbOnly(() => dispatch({ type: "SET_ROUTER_SETTINGS_DIALOG_OPEN", open: true })));
+    // `7` (gap #7 task item 4): length tuning -- see
+    // components/LengthTuningDialog.tsx's own header comment on why this
+    // is a dialog rather than a fourth interactive session. Needs a
+    // single straight track selected first (the dialog itself explains
+    // this when opened with nothing/the wrong thing selected, same as
+    // moveExact's own "only meaningful with something selected" gate).
+    m.set(
+      "pcbnew.LengthTuner.TuneSingleTrack",
+      pcbOnly(() => {
+        const refs = [...state.selection];
+        if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
+        dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
+      })
     );
     m.set(
       "pcbnew.InteractiveDrawing.via",
@@ -457,9 +525,11 @@ export function useActionRunner() {
       // Tell the backend's router session to end too (fire-and-forget --
       // see cancelInteractiveRoute's own doc comment) before the ordinary
       // ESCAPE reducer case clears `drawState` locally; otherwise the
-      // session would linger server-side until the next `start` silently
-      // replaces it.
-      if (state.drawState?.kind === "route") cancelInteractiveRoute(dispatch);
+      // session would linger server-side until the next `start`/
+      // `drag_start` silently replaces it. One backend call covers both
+      // kinds (`POST /api/route/cancel` drops whatever's active on the
+      // shared `Router`), so route/drag/diff-pair all share this one branch.
+      if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch);
       dispatch({ type: "ESCAPE" });
     });
 

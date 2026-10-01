@@ -68,6 +68,20 @@ pub struct DragPreview {
     pub colliding: bool,
     pub displaced_lines: Vec<DisplacedLine>,
     pub displaced_vias: Vec<DisplacedVia>,
+    /// `DragKind::Via` only: the via's own directly-attached tracks, each
+    /// stretched to follow the via's live position. KiCad's real
+    /// `InlineDrag` visibly stretches a dragged item's own connections in
+    /// real time -- that's the whole point of a router-driven drag over a
+    /// plain move -- so the frontend needs a shape to draw for them while
+    /// the drag is still in progress, not just once it commits. Always
+    /// empty for `DragKind::Corner` (no fanout at all -- see
+    /// [`Dragger::candidate`]). Identical in every [`Mode`]: shove only
+    /// ever displaces *other* items out of a pusher's way, it never
+    /// reroutes the pusher's own path (the same reason
+    /// `shove::ShoveOutcome::head` always echoes back its own input), so
+    /// each fanout leg's shape here is simply its own candidate position,
+    /// not something shove could have altered.
+    pub fanout: Vec<Line>,
 }
 
 /// What a finished drag replaces/adds -- `crate::router::Router` turns
@@ -176,7 +190,7 @@ impl Dragger {
                     node.first_colliding(&shape, &l.net, LayerRange::single(l.layer), rules, &exclude).is_some()
                 });
             }
-            return DragPreview { pts: main_pts, colliding, displaced_lines: Vec::new(), displaced_vias: Vec::new() };
+            return DragPreview { pts: main_pts, colliding, displaced_lines: Vec::new(), displaced_vias: Vec::new(), fanout };
         }
 
         // Shove mode: push whatever the dragged shape(s) now collide with.
@@ -216,6 +230,7 @@ impl Dragger {
             colliding,
             displaced_lines: displaced_lines.into_iter().map(|(source_track, line)| DisplacedLine { source_track: Some(source_track), line }).collect(),
             displaced_vias: displaced_vias.into_iter().map(|(source_via, pos)| DisplacedVia { source_via, pos }).collect(),
+            fanout,
         }
     }
 
@@ -313,6 +328,8 @@ mod tests {
         let to = Point { x: 1000, y: 2000 };
         let preview = dragger.preview(&node, &rules, &settings, to);
         assert!(!preview.colliding);
+        assert_eq!(preview.fanout.len(), 1, "the live preview must carry the attached track's stretched shape too, not just the via's own new point");
+        assert_eq!(preview.fanout[0].pts, vec![Point { x: 0, y: 0 }, to], "the fanout track must already end at the via's live (not yet committed) position");
         let commit = dragger.finish(&node, &rules, &settings, to).expect("collision-free via drag must commit");
         assert_eq!(commit.remove_via_ids, vec!["viaA"]);
         assert_eq!(commit.vias[0].0, to);

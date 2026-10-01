@@ -137,11 +137,20 @@ Wiring: `components/canvas/selectionCandidates.ts`, `netAtCursor.ts`,
 | Rotate/flip a footprint (standalone, not mid-move) | identical for 1 item (predates this session); **this session**: 2+ items now share ONE pivot -- `updateModificationPoint`'s real rule (the selection's union-bounding-box center), not each part spinning/mirroring about its own anchor the way an earlier session's docs here incorrectly called "identical" | `edit_tool.cpp:Rotate`/`Flip`, `updateModificationPoint` -- `state/store.tsx`'s `rotateSelection` (now one atomic `Cmd::MoveExact` for the whole group, same single-`BOARD_COMMIT::Push()` undo granularity as source) and `flipSelection` (mirrors each part's X about the shared center via `move_to`, then `flip`'s existing side-toggle -- **documented gap**: this is N separate Cmds, not source's one atomic commit, so undoing a group flip takes 2N Ctrl+Z's, not 1) |
 | Rotate (R/Shift+R) / Flip (F) *during* an active Move | identical for the common case: a dragged footprint spins in place | `edit_tool.cpp`'s own `m_dragging` branch of `Rotate`/`Flip`: the live item is mutated directly mid-drag rather than committing a separate op, and a further rotate during the same drag reuses the *first* rotate's reference point (`updateModificationPoint`'s `m_dragging && HasReferencePoint()` guard). This app can't mutate an uncommitted backend item, so it accumulates the transform on the client-side preview instead (`MovePreview.rotateQuarterTurns`/`flipped`, applied in `painter.ts`'s preview render) and commits move+rotate+flip together as sequential Cmds on drop -- for a **single** selected part this is mathematically identical to source (rotating/flipping about a part's own anchor doesn't move it, so composing the translation and the spin in either order lands on the same pose). **Documented simplification:** a **multi-part** selection rotates/flips each part individually about its own anchor instead of the whole group swinging around one shared pivot the way source's `ROTATE_AROUND_SEL_CENTER`-style group rotation would. **Documented gap:** if R/F is pressed before the mouse has moved even once during a *click-drag* (not the M-armed path, which has no such window), there's no preview yet to attach the rotation to and the keypress is dropped -- `useActionRunner.ts`'s `tryTransformDuringMove` can only see `state.movePreview`/`state.activeTool`, not `Canvas.tsx`'s own pending-drag ref |
 | Move: connected track ends follow the dragged footprint | **does not happen in source either** -- task premise corrected after reading `edit_tool_move_fct.cpp:doMoveSelection` directly: a plain (non-router) Move only ever does `item->Move(movement)` on the selection itself; it never touches a connected-but-unselected track. What source *does* do instead is redraw a live/dynamic ratsnest during the drag (`PCB_ACTIONS::updateLocalRatsnest`) | ported: `kicad-port/localRatsnest.ts:offsetRatsnestForPreview` shifts ratsnest edges touching a moving part's pads by the live preview delta, so the airwire updates every frame instead of only after the move commits and `/api/ratsnest` is re-polled |
-| Router-driven drag (D, "Drag 45 Degree Mode") -- the *actual* mechanism that keeps a part's tracks attached while moving it | **partial: not implemented, and genuinely needs PNS** | `pcbnew.InteractiveRouter.Drag45Degree`/`DragFreeAngle` push-and-shove the attached tracks' far ends live as the part moves, via the full interactive router (`ROUTER_TOOL`, `PNS::DRAG` and friends) -- collision-aware, multi-segment, not a geometry one-liner. This app has no router UI loop (`routing.ts`'s header comment: "a single-segment-per-click router, not pcbnew's own"), so this stays unported; listed under `pcbnew.InteractiveRouter.Drag45Degree` in the hotkey audit below rather than silently missing |
+| Router-driven drag (`D`, `pcbnew.InteractiveRouter.Drag45Degree`) of a track segment/corner or via -- collision-aware, keeps connections live via the full interactive router | **done this session** (gap #7 stage 5's frontend -- `crates/pns::dragger::Dragger` already existed; this session is wiring it in) | `router_tool.cpp:InlineDrag`/`CanInlineDrag` -- `components/canvas/dragging.ts` (`findDraggableAt`: approximates `ACTIONS::selectionCursor` + `NeighboringSegmentFilter` with the existing click-select hit-test, restricted to track/via, falling back to a lone selection; `startInlineDrag`/`finishInlineDrag`), `kicad-port/dragTool.ts` (pure preview-merge glue, mirrors `routeTool.ts`), `Canvas.tsx` (pointerdown commits, pointermove previews -- reuses the route tool's own throttle/request-guard refs since the two sessions are mutually exclusive), `useActionRunner.ts` (the `D` hotkey itself: a one-shot grab-and-go, not a toggle-arm like `X`), `painter.ts:drawInProgress`'s new `"drag"` branch (dashed live preview; a via's own attached tracks -- `fanout` -- render too, not just the via). **Scope, matching `dragger.rs`'s own documented simplifications** (see `crates/pns/PARITY.md`): corner-drag only (no segment-sideways-slide), free-angle (not 45-degree-constrained), and -- per `CanInlineDrag`'s own footprint branch being out of scope for this port's single mode -- **not** a footprint drag (only a track/via); a footprint `Move` stays the plain, non-router kind the row above already covers (confirmed, not a gap, by reading source directly) |
+| Router-driven drag of a **footprint** (so its attached tracks follow via the router, distinct from the row above) | **not implemented** -- `dragger.rs` only models `DM_CORNER`/via dragging, matching the task's explicit single-item-drag scope; `CanInlineDrag`'s footprint branch (`!(aDragMode & DM_FREE_ANGLE)`) has no backend counterpart to wire | `router_tool.cpp:InlineDrag`'s `footprints` path |
+| "Highlight collisions" router mode | **done this session** -- it's not a distinct concept from `Mode::MarkObstacles`, already fully implemented server-side since gap #7 stage 1 (`router_tool.cpp` literally labels `RM_MarkObstacles` as `"Highlight collisions"` in its own status-bar summary); the real gap was that nothing in the frontend ever let a person select any mode but Walkaround at all -- fixed by the settings dialog below | `router_tool.cpp`'s `RM_MarkObstacles` case, `PCB_ACTIONS::routerHighlightMode` |
+| Interactive Router Settings... (`Ctrl+<`) | **done this session, narrower than upstream's own dialog by necessity** -- only `Mode` (Highlight Collisions/Shove/Walk Around) and Remove Redundant Tracks have any real effect in `crates/pns` (confirmed by grepping every other `RoutingSettings` field for a reader outside `settings.rs` itself: none -- `ShoveVias`/`JumpOverObstacles`/`SmartPads`/`SmoothDraggedSegments`/`OptimizeEntireDraggedTrack`/`AutoPosture`/`FixAllSegments`/`AllowDrcViolations` either don't exist on this port's settings struct or exist but are never read), so only those two are real, working controls -- every other upstream field is left out entirely (same "nothing to show, not a bug" convention Board Setup/Zone dialogs already use), except Free Angle Mode, shown **disabled** with its reason rather than omitted since the task asked for it by name and this port's router only ever builds 45-degree traces (a scope decision from gap #7's very first session, not something a checkbox could flip). A setting change here takes effect on the next `X`/`D` session start, not live mid-route -- this app starts a brand-new backend session per route/drag (no persistent one upstream's live dialog could push an update into) | `dialog_pns_settings.cpp` -- `components/RouterSettingsDialog.tsx`, `state.routerSettings` (`state/store.tsx`), `POST /api/route/start`'s new `remove_loops` field and `POST /api/route/drag_start`'s new `mode` field (`crates/cli/src/route_api.rs`) |
+| Route Differential Pair (`6`, `pcbnew.InteractiveRouter.DiffPair`) -- two parallel, gap-matched lines from one session | **done this session, significantly narrower than upstream by necessity** -- see `crates/pns/PARITY.md`'s own "Stage 7" section for the full design. Pair detection by net-name suffix (`+`/`-`/`P`/`N`, trailing digits preserved) and gap/width from the net-class diff-pair fields, both exactly as the task asked; routing itself is a direct 45-trace spine offset into two lines (collision-*reporting* only, like a plain route in `mark_obstacles` mode) rather than upstream's own coupled-shove/walkaround `DIFF_PAIR_T` item -- that whole second collision model was out of proportion to the remaining task scope. No via/layer-switch mid-pair-route either (single layer only) | `pns_diff_pair_placer.cpp`, `board.cpp:MatchDpSuffix` -- `crates/pns/src/diff_pair.rs` (8 tests), `crates/model/src/lib.rs`'s `diff_pair_{width,gap,via_gap}_of` (3 tests), `crates/cli/src/route_api.rs`'s `dp_*` endpoints, `components/canvas/diffPairRouting.ts` + `kicad-port/dpTool.ts` (3 tests, mirroring `routing.ts`/`routeTool.ts`), `Canvas.tsx`, `useActionRunner.ts`, `painter.ts:drawInProgress`'s new `"diffpair"` branch |
+| Tune Length of a Single Track... (`7`, `pcbnew.LengthTuner.TuneSingleTrack`) -- lengthen a track to a target length by inserting a meander | **done this session, as a dialog rather than upstream's own live mouse-driven session** -- see `crates/pns/PARITY.md`'s own "Stage 8" section. Scoped to a straight, axis-aligned, single-segment track (refused with a message otherwise -- `generate_meander`'s own doc comment explains why diagonal baselines need a different, not-yet-derived formula); collision-*reporting* only, same as the diff-pair router above. **Not implemented**: diff-pair length tuning (`8`) and skew tuning (`9`), the `1`/`2`/`3`/`4` live amplitude/spacing hotkeys (plain dialog number fields instead), and the separate `Ctrl+L` settings dialog | `pns_meander_placer.cpp`, `pns_meander.cpp` -- `crates/pns/src/meander.rs` (9 tests), `crates/cli/src/tune_api.rs`'s stateless `/api/tune_length/{preview,apply}` (reuses `Cmd::CommitRoute`, no new `Cmd`), `components/LengthTuningDialog.tsx` |
 
-Pure logic: `kicad-port/localRatsnest.ts` (5 tests). Wiring:
-`painter.ts`'s `movePreview` rotate/flip transform,
-`useActionRunner.ts:tryTransformDuringMove`.
+Pure logic: `kicad-port/localRatsnest.ts` (5 tests), `kicad-port/dragTool.ts`
+(2 tests), `kicad-port/dpTool.ts` (3 tests). Wiring: `painter.ts`'s
+`movePreview` rotate/flip transform, `useActionRunner.ts:
+tryTransformDuringMove`; `components/canvas/dragging.ts`,
+`kicad-port/dragTool.ts`, `Canvas.tsx`, `useActionRunner.ts` for the `D`
+drag tool itself (see the new rows above); `components/RouterSettingsDialog.tsx`
+for the settings dialog.
 
 ## 5. Duplicate (Cmd+D) and copy/paste (Cmd+C/V)
 
@@ -186,25 +195,29 @@ resetLocalCoords -- see section 1). The context menu itself
 ### Hotkey coverage audit
 
 Of 766 extracted actions, 201 have a real default hotkey (hotkey or
-macHotkey non-null). 47 of those are registered in
+macHotkey non-null). 51 of those are registered in
 `useActionRunner.ts` (and therefore reachable from `useGlobalHotkeys.ts`,
 the menu bar, and the toolbars) -- a prior session added
-`selectAll`/`unselectAll` (Ctrl+A/Ctrl+Shift+A); this one added
+`selectAll`/`unselectAll` (Ctrl+A/Ctrl+Shift+A); a later one added
 `highlightNet`/`clearHighlight` (`` ` ``/`~`), `SelectConnection` (U),
 `moveExact` (Shift+M), `duplicate`/`copy`/`paste` (Cmd+D/C/V),
 `layerNext`/`layerPrev` (+/-), and `layerAlphaInc`/`layerAlphaDec`
 (}/{) -- 11 more, picked (per the task's item 5 instruction) for
-user-visible impact once items 1-4 landed. 154 are not registered. 55 of
+user-visible impact once items 1-4 landed; **this session** added
+`Drag45Degree` (`D`, gap #7 stage 5's frontend), `SettingsDialog`
+(`Ctrl+<`, the router settings dialog -- see section 4), `DiffPair`
+(`6`, gap #7 stage 7 -- see section 4), and `LengthTuner.TuneSingleTrack`
+(`7`, gap #7 stage 8 -- see section 4). 150 are not registered. 55 of
 those are `eeschema.*` -- out of scope for *pcbnew* parity specifically,
 since this app's Schematic tab is read-only by design (no schematic
-editing verbs exist in the backend yet). The remaining 99 (59
-`pcbnew.*`, 40 `common.*` that apply to both editors) are genuine
+editing verbs exist in the backend yet). The remaining 95
+(55 `pcbnew.*`, 40 `common.*` that apply to both editors) are genuine
 pcbnew-parity gaps, listed here (alphabetically, same as before) per the
 task's "explicitly listed as missing" instruction rather than left
 silently unimplemented. The final report ranks what's left by
 user-visible impact; this table is for lookup, not priority order.
 
-#### `pcbnew.*` missing (59)
+#### `pcbnew.*` missing (55)
 
 | Action | Hotkey | Label |
 |---|---|---|
@@ -241,12 +254,9 @@ user-visible impact; this table is for lookup, not priority order.
 | `pcbnew.InteractiveMove.moveIndividually` | Ctrl+M | Move Individually |
 | `pcbnew.InteractiveRouter.Autoroute` | Shift+F | Attempt Finish Selected (Autoroute) |
 | `pcbnew.InteractiveRouter.ContinueFromEnd` | Ctrl+E | Route From Other End |
-| `pcbnew.InteractiveRouter.DiffPair` | 6 | Route Differential Pair |
-| `pcbnew.InteractiveRouter.Drag45Degree` | D | Drag 45 Degree Mode |
 | `pcbnew.InteractiveRouter.DragFreeAngle` | G | Drag Free Angle |
 | `pcbnew.InteractiveRouter.RouteSelected` | Shift+X | Route Selected |
 | `pcbnew.InteractiveRouter.RouteSelectedFromEnd` | Shift+E | Route Selected From Other End |
-| `pcbnew.InteractiveRouter.SettingsDialog` | Ctrl+< | Interactive Router Settings... |
 | `pcbnew.InteractiveRouter.UndoLastSegment` | Backspace | Undo Last Segment |
 | `pcbnew.InteractiveSelection.GrabUnconnected` | Shift+O | Grab Nearest Unconnected Footprints |
 | `pcbnew.InteractiveSelection.SelectUnconnected` | O | Select All Unconnected Footprints |
@@ -258,7 +268,6 @@ user-visible impact; this table is for lookup, not priority order.
 | `pcbnew.lengthTuner.SpacingIncrease` | 1 | Increase Spacing |
 | `pcbnew.LengthTuner.TuneDiffPair` | 8 | Tune Length of a Differential Pair |
 | `pcbnew.LengthTuner.TuneDiffPairSkew` | 9 | Tune Skew of a Differential Pair |
-| `pcbnew.LengthTuner.TuneSingleTrack` | 7 | Tune Length of a Single Track |
 | `pcbnew.ModuleEditor.newFootprint` | Ctrl+N | New Footprint |
 | `pcbnew.PadTool.explodePad` | Ctrl+E | Edit Pad as Graphic Shapes |
 | `pcbnew.PadTool.recombinePad` | Ctrl+E | Finish Pad Edit |

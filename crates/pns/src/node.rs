@@ -266,6 +266,37 @@ impl Node {
         Some(line)
     }
 
+    /// `NODE::FindLinesBetweenJoints`, narrowed to this port's one caller
+    /// (`LinePlacer`'s loop removal, see that module's own doc comment):
+    /// every distinct maximal same-net segment chain already in this node
+    /// whose two endpoints are exactly `a` and `b` (in either order). A
+    /// "line" here is the same unit [`Self::assemble_line`] already walks
+    /// (a run between two non-trivial joints -- a branch, a pad/via, or a
+    /// dead end); each one is returned at most once (assembling from any
+    /// of its segments gives the same result, so the first one visited
+    /// marks the rest as `seen` rather than re-discovering the same line
+    /// from a different starting segment).
+    pub fn find_lines_between_joints(&self, a: Point, b: Point, net: &Net) -> Vec<Line> {
+        let mut seen: std::collections::HashSet<ItemId> = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for (&id, item) in &self.items {
+            if seen.contains(&id) {
+                continue;
+            }
+            let Item::Segment(seg) = item else { continue };
+            if !same_net(&seg.net, net) {
+                continue;
+            }
+            let Some(line) = self.assemble_line(id) else { continue };
+            seen.extend(line.segment_ids.iter().copied());
+            let (first, last) = (line.first(), line.last());
+            if (first == Some(a) && last == Some(b)) || (first == Some(b) && last == Some(a)) {
+                out.push(line);
+            }
+        }
+        out
+    }
+
     /// Remove every segment `line` was assembled from (its `via_at_*` are
     /// left alone -- a via is its own item, only re-touched if the caller
     /// explicitly wants to move/remove it) -- the write-side counterpart of

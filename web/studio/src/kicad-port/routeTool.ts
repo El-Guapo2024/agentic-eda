@@ -42,6 +42,8 @@ export interface RouteDrawState {
   via?: { x: number; y: number; diameter: number; drill: number } | null;
   snappedEnd?: [number, number] | null;
   displaced?: { layer: string; pts: [number, number][] }[];
+  /** `shove` mode only: other vias the live head would push aside. */
+  displacedVias?: { source_via: string; x: number; y: number }[];
   placingVia?: boolean;
   pendingViaLayer?: string;
 }
@@ -61,6 +63,7 @@ export function drawStateFromPreview(current: RouteDrawState, preview: RoutePrev
     via: preview.via,
     snappedEnd: preview.snapped_end,
     displaced: preview.displaced,
+    displacedVias: preview.displaced_vias,
   };
 }
 

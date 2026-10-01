@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, LabelScope, Part, Ratsnest, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, LabelScope, Part, Ratsnest, RouteMode, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -44,6 +44,8 @@ export type ToolId =
   | "move"
   | "drag"
   | "route"
+  /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair): route a differential pair -- see kicad-port/dpTool.ts's own header comment. */
+  | "diffpair"
   | "via"
   | "zone"
   | "draw_segment"
@@ -71,8 +73,9 @@ export type ToolId =
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
-  drag: "Drag item(s) (keeps wire connections)",
+  drag: "Drag (keeps connections): click to drop, Esc to cancel",
   route: "Route track: click to add a point, V for via, Enter/double-click to finish, Esc to cancel",
+  diffpair: "Route differential pair: click to add a point, Enter/double-click to finish, Esc to cancel",
   via: "Click to place a via",
   zone: "Zone: click to add points, Enter/double-click to finish, Esc to cancel",
   draw_segment: "Line: click start, then end",
@@ -122,10 +125,57 @@ export type DrawState =
       snappedEnd?: [Um, Um] | null;
       /** `shove` mode only: other tracks the live head would push aside. */
       displaced?: { layer: string; pts: [Um, Um][] }[];
+      /** `shove` mode only: other vias the live head would push aside. */
+      displacedVias?: { source_via: string; x: Um; y: Um }[];
       /** Armed by the `V` hotkey: the next fix drops a via here and
        * continues on `pendingViaLayer`. */
       placingVia?: boolean;
       pendingViaLayer?: string;
+    }
+  /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
+   * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
+   * drag_{start,move,finish}): an in-progress drag of an existing track
+   * segment/corner or via, keeping its connections -- see
+   * kicad-port/dragTool.ts's own header comment for the full gesture and
+   * `DragDrawState`, which this duplicates (dependency-free module,
+   * manually kept in sync, same convention as the "route" variant above). */
+  | {
+      kind: "drag";
+      dragKind: "corner" | "via";
+      net: string | null;
+      layer: string;
+      width: Um;
+      viaDiameter?: Um;
+      /** The dragged item's live shape: the stretched line (corner) or
+       * just the via's own new position, one point (via) -- see
+       * `DragPreview`'s own doc comment. */
+      pts: [Um, Um][];
+      colliding?: boolean;
+      /** `shove` mode only: other tracks/vias this drag would push aside. */
+      displaced?: { layer: string; pts: [Um, Um][] }[];
+      displacedVias?: { source_via: string; x: Um; y: Um }[];
+      /** Via drag only: its own directly-attached tracks, already
+       * stretched to follow it live, each with its own real width. */
+      fanout?: { layer: string; width: Um; pts: [Um, Um][] }[];
+    }
+  /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair ->
+   * `eda_pns::diff_pair::DiffPairPlacer`): an in-progress differential-
+   * pair route, both lines at once -- see kicad-port/dpTool.ts's own
+   * header comment for the full gesture and `DpDrawState`, which this
+   * duplicates (dependency-free module, manually kept in sync, same
+   * convention as the "route"/"drag" variants above). */
+  | {
+      kind: "diffpair";
+      netA: string | null;
+      netB: string | null;
+      layer: string;
+      width: Um;
+      ptsA: [Um, Um][];
+      ptsB: [Um, Um][];
+      colliding?: boolean;
+      runsA?: { layer: string; pts: [Um, Um][] }[];
+      runsB?: { layer: string; pts: [Um, Um][] }[];
+      snappedEnd?: boolean;
     }
   | { kind: "zone"; pts: [Um, Um][] }
   | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }
@@ -481,6 +531,25 @@ export interface StudioState {
   clipboard: ClipboardContents | null;
   /** Shift+M "Move Exactly..." dialog -- open with the selection's own default anchor/bbox already resolved (components/MoveExactDialog.tsx computes the rest). Null = closed. */
   moveExactDialogOpen: boolean;
+  /** `Ctrl+<` "Interactive Router Settings..." (dialog_pns_settings.cpp) -- components/RouterSettingsDialog.tsx. */
+  routerSettingsDialogOpen: boolean;
+  /** `7` (pcbnew.LengthTuner.TuneSingleTrack) -- components/LengthTuningDialog.tsx. */
+  lengthTuningDialogOpen: boolean;
+  /**
+   * `eda_pns::RoutingSettings`, the subset this app's router actually
+   * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
+   * most of upstream's own `DIALOG_PNS_SETTINGS` fields -- shove vias,
+   * jump-over-obstacles/back-pressure, smart pads, smooth dragged
+   * segments, auto posture, suggest ending -- exist on the Rust struct
+   * (or don't exist at all) but are never actually read by any routing
+   * code, so there is nothing real for a toggle to do yet; only `mode`
+   * and `removeLoops` have a genuine effect). Read fresh by `X`/`D`'s own
+   * session start (`routeStart`/`routeDragStart`) -- this app's "start a
+   * fresh session every time" architecture (PARITY.md's own doc on why)
+   * means a setting changed here takes effect on the *next* route/drag,
+   * not one already in progress, unlike upstream's live mid-route dialog.
+   */
+  routerSettings: { mode: RouteMode; removeLoops: boolean };
 }
 
 const initialState: StudioState = {
@@ -562,6 +631,10 @@ const initialState: StudioState = {
   ercSelected: null,
   clipboard: null,
   moveExactDialogOpen: false,
+  routerSettingsDialogOpen: false,
+  lengthTuningDialogOpen: false,
+  // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
+  routerSettings: { mode: "walkaround", removeLoops: true },
 };
 
 export type Action =
@@ -644,7 +717,10 @@ export type Action =
   | { type: "SET_SYMBOL_PROPERTIES"; value: StudioState["symbolProperties"] }
   | { type: "SET_ANNOTATE_DIALOG_OPEN"; open: boolean }
   | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
-  | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean };
+  | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
+  | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean };
 
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
@@ -883,6 +959,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, clipboard: action.clipboard };
     case "SET_MOVE_EXACT_DIALOG_OPEN":
       return { ...state, moveExactDialogOpen: action.open };
+    case "SET_ROUTER_SETTINGS_DIALOG_OPEN":
+      return { ...state, routerSettingsDialogOpen: action.open };
+    case "SET_ROUTER_SETTINGS":
+      return { ...state, routerSettings: action.settings };
+    case "SET_LENGTH_TUNING_DIALOG_OPEN":
+      return { ...state, lengthTuningDialogOpen: action.open };
     default:
       return state;
   }

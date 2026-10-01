@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, Um } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, TuneLengthReply, Um } from "./types";
 
 export class ApiError extends Error {}
 
@@ -264,8 +264,12 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
-export function routeStart(x: Um, y: Um, layer: string, width: Um, mode: RouteMode): Promise<RoutePreview> {
-  return postJson("/api/route/start", { x, y, layer, width, mode });
+/** `removeLoops` (`RoutingSettings::RemoveLoops`, default `true`, see
+ * `components/RouterSettingsDialog.tsx`): delete a pre-existing, now-
+ * redundant same-net path once this route finishes by joining the same two
+ * points another way. Omit to keep the backend's own default. */
+export function routeStart(x: Um, y: Um, layer: string, width: Um, mode: RouteMode, removeLoops?: boolean): Promise<RoutePreview> {
+  return postJson("/api/route/start", { x, y, layer, width, mode, remove_loops: removeLoops });
 }
 
 /** `flipPosture`/`width` fold in the `/` and `W` hotkeys -- see
@@ -296,14 +300,18 @@ export function routeCancel(): Promise<{ ok: boolean }> {
 }
 
 // `D`: drag an existing track segment/corner or via, keeping its
-// connections (gap #7 stage 5). Not yet wired into Canvas.tsx's move tool
-// (see docs/parity/GAPS.md #7's own tracking note) -- these three calls
-// are the full backend surface a future drag-tool integration needs;
-// `routeCancel` above already ends a drag session too (it's the same
-// backend session as a route, see `RoutePreview`'s own doc comment).
+// connections (gap #7 stage 5) -- wired into Canvas.tsx's own drag tool,
+// see components/canvas/dragging.ts. `routeCancel` above already ends a
+// drag session too (it's the same backend session as a route, see
+// `RoutePreview`'s own doc comment).
 
-export function routeDragStart(x: Um, y: Um, layer: string): Promise<DragPreview> {
-  return postJson("/api/route/drag_start", { x, y, layer });
+/** `mode` (`RoutingSettings::Mode`, see `components/RouterSettingsDialog.tsx`):
+ * `eda_pns::dragger::Dragger` reuses the exact same walkaround/shove/
+ * mark-obstacles modes a route session does. Omit to keep the backend's
+ * own default (`Mode::Walkaround`). No `removeLoops` here -- upstream's own
+ * `DRAGGER` never calls `removeLoops` either, a route-only concept. */
+export function routeDragStart(x: Um, y: Um, layer: string, mode?: RouteMode): Promise<DragPreview> {
+  return postJson("/api/route/drag_start", { x, y, layer, mode });
 }
 
 export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
@@ -312,4 +320,53 @@ export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
 
 export function routeDragFinish(x: Um, y: Um): Promise<CmdReply> {
   return postJson("/api/route/drag_finish", { x, y });
+}
+
+// `6`: route a differential pair (gap #7 task item 6) -- wired into
+// Canvas.tsx's own diff-pair tool, see components/canvas/diffPairRouting.ts.
+// `routeCancel` above already ends a dp session too (same backend session).
+
+export function dpStart(x: Um, y: Um, layer: string): Promise<DiffPairPreview> {
+  return postJson("/api/route/dp_start", { x, y, layer });
+}
+
+export function dpMove(x: Um, y: Um, flipPosture?: boolean): Promise<DiffPairPreview> {
+  return postJson("/api/route/dp_move", { x, y, flip_posture: flipPosture });
+}
+
+export function dpFix(x: Um, y: Um): Promise<DpFixReply> {
+  return postJson("/api/route/dp_fix", { x, y });
+}
+
+export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
+  return postJson("/api/route/dp_undo_segment", {});
+}
+
+export function dpFinish(x: Um, y: Um): Promise<CmdReply> {
+  return postJson("/api/route/dp_finish", { x, y });
+}
+
+// `7`: length tuning (gap #7 task item 4) -- stateless, see
+// api/types.ts's TuneLengthReply doc comment and components/
+// LengthTuningDialog.tsx. `trackId` must name a straight, single-segment
+// track (eda_pns::meander's own scope).
+
+export interface TuneLengthRequest {
+  trackId: string;
+  amplitude: Um;
+  spacing: Um;
+  targetLength: Um;
+  flip: boolean;
+}
+
+function tuneLengthBody(req: TuneLengthRequest) {
+  return { track_id: req.trackId, amplitude: req.amplitude, spacing: req.spacing, target_length: req.targetLength, flip: req.flip };
+}
+
+export function tuneLengthPreview(req: TuneLengthRequest): Promise<TuneLengthReply> {
+  return postJson("/api/tune_length/preview", tuneLengthBody(req));
+}
+
+export function tuneLengthApply(req: TuneLengthRequest): Promise<TuneLengthReply> {
+  return postJson("/api/tune_length/apply", tuneLengthBody(req));
 }

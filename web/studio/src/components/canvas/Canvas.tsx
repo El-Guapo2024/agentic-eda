@@ -24,7 +24,11 @@ import { layerColor } from "./layers";
 import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
 import { findRouteAnchor, posture45, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
-import { routeMove } from "../../api/client";
+import { routeMove, routeDragMove, dpMove } from "../../api/client";
+import { finishInlineDrag } from "./dragging";
+import { dragStateFromPreview } from "../../kicad-port/dragTool";
+import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
+import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
 import { pickDefaultZoomController, type ZoomController } from "../../kicad-port/zoomController";
@@ -416,6 +420,9 @@ export function Canvas() {
     if (draw.kind === "route") {
       const [x, y] = draw.pts[draw.pts.length - 1] ?? [draw.pts[0]?.[0] ?? 0, draw.pts[0]?.[1] ?? 0];
       void finishInteractiveRoute(x, y, dispatch, api);
+    } else if (draw.kind === "diffpair") {
+      const [x, y] = draw.ptsA[draw.ptsA.length - 1] ?? [draw.ptsA[0]?.[0] ?? 0, draw.ptsA[0]?.[1] ?? 0];
+      void finishDiffPairRoute(x, y, dispatch, api);
     } else if (draw.kind === "zone") {
       if (draw.pts.length >= 3) {
         dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
@@ -465,10 +472,37 @@ export function Canvas() {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
           const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
-          void startInteractiveRoute(sx, sy, layer, width, dispatch);
+          void startInteractiveRoute(sx, sy, layer, width, state.routerSettings, dispatch);
           return;
         }
         void fixInteractiveRoute(sx, sy, draw, dispatch, api);
+        return;
+      }
+
+      // `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair): same
+      // arm-then-click-to-start/fix flow as the route tool above, just
+      // through diffPairRouting.ts's own pair of start/fix calls.
+      if (state.activeTool === "diffpair") {
+        const draw = state.drawState;
+        if (!draw || draw.kind !== "diffpair") {
+          const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
+          void startDiffPairRoute(sx, sy, layer, dispatch);
+          return;
+        }
+        void fixDiffPairRoute(sx, sy, draw, dispatch, api);
+        return;
+      }
+
+      // `D` (gap #7 stage 5, pcbnew.InteractiveRouter.Drag45Degree): the
+      // drag session itself is started by the hotkey the moment it's
+      // pressed (useActionRunner.ts -- there's no separate "click to
+      // start" step the way the route tool's `X` has, matching source's
+      // own one-shot `InlineDrag` activation), so a click here only ever
+      // commits it -- see dragging.ts's own doc on why that's always a
+      // finish, never a "fix this leg and keep going".
+      if (state.activeTool === "drag") {
+        if (state.drawState?.kind === "drag") void finishInlineDrag(sx, sy, dispatch, api);
+        else dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
         return;
       }
 
@@ -680,6 +714,36 @@ export function Canvas() {
         routeMove(sx, sy).then((preview) => {
           if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
           dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
+        });
+      }
+    }
+
+    // `6`'s own live preview -- same throttle/guard pair as the route tool
+    // above (route/drag/diff-pair sessions are mutually exclusive, see
+    // crates/pns/src/router.rs).
+    if (board && state.activeTool === "diffpair" && state.drawState?.kind === "diffpair") {
+      const draw = state.drawState;
+      if (routeMoveThrottleRef.current.shouldSend(performance.now())) {
+        const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+        const token = routeMoveGuardRef.current.next();
+        dpMove(sx, sy).then((preview) => {
+          if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
+          dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, preview) });
+        });
+      }
+    }
+
+    // `D`'s own live preview -- same throttle/guard pair as the route tool
+    // above (never both active at once: `Router` keeps a route session and
+    // a drag session mutually exclusive, see crates/pns/src/router.rs).
+    if (board && state.activeTool === "drag" && state.drawState?.kind === "drag") {
+      const draw = state.drawState;
+      if (routeMoveThrottleRef.current.shouldSend(performance.now())) {
+        const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+        const token = routeMoveGuardRef.current.next();
+        routeDragMove(sx, sy).then((preview) => {
+          if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
+          dispatch({ type: "SET_DRAW_STATE", draw: dragStateFromPreview(draw, preview) });
         });
       }
     }
@@ -918,6 +982,16 @@ export function Canvas() {
       routeMove(state.cursorUm.x, state.cursorUm.y, true).then((preview) => {
         if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
         dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
+      });
+    }
+    // Same `/` posture flip, for the diff-pair tool's own spine posture.
+    if (e.key === "/" && state.drawState?.kind === "diffpair" && state.cursorUm) {
+      e.preventDefault();
+      const draw = state.drawState;
+      const token = routeMoveGuardRef.current.next();
+      dpMove(state.cursorUm.x, state.cursorUm.y, true).then((preview) => {
+        if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
+        dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, preview) });
       });
     }
   };

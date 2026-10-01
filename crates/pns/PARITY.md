@@ -33,9 +33,14 @@ exists rather than letting you rediscover it.
    straight-segment polyline (`eda_model::ir::Track::pts`); nothing ever
    constructs an arc item. Every KiCad pass that branches on "does this
    line contain an arc" takes the non-arc path unconditionally here.
-4. **No diff pairs, no meandering/length-tuning, no component dragger,
-   no multi-selection drag.** Single track route and single-item
-   (segment/via) drag only, matching the task's explicit scope.
+4. **No component dragger, no multi-selection drag.** Single-item
+   (segment/via) drag only. Diff pairs (Stage 7) and single-track length
+   tuning (Stage 8) *are* now ported, but narrower than upstream in each
+   case -- no coupled shove/walkaround for a pair, no via/layer-switch
+   mid-pair-route, no diff-pair length/skew tuning, length tuning scoped
+   to a straight axis-aligned single-segment track and driven by a
+   dialog rather than a live mouse session; see those stages' own
+   sections for exactly why and what each still is.
 5. **Units**: integer micrometers throughout (`eda_model::ir::Um`), like
    the rest of this workspace, not KiCad's internal nanometers.
 
@@ -199,22 +204,249 @@ up the real via before building its `Cmd::CommitRoute` entry; see
 `router.rs`'s `shove_mode_drag_displaces_a_via_and_the_commit_carries_its_real_size`
 test, which fails without the fix.
 
-**Not done**: the frontend. `D` (`pcbnew.InteractiveRouter.Drag45Degree`
-upstream) isn't wired into Canvas.tsx's move/drag tool -- `api/client.ts`
-has the three `routeDrag*` functions ready to call, but hooking them into
-the existing pointer-down/move/up move system (which today only
-understands translating a part/via/shape/text by a uniform `(dx, dy)`,
-not an arbitrary reshape) needs its own preview state and rendering path,
-the same scope of work the route tool's own frontend wiring was. This is
-the single largest remaining piece of gap #7 -- see the final report's
-ranked "what's left" list.
+A second real gap surfaced while wiring the frontend's live preview (below):
+`DragPreview` never carried the via-drag case's own attached tracks (its
+"fanout" -- the ones stretching to follow the via), only the via's own new
+point. `Dragger::candidate` always computed that fanout (it needs it for
+the mode's own collision check), but `preview()` dropped it on the floor
+rather than returning it, so a frontend drawing only `pts` would show the
+via jumping across the board with nothing visibly following it until the
+drag actually committed. Fixed: `DragPreview` gained a `fanout: Vec<Line>`
+field (always empty for a corner drag), covered by
+`dragging_a_via_drags_its_connected_track_with_it`'s new assertions. While
+in there: `crates/cli/src/route_api.rs`'s `preview_json`/`drag_preview_json`
+also never serialized `Preview`/`DragPreview`'s existing `displaced_vias`
+field into JSON at all (route AND drag alike) -- a shove-mode preview that
+would push a *via* out of the way never showed it moving until commit,
+even though the Rust-side data already existed. Both now send
+`displaced_vias: [{source_via, x, y}]`; the frontend looks up each one's
+real diameter from the board's own still-there via by id rather than this
+repeating it over the wire.
+
+**Frontend: done.** `D` (`pcbnew.InteractiveRouter.Drag45Degree`) is wired
+into Canvas.tsx's tool system, as its own one-shot action rather than
+through the uniform-`(dx,dy)` move/drag system `MovePreview` already
+handles for parts/vias/shapes/text (a drag session's shape is an arbitrary
+reshape, not a translation -- it needed its own preview state and render
+path, the same shape of work the route tool's own frontend wiring was):
+see `web/studio/PARITY-pcb.md` section 4 for the click-through. Still not
+done, same as upstream's own scope split (`InlineDrag` vs. a plain
+footprint `Move`): dragging a *footprint* through the router (so its
+attached tracks follow) -- this port's `Dragger` only ever drags a track
+segment/corner or a lone via (see the scope list above), matching real
+pcbnew's own `CanInlineDrag` rejecting a free-angle footprint drag too
+(`DM_FREE_ANGLE`, this port's only mode -- see "Free-angle corner
+relocation" above). A plain (non-router) footprint `Move` was already
+confirmed, by reading `edit_tool_move_fct.cpp` directly, to **not** drag
+attached tracks in real KiCad either -- see `PARITY-pcb.md` section 4's
+"Move: connected track ends follow the dragged footprint" row -- so there
+is no gap here to close, just a premise the task brief got wrong.
+
+## Stage 6 -- router fidelity gaps (settings dialog, loop removal, highlight-collisions mode)
+
+**"Highlight collisions" mode needed no new backend code at all.** It's
+not a distinct concept from what this port already calls
+`Mode::MarkObstacles` -- `router_tool.cpp`'s own status-bar summary
+literally labels `RM_MarkObstacles` as `"Highlight collisions"`. That mode
+was already fully implemented (Stage 1) and already accepted over the
+wire (`POST /api/route/start`'s `mode: "mark_obstacles"`); the actual gap
+was that **nothing in the frontend ever let a person choose it** --
+`startInteractiveRoute` hardcoded `"walkaround"` and `drag_start` never
+read a mode from its request body at all. Fixed below, alongside the
+settings dialog the task asked for.
+
+**Loop removal (`RemoveLoops`/`FindLinesBetweenJoints`) -- now
+implemented.** `RoutingSettings::remove_loops` already existed as a field
+(defaulting `true`, matching upstream) but nothing read it; the real
+behavior was entirely missing. `Node::find_lines_between_joints` (new,
+`src/node.rs`) is `NODE::FindLinesBetweenJoints` narrowed to this port's
+one caller: every distinct pre-existing same-net line already in the node
+whose two endpoints exactly match a given pair of points.
+`LinePlacer::finish` (new `remove_loops` method, called when
+`settings.remove_loops` and the route reached a real same-net end -- same
+gate as upstream's own `reachesEnd && aEndItem`) checks whether the whole
+just-finished connection's two outer endpoints are also joined by some
+*other* pre-existing path, and if so marks every one of that path's
+source tracks for removal (skipping any with a locked segment, matching
+upstream's own rule) via the same `displaced_tracks` map shove already
+uses for "remove and don't replace" (an empty `Line` as the sentinel --
+`point_count() < 2` already means "no replacement" to
+`Router::build_commit`). Deliberately coarser than upstream in one way:
+checked once for the whole finished connection (its true start to its
+real end), not per internal segment/joint the way upstream's own
+per-`JOINT` loop does -- matching this crate's existing "one commit per
+whole finished line" adaptation (Stage 4's own doc comment) rather than
+upstream's per-segment model. The new route's own runs are never
+inserted into `node` while routing at all (module doc comment, same
+reason same-net items never need collision exclusion here), so every
+match this finds is guaranteed to be a genuinely different, already-
+committed line -- never the one just placed. 3 new tests in
+`line_placer.rs` (redundant path removed, locked path left alone, the
+setting turned off is a no-op). Drag sessions don't get this treatment --
+upstream's own `DRAGGER` never calls `removeLoops` either.
+
+**Frontend: `RouterSettingsDialog.tsx` (`Ctrl+<`,
+`pcbnew.InteractiveRouter.SettingsDialog`)**, backing `state.routerSettings
+= { mode, removeLoops }` -- see `web/studio/PARITY-pcb.md` for the full
+field-by-field scope (deliberately narrower than upstream's own dialog:
+only `mode` and `removeLoops` have any real effect in this crate, so only
+those two are exposed as working controls; Free Angle Mode is shown
+disabled with its reason rather than omitted, since the task named it
+explicitly). `POST /api/route/start` gained `remove_loops`;
+`POST /api/route/drag_start` gained `mode` (previously silently always
+`Mode::Walkaround` regardless of what a route session was using -- a
+small, real inconsistency this closes in passing). A setting change takes
+effect on the *next* `X`/`D` session, not a live one already in progress
+-- this app starts a brand new `Router`/session per route or drag (no
+persistent one to push a live update into the way upstream's own dialog
+does), a deliberate, documented adaptation rather than a gap.
+
+## Stage 7 -- differential pairs
+
+`pns_diff_pair_placer.{h,cpp}` -> `src/diff_pair.rs`, task item 6 (`6`
+key). See that module's own extensive header comment for the full
+design; the short version:
+
+- **Pair detection**: `dp_coupled_net_name` is `BOARD::MatchDpSuffix`
+  (`pcbnew/board.cpp`) ported verbatim -- walk a net name backward past
+  trailing digits/underscores, swap a trailing `+`/`-`/`P`/`N` for its
+  complement (`"LVDS_P0"` -> `"LVDS_N0"`).
+- **Sizing**: `BoardRules::diff_pair_width_of`/`diff_pair_gap_of`/
+  `diff_pair_via_gap_of` (new, `crates/model/src/lib.rs`) resolve the
+  net-class fields the task brief points at (`NetClass::diff_pair_*`,
+  which existed on the model already -- carried through `.kicad_pro`
+  import since an earlier session, per that field's own doc comment --
+  but nothing read them until now), falling back to upstream's own
+  `SIZES_SETTINGS` hardcoded defaults (125um width, 180um gap) when a
+  board has no diff-pair-specific class, which is every example board in
+  this workspace today.
+- **Routing itself is structurally simpler than upstream, on purpose**:
+  upstream routes a genuine new `PNS::ITEM` kind (`DIFF_PAIR_T`, not
+  modeled in this port's `Item` enum at all -- decision #3) with its own
+  dedicated hull/collision/shove/walkaround machinery, so the pair itself
+  is a first-class obstacle-resolution unit. Building that whole second
+  collision model was out of proportion to the remaining scope, so this
+  port instead builds one direct-45-trace **spine** centerline (no
+  walkaround/shove), offsets it perpendicular by `(gap + width) / 2` on
+  each side (`offset_polyline`, a standard "parallel curve of a
+  polyline" construction reusing `optimizer::intersect_lines` -- widened
+  to `pub(crate)` for this -- to miter each new corner), and snaps each
+  line's first/last point to its own real pad rather than the
+  geometrically offset point (so the pair always actually reaches the
+  pads it started from, regardless of their exact spacing relative to
+  `gap + width`). Each line is collision-checked independently; *either*
+  colliding flags the whole preview, matching `Mode::MarkObstacles`'s
+  report-only contract -- **there is no shove or walkaround for a pair in
+  this port**, and no via/layer-switch mid-pair-route either (single
+  layer only). A real, usable feature for the common case the task asks
+  for (lay a clean, gap-matched pair along an open path), just not a
+  collision-resolving one yet.
+- **Commit**: both lines' finished runs become ordinary `Track` IR
+  entries on their own nets in the *same* `RouteCommit`/`Cmd::CommitRoute`
+  a single-track finish produces -- needed no new commit shape at all,
+  just more tracks in the existing one (`Router::finish_diff_pair`).
+- **HTTP**: `POST /api/route/dp_{start,move,fix,undo_segment,finish}`
+  (`crates/cli/src/route_api.rs`), sharing `RouteCell`/`Router` with the
+  route/drag sessions (mutually exclusive, same as those two already are
+  with each other); the existing `/api/route/cancel` already ends a
+  diff-pair session too (it just drops the whole cell).
+- **Frontend**: `6` (`pcbnew.InteractiveRouter.DiffPair`) arms the tool
+  the same toggle-arm way `X` does; `components/canvas/diffPairRouting.ts`
+  + `kicad-port/dpTool.ts` mirror `routing.ts`/`routeTool.ts`'s own split
+  exactly. `/` flips the spine's posture; Backspace undoes the last leg;
+  no via/width hotkeys (not supported, see above). `painter.ts` draws
+  both lines, coloring both the violation color if *either* collides
+  (the pair reads as one unit to the user even though each line is its
+  own collision check).
+- **Test coverage note**: `diff_pair.rs`'s own algorithmic core (suffix
+  matching, polyline offsetting/mitering, pair-finding, full route/fix/
+  finish flows, collision reporting) has 8 direct unit tests; the
+  `Router`-level `*_diff_pair` methods are thin, direct delegations
+  (compiled and type-checked, same disjoint-field-borrow pattern the
+  already-tested `drag_*` methods use) without their own dedicated
+  integration test, to keep this task item's scope proportionate to the
+  remaining ones -- see the final report.
+
+## Stage 8 -- length tuning (single track)
+
+`pns_meander_placer.cpp`/`pns_meander.cpp` -> `src/meander.rs`, task item
+4's first key (`7`, Tune Length of a Single Track). See that module's own
+extensive header comment for the full reasoning; short version:
+
+- **One-shot, dialog-driven, not a third interactive session.** Upstream
+  drives `MEANDER_PLACER` the same live, mouse-dragged way `LINE_PLACER`/
+  `DIFF_PAIR_PLACER` are driven -- a status-bar length readout updates as
+  you drag the mouse away from the track. Building a *third* session type
+  (after route and drag) with its own mouse-driven preview state was out
+  of proportion to the time left after items 1-3, so this port exposes
+  the same underlying operation ("lengthen this track to a target length
+  with this amplitude/spacing") as a stateless, one-shot computation --
+  `crates/cli/src/tune_api.rs`'s `/api/tune_length/{preview,apply}` (no
+  `RouteCell`, no session: every call re-reads `design.json` fresh), the
+  length readout the task asked for is `LengthTuningDialog.tsx`'s own
+  current/achieved-length display rather than a canvas/status-bar one.
+- **Shape scope: a straight, axis-aligned (N/E/S/W), single-segment
+  track only.** `generate_meander`'s own doc comment explains exactly why
+  the construction (`direction + perpendicular` / `direction -
+  perpendicular` as the two diagonal legs of each zigzag) only produces a
+  provably-correct, uniform shape when `direction` itself is axis-
+  aligned -- a diagonal baseline would need a separately-derived formula
+  this session didn't have time to work out and verify. A track with any
+  corner (more than 2 points) or a diagonal run is refused with a plain
+  message, not silently mishandled.
+- **Geometry**: a standard alternating accordion (each period steps
+  diagonally off the baseline by `amplitude`, runs parallel for
+  `spacing`, steps back, alternating sides each period). The extra length
+  one period contributes is `2 * amplitude * (sqrt(2) - 1)`, derived from
+  first principles (each diagonal leg's own length vs. how far it
+  actually advances along the baseline) and cross-checked against a
+  *measured* (not just formula-trusted) polyline length in every test.
+  The final period shrinks its own amplitude -- and, if the baseline
+  itself is what's actually run out of room rather than the requested
+  extra length, shrinks further to whatever the remaining baseline
+  length can physically fit -- to land as close to the requested target
+  as the geometry genuinely allows, rather than always overshooting by a
+  whole period or refusing outright one period early. 9 tests.
+- **Collision**: report-only, same `Mode::MarkObstacles`-style contract
+  every other scoped-down piece of this crate already uses (diff pairs,
+  Stage 7) -- no automatic rerouting around something the meander would
+  hit, just a `colliding` flag the dialog surfaces before `Apply` is
+  even enabled.
+- **Commit**: needed no new `Cmd` at all -- the generated replacement
+  becomes one `Track` IR entry, removed-and-re-added via the exact same
+  `Cmd::CommitRoute` a finished route/drag/diff-pair already uses
+  (`tune_api::apply`).
+
+**Not implemented**: diff-pair length tuning (`8`,
+`pcbnew.LengthTuner.TuneDiffPair`) and diff-pair skew tuning (`9`,
+`TuneDiffPairSkew`) -- both would reuse this same `generate_meander`
+primitive (apply it to each of a pair's two lines, e.g. independently
+with the same period timing so parallel lines stay roughly parallel
+rather than crossing) but needed orchestration (picking both tracks,
+matching/offsetting their two lengths or their skew) this task ran out
+of time to build and verify properly; a half-correct coupled-pair
+meander would be worse than clearly marking this not-done. The settings
+dialog's own amplitude/spacing fields (`1`/`2`/`3`/`4` upstream) are
+`LengthTuningDialog.tsx`'s plain number inputs rather than a separate
+`Ctrl+L` settings dialog + live keystroke adjustment -- see that
+component's own header comment.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
-- `MERGE_OBTUSE`, `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes (`src/
-  optimizer.rs` only ports `MERGE_SEGMENTS`/`MERGE_COLINEAR`, the two every
-  plain interactive route and post-shove cleanup actually uses by
-  default).
+- `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
+  ported too (`src/optimizer.rs`'s `merge_obtuse`, run in upstream's own
+  `mergeFull -> mergeObtuse -> mergeColinear` order; see that module's
+  header comment for exactly how it differs from `MERGE_SEGMENTS`: it
+  extends two existing obtuse segments' own directions to their natural
+  meeting point rather than hunting for a fresh lower-cost bypass, which
+  can collapse a long obtuse "staircase" (common after a walkaround) in
+  one step). `SMART_PADS`/`FANOUT_CLEANUP` remain unported.
+  `RoutingSettings::smart_pads` exists as a field but, like
+  `shove_vias`/`jump_over_obstacles`/`optimizer_effort`/
+  `fix_all_segments`/`walkaround_hug_length_threshold`, is never read by
+  any routing code in this crate -- struct-shape parity only, not
+  implemented behavior (confirmed by grepping for each field's use
+  outside `settings.rs` itself: none).
 - `KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints
   (every candidate is still collision-checked, which is the one
   constraint that must never be skipped; the others are refinements).
@@ -223,6 +455,10 @@ ranked "what's left" list.
 - `VIA::PushoutForce`'s iterative lead-direction search for via lead-in
   while routing (`buildInitialLine`'s via-placement path uses a simpler
   direct placement -- see `line_placer.rs`).
-- Loop removal (`RemoveLoops`/`FindLinesBetweenJoints`) -- not implemented;
-  a route that reconnects to an existing same-net path leaves both in
-  place rather than deleting the redundant one.
+- `MOUSE_TRAIL_TRACER` (posture guessed from the swept mouse trail) and
+  springback (an incremental undo stack so backing the cursor up reverts
+  shove/walkaround decisions instead of recomputing from scratch) --
+  still not implemented; see `line_placer.rs`'s own module doc comment
+  (point 1) and `shove.rs`'s Stage 3 doc comment above for why, and
+  `docs/parity/GAPS.md` for this task's own priority ranking of what's
+  left in gap #7.

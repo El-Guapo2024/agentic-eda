@@ -8,7 +8,7 @@ function baseDraw(overrides: Partial<RouteDrawState> = {}): RouteDrawState {
 }
 
 function basePreview(overrides: Partial<RoutePreview> = {}): RoutePreview {
-  return { ok: true, net: "SIG", colliding: false, layer: "F.Cu", head: [[0, 0]], runs: [], via: null, snapped_end: null, displaced: [], ...overrides };
+  return { ok: true, net: "SIG", colliding: false, layer: "F.Cu", head: [[0, 0]], runs: [], via: null, snapped_end: null, displaced: [], displaced_vias: [], ...overrides };
 }
 
 test("drawStateFromPreview copies the server's head/colliding/via/snapped_end into the draw state", () => {
@@ -41,6 +41,13 @@ test("drawStateFromPreview carries runs and displaced lines through untouched", 
   const next = drawStateFromPreview(current, preview);
   assert.deepEqual(next.runs, preview.runs);
   assert.deepEqual(next.displaced, preview.displaced);
+});
+
+test("drawStateFromPreview carries displaced vias through untouched", () => {
+  const current = baseDraw();
+  const preview = basePreview({ displaced_vias: [{ source_via: "via_abc", x: 1000, y: 2000 }] });
+  const next = drawStateFromPreview(current, preview);
+  assert.deepEqual(next.displacedVias, preview.displaced_vias);
 });
 
 test("createRequestGuard: only the most recently issued token is current", () => {
