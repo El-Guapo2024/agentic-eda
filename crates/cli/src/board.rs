@@ -1055,6 +1055,7 @@ mod tests {
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
         let design = Design {
+            footprint_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
@@ -1204,6 +1205,7 @@ mod tests {
 
         let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
         let design = Design {
+            footprint_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(eda_model::ir::SchematicSection {

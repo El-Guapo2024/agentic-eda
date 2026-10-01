@@ -20,7 +20,7 @@ pub type Um = i64;
 /// Rotation in millidegrees (0..360_000) so 45° etc. stay exact integers.
 pub type Millideg = u32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
 pub struct Point {
     pub x: Um,
     pub y: Um,
@@ -65,6 +65,19 @@ pub struct Design {
     /// placement or routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drawings: Option<DrawingsSection>,
+    /// The Footprint Editor's own content (GAPS.md #8): footprint
+    /// definitions the user created or edited here, by name ("Lib:Name",
+    /// or a bare name for one authored from scratch). This is the one
+    /// section `crate::footprint::Footprint`/`Pad` (the *intent*-derived,
+    /// frozen `ConstraintModel::footprints`) has an editable counterpart
+    /// of -- see `LibraryFootprint`'s own doc for why it is a distinct
+    /// type rather than reusing `crate::footprint::Pad` directly. Absent
+    /// on a `design.json` written before this editor existed, same as
+    /// every other optional section here; a board footprint keeps
+    /// pointing at its `Part::footprint` name regardless of whether that
+    /// name has ever been opened here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footprint_library: Option<FootprintLibrarySection>,
 }
 
 impl Design {
@@ -84,6 +97,9 @@ impl Design {
         }
         if let Some(dr) = &mut self.drawings {
             dr.assign_missing_ids();
+        }
+        if let Some(lib) = &mut self.footprint_library {
+            lib.assign_missing_ids();
         }
     }
 }
@@ -1009,6 +1025,509 @@ impl DrawingsSection {
     }
 }
 
+// ---------- footprint library (the Footprint Editor's own content) ----------
+
+/// GAPS.md #8's editable footprint library: one entry per footprint name
+/// the user has opened in the Footprint Editor. Additive, same convention
+/// as every other `Design` section -- a `design.json` written before this
+/// editor existed simply has none.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintLibrarySection {
+    /// Sorted by `name`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprints: Vec<LibraryFootprint>,
+}
+
+/// KiCad's `FOOTPRINT_ATTR_T` flags (`pcbnew/footprint.h:83-91`:
+/// `FP_THROUGH_HOLE=0x0001, FP_SMD=0x0002, FP_EXCLUDE_FROM_POS_FILES=0x0004,
+/// FP_EXCLUDE_FROM_BOM=0x0008, FP_BOARD_ONLY=0x0010, FP_DNP=0x0040`) plus
+/// the dialog's two related-but-not-attribute-bit checkboxes
+/// (`m_noCourtyards`/`AllowMissingCourtyard`, `m_allowBridges`/
+/// `AllowSolderMaskBridges`) -- all on the Footprint Properties dialog's
+/// General tab (`dialog_footprint_properties_fp_editor.cpp`). Not mutually
+/// exclusive (KiCad itself allows a footprint with neither `smd` nor
+/// `through_hole` set -- "Normal", e.g. a pure-mechanical part).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintAttributes {
+    #[serde(default)]
+    pub smd: bool,
+    #[serde(default)]
+    pub through_hole: bool,
+    #[serde(default)]
+    pub exclude_from_bom: bool,
+    #[serde(default)]
+    pub exclude_from_position_files: bool,
+    /// "Board Only" -- not placed from the schematic/BOM at all (a
+    /// mechanical-only footprint with no symbol counterpart).
+    #[serde(default)]
+    pub board_only: bool,
+    /// "Do Not Populate" (`FP_DNP`) -- greyed out on the board, excluded
+    /// from the BOM/position files regardless of those two flags' own
+    /// state.
+    #[serde(default)]
+    pub dnp: bool,
+    /// Suppresses the "missing courtyard" footprint-checker warning for a
+    /// footprint that genuinely has none by design.
+    #[serde(default)]
+    pub allow_missing_courtyard: bool,
+    /// Suppresses the "silkscreen clipped by solder mask" warning where
+    /// this footprint intentionally overlaps the two.
+    #[serde(default)]
+    pub allow_soldermask_bridges: bool,
+}
+
+fn d_true() -> bool {
+    true
+}
+
+/// One named field on a footprint (KiCad's `PCB_FIELD`, e.g. a custom
+/// "Vendor" or "Datasheet" field beyond the built-in Reference/Value) --
+/// `dialog_footprint_properties_fp_editor.cpp`'s Fields tab. Position/
+/// orientation/layer are deferred (see PARITY-fpedit.md): only name/value/
+/// visibility are modeled, enough to author one and read it back.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintField {
+    pub name: String,
+    pub value: String,
+    #[serde(default = "d_true")]
+    pub visible: bool,
+}
+
+/// One pad on a [`LibraryFootprint`], in the footprint's own local frame
+/// (see that type's doc). Mirrors `crate::footprint::Pad` field-for-field
+/// (shape/kind/drill/drill_slot/rot/roundrect_ratio all mean exactly the
+/// same thing there) plus what the Pad Properties dialog needs beyond
+/// placement geometry: a stable `id` (pad *numbers* are deliberately not
+/// unique -- see `crate::footprint::PlacedPad::number`'s own doc -- so
+/// addressing one pad for move/edit/delete needs a real id, same reason
+/// `Track`/`Via`/`Shape`/`Text` each have one) and per-pad clearance/
+/// thermal overrides (`dialog_pad_properties.cpp`'s "Clearance Overrides
+/// and Settings" panel; `None` = "use board/zone default", KiCad's own
+/// 0-means-inherit convention).
+///
+/// Deliberately a distinct type from `crate::footprint::Pad` rather than
+/// adding `id`/overrides to that one directly: `Pad` is constructed by
+/// struct literal (not just `Pad::simple`) in a dozen call sites across
+/// `crates/kicad`, `crates/connectivity`, `crates/freeroute`,
+/// `crates/interchange` and more -- every one *outside* this task's
+/// footprint-editor scope -- and a new required field there would be a
+/// breaking change to all of them for a concept (editor identity/
+/// overrides) only the editor's own JSON needs. `to_engine_pad`/
+/// `from_engine_pad` below are the one seam between the two.
+///
+/// `shape` is this editor's OWN shape enum ([`LibraryPadShape`]), not
+/// `crate::footprint::PadShape` -- it needs two more members (Trapezoid,
+/// ChamferedRect, `dialog_pad_properties.cpp`'s shape dropdown) the engine
+/// enum doesn't have, for the same "don't touch a type a dozen unrelated
+/// call sites construct by struct literal" reason `LibraryPad` itself is
+/// a distinct type (see this type's own doc above). `to_engine_pad` maps
+/// both of those down to the closest engine shape (documented there).
+///
+/// `layers` is likewise editor/export-only metadata `crate::footprint::
+/// Pad` has no field for at all (the engine infers through-hole-ness from
+/// `kind` alone -- see `PlacedPad::through_hole` -- and never needed a
+/// real per-pad layer set); this editor keeps it so the Layers tab has
+/// something real to show/edit and the derived `.kicad_mod` export (step
+/// 6) can write a correct `(layers ...)` line instead of guessing one
+/// from `kind`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryPad {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub number: String,
+    pub at: Point,
+    pub size: (Um, Um),
+    #[serde(default)]
+    pub shape: LibraryPadShape,
+    #[serde(default)]
+    pub kind: crate::footprint::PadKind,
+    #[serde(default)]
+    pub drill: Option<Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drill_slot: Option<(Um, Um)>,
+    #[serde(default)]
+    pub rot: Millideg,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roundrect_ratio: Option<f64>,
+    /// `PAD::SetTrapezoidDeltaSize` -- (dx, dy), KiCad's own convention of
+    /// only ever one axis non-zero (the dialog's axis radio picks which).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trapezoid_delta: Option<(Um, Um)>,
+    /// `PAD::SetChamferRectRatio` -- fraction of the shorter side, same
+    /// shape as `roundrect_ratio`. Only meaningful for `ChamferedRect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chamfer_ratio: Option<f64>,
+    /// `PAD::SetChamferPositions` -- which corners are cut.
+    #[serde(default)]
+    pub chamfer_corners: ChamferCorners,
+    /// KiCad layer names this pad occupies ("F.Cu", "F.Paste", "F.Mask",
+    /// "*.Cu", ...) -- see this type's own doc on why the engine's `Pad`
+    /// has nothing equivalent. Empty means "not set yet"; the Pad
+    /// Properties dialog's layer-preset buttons (SMD/THT/NPTH/connector)
+    /// are what normally fill this in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<String>,
+    /// `PAD::GetLocalClearance()` -- `None` = inherit the board/footprint default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance_override: Option<Um>,
+    /// `PAD::GetLocalThermalGapOverride()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_gap_override: Option<Um>,
+    /// `PAD::GetLocalThermalSpokeWidthOverride()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_width_override: Option<Um>,
+}
+
+/// `PAD_SHAPE` (`pcbnew/padstack.h`) as the Footprint Editor exposes it --
+/// see `LibraryPad`'s own doc for why this is a distinct enum from
+/// `crate::footprint::PadShape` rather than an extension of it. Custom
+/// (primitive-based) pad shapes are not modeled -- KiCad's own Explode/
+/// Recombine editing mode for them is a substantial separate subsystem
+/// (see PARITY-fpedit.md); a `.kicad_mod` with a custom-shape pad can
+/// still be *opened* (the pad's anchor shape/size loads, the custom
+/// primitives are dropped with a warning), just not authored here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LibraryPadShape {
+    Circle,
+    #[default]
+    Rect,
+    Oval,
+    RoundRect,
+    Trapezoid,
+    ChamferedRect,
+}
+
+/// `PAD::SetChamferPositions`' four corner flags (`RECT_CHAMFER_TOP_LEFT`
+/// etc, `pcbnew/padstack.h`), un-rotated pad-local corners.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChamferCorners {
+    #[serde(default)]
+    pub top_left: bool,
+    #[serde(default)]
+    pub top_right: bool,
+    #[serde(default)]
+    pub bottom_left: bool,
+    #[serde(default)]
+    pub bottom_right: bool,
+}
+
+impl LibraryPad {
+    fn id_seed(&self) -> String {
+        format!("{}|{},{}|{}x{}|{:?}|{:?}", self.number, self.at.x, self.at.y, self.size.0, self.size.1, self.shape, self.kind)
+    }
+
+    /// The same pad, as the engine's `crate::footprint::Pad` -- drops
+    /// `id`, `layers`, and the override fields (see this type's own doc),
+    /// and maps the two shapes the engine doesn't have down to the
+    /// closest one it does, so placement/routing/DRC still see a sane
+    /// bounding shape even though they can't draw the true outline:
+    /// `Trapezoid` -> `Rect` (its own bounding box -- `size` already is
+    /// the trapezoid's full bounding width/height, same convention
+    /// `PAD_SHAPE::TRAPEZOID`'s own `GetBoundingBox` uses), `ChamferedRect`
+    /// -> `RoundRect` (reuses `chamfer_ratio` as the roundrect ratio --
+    /// both express "fraction of the shorter side cut from the corner",
+    /// so the clearance-relevant corner inset is the same order of
+    /// magnitude even though one cuts a chamfer and the other a fillet).
+    pub fn to_engine_pad(&self) -> crate::footprint::Pad {
+        let (shape, roundrect_ratio) = match self.shape {
+            LibraryPadShape::Circle => (crate::footprint::PadShape::Circle, None),
+            LibraryPadShape::Rect | LibraryPadShape::Trapezoid => (crate::footprint::PadShape::Rect, None),
+            LibraryPadShape::Oval => (crate::footprint::PadShape::Oval, None),
+            LibraryPadShape::RoundRect => (crate::footprint::PadShape::RoundRect, self.roundrect_ratio),
+            LibraryPadShape::ChamferedRect => (crate::footprint::PadShape::RoundRect, self.chamfer_ratio),
+        };
+        crate::footprint::Pad {
+            number: self.number.clone(),
+            at: (self.at.x, self.at.y),
+            size: self.size,
+            shape,
+            kind: self.kind,
+            drill: self.drill,
+            drill_slot: self.drill_slot,
+            rot: self.rot,
+            roundrect_ratio,
+        }
+    }
+
+    /// The reverse of `to_engine_pad`, for materializing an editable copy
+    /// of a resolved `crate::footprint::Footprint` (builtin table, intent-
+    /// declared, or a real `.kicad_mod` library file) the first time the
+    /// Footprint Editor opens it -- `id` is left empty (the caller backfills
+    /// via `LibraryFootprint::assign_missing_ids`) and every editor-only
+    /// field (layers, overrides, trapezoid/chamfer) starts empty/`None`,
+    /// since the engine's own `Pad` never had one to read back.
+    pub fn from_engine_pad(p: &crate::footprint::Pad) -> Self {
+        let shape = match p.shape {
+            crate::footprint::PadShape::Rect => LibraryPadShape::Rect,
+            crate::footprint::PadShape::RoundRect => LibraryPadShape::RoundRect,
+            crate::footprint::PadShape::Circle => LibraryPadShape::Circle,
+            crate::footprint::PadShape::Oval => LibraryPadShape::Oval,
+        };
+        LibraryPad {
+            id: String::new(),
+            number: p.number.clone(),
+            at: Point { x: p.at.0, y: p.at.1 },
+            size: p.size,
+            shape,
+            kind: p.kind,
+            drill: p.drill,
+            drill_slot: p.drill_slot,
+            rot: p.rot,
+            roundrect_ratio: p.roundrect_ratio,
+            trapezoid_delta: None,
+            chamfer_ratio: None,
+            chamfer_corners: ChamferCorners::default(),
+            layers: Vec::new(),
+            clearance_override: None,
+            thermal_gap_override: None,
+            thermal_spoke_width_override: None,
+        }
+    }
+}
+
+/// A footprint definition as the Footprint Editor shows/edits it --
+/// GAPS.md #8's "project footprint library section in the IR". Local
+/// frame: micrometers, origin at `anchor` (KiCad's "Place Footprint
+/// Anchor" point -- `{0,0}` until that tool moves it), +x right, +y down,
+/// un-rotated, always as seen from the top side -- same convention
+/// `crate::footprint` already documents for the engine's own `Footprint`/
+/// `Pad`, so a `to_engine_footprint`/`from_engine_footprint` round trip
+/// never needs an axis flip.
+///
+/// Reuses `Shape`/`Text` (this module's own board-drawing types) for
+/// `graphics`/`texts` rather than inventing parallel footprint-graphic
+/// types: the fields (layer/stroke_width/filled/points, or content/at/
+/// angle/size/justify/mirror) mean exactly the same thing, just read in
+/// this footprint's local frame instead of board space -- `Shape::
+/// translate`/`set_layer`/`set_stroke_width`/`set_filled` and each type's
+/// own `id`/`set_id` all come along for free.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryFootprint {
+    /// "Lib:Name" (opened from a loaded library) or a bare name (authored
+    /// from scratch here) -- the same string a `Part::footprint`/
+    /// `Part::package` names, and this section's own addressing key (no
+    /// separate id: footprint names are already unique the way a
+    /// Track/Via/Shape/Text's content never is).
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub keywords: String,
+    #[serde(default)]
+    pub attributes: FootprintAttributes,
+    /// Sorted by `id`.
+    #[serde(default)]
+    pub pads: Vec<LibraryPad>,
+    /// Free-standing graphics (F.SilkS/F.Fab/F.CrtYd/...), sorted by `id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graphics: Vec<Shape>,
+    /// Sorted by `id`. The footprint's own Reference/Value text fields are
+    /// NOT in this list (same split `FootprintField`'s doc notes) -- see
+    /// `reference_visible`/`value_visible` below for the little this
+    /// editor models of those two.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<Text>,
+    /// Extra named fields beyond Reference/Value/Footprint (KiCad's own
+    /// built-in three), e.g. a custom "Vendor" or "Datasheet" field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<FootprintField>,
+    #[serde(default = "d_true")]
+    pub reference_visible: bool,
+    #[serde(default = "d_true")]
+    pub value_visible: bool,
+    /// Courtyard half-extents -- same field/meaning as `crate::footprint::
+    /// Footprint::courtyard` (`None` derives one from the pad bbox).
+    #[serde(default)]
+    pub courtyard: Option<(Um, Um)>,
+    /// `(model "...")` 3D model path -- same field/meaning as
+    /// `crate::footprint::Footprint::model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// KiCad's footprint anchor (`footprint_editor_control.cpp`'s "Place
+    /// Footprint Anchor" tool): the local-frame point every pad/graphic/
+    /// text coordinate above is relative to. `{0,0}` (KiCad's
+    /// overwhelmingly common case) until that tool moves it.
+    #[serde(default)]
+    pub anchor: Point,
+    /// Whether a board footprint instance naming this footprint should
+    /// resolve its pads/courtyard from here (`crate::board::load`'s
+    /// overlay onto `ConstraintModel::footprints`, filtered on this flag)
+    /// -- KiCad's "Update Footprint from Library", kept an explicit,
+    /// user-triggered action rather than instant/automatic propagation:
+    /// editing pads here never touches the board on its own; only
+    /// `Cmd::UpdateFootprintOnBoard` sets this `true`. Starts `false`, so
+    /// opening a real library footprint and nudging a pad can never
+    /// change what's already placed without that separate, explicit step.
+    #[serde(default)]
+    pub published: bool,
+}
+
+impl Default for LibraryFootprint {
+    fn default() -> Self {
+        LibraryFootprint {
+            name: String::new(),
+            description: String::new(),
+            keywords: String::new(),
+            attributes: FootprintAttributes::default(),
+            pads: Vec::new(),
+            graphics: Vec::new(),
+            texts: Vec::new(),
+            fields: Vec::new(),
+            reference_visible: true,
+            value_visible: true,
+            courtyard: None,
+            model: None,
+            anchor: Point { x: 0, y: 0 },
+            published: false,
+        }
+    }
+}
+
+impl LibraryFootprint {
+    /// A brand-new, empty footprint named `name` -- "New Footprint"
+    /// (`footprint_editor_control.cpp`'s `NewFootprint`) before anything
+    /// has been drawn in it.
+    pub fn new_empty(name: impl Into<String>) -> Self {
+        LibraryFootprint { name: name.into(), ..Default::default() }
+    }
+
+    /// An editable copy of an already-resolved engine `Footprint`
+    /// (builtin table, intent-declared, or a real `.kicad_mod` library
+    /// file parsed by `eda_kicad::footprint_lib`) -- what the Footprint
+    /// Editor materializes into `FootprintLibrarySection` the first time
+    /// an edit touches a footprint that was not already there. Every pad
+    /// gets a fresh empty id (backfilled by the caller via
+    /// `assign_missing_ids`); attributes/keywords/fields/anchor all start
+    /// at their defaults since `crate::footprint::Footprint` has no
+    /// concept of any of them yet.
+    pub fn from_engine_footprint(fp: &crate::footprint::Footprint) -> Self {
+        LibraryFootprint {
+            name: fp.name.clone(),
+            pads: fp.pads.iter().map(LibraryPad::from_engine_pad).collect(),
+            courtyard: fp.courtyard,
+            model: fp.model.clone(),
+            ..Default::default()
+        }
+    }
+
+    /// The reverse of `from_engine_footprint`/the basis for exporting a
+    /// derived `.kicad_mod` (GAPS.md #8 step 6): this footprint's pads
+    /// and courtyard/model as the engine's own `Footprint` -- graphics/
+    /// text/fields/attributes stay editor-only (the engine has no use for
+    /// silkscreen art or a BOM-exclude flag), same split `LibraryPad::
+    /// to_engine_pad`'s doc explains.
+    pub fn to_engine_footprint(&self) -> crate::footprint::Footprint {
+        crate::footprint::Footprint { name: self.name.clone(), pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(), courtyard: self.courtyard, model: self.model.clone() }
+    }
+
+    /// Assign a deterministic id to every pad/graphic/text whose `id` is
+    /// still empty -- same contract as `RoutingSection`/`DrawingsSection`'s
+    /// own `assign_missing_ids` (stable per-kind processing order, `_2`/
+    /// `_3`/... suffix on an exact-content duplicate).
+    pub fn assign_missing_ids(&mut self) {
+        let mut existing: std::collections::BTreeSet<String> = self.pads.iter().map(|p| p.id.clone()).filter(|s| !s.is_empty()).collect();
+        existing.extend(self.graphics.iter().map(|g| g.id().to_string()).filter(|s| !s.is_empty()));
+        existing.extend(self.texts.iter().map(|t| t.id.clone()).filter(|s| !s.is_empty()));
+
+        let mut order: Vec<usize> = (0..self.pads.len()).collect();
+        order.sort_by(|&a, &b| (&self.pads[a].number, self.pads[a].at).cmp(&(&self.pads[b].number, self.pads[b].at)));
+        for i in order {
+            if self.pads[i].id.is_empty() {
+                let id = next_item_id("pad", &self.pads[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.pads[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.graphics.len()).collect();
+        order.sort_by(|&a, &b| (self.graphics[a].layer(), self.graphics[a].points().first().copied()).cmp(&(self.graphics[b].layer(), self.graphics[b].points().first().copied())));
+        for i in order {
+            if self.graphics[i].id().is_empty() {
+                let pts: Vec<String> = self.graphics[i].points().iter().map(|p| format!("{},{}", p.x, p.y)).collect();
+                let seed = format!("{}|{}", self.graphics[i].layer(), pts.join(";"));
+                let id = next_item_id("fpg", &seed, &existing);
+                existing.insert(id.clone());
+                self.graphics[i].set_id(id);
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.texts.len()).collect();
+        order.sort_by(|&a, &b| (&self.texts[a].content, self.texts[a].at).cmp(&(&self.texts[b].content, self.texts[b].at)));
+        for i in order {
+            if self.texts[i].id.is_empty() {
+                let seed = format!("{}|{},{}", self.texts[i].content, self.texts[i].at.x, self.texts[i].at.y);
+                let id = next_item_id("fpt", &seed, &existing);
+                existing.insert(id.clone());
+                self.texts[i].id = id;
+            }
+        }
+    }
+
+    /// `FOOTPRINT::GetNextPadNumber` (`pad_tool.cpp`'s `PAD_PLACER`,
+    /// `footprint.cpp:3357`): split `last` into its non-numeric prefix and
+    /// trailing integer (ASCII digits only -- a non-ASCII pad number, rare
+    /// in practice, keeps its whole prefix), then increment the integer
+    /// until `prefix+integer` collides with no existing pad number on this
+    /// footprint -- not just "+1": a manually-renumbered or out-of-order
+    /// board is still handled correctly, same as source.
+    pub fn next_pad_number_after(&self, last: &str) -> String {
+        let digit_count = last.chars().rev().take_while(|c| c.is_ascii_digit()).count();
+        let split_at = last.len() - digit_count;
+        let prefix = &last[..split_at];
+        let mut num: u64 = last[split_at..].parse().unwrap_or(0);
+        let used: std::collections::BTreeSet<&str> = self.pads.iter().map(|p| p.number.as_str()).collect();
+        loop {
+            num += 1;
+            let candidate = format!("{prefix}{num}");
+            if !used.contains(candidate.as_str()) {
+                return candidate;
+            }
+        }
+    }
+
+    /// `next_pad_number_after`, seeded from this footprint's own
+    /// highest-numbered existing pad (KiCad's `PAD_TOOL::m_lastPadNumber`,
+    /// which this editor has no standing interactive-session state to
+    /// carry between Cmds for -- the highest existing number is the same
+    /// "continue the sequence" answer in the overwhelmingly common case of
+    /// placing pads in order). `"1"` for the first pad on an empty
+    /// footprint, matching `m_lastPadNumber`'s own `"1"` reset default.
+    pub fn next_pad_number(&self) -> String {
+        let last = self
+            .pads
+            .iter()
+            .max_by_key(|p| {
+                let n = p.number.as_str();
+                let digit_count = n.chars().rev().take_while(|c| c.is_ascii_digit()).count();
+                n[n.len() - digit_count..].parse::<u64>().unwrap_or(0)
+            })
+            .map(|p| p.number.as_str())
+            .unwrap_or("0");
+        self.next_pad_number_after(last)
+    }
+}
+
+impl FootprintLibrarySection {
+    pub fn by_name(&self, name: &str) -> Option<&LibraryFootprint> {
+        self.footprints.iter().find(|f| f.name == name)
+    }
+    pub fn by_name_mut(&mut self, name: &str) -> Option<&mut LibraryFootprint> {
+        self.footprints.iter_mut().find(|f| f.name == name)
+    }
+    pub fn assign_missing_ids(&mut self) {
+        for fp in &mut self.footprints {
+            fp.assign_missing_ids();
+        }
+    }
+}
+
 /// Deterministic, dependency-free 64-bit hash (FNV-1a) of a byte string,
 /// hex-encoded. Not cryptographic, and deliberately not
 /// `std::hash::DefaultHasher`: the standard library does not promise that
@@ -1069,6 +1588,14 @@ impl Design {
             dr.shapes.sort_by(|a, b| a.id().cmp(b.id()));
             dr.texts.sort_by(|a, b| a.id.cmp(&b.id));
         }
+        if let Some(lib) = &mut d.footprint_library {
+            lib.footprints.sort_by(|a, b| a.name.cmp(&b.name));
+            for fp in &mut lib.footprints {
+                fp.pads.sort_by(|a, b| a.id.cmp(&b.id));
+                fp.graphics.sort_by(|a, b| a.id().cmp(b.id()));
+                fp.texts.sort_by(|a, b| a.id.cmp(&b.id));
+            }
+        }
         serde_json::to_vec(&d)
     }
 }
@@ -1102,6 +1629,7 @@ mod tests {
             placement: None,
             routing: None,
             drawings: None,
+            footprint_library: None,
         }
     }
 
@@ -1246,5 +1774,115 @@ mod tests {
         let mut s = Shape::Rect { id: "shp_1".into(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 100, y: 100 } };
         s.translate(10, 20);
         assert_eq!(s.points(), vec![Point { x: 10, y: 20 }, Point { x: 110, y: 120 }]);
+    }
+
+    // -------------------------------------------------- footprint library
+
+    fn lib_pad(number: &str, x: Um, y: Um) -> LibraryPad {
+        LibraryPad {
+            id: String::new(),
+            number: number.into(),
+            at: Point { x, y },
+            size: (1000, 1000),
+            shape: LibraryPadShape::RoundRect,
+            kind: crate::footprint::PadKind::Smd,
+            drill: None,
+            drill_slot: None,
+            rot: 0,
+            roundrect_ratio: Some(0.25),
+            trapezoid_delta: None,
+            chamfer_ratio: None,
+            chamfer_corners: ChamferCorners::default(),
+            layers: vec!["F.Cu".into()],
+            clearance_override: None,
+            thermal_gap_override: None,
+            thermal_spoke_width_override: None,
+        }
+    }
+
+    #[test]
+    fn footprint_library_pad_ids_are_assigned_and_stable() {
+        let mut fp = LibraryFootprint::new_empty("Test:Lib");
+        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1000, 0)];
+        fp.assign_missing_ids();
+        assert!(fp.pads.iter().all(|p| !p.id.is_empty()), "{:?}", fp.pads);
+        assert_ne!(fp.pads[0].id, fp.pads[1].id);
+        let ids_before: Vec<String> = fp.pads.iter().map(|p| p.id.clone()).collect();
+        fp.assign_missing_ids(); // a second pass must be a no-op
+        let ids_after: Vec<String> = fp.pads.iter().map(|p| p.id.clone()).collect();
+        assert_eq!(ids_before, ids_after);
+    }
+
+    #[test]
+    fn next_pad_number_increments_and_skips_collisions() {
+        let empty = LibraryFootprint::new_empty("Test:Lib");
+        assert_eq!(empty.next_pad_number(), "1");
+
+        let mut fp = LibraryFootprint::new_empty("Test:Lib");
+        fp.pads = vec![lib_pad("1", 0, 0), lib_pad("2", 1000, 0)];
+        assert_eq!(fp.next_pad_number(), "3");
+
+        // A manually-added "4" alongside a hole left at "3" must still
+        // skip the now-occupied "4" when continuing from "3".
+        fp.pads.push(lib_pad("4", 2000, 0));
+        assert_eq!(fp.next_pad_number_after("3"), "5");
+    }
+
+    #[test]
+    fn library_pad_round_trips_through_engine_pad_for_simple_shapes() {
+        let p = lib_pad("1", 500, -500);
+        let engine = p.to_engine_pad();
+        assert_eq!(engine.number, "1");
+        assert_eq!(engine.at, (500, -500));
+        assert_eq!(engine.shape, crate::footprint::PadShape::RoundRect);
+        assert_eq!(engine.roundrect_ratio, Some(0.25));
+
+        let back = LibraryPad::from_engine_pad(&engine);
+        assert_eq!(back.number, engine.number);
+        assert_eq!(back.at, Point { x: 500, y: -500 });
+        assert_eq!(back.shape, LibraryPadShape::RoundRect);
+        assert!(back.id.is_empty(), "from_engine_pad must leave id for the caller to assign");
+    }
+
+    #[test]
+    fn trapezoid_and_chamfered_pads_approximate_down_for_the_engine() {
+        let mut trap = lib_pad("1", 0, 0);
+        trap.shape = LibraryPadShape::Trapezoid;
+        trap.trapezoid_delta = Some((200, 0));
+        assert_eq!(trap.to_engine_pad().shape, crate::footprint::PadShape::Rect);
+
+        let mut chf = lib_pad("1", 0, 0);
+        chf.shape = LibraryPadShape::ChamferedRect;
+        chf.chamfer_ratio = Some(0.2);
+        chf.roundrect_ratio = None;
+        let engine = chf.to_engine_pad();
+        assert_eq!(engine.shape, crate::footprint::PadShape::RoundRect);
+        assert_eq!(engine.roundrect_ratio, Some(0.2), "chamfer ratio stands in for roundrect ratio in the engine approximation");
+    }
+
+    #[test]
+    fn footprint_library_round_trips_through_engine_footprint() {
+        let engine = crate::footprint::builtin("0603").unwrap();
+        let lib = LibraryFootprint::from_engine_footprint(&engine);
+        assert_eq!(lib.pads.len(), engine.pads.len());
+        assert!(lib.pads.iter().all(|p| p.id.is_empty()));
+        assert!(!lib.published, "opening a footprint must never auto-publish it to the board");
+        let mut lib = lib;
+        lib.assign_missing_ids();
+        let back = lib.to_engine_footprint();
+        assert_eq!(back.pads.len(), engine.pads.len());
+        assert_eq!(back.courtyard, engine.courtyard);
+    }
+
+    #[test]
+    fn footprint_library_section_is_additive_on_an_old_design() {
+        // A `design.json` written before this editor existed has no
+        // `footprint_library` key at all; it must still load, and a
+        // normalization pass must not invent one out of thin air.
+        let json = r#"{"schema": 1, "provenance": {"engine_version": "0", "intent_hash": "x", "seed": 0}}"#;
+        let mut d: Design = serde_json::from_str(json).expect("an old design.json with no footprint_library must still parse");
+        assert!(d.footprint_library.is_none());
+        d.assign_missing_ids();
+        assert!(d.footprint_library.is_none(), "assign_missing_ids must not create a section that was never there");
     }
 }

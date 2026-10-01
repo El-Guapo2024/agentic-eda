@@ -488,6 +488,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         placement: None,
         routing: None,
         drawings: None,
+        footprint_library: None,
     })
 }
 

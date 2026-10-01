@@ -457,6 +457,7 @@ mod tests {
 
     fn design() -> Design {
         Design {
+            footprint_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],

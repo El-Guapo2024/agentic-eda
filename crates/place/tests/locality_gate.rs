@@ -16,6 +16,7 @@ fn examples_dir() -> PathBuf {
 
 fn design() -> Design {
     Design {
+        footprint_library: None,
         schema: 1,
         provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,

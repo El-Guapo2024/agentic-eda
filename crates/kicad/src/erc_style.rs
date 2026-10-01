@@ -1429,7 +1429,7 @@ mod tests {
     }
 
     fn design(sch: SchematicSection) -> Design {
-        Design { schema: 1, provenance: provenance(), schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None }
+        Design { schema: 1, provenance: provenance(), schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None }
     }
 
     /// One part: a 2-pin passive with pins at Left(offset 1270)/Right

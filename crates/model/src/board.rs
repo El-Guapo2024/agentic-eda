@@ -266,6 +266,7 @@ mod tests {
             placement: Some(crate::ir::PlacementSection { outline: Vec::new(), footprints: Vec::new(), modules: Vec::new() }),
             routing: None,
             drawings: None,
+            footprint_library: None,
         };
         assert!(fit_outline(&empty, &m, 0.25, 0.0).placement.unwrap().outline.is_empty());
 

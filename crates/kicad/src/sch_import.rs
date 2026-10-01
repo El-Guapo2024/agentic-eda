@@ -172,6 +172,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         placement: None,
         routing: None,
         drawings: None,
+        footprint_library: None,
     };
     design.assign_missing_ids();
 

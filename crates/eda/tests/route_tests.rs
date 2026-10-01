@@ -89,6 +89,7 @@ fn fp_side(id: &str, x: i64, y: i64, side: Side) -> FootprintInstance {
 
 fn design(outline: Vec<Point>, footprints: Vec<FootprintInstance>) -> Design {
     Design {
+        footprint_library: None,
         schema: 1,
         provenance: provenance(),
         schematic: None, nets: None,
