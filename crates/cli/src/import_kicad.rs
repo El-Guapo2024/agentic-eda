@@ -41,7 +41,15 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
         .ok_or_else(|| fail("kicad_import_usage", "import-kicad", "eda import-kicad needs -o <dir>"))?;
 
     let text = std::fs::read_to_string(&input).map_err(|e| fail("io", &input, format!("could not read {input}: {e}")))?;
-    let (design, model, notes) = eda::import_kicad_pcb(&text)?;
+    let (design, mut model, notes) = eda::import_kicad_pcb(&text)?;
+    // A real project's net classes live in the sidecar `.kicad_pro`, not
+    // the `.kicad_pcb` itself (see `eda_kicad::merge_project_net_classes`'s
+    // doc comment) -- merge it in when the board came from a real project
+    // directory rather than a bare, single-file board.
+    let pro_path = PathBuf::from(&input).with_extension("kicad_pro");
+    if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
+        eda::merge_project_net_classes(&mut model, &pro_text);
+    }
 
     std::fs::create_dir_all(&out).map_err(|e| fail("io", &out.display().to_string(), e.to_string()))?;
 

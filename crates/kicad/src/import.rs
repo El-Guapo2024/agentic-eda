@@ -256,10 +256,126 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
             }
             let track_width = sexpr::find(nc, "trace_width").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
             let clearance = sexpr::find(nc, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
-            Some(NetClass { name, nets, track_width, clearance, priority: 0 })
+            let via_diameter = sexpr::find(nc, "via_dia").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+            let via_drill = sexpr::find(nc, "via_drill").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+            Some(NetClass { name, nets, track_width, clearance, via_diameter, via_drill, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 })
         })
         .collect();
     board
+}
+
+/// A KiCad 7+ project's real net-class source: `net_settings.classes[]` +
+/// `net_settings.netclass_patterns[]` in the sidecar `.kicad_pro` JSON file
+/// -- *not* the `(net_class ...)` s-expression [`import_board_rules`] reads
+/// from the `.kicad_pcb` itself, which current KiCad only still emits for
+/// the implicit `"Default"` class (read there for track width/clearance/via
+/// size) and leaves empty of any custom class a real project defines. A
+/// `.kicad_pcb` with no sidecar project (common for a single-file QA
+/// fixture) legitimately has no custom classes to find; this returns an
+/// empty `Vec` rather than an error for any JSON this doesn't recognize, matching
+/// the rest of this module's "unknown field is invisible, not a parse
+/// error" convention.
+///
+/// `nets: Vec<String>` is populated straight from each matching pattern
+/// string (not resolved against the board's actual net list): `NetClass::
+/// matches` already glob-matches a net name against these patterns the
+/// same way `BoardRules::class_of`/`clearance_of` resolve every other
+/// class, so no extra resolution step is needed here. Declaration order in
+/// `classes[]` is preserved (skipping `"Default"`, which this crate's
+/// `BoardRules` board-wide defaults already stand in for) -- `class_of`'s
+/// "first match wins" is exactly KiCad's own "earliest-declared non-default
+/// netclass wins" precedence (`net_settings.cpp`'s `makeEffectiveNetclass`).
+pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else {
+        return Vec::new();
+    };
+    let Some(net_settings) = root.get("net_settings") else {
+        return Vec::new();
+    };
+    let classes = net_settings.get("classes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let patterns = net_settings.get("netclass_patterns").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    let num_mm = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_f64()).map(mm_to_um);
+
+    let mut out = Vec::new();
+    for class in &classes {
+        let Some(name) = class.get("name").and_then(|v| v.as_str()) else { continue };
+        if name == "Default" {
+            continue; // the board-default fields already cover this; see the doc comment above
+        }
+        let nets: Vec<String> = patterns
+            .iter()
+            .filter(|p| p.get("netclass").and_then(|v| v.as_str()) == Some(name))
+            .filter_map(|p| p.get("pattern").and_then(|v| v.as_str()).map(String::from))
+            .collect();
+        if nets.is_empty() {
+            continue; // an unused class matches nothing; not worth carrying (same rule import_board_rules uses)
+        }
+        out.push(NetClass {
+            name: name.to_string(),
+            nets,
+            track_width: num_mm(class, "track_width"),
+            clearance: num_mm(class, "clearance"),
+            via_diameter: num_mm(class, "via_diameter"),
+            via_drill: num_mm(class, "via_drill"),
+            microvia_diameter: num_mm(class, "microvia_diameter"),
+            microvia_drill: num_mm(class, "microvia_drill"),
+            diff_pair_width: num_mm(class, "diff_pair_width"),
+            diff_pair_gap: num_mm(class, "diff_pair_gap"),
+            diff_pair_via_gap: num_mm(class, "diff_pair_via_gap"),
+            priority: out.len() as i32,
+        });
+    }
+    out
+}
+
+/// Merge a `.kicad_pro`'s net classes into an already-imported board:
+/// project classes are inserted *before* whatever [`import_board_rules`]
+/// found in the `.kicad_pcb` itself (first-match-wins in `class_of`, and a
+/// bare `.kicad_pcb`-level class is the rarer, more conservative case worth
+/// keeping as a fallback rather than letting it shadow the project's own).
+/// A caller that has both files -- any real project directory, as opposed
+/// to a bare single-file `.kicad_pcb` -- should call this after
+/// [`import_kicad_pcb`] with the sidecar `.kicad_pro`'s contents.
+///
+/// Also applies the project's own `"Default"` class to `BoardRules`'s own
+/// scalar fields (`clearance`/`track_width`/`via_diameter`/`via_drill`).
+/// `import_board_rules` already reads a `"Default"` class for these -- but
+/// only from a legacy `(net_class ...)` s-expression in the `.kicad_pcb`
+/// itself, which a modern (KiCad 7+) project typically does not write at
+/// all once it has a `.kicad_pro` (confirmed empirically: zero such blocks
+/// in several real multi-class QA-corpus boards sampled while building
+/// this). Without this, a board imported alongside its real project would
+/// silently keep this crate's own placeholder defaults (`BoardRules::
+/// default()`) instead of that project's actual default clearance/width/
+/// via size -- wrong for every net that has no more specific class, not
+/// just the ones a custom class names.
+pub fn merge_project_net_classes(model: &mut eda_model::ConstraintModel, project_json: &str) {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else {
+        return;
+    };
+    let classes = root.get("net_settings").and_then(|ns| ns.get("classes")).and_then(|v| v.as_array());
+    if let Some(default) = classes.and_then(|cs| cs.iter().find(|c| c.get("name").and_then(|v| v.as_str()) == Some("Default"))) {
+        let mm = |key: &str| default.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+        if let Some(v) = mm("clearance") {
+            model.board.clearance = v;
+        }
+        if let Some(v) = mm("track_width") {
+            model.board.track_width = v;
+        }
+        if let Some(v) = mm("via_diameter") {
+            model.board.via_diameter = v;
+        }
+        if let Some(v) = mm("via_drill") {
+            model.board.via_drill = v;
+        }
+    }
+
+    let mut project_classes = parse_project_net_classes(project_json);
+    if !project_classes.is_empty() {
+        project_classes.append(&mut model.board.net_classes);
+        model.board.net_classes = project_classes;
+    }
 }
 
 // -------------------------------------------------------------- footprints
@@ -762,6 +878,65 @@ mod tests {
         assert_eq!(*pts.first().unwrap(), start);
         assert_eq!(*pts.last().unwrap(), end);
         assert!(pts.len() > 2);
+    }
+
+    /// Shape confirmed against a real `.kicad_pro` in the KiCad QA corpus
+    /// (`issue12609.kicad_pro`'s `net_settings`), field-for-field.
+    const SAMPLE_PROJECT_JSON: &str = r#"{
+        "net_settings": {
+            "classes": [
+                { "name": "Default", "clearance": 0.15, "track_width": 0.25, "via_diameter": 0.6, "via_drill": 0.3 },
+                { "name": "1kV", "clearance": 2.4, "track_width": 0.5, "via_diameter": 1.0, "via_drill": 0.5 },
+                { "name": "500V", "clearance": 1.2, "track_width": 0.3 }
+            ],
+            "netclass_patterns": [
+                { "netclass": "1kV", "pattern": "/1kV" },
+                { "netclass": "500V", "pattern": "/500Vpp" },
+                { "netclass": "500V", "pattern": "/500Vpn" }
+            ]
+        }
+    }"#;
+
+    #[test]
+    fn parses_project_net_classes_skipping_default() {
+        let classes = parse_project_net_classes(SAMPLE_PROJECT_JSON);
+        assert_eq!(classes.len(), 2, "{classes:?}");
+        assert_eq!(classes[0].name, "1kV");
+        assert_eq!(classes[0].nets, vec!["/1kV".to_string()]);
+        assert_eq!(classes[0].clearance, Some(2400));
+        assert_eq!(classes[0].track_width, Some(500));
+        assert_eq!(classes[0].via_diameter, Some(1000));
+        assert_eq!(classes[0].via_drill, Some(500));
+        assert_eq!(classes[1].name, "500V");
+        assert_eq!(classes[1].nets, vec!["/500Vpp".to_string(), "/500Vpn".to_string()], "a class can own more than one pattern");
+    }
+
+    #[test]
+    fn merge_puts_project_classes_ahead_of_pcb_level_ones() {
+        let mut model = eda_model::ConstraintModel::default();
+        model.board.net_classes.push(NetClass { name: "pcb_level".into(), nets: vec!["*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        merge_project_net_classes(&mut model, SAMPLE_PROJECT_JSON);
+        assert_eq!(model.board.net_classes.len(), 3);
+        assert_eq!(model.board.net_classes[0].name, "1kV", "project classes come first: class_of is first-match-wins, same as KiCad's own earliest-declared-wins precedence");
+        assert_eq!(model.board.net_classes[2].name, "pcb_level");
+    }
+
+    #[test]
+    fn merge_applies_the_projects_default_class_to_board_scalars() {
+        let mut model = eda_model::ConstraintModel::default();
+        let before = model.board.clearance;
+        merge_project_net_classes(&mut model, SAMPLE_PROJECT_JSON);
+        assert_eq!(model.board.clearance, 150, "Default class's 0.15mm clearance, not this crate's own placeholder default ({before})");
+        assert_eq!(model.board.track_width, 250);
+        assert_eq!(model.board.via_diameter, 600);
+        assert_eq!(model.board.via_drill, 300);
+    }
+
+    #[test]
+    fn unparseable_or_absent_net_settings_is_an_empty_no_op() {
+        assert!(parse_project_net_classes("not json").is_empty());
+        assert!(parse_project_net_classes("{}").is_empty());
+        assert!(parse_project_net_classes(r#"{"net_settings": {}}"#).is_empty());
     }
 
     #[test]

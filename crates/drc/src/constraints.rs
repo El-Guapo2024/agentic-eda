@@ -34,6 +34,19 @@ pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Um {
     ca.max(cb)
 }
 
+/// The largest clearance value *any* pair on this board could possibly
+/// resolve to -- `BOARD::GetMaxClearanceValue()` / `m_DRCMaxClearance` in
+/// `drc_cache_generator.cpp`, used there to size how far a `DRC_RTREE`
+/// query reaches so a bounded spatial query can never miss a pair that
+/// `EvalRules` would later resolve to a bigger-than-default clearance.
+/// Board default and hole clearance are always candidates; so is every
+/// netclass's own clearance override (the only per-net source this port
+/// resolves -- see [`clearance`]'s own doc comment on what's out of scope).
+pub fn worst_case_clearance(rules: &BoardRules) -> Um {
+    let base = rules.clearance.max(rules.hole_clearance_um);
+    rules.net_classes.iter().filter_map(|c| c.clearance).fold(base, Um::max)
+}
+
 /// `bds.m_TrackMinWidth`: the absolute track-width floor, independent of
 /// net class (a netclass's own `track_width` only ever sets the *nominal*
 /// value KiCad's router aims for -- see `loadImplicitRules`'s
@@ -103,7 +116,10 @@ mod tests {
     use eda_model::NetClass;
 
     fn rules_with_classes() -> BoardRules {
-        BoardRules { net_classes: vec![NetClass { name: "power".into(), nets: vec!["VIN".into()], track_width: None, clearance: Some(500), priority: 0 }], ..BoardRules::default() }
+        BoardRules {
+            net_classes: vec![NetClass { name: "power".into(), nets: vec!["VIN".into()], track_width: None, clearance: Some(500), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
+            ..BoardRules::default()
+        }
     }
 
     #[test]
