@@ -238,13 +238,16 @@ def render_report(drc, erc, conn, rt, scores):
             "_Reading this number_: precision is low enough to call out specifically, and it isn't evenly spread. "
             "`tracks_crossing` is 0 on the KiCad side across every one of these boards but 1567 on ours -- a 100% "
             "disagreement rate for that one check, which looks like a real correctness bug rather than a tolerance "
-            "or scope difference (see GAPS.md #3). `hole_clearance` has zero *matched* instances despite 378/831 "
-            "raw counts -- the positions disagree every time, not just the totals. Several clearance-family checks "
-            "(`clearance`, `track_width`, `shorting_items`, `silk_over_copper`) over-fire 4-10x, consistent with "
-            "this project checking every net against one global default rule while real boards carry per-net/"
-            "netclass overrides `import_kicad_pcb` doesn't reconstruct (GAPS.md #10). Two of the four "
-            "`examples/ladder/*.yaml` rungs are additionally missing from these totals entirely -- see the "
-            "timeout entries below, and GAPS.md #2._\n"
+            "or scope difference (see GAPS.md #3). `hole_clearance` has zero *matched* instances despite 179/633 "
+            "raw counts -- the positions disagree every time, not just the totals (a same-net exclusion bug that "
+            "inflated the raw count further was fixed this round; the remaining zero-match issue is a separate "
+            "position/scope mismatch, still open). Several clearance-family checks (`clearance`, `track_width`, "
+            "`shorting_items`, `silk_over_copper`) over-fire 2-7x -- down from 4-10x before real per-net/netclass "
+            "rules were imported from the sidecar `.kicad_pro`, but still consistent with remaining gaps in how "
+            "`import_kicad_pcb` resolves per-net overrides (GAPS.md #10). Three of the four "
+            "`examples/ladder/*.yaml` rungs are additionally missing from these totals entirely (load-sensitive "
+            "`crates/freeroute` route times, not `eda_drc` itself -- see GAPS.md #2) -- see the timeout entries "
+            "below.\n"
         )
         lines.append(type_table(drc["totals"]))
         non_kicad = drc.get("non_kicad_totals") or {}

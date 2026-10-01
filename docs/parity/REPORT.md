@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-01T05:50:25.108532+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-01T11:26:30.773738+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -20,9 +20,9 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 |---|---:|---:|
 | `connectivity_boards_evaluated` | 58 | 58 |
 | `connectivity_exact_match_rate` | 83.9% | 83.9% |
-| `drc_boards_evaluated` | 56 | 56 |
-| `drc_precision` | 6.3% | 6.3% |
-| `drc_recall` | 14.1% | 14.1% |
+| `drc_boards_evaluated` | 51 | 56 |
+| `drc_precision` | 7.8% | 7.8% |
+| `drc_recall` | 19.2% | 19.2% |
 | `erc_boards_evaluated` | 52 | 52 |
 | `erc_precision` | 34.8% | 34.8% |
 | `erc_recall` | 23.9% | 23.9% |
@@ -37,63 +37,61 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 
 _Caveat: `eda_drc` is this task's measurement target per its own instructions, but it is **not** the engine wired into production `eda check`/`eda board` today -- `eda_gates::pcb` still owns `check_placement`/`check_routing` there (see `crates/drc/src/lib.rs`'s own "Integration status" doc comment). Numbers below describe the standalone ported crate, not what a user driving `eda board` currently gets._
 
-Boards evaluated: 56 (of 59 attempted). Position-match tolerance: 50 um. `unconnected_items` excluded here -- measured instead under Connectivity.
+Boards evaluated: 51 (of 57 attempted). Position-match tolerance: 50 um. `unconnected_items` excluded here -- measured instead under Connectivity.
 
-**Overall precision: 6.3%, recall: 14.1%.**
+**Overall precision: 7.8%, recall: 19.2%.**
 
-_Reading this number_: precision is low enough to call out specifically, and it isn't evenly spread. `tracks_crossing` is 0 on the KiCad side across every one of these boards but 1567 on ours -- a 100% disagreement rate for that one check, which looks like a real correctness bug rather than a tolerance or scope difference (see GAPS.md #3). `hole_clearance` has zero *matched* instances despite 378/831 raw counts -- the positions disagree every time, not just the totals. Several clearance-family checks (`clearance`, `track_width`, `shorting_items`, `silk_over_copper`) over-fire 4-10x, consistent with this project checking every net against one global default rule while real boards carry per-net/netclass overrides `import_kicad_pcb` doesn't reconstruct (GAPS.md #10). Two of the four `examples/ladder/*.yaml` rungs are additionally missing from these totals entirely -- see the timeout entries below, and GAPS.md #2._
+_Reading this number_: precision is low enough to call out specifically, and it isn't evenly spread. `tracks_crossing` is 0 on the KiCad side across every one of these boards but 1567 on ours -- a 100% disagreement rate for that one check, which looks like a real correctness bug rather than a tolerance or scope difference (see GAPS.md #3). `hole_clearance` has zero *matched* instances despite 179/633 raw counts -- the positions disagree every time, not just the totals (a same-net exclusion bug that inflated the raw count further was fixed this round; the remaining zero-match issue is a separate position/scope mismatch, still open). Several clearance-family checks (`clearance`, `track_width`, `shorting_items`, `silk_over_copper`) over-fire 2-7x -- down from 4-10x before real per-net/netclass rules were imported from the sidecar `.kicad_pro`, but still consistent with remaining gaps in how `import_kicad_pcb` resolves per-net overrides (GAPS.md #10). Three of the four `examples/ladder/*.yaml` rungs are additionally missing from these totals entirely (load-sensitive `crates/freeroute` route times, not `eda_drc` itself -- see GAPS.md #2) -- see the timeout entries below.
 
 | type | kicad | ours | matched | missing | extra |
 |---|---:|---:|---:|---:|---:|
 | `annular_width` | 23 | 27 | 12 | 11 | 15 |
 | `assertion_failure` | 2 | 0 | 0 | 2 | 0 |
-| `clearance` | 1056 | 2334 | 86 | 970 | 2248 |
+| `clearance` | 530 | 1179 | 82 | 448 | 1097 |
 | `connection_width` | 3 | 0 | 0 | 3 | 0 |
 | `copper_edge_clearance` | 45 | 87 | 4 | 41 | 83 |
 | `copper_sliver` | 1 | 0 | 0 | 1 | 0 |
-| `courtyards_overlap` | 0 | 92 | 0 | 0 | 92 |
-| `creepage` | 58 | 0 | 0 | 58 | 0 |
-| `drill_out_of_range` | 341 | 660 | 203 | 138 | 457 |
-| `hole_clearance` | 378 | 831 | 0 | 378 | 831 |
+| `courtyards_overlap` | 0 | 90 | 0 | 0 | 90 |
+| `creepage` | 1 | 0 | 0 | 1 | 0 |
+| `drill_out_of_range` | 341 | 474 | 203 | 138 | 271 |
+| `hole_clearance` | 179 | 633 | 0 | 179 | 633 |
 | `hole_to_hole` | 0 | 1 | 0 | 0 | 1 |
 | `holes_co_located` | 4 | 4 | 4 | 0 | 0 |
 | `invalid_outline` | 12 | 0 | 0 | 12 | 0 |
 | `isolated_copper` | 63 | 0 | 0 | 63 | 0 |
 | `items_not_allowed` | 46 | 0 | 0 | 46 | 0 |
-| `lib_footprint_issues` | 264 | 0 | 0 | 264 | 0 |
-| `lib_footprint_mismatch` | 159 | 0 | 0 | 159 | 0 |
+| `lib_footprint_issues` | 156 | 0 | 0 | 156 | 0 |
+| `lib_footprint_mismatch` | 144 | 0 | 0 | 144 | 0 |
 | `mirrored_text_on_front_layer` | 4 | 0 | 0 | 4 | 0 |
 | `missing_tuning_profile` | 1 | 0 | 0 | 1 | 0 |
 | `nonmirrored_text_on_back_layer` | 4 | 0 | 0 | 4 | 0 |
 | `pth_inside_courtyard` | 0 | 5 | 0 | 0 | 5 |
-| `shorting_items` | 137 | 920 | 42 | 95 | 878 |
-| `silk_edge_clearance` | 25 | 11 | 0 | 25 | 11 |
-| `silk_over_copper` | 163 | 559 | 0 | 163 | 559 |
-| `silk_overlap` | 226 | 235 | 0 | 226 | 235 |
+| `shorting_items` | 135 | 918 | 34 | 101 | 884 |
+| `silk_edge_clearance` | 22 | 8 | 0 | 22 | 8 |
+| `silk_over_copper` | 122 | 462 | 0 | 122 | 462 |
+| `silk_overlap` | 217 | 232 | 0 | 217 | 232 |
 | `skew_out_of_range` | 3 | 0 | 0 | 3 | 0 |
-| `solder_mask_bridge` | 321 | 182 | 1 | 320 | 181 |
+| `solder_mask_bridge` | 312 | 180 | 1 | 311 | 179 |
 | `starved_thermal` | 8 | 0 | 0 | 8 | 0 |
 | `text_height` | 0 | 1 | 0 | 0 | 1 |
-| `track_dangling` | 7 | 111 | 1 | 6 | 110 |
-| `track_width` | 209 | 1043 | 10 | 199 | 1033 |
+| `track_dangling` | 7 | 100 | 1 | 6 | 99 |
+| `track_width` | 209 | 959 | 10 | 199 | 949 |
 | `tracks_crossing` | 0 | 1567 | 0 | 0 | 1567 |
-| `via_dangling` | 316 | 163 | 36 | 280 | 127 |
-| `via_diameter` | 337 | 657 | 199 | 138 | 458 |
+| `via_dangling` | 117 | 163 | 36 | 81 | 127 |
+| `via_diameter` | 337 | 469 | 199 | 138 | 270 |
 | `zones_intersect` | 12 | 0 | 0 | 12 | 0 |
 
-_Excluded from the above: 1247 occurrences of this project's own placement-quality/netclass checks (no KiCad counterpart by design), which would only add noise to precision/recall._
+_Excluded from the above: 1170 occurrences of this project's own placement-quality/netclass checks (no KiCad counterpart by design), which would only add noise to precision/recall._
 
 
-### Zone fill impact (KiCad with vs without `--refill-zones`, same file)
+### Boards that errored (6, excluded from totals above)
 
-- **l4_control_hub (ours, routed)**: refilled={'lib_footprint_issues': 100, 'silk_edge_clearance': 11, 'silk_over_copper': 32, 'silk_overlap': 5, 'starved_thermal': 1, 'unconnected_items': 0}, unfilled={'lib_footprint_issues': 100, 'silk_edge_clearance': 11, 'silk_over_copper': 32, 'silk_overlap': 5, 'unconnected_items': 0}
-- **intersectingzones (QA corpus, real)**: refilled={'unconnected_items': 0}, unfilled={'clearance': 1, 'unconnected_items': 0}
-
-### Boards that errored (3, excluded from totals above)
-
+- l2_sensor_hub [ladder]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)
 - l3_motor_hub [ladder]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)
 - l4_control_hub [ladder]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)
+- mcu_board_30plus [example]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)
 - unroutable_tiny_outline [example]: place: [CheckResult { check: "place_legalize", status: Fail, location: Some("design"), hint: Some("could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C1"), hint: Some("14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("C2"), hint: Some("14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }, CheckResult { check: "place_outside", status: Fail, location: Some("U1"), hint: Some("78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)"), detail: None }]
+- issue21482/issue21482.kicad_pcb [qa]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)
 
 ## 2. ERC -- `check_erc` vs `kicad-cli sch erc`
 

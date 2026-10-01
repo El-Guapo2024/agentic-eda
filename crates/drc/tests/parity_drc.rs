@@ -541,7 +541,21 @@ fn parity_drc_harness() {
         eprintln!("KiCad QA corpus not found (set {QA_ROOT_ENV} or see default path in source); skipping QA-corpus boards");
     }
 
-    let zone_impact = zone_fill_impact(&cli, &repo, &qa_sample);
+    // Opt-in only (`PARITY_ZONE_IMPACT=1`): re-derives l4_control_hub's full
+    // schematic -> place -> route pipeline from scratch, solely for the
+    // informational "zone fill impact" sidebar in REPORT.md -- it does not
+    // feed the precision/recall totals below. Now that a real zone filler
+    // exists upstream, that sidebar is largely superseded anyway. Left off
+    // by default because crates/freeroute's autorouter is measurably very
+    // slow on this board regardless of system load (see docs/parity/
+    // GAPS.md #2's follow-up note) -- it was turning every plain harness
+    // run into a multi-hour wait for one sidebar table.
+    let zone_impact = if std::env::var("PARITY_ZONE_IMPACT").as_deref() == Ok("1") {
+        zone_fill_impact(&cli, &repo, &qa_sample)
+    } else {
+        eprintln!("skipping zone_fill_impact (set PARITY_ZONE_IMPACT=1 to include it -- see its doc comment, it re-routes l4_control_hub from scratch and is slow)");
+        Vec::new()
+    };
 
     // ---- summarize ----
     let mut totals: BTreeMap<String, TypeStat> = BTreeMap::new();
