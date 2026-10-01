@@ -120,8 +120,12 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     let mut pin_port_of: BTreeMap<String, Vec<Option<usize>>> = BTreeMap::new();
     for part in &model.parts {
         let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
-        let (width, height) = geometry::node_size(part, resolved.as_ref());
-        let (ports, pin_ports) = geometry::build_ports(part, width, height, resolved.as_ref());
+        // `derive_schematic` never splits a part across multiple placed
+        // units (see `SymbolInstance::unit`'s own doc) -- every node it
+        // builds is unit 1, regardless of how many units the resolved real
+        // symbol actually declares.
+        let (width, height) = geometry::node_size(part, resolved.as_ref(), 1);
+        let (ports, pin_ports) = geometry::build_ports(part, width, height, resolved.as_ref(), 1);
         node_of.insert(part.reference.clone(), Node { id: 0, width, height, ports });
         pin_port_of.insert(part.reference.clone(), pin_ports);
     }
@@ -250,6 +254,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                 net: net.clone(),
                 pins: pins.clone(),
                 pts: poly.iter().map(|p| Point { x: p.x + off.x, y: p.y + off.y }).collect(),
+                bus: false,
             });
         }
     }
@@ -281,7 +286,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         let Some(top_left) = positions.get(&part.reference).copied() else { continue };
         let node = &node_of[&part.reference];
         let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
-        for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height, resolved.as_ref()) {
+        for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height, resolved.as_ref(), 1) {
             let at = graph::Point { x: top_left.x + local.x, y: top_left.y + local.y };
             no_connects.push(NoConnect { id: String::new(), at: Point { x: at.x, y: at.y }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
         }
@@ -381,6 +386,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                         net: net.clone(),
                         pins: run.iter().map(|(pin_ref, _)| pin_ref.clone()).collect(),
                         pts: points.into_iter().map(|p| Point { x: p.x, y: p.y }).collect(),
+                        bus: false,
                     });
                 }
             }
@@ -484,12 +490,12 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             seed: opts.seed,
             stage_hashes: Vec::new(),
         },
-        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, erc_exclusions: vec![], imported_from_kicad: false, title_block: None, sheets: vec![] }),
+        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![] }),
         nets: None,
         placement: None,
         routing: None,
         drawings: None,
-        footprint_library: None,
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
     })
 }
 
@@ -1359,8 +1365,8 @@ mod tests {
         let sch = d.schematic.unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();
-        let (width, height) = geometry::node_size(part, None);
-        let (ports, pin_port) = geometry::build_ports(part, width, height, None);
+        let (width, height) = geometry::node_size(part, None, 1);
+        let (ports, pin_port) = geometry::build_ports(part, width, height, None, 1);
         // U1 pin "2" (GND) -> its port -> stub tip, must equal the power
         // symbol's own `at`.
         let port_idx = pin_port[1].unwrap();

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-01T18:08:06.177704+00:00",
+  "generated_at": "2026-10-01T18:21:00.840273+00:00",
   "metrics": [
     {
       "name": "connectivity_boards_evaluated",
@@ -30,18 +30,21 @@
     },
     {
       "name": "erc_boards_evaluated",
-      "current": 52.0,
-      "floor": 52.0
+      "current": 50.0,
+      "floor": 50.0,
+      "note": "Floor reset down from 52: the prior 52 included work/mcu30 and work/l1-order, two local-only gitignored scratch boards (`work/` is 'local state, not source') that cannot exist in any fresh checkout, including this one. 50 is the full, reproducible examples/+QA-corpus set -- see REPORT.md's own ERC section for the full explanation."
     },
     {
       "name": "erc_precision",
-      "current": 0.7509578544061303,
-      "floor": 0.7509578544061303
+      "current": 0.7464788732394366,
+      "floor": 0.7464788732394366,
+      "note": "Floor reset down from 0.7510 for the same reason as erc_boards_evaluated (a smaller but fully reproducible corpus, not a code regression) -- see REPORT.md. Per-type matched counts on the shared checks actually rose this round (GAPS.md #6's hierarchy flattening now descends into child sheets)."
     },
     {
       "name": "erc_recall",
-      "current": 0.4776604386677498,
-      "floor": 0.4776604386677498
+      "current": 0.38326446280991733,
+      "floor": 0.38326446280991733,
+      "note": "Floor reset down from 0.4777 for the same reason as erc_boards_evaluated (a smaller but fully reproducible corpus, not a code regression) -- see REPORT.md."
     },
     {
       "name": "roundtrip_own_footprint_pose_survival_rate",

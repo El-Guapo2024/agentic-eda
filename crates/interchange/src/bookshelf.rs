@@ -405,7 +405,7 @@ mod tests {
         };
         let outline = vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 15_000 }, Point { x: 0, y: 15_000 }];
         let design = Design {
-            footprint_library: None,
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "h".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,

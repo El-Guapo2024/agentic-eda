@@ -19,11 +19,11 @@ function resistor(id: string, at: [number, number]): SchematicSymbol {
 }
 
 function wire(id: string, pts: [number, number][]): SchematicWire {
-  return { id, net: "N", pins: [], pts };
+  return { id, net: "N", pins: [], pts, bus: false };
 }
 
 function schematic(symbols: SchematicSymbol[], wires: SchematicWire[]): Schematic {
-  return { lib_symbols: R_LIB, symbols, power_symbols: [], wires, no_connects: [], labels: [], texts: [], title_block: null };
+  return { lib_symbols: R_LIB, symbols, power_symbols: [], wires, no_connects: [], labels: [], texts: [], title_block: null, bus_entries: [], sheets: [], sheet_path: [] };
 }
 
 test("collectBoxSelection: a symbol fully inside the box is collected either way (crossing or enclosed)", () => {

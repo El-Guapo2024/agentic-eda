@@ -78,6 +78,25 @@ pub struct Design {
     /// name has ever been opened here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footprint_library: Option<FootprintLibrarySection>,
+    /// Every non-root sheet's own drawn content (GAPS.md #6), keyed by its
+    /// `SheetInstance::file` name -- KiCad's own "one `SCH_SCREEN` per
+    /// unique file" convention: two `SheetInstance`s naming the same file
+    /// (the same screen placed more than once) share the one entry here.
+    /// `schematic` above is always the *root* sheet's own content, never an
+    /// entry in this map -- a single-sheet design (everything before this
+    /// field existed, and most designs even now) has this as `None`, same
+    /// "absent means nothing to add" convention as every other optional
+    /// section. See `crate::hierarchy`'s own doc (eda-kicad) for how this
+    /// flattens into one netlist, and `SchematicSection::instance_overrides`
+    /// for how a multiply-placed screen's own symbols get a different
+    /// Reference per placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_contents: Option<std::collections::BTreeMap<String, SchematicSection>>,
+    /// Project-scoped bus aliases (GAPS.md #20) — see [`BusAlias`]'s own
+    /// doc for why these live here (one list for the whole design) rather
+    /// than inside each `SchematicSection`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bus_aliases: Vec<BusAlias>,
 }
 
 impl Design {
@@ -100,6 +119,11 @@ impl Design {
         }
         if let Some(lib) = &mut self.footprint_library {
             lib.assign_missing_ids();
+        }
+        if let Some(screens) = &mut self.sheet_contents {
+            for sch in screens.values_mut() {
+                sch.assign_missing_ids();
+            }
         }
     }
 }
@@ -141,7 +165,13 @@ pub enum Stage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchematicSection {
-    /// Sorted by `id` (reference designator).
+    /// Sorted by `(id, unit)`. Several entries can share one `id`: a
+    /// multi-unit part (an op-amp's gates, a logic chip's one shared
+    /// power unit, ...) is one `ConstraintModel::Part`/one footprint, one
+    /// reference, placed as several `SymbolInstance`s -- one per used unit
+    /// -- that all carry that same `id` and differ only by `unit`. A
+    /// single-unit part (everything before multi-unit support existed, and
+    /// the overwhelming majority of parts even now) still has exactly one.
     pub symbols: Vec<SymbolInstance>,
     /// Sorted by (net, then first point).
     pub wires: Vec<Wire>,
@@ -162,6 +192,9 @@ pub struct SchematicSection {
     /// by `at`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub no_connects: Vec<NoConnect>,
+    /// Bus entries (GAPS.md #20) — see [`BusEntry`]'s own doc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bus_entries: Vec<BusEntry>,
     /// Accepted ("excluded") ERC findings -- `dialog_erc.cpp`'s own
     /// per-sheet `SCHEMATIC::RecordERCExclusions`. Sorted by (check,
     /// location); see [`ErcExclusion`]'s own doc for why it has no `id`.
@@ -171,12 +204,20 @@ pub struct SchematicSection {
     /// `ExportMeta` (title/date) the way every export always has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_block: Option<TitleBlock>,
-    /// Child hierarchical sheets. Always empty today (one sheet only) —
-    /// carried so the format can grow into a hierarchy without another
-    /// schema break; the reader accepts and preserves sheets it finds in
-    /// an imported file without descending into their own content.
+    /// Child hierarchical sheets placed directly on *this* sheet -- each
+    /// one's own content lives in `Design::sheet_contents[sheet.file]`, not
+    /// here (GAPS.md #6). Empty for a single-sheet design, same as always.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<SheetInstance>,
+    /// `SCH_SYMBOL_INSTANCE`-style per-placement overrides for this
+    /// screen's own symbols, keyed by `SymbolPathOverride::parent_sheet_instance_id` --
+    /// only ever non-empty on a screen placed by more than one
+    /// [`SheetInstance`] (the content this `SchematicSection` belongs to is
+    /// reused), and empty on the root sheet (nothing ever places it). See
+    /// [`SymbolPathOverride`]'s own doc for why `at`, not a stored id, is
+    /// the per-symbol key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instance_overrides: Vec<SymbolPathOverride>,
     /// True when this section was built by `eda_kicad::import_kicad_sch`
     /// from a real `.kicad_sch` file, rather than by this project's own
     /// `derive_schematic`. The two disagree on what `SymbolInstance::at`
@@ -237,8 +278,16 @@ pub struct SymbolInstance {
     /// (a generic box synthesized from the part's own pins).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub lib_id: String,
-    /// KiCad unit index (1-based); multi-unit placement is deferred, so
-    /// this is always 1 for anything this port places.
+    /// KiCad unit index (1-based) -- which unit of a multi-unit symbol this
+    /// placed instance draws (see `SchematicSection::symbols`'s own doc on
+    /// several instances sharing one `id`). Always 1 for a single-unit
+    /// part, which is every part this port places on its own
+    /// (`derive_schematic`'s own generator never splits a resolved
+    /// multi-unit symbol across several placed instances -- a documented
+    /// scope limit, not a bug: every unit it needs is still present as
+    /// `ConstraintModel::Part::pins`, just all drawn on one instance) --
+    /// real multi-unit placement is read from an imported `.kicad_sch`, or
+    /// built up one `Cmd::AddSymbol` at a time in the studio editor.
     #[serde(default = "d_unit_one", skip_serializing_if = "is_unit_one")]
     pub unit: u32,
     /// The instance's own `Value` field — carried here (not just read from
@@ -272,6 +321,16 @@ pub struct Wire {
     pub pins: Vec<String>,
     /// Polyline in sheet coordinates.
     pub pts: Vec<Point>,
+    /// True for a bus wire (KiCad's `LAYER_BUS` vs `LAYER_WIRE` -- the same
+    /// `SCH_LINE`, just a different layer; GAPS.md #20). `net` on a bus
+    /// wire carries whatever name/vector/group text a touching label gave
+    /// it, same mechanism as a plain wire -- this flag is what tells
+    /// `crate::bus` (eda-kicad) that name needs bus *expansion* rather than
+    /// being one plain net, and is also what `bus_to_net_conflict` compares
+    /// across a resolved group to catch a plain wire touching a bus
+    /// directly with no [`BusEntry`] between them.
+    #[serde(default)]
+    pub bus: bool,
 }
 
 impl Wire {
@@ -409,6 +468,59 @@ impl NoConnect {
     }
 }
 
+/// A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub
+/// tying one specific member net into a bus. `at` and `at + size` are its
+/// two endpoints in sheet coordinates (`size` carries the sign of each
+/// axis, same as KiCad's own `(at)(size)` pair -- a negative component
+/// picks one of the other three diagonal quadrants); which endpoint is
+/// "the bus side" is never stored, only read off geometry at ERC/connectivity
+/// time (`crate::bus` (eda-kicad): whichever endpoint lands on a [`Wire`]
+/// with `bus: true`). KiCad's companion `SCH_BUS_BUS_ENTRY` (bus-to-bus) is
+/// deliberately not ported: real KiCad's own file writer never emits one
+/// any more (it silently downgrades to a plain bus line on save) and no UI
+/// action in current KiCad creates one, so there is nothing to round-trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BusEntry {
+    /// Stable id (`bent_xxxxxxxxxxxx`) — see `Wire::id`'s doc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub at: Point,
+    /// Signed offset from `at` to this entry's other endpoint — real KiCad
+    /// always uses a fixed ±100mil (±2540um) magnitude on each axis, but
+    /// nothing here enforces that; an imported file's own stored size is
+    /// kept exactly.
+    pub size: Point,
+}
+
+impl BusEntry {
+    fn id_seed(&self) -> String {
+        format!("{},{}|{},{}", self.at.x, self.at.y, self.size.x, self.size.y)
+    }
+}
+
+/// A project-scoped bus alias (`BUS_ALIAS`, GAPS.md #20): a name that
+/// stands in for a fixed list of member net names anywhere a bus vector/
+/// group name could otherwise be written (`{MY_ALIAS}`) or, bare, as a bus
+/// wire's own name directly. Real KiCad stores these in the `.kicad_pro`
+/// project file (`SCHEMATIC::updateProjectBusAliases`) with a *legacy*
+/// per-screen `(bus_alias ...)` `.kicad_sch` reader kept only for
+/// backward compatibility (`SCH_IO_KICAD_SEXPR_PARSER::parseBusAlias`,
+/// forwarding into the same project-level list) -- this project has no
+/// `.kicad_pro` reader/writer at all yet, so `crate::import`/`crate::lib`
+/// (eda-kicad) round-trip aliases through that same legacy per-screen
+/// `(bus_alias "NAME" (members "A" "B"))` block instead, written into the
+/// root screen's own file on export and collected from every screen on
+/// import. Scoped at the `Design` level (not per-sheet) because that is
+/// how real KiCad actually resolves them: `SCHEMATIC::GetBusAlias` searches
+/// the one project-wide list regardless of which sheet is asking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BusAlias {
+    pub name: String,
+    pub members: Vec<String>,
+}
+
 /// An accepted ERC finding (`dialog_erc.cpp`'s own "Exclude this
 /// violation" / `SCHEMATIC::RecordERCExclusions`): `(check, location)`
 /// matches `eda_kicad::erc::Exclusions`'s own key shape exactly (a
@@ -449,19 +561,88 @@ pub struct TitleBlock {
     pub comments: Vec<String>,
 }
 
-/// A child hierarchical sheet, as placed on its parent sheet. Deferred:
-/// `derive_schematic` never creates one, and the reader does not descend
-/// into `file` — this only records that a sheet symbol was there (its
-/// name/file/position/size), so re-exporting a file that had one does not
-/// silently drop it, and so the schema has a place to grow into real
-/// hierarchy later.
+/// A child hierarchical sheet, as placed on its parent sheet (GAPS.md #6).
+/// `id` is this *placement*'s own stable identity -- a real file's own
+/// sheet `(uuid ...)` when imported, or a deterministic id assigned the
+/// same way a wire/label gets one when this project creates a sheet fresh
+/// -- distinct from `file`, the name of the *content* this placement
+/// shows: the same `file` can be placed more than once (KiCad's own
+/// `SCH_SCREEN` sharing -- see `Design::sheet_contents`'s own doc), each
+/// such placement getting its own `id` and, through it, its own
+/// `SchematicSection::instance_overrides` entries for that shared
+/// content's symbols. `derive_schematic` never creates one; the reader
+/// descends into `file` (`sch_import::import_kicad_sch_tree`) when given a
+/// directory to resolve sibling sheet files against, and only records the
+/// placement without descending (as before) when given bare text with no
+/// filesystem context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetInstance {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub name: String,
     pub file: String,
     pub at: Point,
     pub size: (Um, Um),
+    /// Sheet pins on this placement's own border (`SCH_SHEET_PIN`), each
+    /// tied *by name* (not by any stored link) to a hierarchical label of
+    /// the same name in `file`'s own content -- see
+    /// `crate::hierarchy`'s own doc for how that join flattens into one
+    /// netlist, and `check_erc`'s `hier_label_mismatch` for the name-only
+    /// matching rule (shape is cosmetic, confirmed against
+    /// `connection_graph.cpp::ercCheckHierSheets`, which never compares
+    /// it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<SheetPin>,
+}
+
+/// One pin on a [`SheetInstance`]'s own border. `shape` is the same
+/// 5-value vocabulary a hierarchical label carries (`LabelShape`) --
+/// KiCad's own `SCH_SHEET_PIN : public SCH_HIERLABEL` inheritance, which is
+/// why the two share a shape type here too.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetPin {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub shape: LabelShape,
+    /// Sheet coordinates (not sheet-local) -- always on the placement's
+    /// own border rectangle, same as a real `SCH_SHEET_PIN` is always
+    /// `ConstrainOnEdge`-clamped there.
+    pub at: Point,
+}
+
+impl SheetPin {
+    fn id_seed(&self) -> String {
+        format!("{}|{},{}", self.name, self.at.x, self.at.y)
+    }
+}
+
+/// One placed symbol's Reference/Value/Footprint/unit *as seen through one
+/// specific parent sheet placement*, for a screen ([`Design::sheet_contents`]
+/// entry) that is placed more than once -- real KiCad's `SCH_SYMBOL_INSTANCE`
+/// (`sch_sheet_path.h`), keyed there by a full root-to-leaf sheet-uuid path;
+/// keyed here by just `parent_sheet_instance_id` (the *immediate* parent
+/// [`SheetInstance::id`] that placed this screen), since that one id is
+/// already globally unique across the whole design and nothing deeper is
+/// needed to tell two placements of the same file apart. `at` identifies
+/// *which* symbol in this screen's own content the override is for (a
+/// screen's own drawn content is placement-invariant, so a symbol's own
+/// position is already a stable, unique-enough key within it -- the same
+/// reasoning `Wire`/`NetLabel` id derivation already leans on elsewhere in
+/// this file). Absent entirely for the overwhelming common case (a sheet
+/// placed exactly once), where [`SymbolInstance::id`] is already the only
+/// answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolPathOverride {
+    pub at: Point,
+    pub parent_sheet_instance_id: String,
+    pub reference: String,
+    #[serde(default = "d_unit_one")]
+    pub unit: u32,
 }
 
 impl SchematicSection {
@@ -477,6 +658,7 @@ impl SchematicSection {
             .chain(self.labels.iter().map(|l| &l.id))
             .chain(self.texts.iter().map(|t| &t.id))
             .chain(self.no_connects.iter().map(|nc| &nc.id))
+            .chain(self.bus_entries.iter().map(|be| &be.id))
             .filter(|s| !s.is_empty())
             .cloned()
             .collect();
@@ -518,6 +700,41 @@ impl SchematicSection {
                 let id = next_item_id("nc", &self.no_connects[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.no_connects[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.bus_entries.len()).collect();
+        order.sort_by(|&a, &b| self.bus_entries[a].at.cmp(&self.bus_entries[b].at));
+        for i in order {
+            if self.bus_entries[i].id.is_empty() {
+                let id = next_item_id("bent", &self.bus_entries[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.bus_entries[i].id = id;
+            }
+        }
+
+        // Sheets and their own pins: imported from a real file carries
+        // real uuids already (see `sch_import`'s own sheet-parsing loop),
+        // so this only ever fires for a sheet this project placed itself
+        // (the `S` tool, once it exists) with no id yet.
+        existing.extend(self.sheets.iter().map(|s| s.id.clone()).filter(|s| !s.is_empty()));
+        existing.extend(self.sheets.iter().flat_map(|s| s.pins.iter()).map(|p| p.id.clone()).filter(|s| !s.is_empty()));
+        let mut order: Vec<usize> = (0..self.sheets.len()).collect();
+        order.sort_by(|&a, &b| (&self.sheets[a].file, self.sheets[a].at).cmp(&(&self.sheets[b].file, self.sheets[b].at)));
+        for i in order {
+            if self.sheets[i].id.is_empty() {
+                let id = next_item_id("sheet", &format!("{}|{},{}", self.sheets[i].file, self.sheets[i].at.x, self.sheets[i].at.y), &existing);
+                existing.insert(id.clone());
+                self.sheets[i].id = id;
+            }
+            let mut pin_order: Vec<usize> = (0..self.sheets[i].pins.len()).collect();
+            pin_order.sort_by(|&a, &b| (&self.sheets[i].pins[a].name, self.sheets[i].pins[a].at).cmp(&(&self.sheets[i].pins[b].name, self.sheets[i].pins[b].at)));
+            for j in pin_order {
+                if self.sheets[i].pins[j].id.is_empty() {
+                    let id = next_item_id("shpin", &self.sheets[i].pins[j].id_seed(), &existing);
+                    existing.insert(id.clone());
+                    self.sheets[i].pins[j].id = id;
+                }
             }
         }
     }
@@ -1728,20 +1945,24 @@ mod tests {
                     SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                     SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                 ],
-                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }] }],
+                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }], bus: false }],
                 labels: vec![],
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
+                bus_entries: vec![],
                 erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
+                instance_overrides: vec![],
             }),
             nets: None,
             placement: None,
             routing: None,
             drawings: None,
             footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
         }
     }
 

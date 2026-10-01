@@ -31,7 +31,7 @@
 // the dangling-pin indicator circle is not drawn), and no electrical-pin
 // -type annotation text (off by default in the real schematic editor
 // too, so this is not actually a gap).
-import type { ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire } from "../../api/types";
+import type { BusEntry, ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, Sheet } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
@@ -41,6 +41,7 @@ import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLab
 import { drawStrokeText } from "../text/strokeFont";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
+import { unitLetter } from "../../kicad-port/unitLetter";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -142,7 +143,7 @@ function stubTip(port: ResolvedSymbol["ports"][number], lx: number, ly: number):
 
 // ------------------------------------------------------------- box fallback
 
-function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: ResolvedSymbol, selected: boolean) {
+function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: ResolvedSymbol, selected: boolean, unitSuffix: string) {
   const { symbol, width, height, ports, pinPort, passive } = r;
   ctx.save();
   ctx.translate(symbol.at[0], symbol.at[1]);
@@ -248,7 +249,7 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
     }
   });
 
-  drawFieldsAbout(ctx, symbol, 0, height, 0);
+  drawFieldsAbout(ctx, symbol, 0, height, 0, unitSuffix);
   ctx.restore();
 }
 
@@ -327,9 +328,9 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
  * even though neither is pixel-exact against a real recorded field
  * position.
  */
-function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol, localX: number, bboxBottom: number, bboxTop: number) {
+function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol, localX: number, bboxBottom: number, bboxTop: number, unitSuffix: string) {
   const refSizeUm = REF_FONT * 1000;
-  drawStrokeText(ctx, symbol.id, localX, bboxTop - 400, { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, color: layerColor("LAYER_REFERENCEPART") });
+  drawStrokeText(ctx, symbol.id + unitSuffix, localX, bboxTop - 400, { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
     const sizeUm = VALUE_FONT * 1000;
     drawStrokeText(ctx, symbol.value ?? symbol.mpn ?? "", localX, bboxBottom + 1800, { sizeUm, color: layerColor("LAYER_VALUEPART") });
@@ -583,7 +584,7 @@ function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: Reso
   }
 }
 
-function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean) {
+function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean, unitSuffix: string) {
   const hair = 1 / view.scale;
   const strokeColor = layerColor("LAYER_DEVICE");
   ctx.strokeStyle = strokeColor;
@@ -598,7 +599,7 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
   }
 
   drawPins(ctx, view, pins);
-  drawFieldsAbout(ctx, instance, (bbox.minX + bbox.maxX) / 2, bbox.maxY, bbox.minY);
+  drawFieldsAbout(ctx, instance, (bbox.minX + bbox.maxX) / 2, bbox.maxY, bbox.minY, unitSuffix);
 }
 
 /**
@@ -697,6 +698,39 @@ function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText) {
   drawStrokeText(ctx, t.content, t.at[0], t.at[1], { sizeUm: t.size_um, angleRad: (t.angle * Math.PI) / 180, justify: "left", color: layerColor("LAYER_NOTES") });
 }
 
+/**
+ * A child hierarchical sheet (GAPS.md #6) -- `SCH_SHEET`'s own on-canvas
+ * look: a plain rectangle (`LAYER_SHEET` border, transparent fill, same as
+ * real eeschema's default sheet color scheme), its name above the
+ * top-left corner (`LAYER_SHEETNAME`) and filename below the bottom-left
+ * corner (`LAYER_SHEETFILENAME`), and each of its own pins as a short stub
+ * on the border with its name (`LAYER_SHEETLABEL`) -- not full
+ * `SCH_SHEET_PIN` arrow glyphs (shape-specific triangle/chevron outlines,
+ * `labelShape.ts`'s own `hierLabelOutline`), since this pass is about
+ * making the hierarchy visible and navigable at all (previously nothing
+ * drew here, the view simply had no sheets to show) rather than full
+ * pixel-parity with source's own pin glyphs.
+ */
+function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet) {
+  const hair = 1 / view.scale;
+  const [x, y] = s.at;
+  const [w, h] = s.size;
+  ctx.save();
+  ctx.strokeStyle = layerColor("LAYER_SHEET");
+  ctx.lineWidth = Math.max(152.4, hair);
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
+
+  const nameSizeUm = 1270;
+  drawStrokeText(ctx, s.name, x, y - 400, { sizeUm: nameSizeUm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
+  drawStrokeText(ctx, s.file, x, y + h + 400 + nameSizeUm * 0.8, { sizeUm: nameSizeUm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
+
+  for (const p of s.pins) {
+    const [px, py] = p.at;
+    drawStrokeText(ctx, p.name, px + 300, py, { sizeUm: 1000, justify: "left", color: layerColor("LAYER_SHEETLABEL") });
+  }
+}
+
 function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: NoConnect) {
   const hair = 1 / view.scale;
   ctx.save();
@@ -709,6 +743,29 @@ function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: N
   ctx.lineTo(x + s, y + s);
   ctx.moveTo(x + s, y - s);
   ctx.lineTo(x - s, y + s);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a single diagonal stub
+ * from `at` to `at + size` -- real KiCad gives it no outline/fill
+ * distinction of its own, just a `LAYER_BUS`-colored line the same width
+ * as a bus wire, which of `at`/`at + size` is "the bus side" is purely
+ * geometric (whichever end lands on a bus wire's own point -- see
+ * `crates/kicad/src/bus.rs`'s own doc) and irrelevant to drawing it: both
+ * ends are simply connected by one straight segment.
+ */
+function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: BusEntry) {
+  const hair = 1 / view.scale;
+  const [x, y] = be.at;
+  const [dx, dy] = be.size;
+  ctx.save();
+  ctx.strokeStyle = layerColor("LAYER_BUS");
+  ctx.lineWidth = Math.max(150, hair);
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + dx, y + dy);
   ctx.stroke();
   ctx.restore();
 }
@@ -763,12 +820,20 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // shift-selected wire had no visual confirmation it would do anything).
   for (const w of sch.wires) {
     const on = opts.netHighlight === w.net || opts.selection.has(w.id);
-    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_WIRE");
+    // Bus wires (GAPS.md #20) are the same `SCH_LINE` shape as a plain
+    // wire, just `LAYER_BUS` instead of `LAYER_WIRE` -- same convention
+    // real eeschema uses (a visibly different, blue by default, color; not
+    // a different line width).
+    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor(w.bus ? "LAYER_BUS" : "LAYER_WIRE");
     ctx.lineWidth = Math.max(on ? 300 : 150, hair * (on ? 2.5 : 1));
     ctx.beginPath();
     w.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.stroke();
   }
+
+  // Bus entries (GAPS.md #20) -- a short diagonal stub from `at` to
+  // `at + size`, `LAYER_BUS`-colored same as the bus wire it taps.
+  for (const be of sch.bus_entries) drawBusEntry(ctx, view, be);
 
   // Junctions -- see junctions.ts's own doc for exactly which points
   // besides coincident wire endpoints (power symbol/label anchors landing
@@ -780,6 +845,12 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.arc(x, y, Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
     ctx.fill();
   }
+
+  // Hierarchical sheets (GAPS.md #6) -- drawn early, like the wires/
+  // junctions pass above, so a sheet's own local wires/labels/symbols
+  // (all drawn later below) read as sitting "on" the page rather than
+  // under it.
+  for (const s of sch.sheets) drawSheet(ctx, view, s);
 
   // No-connects.
   for (const nc of sch.no_connects) drawNoConnect(ctx, view, nc);
@@ -802,14 +873,23 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   }
 
   // Symbols (drawn last, like eda-render, so their fill sits on top of any wire stub reaching into the box).
+  // Multi-unit: a reference with more than one placed instance gets its
+  // KiCad-style unit-letter suffix drawn next to the reference ("U1" ->
+  // "U1A"/"U1B"/...), same as real eeschema -- `unitCounts` is only used
+  // to decide *whether* to suffix at all, so a single-unit part (every
+  // placed instance appears here exactly once) keeps the bare reference it
+  // always had.
+  const unitCounts = new Map<string, number>();
+  for (const s of sch.symbols) unitCounts.set(s.id, (unitCounts.get(s.id) ?? 0) + 1);
   for (const s of sch.symbols) {
     const selected = opts.selection.has(s.id);
+    const unitSuffix = (unitCounts.get(s.id) ?? 1) > 1 ? unitLetter(s.unit) : "";
     const real = resolveLibSymbol(s, sch.lib_symbols);
     if (real) {
-      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected);
+      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix);
     } else {
       const r = resolveSymbol(s);
-      drawBoxSymbol(ctx, view, r, selected);
+      drawBoxSymbol(ctx, view, r, selected, unitSuffix);
     }
   }
 
