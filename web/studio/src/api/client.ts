@@ -199,6 +199,30 @@ export async function fetchFootprintLibraryNames(): Promise<FootprintLibraryName
   return r;
 }
 
+/**
+ * `GET /api/footprint/export?name=...`'s derived `.kicad_mod` text
+ * (`eda_kicad::export_kicad_mod`, GAPS.md #8 step 6) saved as a browser
+ * download -- a `Blob` + synthetic anchor click, since the backend route
+ * itself returns plain `text/plain` with no `Content-Disposition` (same
+ * convention as every other GET route in this file; see studio.rs's own
+ * doc on that route).
+ */
+export async function downloadFootprintKicadMod(name: string): Promise<void> {
+  const r = await fetch(`/api/footprint/export?name=${name}`, { cache: "no-store" });
+  if (!r.ok) throw new ApiError(await r.text());
+  const text = await r.text();
+  const blob = new Blob([text], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const fileName = name.includes(":") ? name.split(":").slice(1).join(":") : name;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${fileName}.kicad_mod`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 // ------------------------------------------------------- interactive router
 //
 // Gap #7's push-and-shove router (crates/pns), driven through

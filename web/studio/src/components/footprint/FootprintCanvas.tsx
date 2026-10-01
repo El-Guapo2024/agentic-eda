@@ -21,11 +21,12 @@ import { nextPadNumber } from "../../kicad-port/padNumbering";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import "../../styles/canvas.css";
 
-const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle">> = {
+const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon">> = {
   draw_segment: "segment",
   draw_arc: "arc",
   draw_rect: "rect",
   draw_circle: "circle",
+  draw_polygon: "polygon",
 };
 
 /** `BOARD_DESIGN_SETTINGS::SetDefaultMasterPad()` -- the interactive Pad tool's own starting template (`m_Pad_Master`), reused here as this editor's "last placed pad" memory: after each placement, `PlaceItem()`'s own "push settings back into the master" behavior is mirrored by just remembering the pad just placed. */
@@ -135,7 +136,7 @@ type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] }
   | { kind: "move"; refs: string[]; moveKind: "pad" | "graphic" | "text"; startWorld: [number, number] };
 
-function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle", pts: [number, number][], layer: string): CmdShape | null {
+function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon", pts: [number, number][], layer: string): CmdShape | null {
   const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
   switch (kind) {
     case "segment":
@@ -146,10 +147,18 @@ function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle", pts: [
       return pts.length >= 2 ? { kind: "circle", layer, stroke_width: 150, filled: false, center: p(0), end: p(1) } : null;
     case "arc":
       return pts.length >= 3 ? { kind: "arc", layer, stroke_width: 150, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
+    case "polygon":
+      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: 150, filled: true, pts: pts.map((_, i) => p(i)) } : null;
   }
 }
 
-const AUTO_FINISH: Record<"segment" | "rect" | "circle" | "arc", number> = { segment: 2, rect: 2, circle: 2, arc: 3 };
+// `polygon` has no fixed point count (like the PCB tab's own AddShape
+// polygon tool) -- left out of this table entirely, so `pts.length >=
+// AUTO_FINISH[shapeKind]` (`undefined` for a missing key) is always
+// false and placement only ever ends on an explicit Enter/double-click
+// (`finishDraw`), same convention zones/polygons use everywhere else in
+// this app.
+const AUTO_FINISH: Partial<Record<"segment" | "rect" | "circle" | "arc" | "polygon", number>> = { segment: 2, rect: 2, circle: 2, arc: 3 };
 
 export function FootprintCanvas() {
   const state = useFpState();
@@ -297,7 +306,7 @@ export function FootprintCanvas() {
     if (shapeKind) {
       const already = state.drawState?.shapeKind === shapeKind ? state.drawState.pts : [];
       const pts: [number, number][] = [...already, [sx, sy]];
-      if (pts.length >= AUTO_FINISH[shapeKind]) {
+      if (pts.length >= (AUTO_FINISH[shapeKind] ?? Infinity)) {
         const shape = footprintToShapeArg(shapeKind, pts, state.activeLayer);
         if (shape) void api.addGraphic(shape);
         dispatch({ type: "SET_DRAW_STATE", draw: null });
@@ -410,6 +419,14 @@ export function FootprintCanvas() {
         const p = api.padById(id);
         if (p) void api.rotatePad(id, e.shiftKey ? -1 : 1);
       }
+      return;
+    }
+    // `pcbnew.InteractiveEdit.properties` ("E"), same hotkey the PCB tab's
+    // own `useActionRunner.ts` binds -- single-pad only, same as that
+    // action's own single-item scope there.
+    if ((e.key === "e" || e.key === "E") && state.activeTool === "select" && state.selection.size === 1) {
+      const [only] = state.selection;
+      if (only && api.padById(only)) dispatch({ type: "SET_PAD_PROPERTIES_ID", id: only });
     }
   };
 

@@ -540,6 +540,14 @@ fn handle(
             let v = footprint_library_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/footprint/export") => {
+            let query = target.split('?').nth(1).unwrap_or("");
+            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
+            match footprint_kicad_mod(dir, name) {
+                Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
+                Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
+            }
+        }
         ("GET", "/api/fill") => {
             let v = fill_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -1177,6 +1185,25 @@ fn footprint_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         names.extend(lib.footprints.iter().map(|f| f.name.clone()));
     }
     Ok(json!({ "names": names.into_iter().collect::<Vec<_>>() }))
+}
+
+/// `GET /api/footprint/export?name=<name>` -- a derived, standalone
+/// `.kicad_mod` for `name` (GAPS.md #8 step 6), via `eda_kicad::
+/// export_kicad_mod`. `name` must already be open in `design.
+/// footprint_library`, same requirement `footprint_json` documents (this
+/// route exports the library's own current copy, not a fresh re-resolve
+/// of the intent/builtin table). The frontend turns the returned text
+/// into a browser download client-side (a `Blob` + synthetic anchor
+/// click) -- this route itself only ever returns `text/plain`, no
+/// `Content-Disposition`, matching every other GET route here.
+fn footprint_kicad_mod(dir: &Path, name: &str) -> Result<String, Vec<CheckResult>> {
+    let (_, design, _) = board::load(dir)?;
+    let fp = design
+        .footprint_library
+        .as_ref()
+        .and_then(|l| l.by_name(name))
+        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
+    Ok(eda_kicad::export_kicad_mod(fp))
 }
 
 /// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest

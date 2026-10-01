@@ -10,10 +10,10 @@
 // pad_tool.cpp's own Copy/Paste Pad Properties needs.
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Um } from "../api/types";
-import { fetchFootprint, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadFootprintKicadMod, fetchFootprint, postCmd, postRedo, postUndo } from "../api/client";
 import type { ViewTransform } from "./store";
 
-export type FpToolId = "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "text";
+export type FpToolId = "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text";
 
 export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   select: "Select item(s)",
@@ -23,11 +23,12 @@ export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   draw_arc: "Arc: click start, mid, then end",
   draw_rect: "Rectangle: click one corner, then the opposite one",
   draw_circle: "Circle: click center, then a point on the edge",
+  draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
   text: "Click to place text",
 };
 
 /** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). */
-export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle"; pts: [Um, Um][] };
+export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] };
 
 export interface FpMovePreview {
   refs: string[];
@@ -201,6 +202,8 @@ export interface FootprintEditorApi {
   editProperties: (fields: FootprintPropertiesFields) => Promise<boolean>;
   updateOnBoard: () => Promise<void>;
   deleteFootprint: () => Promise<void>;
+  /** `GET /api/footprint/export` (GAPS.md #8 step 6) as a browser download. */
+  exportKicadMod: () => Promise<void>;
 }
 
 const FpStateContext = createContext<FootprintEditorState | null>(null);
@@ -411,6 +414,15 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
       if (!name) return;
       await postCmd({ op: "delete_library_footprint", name }, false);
       dispatch({ type: "SET_NAME", name: null });
+    },
+    exportKicadMod: async () => {
+      const name = stateRef.current.name;
+      if (!name) return;
+      try {
+        await downloadFootprintKicadMod(name);
+      } catch (e) {
+        dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
+      }
     },
   };
 

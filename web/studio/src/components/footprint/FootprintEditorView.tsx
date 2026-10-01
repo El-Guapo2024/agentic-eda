@@ -18,6 +18,7 @@ const TOOL_BUTTONS: { id: FpToolId; label: string }[] = [
   { id: "draw_arc", label: "Arc" },
   { id: "draw_rect", label: "Rect" },
   { id: "draw_circle", label: "Circle" },
+  { id: "draw_polygon", label: "Polygon" },
   { id: "text", label: "Text" },
 ];
 
@@ -143,6 +144,9 @@ export function FootprintEditorView() {
         </button>
         <button className="toolbar-button" onClick={() => void api.updateOnBoard()} disabled={!state.footprint} title="Push this library definition to every board instance naming it (GAPS.md #8's explicit Update Footprint from Library)">
           Update on Board
+        </button>
+        <button className="toolbar-button" onClick={() => void api.exportKicadMod()} disabled={!state.footprint} title="Save a derived, standalone .kicad_mod for this footprint">
+          Export .kicad_mod
         </button>
         <div style={{ flex: 1 }} />
         <span style={{ padding: "4px 10px", color: "var(--chrome-text-dim)" }}>{state.name ?? "(no footprint open)"}</span>

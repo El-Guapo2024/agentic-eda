@@ -28,7 +28,7 @@ mod import;
 pub use import::{import_kicad_pcb, merge_project_net_classes, mm_to_um, parse_project_net_classes, ImportNotes};
 
 mod footprint_lib;
-pub use footprint_lib::{default_footprint_library_root, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
+pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
 
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, find_symbol_library_file, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};

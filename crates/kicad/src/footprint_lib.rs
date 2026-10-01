@@ -189,6 +189,204 @@ pub fn resolve_library_footprints(model: &mut ConstraintModel, lib_root: &Path) 
     warnings
 }
 
+/// Derive a standalone `.kicad_mod` library file from a project footprint-
+/// library entry (GAPS.md #8 step 6) -- the write-side counterpart of
+/// `parse_footprint_file` above, reusing this crate's own format helpers
+/// (`crate::mm`/`sexpr_str`/`duid`/`fmt_mm_f`/`pad_file_angle`) so the two
+/// never drift on what a number/string/uuid looks like on disk. A bare
+/// library file, same convention `parse_footprint_file`'s own doc
+/// describes: no `(at ...)` (no board placement), no reference/value/net
+/// (a board instance's concern, not the definition's).
+///
+/// Not a full inverse of `LibraryFootprint::from_engine_footprint`+editing:
+/// a `"trapezoid"`/`"chamfered_rect"` pad is written as its `LibraryPad::
+/// to_engine_pad` approximation (`rect`/`roundrect`) rather than KiCad's own
+/// trapezoid/chamfer pad fields, and per-pad thermal-gap/spoke-width
+/// overrides and the footprint's own clearance/attribute-adjacent fields
+/// this session could not verify an exact on-disk token for are left out
+/// rather than guessed at -- this writer only emits sub-expressions this
+/// crate's own reader (`parse_pad_geometry`/`courtyard_from`) or
+/// `crates/kicad/src/pcb.rs`'s existing, exercised board writer already
+/// round-trips (`offset`/`clearance`/`layers`/`roundrect_rratio`/`drill`).
+/// See PARITY-fpedit.md for the tracked gap.
+pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
+    use eda_model::ir::{LibraryPadShape, Shape};
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    writeln!(out, "(footprint {}", crate::sexpr_str(&fp.name)).unwrap();
+    writeln!(out, "\t(version 20240108)").unwrap();
+    writeln!(out, "\t(generator \"eda\")").unwrap();
+    writeln!(out, "\t(generator_version \"1.0\")").unwrap();
+    writeln!(out, "\t(layer \"F.Cu\")").unwrap();
+    if !fp.description.is_empty() {
+        writeln!(out, "\t(descr {})", crate::sexpr_str(&fp.description)).unwrap();
+    }
+    if !fp.keywords.is_empty() {
+        writeln!(out, "\t(tags {})", crate::sexpr_str(&fp.keywords)).unwrap();
+    }
+    let mut attrs = Vec::new();
+    if fp.attributes.smd {
+        attrs.push("smd");
+    }
+    if fp.attributes.through_hole {
+        attrs.push("through_hole");
+    }
+    if fp.attributes.board_only {
+        attrs.push("board_only");
+    }
+    if fp.attributes.exclude_from_position_files {
+        attrs.push("exclude_from_pos_files");
+    }
+    if fp.attributes.exclude_from_bom {
+        attrs.push("exclude_from_bom");
+    }
+    if fp.attributes.allow_missing_courtyard {
+        attrs.push("allow_missing_courtyard");
+    }
+    if fp.attributes.dnp {
+        attrs.push("dnp");
+    }
+    if !attrs.is_empty() {
+        writeln!(out, "\t(attr {})", attrs.join(" ")).unwrap();
+    }
+
+    let fp_fill = |filled: bool| if filled { "yes" } else { "no" };
+    for g in &fp.graphics {
+        let uuid = crate::duid(&format!("fpgraphic:{}", g.id()));
+        let layer = crate::sexpr_str(g.layer());
+        match g {
+            Shape::Segment { stroke_width, start, end, .. } => writeln!(
+                out,
+                "\t(fp_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
+            ),
+            Shape::Arc { stroke_width, start, mid, end, .. } => writeln!(
+                out,
+                "\t(fp_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                crate::mm(start.x), crate::mm(start.y), crate::mm(mid.x), crate::mm(mid.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
+            ),
+            Shape::Rect { stroke_width, filled, start, end, .. } => writeln!(
+                out,
+                "\t(fp_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
+                crate::mm(start.x), crate::mm(start.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0)), fp_fill(*filled)
+            ),
+            Shape::Circle { stroke_width, filled, center, end, .. } => writeln!(
+                out,
+                "\t(fp_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
+                crate::mm(center.x), crate::mm(center.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0)), fp_fill(*filled)
+            ),
+            Shape::Polygon { stroke_width, filled, pts, .. } => {
+                write!(out, "\t(fp_poly (pts").unwrap();
+                for p in pts {
+                    write!(out, " (xy {} {})", crate::mm(p.x), crate::mm(p.y)).unwrap();
+                }
+                writeln!(out, ") (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))", crate::mm((*stroke_width).max(0)), fp_fill(*filled))
+            }
+        }
+        .unwrap();
+    }
+
+    for t in &fp.texts {
+        write_fp_text(&mut out, t);
+    }
+
+    for pad in &fp.pads {
+        let shape = match pad.shape {
+            LibraryPadShape::Circle => "circle",
+            LibraryPadShape::Rect | LibraryPadShape::Trapezoid => "rect",
+            LibraryPadShape::Oval => "oval",
+            LibraryPadShape::RoundRect | LibraryPadShape::ChamferedRect => "roundrect",
+        };
+        let kind = match pad.kind {
+            eda_model::PadKind::Smd => "smd",
+            eda_model::PadKind::ThroughHole => "thru_hole",
+            eda_model::PadKind::NonPlatedHole => "np_thru_hole",
+        };
+        let uuid = crate::duid(&format!("fppad:{}:{}:{}:{}", pad.id, pad.number, pad.at.x, pad.at.y));
+        let angle_deg = crate::pad_file_angle(eda_model::ir::Side::Top, 0, pad.rot);
+        write!(out, "\t(pad {} {kind} {shape} (at {} {} {angle_deg})", crate::sexpr_str(&pad.number), crate::mm(pad.at.x), crate::mm(pad.at.y)).unwrap();
+        write!(out, " (size {} {})", crate::mm(pad.size.0), crate::mm(pad.size.1)).unwrap();
+        if matches!(pad.shape, LibraryPadShape::RoundRect | LibraryPadShape::ChamferedRect) {
+            let ratio = if pad.shape == LibraryPadShape::ChamferedRect { pad.chamfer_ratio } else { pad.roundrect_ratio };
+            write!(out, " (roundrect_rratio {})", crate::fmt_mm_f(ratio.unwrap_or(0.25))).unwrap();
+        }
+        if pad.offset.x != 0 || pad.offset.y != 0 {
+            write!(out, " (offset {} {})", crate::mm(pad.offset.x), crate::mm(pad.offset.y)).unwrap();
+        }
+        match pad.kind {
+            eda_model::PadKind::ThroughHole | eda_model::PadKind::NonPlatedHole => match (pad.drill, pad.drill_slot) {
+                (Some(d), _) => {
+                    write!(out, " (drill {})", crate::mm(d)).unwrap();
+                }
+                (None, Some((w, h))) => {
+                    write!(out, " (drill oval {} {})", crate::mm(w), crate::mm(h)).unwrap();
+                }
+                (None, None) => {} // Footprint::validate would have caught this on the way in; an empty footprint being exported mid-edit (validation not yet enforced on save) just emits no drill rather than panicking.
+            },
+            eda_model::PadKind::Smd => {}
+        }
+        let layers = if pad.layers.is_empty() {
+            match pad.kind {
+                eda_model::PadKind::Smd => vec!["F.Cu".to_string(), "F.Paste".to_string(), "F.Mask".to_string()],
+                eda_model::PadKind::ThroughHole | eda_model::PadKind::NonPlatedHole => vec!["*.Cu".to_string(), "*.Mask".to_string()],
+            }
+        } else {
+            pad.layers.clone()
+        };
+        write!(out, " (layers").unwrap();
+        for l in &layers {
+            write!(out, " {}", crate::sexpr_str(l)).unwrap();
+        }
+        write!(out, ")").unwrap();
+        if let Some(c) = pad.clearance_override {
+            write!(out, " (clearance {})", crate::mm(c)).unwrap();
+        }
+        writeln!(out, " (uuid \"{uuid}\"))").unwrap();
+    }
+
+    if let Some(model_path) = &fp.model {
+        writeln!(out, "\t(model {}", crate::sexpr_str(model_path)).unwrap();
+        writeln!(out, "\t\t(offset\n\t\t\t(xyz 0 0 0)\n\t\t)").unwrap();
+        writeln!(out, "\t\t(scale\n\t\t\t(xyz 1 1 1)\n\t\t)").unwrap();
+        writeln!(out, "\t\t(rotate\n\t\t\t(xyz 0 0 0)\n\t\t)").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+    writeln!(out, ")").unwrap();
+    out
+}
+
+/// `fp_text user "..."`, the footprint-local counterpart of `pcb.rs`'s
+/// `write_text`'s `gr_text` -- same field shape (KiCad's `EDA_TEXT::Format`
+/// is shared by both), different owning tag and an added type token.
+fn write_fp_text(out: &mut String, text: &eda_model::ir::Text) {
+    use eda_model::ir::TextJustify;
+    use std::fmt::Write as _;
+    let uuid = crate::duid(&format!("fptext:{}", text.id));
+    let angle_deg = crate::fmt_mm_f(text.angle as f64 / 1000.0);
+    let size_mm = crate::mm(text.size_um);
+    let thickness_mm = crate::mm(text.stroke_width);
+    let mut justify = String::new();
+    match text.justify {
+        TextJustify::Left => justify.push_str(" left"),
+        TextJustify::Right => justify.push_str(" right"),
+        TextJustify::Center => {}
+    }
+    if text.mirror {
+        justify.push_str(" mirror");
+    }
+    let justify_tok = if justify.is_empty() { String::new() } else { format!(" (justify{justify})") };
+    writeln!(
+        out,
+        "\t(fp_text user {} (at {} {} {angle_deg}) (layer {}) (uuid \"{uuid}\")\n\t\t(effects (font (size {size_mm} {size_mm}) (thickness {thickness_mm})){justify_tok})\n\t)",
+        crate::sexpr_str(&text.content),
+        crate::mm(text.at.x),
+        crate::mm(text.at.y),
+        crate::sexpr_str(text.layer.as_str()),
+    )
+    .unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,5 +503,86 @@ mod tests {
         let button = parse_footprint_file(&text, "Button_Switch_SMD:SW_SPST_B3U-1000P").expect("parses");
         assert!(button.validate().is_empty());
         assert_eq!(button.pads.len(), 2);
+    }
+
+    // -------------------------------------------------- export_kicad_mod
+
+    fn lib_pad(number: &str, x: eda_model::ir::Um, y: eda_model::ir::Um, shape: eda_model::ir::LibraryPadShape, kind: PadKind) -> eda_model::ir::LibraryPad {
+        eda_model::ir::LibraryPad {
+            id: format!("pad_{number}"),
+            number: number.into(),
+            at: eda_model::ir::Point { x, y },
+            offset: eda_model::ir::Point { x: 0, y: 0 },
+            size: (1000, 1000),
+            shape,
+            kind,
+            drill: if kind == PadKind::Smd { None } else { Some(600) },
+            drill_slot: None,
+            rot: 0,
+            roundrect_ratio: Some(0.25),
+            trapezoid_delta: None,
+            chamfer_ratio: None,
+            chamfer_corners: eda_model::ir::ChamferCorners::default(),
+            layers: vec![],
+            clearance_override: None,
+            thermal_gap_override: None,
+            thermal_spoke_width_override: None,
+        }
+    }
+
+    #[test]
+    fn export_kicad_mod_round_trips_through_this_crates_own_reader() {
+        let fp = eda_model::ir::LibraryFootprint {
+            name: "Test:RoundTrip".into(),
+            description: "a test footprint".into(),
+            keywords: "test".into(),
+            attributes: eda_model::ir::FootprintAttributes { smd: true, ..Default::default() },
+            pads: vec![
+                lib_pad("1", -1000, 0, eda_model::ir::LibraryPadShape::RoundRect, PadKind::Smd),
+                lib_pad("2", 1000, 0, eda_model::ir::LibraryPadShape::Circle, PadKind::Smd),
+                lib_pad("3", 0, 1500, eda_model::ir::LibraryPadShape::Oval, PadKind::ThroughHole),
+            ],
+            graphics: vec![eda_model::ir::Shape::Rect { id: "g1".into(), layer: "F.CrtYd".into(), stroke_width: 50, filled: false, start: eda_model::ir::Point { x: -2000, y: -2000 }, end: eda_model::ir::Point { x: 2000, y: 2000 } }],
+            texts: vec![],
+            fields: vec![],
+            reference_visible: true,
+            value_visible: true,
+            courtyard: None,
+            model: Some("${KICAD10_3DMODEL_DIR}/Test.3dshapes/RoundTrip.step".into()),
+            anchor: eda_model::ir::Point { x: 0, y: 0 },
+            published: false,
+        };
+
+        let text = export_kicad_mod(&fp);
+        let parsed = parse_footprint_file(&text, "Test:RoundTrip").expect("the exported file must parse back through this crate's own reader");
+        assert_eq!(parsed.pads.len(), 3);
+        assert!(parsed.validate().is_empty(), "{:?}", parsed.validate());
+
+        let by_num = |n: &str| parsed.pads.iter().find(|p| p.number == n).unwrap();
+        assert_eq!(by_num("1").shape, eda_model::PadShape::RoundRect);
+        assert_eq!(by_num("1").at, (-1000, 0));
+        assert_eq!(by_num("2").shape, eda_model::PadShape::Circle);
+        assert_eq!(by_num("3").kind, PadKind::ThroughHole);
+        assert_eq!(by_num("3").drill, Some(600));
+        assert!(parsed.courtyard.is_some(), "the exported F.CrtYd rect must be picked back up as the courtyard");
+        assert_eq!(parsed.model.as_deref(), Some("${KICAD10_3DMODEL_DIR}/Test.3dshapes/RoundTrip.step"));
+    }
+
+    #[test]
+    fn export_kicad_mod_approximates_trapezoid_and_chamfered_pads_as_valid_kicad_shapes() {
+        let mut trap = lib_pad("1", 0, 0, eda_model::ir::LibraryPadShape::Trapezoid, PadKind::Smd);
+        trap.trapezoid_delta = Some((200, 0));
+        let mut chf = lib_pad("2", 2000, 0, eda_model::ir::LibraryPadShape::ChamferedRect, PadKind::Smd);
+        chf.chamfer_ratio = Some(0.3);
+        chf.roundrect_ratio = None;
+        let fp = eda_model::ir::LibraryFootprint { name: "Test:Approx".into(), pads: vec![trap, chf], ..eda_model::ir::LibraryFootprint::new_empty("Test:Approx") };
+
+        let text = export_kicad_mod(&fp);
+        let parsed = parse_footprint_file(&text, "Test:Approx").expect("a trapezoid/chamfer approximation must still be a valid, loadable footprint");
+        assert!(parsed.validate().is_empty());
+        let by_num = |n: &str| parsed.pads.iter().find(|p| p.number == n).unwrap();
+        assert_eq!(by_num("1").shape, eda_model::PadShape::Rect, "trapezoid exports as its own rect bounding-box approximation -- see export_kicad_mod's own doc");
+        assert_eq!(by_num("2").shape, eda_model::PadShape::RoundRect, "chamfered_rect exports as roundrect");
+        assert_eq!(by_num("2").roundrect_ratio, Some(0.3), "the chamfer ratio stands in for the roundrect ratio in this approximation");
     }
 }

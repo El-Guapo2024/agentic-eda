@@ -269,7 +269,7 @@ function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText
 }
 
 /** Rubber-band preview for the graphics tool currently in progress (click-to-add-points, same convention the PCB tab's own `drawInProgress` uses -- including drawing it in the selection color regardless of target layer). */
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: "segment" | "arc" | "rect" | "circle"; pts: [Um, Um][] } | null, cursorUm: { x: number; y: number } | null) {
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] } | null, cursorUm: { x: number; y: number } | null) {
   if (!draw) return;
   const pts = draw.pts.slice();
   if (cursorUm) pts.push([cursorUm.x, cursorUm.y]);
@@ -301,7 +301,7 @@ export interface FpPaintOptions {
   selection: Set<string>;
   gridUm: number;
   gridVisible: boolean;
-  drawState: { shapeKind: "segment" | "arc" | "rect" | "circle"; pts: [Um, Um][] } | null;
+  drawState: { shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] } | null;
   cursorUm: { x: number; y: number } | null;
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
 }
