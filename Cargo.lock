@@ -572,7 +572,13 @@ dependencies = [
 name = "eda-fab"
 version = "0.1.0"
 dependencies = [
+ "eda-drc",
+ "eda-kicad",
  "eda-model",
+ "eda-shape-poly-set",
+ "eda-zone-filler",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

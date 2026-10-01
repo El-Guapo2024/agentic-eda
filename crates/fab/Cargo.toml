@@ -5,3 +5,11 @@ edition = "2021"
 
 [dependencies]
 eda-model = { path = "../model" }
+eda-drc = { path = "../drc" }
+eda-zone-filler = { path = "../zone-filler" }
+eda-shape-poly-set = { path = "../shape-poly-set" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+eda-kicad = { path = "../kicad" }

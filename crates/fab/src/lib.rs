@@ -6,22 +6,30 @@
 //! machine uses, and a side; none of that is checked by DRC, and all of
 //! it is silently absent from a board that opens perfectly in a viewer.
 //!
-//! **Division of labour.** Gerbers and the drill file are plotted by
-//! `kicad-cli` from the board we export, not written here. That is a
-//! deliberate call and it cuts against this workspace being native Rust,
-//! so it is worth stating the reason: our copper pour is an *outline*
-//! plus KiCad's fill. Writing gerbers natively would mean implementing
-//! that flood fill -- thermal reliefs, clearances, orphan islands --
-//! a second time, and the copper we shipped would then be copper no DRC
-//! had ever seen. Plotting from the same file `kicad-cli pcb drc`
-//! verifies means the copper we ship is the copper that was checked.
+//! **Division of labour, updated.** Gerbers (`gerber`), the job file
+//! (`job`), the Excellon drill file (`drill`) and KiCad's own `.pos`
+//! format (`position`) are all written natively here now -- ports of
+//! KiCad's own writers (`GERBER_PLOTTER`, `GERBER_JOBFILE_WRITER`,
+//! `EXCELLON_WRITER`, `PLACE_FILE_EXPORTER`; see each module's own doc
+//! comment), not `kicad-cli` invocations. `kicad-cli` remains the
+//! *oracle* these writers are checked against (`tests/
+//! kicad_cli_parity.rs`, `PARITY.md`): the copper this crate plots is the
+//! same outline-plus-fill `eda_drc`/`eda_zone_filler` already compute and
+//! `kicad-cli pcb drc` already checks, so there is no second flood-fill
+//! implementation to drift from the first -- only a second *writer* of
+//! the one fill this workspace already trusts.
 //!
-//! The BOM and the placement file are written here, from our own model.
-//! They are our data; round-tripping them through a viewer would only
-//! add a translation that could lie.
+//! The BOM and the JLCPCB-template placement file ([`cpl_csv`]/
+//! [`bom_csv`], below) are written here too, from our own model; see
+//! [`position::write_pos`]'s own doc comment for how that differs from
+//! KiCad's *own* position-file format, which `position` also writes.
 
 use eda_model::ir::{Design, Side};
 use eda_model::{CheckResult, ConstraintModel};
+
+pub mod drill;
+pub mod gerber;
+pub mod job;
 
 /// CSV escaping: quote when the field contains a comma, quote or newline,
 /// and double any embedded quote. A part described as `1uF, 16V` is not
