@@ -642,16 +642,32 @@ fn parity_drc_harness() {
     let repo = repo_root();
     let mut boards = Vec::new();
 
-    for yaml in example_boards(&repo) {
-        let source = if yaml.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("ladder") { "ladder" } else { "example" };
-        println!("== example: {} ==", yaml.display());
-        boards.push(process_example(&cli, &repo, &yaml, source));
+    // Dev-speed knobs only, both no-ops by default (full board set, cap 40,
+    // matching what's committed in docs/parity/*) -- this task's own speed
+    // rules ask for iterating on a small fixed sample (QA corpus only, a
+    // handful of boards) and paying the full examples/ladder route-cache-cold
+    // cost just once, at the end. `PARITY_QA_ONLY=1` skips the
+    // examples/ladder/work boards entirely (they need a cold `place`+`route`
+    // in a fresh worktree with no `target/parity_route_cache` yet, which is
+    // exactly the expensive, not-needed-for-this-task path); `QA_SAMPLE_CAP`
+    // overrides `select_qa_pcb_boards`'s board count.
+    let qa_only = std::env::var("PARITY_QA_ONLY").as_deref() == Ok("1");
+    let qa_cap: usize = std::env::var("QA_SAMPLE_CAP").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+
+    if !qa_only {
+        for yaml in example_boards(&repo) {
+            let source = if yaml.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("ladder") { "ladder" } else { "example" };
+            println!("== example: {} ==", yaml.display());
+            boards.push(process_example(&cli, &repo, &yaml, source));
+        }
     }
 
     let work_root = repo.join("work");
     let mcu30_design = work_root.join("mcu30/design.json");
     let mcu30_pcb = work_root.join("mcu30/export/mcu_board_30plus.kicad_pcb");
-    if mcu30_design.exists() && mcu30_pcb.exists() {
+    if qa_only {
+        // skip -- see the PARITY_QA_ONLY doc comment above.
+    } else if mcu30_design.exists() && mcu30_pcb.exists() {
         println!("== work: mcu30 ==");
         boards.push(process_work_board(&cli, &repo, "work/mcu30", &mcu30_design, &repo.join("examples/mcu_board_30plus.yaml"), &mcu30_pcb));
     } else {
@@ -659,7 +675,9 @@ fn parity_drc_harness() {
     }
     let l1_design = work_root.join("l1-order/_pipeline/design.json");
     let l1_pcb = work_root.join("l1-order/_pipeline/l1_usb_mcu.kicad_pcb");
-    if l1_design.exists() && l1_pcb.exists() {
+    if qa_only {
+        // skip -- see the PARITY_QA_ONLY doc comment above.
+    } else if l1_design.exists() && l1_pcb.exists() {
         println!("== work: l1-order ==");
         boards.push(process_work_board(&cli, &repo, "work/l1-order", &l1_design, &repo.join("examples/ladder/l1_usb_mcu.yaml"), &l1_pcb));
     } else {
@@ -668,7 +686,7 @@ fn parity_drc_harness() {
 
     let mut qa_sample = Vec::new();
     if let Some(root) = qa_root() {
-        qa_sample = select_qa_pcb_boards(&root, 40);
+        qa_sample = select_qa_pcb_boards(&root, qa_cap);
         println!("\nQA corpus sample ({} boards, root={}):", qa_sample.len(), root.display());
         for p in &qa_sample {
             println!("  {}", p.display());

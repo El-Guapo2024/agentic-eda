@@ -596,6 +596,29 @@ pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, note
 
     let pad_at = sexpr::find(pad, "at")?;
     let (px, py) = (sexpr::num(pad_at, 1)?, sexpr::num(pad_at, 2)?);
+    // A pad's `(at x y)` in a real `.kicad_pcb` is *already* mirrored when
+    // its footprint is on the back layer -- KiCad's own writer and reader
+    // apply no separate mirror step at all; it just rotates+translates
+    // whatever `x` is on file (confirmed directly against `kicad-cli pcb
+    // drc`'s reported pad positions on a back-side, rotated footprint: a
+    // pad's true board position is `fp.at + Rotate(-file_angle)(x, y)`,
+    // identical in form for front and back). Our own `Pad::at`/`to_board`
+    // convention is the opposite on purpose (a library footprint is always
+    // authored once, as seen from the top, and `to_board` mirrors `x` at
+    // placement time for a bottom-side instance -- see `eda_model::
+    // footprint`'s module doc) -- `write_footprint` already pre-mirrors `x`
+    // for exactly this reason (`let px = ... if Bottom { -pad.at.0 } ...`).
+    // This importer has to undo that same mirror on the way in, or a real
+    // KiCad-authored back-side pad's *position* re-mirrors a second time at
+    // placement and lands on its mirror image -- this was GAPS.md #3's
+    // "clearance" over-firing root cause (confirmed on `issue11814`'s R34:
+    // a 90°-rotated back-side resistor whose two pads came out swapped by
+    // exactly their pitch, putting one pad's copper on top of a foreign
+    // net's track). A pure export/import round trip never caught this: our
+    // own writer's mirror and this missing un-mirror canceled out for a
+    // file we wrote ourselves, which is exactly why real-file import needed
+    // its own regression test (see this module's tests).
+    let px = if fp_side == Side::Bottom { -px } else { px };
     let pad_file_rot = sexpr::num(pad_at, 3).unwrap_or(0.0);
     let rot = crate::pad_rot_from_file(fp_side, fp_rot, pad_file_rot);
 
@@ -623,6 +646,89 @@ pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, note
     let roundrect_ratio = sexpr::find(pad, "roundrect_rratio").and_then(|r| sexpr::num(r, 1));
 
     Some(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: pad_shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio })
+}
+
+/// The cache key `import_footprints` should use for an instance whose lib id
+/// is `lib_id` and whose own freshly-parsed pad geometry is `pads`: `lib_id`
+/// itself if nothing is cached there yet or the cached entry already has
+/// this exact geometry, else `"{lib_id}#2"`/`"#3"`/... -- the first slot
+/// (plain or suffixed) whose pads match, or a freshly inserted one if none
+/// do. See `import_footprints`'s call site for why this can legitimately
+/// happen (the same lib id placed on both sides of one board).
+fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str, pads: &[Pad]) -> String {
+    match explicit.get(lib_id) {
+        None => lib_id.to_string(),
+        Some(existing) if existing.pads.as_slice() == pads => lib_id.to_string(),
+        Some(_) => {
+            for n in 2.. {
+                let key = format!("{lib_id}#{n}");
+                match explicit.get(&key) {
+                    None => return key,
+                    Some(existing) if existing.pads.as_slice() == pads => return key,
+                    Some(_) => continue,
+                }
+            }
+            unreachable!()
+        }
+    }
+}
+
+/// This instance's own courtyard half-extents `(hw, hh)`, derived from its
+/// `F.CrtYd`/`B.CrtYd` graphics (`fp_line`/`fp_rect`/`fp_poly`/`fp_circle`)
+/// -- `None` when it has none, in which case `Footprint::courtyard_half`
+/// falls back to the pad bounding box plus a flat margin, same as before
+/// this existed. A real courtyard is routinely much larger than the pad
+/// bbox (a connector's shroud, a mounting flange, a mechanical keep-out) --
+/// measured on the QA corpus, the bbox-derived fallback's `courtyards_overlap`
+/// was a 100% false-positive rate (KiCad 0 across every sampled board, this
+/// port dozens) precisely because it has no way to see that margin.
+///
+/// Every point is read in the footprint's own local frame exactly like a
+/// pad's `(at ...)`, so a back-side instance needs the same x-un-mirror
+/// `parse_pad_geometry` applies to a pad position (see that function's doc
+/// comment for why: `to_board` mirrors `x` for a `Side::Bottom` instance,
+/// so this importer must feed it the pre-image of that mirror, not the raw
+/// file value, or every back-side footprint's courtyard comes out shifted
+/// to its mirror image same as a pad would).
+///
+/// `Footprint::courtyard` is a single symmetric-about-the-origin half-extent
+/// (see that field's own doc comment on why), so an off-centre real
+/// courtyard is conservatively enclosed by the smallest symmetric box that
+/// contains every point found here -- the same simplification
+/// `courtyard_half` already documents for a hand-authored one.
+fn footprint_courtyard_half(fp: &[Sexpr], side: Side) -> Option<(i64, i64)> {
+    let is_crtyd = |item: &[Sexpr]| -> bool { matches!(sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd")) };
+
+    let mut pts: Vec<Point> = Vec::new();
+    for item in sexpr::find_all(fp, "fp_line").filter(|it| is_crtyd(it)) {
+        pts.extend(sexpr::find(item, "start").and_then(xy_point));
+        pts.extend(sexpr::find(item, "end").and_then(xy_point));
+    }
+    for item in sexpr::find_all(fp, "fp_rect").filter(|it| is_crtyd(it)) {
+        pts.extend(sexpr::find(item, "start").and_then(xy_point));
+        pts.extend(sexpr::find(item, "end").and_then(xy_point));
+    }
+    for item in sexpr::find_all(fp, "fp_poly").filter(|it| is_crtyd(it)) {
+        if let Some(poly) = poly_points(item) {
+            pts.extend(poly);
+        }
+    }
+    for item in sexpr::find_all(fp, "fp_circle").filter(|it| is_crtyd(it)) {
+        let (Some(c), Some(e)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
+        let r = (((e.x - c.x) as f64).powi(2) + ((e.y - c.y) as f64).powi(2)).sqrt().round() as i64;
+        pts.extend([Point { x: c.x - r, y: c.y }, Point { x: c.x + r, y: c.y }, Point { x: c.x, y: c.y - r }, Point { x: c.x, y: c.y + r }]);
+    }
+    if pts.is_empty() {
+        return None;
+    }
+
+    let (mut hw, mut hh) = (0, 0);
+    for p in pts {
+        let x = if side == Side::Bottom { -p.x } else { p.x }; // undo the file's mirror -- see this function's doc comment
+        hw = hw.max(x.abs());
+        hh = hh.max(p.y.abs());
+    }
+    Some((hw, hh))
 }
 
 #[allow(clippy::type_complexity)]
@@ -691,9 +797,27 @@ fn import_footprints(
         // than re-deriving it keeps the two readers from drifting apart
         // on what that one line means, same reasoning this module's own
         // doc comment already gives for sharing parse_pad_geometry.
-        explicit.entry(lib_id.clone()).or_insert_with(|| Footprint { name: lib_id.clone(), pads, courtyard: None, model: crate::footprint_lib::model_from(fp) });
+        //
+        // Almost every real board instantiates a given lib id on one side
+        // consistently, in which case every instance's own freshly-parsed
+        // `pads` agrees with the one already cached and the plain `lib_id`
+        // key is reused as-is. The rare real exception (confirmed on
+        // `issue11814`: the same `R_0402_..._HandSolder` lib id placed both
+        // on `F.Cu` and `B.Cu`) needs its own cache slot: `parse_pad_geometry`
+        // resolves each pad's *own* instance geometry (its side-corrected
+        // local offset -- see that function's doc comment), so two
+        // instances of one lib id on opposite sides legitimately disagree
+        // on it, and collapsing them into one shared `Footprint` would make
+        // one side's pads silently wrong. `dedup_footprint_key` finds (or
+        // starts) whichever cache slot actually matches this instance's own
+        // geometry, so `model.footprint_of` -- a plain name lookup with no
+        // side of its own to disambiguate by -- still resolves to the right
+        // one for every instance.
+        let key = dedup_footprint_key(&mut explicit, &lib_id, &pads);
+        let courtyard = footprint_courtyard_half(fp, side);
+        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, model: crate::footprint_lib::model_from(fp) });
 
-        parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(lib_id), pins, body_um: None, symbol: None, datasheet: None, edge: None });
+        parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_um: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
     }
 
@@ -1065,6 +1189,116 @@ mod tests {
         let (pts, closed) = chain_edges(&edges);
         assert!(closed);
         assert_eq!(pts.len(), 4);
+    }
+
+    /// GAPS.md #3's clearance-over-firing root cause, pinned down directly:
+    /// a real `.kicad_pcb` already writes a back-side pad's `x` pre-mirrored
+    /// (confirmed against live `kicad-cli pcb drc` on a minimal repro and on
+    /// `issue11814` itself -- see `parse_pad_geometry`'s doc comment), so
+    /// this importer must undo that mirror once, not leave it for
+    /// `to_board` to apply a second time. These are `issue11814.kicad_pcb`'s
+    /// own numbers verbatim: footprint `R_0402_..._HandSolder` at
+    /// `(at 114.8 137.8 90)` on `B.Cu`, pad "1" at local `(at -0.5975 0 90)`.
+    /// Real KiCad reports this pad's absolute position as
+    /// `(114.8, 138.3975)` (`kicad-cli pcb drc` on the isolated footprint);
+    /// before this fix, `to_board` re-mirrored the un-undone x and produced
+    /// `(114.8, 137.2025)` instead -- exactly R34's *other* pad's position,
+    /// 1.196mm away, which is what put this pad's copper on top of a
+    /// foreign net's track and fired a false `shorting_items`/`clearance`.
+    #[test]
+    fn back_side_pad_position_matches_kicad_cli_ground_truth() {
+        let pad_sexpr = sexpr::parse(
+            r#"(pad "1" smd roundrect (at -0.5975 0 90) (size 0.715 0.64) (layers "B.Cu" "B.Mask" "B.Paste") (roundrect_rratio 0.25))"#,
+        )
+        .unwrap();
+        let mut notes = ImportNotes::default();
+        // `fp_rot` here is already-imported (negated) millidegrees for a
+        // footprint whose file angle is 90 -- `import_rot_millideg(90.0)`.
+        let fp_rot = import_rot_millideg(90.0);
+        let pad = parse_pad_geometry(pad_sexpr.as_list().unwrap(), Side::Bottom, fp_rot, &mut notes).expect("pad parses");
+        // Pre-mirror local frame (what `to_board` expects to mirror itself):
+        // negating the file's raw -0.5975mm gives +597.5um -> rounds to 598.
+        assert_eq!(pad.at, (598, 0), "importer must undo the file's own back-side mirror, not pass x through as-is");
+
+        let fp = FootprintInstance { id: "R34".into(), at: Point { x: 114_800, y: 137_800 }, rot: fp_rot, side: Side::Bottom, label: Default::default() };
+        let board_pos = eda_model::footprint::to_board(&fp, pad.at);
+        assert_eq!(board_pos, Point { x: 114_800, y: 138_398 }, "must match kicad-cli's own reported absolute pad position (114.8, 138.3975mm), not the other pad's position 1.196mm away");
+    }
+
+    /// GAPS.md #3's second over-firing source: `courtyards_overlap` was a
+    /// 100% false-positive rate (KiCad 0, ours dozens) because every
+    /// imported footprint fell back to a pad-bbox-derived courtyard that
+    /// has no way to represent a connector shroud or mounting flange
+    /// sticking out past the pads. This pins the fix to a real, asymmetric
+    /// `F.CrtYd` rectangle (pads only reach +-0.5mm; the courtyard reaches
+    /// 2mm on the +x side for a shroud) and confirms the un-mirror applies
+    /// to courtyard graphics the same way `parse_pad_geometry` applies it
+    /// to a pad's own `(at ...)`.
+    #[test]
+    fn footprint_courtyard_half_reads_real_crtyd_graphics_and_unmirrors_for_back_side() {
+        let fp = sexpr::parse(
+            r#"(footprint "test:conn"
+                (layer "F.Cu")
+                (at 0 0)
+                (fp_rect (start -0.5 -0.5) (end 2.0 0.5) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd"))
+                (pad "1" smd rect (at 0 0) (size 0.3 0.3) (layers "F.Cu")))"#,
+        )
+        .unwrap();
+        let body = fp.as_list().unwrap();
+
+        // Top side: no mirror, so the asymmetric +x reach (2mm) and the -x
+        // reach (0.5mm) land exactly where they're written.
+        let (hw, hh) = footprint_courtyard_half(body, Side::Top).expect("courtyard found");
+        assert_eq!((hw, hh), (2000, 500), "symmetric half-extent must enclose the farthest point on each axis: max(|{{-500,2000}}|)=2000, max(|{{-500,500}}|)=500");
+
+        // Back side: the same raw numbers must be un-mirrored (x negated)
+        // before taking the half-extent, exactly like a pad's `at` -- the
+        // farthest-x point is still the one that was at file-x=2.0 (now at
+        // internal x=-2.0), so the half-extent magnitude is unchanged, but
+        // getting the sign backwards here is exactly the bug this is
+        // guarding: it would silently still pass this symmetric-extent
+        // check while leaving the *centre* wrong for a caller that (unlike
+        // this one) cares about which side the shroud is on.
+        let (hw_b, hh_b) = footprint_courtyard_half(body, Side::Bottom).expect("courtyard found");
+        assert_eq!((hw_b, hh_b), (2000, 500));
+    }
+
+    #[test]
+    fn footprint_courtyard_half_is_none_without_crtyd_graphics() {
+        let fp = sexpr::parse(r#"(footprint "test:bare" (layer "F.Cu") (at 0 0) (pad "1" smd rect (at 0 0) (size 0.3 0.3) (layers "F.Cu")))"#).unwrap();
+        assert!(footprint_courtyard_half(fp.as_list().unwrap(), Side::Top).is_none(), "no F.CrtYd/B.CrtYd graphics -> None, same as before this existed (falls back to the pad-bbox heuristic)");
+    }
+
+    /// GAPS.md #3's exact `issue11814` shape: the identical lib id
+    /// (`R_0402_..._HandSolder`) placed on both `F.Cu` (R35) and `B.Cu`
+    /// (R34). Each instance's own un-mirrored pad geometry is correct in
+    /// isolation (the test above), but caching pad geometry by bare lib id
+    /// -- the overwhelming majority case, where the same lib id is only
+    /// ever on one side -- would make whichever instance is parsed *first*
+    /// win the cache for every later instance on the *other* side, silently
+    /// handing it the wrong (mirror-image) pad positions. This is what
+    /// actually put R34's pad 1 on top of a foreign net's track before this
+    /// fix: R35 (first in file order) cached the Top-side geometry, and R34
+    /// (Bottom) got it unchanged instead of its own.
+    #[test]
+    fn dedup_footprint_key_gives_mixed_side_instances_of_one_lib_id_separate_slots() {
+        let mut explicit: BTreeMap<String, Footprint> = BTreeMap::new();
+        let top_pads = vec![Pad { number: "1".into(), at: (-598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let bottom_pads = vec![Pad { number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+
+        let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
+        let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads);
+        assert_eq!(key_top, lib_id, "first instance (R35, top) gets the plain lib id");
+        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, model: None });
+
+        let key_bottom = dedup_footprint_key(&mut explicit, lib_id, &bottom_pads);
+        assert_ne!(key_bottom, lib_id, "R34 (bottom)'s own un-mirrored geometry disagrees with R35's cached one -- it must get its own slot, not silently reuse R35's");
+        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, model: None });
+
+        // A third instance matching either existing slot exactly must reuse
+        // it rather than growing a new one every time.
+        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &top_pads), lib_id);
+        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &bottom_pads), key_bottom);
     }
 
     #[test]
