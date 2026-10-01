@@ -24,5 +24,10 @@
 
     "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // *.test.ts units (node:test, run via tsconfig.test.json + `npm run
+  // test:unit` -- see its own header comment) are never part of the
+  // shipped app; excluded here the same way Vite's build never bundles
+  // them (nothing imports a test file from the app's own entry chain).
+  "exclude": ["src/**/*.test.ts"]
 }

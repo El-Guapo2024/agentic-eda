@@ -7,7 +7,7 @@ import { useEffect, useMemo } from "react";
 import actionsData from "../kicad/actions.json";
 import type { ActionsFile } from "../kicad/types";
 import { useActionRunner } from "./useActionRunner";
-import { eventToHotkey } from "./hotkeys";
+import { eventToHotkey, effectiveHotkey } from "./hotkeys";
 
 const actionsFile = actionsData as ActionsFile;
 
@@ -33,8 +33,9 @@ export function useGlobalHotkeys() {
       else idx.set(hk, [name]);
     };
     for (const a of actionsFile.actions) {
-      add(a.hotkey, a.name);
-      add(a.altHotkey, a.name);
+      const { hotkey, altHotkey } = effectiveHotkey(a);
+      add(hotkey, a.name);
+      add(altHotkey, a.name);
     }
     return idx;
   }, []);

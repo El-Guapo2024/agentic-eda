@@ -181,6 +181,22 @@ export interface StudioState {
   /** Cursor position in board µm, for the status bar's X/Y/dx/dy/dist. */
   cursorUm: { x: number; y: number } | null;
   moveOriginUm: { x: number; y: number } | null;
+  /**
+   * base_screen.cpp's `m_LocalOrigin` (default (0,0), same as source) --
+   * the status bar's dx/dy/dist is always relative to THIS point, set by
+   * Space (common.Control.resetLocalCoords, pcb_base_frame.cpp's
+   * UpdateStatusBar). Independent of moveOriginUm (the move tool's own
+   * drag-grab anchor): KiCad's move tool never touches m_LocalOrigin.
+   */
+  localOriginUm: { x: number; y: number };
+  /**
+   * view_controls.cpp VC_SETTINGS::m_autoPanSettingEnabled -- edge
+   * auto-pan while dragging/drawing near the canvas border. KiCad ships
+   * with this OFF (input.auto_pan defaults false; Preferences > Mouse and
+   * Touchpad turns it on) -- same default here, see kicad-port/
+   * viewControls.ts.
+   */
+  autoPanEnabled: boolean;
 
   /**
    * GET /api/schematic (structured symbols/wires/labels, see studio.rs),
@@ -256,6 +272,8 @@ const initialState: StudioState = {
   toast: null,
   cursorUm: null,
   moveOriginUm: null,
+  localOriginUm: { x: 0, y: 0 },
+  autoPanEnabled: false,
   schematic: null,
   schematicError: null,
   ratsnest: null,
@@ -308,6 +326,8 @@ type Action =
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
+  | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
+  | { type: "TOGGLE_AUTO_PAN" }
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
   | { type: "SCHEMATIC_ERR"; message: string }
   | { type: "RATSNEST_OK"; ratsnest: Ratsnest }
@@ -429,6 +449,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, cursorUm: action.at };
     case "SET_MOVE_ORIGIN":
       return { ...state, moveOriginUm: action.at };
+    case "SET_LOCAL_ORIGIN":
+      return { ...state, localOriginUm: action.at };
+    case "TOGGLE_AUTO_PAN":
+      return { ...state, autoPanEnabled: !state.autoPanEnabled };
     case "SCHEMATIC_OK":
       return { ...state, schematic: action.schematic, schematicError: null };
     case "SCHEMATIC_ERR":

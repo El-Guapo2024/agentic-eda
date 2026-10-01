@@ -6,7 +6,7 @@
 import { useMemo, useState } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { useActionRunner } from "../actions/useActionRunner";
-import { displayHotkey } from "../actions/hotkeys";
+import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
 import actionsData from "../kicad/actions.json";
 import type { ActionsFile } from "../kicad/types";
 
@@ -21,9 +21,10 @@ export function HotkeysDialog() {
   const rows = useMemo(
     () =>
       actionsFile.actions
-        .filter((a) => a.hotkey || a.altHotkey)
-        .filter((a) => !filter || a.label.toLowerCase().includes(filter.toLowerCase()))
-        .sort((a, b) => a.label.localeCompare(b.label)),
+        .map((a) => ({ a, ...effectiveHotkey(a) }))
+        .filter(({ hotkey, altHotkey }) => hotkey || altHotkey)
+        .filter(({ a }) => !filter || a.label.toLowerCase().includes(filter.toLowerCase()))
+        .sort((x, y) => x.a.label.localeCompare(y.a.label)),
     [filter]
   );
 
@@ -46,12 +47,12 @@ export function HotkeysDialog() {
             style={{ width: "100%", padding: "5px 8px", marginBottom: 8 }}
           />
           <div className="kv-grid" style={{ gridTemplateColumns: "1fr auto", rowGap: 4 }}>
-            {rows.map((a) => (
+            {rows.map(({ a, hotkey, altHotkey }) => (
               <span key={a.name} style={{ display: "contents" }}>
                 <span style={{ opacity: isEnabled(a.name) ? 1 : 0.45 }}>{a.label}</span>
                 <span style={{ color: "var(--chrome-text-dim)", fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
-                  {displayHotkey(a.hotkey)}
-                  {a.altHotkey ? ` / ${displayHotkey(a.altHotkey)}` : ""}
+                  {displayHotkey(hotkey)}
+                  {altHotkey ? ` / ${displayHotkey(altHotkey)}` : ""}
                 </span>
               </span>
             ))}

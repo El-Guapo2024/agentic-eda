@@ -19,6 +19,44 @@ function extractRaw(body, methodName) {
   return m ? m[1].trim() : null;
 }
 
+/**
+ * Some actions (common/tool/actions.cpp: redo, doDelete, zoomIn, zoomOut,
+ * zoomRedraw, zoomFitScreen) give `methodName` two different values behind
+ * a `#if defined( __WXMAC__ ) ... #else ... #endif` -- a real macOS-only
+ * default, not just KiCad's usual "Cmd stands in for Ctrl" substitution
+ * (e.g. zoomIn is bare WXK_F1 on Windows/Linux but Cmd+'+' on macOS; a
+ * plain single-value extractRaw() can't tell the two branches apart).
+ *
+ * The naive `extractRaw` regex is particularly dangerous here: its lazy
+ * `[^;]*?` has no reason to stop at the *first* `.Method(...)` it meets --
+ * since wxWidgets preprocessor lines (`#else`, `#endif`) aren't `.` or
+ * end-of-string, the "stop here" lookahead fails inside the #if branch and
+ * the match silently expands across both branches, often splicing a
+ * fragment of each into one bogus hotkey (this is exactly how zoomIn and
+ * zoomOut previously came out as "Ctrl+F1"/"Ctrl+F2": the mac branch's
+ * MD_CTRL plus the non-mac branch's WXK_F1/WXK_F2, two different
+ * platforms' tokens glued into one that's wrong on both).
+ *
+ * Returns `{ primary, mac }` -- `primary` is the `#else` (non-mac) value
+ * when an ifdef is present (matching every other action's convention,
+ * where `hotkey` already means "the Windows/Linux default, with Cmd
+ * standing in for Ctrl on macOS"), `mac` is the `#if __WXMAC__` value, or
+ * `{ primary: extractRaw(...), mac: null }` when there's no such split.
+ */
+function extractPlatformRaw(body, methodName) {
+  const ifdefRe = new RegExp(
+    `#if\\s+defined\\(\\s*__WXMAC__\\s*\\)\\s*` +
+      `\\.${methodName}\\(([^)]*)\\)\\s*` +
+      `#else\\s*` +
+      `\\.${methodName}\\(([^)]*)\\)\\s*` +
+      `#endif`,
+    "s"
+  );
+  const m = ifdefRe.exec(body);
+  if (m) return { primary: m[2].trim(), mac: m[1].trim() };
+  return { primary: extractRaw(body, methodName), mac: null };
+}
+
 const NAMED_KEYS = {
   WXK_DELETE: "Del",
   WXK_BACK: "Backspace",
@@ -55,8 +93,15 @@ export function normalizeHotkey(raw) {
     }
   }
   if (!key) {
+    // A literal char constant, e.g. `.DefaultHotkey( ' ' )` for
+    // common.Control.resetLocalCoords (status-bar relative origin) --
+    // KiCad writes this one as a bare space char rather than WXK_SPACE,
+    // so it isn't caught by the NAMED_KEYS lookup above. Canonicalize it
+    // the same way DOM_KEY_TO_CANONICAL (actions/hotkeys.ts) names a
+    // literal " " keydown, or a real keypress for this action could
+    // never match the stored hotkey string.
     const charMatch = /'(.)'/.exec(s);
-    if (charMatch) key = charMatch[1].toUpperCase();
+    if (charMatch) key = charMatch[1] === " " ? "Space" : charMatch[1].toUpperCase();
   }
   if (!key) return null;
   parts.push(key);
@@ -77,8 +122,12 @@ export function parseActionsFromFile(fileText) {
     const [, qualifier, func, body] = m;
     const name = extractString(body, "Name");
     if (!name) continue;
-    const hotkeyRaw = extractRaw(body, "DefaultHotkey");
-    const altHotkeyRaw = extractRaw(body, "DefaultHotkeyAlt") || extractRaw(body, "AlternateHotkey");
+    const hotkeySplit = extractPlatformRaw(body, "DefaultHotkey");
+    const altHotkeySplit = /DefaultHotkeyAlt/.test(body) ? extractPlatformRaw(body, "DefaultHotkeyAlt") : extractPlatformRaw(body, "AlternateHotkey");
+    const hotkeyRaw = hotkeySplit.primary;
+    const altHotkeyRaw = altHotkeySplit.primary;
+    const macHotkeyRaw = hotkeySplit.mac;
+    const macAltHotkeyRaw = altHotkeySplit.mac;
     const flags = [];
     const flagsRaw = extractRaw(body, "Flags");
     if (flagsRaw)
@@ -98,6 +147,11 @@ export function parseActionsFromFile(fileText) {
       altHotkey: normalizeHotkey(altHotkeyRaw),
       hotkeyRaw,
       altHotkeyRaw,
+      /** The real macOS-only default when it genuinely differs from a plain Cmd-for-Ctrl swap of `hotkey` (see extractPlatformRaw) -- null means macOS uses `hotkey` with Cmd standing in for Ctrl, same as every other action. */
+      macHotkey: normalizeHotkey(macHotkeyRaw),
+      macAltHotkey: normalizeHotkey(macAltHotkeyRaw),
+      macHotkeyRaw,
+      macAltHotkeyRaw,
       icon: (/\.Icon\(\s*BITMAPS::(\w+)/s.exec(body) || [])[1] ?? null,
       flags,
     });

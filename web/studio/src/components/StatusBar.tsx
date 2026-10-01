@@ -24,7 +24,12 @@ export function StatusBar() {
   // number that used to be true isn't.
   const onPcb = state.tab === "pcb";
   const cursor = onPcb ? state.cursorUm : null;
-  const origin = onPcb ? state.moveOriginUm : null;
+  // pcb_base_frame.cpp UpdateStatusBar: dx/dy/dist is always relative to
+  // m_LocalOrigin (Space to reset it; default (0,0)), NOT the move tool's
+  // own drag anchor (state.moveOriginUm) -- KiCad's move tool never
+  // touches the local origin, so this is a different number even while a
+  // move preview happens to also be active.
+  const origin = onPcb ? state.localOriginUm : null;
   const dx = cursor && origin ? cursor.x - origin.x : null;
   const dy = cursor && origin ? cursor.y - origin.y : null;
   // Schematic has its own independent pan/zoom (SchematicView.tsx's
@@ -49,6 +54,12 @@ export function StatusBar() {
         <input type="checkbox" checked={state.polar} onChange={() => dispatch({ type: "TOGGLE_POLAR" })} />
         polar
       </label>
+      {onPcb && (
+        <label className="toggle" title="Pan the view when the cursor nears the canvas edge while dragging (view_controls.cpp's auto-pan; off by default in KiCad too)">
+          <input type="checkbox" checked={state.autoPanEnabled} onChange={() => dispatch({ type: "TOGGLE_AUTO_PAN" })} />
+          autopan
+        </label>
+      )}
       <select value={state.units} onChange={(e) => dispatch({ type: "SET_UNITS", units: e.target.value as LengthUnit })} title="Units">
         <option value="mm">mm</option>
         <option value="mil">mil</option>

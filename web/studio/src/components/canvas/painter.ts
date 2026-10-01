@@ -12,6 +12,7 @@ import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { posture45 } from "./routing";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
+import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
 
 export interface PaintOptions {
   selection: Set<string>;
@@ -397,21 +398,46 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
   }
 }
 
+/**
+ * graphics_abstraction_layer.h GAL::GetVisibleGridSize() + opengl_gal.cpp
+ * DrawGrid(), for the DOTS style (KiCad's own real default --
+ * gal_display_options.cpp). Source draws this as two stencil-masked line
+ * passes (a full-width horizontal line and a full-height vertical line
+ * per grid step, each possibly "major" width, overlapped via the stencil
+ * buffer so only their intersections show) -- Canvas2D has no stencil
+ * buffer, and reproducing that two-pass trick for a cosmetic dot-size
+ * nuance isn't worth an offscreen-canvas compositing detour. This instead
+ * draws one dot per intersection directly, sized up only where BOTH axes
+ * land on a tick line (opengl_gal.cpp's own SMALL_CROSS style, the one
+ * other GRID_STYLE enumerator in source that draws per-intersection,
+ * does exactly this `tickX && tickY` combination for ITS major marks) --
+ * a close, simple approximation rather than a literal transcription of
+ * the DOTS stencil mechanism. The coarsen-when-too-dense threshold
+ * (computeVisibleGridSize) is the behaviorally important part and IS
+ * ported exactly; see PARITY-pcb.md.
+ */
 function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number) {
-  const stepPx = gridUm * view.scale;
-  if (stepPx < 4) return; // too dense to be useful -- KiCad fades its grid out the same way
-  const [x0] = [(-view.x) / view.scale];
-  const [y0] = [(-view.y) / view.scale];
-  const firstX = Math.floor(x0 / gridUm) * gridUm;
-  const firstY = Math.floor(y0 / gridUm) * gridUm;
+  const visible = computeVisibleGridSize(gridUm, view.scale, DEFAULT_GRID_STYLE);
+  const stepPx = visible * view.scale;
+  if (!(stepPx > 0)) return; // gridUm <= 0 or a degenerate scale -- nothing sane to draw
+  const x0 = -view.x / view.scale;
+  const y0 = -view.y / view.scale;
   const wUm = widthPx / view.scale;
   const hUm = heightPx / view.scale;
+  const firstIndexX = Math.floor(x0 / visible) - 1;
+  const firstIndexY = Math.floor(y0 / visible) - 1;
+  const lastIndexX = Math.ceil((x0 + wUm) / visible) + 1;
+  const lastIndexY = Math.ceil((y0 + hUm) / visible) + 1;
   ctx.fillStyle = layerColor("grid");
-  const r = hairlineUm(view, stepPx < 8 ? 0.6 : 1);
-  for (let x = firstX; x <= x0 + wUm + gridUm; x += gridUm) {
-    for (let y = firstY; y <= y0 + hUm + gridUm; y += gridUm) {
+  const minorR = hairlineUm(view, stepPx < 8 ? 0.6 : 1);
+  const majorR = minorR * MAJOR_GRID_LINE_WIDTH_RATIO;
+  for (let i = firstIndexX; i <= lastIndexX; i++) {
+    const x = i * visible;
+    const tickX = isMajorGridLine(i);
+    for (let j = firstIndexY; j <= lastIndexY; j++) {
+      const y = j * visible;
       ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.arc(x, y, tickX && isMajorGridLine(j) ? majorR : minorR, 0, Math.PI * 2);
       ctx.fill();
     }
   }

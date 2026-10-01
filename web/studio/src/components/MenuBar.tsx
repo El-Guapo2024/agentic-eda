@@ -11,7 +11,7 @@ import menusData from "../kicad/menus.json";
 import schMenusData from "../kicad/sch_menus.json";
 import actionsData from "../kicad/actions.json";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
-import { displayHotkey } from "../actions/hotkeys";
+import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
 import { useStudioState } from "../state/store";
 
@@ -42,10 +42,11 @@ function MenuNodeView({ node }: { node: MenuNode }) {
   const enabled = isEnabled(node.action);
   const label = action?.label ?? node.action;
   const tooltip = enabled ? action?.tooltip : `${action?.tooltip ?? ""} (not ported yet)`.trim();
+  const hotkey = action ? effectiveHotkey(action).hotkey : null;
   return (
     <div className="menu-node-item" role="menuitem" aria-disabled={!enabled} title={tooltip} onClick={() => enabled && run(node.action)}>
       <span>{label}</span>
-      {action?.hotkey && <span className="menu-node-hotkey">{displayHotkey(action.hotkey)}</span>}
+      {hotkey && <span className="menu-node-hotkey">{displayHotkey(hotkey)}</span>}
     </div>
   );
 }
