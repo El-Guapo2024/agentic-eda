@@ -118,7 +118,7 @@ fn d_true() -> bool {
 }
 
 /// One pin of a library symbol.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LibPin {
     pub number: String,

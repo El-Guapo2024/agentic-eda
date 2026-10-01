@@ -22,8 +22,11 @@ use std::collections::BTreeSet;
 const REGISTERED: &[&str] = &[
     // -- electrical (erc.rs) -----------------------------------------
     "duplicate_reference",
+    "endpoint_off_grid",
+    "isolated_pin_label",
     "label_dangling",
     "lib_symbol_issues",
+    "lib_symbol_mismatch",
     "no_connect_connected",
     "no_connect_dangling",
     "pin_not_connected",

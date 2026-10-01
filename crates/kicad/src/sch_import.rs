@@ -193,7 +193,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, erc_exclusions: Vec::new(), title_block, sheets };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, erc_exclusions: Vec::new(), imported_from_kicad: true, title_block, sheets };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },

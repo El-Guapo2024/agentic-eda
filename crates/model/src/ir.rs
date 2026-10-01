@@ -161,6 +161,26 @@ pub struct SchematicSection {
     /// an imported file without descending into their own content.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<SheetInstance>,
+    /// True when this section was built by `eda_kicad::import_kicad_sch`
+    /// from a real `.kicad_sch` file, rather than by this project's own
+    /// `derive_schematic`. The two disagree on what `SymbolInstance::at`
+    /// means: `derive_schematic` always places it at the engine's own
+    /// "top-left of a synthesized box" corner (every downstream consumer —
+    /// rendering, the exporter's `baked_local`, and `eda_kicad::erc`'s own
+    /// `resolve_pins` — agrees on that convention), while a real file's
+    /// `(symbol (at X Y))` is the symbol's *native* KiCad origin, which for
+    /// a real library symbol is almost never a bounding-box corner. Mixing
+    /// the two conventions silently computes the wrong absolute pin
+    /// position for an imported real symbol (`resolve_pins`' original bug
+    /// this field exists to fix — see its own doc comment); setting this
+    /// flag lets that one function recover the correct point the same way
+    /// `import_kicad_sch::reconcile` itself does, without changing
+    /// anything for a schematic this project generated itself. `#[serde(default)]`
+    /// so every existing `design.json`/engine-constructed section (and
+    /// every other crate's existing `SchematicSection { .. }` literal)
+    /// keeps today's (correct, for them) engine-box behavior unchanged.
+    #[serde(default)]
+    pub imported_from_kicad: bool,
 }
 
 fn d_unit_one() -> u32 {
@@ -1179,7 +1199,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
-                erc_exclusions: vec![],
+                erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
             }),
