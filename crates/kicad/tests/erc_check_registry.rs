@@ -36,6 +36,22 @@ const REGISTERED: &[&str] = &[
     "power_pin_not_driven",
     "unconnected_wire_endpoint",
     "wire_dangling",
+    // -- multi-unit symbols, GAPS.md #21 (erc.rs::check_multi_unit_symbols) --
+    "different_unit_footprint",
+    "different_unit_net",
+    "extra_units",
+    "missing_bidi_pin",
+    "missing_input_pin",
+    "missing_power_pin",
+    "missing_unit",
+    "unit_value_mismatch",
+    // -- hierarchy, GAPS.md #6/#20 (erc.rs::check_hierarchy) --
+    "duplicate_sheet_names",
+    "hier_label_mismatch",
+    "bus_to_bus_conflict",
+    // -- buses, GAPS.md #20 (bus.rs::check_bus) --
+    "bus_to_net_conflict",
+    "net_not_bus_member",
     // -- readability/style (erc_style.rs) -----------------------------
     "schematic_cluster_split",
     "schematic_column_overflow",
@@ -68,7 +84,7 @@ const REGISTERED: &[&str] = &[
 /// `lib_symbol_*`/`*_dangling`/`*_reference` electrical check name, or
 /// carries the `schematic_` style-check prefix.
 fn emitted() -> BTreeSet<String> {
-    const SOURCES: &[&str] = &[include_str!("../src/erc.rs"), include_str!("../src/erc_style.rs")];
+    const SOURCES: &[&str] = &[include_str!("../src/erc.rs"), include_str!("../src/erc_style.rs"), include_str!("../src/bus.rs")];
     let mut found = BTreeSet::new();
     for src in SOURCES {
         for (i, _) in src.match_indices('"') {

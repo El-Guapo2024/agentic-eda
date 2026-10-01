@@ -30,9 +30,15 @@ export async function fetchState(): Promise<BoardState> {
  * Schematic Editor's own KiCad-style renderer. /api/schematic.svg (a
  * single baked image) still exists on the backend but nothing in this
  * app fetches it anymore.
+ *
+ * `sheetPath` (GAPS.md #6): the root-to-here list of `SheetInstance::id`s
+ * the Hierarchy panel has navigated into (`state.currentSheetPath`) --
+ * omitted/empty fetches the root sheet, exactly as every call before
+ * hierarchy support existed already did.
  */
-export async function fetchSchematic(): Promise<Schematic> {
-  const s = await getJson<Schematic & { error?: string }>("/api/schematic");
+export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Schematic> {
+  const query = sheetPath && sheetPath.length > 0 ? `?sheet=${sheetPath.join("/")}` : "";
+  const s = await getJson<Schematic & { error?: string }>(`/api/schematic${query}`);
   if (s.error) throw new ApiError(s.error);
   // Defensive defaults for the lib_symbols/power_symbols/no_connects
   // fields, and per-symbol/per-label fields, the Eeschema-port merge
@@ -51,6 +57,12 @@ export async function fetchSchematic(): Promise<Schematic> {
     no_connects: s.no_connects ?? [],
     texts: s.texts ?? [],
     title_block: s.title_block ?? null,
+    sheets: s.sheets ?? [],
+    sheet_path: s.sheet_path ?? [],
+    bus_entries: s.bus_entries ?? [],
+    // `bus` is new (GAPS.md #20) -- a wire from a backend built before it
+    // existed has no such field at all, not even `false`.
+    wires: (s.wires ?? []).map((w) => ({ ...w, bus: w.bus ?? false })),
     symbols: (s.symbols ?? []).map((sym) => {
       // `mirror` replaces an earlier `mirrored: boolean` (see types.ts's
       // SchematicSymbol doc comment) that could only ever express one of
@@ -69,7 +81,7 @@ export async function fetchSchematic(): Promise<Schematic> {
 export async function fetchSymbolLibrary(): Promise<SymbolLibrary> {
   const s = await getJson<SymbolLibrary & { error?: string }>("/api/symbol_library");
   if (s.error) throw new ApiError(s.error);
-  return { entries: s.entries ?? [], lib_symbols: s.lib_symbols ?? {} };
+  return { entries: (s.entries ?? []).map((e) => ({ ...e, unit_count: e.unit_count ?? 1 })), lib_symbols: s.lib_symbols ?? {} };
 }
 
 /**

@@ -27,11 +27,11 @@ function resistor(id: string, at: [number, number]): SchematicSymbol {
 }
 
 function wire(id: string, pts: [number, number][]): SchematicWire {
-  return { id, net: "", pins: [], pts };
+  return { id, net: "", pins: [], pts, bus: false };
 }
 
 function schematic(symbols: SchematicSymbol[], wires: SchematicWire[]): Schematic {
-  return { lib_symbols: R_LIB, symbols, power_symbols: [], wires, no_connects: [], labels: [], texts: [], title_block: null };
+  return { lib_symbols: R_LIB, symbols, power_symbols: [], wires, no_connects: [], labels: [], texts: [], title_block: null, bus_entries: [], sheets: [], sheet_path: [] };
 }
 
 test("attachedWireEndpoints: a wire landing exactly on a pin tip is attached at that endpoint", () => {

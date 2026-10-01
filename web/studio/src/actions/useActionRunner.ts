@@ -822,6 +822,17 @@ export function useActionRunner() {
 
     m.set("eeschema.InspectionTool.runERC", () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: true }));
 
+    // `Alt+Backspace`/`Alt+Up` (sch_navigate_tool.cpp::LeaveSheet/Up -- `Up()`
+    // itself just calls `LeaveSheet` in source, so both bind the same
+    // handler here): pop one level off `state.currentSheetPath`. A no-op
+    // at the root, same as source's own `CanGoUp()` guard.
+    const leaveSheet = schematicOnly(() => {
+      if (state.currentSheetPath.length === 0) return;
+      api.navigateToSheet(state.currentSheetPath.slice(0, -1));
+    });
+    m.set("eeschema.NavigateTool.leaveSheet", leaveSheet);
+    m.set("eeschema.NavigateTool.up", leaveSheet);
+
     // `Ctrl+A`: opens AnnotateDialog.tsx (scope/order/reset options) --
     // the dialog itself issues the real `annotate` Cmd on confirm.
     m.set("eeschema.EditorControl.annotate", schematicOnly(() => dispatch({ type: "SET_ANNOTATE_DIALOG_OPEN", open: true })));
@@ -833,6 +844,15 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveDrawingLineWireBus.drawWires",
       schematicOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "wire" ? "select" : "wire" }))
+    );
+    // `B` (GAPS.md #20): arm/disarm the bus tool -- shares the exact same
+    // click-to-add-point/finish state machine as the wire tool above
+    // (`drawState.kind` stays `"wire"` either way; `SchematicView.tsx`
+    // reads `state.activeTool === "bus"` at commit time to tag the result
+    // `Cmd::AddWire { bus: true }` instead of a plain wire).
+    m.set(
+      "eeschema.InteractiveDrawingLineWireBus.drawBuses",
+      schematicOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "bus" ? "select" : "bus" }))
     );
     // Backspace mid-draw: pop the in-progress wire's last point (never a
     // committed-command undo -- see `Cmd::DeleteWire`'s own doc on why
@@ -858,6 +878,7 @@ export function useActionRunner() {
     m.set("eeschema.InteractiveDrawing.placePowerSymbol", toggleSchTool("sch_power"));
     m.set("eeschema.InteractiveDrawing.placeSchematicText", toggleSchTool("sch_text"));
     m.set("eeschema.InteractiveDrawing.placeNoConnect", toggleSchTool("sch_no_connect"));
+    m.set("eeschema.InteractiveDrawing.placeBusWireEntry", toggleSchTool("sch_bus_entry"));
     // `A`: unlike the others above, this opens the chooser dialog first
     // (real source's own order too, for this one tool -- see
     // SymbolChooserDialog.tsx's header comment) rather than arming a tool

@@ -21,9 +21,10 @@
 //! resulting group's net name prefers a label's text, then a power
 //! symbol's asserted net, else a synthesized `NET_<n>`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
 
-use eda_model::ir::{Design, LabelKind, LabelShape, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
+use eda_model::ir::{Design, LabelKind, LabelShape, Millideg, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
 use eda_model::symbol::{LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
@@ -78,6 +79,38 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     }
     let nc_points: std::collections::BTreeSet<Point> = no_connects.iter().map(|nc| nc.at).collect();
 
+    // One raw, not-yet-grouped record per placed `(symbol ...)` item --
+    // multi-unit means several of these can share one `reference` (e.g. a
+    // quad op-amp's gates A/B/C/D, each its own placed instance at its own
+    // position, see `SymbolInstance::unit`'s own doc). Collected first, then
+    // grouped by reference below, because a reference's `Part` needs to see
+    // *every* one of its placed units before its own pin list (every pin
+    // the real library declares, not just whichever unit happened to be
+    // read first) and per-pin world position can be resolved.
+    struct RawInstance {
+        lib_id: String,
+        at_um: Point,
+        rot: Millideg,
+        angle_deg: f64,
+        mirrored: bool,
+        mirror_y: bool,
+        unit: u32,
+        reference: String,
+        value: String,
+        footprint: String,
+        datasheet: String,
+    }
+    let mut raw: Vec<RawInstance> = Vec::new();
+    // `SCH_SYMBOL_INSTANCE`-style per-sheet-instance overrides -- only ever
+    // non-empty when this screen is placed by more than one `SheetInstance`
+    // (see `SymbolPathOverride`'s own doc). Parsed unconditionally here
+    // (not just when this read is part of a multi-file tree walk) because
+    // the data lives in *this* file's own `(symbol ... (instances ...))`
+    // blocks regardless of whether the caller goes on to assemble a tree
+    // around it -- a bare single-file `import_kicad_sch` on a screen that
+    // happens to be shared just carries overrides nothing yet queries.
+    let mut overrides: Vec<eda_model::ir::SymbolPathOverride> = Vec::new();
+
     for item in sexpr::find_all(root, "symbol") {
         let Some(lib_id) = sexpr::find(item, "lib_id").and_then(|l| sexpr::txt(l, 1)) else { continue };
         let Some(resolved) = lib_table.get(lib_id) else {
@@ -99,7 +132,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         let mirror_tag = sexpr::find(item, "mirror").and_then(|m| sexpr::txt(m, 1));
         let mirrored = mirror_tag == Some("y");
         let mirror_y = mirror_tag == Some("x");
-        let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0) as u32;
+        let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
         let at_um = Point { x: crate::import::mm_to_um(x_mm), y: crate::import::mm_to_um(y_mm) };
         let rot = import_rot_millideg_sch(angle_deg);
 
@@ -116,35 +149,138 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
             continue;
         }
 
-        let mut pins: Vec<Pin> = Vec::with_capacity(resolved.pins.len());
-        for p in &resolved.pins {
-            let world = transform_local_point(p.at, angle_deg, mirrored, mirror_y);
-            let at_pin = Point { x: at_um.x + crate::import::mm_to_um(world.x), y: at_um.y + crate::import::mm_to_um(world.y) };
-            pin_world.insert(format!("{reference}.{}", p.number), at_pin);
-            let kind = if nc_points.contains(&at_pin) { eda_model::PinKind::Nc } else { pin_kind_from_electrical_type(&p.electrical_type, &p.name) };
-            pins.push(Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind });
+        overrides.extend(parse_instance_overrides(item, at_um));
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, reference, value, footprint, datasheet });
+    }
+
+    // Group by reference, preserving first-sighting order (file order) so
+    // `parts`/`symbols` come out in a deterministic, re-reading-stable
+    // sequence -- `assign_missing_ids`/the exporter's own `symbols.sort_by`
+    // re-sort later, but a stable starting order still matters for any
+    // same-hash tie-break along the way.
+    let mut order: Vec<String> = Vec::new();
+    let mut by_ref: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, r) in raw.iter().enumerate() {
+        by_ref.entry(r.reference.clone()).or_default().push(i);
+        if !order.contains(&r.reference) {
+            order.push(r.reference.clone());
+        }
+    }
+
+    for reference in order {
+        let idxs = &by_ref[&reference];
+        // Every instance of one reference is the same real part (one
+        // footprint, several placed units -- this task's own framing), so
+        // they all resolve the same `lib_id`/library symbol; the first
+        // instance found stands in for the whole group as the "primary"
+        // (used for the `Part`-level Value/Footprint/Datasheet denormalized
+        // copies below, same precedent `derive_schematic`'s single-instance
+        // case already set).
+        let primary = &raw[idxs[0]];
+        let lib_id = primary.lib_id.clone();
+        let resolved = lib_table.get(lib_id.as_str());
+
+        let mut pins: Vec<Pin> = Vec::new();
+        if let Some(resolved) = resolved {
+            pins.reserve(resolved.pins.len());
+            for p in &resolved.pins {
+                // The specific placed instance that actually carries this
+                // pin's unit (or any instance at all, for a `unit == 0`
+                // pin common to every unit) -- `None` means this pin's own
+                // unit was never placed anywhere on the sheet at all (ERC's
+                // `missing_unit`/`missing_power_pin` is what flags that;
+                // the pin still belongs to the physical part, so it still
+                // gets a `Pin` entry here, just with no resolvable world
+                // position to seed `pin_world` with).
+                let owner = idxs.iter().map(|&i| &raw[i]).find(|r| p.unit == 0 || p.unit == r.unit);
+                let kind = match owner {
+                    Some(owner) => {
+                        let world = transform_local_point(p.at, owner.angle_deg, owner.mirrored, owner.mirror_y);
+                        let at_pin = Point { x: owner.at_um.x + crate::import::mm_to_um(world.x), y: owner.at_um.y + crate::import::mm_to_um(world.y) };
+                        pin_world.insert(format!("{reference}.{}", p.number), at_pin);
+                        if nc_points.contains(&at_pin) {
+                            eda_model::PinKind::Nc
+                        } else {
+                            pin_kind_from_electrical_type(&p.electrical_type, &p.name)
+                        }
+                    }
+                    None => pin_kind_from_electrical_type(&p.electrical_type, &p.name),
+                };
+                pins.push(Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind });
+            }
         }
         parts.push(Part {
             reference: reference.clone(),
             mpn: None,
             lcsc: None,
-            value: (!value.is_empty()).then(|| value.clone()),
+            value: (!primary.value.is_empty()).then(|| primary.value.clone()),
             package: None,
-            footprint: (!footprint.is_empty()).then(|| footprint.clone()),
-            symbol: Some(lib_id.to_string()),
-            datasheet: (!datasheet.is_empty()).then_some(datasheet.clone()),
+            footprint: (!primary.footprint.is_empty()).then(|| primary.footprint.clone()),
+            symbol: Some(lib_id.clone()),
+            datasheet: (!primary.datasheet.is_empty()).then(|| primary.datasheet.clone()),
             pins,
             body_um: None,
             edge: None,
         });
-        symbols.push(SymbolInstance { id: reference, at: at_um, rot, mirrored, mirror_y, lib_id: lib_id.to_string(), unit, value, footprint, datasheet });
+        for &i in idxs {
+            let r = &raw[i];
+            symbols.push(SymbolInstance {
+                id: reference.clone(),
+                at: r.at_um,
+                rot: r.rot,
+                mirrored: r.mirrored,
+                mirror_y: r.mirror_y,
+                lib_id: r.lib_id.clone(),
+                unit: r.unit,
+                value: r.value.clone(),
+                footprint: r.footprint.clone(),
+                datasheet: r.datasheet.clone(),
+            });
+        }
     }
 
     let mut wires: Vec<Wire> = Vec::new();
     for w in sexpr::find_all(root, "wire") {
         if let Some(pts) = import_pts(w) {
-            wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts });
+            wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: false });
         }
+    }
+    // `(bus ...)` (GAPS.md #20): the exact same `SCH_LINE`/`(pts ...)` shape
+    // as `(wire ...)`, just `LAYER_BUS` instead of `LAYER_WIRE` -- see
+    // `Wire::bus`'s own doc.
+    for b in sexpr::find_all(root, "bus") {
+        if let Some(pts) = import_pts(b) {
+            wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: true });
+        }
+    }
+
+    let mut bus_entries: Vec<eda_model::ir::BusEntry> = Vec::new();
+    for be in sexpr::find_all(root, "bus_entry") {
+        let Some(at) = sexpr::find(be, "at").and_then(point_mm) else { continue };
+        let Some(size) = sexpr::find(be, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))) else { continue };
+        let id = sexpr::find(be, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
+        bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::mm_to_um(size.0), y: crate::import::mm_to_um(size.1) } });
+    }
+
+    // `(bus_alias "NAME" (members "A" "B"))` (GAPS.md #20): real modern
+    // KiCad only *writes* these into the `.kicad_pro` project file this
+    // project has no reader/writer for at all -- this legacy per-screen
+    // `.kicad_sch` block is kept only for backward compatibility with
+    // older files (`SCH_IO_KICAD_SEXPR_PARSER::parseBusAlias`, itself still
+    // forwarding into the same project-wide list on import) -- see
+    // `BusAlias`'s own doc for why this project round-trips aliases through
+    // it instead. Collected here per-screen; `import_kicad_sch_tree`
+    // merges every screen's own list into one project-wide
+    // `Design::bus_aliases` the same way real KiCad's project-wide
+    // visibility already treats them.
+    let mut bus_aliases: Vec<eda_model::ir::BusAlias> = Vec::new();
+    for a in sexpr::find_all(root, "bus_alias") {
+        let Some(name) = sexpr::txt(a, 1).map(String::from) else { continue };
+        // `(members "A" "B" "C")` -- bare string atoms, not sub-lists, so
+        // this walks past the "members" tag itself (index 0) rather than
+        // using `find`/`find_all` (which only ever match nested lists).
+        let members = sexpr::find(a, "members").map(|m| m.iter().skip(1).filter_map(|s| s.text().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
+        bus_aliases.push(eda_model::ir::BusAlias { name, members });
     }
 
     let mut labels: Vec<eda_model::ir::NetLabel> = Vec::new();
@@ -183,17 +319,27 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
+        let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
         let file = sheet_property_text(s, "Sheetfile").unwrap_or_default();
         let at = sexpr::find(s, "at").and_then(point_mm).unwrap_or(SPoint::new(0.0, 0.0));
         let size = sexpr::find(s, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))).unwrap_or((0.0, 0.0));
-        sheets.push(SheetInstance { name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)) });
+        let pins = sexpr::find_all(s, "pin")
+            .filter_map(|p| {
+                let name = sexpr::txt(p, 1)?.to_string();
+                let shape = sexpr::txt(p, 2).map(label_shape_from_token).unwrap_or_default();
+                let at = sexpr::find(p, "at").and_then(point_mm)?;
+                let id = sexpr::find(p, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
+                Some(eda_model::ir::SheetPin { id, name, shape, at: mm_point_to_um(at) })
+            })
+            .collect();
+        sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)), pins });
         notes.sheets_not_descended += 1;
     }
 
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, erc_exclusions: Vec::new(), imported_from_kicad: true, title_block, sheets };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, erc_exclusions: Vec::new(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -202,11 +348,95 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         placement: None,
         routing: None,
         drawings: None,
-        footprint_library: None,
+        footprint_library: None, sheet_contents: None, bus_aliases,
     };
     design.assign_missing_ids();
 
     let model = ConstraintModel { parts, nets, symbols: lib_table.into_values().collect(), ..Default::default() };
+    Ok((design, model, notes))
+}
+
+/// `import_kicad_sch`'s multi-file counterpart (GAPS.md #6): reads `path`
+/// as the root sheet, then recursively follows every `(sheet ...)` it (and
+/// each sheet it finds) names, resolving each `Sheetfile` against *its own
+/// parent's* directory -- the convention every sheet-bearing fixture in
+/// KiCad's own QA corpus actually uses (confirmed directly: every
+/// `Sheetfile` found there is a bare filename sitting next to the sheet
+/// that names it, never a subpath) -- and folds the result into
+/// `Design::sheet_contents`. The *same* file named by more than one
+/// `SheetInstance` (KiCad's own shared-`SCH_SCREEN` case -- see that
+/// field's own doc) is read exactly once, no matter how many places name
+/// it or how deep the recursion that reaches it goes. A cycle (a sheet
+/// that, through some chain, names itself) is broken by the same
+/// "already read this file" set, matching `SCH_SHEET_PATH::TestForRecursion`'s
+/// own intent without reproducing its full path-based algorithm.
+///
+/// A sheet naming a file that does not exist, or does not parse, is left
+/// exactly as `import_kicad_sch` alone would leave it -- recorded (name/
+/// file/position/pins) but with no entry in `sheet_contents`, so a
+/// consumer that cares (`hierarchy::flatten`, `check_hierarchy`) can tell
+/// "placed but unreadable" apart from "placed and empty". `notes.
+/// sheets_not_descended` is recomputed at the end to count only sheets
+/// that are *still* un-descended after this whole walk, not the
+/// per-file-read tally `import_kicad_sch` itself would have left it at.
+pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
+    let text = std::fs::read_to_string(path).map_err(|e| vec![CheckResult::fail("kicad_import.read", path.display().to_string(), format!("{e}"))])?;
+    let (mut design, mut model, mut notes) = import_kicad_sch(&text)?;
+    let Some(dir) = path.parent() else { return Ok((design, model, notes)) };
+
+    let mut sheet_contents: BTreeMap<String, SchematicSection> = BTreeMap::new();
+    let mut read_files: BTreeSet<String> = BTreeSet::new();
+    let root_sheets: Vec<(String, std::path::PathBuf)> = design.schematic.as_ref().map(|s| s.sheets.iter().map(|sh| (sh.file.clone(), dir.to_path_buf())).collect()).unwrap_or_default();
+    let mut queue: Vec<(String, std::path::PathBuf)> = root_sheets;
+
+    while let Some((file, resolve_dir)) = queue.pop() {
+        if !read_files.insert(file.clone()) {
+            continue; // same screen reached again through another placement/path -- already have its content
+        }
+        let child_path = resolve_dir.join(&file);
+        let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
+        let Ok((child_design, child_model, child_notes)) = import_kicad_sch(&child_text) else { continue };
+        notes.unresolved_symbols += child_notes.unresolved_symbols;
+        model.parts.extend(child_model.parts);
+        model.symbols.extend(child_model.symbols);
+        // Bus aliases (GAPS.md #20) are project-wide, not per-screen (see
+        // `BusAlias`'s own doc) -- every sheet's own legacy `(bus_alias ...)`
+        // block feeds the *one* design-level list, by name, first
+        // definition wins (matching `SCHEMATIC::AddBusAlias`'s own
+        // same-name-same-members dedup intent closely enough: a real
+        // project only ever declares one alias per name in practice).
+        for alias in child_design.bus_aliases {
+            if !design.bus_aliases.iter().any(|a| a.name == alias.name) {
+                design.bus_aliases.push(alias);
+            }
+        }
+        if let Some(child_sch) = child_design.schematic {
+            let child_dir = child_path.parent().unwrap_or(&resolve_dir).to_path_buf();
+            for s in &child_sch.sheets {
+                queue.push((s.file.clone(), child_dir.clone()));
+            }
+            sheet_contents.insert(file, child_sch);
+        }
+    }
+
+    // Recount, over the whole final tree, rather than trust the
+    // per-file incremental tally `import_kicad_sch` left on each piece.
+    let mut still_not_descended = 0usize;
+    let mut all_screens: Vec<&SchematicSection> = Vec::new();
+    if let Some(root) = &design.schematic {
+        all_screens.push(root);
+    }
+    all_screens.extend(sheet_contents.values());
+    for screen in &all_screens {
+        for s in &screen.sheets {
+            if !sheet_contents.contains_key(&s.file) {
+                still_not_descended += 1;
+            }
+        }
+    }
+    notes.sheets_not_descended = still_not_descended;
+    design.sheet_contents = (!sheet_contents.is_empty()).then_some(sheet_contents);
+
     Ok((design, model, notes))
 }
 
@@ -233,6 +463,33 @@ fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
 /// A symbol instance's own `(property "Name" "Value" ...)` text, by name.
 fn property_text(item: &[Sexpr], name: &str) -> Option<String> {
     sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).map(String::from)
+}
+
+/// Every `(path "..." (reference "X") (unit N))` entry inside a placed
+/// symbol's own `(instances (project "..." (path ...) ...) ...)` block
+/// (real KiCad nests these under one or more `(project ...)` wrappers --
+/// walked here regardless of project name, matching real QA data's own
+/// inconsistent `""` vs the real project name across sibling symbols in
+/// the same file) -- the per-sheet-instance Reference/unit overrides
+/// `hierarchy::flatten` applies when a screen is placed more than once.
+/// `parent_sheet_instance_id` is the *last* component of the recorded path
+/// (`/<root-uuid>/<this-placement's-own-sheet-uuid>` -> the sheet uuid) --
+/// see `SymbolPathOverride`'s own doc for why only that one component is
+/// needed. A path with no components at all (shouldn't happen in a real
+/// file) is skipped, not guessed at.
+fn parse_instance_overrides(item: &[Sexpr], at: Point) -> Vec<eda_model::ir::SymbolPathOverride> {
+    let Some(instances) = sexpr::find(item, "instances") else { return Vec::new() };
+    let mut out = Vec::new();
+    for project in sexpr::find_all(instances, "project") {
+        for path in sexpr::find_all(project, "path") {
+            let Some(path_str) = sexpr::txt(path, 1) else { continue };
+            let Some(parent_sheet_instance_id) = path_str.rsplit('/').find(|s| !s.is_empty()) else { continue };
+            let Some(reference) = sexpr::find(path, "reference").and_then(|r| sexpr::txt(r, 1)) else { continue };
+            let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
+            out.push(eda_model::ir::SymbolPathOverride { at, parent_sheet_instance_id: parent_sheet_instance_id.to_string(), reference: reference.to_string(), unit });
+        }
+    }
+    out
 }
 
 fn sheet_property_text(item: &[Sexpr], name: &str) -> Option<String> {
@@ -692,5 +949,232 @@ mod tests {
     #[test]
     fn rejects_non_schematic_input() {
         assert!(import_kicad_sch("(kicad_pcb (version 1))").is_err());
+    }
+
+    /// GAPS.md #21: a multi-unit part -- one reference, two placed units,
+    /// each at its own position -- survives `export_kicad_sch` ->
+    /// `import_kicad_sch` as one `Part` with every one of the real
+    /// symbol's pins, and two `SymbolInstance`s that keep their own
+    /// `unit`/position apart (the exact bug `reconcile`'s own per-unit pin
+    /// filter, and this module's grouped-by-reference symbol loop, exist
+    /// to fix -- see both their own doc comments).
+    #[test]
+    fn multi_unit_symbol_round_trips_through_export_and_import() {
+        use eda_model::symbol::{LibPin, LibSymbol, SPoint};
+        let p = |number: &str, name: &str, etype: &str, x: f64, angle: f64, unit: u32| LibPin {
+            number: number.into(),
+            name: name.into(),
+            electrical_type: etype.into(),
+            shape: "line".into(),
+            at: SPoint::new(x, 1.27),
+            angle_deg: angle,
+            length_mm: 1.27,
+            unit,
+        };
+        let lib = LibSymbol {
+            lib_id: "test:DUAL".into(),
+            graphics: vec![],
+            pins: vec![
+                p("1", "A1", "input", -2.54, 0.0, 1),
+                p("2", "A2", "input", -2.54, 0.0, 1),
+                p("3", "Y1", "output", 2.54, 180.0, 1),
+                p("4", "A3", "input", -2.54, 0.0, 2),
+                p("5", "A4", "input", -2.54, 0.0, 2),
+                p("6", "Y2", "output", 2.54, 180.0, 2),
+            ],
+            power: false,
+            in_bom: true,
+            on_board: true,
+            datasheet: String::new(),
+            description: "Dual gate".into(),
+            reference_prefix: "U".into(),
+            unit_count: 2,
+        };
+        let u1 = part(
+            "U1",
+            vec![
+                pin("1", "A1", PinKind::Signal),
+                pin("2", "A2", PinKind::Signal),
+                pin("3", "Y1", PinKind::Signal),
+                pin("4", "A3", PinKind::Signal),
+                pin("5", "A4", PinKind::Signal),
+                pin("6", "Y2", PinKind::Signal),
+            ],
+        );
+        let model = ConstraintModel { parts: vec![u1], symbols: vec![lib], ..Default::default() };
+
+        let sym = |unit: u32, x: i64| SymbolInstance { id: "U1".into(), at: Point { x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new() };
+        let sch = SchematicSection {
+            symbols: vec![sym(1, 0), sym(2, 50_000)],
+            wires: vec![],
+            labels: vec![],
+            texts: vec![],
+            power_symbols: vec![],
+            no_connects: vec![], bus_entries: vec![],
+            erc_exclusions: vec![],
+            title_block: None,
+            sheets: vec![], instance_overrides: vec![],
+            imported_from_kicad: false,
+        };
+        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![] };
+
+        let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "multi_unit" }).unwrap();
+        assert!(text.contains("(unit 1)"), "{text}");
+        assert!(text.contains("(unit 2)"), "{text}");
+
+        let (back_design, back_model, notes) = import_kicad_sch(&text).expect("round trips");
+        assert_eq!(notes.unresolved_symbols, 0);
+        let back_sch = back_design.schematic.expect("schematic section");
+        assert_eq!(back_sch.symbols.len(), 2, "both placed units survive the round trip");
+        assert!(back_sch.symbols.iter().all(|s| s.id == "U1"));
+        let units: std::collections::BTreeSet<u32> = back_sch.symbols.iter().map(|s| s.unit).collect();
+        assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
+
+        // One Part, every one of the real symbol's 6 pins -- not split per
+        // unit, not duplicated (this task's own "one part, one footprint,
+        // several placed units" framing).
+        assert_eq!(back_model.parts.len(), 1);
+        assert_eq!(back_model.parts[0].pins.len(), 6);
+
+        // Unit 2's own pins must resolve at unit 2's own position, not
+        // unit 1's -- the exact bug a naive "position every pin at
+        // whichever instance's own id we see last" implementation would
+        // get wrong.
+        let unit1 = back_sch.symbols.iter().find(|s| s.unit == 1).unwrap();
+        let unit2 = back_sch.symbols.iter().find(|s| s.unit == 2).unwrap();
+        assert_eq!(unit1.at.x, 0);
+        assert_eq!(unit2.at.x, 50_000);
+    }
+
+    /// GAPS.md #6: `import_kicad_sch_tree` actually follows a `(sheet ...)`
+    /// placement onto disk and reads the file it names, unlike bare
+    /// `import_kicad_sch` (which only ever records that a sheet was there).
+    /// The child file here is this crate's own ordinary export (already
+    /// covered by `parses_our_own_export`); this test is about the
+    /// multi-file *walk* on top of it, not re-proving single-file import.
+    #[test]
+    fn import_kicad_sch_tree_descends_into_a_sibling_sheet_file() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_sch_tree_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let child_model = ConstraintModel { parts: vec![part("R1", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)])], ..Default::default() };
+        let child_design = derive_schematic(&child_model, &EngineOptions::new(1, "tree_child")).unwrap();
+        let child_text = export_kicad_sch(&child_design, &child_model, &ExportMeta { date: "2026-01-01", title: "child" }).unwrap();
+        std::fs::write(dir.join("child.kicad_sch"), child_text).unwrap();
+
+        let root_text = r#"(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "11111111-1111-1111-1111-111111111111")
+	(paper "A4")
+	(sheet
+		(at 100 100) (size 20 20)
+		(stroke (width 0.1524) (type solid))
+		(fill (color 255 255 194 1.0000))
+		(uuid "22222222-2222-2222-2222-222222222222")
+		(property "Sheetname" "child" (at 100 99 0) (effects (font (size 1.27 1.27))))
+		(property "Sheetfile" "child.kicad_sch" (at 100 121 0) (effects (font (size 1.27 1.27))))
+		(pin "AD0" passive
+			(at 100 110 180)
+			(uuid "33333333-3333-3333-3333-333333333333")
+			(effects (font (size 1.27 1.27)) (justify left)))
+		(instances (project "test" (path "/11111111-1111-1111-1111-111111111111" (page "2")))))
+	(sheet_instances (path "/" (page "1"))))
+"#;
+        std::fs::write(dir.join("root.kicad_sch"), root_text).unwrap();
+
+        let (design, model, notes) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).expect("tree import succeeds");
+        assert_eq!(notes.sheets_not_descended, 0, "the one sheet named was successfully read");
+        let root_sch = design.schematic.expect("root schematic");
+        assert_eq!(root_sch.sheets.len(), 1);
+        assert_eq!(root_sch.sheets[0].file, "child.kicad_sch");
+        assert_eq!(root_sch.sheets[0].pins.len(), 1);
+        assert_eq!(root_sch.sheets[0].pins[0].name, "AD0");
+
+        let screens = design.sheet_contents.expect("sheet_contents populated");
+        let child = screens.get("child.kicad_sch").expect("child content present");
+        assert_eq!(child.symbols.len(), 1);
+        assert_eq!(child.symbols[0].id, "R1");
+        assert!(model.parts.iter().any(|p| p.reference == "R1"), "child's own Part folded into the combined model");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Real KiCad data, not a hand-built fixture: `topology_mismatch.kicad_sch`
+    /// places `i2c_thingy.kicad_sch` *twice* (ch0/ch1), each instance
+    /// giving its own shared symbols a different Reference via per-path
+    /// `(instances (project ... (path ...)))` overrides (confirmed directly
+    /// against the file this session's own research read: the same drawn
+    /// `Device:R`/`Interface_Expansion:MAX7325AEG+` show up as "R1"/"U1"
+    /// through one sheet path and "R2"/"U2" through the other). Skipped
+    /// gracefully, like every other QA-corpus test in this crate, when the
+    /// corpus isn't present in this environment.
+    #[test]
+    fn real_qa_shared_screen_gets_a_different_reference_per_sheet_instance() {
+        let root = std::path::PathBuf::from("/private/tmp/claude-501/-Users-juanantonioluera-ws/8eb77140-1019-4605-b5f4-960e15f5bf6d/scratchpad/kicad_qa_boards/qa/data/pcbnew/issue21739/topology_mismatch.kicad_sch");
+        if !root.exists() {
+            eprintln!("QA corpus not found at {}; skipping", root.display());
+            return;
+        }
+        let (design, _model, notes) = import_kicad_sch_tree(&root).expect("real QA file imports");
+        assert_eq!(notes.sheets_not_descended, 0, "both ch0/ch1 placements of i2c_thingy.kicad_sch are the same file, read once");
+        assert_eq!(design.schematic.as_ref().expect("root schematic").sheets.len(), 2, "ch0 and ch1");
+        {
+            let screens = design.sheet_contents.as_ref().expect("sheet_contents populated");
+            let child = screens.get("i2c_thingy.kicad_sch").expect("child content present");
+            assert!(!child.instance_overrides.is_empty(), "a twice-placed screen must carry per-instance overrides");
+        }
+
+        // Flatten and confirm BOTH references appear with real pins -- the
+        // override mechanism actually produced two distinct components,
+        // not one reference silently shadowing the other.
+        let model = _model;
+        let (flat, _nets) = crate::hierarchy::flatten(&design, &model).expect("root exists");
+        let refs: std::collections::BTreeSet<&str> = flat.symbols.iter().map(|s| s.id.as_str()).collect();
+        assert!(refs.contains("R1") && refs.contains("R2"), "both R1 and R2 (one resistor, two sheet instances) must appear: {refs:?}");
+        assert!(refs.contains("U1") && refs.contains("U2"), "both U1 and U2 (one port expander, two sheet instances) must appear: {refs:?}");
+    }
+
+    /// A bus wire, a bus entry, and a bus alias (GAPS.md #20) all survive
+    /// `export_kicad_sch` -> `import_kicad_sch` -- no real symbols/parts
+    /// needed, this is purely about the three new sexpr shapes
+    /// (`crate::lib`'s writer / this module's own `(bus ...)`/`(bus_entry
+    /// ...)`/`(bus_alias ...)` readers above) agreeing with each other.
+    #[test]
+    fn bus_wire_entry_and_alias_round_trip_through_export_and_import() {
+        let bus_pt = Point { x: 10_000, y: 10_000 };
+        let net_pt = Point { x: 12_540, y: 12_540 };
+        let sch = SchematicSection {
+            wires: vec![Wire { id: String::new(), net: "DATA[0..3]".into(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, bus_pt], bus: true }],
+            bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540, y: 2_540 } }],
+            labels: vec![eda_model::ir::NetLabel { id: String::new(), net: "DATA2".into(), at: net_pt, kind: LabelKind::Local }],
+            ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
+        };
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(sch),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![eda_model::ir::BusAlias { name: "USB".into(), members: vec!["D+".into(), "D-".into()] }],
+        };
+        let model = ConstraintModel::default();
+        let text = crate::export_kicad_sch(&design, &model, &crate::ExportMeta { date: "2026-01-01", title: "bus test" }).expect("exports cleanly with zero symbols");
+
+        let (reimported, _model, _notes) = import_kicad_sch(&text).expect("re-imports cleanly");
+        let sch = reimported.schematic.expect("schematic present");
+        assert_eq!(sch.wires.len(), 1);
+        assert!(sch.wires[0].bus, "the bus wire's own layer flag must survive the round trip");
+        assert_eq!(sch.wires[0].pts, vec![Point { x: 0, y: 10_000 }, bus_pt]);
+        assert_eq!(sch.bus_entries.len(), 1);
+        assert_eq!(sch.bus_entries[0].at, bus_pt);
+        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540, y: 2_540 });
+        assert_eq!(reimported.bus_aliases.len(), 1);
+        assert_eq!(reimported.bus_aliases[0].name, "USB");
+        assert_eq!(reimported.bus_aliases[0].members, vec!["D+".to_string(), "D-".to_string()]);
     }
 }

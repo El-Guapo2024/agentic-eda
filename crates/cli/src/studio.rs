@@ -516,7 +516,14 @@ fn handle(
             serve_3dmodel(stream, name)
         }
         ("GET", "/api/schematic") => {
-            let v = schematic_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `?sheet=<id>/<id>/...`: a `/`-joined path of `SheetInstance::id`s
+            // from the root down to whichever sheet the Hierarchy panel has
+            // currently navigated into (GAPS.md #6) -- omitted or empty means
+            // the root sheet, exactly as every board before hierarchy support
+            // existed already behaved.
+            let query = target.split('?').nth(1).unwrap_or("");
+            let sheet_path = query.split('&').find_map(|kv| kv.strip_prefix("sheet=")).unwrap_or("");
+            let v = schematic_json(dir, sheet_path).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/symbol_library") => {
@@ -907,35 +914,92 @@ fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String
     Ok(svg)
 }
 
+/// Walks `sheet_path` (`"<id>/<id>/..."`, root when empty) down from
+/// `design`'s own root sheet through `design.sheet_contents` (GAPS.md #6) --
+/// a sheet-instance id not found at some level, or naming a file this
+/// design never descended into, falls back to whatever level was last
+/// successfully resolved (the Hierarchy panel's own stale-path safety net:
+/// a board reloaded after an edit that removed a sheet should not just
+/// error the whole schematic view out). Returns the resolved section
+/// alongside the `(id, name)` breadcrumb actually reached, which may be
+/// shorter than the requested path when it had to fall back.
+fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model::ir::SchematicSection, Vec<(String, String)>) {
+    let mut current = design.schematic.clone().unwrap_or(eda_model::ir::SchematicSection {
+        power_symbols: vec![],
+        no_connects: vec![], bus_entries: vec![],
+        erc_exclusions: vec![],
+        imported_from_kicad: false,
+        title_block: None,
+        sheets: vec![],
+        instance_overrides: vec![],
+        symbols: Vec::new(),
+        wires: Vec::new(),
+        labels: Vec::new(),
+        texts: Vec::new(),
+    });
+    let mut breadcrumb = Vec::new();
+    for id in sheet_path.split('/').filter(|s| !s.is_empty()) {
+        let Some(sheet) = current.sheets.iter().find(|s| s.id == id) else { break };
+        let Some(child) = design.sheet_contents.as_ref().and_then(|screens| screens.get(&sheet.file)) else { break };
+        breadcrumb.push((sheet.id.clone(), sheet.name.clone()));
+        current = child.clone();
+    }
+    (current, breadcrumb)
+}
+
 /// The same schematic `schematic_svg` draws, but as structured JSON for
 /// the browser UI's own KiCad-style renderer instead of one baked image:
 /// each symbol instance plus its part's pins (a `SymbolInstance` alone
 /// says nothing about what it draws), every wire, and every net label.
-/// No second cache next to `schematic_svg`'s -- these boards are small,
-/// so deriving again on a cache miss costs nothing worth guarding.
-fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+/// `sheet_path`: see `resolve_sheet`'s own doc -- empty/root for every
+/// design before hierarchy support existed, same response shape as always
+/// for that case (plus the two new, always-present `sheets`/`sheet_path`
+/// fields, empty arrays for a plain single-sheet design). No second cache
+/// next to `schematic_svg`'s -- these boards are small, so deriving again
+/// on a cache miss costs nothing worth guarding.
+fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    let sch = match design.schematic {
-        Some(s) => s,
-        None => {
+    let (sch, breadcrumb) = if design.schematic.is_some() {
+        resolve_sheet(&design, sheet_path)
+    } else {
+        (
             eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection {
                 power_symbols: vec![],
-                no_connects: vec![],
+                no_connects: vec![], bus_entries: vec![],
                 erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
+                instance_overrides: vec![],
                 symbols: Vec::new(),
                 wires: Vec::new(),
                 labels: Vec::new(),
                 texts: Vec::new(),
-            })
-        }
+            }),
+            Vec::new(),
+        )
     };
     let symbols: Vec<Value> = sch
         .symbols
         .iter()
         .map(|s| {
             let part = model.part(&s.id);
+            // Multi-unit: this instance's own pin list is only the pins
+            // that belong to its unit (or a `unit == 0` common-to-every-
+            // unit pin) -- a sibling instance of the same reference, placed
+            // for a different unit, carries the rest. Falls open (every
+            // part.pins entry) when no real library symbol resolves one of
+            // them by number, same "can't tell, so don't filter" fallback
+            // `eda_engine::geometry`'s own unit-aware functions use.
+            let resolved = part.and_then(|p| model.real_symbol_of(&s.lib_id, p));
+            let pins: Vec<Value> = part
+                .map(|p| {
+                    p.pins
+                        .iter()
+                        .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
+                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind }))
+                        .collect()
+                })
+                .unwrap_or_default();
             json!({
                 "id": s.id,
                 "at": [s.at.x, s.at.y],
@@ -958,16 +1022,25 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 // the synthetic "eda:<id>" for a part with no resolved real
                 // symbol) -- key into "lib_symbols" below for its graphics.
                 "lib_id": s.lib_id,
+                // Which unit (1-based) of a multi-unit symbol this placed
+                // instance is -- `libSymbol.ts`'s own `resolveLibSymbol`
+                // already filters `lib_symbols[lib_id]`'s graphics/pins by
+                // this field (`visibleFor`), so sending it is what actually
+                // turns that pre-existing renderer plumbing on.
+                "unit": s.unit,
                 "value": if s.value.is_empty() { part.and_then(|p| p.value.clone()) } else { Some(s.value.clone()) },
                 "footprint": if s.footprint.is_empty() { None } else { Some(s.footprint.clone()) },
                 "datasheet": if s.datasheet.is_empty() { None } else { Some(s.datasheet.clone()) },
                 "mpn": part.and_then(|p| p.mpn.clone()),
                 "package": part.and_then(|p| p.package.clone()),
-                "pins": part.map(|p| p.pins.iter().map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind })).collect::<Vec<_>>()).unwrap_or_default(),
+                "pins": pins,
             })
         })
         .collect();
-    let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect();
+    let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus })).collect();
+    // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
+    // diagonal stub on canvas.
+    let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y] })).collect();
     let labels: Vec<Value> = sch
         .labels
         .iter()
@@ -1015,6 +1088,25 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         .collect::<serde_json::Map<_, _>>()
         .into();
 
+    // GAPS.md #6: the currently-displayed sheet's own child placements
+    // (for the Hierarchy panel's tree and for drawing a child sheet as a
+    // labeled box on the canvas) and the breadcrumb that reached here (for
+    // "Leave Sheet"/an up-the-tree display) -- both empty for the
+    // overwhelmingly common single-sheet design, same as `sheets`/
+    // `instance_overrides` already default to empty everywhere else.
+    let sheets: Vec<Value> = sch
+        .sheets
+        .iter()
+        .map(|s| {
+            json!({
+                "id": s.id, "name": s.name, "file": s.file,
+                "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
+                "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    let sheet_path: Vec<Value> = breadcrumb.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect();
+
     Ok(json!({
         "symbols": symbols,
         "wires": wires,
@@ -1022,8 +1114,11 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         "texts": texts,
         "power_symbols": power_symbols,
         "no_connects": no_connects,
+        "bus_entries": bus_entries,
         "title_block": title_block,
         "lib_symbols": lib_symbols,
+        "sheets": sheets,
+        "sheet_path": sheet_path,
     }))
 }
 
@@ -1075,6 +1170,11 @@ fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 "lib_id": s.lib_id,
                 "description": s.description,
                 "reference_prefix": if s.reference_prefix.is_empty() { "U" } else { s.reference_prefix.as_str() },
+                // Multi-unit: how many units (`SymbolChooserDialog`'s own
+                // unit picker, once a part names one) this library symbol
+                // declares -- 1 for every single-unit symbol, unchanged
+                // from before this field existed.
+                "unit_count": s.unit_count,
             })
         })
         .collect();
@@ -1400,4 +1500,58 @@ fn fill_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         })
         .collect();
     Ok(json!({ "zones": zones_json }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
+
+    fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets, instance_overrides: vec![], imported_from_kicad: false }
+    }
+
+    fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {
+        eda_model::ir::Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(root),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: (!screens.is_empty()).then_some(screens),
+            bus_aliases: vec![],
+        }
+    }
+
+    #[test]
+    fn empty_sheet_path_resolves_to_the_root() {
+        let d = design(sch(vec![]), std::collections::BTreeMap::new());
+        let (resolved, breadcrumb) = resolve_sheet(&d, "");
+        assert_eq!(resolved.sheets.len(), 0);
+        assert!(breadcrumb.is_empty());
+    }
+
+    #[test]
+    fn a_real_sheet_id_descends_and_builds_the_breadcrumb() {
+        let placement = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![] };
+        let child = sch(vec![]);
+        let mut screens = std::collections::BTreeMap::new();
+        screens.insert("child.kicad_sch".to_string(), child);
+        let d = design(sch(vec![placement]), screens);
+
+        let (resolved, breadcrumb) = resolve_sheet(&d, "s1");
+        assert_eq!(resolved.sheets.len(), 0, "the child has no sheets of its own");
+        assert_eq!(breadcrumb, vec![("s1".to_string(), "child".to_string())]);
+    }
+
+    #[test]
+    fn an_unknown_sheet_id_falls_back_to_the_last_good_level_instead_of_erroring() {
+        let d = design(sch(vec![]), std::collections::BTreeMap::new());
+        let (resolved, breadcrumb) = resolve_sheet(&d, "nonexistent");
+        assert_eq!(resolved.sheets.len(), 0, "falls back to the root, not a panic/error");
+        assert!(breadcrumb.is_empty());
+    }
 }

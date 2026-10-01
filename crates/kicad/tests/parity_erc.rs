@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use eda_engine::{derive_schematic, EngineOptions};
-use eda_kicad::{check_erc, export_kicad_sch, import_kicad_sch, ExportMeta};
+use eda_kicad::{check_erc, export_kicad_sch, import_kicad_sch, import_kicad_sch_tree, ExportMeta};
 use eda_model::ir::Design;
 use eda_model::{CheckStatus, ConstraintModel};
 
@@ -241,8 +241,16 @@ fn process_prebuilt_sch(cli: &Path, name: &'static str, sch: &Path) -> BoardResu
 fn process_qa_sch(cli: &Path, sch: &Path) -> BoardResult {
     let name = sch.strip_prefix(sch.ancestors().nth(2).unwrap_or(sch)).unwrap_or(sch).display().to_string();
     let result = catch(AssertUnwindSafe(|| {
-        let text = std::fs::read_to_string(sch).unwrap_or_else(|e| panic!("read {}: {e}", sch.display()));
-        let (design, model, _notes) = import_kicad_sch(&text).unwrap_or_else(|e| panic!("import_kicad_sch failed: {e:?}"));
+        // GAPS.md #6/#20: `import_kicad_sch_tree` (not bare `import_kicad_sch`)
+        // so a root sheet with its own `(sheet ...)` placements actually
+        // descends into them -- a no-op for every leaf-only board (the
+        // overwhelming majority of the corpus), since a board with no
+        // sheets of its own tree-walks to nothing beyond itself either way.
+        // `check_erc` itself flattens the result before judging it (see
+        // `check_erc`'s own doc), so this one swap is the whole change
+        // needed for the QA-corpus side of this measurement to see real
+        // multi-sheet connectivity instead of a single, un-descended sheet.
+        let (design, model, _notes) = import_kicad_sch_tree(sch).unwrap_or_else(|e| panic!("import_kicad_sch_tree failed: {e:?}"));
         let kicad_report = run_kicad_erc(cli, sch);
         let ours = check_erc(&design, &model);
         compare(&kicad_report, &ours)

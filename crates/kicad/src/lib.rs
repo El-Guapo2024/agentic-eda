@@ -42,7 +42,13 @@ mod erc;
 pub use erc::{check_erc, check_erc_excluding, Exclusions};
 
 mod sch_import;
-pub use sch_import::{import_kicad_sch, pin_kind_from_electrical_type, reconcile, transform_local_point};
+pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
+
+mod hierarchy;
+pub use hierarchy::flatten as flatten_hierarchy;
+
+mod bus;
+pub use bus::{expand_bus_members, is_bus_name};
 
 const STUB_MM: f64 = 1.27;
 
@@ -67,7 +73,10 @@ pub fn export_kicad_sch(
     let parts_by_ref: BTreeMap<&str, &Part> = model.parts.iter().map(|p| (p.reference.as_str(), p)).collect();
 
     let mut symbols: Vec<&SymbolInstance> = sch.symbols.iter().collect();
-    symbols.sort_by(|a, b| a.id.cmp(&b.id));
+    // (id, unit): several instances now legitimately share one id (a
+    // multi-unit part's placed units), so a secondary key is needed for a
+    // deterministic order between them.
+    symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
     for sym in &symbols {
         if !parts_by_ref.contains_key(sym.id.as_str()) {
             errors.push(CheckResult::fail("kicad.unknown_part", sym.id.clone(), "symbol id has no matching part in the constraint model"));
@@ -134,8 +143,18 @@ pub fn export_kicad_sch(
     // ---- lib_symbols ----
     writeln!(out, "\t(lib_symbols").unwrap();
     for lib_id in &lib_ids {
-        if let Some((part, sym)) = symbols.iter().find_map(|s| (sym_lib_id(s) == *lib_id).then(|| (parts_by_ref[s.id.as_str()], *s))) {
-            write_regular_lib_symbol(&mut out, lib_id, sym, part, model);
+        if let Some((part, representative)) = symbols.iter().find_map(|s| (sym_lib_id(s) == *lib_id).then(|| (parts_by_ref[s.id.as_str()], *s))) {
+            // Every placed unit of *this one reference* (not just the first
+            // instance this lib_id happened to match) -- a multi-unit part
+            // embeds all of them as sibling `_<unit>_1` sub-blocks of the
+            // same `lib_symbols` entry, see `write_regular_lib_symbol`'s own
+            // doc. Two different references sharing one real `lib_id`
+            // (`CIN`/`COUT` both `Device:C`) still collapse onto this same
+            // representative's own transform, the pre-existing simplification
+            // this exporter has always made for that case (see `bare_name`'s
+            // own doc below) -- multi-unit does not make that any worse.
+            let instances: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == representative.id).copied().collect();
+            write_regular_lib_symbol(&mut out, lib_id, &instances, part, model);
         } else {
             // A power symbol (never a bare part): `model.symbol_of` always
             // resolves it, real library first, then `symbol::builtin`'s
@@ -158,7 +177,7 @@ pub fn export_kicad_sch(
         let x = mm(sym.at.x);
         let y = mm(sym.at.y);
         let uuid = duid(&format!("sym:{}", sym.id));
-        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit 1)", sexpr_str(&lib_id)).unwrap();
+        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit {})", sexpr_str(&lib_id), sym.unit).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         let value = if !sym.value.is_empty() { sym.value.as_str() } else { part.value.as_deref().unwrap_or(&sym.id) };
@@ -172,7 +191,13 @@ pub fn export_kicad_sch(
         write_property(&mut out, "Value", value, 0.0, 2.0, false);
         write_property(&mut out, "Footprint", footprint, 0.0, 4.0, true);
         write_property(&mut out, "Datasheet", datasheet, 0.0, 6.0, true);
-        for pin in &part.pins {
+        // Only this instance's own unit's pins (plus any `unit == 0`
+        // common-to-every-unit pin) -- a multi-unit instance's pin-uuid
+        // list must not claim pins that are actually drawn on a sibling
+        // placed unit elsewhere on the sheet. A single-unit part (no real
+        // symbol resolved, or one with exactly one unit) has every pin
+        // match trivially, same list as before this field existed.
+        for pin in part.pins.iter().filter(|pin| resolved.as_ref().and_then(|s| s.pin_by_number(&pin.number)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit)) {
             let pin_uuid = duid(&format!("pin:{}:{}", sym.id, pin.number));
             writeln!(out, "\t\t(pin {} (uuid \"{pin_uuid}\"))", sexpr_str(&pin.number)).unwrap();
         }
@@ -180,7 +205,7 @@ pub fn export_kicad_sch(
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
         writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\"").unwrap();
         writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&sym.id)).unwrap();
-        writeln!(out, "\t\t\t\t\t(unit 1)").unwrap();
+        writeln!(out, "\t\t\t\t\t(unit {})", sym.unit).unwrap();
         writeln!(out, "\t\t\t\t)").unwrap();
         writeln!(out, "\t\t\t)").unwrap();
         writeln!(out, "\t\t)").unwrap();
@@ -212,20 +237,59 @@ pub fn export_kicad_sch(
         writeln!(out, "\t)").unwrap();
     }
 
-    // ---- wires (each polyline segment as one KiCad wire) ----
+    // ---- wires and bus wires (GAPS.md #20 -- `SCH_LINE`'s own `LAYER_WIRE`
+    // vs `LAYER_BUS`, the same shape either way) -- each polyline segment
+    // as one KiCad wire/bus ----
     for (i, w) in wires.iter().enumerate() {
+        let tag = if w.bus { "bus" } else { "wire" };
         for (j, pair) in w.pts.windows(2).enumerate() {
             let x1 = mm(pair[0].x);
             let y1 = mm(pair[0].y);
             let x2 = mm(pair[1].x);
             let y2 = mm(pair[1].y);
-            let uuid = duid(&format!("wire:{}:{}:{}", w.net, i, j));
-            writeln!(out, "\t(wire").unwrap();
+            let uuid = duid(&format!("{tag}:{}:{}:{}", w.net, i, j));
+            writeln!(out, "\t({tag}").unwrap();
             writeln!(out, "\t\t(pts (xy {x1} {y1}) (xy {x2} {y2}))").unwrap();
             writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
             writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
             writeln!(out, "\t)").unwrap();
         }
+    }
+
+    // ---- bus entries (GAPS.md #20) ----
+    let mut bus_entries: Vec<&eda_model::ir::BusEntry> = sch.bus_entries.iter().collect();
+    bus_entries.sort_by(|a, b| a.at.cmp(&b.at));
+    for be in &bus_entries {
+        let x = mm(be.at.x);
+        let y = mm(be.at.y);
+        let dx = mm(be.size.x);
+        let dy = mm(be.size.y);
+        let uuid = if be.id.is_empty() { duid(&format!("bent:{}:{}", be.at.x, be.at.y)) } else { be.id.clone() };
+        writeln!(out, "\t(bus_entry (at {x} {y}) (size {dx} {dy})").unwrap();
+        writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+
+    // ---- bus aliases (GAPS.md #20) -- see `BusAlias`'s own doc for why
+    // this legacy per-screen block (not a `.kicad_pro` project file this
+    // project has no writer for) is where this project round-trips them.
+    // `export_kicad_sch` has no way to tell "am I the root of a tree
+    // export" from its own arguments alone (`export_kicad_sch_tree` clones
+    // the *whole* design, `bus_aliases` included, into every child screen's
+    // own call) -- rather than invent one, every screen's own file just
+    // carries the full project-wide list. Harmless duplication: real
+    // project-wide *visibility* never depended on which screen's text
+    // "owns" an alias, and `sch_import::import_kicad_sch_tree`'s own
+    // by-name merge on the way back in already de-duplicates it.
+    for alias in &design.bus_aliases {
+        writeln!(out, "\t(bus_alias {}", sexpr_str(&alias.name)).unwrap();
+        write!(out, "\t\t(members").unwrap();
+        for m in &alias.members {
+            write!(out, " {}", sexpr_str(m)).unwrap();
+        }
+        writeln!(out, ")").unwrap();
+        writeln!(out, "\t)").unwrap();
     }
 
     // ---- junctions: every point where 3+ same-net wire-segment endpoints
@@ -290,6 +354,41 @@ pub fn export_kicad_sch(
         writeln!(out, "\t)").unwrap();
     }
 
+    // ---- child hierarchical sheets (GAPS.md #6), with their own pins ----
+    let mut sheets: Vec<&eda_model::ir::SheetInstance> = sch.sheets.iter().collect();
+    sheets.sort_by(|a, b| (&a.file, a.at).cmp(&(&b.file, b.at)));
+    for s in &sheets {
+        let x = mm(s.at.x);
+        let y = mm(s.at.y);
+        let w = mm(s.size.0);
+        let h = mm(s.size.1);
+        let uuid = if s.id.is_empty() { duid(&format!("sheet:{}:{}", s.file, s.at.x)) } else { s.id.clone() };
+        writeln!(out, "\t(sheet").unwrap();
+        writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
+        writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
+        writeln!(out, "\t\t(fill (color 255 255 194 1.0000))").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        let name_y = mm(s.at.y - 600);
+        let file_y = mm(s.at.y + s.size.1 + 600);
+        writeln!(out, "\t\t(property \"Sheetname\" {} (at {x} {name_y} 0) (effects (font (size 1.27 1.27))))", sexpr_str(&s.name)).unwrap();
+        writeln!(out, "\t\t(property \"Sheetfile\" {} (at {x} {file_y} 0) (effects (font (size 1.27 1.27))))", sexpr_str(&s.file)).unwrap();
+        for p in &s.pins {
+            let px = mm(p.at.x);
+            let py = mm(p.at.y);
+            let pin_uuid = if p.id.is_empty() { duid(&format!("sheetpin:{uuid}:{}", p.name)) } else { p.id.clone() };
+            writeln!(out, "\t\t(pin {} {}", sexpr_str(&p.name), label_shape_token(p.shape)).unwrap();
+            writeln!(out, "\t\t\t(at {px} {py} 0)").unwrap();
+            writeln!(out, "\t\t\t(uuid \"{pin_uuid}\")").unwrap();
+            writeln!(out, "\t\t\t(effects (font (size 1.27 1.27)) (justify left)))").unwrap();
+        }
+        writeln!(out, "\t\t(instances").unwrap();
+        writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
+        writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\" (page \"1\"))").unwrap();
+        writeln!(out, "\t\t\t)").unwrap();
+        writeln!(out, "\t\t)").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+
     // ---- sheet instances (required by KiCad 9 for a valid project-less sheet) ----
     writeln!(out, "\t(sheet_instances").unwrap();
     writeln!(out, "\t\t(path \"/\" (page \"1\"))").unwrap();
@@ -297,6 +396,30 @@ pub fn export_kicad_sch(
     writeln!(out, "\t(embedded_fonts no)").unwrap();
 
     writeln!(out, ")").unwrap();
+    Ok(out)
+}
+
+/// `export_kicad_sch`'s multi-file counterpart (GAPS.md #6): the root
+/// (`root_filename`, `design.schematic`) plus one file per
+/// `design.sheet_contents` entry, each written through the exact same
+/// per-screen `export_kicad_sch` -- a screen's own `(sheet ...)` placements
+/// (if it has grandchildren) are written by that same call, since
+/// `sch.sheets` is read identically regardless of whether the caller is
+/// the root or some other screen. Returns `(filename, text)` pairs rather
+/// than doing any filesystem I/O itself, same convention `export_kicad_sch`
+/// already set (the caller decides where/whether to write them -- see
+/// `crate::sch_import::import_kicad_sch_tree`'s own doc for the inverse
+/// direction's equivalent "caller resolves paths" choice).
+pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &ExportMeta, root_filename: &str) -> Result<Vec<(String, String)>, Vec<CheckResult>> {
+    let mut out = vec![(root_filename.to_string(), export_kicad_sch(design, model, meta)?)];
+    if let Some(screens) = &design.sheet_contents {
+        for (file, sch) in screens {
+            let child_design = Design { schematic: Some(sch.clone()), sheet_contents: None, nets: None, ..design.clone() };
+            let title = file.strip_suffix(".kicad_sch").unwrap_or(file);
+            let child_meta = ExportMeta { date: meta.date, title };
+            out.push((file.clone(), export_kicad_sch(&child_design, model, &child_meta)?));
+        }
+    }
     Ok(out)
 }
 
@@ -417,20 +540,25 @@ fn baked_graphic(g: &eda_model::SymbolGraphic, sym: &SymbolInstance, width_um: f
 /// from the *same* resolved symbol (see `write_schematic`'s own call),
 /// so a wire's stub tip and this function's own drawn pin position can
 /// never disagree about where a pin actually is.
-fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance, part: &Part, model: &ConstraintModel) {
+/// `instances`: every placed `SymbolInstance` on the sheet that shares the
+/// representative reference this `lib_id` was first seen on (always exactly
+/// one for a single-unit part; several, one per placed unit, for a
+/// multi-unit one -- see this function's own per-unit loop below).
+fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&SymbolInstance], part: &Part, model: &ConstraintModel) {
     let resolved = model.real_symbol_of(lib_id, part);
-    let (width, height) = eda_engine::geometry::node_size(part, resolved.as_ref());
-    let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved.as_ref());
-    // This part's box corner in *library* frame -- see `baked_real_point`'s
-    // doc comment. Only meaningful when `resolved` is `Some`; the `None`
-    // branches below never read it.
-    let (x0, _, _, y1) = resolved.as_ref().map(|s| eda_engine::geometry::real_symbol_bbox(s)).unwrap_or((0.0, 0.0, 0.0, 0.0));
-    let mut pin_of_port: Vec<Option<usize>> = vec![None; ports.len()];
-    for (pin_idx, port_idx) in pin_port.iter().enumerate() {
-        if let Some(pi) = port_idx {
-            pin_of_port[*pi] = Some(pin_idx);
-        }
-    }
+    // The representative instance whose own rotation/mirror every graphic
+    // and pin gets baked through (see `baked_graphic`/`baked_real_point`'s
+    // own docs on why this exporter bakes at all): unit 1's own placed
+    // instance when there is one (the common case -- unit 1 is almost
+    // always placed), else simply the first instance this reference has.
+    // Every *other* unit's own sub-block below prefers its own placed
+    // instance's transform when one exists, falling back to this same
+    // default only for a unit that is not placed anywhere (nothing to bake
+    // through at all, so the representative's transform is as good a guess
+    // as any -- that unit's embedded graphics are never actually shown
+    // anywhere on this sheet regardless).
+    let default_baker = instances.iter().find(|s| s.unit == 1).copied().unwrap_or(instances[0]);
+    let unit_count = resolved.as_ref().map(|s| s.unit_count).unwrap_or(1);
 
     // KiCad requires a unit/body-style sub-symbol's own name to be
     // `<bare-name>_<unit>_<style>`, where `<bare-name>` is the *library*
@@ -447,22 +575,28 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance
     write_property(out, "Reference", "U", 0.0, 0.0, false);
     write_property(out, "Value", bare_name, 0.0, 0.0, false);
 
-    // ---- unit _0_1: the body ----
+    // ---- unit _0_1: the body common to every unit ----
     writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_0_1"))).unwrap();
     match &resolved {
         Some(sym_data) => {
-            // Every unit (0 = "every unit") or specifically unit 1 -- this
-            // project only ever places a symbol's unit 1, so a graphic
-            // scoped to another unit is never this instance's own body.
-            for g in sym_data.graphics.iter().filter(|g| matches!(g.unit(), 0 | 1)) {
-                write_symbol_graphic(out, &baked_graphic(g, sym, width as f64, x0, y1));
+            // Strictly unit 0 ("every unit") here -- a graphic scoped to a
+            // *specific* unit belongs in that unit's own `_<u>_1` sub-block
+            // below instead, not doubled up here too (KiCad shows `_0_1`'s
+            // contents underneath *every* unit's own body, so leaking a
+            // unit-1-specific graphic in here would draw it under units
+            // 2..N as well).
+            let (width, _height) = eda_engine::geometry::node_size(part, resolved.as_ref(), 1);
+            let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(sym_data, 1);
+            for g in sym_data.graphics.iter().filter(|g| g.unit() == 0) {
+                write_symbol_graphic(out, &baked_graphic(g, default_baker, width as f64, x0, y1));
             }
         }
         None => {
+            let (width, height) = eda_engine::geometry::node_size(part, None, 1);
             let corners = [(0.0, 0.0), (width as f64, 0.0), (width as f64, height as f64), (0.0, height as f64), (0.0, 0.0)];
             write!(out, "\t\t\t\t(polyline\n\t\t\t\t\t(pts").unwrap();
             for (lx, ly) in corners {
-                let (bx, by) = baked_local(sym, width as f64, lx, ly);
+                let (bx, by) = baked_local(default_baker, width as f64, lx, ly);
                 write!(out, " (xy {} {})", fmt_mm_f(bx), fmt_mm_f(by)).unwrap();
             }
             writeln!(out, ")\n\t\t\t\t\t(stroke (width 0.254) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)").unwrap();
@@ -470,74 +604,99 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance
     }
     writeln!(out, "\t\t\t)").unwrap();
 
-    // ---- unit _1_1: the pins ----
-    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_1_1"))).unwrap();
-    for (port_idx, port) in ports.iter().enumerate() {
-        let Some(pin_idx) = pin_of_port[port_idx] else { continue };
-        let pin = &part.pins[pin_idx];
-        let real_pin = resolved.as_ref().and_then(|s| s.pin_by_number(&pin.number));
-        let (bx, by, angle, length_mm) = match real_pin {
-            // The real pin's own outer point/angle/length -- exactly
-            // where its own drawn line (just written above, as part of
-            // the body's graphics when it's a separate primitive, or
-            // implicit when the pin line itself *is* the graphic) and a
-            // wire's own stub tip (computed from the very same point by
-            // `build_ports`'s real-symbol path) both place it.
-            Some(rp) => {
-                let p = baked_real_point(sym, width as f64, x0, y1, rp.at);
-                (p.x, p.y, baked_real_angle(sym, rp.angle_deg), rp.length_mm)
+    // ---- unit _<u>_1, u = 1..=unit_count: each unit's own body + pins ----
+    // A single-unit part (`unit_count == 1`, the overwhelming common case)
+    // runs this loop exactly once, over exactly the same pins/graphics the
+    // old unconditional "_1_1" block always wrote -- no behavior change.
+    for u in 1..=unit_count {
+        let baker = instances.iter().find(|s| s.unit == u).copied().unwrap_or(default_baker);
+        let (width, height) = eda_engine::geometry::node_size(part, resolved.as_ref(), u);
+        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved.as_ref(), u);
+        let (x0, _, _, y1) = resolved.as_ref().map(|s| eda_engine::geometry::real_symbol_bbox(s, u)).unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let mut pin_of_port: Vec<Option<usize>> = vec![None; ports.len()];
+        for (pin_idx, port_idx) in pin_port.iter().enumerate() {
+            if let Some(pi) = port_idx {
+                pin_of_port[*pi] = Some(pin_idx);
             }
-            // No matching real pin (shouldn't happen for a resolved
-            // symbol whose numbers agree with ours -- defensive only):
-            // fall back to the synthetic stub tip so the instance's own
-            // pin-uuid list still has a drawn pin for every part.pins
-            // entry.
-            None => {
-                let (plx, ply) = local_port_point(port, width, height);
-                let (slx, sly) = local_stub_tip(port, plx, ply);
-                let (bx, by) = baked_local(sym, width as f64, slx, sly);
-                (bx, by, 0.0, STUB_MM)
+        }
+
+        writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_{u}_1"))).unwrap();
+        // This unit's own graphics (a multi-unit symbol very often draws a
+        // different body outline per unit -- e.g. each gate of a logic
+        // array) -- unit 1 of a single-unit part has none of these beyond
+        // what `_0_1` already drew, same as before this loop existed.
+        if let Some(sym_data) = &resolved {
+            for g in sym_data.graphics.iter().filter(|g| g.unit() == u) {
+                write_symbol_graphic(out, &baked_graphic(g, baker, width as f64, x0, y1));
             }
-        };
-        let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
-        let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
-        writeln!(
-            out,
-            "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
-            fmt_mm_f(bx),
-            fmt_mm_f(by),
-            fmt_mm_f(angle),
-            fmt_mm_f(length_mm),
-            sexpr_str(&name),
-            sexpr_str(&pin.number),
-        )
-        .unwrap();
+        }
+        for (port_idx, port) in ports.iter().enumerate() {
+            let Some(pin_idx) = pin_of_port[port_idx] else { continue };
+            let pin = &part.pins[pin_idx];
+            let real_pin = resolved.as_ref().and_then(|s| s.pin_by_number(&pin.number));
+            let (bx, by, angle, length_mm) = match real_pin {
+                // The real pin's own outer point/angle/length -- exactly
+                // where its own drawn line (just written above, as part of
+                // the body's graphics when it's a separate primitive, or
+                // implicit when the pin line itself *is* the graphic) and a
+                // wire's own stub tip (computed from the very same point by
+                // `build_ports`'s real-symbol path) both place it.
+                Some(rp) => {
+                    let p = baked_real_point(baker, width as f64, x0, y1, rp.at);
+                    (p.x, p.y, baked_real_angle(baker, rp.angle_deg), rp.length_mm)
+                }
+                // No matching real pin (shouldn't happen for a resolved
+                // symbol whose numbers agree with ours -- defensive only):
+                // fall back to the synthetic stub tip so the instance's own
+                // pin-uuid list still has a drawn pin for every part.pins
+                // entry.
+                None => {
+                    let (plx, ply) = local_port_point(port, width, height);
+                    let (slx, sly) = local_stub_tip(port, plx, ply);
+                    let (bx, by) = baked_local(baker, width as f64, slx, sly);
+                    (bx, by, 0.0, STUB_MM)
+                }
+            };
+            let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
+            let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
+            writeln!(
+                out,
+                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+                fmt_mm_f(bx),
+                fmt_mm_f(by),
+                fmt_mm_f(angle),
+                fmt_mm_f(length_mm),
+                sexpr_str(&name),
+                sexpr_str(&pin.number),
+            )
+            .unwrap();
+        }
+        // `nc`-kind pins carry no `Port` (see `geometry::nc_pin_local_points`);
+        // draw them here too, at the same points `derive_schematic` placed a
+        // `no_connects` marker at, so this unit's own pin-uuid list always
+        // has a matching drawn pin for every one of its `part.pins` entries.
+        for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width, height, resolved.as_ref(), u) {
+            let pin = &part.pins[i];
+            // `baked_local` takes um (like every other call site in this
+            // function — `local_stub_tip`'s output, `width`/`height`
+            // themselves) and does its own um->mm division at the end; do
+            // not pre-convert `local` here too, or every nc pin lands 1000x
+            // closer to the origin than intended.
+            let (bx, by) = baked_local(baker, width as f64, local.x as f64, local.y as f64);
+            let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
+            let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
+            writeln!(
+                out,
+                "\t\t\t\t(pin {etype} line (at {} {} 0) (length 0)\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+                fmt_mm_f(bx),
+                fmt_mm_f(by),
+                sexpr_str(&name),
+                sexpr_str(&pin.number),
+            )
+            .unwrap();
+        }
+        writeln!(out, "\t\t\t)").unwrap();
     }
-    // `nc`-kind pins carry no `Port` (see `geometry::nc_pin_local_points`);
-    // draw them here too, at the same points `derive_schematic` placed a
-    // `no_connects` marker at, so the instance's own pin-uuid list (every
-    // `part.pins`, unconditionally) always has a matching drawn pin.
-    for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width, height, resolved.as_ref()) {
-        let pin = &part.pins[i];
-        // `baked_local` takes um (like every other call site in this
-        // function — `local_stub_tip`'s output, `width`/`height`
-        // themselves) and does its own um->mm division at the end; do not
-        // pre-convert `local` here too, or every nc pin lands 1000x closer
-        // to the origin than intended.
-        let (bx, by) = baked_local(sym, width as f64, local.x as f64, local.y as f64);
-        let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
-        let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
-        writeln!(
-            out,
-            "\t\t\t\t(pin {etype} line (at {} {} 0) (length 0)\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
-            fmt_mm_f(bx),
-            fmt_mm_f(by),
-            sexpr_str(&name),
-            sexpr_str(&pin.number),
-        )
-        .unwrap();
-    }
-    writeln!(out, "\t\t\t)").unwrap();
 
     writeln!(out, "\t\t)").unwrap();
 }
@@ -902,8 +1061,8 @@ mod tests {
         let sch = design.schematic.as_ref().unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();
-        let (width, height) = eda_engine::geometry::node_size(part, None);
-        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, None);
+        let (width, height) = eda_engine::geometry::node_size(part, None, 1);
+        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, None, 1);
         // VIN is pin "1" -> some port; compute expected world stub tip.
         let port_idx = pin_port[0].unwrap();
         let port = ports[port_idx];
@@ -950,7 +1109,7 @@ mod tests {
     #[test]
     fn missing_schematic_errors() {
         let design = Design {
-            footprint_library: None,
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
             schema: 1,
             provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
@@ -981,5 +1140,74 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(a.len(), 36);
         assert_eq!(a.chars().filter(|&c| c == '-').count(), 4);
+    }
+
+    /// GAPS.md #6: `export_kicad_sch_tree` writes a real `(sheet ...)`
+    /// placement (with its own pin) on the root, and the child screen it
+    /// names as its own standalone file -- round-tripped end to end
+    /// through `import_kicad_sch_tree` (actual disk files, not just
+    /// in-memory structs), confirming the two directions agree on the
+    /// file format this task's own research pinned down.
+    #[test]
+    fn multi_sheet_design_round_trips_through_export_tree_and_import_tree() {
+        use eda_model::ir::{LabelKind, LabelShape, Point, SchematicSection, SheetInstance, SheetPin};
+
+        let r1 = part("R1", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)]);
+        let model = ConstraintModel { parts: vec![r1], ..Default::default() };
+        let mut child_design = derive_schematic(&model, &EngineOptions::new(1, "tree_export_child")).unwrap();
+        let child_sch = child_design.schematic.as_mut().unwrap();
+        // A hierarchical label landing exactly on R1's own pin 1 stub tip
+        // -- reuse the already-reconciled wire-free single-pin convention
+        // this crate's other tests already rely on, rather than
+        // re-deriving the exact stub-tip offset by hand.
+        let r1_at = child_sch.symbols[0].at;
+        let pin1_tip = Point { x: r1_at.x, y: r1_at.y - 3810 };
+        child_sch.labels.push(eda_model::ir::NetLabel { id: String::new(), net: "AD0".into(), at: pin1_tip, kind: LabelKind::Hierarchical { shape: LabelShape::Passive } });
+
+        let root_sch = SchematicSection {
+            symbols: vec![],
+            wires: vec![],
+            labels: vec![],
+            texts: vec![],
+            power_symbols: vec![],
+            no_connects: vec![], bus_entries: vec![],
+            erc_exclusions: vec![],
+            title_block: None,
+            sheets: vec![SheetInstance {
+                id: String::new(),
+                name: "child".into(),
+                file: "child.kicad_sch".into(),
+                at: Point { x: 10_000, y: 10_000 },
+                size: (20_000, 20_000),
+                pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000, y: 30_000 } }],
+            }],
+            instance_overrides: vec![],
+            imported_from_kicad: false,
+        };
+        let mut screens = std::collections::BTreeMap::new();
+        screens.insert("child.kicad_sch".to_string(), child_sch.clone());
+        let design = Design { sheet_contents: Some(screens), schematic: Some(root_sch), ..child_design };
+
+        let files = export_kicad_sch_tree(&design, &model, &ExportMeta { date: "2026-01-01", title: "root" }, "root.kicad_sch").unwrap();
+        assert_eq!(files.len(), 2, "root + one child");
+
+        let dir = std::env::temp_dir().join(format!("eda_kicad_export_tree_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, text) in &files {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+
+        let (back_design, _model, notes) = crate::import_kicad_sch_tree(&dir.join("root.kicad_sch")).expect("round trips");
+        assert_eq!(notes.sheets_not_descended, 0);
+        let back_root = back_design.schematic.unwrap();
+        assert_eq!(back_root.sheets.len(), 1);
+        assert_eq!(back_root.sheets[0].file, "child.kicad_sch");
+        assert_eq!(back_root.sheets[0].pins.len(), 1, "the sheet pin survives the round trip");
+        assert_eq!(back_root.sheets[0].pins[0].name, "AD0");
+        let back_child = back_design.sheet_contents.unwrap().remove("child.kicad_sch").unwrap();
+        assert_eq!(back_child.symbols.len(), 1);
+        assert!(back_child.labels.iter().any(|l| l.net == "AD0" && matches!(l.kind, LabelKind::Hierarchical { .. })));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

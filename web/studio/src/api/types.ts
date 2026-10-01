@@ -544,23 +544,35 @@ export type Cmd =
   // `rotate_millideg` already set: a write-side angle is always named
   // for its unit, since the read side (`SchematicSymbol.rot`, `Degrees`)
   // uses plain degrees instead.
-  | { op: "move_symbol"; id: string; x: Um; y: Um }
-  | { op: "drag_symbol"; id: string; x: Um; y: Um; attached_wire_endpoints: [number, number][] }
-  | { op: "rotate_symbol"; id: string; quarter_turns: number }
-  | { op: "mirror_symbol"; id: string }
-  | { op: "mirror_symbol_vertical"; id: string }
-  | { op: "delete_symbol"; id: string }
-  | { op: "add_wire"; pts: PointXY[] }
+  // `unit`: which placed instance of `id` to act on, when a multi-unit
+  // part has more than one on the sheet -- omit (undefined) when `id`
+  // names exactly one instance (every single-unit part, the overwhelming
+  // common case); the backend refuses as ambiguous if more than one
+  // instance shares `id` and no `unit` was sent.
+  | { op: "move_symbol"; id: string; x: Um; y: Um; unit?: number }
+  | { op: "drag_symbol"; id: string; x: Um; y: Um; attached_wire_endpoints: [number, number][]; unit?: number }
+  | { op: "rotate_symbol"; id: string; quarter_turns: number; unit?: number }
+  | { op: "mirror_symbol"; id: string; unit?: number }
+  | { op: "mirror_symbol_vertical"; id: string; unit?: number }
+  | { op: "delete_symbol"; id: string; unit?: number }
+  | { op: "add_wire"; pts: PointXY[]; bus?: boolean }
   | { op: "delete_wire"; id: string }
   | { op: "add_no_connect"; at: PointXY }
   | { op: "delete_no_connect"; id: string }
+  | { op: "add_bus_entry"; at: PointXY; size: PointXY }
+  | { op: "delete_bus_entry"; id: string }
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
   | { op: "delete_sch_text"; id: string }
   | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
   | { op: "delete_power_symbol"; id: string }
-  | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string }
+  // `unit`: which unit of a multi-unit symbol this placement is (omit for
+  // 1, a single-unit part). Only refused if `(id, unit)` already exists --
+  // placing `{ id: "U1", unit: 2 }` once "U1" unit 1 is already on the
+  // sheet is how another unit of an existing, already-annotated part gets
+  // added.
+  | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string; unit?: number }
   | { op: "edit_symbol_fields"; id: string; value?: string | null; footprint?: string | null; datasheet?: string | null }
   | { op: "rename_symbol"; id: string; new_id: string }
   | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[] }
@@ -986,6 +998,15 @@ export interface SchematicWire {
   /** "REF.PIN" refs this wire lands on. */
   pins: string[];
   pts: [Um, Um][];
+  /** True for a bus wire (GAPS.md #20) -- KiCad's `LAYER_BUS` vs `LAYER_WIRE`, same shape either way. */
+  bus: boolean;
+}
+
+/** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
+export interface BusEntry {
+  id: string;
+  at: [Um, Um];
+  size: [Um, Um];
 }
 
 export interface SchematicLabel {
@@ -1018,6 +1039,30 @@ export interface TitleBlock {
   comment4: string;
 }
 
+/** A hierarchical sheet pin (`SCH_SHEET_PIN`) on a placed sheet's own border -- GAPS.md #6. Tied *by name only* to a hierarchical label of the same name inside the sheet's own file (see crates/kicad/src/erc.rs's `check_hierarchy` doc for why shape is never compared). */
+export interface SheetPin {
+  id: string;
+  name: string;
+  shape: LabelShape;
+  at: [Um, Um];
+}
+
+/** One child sheet placed directly on the schematic view currently being shown -- `GET /api/schematic`'s own `sheets` field, not the whole project's tree (see `sheet_path` for how deep the current view already is). */
+export interface Sheet {
+  id: string;
+  name: string;
+  file: string;
+  at: [Um, Um];
+  size: [Um, Um];
+  pins: SheetPin[];
+}
+
+/** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */
+export interface SheetPathEntry {
+  id: string;
+  name: string;
+}
+
 export interface Schematic {
   /** Empty object on a board with no schematic yet, never absent -- see api/client.ts's fetchSchematic for the defensive `?? {}` this file's other optional-till-populated collections already use. */
   lib_symbols: LibSymbols;
@@ -1028,6 +1073,12 @@ export interface Schematic {
   labels: SchematicLabel[];
   texts: SchematicText[];
   title_block: TitleBlock | null;
+  /** Bus entries (GAPS.md #20) -- see `BusEntry`'s own doc. */
+  bus_entries: BusEntry[];
+  /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
+  sheets: Sheet[];
+  /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */
+  sheet_path: SheetPathEntry[];
 }
 
 // ---------------------------------------------------------------- Symbol library
@@ -1045,6 +1096,8 @@ export interface SymbolLibraryEntry {
   description: string;
   /** The library's own default `Reference` ("R", "C", "U", ...) -- "U" when unknown. Seeds `A`'s own next-free-number placement, same as a real reference designator always needs a letter prefix to start from. */
   reference_prefix: string;
+  /** How many units this symbol declares (1 for a single-unit part). >1 means `SymbolChooserDialog` offers a unit picker before placing. */
+  unit_count: number;
 }
 
 export interface SymbolLibrary {

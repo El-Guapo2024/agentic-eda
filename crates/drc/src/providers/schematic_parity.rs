@@ -87,6 +87,8 @@ mod tests {
         let footprints = ids.iter().enumerate().map(|(i, id)| FootprintInstance { id: id.to_string(), at: Point { x: i as i64 * 1000, y: 0 }, rot: 0, side: Side::Top, label: Default::default() }).collect();
         Design {
             footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,

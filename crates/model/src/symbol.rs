@@ -41,10 +41,9 @@ impl SPoint {
 /// One drawn primitive of a library symbol, in the symbol's own mm frame.
 /// `unit` is KiCad's unit index for a multi-unit symbol (an op-amp's four
 /// gates, say): 0 means "drawn on every unit" (KiCad's own `<name>_0_n`
-/// convention), 1.. is a specific unit. Every symbol this port places has
-/// exactly one real unit, so `unit` is 0 or 1 in practice, but the field
-/// exists so a symbol read from a real multi-unit library round-trips
-/// without losing which unit each graphic belongs to.
+/// convention), 1.. is a specific unit -- see `ir::SchematicSection::symbols`'s
+/// own doc for how a real multi-unit part's several placed instances each
+/// pick out their own unit's graphics/pins by this field.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SymbolGraphic {
@@ -144,8 +143,8 @@ pub struct LibPin {
     /// toward the symbol body.
     pub angle_deg: f64,
     pub length_mm: Mm,
-    /// Which unit this pin belongs to (1-based; symbols this port places
-    /// have exactly one unit).
+    /// Which unit this pin belongs to (1-based; 0 means common to every
+    /// unit) -- see `ir::SchematicSection::symbols`'s own doc.
     #[serde(default = "d_unit_one")]
     pub unit: u32,
 }
@@ -183,8 +182,11 @@ pub struct LibSymbol {
     /// `annotate`'s own default.
     #[serde(default)]
     pub reference_prefix: String,
-    /// Highest unit index used by `pins`/`graphics`; 1 for every symbol
-    /// this port actually places (multi-unit placement is deferred).
+    /// Highest unit index used by `pins`/`graphics`; 1 for a single-unit
+    /// symbol. A real multi-unit library symbol (quad op-amp, logic gate
+    /// array, ...) can place up to this many separate `SymbolInstance`s
+    /// sharing one reference -- see `ir::SchematicSection::symbols`'s own
+    /// doc.
     #[serde(default = "d_unit_one")]
     pub unit_count: u32,
 }
