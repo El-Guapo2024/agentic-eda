@@ -22,6 +22,7 @@
 use crate::board;
 use crate::fab_api;
 use crate::route_api;
+use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::{LabelSide, Shape, Side};
 use eda_model::{CheckResult, CheckStatus};
@@ -631,6 +632,11 @@ fn handle(
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
+        // 7 (gap #7 task item 4): length tuning. Stateless -- no session
+        // cell, every call re-reads design.json fresh (see tune_api's own
+        // doc comment on why this one differs from route/drag/dp above).
+        ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
         // Fabrication outputs (Plot / Generate Drill Files / Footprint
         // Position Files dialogs, plus the plain BOM): `crate::fab_api`
         // runs the same `eda_fab` writers `eda fab ...` does and writes

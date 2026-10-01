@@ -753,6 +753,29 @@ export interface DpFixReply {
   preview?: DiffPairPreview;
 }
 
+/** `POST /api/tune_length/{preview,apply}` (gap #7 task item 4, `7`):
+ * lengthen a straight, single-segment track to a target length by
+ * inserting a meander -- `eda_pns::meander`. Unlike every other
+ * interactive-router endpoint, this is entirely stateless: no session,
+ * every call re-reads `design.json` fresh (see that module's own doc
+ * comment on why length tuning is a one-shot dialog here, not a third
+ * live mouse-driven session). */
+export interface TuneLengthReply {
+  ok: boolean;
+  message?: string;
+  net?: string;
+  layer?: string;
+  width?: Um;
+  /** The source track's own straight-line length, before tuning. */
+  original_length?: Um;
+  /** The generated meander's real, measured length -- usually within a
+   * few um of the requested target when reachable, see that module's own
+   * doc comment on why it isn't always exact to the micrometer. */
+  achieved_length?: Um;
+  pts?: [Um, Um][];
+  colliding?: boolean;
+}
+
 // ---------------------------------------------------------------- Ratsnest
 //
 // GET /api/ratsnest. Source of truth: crates/cli/src/studio.rs

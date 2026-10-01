@@ -285,6 +285,20 @@ export function useActionRunner() {
     // `state.routerSettings`'s own doc comment on why this isn't live
     // mid-route the way upstream's dialog is.
     m.set("pcbnew.InteractiveRouter.SettingsDialog", pcbOnly(() => dispatch({ type: "SET_ROUTER_SETTINGS_DIALOG_OPEN", open: true })));
+    // `7` (gap #7 task item 4): length tuning -- see
+    // components/LengthTuningDialog.tsx's own header comment on why this
+    // is a dialog rather than a fourth interactive session. Needs a
+    // single straight track selected first (the dialog itself explains
+    // this when opened with nothing/the wrong thing selected, same as
+    // moveExact's own "only meaningful with something selected" gate).
+    m.set(
+      "pcbnew.LengthTuner.TuneSingleTrack",
+      pcbOnly(() => {
+        const refs = [...state.selection];
+        if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
+        dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
+      })
+    );
     m.set(
       "pcbnew.InteractiveDrawing.via",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))

@@ -35,6 +35,7 @@ pub mod joint;
 pub mod layer;
 pub mod line;
 pub mod line_placer;
+pub mod meander;
 pub mod node;
 pub mod optimizer;
 pub mod router;

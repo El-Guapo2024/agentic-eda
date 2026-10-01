@@ -33,12 +33,14 @@ exists rather than letting you rediscover it.
    straight-segment polyline (`eda_model::ir::Track::pts`); nothing ever
    constructs an arc item. Every KiCad pass that branches on "does this
    line contain an arc" takes the non-arc path unconditionally here.
-4. **No meandering/length-tuning, no component dragger, no multi-
-   selection drag.** Single-item (segment/via) drag only. Diff pairs
-   (Stage 7) *are* now ported, but narrower than upstream's own
-   `DIFF_PAIR_T`-based implementation -- no coupled shove/walkaround for
-   a pair, no via/layer-switch mid-pair-route; see that stage's own
-   section for exactly why and what it still is.
+4. **No component dragger, no multi-selection drag.** Single-item
+   (segment/via) drag only. Diff pairs (Stage 7) and single-track length
+   tuning (Stage 8) *are* now ported, but narrower than upstream in each
+   case -- no coupled shove/walkaround for a pair, no via/layer-switch
+   mid-pair-route, no diff-pair length/skew tuning, length tuning scoped
+   to a straight axis-aligned single-segment track and driven by a
+   dialog rather than a live mouse session; see those stages' own
+   sections for exactly why and what each still is.
 5. **Units**: integer micrometers throughout (`eda_model::ir::Um`), like
    the rest of this workspace, not KiCad's internal nanometers.
 
@@ -364,6 +366,70 @@ design; the short version:
   already-tested `drag_*` methods use) without their own dedicated
   integration test, to keep this task item's scope proportionate to the
   remaining ones -- see the final report.
+
+## Stage 8 -- length tuning (single track)
+
+`pns_meander_placer.cpp`/`pns_meander.cpp` -> `src/meander.rs`, task item
+4's first key (`7`, Tune Length of a Single Track). See that module's own
+extensive header comment for the full reasoning; short version:
+
+- **One-shot, dialog-driven, not a third interactive session.** Upstream
+  drives `MEANDER_PLACER` the same live, mouse-dragged way `LINE_PLACER`/
+  `DIFF_PAIR_PLACER` are driven -- a status-bar length readout updates as
+  you drag the mouse away from the track. Building a *third* session type
+  (after route and drag) with its own mouse-driven preview state was out
+  of proportion to the time left after items 1-3, so this port exposes
+  the same underlying operation ("lengthen this track to a target length
+  with this amplitude/spacing") as a stateless, one-shot computation --
+  `crates/cli/src/tune_api.rs`'s `/api/tune_length/{preview,apply}` (no
+  `RouteCell`, no session: every call re-reads `design.json` fresh), the
+  length readout the task asked for is `LengthTuningDialog.tsx`'s own
+  current/achieved-length display rather than a canvas/status-bar one.
+- **Shape scope: a straight, axis-aligned (N/E/S/W), single-segment
+  track only.** `generate_meander`'s own doc comment explains exactly why
+  the construction (`direction + perpendicular` / `direction -
+  perpendicular` as the two diagonal legs of each zigzag) only produces a
+  provably-correct, uniform shape when `direction` itself is axis-
+  aligned -- a diagonal baseline would need a separately-derived formula
+  this session didn't have time to work out and verify. A track with any
+  corner (more than 2 points) or a diagonal run is refused with a plain
+  message, not silently mishandled.
+- **Geometry**: a standard alternating accordion (each period steps
+  diagonally off the baseline by `amplitude`, runs parallel for
+  `spacing`, steps back, alternating sides each period). The extra length
+  one period contributes is `2 * amplitude * (sqrt(2) - 1)`, derived from
+  first principles (each diagonal leg's own length vs. how far it
+  actually advances along the baseline) and cross-checked against a
+  *measured* (not just formula-trusted) polyline length in every test.
+  The final period shrinks its own amplitude -- and, if the baseline
+  itself is what's actually run out of room rather than the requested
+  extra length, shrinks further to whatever the remaining baseline
+  length can physically fit -- to land as close to the requested target
+  as the geometry genuinely allows, rather than always overshooting by a
+  whole period or refusing outright one period early. 9 tests.
+- **Collision**: report-only, same `Mode::MarkObstacles`-style contract
+  every other scoped-down piece of this crate already uses (diff pairs,
+  Stage 7) -- no automatic rerouting around something the meander would
+  hit, just a `colliding` flag the dialog surfaces before `Apply` is
+  even enabled.
+- **Commit**: needed no new `Cmd` at all -- the generated replacement
+  becomes one `Track` IR entry, removed-and-re-added via the exact same
+  `Cmd::CommitRoute` a finished route/drag/diff-pair already uses
+  (`tune_api::apply`).
+
+**Not implemented**: diff-pair length tuning (`8`,
+`pcbnew.LengthTuner.TuneDiffPair`) and diff-pair skew tuning (`9`,
+`TuneDiffPairSkew`) -- both would reuse this same `generate_meander`
+primitive (apply it to each of a pair's two lines, e.g. independently
+with the same period timing so parallel lines stay roughly parallel
+rather than crossing) but needed orchestration (picking both tracks,
+matching/offsetting their two lengths or their skew) this task ran out
+of time to build and verify properly; a half-correct coupled-pair
+meander would be worse than clearly marking this not-done. The settings
+dialog's own amplitude/spacing fields (`1`/`2`/`3`/`4` upstream) are
+`LengthTuningDialog.tsx`'s plain number inputs rather than a separate
+`Ctrl+L` settings dialog + live keystroke adjustment -- see that
+component's own header comment.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

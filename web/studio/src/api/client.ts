@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, Um } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, TuneLengthReply, Um } from "./types";
 
 export class ApiError extends Error {}
 
@@ -344,4 +344,29 @@ export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
 
 export function dpFinish(x: Um, y: Um): Promise<CmdReply> {
   return postJson("/api/route/dp_finish", { x, y });
+}
+
+// `7`: length tuning (gap #7 task item 4) -- stateless, see
+// api/types.ts's TuneLengthReply doc comment and components/
+// LengthTuningDialog.tsx. `trackId` must name a straight, single-segment
+// track (eda_pns::meander's own scope).
+
+export interface TuneLengthRequest {
+  trackId: string;
+  amplitude: Um;
+  spacing: Um;
+  targetLength: Um;
+  flip: boolean;
+}
+
+function tuneLengthBody(req: TuneLengthRequest) {
+  return { track_id: req.trackId, amplitude: req.amplitude, spacing: req.spacing, target_length: req.targetLength, flip: req.flip };
+}
+
+export function tuneLengthPreview(req: TuneLengthRequest): Promise<TuneLengthReply> {
+  return postJson("/api/tune_length/preview", tuneLengthBody(req));
+}
+
+export function tuneLengthApply(req: TuneLengthRequest): Promise<TuneLengthReply> {
+  return postJson("/api/tune_length/apply", tuneLengthBody(req));
 }

@@ -23,6 +23,7 @@ import { TextDialog } from "./components/TextDialog";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
 import { MoveExactDialog } from "./components/MoveExactDialog";
 import { RouterSettingsDialog } from "./components/RouterSettingsDialog";
+import { LengthTuningDialog } from "./components/LengthTuningDialog";
 import { BoardSetupDialog } from "./components/BoardSetupDialog";
 import { LabelDialog } from "./components/LabelDialog";
 import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
@@ -167,6 +168,7 @@ function StudioFrame() {
       <ItemPropertiesDialog />
       <MoveExactDialog />
       <RouterSettingsDialog />
+      <LengthTuningDialog />
       <BoardSetupDialog />
       <LabelDialog />
       <PowerSymbolDialog />

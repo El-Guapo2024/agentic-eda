@@ -533,6 +533,8 @@ export interface StudioState {
   moveExactDialogOpen: boolean;
   /** `Ctrl+<` "Interactive Router Settings..." (dialog_pns_settings.cpp) -- components/RouterSettingsDialog.tsx. */
   routerSettingsDialogOpen: boolean;
+  /** `7` (pcbnew.LengthTuner.TuneSingleTrack) -- components/LengthTuningDialog.tsx. */
+  lengthTuningDialogOpen: boolean;
   /**
    * `eda_pns::RoutingSettings`, the subset this app's router actually
    * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
@@ -630,6 +632,7 @@ const initialState: StudioState = {
   clipboard: null,
   moveExactDialogOpen: false,
   routerSettingsDialogOpen: false,
+  lengthTuningDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
   routerSettings: { mode: "walkaround", removeLoops: true },
 };
@@ -716,7 +719,8 @@ export type Action =
   | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
   | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
-  | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] };
+  | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
+  | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean };
 
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
@@ -959,6 +963,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, routerSettingsDialogOpen: action.open };
     case "SET_ROUTER_SETTINGS":
       return { ...state, routerSettings: action.settings };
+    case "SET_LENGTH_TUNING_DIALOG_OPEN":
+      return { ...state, lengthTuningDialogOpen: action.open };
     default:
       return state;
   }
