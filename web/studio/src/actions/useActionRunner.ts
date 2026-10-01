@@ -14,7 +14,8 @@
 // Canvas.tsx no longer needs any keydown handling of its own.
 
 import { useCallback, useMemo } from "react";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
+import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { finishInteractiveRoute, cancelInteractiveRoute } from "../components/canvas/routing";
 import { routeMove, routeToggleVia, routeUndoSegment } from "../api/client";
@@ -23,6 +24,7 @@ import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
 import { GRID_OPTIONS_UM } from "../components/Toolbar";
+import { computeDragAttachment } from "../components/schematic/wireAttachment";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -71,7 +73,7 @@ export function useActionRunner() {
      * PARITY-pcb.md for this narrow, documented gap.
      */
     const tryTransformDuringMove = (addQuarterTurns: number, toggleFlip: boolean): boolean => {
-      const moving = state.activeTool === "move" || state.movePreview != null;
+      const moving = state.activeTool === "move" || state.activeTool === "drag" || state.movePreview != null;
       if (!moving) return false;
       const refs = state.movePreview?.refs ?? [...state.selection];
       if (refs.length === 0) return false;
@@ -80,8 +82,11 @@ export function useActionRunner() {
       // first so a ref that happens to share an id with nothing on the
       // PCB side (every schematic symbol's id IS a part reference, so
       // api.partByRef would also resolve on the Schematic tab) still
-      // lands on "symbol", not "part".
-      const kind = state.movePreview?.kind ?? (state.tab === "schematic" ? "symbol" : api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
+      // lands on "symbol"/"symbol_drag", not "part". `activeTool ===
+      // "drag"` only matters here before the first pointer-move after
+      // arming `G` (state.movePreview still null) -- once a preview
+      // exists it already carries its own correct kind.
+      const kind = state.movePreview?.kind ?? (state.activeTool === "drag" ? "symbol_drag" : state.tab === "schematic" ? "symbol" : api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
       const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0 };
       const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
@@ -672,10 +677,22 @@ export function useActionRunner() {
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
       })
     );
-    // `G` (drag, with wire rubber-banding) isn't ported yet -- see
-    // PARITY-sch.md. Bound to plain Move for now (better than a dead key)
-    // rather than left silently unregistered.
-    m.set("eeschema.InteractiveMove.drag", schematicOnly(() => m.get("eeschema.InteractiveMove.move")?.()));
+    // `G` ("Drag", sch_move_tool.cpp): same arm-then-click-to-drop flow as
+    // `M`, except the wire endpoints attached to the selection's own pins
+    // (computeDragAttachment -- resolved now, before the symbol moves out
+    // from under them) rubber-band along with it instead of being left
+    // dangling. See state.dragAttach's own doc and MovePreview's
+    // "symbol_drag" kind.
+    m.set(
+      "eeschema.InteractiveMove.drag",
+      schematicOnly(() => {
+        const first = [...state.selection][0];
+        if (!first || !api.symbolById(first) || !state.schematic) return;
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
+        dispatch({ type: "SET_DRAG_ATTACH", attach: computeDragAttachment(state.schematic, [...state.selection]) });
+      })
+    );
 
     m.set(
       "eeschema.InteractiveEdit.rotateCCW",
@@ -693,8 +710,6 @@ export function useActionRunner() {
         if (id && api.symbolById(id)) api.rotateSymbol(id, 3);
       })
     );
-    // `Y` (Mirror Vertically) has no IR field to toggle yet -- see
-    // `Cmd::MirrorSymbol`'s own doc -- so only `X` is wired.
     m.set(
       "eeschema.InteractiveEdit.mirrorH",
       schematicOnly(() => {
@@ -702,21 +717,34 @@ export function useActionRunner() {
         if (id && api.symbolById(id)) api.mirrorSymbol(id);
       })
     );
+    m.set(
+      "eeschema.InteractiveEdit.mirrorV",
+      schematicOnly(() => {
+        const id = [...state.selection][0];
+        if (id && api.symbolById(id)) api.mirrorSymbolVertical(id);
+      })
+    );
+
+    // `E`/`U`/`V`/`F` (sch_edit_tool.cpp::Properties/EditField): one
+    // shared dialog for all four -- see SymbolPropertiesDialog.tsx's own
+    // header comment on why U/V/F don't get source's own separate, far
+    // smaller single-field dialog.
+    const openSymbolProperties = (field: "reference" | "value" | "footprint" | "datasheet" | null) =>
+      schematicOnly(() => {
+        const id = [...state.selection][0];
+        if (id && api.symbolById(id)) dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id, field } });
+      });
+    m.set("eeschema.InteractiveEdit.properties", openSymbolProperties(null));
+    m.set("eeschema.InteractiveEdit.symbolProperties", openSymbolProperties(null));
+    m.set("eeschema.InteractiveEdit.editReference", openSymbolProperties("reference"));
+    m.set("eeschema.InteractiveEdit.editValue", openSymbolProperties("value"));
+    m.set("eeschema.InteractiveEdit.editFootprint", openSymbolProperties("footprint"));
 
     m.set("eeschema.InspectionTool.runERC", () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: true }));
 
-    // `dialog_annotate.cpp`'s own default mode ("Keep existing
-    // annotations", not "Reset") -- no dialog yet to offer the reset
-    // choice or the sheet/selection scope options, so this always
-    // annotates the whole sheet, additively. See `Cmd::Annotate`'s own
-    // doc for the numbering scheme (top-to-bottom, per reference prefix).
-    m.set(
-      "eeschema.EditorControl.annotate",
-      schematicOnly(async () => {
-        const ok = await api.cmd({ op: "annotate", reset_existing: false });
-        dispatch({ type: "TOAST", message: ok ? "Annotated." : "Nothing to annotate.", kind: "info" });
-      })
-    );
+    // `Ctrl+A`: opens AnnotateDialog.tsx (scope/order/reset options) --
+    // the dialog itself issues the real `annotate` Cmd on confirm.
+    m.set("eeschema.EditorControl.annotate", schematicOnly(() => dispatch({ type: "SET_ANNOTATE_DIALOG_OPEN", open: true })));
 
     // `W`: arm/disarm the wire tool -- SchematicView.tsx's own
     // onPointerDown/onDoubleClick own the actual click-to-add-point/
@@ -738,10 +766,55 @@ export function useActionRunner() {
       })
     );
 
+    // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp): arm/disarm each
+    // placement tool, same toggle shape as the wire tool above --
+    // SchematicView.tsx's onPointerDown owns the actual click behavior
+    // (pin-snap, open the right pending-dialog state, or for `Q`, commit
+    // immediately).
+    const toggleSchTool = (tool: Exclude<ToolId, "select">) => schematicOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool }));
+    m.set("eeschema.InteractiveDrawing.placeLabel", toggleSchTool("sch_label_local"));
+    m.set("eeschema.InteractiveDrawing.placeGlobalLabel", toggleSchTool("sch_label_global"));
+    m.set("eeschema.InteractiveDrawing.placeHierarchicalLabel", toggleSchTool("sch_label_hier"));
+    m.set("eeschema.InteractiveDrawing.placePowerSymbol", toggleSchTool("sch_power"));
+    m.set("eeschema.InteractiveDrawing.placeSchematicText", toggleSchTool("sch_text"));
+    m.set("eeschema.InteractiveDrawing.placeNoConnect", toggleSchTool("sch_no_connect"));
+    // `A`: unlike the others above, this opens the chooser dialog first
+    // (real source's own order too, for this one tool -- see
+    // SymbolChooserDialog.tsx's header comment) rather than arming a tool
+    // directly; confirming a choice there is what arms `sch_place_symbol`.
+    m.set("eeschema.InteractiveDrawing.placeSymbol", schematicOnly(() => dispatch({ type: "SET_SYMBOL_CHOOSER_OPEN", open: true })));
+
     return m;
   }, [api, dispatch, state]);
 
-  const isEnabled = useCallback((name: string) => registry.has(name), [registry]);
+  // `registry.has(name)` alone used to be the whole check, but the
+  // registry holds EVERY action's handler regardless of tab (every
+  // `pcbOnly`/`schematicOnly` wrapper above is itself registered
+  // unconditionally -- only the function *body* it wraps checks the
+  // tab, and only once called). That made `isEnabled` blind to tab at
+  // exactly the place useGlobalHotkeys.ts needs it most: several
+  // physical keys are double-booked by one `pcbnew.*` and one
+  // `eeschema.*` action with the *same* hotkey (R, M, G, X, E, U, V, F
+  // all collide this way in the real, extracted hotkey table), and
+  // `hotkeyIndex.get(combo)?.find(isEnabled)` there picks the first
+  // name `isEnabled` accepts -- so whichever of the pair happened to
+  // come first in actions.json's own order permanently shadowed the
+  // other, on *every* tab, regardless of which one was actually
+  // relevant. `pcbnew.InteractiveEdit.rotateCcw` (R) and
+  // `pcbnew.InteractiveMove.move` (M) were already losing that race to
+  // their eeschema counterparts before this fix -- real, silent PCB
+  // regressions from the schematic port's own earlier sessions, not
+  // hypothetical. `isActionEnabledForTab` (kicad-port, unit tested) is
+  // the actual fix; MenuBar.tsx/Toolbar.tsx already load an entirely
+  // separate, per-tab menu/toolbar tree each (menus.json vs
+  // sch_menus.json, same for toolbars), so this changes nothing for
+  // them -- they never asked `isEnabled` about an action from the
+  // other tab's tree in the first place. HotkeysDialog.tsx is the one
+  // visible side effect: it lists every action in one place, so an
+  // eeschema action now dims while looking at it from the PCB tab (and
+  // vice versa) -- arguably more honest ("usable right now" instead of
+  // "usable somewhere"), not a regression.
+  const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)), [registry, state.tab]);
   const run = useCallback((name: string) => registry.get(name)?.(), [registry]);
   return { run, isEnabled };
 }

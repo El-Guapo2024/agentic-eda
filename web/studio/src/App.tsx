@@ -20,6 +20,12 @@ import { TextDialog } from "./components/TextDialog";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
 import { MoveExactDialog } from "./components/MoveExactDialog";
 import { BoardSetupDialog } from "./components/BoardSetupDialog";
+import { LabelDialog } from "./components/LabelDialog";
+import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
+import { SchTextDialog } from "./components/SchTextDialog";
+import { SymbolChooserDialog } from "./components/SymbolChooserDialog";
+import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
+import { AnnotateDialog } from "./components/AnnotateDialog";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
@@ -142,6 +148,12 @@ function StudioFrame() {
       <ItemPropertiesDialog />
       <MoveExactDialog />
       <BoardSetupDialog />
+      <LabelDialog />
+      <PowerSymbolDialog />
+      <SchTextDialog />
+      <SymbolChooserDialog />
+      <SymbolPropertiesDialog />
+      <AnnotateDialog />
     </div>
   );
 }

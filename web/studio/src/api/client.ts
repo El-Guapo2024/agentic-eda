@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DragPreview, DrcReport, ErcReport, FillReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, Um } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DragPreview, DrcReport, ErcReport, FillReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, Um } from "./types";
 
 export class ApiError extends Error {}
 
@@ -49,6 +49,7 @@ export async function fetchSchematic(): Promise<Schematic> {
     lib_symbols: s.lib_symbols ?? {},
     power_symbols: s.power_symbols ?? [],
     no_connects: s.no_connects ?? [],
+    texts: s.texts ?? [],
     title_block: s.title_block ?? null,
     symbols: (s.symbols ?? []).map((sym) => {
       // `mirror` replaces an earlier `mirrored: boolean` (see types.ts's
@@ -62,6 +63,13 @@ export async function fetchSchematic(): Promise<Schematic> {
     }),
     labels: (s.labels ?? []).map((l) => ({ ...l, scope: l.scope ?? "local", shape: l.shape ?? null })),
   };
+}
+
+/** `A`'s symbol-chooser catalog -- fetched once when the dialog opens (SymbolChooserDialog.tsx), not polled: it only changes when the project's own intent/already-placed symbols change, which is already a full-page board refresh via the normal version-poll loop. */
+export async function fetchSymbolLibrary(): Promise<SymbolLibrary> {
+  const s = await getJson<SymbolLibrary & { error?: string }>("/api/symbol_library");
+  if (s.error) throw new ApiError(s.error);
+  return { entries: s.entries ?? [], lib_symbols: s.lib_symbols ?? {} };
 }
 
 /**

@@ -84,6 +84,48 @@ pub fn resolve_symbol(lib_root: &Path, lib_id: &str) -> Option<LibSymbol> {
     Some(sym)
 }
 
+/// Every symbol in one real installed library file (`"Device"` ->
+/// `Device:R`, `Device:C`, ...), each with its `lib_id` fixed up to the
+/// fully-qualified form (see `resolve_symbol`'s own doc on why the raw
+/// table doesn't already have it), sorted by bare name. Empty, not an
+/// error, when the library file doesn't exist -- same "no real symbol,
+/// caller falls back" contract every other lookup in this module uses.
+/// `A`'s symbol chooser is this function's only caller: it needs every
+/// symbol a library defines, not just the ones some part's `symbol:`
+/// field already resolved one of.
+pub fn list_symbols_in_library(lib_root: &Path, lib_name: &str) -> Vec<LibSymbol> {
+    let Some(path) = find_symbol_library_file(lib_root, lib_name) else { return Vec::new() };
+    let Ok(table) = load_library_table(&path) else { return Vec::new() };
+    let mut out: Vec<LibSymbol> = table
+        .iter()
+        .map(|(name, sym)| {
+            let mut sym = sym.clone();
+            sym.lib_id = format!("{lib_name}:{name}");
+            sym
+        })
+        .collect();
+    out.sort_by(|a, b| a.lib_id.cmp(&b.lib_id));
+    out
+}
+
+/// Every `.kicad_sym` file directly under `lib_root`, as bare library
+/// names (`"Device"`, not `"Device.kicad_sym"`) -- what `A`'s symbol
+/// chooser treats as "the libraries we already load" when it also wants
+/// real installed-library content, not just the hand-ported `builtin`
+/// catalog. Empty, not an error, when `lib_root` doesn't exist (the
+/// common case in an environment with no real KiCad install -- every
+/// caller already treats an empty result the same as "nothing more to
+/// offer beyond `builtin`").
+pub fn list_symbol_libraries(lib_root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(lib_root) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.path().file_stem().and_then(|s| s.to_str()).map(String::from).filter(|_| e.path().extension().and_then(|x| x.to_str()) == Some("kicad_sym")))
+        .collect();
+    names.sort();
+    names
+}
+
 fn load_library_table(path: &Path) -> Result<std::sync::Arc<LibraryTable>, String> {
     {
         let guard = cache().lock().unwrap();
@@ -172,6 +214,7 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
         on_board: bool_field("on_board", true),
         datasheet: prop("Datasheet"),
         description: prop("Description"),
+        reference_prefix: prop("Reference"),
         unit_count: unit_count.max(1),
     }
 }
@@ -401,6 +444,40 @@ mod tests {
         assert!(resolve_symbol(&dir, "Device:DoesNotExist").is_none());
         assert!(resolve_symbol(&dir, "NoSuchLib:R").is_none());
         assert!(resolve_symbol(&dir, "not_a_lib_id").is_none());
+    }
+
+    #[test]
+    fn build_symbol_captures_the_reference_property_as_a_prefix() {
+        let table = parse_symbol_library(MINI_LIB).unwrap();
+        assert_eq!(table.get("R").unwrap().reference_prefix, "R");
+        assert_eq!(table.get("GND").unwrap().reference_prefix, "#PWR", "power symbols use KiCad's own #PWR convention");
+        assert_eq!(table.get("AP1117-15").unwrap().reference_prefix, "", "no Reference property in this fixture's AP1117-15 -- empty, not a guess");
+    }
+
+    #[test]
+    fn list_symbols_in_library_returns_every_entry_with_a_fully_qualified_id() {
+        let dir = std::env::temp_dir().join("eda_kicad_symbol_lib_list_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Device.kicad_sym"), MINI_LIB).unwrap();
+
+        let all = list_symbols_in_library(&dir, "Device");
+        let ids: Vec<&str> = all.iter().map(|s| s.lib_id.as_str()).collect();
+        assert_eq!(ids, vec!["Device:AMS1117-3.3", "Device:AP1117-15", "Device:GND", "Device:R"], "every symbol in the file, sorted, not just one a part already resolved");
+        assert!(all.iter().all(|s| s.lib_id.starts_with("Device:")), "every entry's lib_id is fixed up, same as resolve_symbol's own doc explains the raw table needs");
+
+        assert!(list_symbols_in_library(&dir, "NoSuchLib").is_empty(), "a library with no file is empty, not an error -- same contract as resolve_symbol");
+    }
+
+    #[test]
+    fn list_symbol_libraries_finds_kicad_sym_files_only() {
+        let dir = std::env::temp_dir().join("eda_kicad_symbol_lib_names_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Device.kicad_sym"), MINI_LIB).unwrap();
+        std::fs::write(dir.join("power.kicad_sym"), MINI_LIB).unwrap();
+        std::fs::write(dir.join("README.txt"), "not a library").unwrap();
+
+        assert_eq!(list_symbol_libraries(&dir), vec!["Device", "power"], "sorted bare names, non-.kicad_sym files ignored");
+        assert!(list_symbol_libraries(Path::new("/no/such/directory/at/all")).is_empty(), "a missing root is empty, not a panic");
     }
 
     #[test]

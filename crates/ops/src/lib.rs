@@ -41,12 +41,23 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
 use eda_model::ir::{
-    Design, DrawingsSection, FillMode, FootprintInstance, IslandRemovalMode, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection,
-    SchematicSection, Shape, Side, SymbolInstance, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, DrawingsSection, ErcExclusion, FillMode, FootprintInstance, IslandRemovalMode, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+
+/// `dialog_annotate.cpp`'s own "Order Options": which coordinate breaks
+/// ties first when two symbols would otherwise land in the same spot in
+/// the sort. `YThenX` ("sort by Y position") is KiCad's own default and
+/// what this project's `annotate` already did before this field existed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnotateOrder {
+    #[default]
+    YThenX,
+    XThenY,
+}
 
 /// Which way from the anchor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -377,14 +388,19 @@ pub enum Cmd {
     /// `R`: quarter turns, same convention as `Rotate`.
     RotateSymbol { id: String, quarter_turns: u8 },
     /// `X` ("Mirror Horizontally", KiCad's `SYM_MIRROR_Y` / negate-X):
-    /// toggles `SymbolInstance::mirrored`, the one axis this project's
-    /// schematic IR currently models (confirmed against
-    /// `transform_local_point`: `mirrored` already negates X, matching
-    /// this hotkey exactly). `Y` ("Mirror Vertically" / negate-Y) has no
-    /// field to toggle yet -- see `PARITY-sch.md`'s eeschema row for that
-    /// gap; left unwired rather than overloading this one flag with a
-    /// second meaning.
+    /// toggles `SymbolInstance::mirrored` (confirmed against
+    /// `transform_local_point`: `mirrored` negates X, matching this
+    /// hotkey exactly).
     MirrorSymbol { id: String },
+    /// `Y` ("Mirror Vertically", KiCad's `SYM_MIRROR_X`): toggles
+    /// `SymbolInstance::mirror_y`, clearing `mirrored` if it was set --
+    /// KiCad's own symbols never carry both mirror flags at once (there
+    /// are only 3 mirror states: none, X, Y -- see `transform.ts`'s own
+    /// header comment on the frontend, ported from `sch_symbol.cpp::
+    /// SetOrientation`), so toggling one axis on always means toggling
+    /// the other off, same as a real `SetOrientation` call replaces the
+    /// whole orientation rather than adding a flag.
+    MirrorSymbolVertical { id: String },
     /// `Del` on a symbol: removes the instance (and its synthesized
     /// `Part`, if `reconcile_schematic` had added one for a symbol with no
     /// intent counterpart) from the sheet. Matches real eeschema: wires
@@ -415,10 +431,29 @@ pub enum Cmd {
     AddNoConnect { at: Point },
     DeleteNoConnect { id: String },
 
+    /// `dialog_erc.cpp`'s own "Exclude this violation" (right-click a
+    /// finding, or the dialog's own Exclude button): accepts one ERC
+    /// finding by its own `(check, location)` key -- the same shape
+    /// `eda_kicad::erc::Exclusions` already keys on, so `erc_json` can
+    /// build one directly from the persisted list with no translation.
+    /// Refused if `location` is empty (nothing to key on -- the same
+    /// findings `Exclusions` itself can never exclude); adding one
+    /// already excluded is a harmless no-op, not an error.
+    AddErcExclusion { check: String, location: String },
+    /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"):
+    /// refused if no exclusion with this exact key exists.
+    DeleteErcExclusion { check: String, location: String },
+
     /// `L`/`Ctrl+L`/`H`: place a net label. `kind`/`shape` follow
     /// `eda_model::ir::LabelKind`'s own vocabulary (local has no shape).
     AddLabel { net: String, at: Point, kind: LabelKind },
     DeleteLabel { id: String },
+    /// `T`: place free-standing text -- see `SchematicText`'s own doc for
+    /// why this is a separate verb from `AddText` (the PCB one, a
+    /// different shape entirely: layer/stroke/justify/mirror, none of
+    /// which a schematic has).
+    AddSchText { content: String, at: Point, angle_millideg: Millideg, size_um: Um },
+    DeleteSchText { id: String },
     /// `P`: place a power symbol on a pin.
     AddPowerSymbol { lib_id: String, at: Point, rot_millideg: Millideg, net: String, pin: String },
     DeletePowerSymbol { id: String },
@@ -430,14 +465,53 @@ pub enum Cmd {
     /// `eda board new` never heard of.
     AddSymbol { id: String, lib_id: String, at: Point, rot_millideg: Millideg, value: String, footprint: String },
 
+    /// `E` (Properties -- Value/Footprint/Datasheet only; see below for
+    /// `U`'s own reference rename) and `V`/`F` (`sch_edit_tool.cpp::
+    /// EditField`'s quick single-field edits): any of `value`/
+    /// `footprint`/`datasheet` left `None` is unchanged, so a single
+    /// quick-edit doesn't have to resend the other two just to leave them
+    /// alone. Deliberately does *not* touch `ConstraintModel::Part` (not
+    /// persisted across requests anyway, see `board::load`) -- same
+    /// "the schematic instance's own copy wins when set" precedent
+    /// `SymbolInstance::value`'s own doc already established, so the
+    /// Schematic tab reflects the edit immediately regardless.
+    EditSymbolFields { id: String, value: Option<String>, footprint: Option<String>, datasheet: Option<String> },
+
+    /// `U` (`editReference`): rename a symbol's own reference designator,
+    /// cascading the change through every `"REF.PIN"` string this sheet's
+    /// wires/power-symbols/no-connects hold (so a wire that named
+    /// `"R1.2"` still resolves after `R1` becomes `R5`). Refused if
+    /// `new_id` is blank or already names another symbol on this sheet.
+    /// Deliberately does *not* retarget `design.placement`'s own
+    /// `FootprintInstance` (the PCB side has no rename concept at all) or
+    /// touch intent.yaml (read-only to every verb in this file) -- the
+    /// next `reconcile_schematic` pass simply synthesizes a fresh `Part`
+    /// for the new id, same mechanism `AddSymbol`'s own doc describes,
+    /// while the old reference's PCB footprint (if any) is left exactly
+    /// where it was, now with no matching schematic symbol. A real
+    /// "rename and keep the PCB placement" is future work -- see
+    /// PARITY-sch.md.
+    RenameSymbol { id: String, new_id: String },
+
     /// `Ctrl+A` (Annotate): assign reference designators to every
     /// not-yet-annotated symbol (an `id` this project synthesizes as
     /// `"U?1"`/`"U?2"`/... when `AddSymbol` is given a blank prefix+number
-    /// -- see `sch_drawing_tools`' own symbol-chooser flow), in `order`
-    /// (top-to-bottom sheet position, left-to-right as the tiebreak,
-    /// matching `dialog_annotate.cpp`'s default). `reset_existing` mirrors
-    /// the dialog's "Clear and re-annotate" vs "Keep existing" modes.
-    Annotate { reset_existing: bool },
+    /// -- see `sch_drawing_tools`' own symbol-chooser flow), sorted by
+    /// `order` (`dialog_annotate.cpp`'s "Order Options", default top to
+    /// bottom). `reset_existing` mirrors the dialog's "Clear and
+    /// re-annotate" vs "Keep existing" modes. `ids`, when given, is
+    /// `dialog_annotate.cpp`'s own "Selection" scope -- only symbols named
+    /// here are reset/renumbered, everything else on the sheet is left
+    /// exactly as it is; `None` is the dialog's "Schematic"/"Sheet" scope
+    /// (this project's IR has no sheet hierarchy to tell those two apart,
+    /// so there's only one "whole sheet" scope here, not source's three).
+    Annotate {
+        reset_existing: bool,
+        #[serde(default)]
+        order: AnnotateOrder,
+        #[serde(default)]
+        ids: Option<Vec<String>>,
+    },
 }
 
 /// Which editor a `Cmd` belongs to -- `eeschema`'s `design.schematic`, or
@@ -463,16 +537,23 @@ impl Cmd {
             | Cmd::DragSymbol { .. }
             | Cmd::RotateSymbol { .. }
             | Cmd::MirrorSymbol { .. }
+            | Cmd::MirrorSymbolVertical { .. }
             | Cmd::DeleteSymbol { .. }
             | Cmd::AddWire { .. }
             | Cmd::DeleteWire { .. }
             | Cmd::AddNoConnect { .. }
             | Cmd::DeleteNoConnect { .. }
+            | Cmd::AddErcExclusion { .. }
+            | Cmd::DeleteErcExclusion { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
+            | Cmd::AddSchText { .. }
+            | Cmd::DeleteSchText { .. }
             | Cmd::AddPowerSymbol { .. }
             | Cmd::DeletePowerSymbol { .. }
             | Cmd::AddSymbol { .. }
+            | Cmd::EditSymbolFields { .. }
+            | Cmd::RenameSymbol { .. }
             | Cmd::Annotate { .. } => Domain::Schematic,
             _ => Domain::Pcb,
         }
@@ -518,11 +599,21 @@ impl Cmd {
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
 
-            Cmd::MoveSymbol { id, .. } | Cmd::DragSymbol { id, .. } | Cmd::RotateSymbol { id, .. } | Cmd::MirrorSymbol { id } | Cmd::DeleteSymbol { id } | Cmd::AddSymbol { id, .. } => vec![id],
+            Cmd::MoveSymbol { id, .. }
+            | Cmd::DragSymbol { id, .. }
+            | Cmd::RotateSymbol { id, .. }
+            | Cmd::MirrorSymbol { id }
+            | Cmd::MirrorSymbolVertical { id }
+            | Cmd::DeleteSymbol { id }
+            | Cmd::AddSymbol { id, .. }
+            | Cmd::EditSymbolFields { id, .. }
+            | Cmd::RenameSymbol { id, .. } => vec![id],
             Cmd::AddWire { .. } => vec!["wire"],
-            Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } => vec![id],
+            Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } | Cmd::DeleteSchText { id } => vec![id],
             Cmd::AddNoConnect { .. } => vec!["no_connect"],
+            Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
+            Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
             Cmd::Annotate { .. } => vec!["annotate"],
         }
@@ -843,17 +934,24 @@ impl<'a> Board<'a> {
             Cmd::DragSymbol { id, x, y, attached_wire_endpoints } => self.drag_symbol(id, *x, *y, attached_wire_endpoints),
             Cmd::RotateSymbol { id, quarter_turns } => self.rotate_symbol(id, *quarter_turns),
             Cmd::MirrorSymbol { id } => self.mirror_symbol(id),
+            Cmd::MirrorSymbolVertical { id } => self.mirror_symbol_vertical(id),
             Cmd::DeleteSymbol { id } => self.delete_symbol(id),
             Cmd::AddWire { pts } => self.add_wire(pts.clone()),
             Cmd::DeleteWire { id } => self.delete_wire(id),
             Cmd::AddNoConnect { at } => self.add_no_connect(*at),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
+            Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
+            Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
             Cmd::DeleteLabel { id } => self.delete_label(id),
+            Cmd::AddSchText { content, at, angle_millideg, size_um } => self.add_sch_text(content, *at, *angle_millideg, *size_um),
+            Cmd::DeleteSchText { id } => self.delete_sch_text(id),
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint),
-            Cmd::Annotate { reset_existing } => self.annotate(*reset_existing),
+            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
+            Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
+            Cmd::Annotate { reset_existing, order, ids } => self.annotate(*reset_existing, *order, ids.as_deref()),
         }
     }
 
@@ -1780,7 +1878,7 @@ impl<'a> Board<'a> {
     /// `derive_schematic` never ran); everything else targets an id that
     /// can only already exist inside a section that is already there.
     fn schematic_mut_or_create(&mut self) -> &mut SchematicSection {
-        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![] })
+        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![] })
     }
 
     fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {
@@ -1824,13 +1922,27 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// `X` ("Mirror Horizontally") -- see `Cmd::MirrorSymbol`'s doc on why
-    /// this is the one axis the IR models.
+    /// `X` ("Mirror Horizontally").
     fn mirror_symbol(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
         self.find_symbol(id)?;
         let sch = self.schematic_mut()?;
         let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
         s.mirrored = !s.mirrored;
+        if s.mirrored {
+            s.mirror_y = false; // see Cmd::MirrorSymbolVertical's doc -- never both at once
+        }
+        Ok(())
+    }
+
+    /// `Y` ("Mirror Vertically") -- see `Cmd::MirrorSymbolVertical`'s doc.
+    fn mirror_symbol_vertical(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        self.find_symbol(id)?;
+        let sch = self.schematic_mut()?;
+        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        s.mirror_y = !s.mirror_y;
+        if s.mirror_y {
+            s.mirrored = false;
+        }
         Ok(())
     }
 
@@ -1877,6 +1989,29 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// `dialog_erc.cpp`'s "Exclude this violation" -- see `Cmd::AddErcExclusion`'s own doc.
+    fn add_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
+        if location.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_erc_exclusion", check, "this finding has no location to key an exclusion on")]);
+        }
+        let sch = self.schematic_mut_or_create();
+        if !sch.erc_exclusions.iter().any(|e| e.check == check && e.location == location) {
+            sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into() });
+            sch.erc_exclusions.sort();
+        }
+        Ok(())
+    }
+
+    fn delete_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.erc_exclusions.len();
+        sch.erc_exclusions.retain(|e| !(e.check == check && e.location == location));
+        if sch.erc_exclusions.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_erc_exclusion", location, "no exclusion with this check+location exists")]);
+        }
+        Ok(())
+    }
+
     fn add_label(&mut self, net: &str, at: Point, kind: LabelKind) -> Result<(), Vec<CheckResult>> {
         if net.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_label", "label", "a label needs a net name")]);
@@ -1891,6 +2026,27 @@ impl<'a> Board<'a> {
         sch.labels.retain(|l| l.id != id);
         if sch.labels.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_label", id, "no label with this id")]);
+        }
+        Ok(())
+    }
+
+    /// `T`: place free-standing text. Unlike `add_label`, an empty
+    /// `content` isn't refused here -- the frontend dialog itself requires
+    /// non-blank text before it will even submit (same convention
+    /// `TextDialog.tsx` already uses for the PCB side's own `add_text`),
+    /// so a backend-level refusal would never actually trigger in
+    /// practice; this keeps the verb itself simple.
+    fn add_sch_text(&mut self, content: &str, at: Point, angle: Millideg, size_um: Um) -> Result<(), Vec<CheckResult>> {
+        self.schematic_mut_or_create().texts.push(SchematicText { id: String::new(), content: content.into(), at, angle, size_um });
+        Ok(())
+    }
+
+    fn delete_sch_text(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.texts.len();
+        sch.texts.retain(|t| t.id != id);
+        if sch.texts.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_sch_text", id, "no text with this id")]);
         }
         Ok(())
     }
@@ -1935,7 +2091,60 @@ impl<'a> Board<'a> {
         if sch.symbols.iter().any(|s| s.id == id) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, "a symbol with this reference is already on the sheet")]);
         }
-        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, lib_id: lib_id.into(), unit: 1, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
+        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit: 1, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
+        Ok(())
+    }
+
+    /// `E`/`V`/`F`: see `Cmd::EditSymbolFields`'s own doc.
+    fn edit_symbol_fields(&mut self, id: &str, value: Option<&str>, footprint: Option<&str>, datasheet: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        self.find_symbol(id)?;
+        let sch = self.schematic_mut()?;
+        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        if let Some(v) = value {
+            s.value = v.to_string();
+        }
+        if let Some(f) = footprint {
+            s.footprint = f.to_string();
+        }
+        if let Some(d) = datasheet {
+            s.datasheet = d.to_string();
+        }
+        Ok(())
+    }
+
+    /// `U`: see `Cmd::RenameSymbol`'s own doc.
+    fn rename_symbol(&mut self, id: &str, new_id: &str) -> Result<(), Vec<CheckResult>> {
+        if new_id.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a symbol needs a reference designator")]);
+        }
+        self.find_symbol(id)?;
+        if new_id != id && self.schematic()?.symbols.iter().any(|s| s.id == new_id) {
+            return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on the sheet")]);
+        }
+        if new_id == id {
+            return Ok(()); // renaming to the same id is a no-op, not an error
+        }
+        let sch = self.schematic_mut()?;
+        let old_prefix = format!("{id}.");
+        let new_prefix = format!("{new_id}.");
+        for w in &mut sch.wires {
+            for p in &mut w.pins {
+                if let Some(rest) = p.strip_prefix(&old_prefix) {
+                    *p = format!("{new_prefix}{rest}");
+                }
+            }
+        }
+        for ps in &mut sch.power_symbols {
+            if let Some(rest) = ps.pin.strip_prefix(&old_prefix) {
+                ps.pin = format!("{new_prefix}{rest}");
+            }
+        }
+        for nc in &mut sch.no_connects {
+            if let Some(rest) = nc.pin.strip_prefix(&old_prefix) {
+                nc.pin = format!("{new_prefix}{rest}");
+            }
+        }
+        sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above").id = new_id.to_string();
         Ok(())
     }
 
@@ -1947,10 +2156,20 @@ impl<'a> Board<'a> {
     /// `reset_existing` first strips every symbol's id back to
     /// "<prefix>?" (dialog's "Reset existing annotations"), so the whole
     /// sheet renumbers from scratch instead of only filling gaps.
-    fn annotate(&mut self, reset_existing: bool) -> Result<(), Vec<CheckResult>> {
+    fn annotate(&mut self, reset_existing: bool, order: AnnotateOrder, ids: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
         let sch = self.schematic_mut()?;
+        // Scope snapshot, by index, taken before any id mutates: `ids`
+        // names symbols by the id the caller/selection saw them under,
+        // which `reset_existing` below is about to change for exactly the
+        // ones in scope -- re-checking membership against the *new* id
+        // after that would wrongly drop them back out of scope.
+        let in_scope: Vec<bool> = sch.symbols.iter().map(|s| ids.is_none_or(|list| list.iter().any(|want| want == &s.id))).collect();
+
         if reset_existing {
-            for s in &mut sch.symbols {
+            for (i, s) in sch.symbols.iter_mut().enumerate() {
+                if !in_scope[i] {
+                    continue;
+                }
                 let prefix: String = s.id.chars().take_while(|c| c.is_alphabetic()).collect();
                 if !prefix.is_empty() {
                     s.id = format!("{prefix}?");
@@ -1967,9 +2186,16 @@ impl<'a> Board<'a> {
             let e = next.entry(prefix).or_insert(0);
             *e = (*e).max(num);
         }
-        let mut order: Vec<usize> = (0..sch.symbols.len()).filter(|&i| sch.symbols[i].id.ends_with('?')).collect();
-        order.sort_by(|&a, &b| (sch.symbols[a].at.y, sch.symbols[a].at.x).cmp(&(sch.symbols[b].at.y, sch.symbols[b].at.x)));
-        for i in order {
+        let mut to_number: Vec<usize> = (0..sch.symbols.len()).filter(|&i| sch.symbols[i].id.ends_with('?') && in_scope[i]).collect();
+        to_number.sort_by(|&a, &b| {
+            let (ya, xa) = (sch.symbols[a].at.y, sch.symbols[a].at.x);
+            let (yb, xb) = (sch.symbols[b].at.y, sch.symbols[b].at.x);
+            match order {
+                AnnotateOrder::YThenX => (ya, xa).cmp(&(yb, xb)),
+                AnnotateOrder::XThenY => (xa, ya).cmp(&(xb, yb)),
+            }
+        });
+        for i in to_number {
             let prefix = sch.symbols[i].id.trim_end_matches('?').to_string();
             let prefix = if prefix.is_empty() { "U".to_string() } else { prefix };
             let n = next.entry(prefix.clone()).or_insert(0);

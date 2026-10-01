@@ -37,6 +37,13 @@ export function StatusBar() {
   // at the schematic would report a number that has nothing to do with
   // what's on screen. 3D's camera has no comparable "zoom %" concept.
   const zoomScale = state.tab === "schematic" ? state.schematicView.scale : state.tab === "pcb" ? state.view.scale : 0;
+  // Unlike grid/autopan/layer above, the tool message (field 6) is real
+  // and meaningful on the Schematic tab too -- SchematicView.tsx has its
+  // own `state.activeTool` (move/drag/wire/the `L`/`P`/`T`/`Q` placement
+  // tools), and with no live canvas preview for most of those (see
+  // PARITY-sch.md), this is the one piece of "what will clicking do"
+  // feedback they get.
+  const showToolMsg = state.tab === "pcb" || state.tab === "schematic";
 
   return (
     <div className="status-bar">
@@ -65,7 +72,7 @@ export function StatusBar() {
         <option value="mil">mil</option>
         <option value="in">in</option>
       </select>
-      {onPcb && <span className="field">{TOOL_MESSAGES[state.activeTool]}</span>}
+      {showToolMsg && <span className="field">{TOOL_MESSAGES[state.activeTool]}</span>}
       {onPcb && state.activeLayer && <span className="field">layer {state.activeLayer}</span>}
       <span className="spacer" />
       <label className="toggle" title="Refuse a move/edit that adds gate failures (not a KiCad feature)">

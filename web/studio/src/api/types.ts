@@ -427,6 +427,7 @@ export type Cmd =
   | { op: "drag_symbol"; id: string; x: Um; y: Um; attached_wire_endpoints: [number, number][] }
   | { op: "rotate_symbol"; id: string; quarter_turns: number }
   | { op: "mirror_symbol"; id: string }
+  | { op: "mirror_symbol_vertical"; id: string }
   | { op: "delete_symbol"; id: string }
   | { op: "add_wire"; pts: PointXY[] }
   | { op: "delete_wire"; id: string }
@@ -434,10 +435,17 @@ export type Cmd =
   | { op: "delete_no_connect"; id: string }
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
+  | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
+  | { op: "delete_sch_text"; id: string }
   | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
   | { op: "delete_power_symbol"; id: string }
   | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string }
-  | { op: "annotate"; reset_existing: boolean };
+  | { op: "edit_symbol_fields"; id: string; value?: string | null; footprint?: string | null; datasheet?: string | null }
+  | { op: "rename_symbol"; id: string; new_id: string }
+  | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[] }
+  /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
+  | { op: "add_erc_exclusion"; check: string; location: string }
+  | { op: "delete_erc_exclusion"; check: string; location: string };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
 export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
@@ -759,6 +767,16 @@ export interface SchematicLabel {
   shape: LabelShape | null;
 }
 
+/** `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, deliberately minimal next to a PCB `BoardText` (no layer/justify/mirror -- a schematic has none of those concepts). */
+export interface SchematicText {
+  /** Stable id (`txt_xxxxxxxxxxxx`) -- for `delete_sch_text`. */
+  id: string;
+  content: string;
+  at: [Um, Um];
+  angle: Degrees;
+  size_um: Um;
+}
+
 export interface TitleBlock {
   title: string;
   date: string;
@@ -778,7 +796,31 @@ export interface Schematic {
   wires: SchematicWire[];
   no_connects: NoConnect[];
   labels: SchematicLabel[];
+  texts: SchematicText[];
   title_block: TitleBlock | null;
+}
+
+// ---------------------------------------------------------------- Symbol library
+//
+// GET /api/symbol_library. Source of truth: crates/cli/src/studio.rs
+// `symbol_library_json()`. `A`'s symbol chooser's own catalog -- "the
+// libraries we already load" (every library name this project's intent
+// already resolved a part against, or that's already on the sheet,
+// scanned for its *full* contents), not a browse-every-installed-library
+// search. Power symbols and the parametric `Connector_Generic:Conn_01x*`
+// family are deliberately excluded -- see `symbol_library_json`'s own doc.
+
+export interface SymbolLibraryEntry {
+  lib_id: string;
+  description: string;
+  /** The library's own default `Reference` ("R", "C", "U", ...) -- "U" when unknown. Seeds `A`'s own next-free-number placement, same as a real reference designator always needs a letter prefix to start from. */
+  reference_prefix: string;
+}
+
+export interface SymbolLibrary {
+  entries: SymbolLibraryEntry[];
+  /** Resolved graphics for every entry above, keyed by `lib_id` -- same shape `Schematic.lib_symbols` already uses, so the chooser's live preview reuses the exact same renderer the canvas itself does. */
+  lib_symbols: LibSymbols;
 }
 
 // ---------------------------------------------------------------- DRC
@@ -835,13 +877,32 @@ export interface DrcReport {
 // back to something selectable/panable itself rather than reading a
 // ready-made position the way DRC's `DrcItem.pos` gives one.
 
-export type ErcSeverity = "error" | "warning";
+/** `"excluded"` is `dialog_erc.cpp`'s "Exclude this violation" (right-click a marker), persisted server-side in `design.schematic.erc_exclusions` and applied by `check_erc_excluding` -- a finding stays in `violations[]` (so `ErcDialog.tsx` can still show and un-exclude it) rather than disappearing the way an unexcluded Pass does. */
+export type ErcSeverity = "error" | "warning" | "excluded";
 
 export interface ErcViolation {
   /** `eda_kicad::erc`'s own check name ("pin_not_connected", "wire_dangling", ...) -- real KiCad's own ERC type names, per `kicad-cli sch erc`'s report. */
   check: string;
   severity: ErcSeverity;
-  /** "U1" or "U1.3" (REF or REF.PIN) when the finding is about one symbol/pin; otherwise whatever `CheckResult::location` carries ("design", a net name, ...), or null. */
+  /**
+   * An id into the schematic, in one of several shapes depending on which
+   * check produced it (`crates/kicad/src/erc.rs`, every `location: Some(format!(...))`
+   * call read directly) -- never a ready-made point the way DRC's `DrcItem.pos`
+   * is. `ercMarkerPosition` (components/schematic/ercMarkerPosition.ts) is the
+   * one place this app resolves any of these back to a canvas position:
+   *   "REF.PIN"      -- pin_not_connected (PIN is a pin *number*, not name).
+   *   "NET:REF.PIN"  -- pin_to_pin / pin_not_driven / power_pin_not_driven.
+   *   "NET:ID"       -- same two checks, when the flagged net member is a
+   *                     power symbol: ID is its own `PowerSymbol.id`, not
+   *                     a part ref (no dot).
+   *   "x,y"          -- no_connect_connected / no_connect_dangling: a
+   *                     literal point, board-space um.
+   *   "NET:x,y"      -- unconnected_wire_endpoint: same literal point,
+   *                     net name prefix ignored.
+   *   a bare net name -- wire_dangling: no symbol/point in the string at
+   *                     all.
+   * `null` on a (currently theoretical) location-less finding.
+   */
   location: string | null;
   hint: string | null;
 }

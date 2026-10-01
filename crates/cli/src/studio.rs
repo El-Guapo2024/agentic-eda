@@ -517,6 +517,10 @@ fn handle(
             let v = schematic_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/symbol_library") => {
+            let v = symbol_library_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job),
         ("GET", "/api/drc") => {
             let v = drc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
@@ -862,11 +866,13 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection {
                 power_symbols: vec![],
                 no_connects: vec![],
+                erc_exclusions: vec![],
                 title_block: None,
                 sheets: vec![],
                 symbols: Vec::new(),
                 wires: Vec::new(),
                 labels: Vec::new(),
+                texts: Vec::new(),
             })
         }
     };
@@ -880,6 +886,18 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 "at": [s.at.x, s.at.y],
                 // Millideg -> plain degrees, same convention `state()` uses for a PCB part's `rot`.
                 "rot": s.rot as f64 / 1000.0,
+                // `mirror`: the two-axis form the frontend's own renderer
+                // (schematic/transform.ts, ported from `sch_symbol.cpp::
+                // SetOrientation` before this field existed on this side)
+                // has always expected -- `mirrored`/`mirror_y` are never
+                // both true at once (`mirror_symbol`/`mirror_symbol_
+                // vertical` each clear the other), so this is a clean
+                // three-way choice, not a lossy collapse. `mirrored` is
+                // also still sent, for api/client.ts's own legacy-shim
+                // fallback (`sym.mirror ?? (legacy.mirrored ? "y" : null)`) --
+                // redundant once this field exists, but harmless to leave
+                // both until that shim is itself cleaned up.
+                "mirror": if s.mirrored { Some("y") } else if s.mirror_y { Some("x") } else { None },
                 "mirrored": s.mirrored,
                 // KiCad library id this instance draws from ("Device:R", or
                 // the synthetic "eda:<id>" for a part with no resolved real
@@ -906,6 +924,11 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             };
             json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str) })
         })
+        .collect();
+    let texts: Vec<Value> = sch
+        .texts
+        .iter()
+        .map(|t| json!({ "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_um": t.size_um }))
         .collect();
     let power_symbols: Vec<Value> = sch
         .power_symbols
@@ -941,11 +964,68 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         "symbols": symbols,
         "wires": wires,
         "labels": labels,
+        "texts": texts,
         "power_symbols": power_symbols,
         "no_connects": no_connects,
         "title_block": title_block,
         "lib_symbols": lib_symbols,
     }))
+}
+
+/// `A`'s symbol chooser's own catalog -- GET /api/symbol_library. "The
+/// libraries we already load" (the task brief's own framing, not "browse
+/// every installed library"): every library name this project's intent
+/// already resolved a part against, or that's already placed on the
+/// sheet, scanned for its *full* contents (`eda_kicad::
+/// list_symbols_in_library`) -- not just the one symbol some part
+/// happened to already use -- so placing a second, different part from an
+/// already-referenced library (say, a diode when only resistors are used
+/// so far) is possible without it being on the sheet first. Power symbols
+/// are excluded (`P` is their own tool, section 3) and so is the
+/// parametric `Connector_Generic:Conn_01x<N>` family (see
+/// `builtin_catalog`'s own doc) -- both documented gaps, not oversights.
+///
+/// `eda_model::symbol::builtin_catalog` fills in anything a real library
+/// file didn't already cover for a referenced name, same "real file
+/// first, builtin fallback" precedence every other symbol resolution in
+/// this codebase already uses -- the common case in this project's own
+/// test/example boards, which have no real KiCad install to read from at
+/// all (`default_symbol_library_root` points at a path that doesn't exist
+/// here), so without it the chooser would be empty on every board this
+/// session could actually try it against.
+fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let lib_root = eda_kicad::default_symbol_library_root();
+
+    let lib_name_of = |lib_id: &str| lib_id.split_once(':').map(|(l, _)| l.to_string());
+    let mut lib_names: std::collections::BTreeSet<String> = model.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)).collect();
+    if let Some(sch) = &design.schematic {
+        lib_names.extend(sch.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)));
+    }
+
+    let mut by_lib_id: std::collections::BTreeMap<String, eda_model::LibSymbol> = std::collections::BTreeMap::new();
+    for name in &lib_names {
+        for sym in eda_kicad::list_symbols_in_library(&lib_root, name) {
+            by_lib_id.insert(sym.lib_id.clone(), sym);
+        }
+    }
+    for sym in eda_model::symbol::builtin_catalog() {
+        by_lib_id.entry(sym.lib_id.clone()).or_insert(sym);
+    }
+
+    let entries: Vec<Value> = by_lib_id
+        .values()
+        .map(|s| {
+            json!({
+                "lib_id": s.lib_id,
+                "description": s.description,
+                "reference_prefix": if s.reference_prefix.is_empty() { "U" } else { s.reference_prefix.as_str() },
+            })
+        })
+        .collect();
+    let lib_symbols: Value = by_lib_id.iter().map(|(id, s)| (id.clone(), lib_symbol_json(s))).collect::<serde_json::Map<_, _>>().into();
+
+    Ok(json!({ "entries": entries, "lib_symbols": lib_symbols }))
 }
 
 fn label_shape_str(s: eda_model::ir::LabelShape) -> &'static str {
@@ -972,8 +1052,25 @@ fn label_shape_str(s: eda_model::ir::LabelShape) -> &'static str {
 /// part (unlike a real lib_id, which can be shared), so this always has a
 /// `Part` to build from.
 pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::ConstraintModel) -> eda_model::LibSymbol {
-    let empty = || eda_model::LibSymbol { lib_id: lib_id.to_string(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), unit_count: 1 };
     let reference = lib_id.strip_prefix("eda:").unwrap_or(lib_id);
+    // This id already names one specific part (`"eda:<id>"` is 1:1 with a
+    // `Part`, unlike a real lib_id which many instances can share) -- its
+    // own reference's leading letters are the only "what kind of part is
+    // this" signal available here, same heuristic `annotate()` already
+    // uses to recover a prefix from an id.
+    let reference_prefix: String = reference.chars().take_while(|c| c.is_alphabetic()).collect();
+    let empty = || eda_model::LibSymbol {
+        lib_id: lib_id.to_string(),
+        graphics: vec![],
+        pins: vec![],
+        power: false,
+        in_bom: true,
+        on_board: true,
+        datasheet: String::new(),
+        description: String::new(),
+        reference_prefix: reference_prefix.clone(),
+        unit_count: 1,
+    };
     let Some(part) = model.part(reference) else { return empty() };
     let wireable: Vec<&eda_model::Pin> = part.pins.iter().filter(|p| p.kind != eda_model::PinKind::Nc).collect();
     if wireable.is_empty() {
@@ -1016,7 +1113,18 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         .into_iter()
         .map(|(p, at, angle_deg)| eda_model::LibPin { number: p.number.clone(), name: p.name.clone().unwrap_or_default(), electrical_type: etype(p.kind).to_string(), shape: "line".to_string(), at, angle_deg, length_mm: 1.27, unit: 1 })
         .collect();
-    eda_model::LibSymbol { lib_id: lib_id.to_string(), graphics, pins: lib_pins, power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), unit_count: 1 }
+    eda_model::LibSymbol {
+        lib_id: lib_id.to_string(),
+        graphics,
+        pins: lib_pins,
+        power: false,
+        in_bom: true,
+        on_board: true,
+        datasheet: String::new(),
+        description: String::new(),
+        reference_prefix,
+        unit_count: 1,
+    }
 }
 
 /// One `LibSymbol` as JSON: graphics/pins in the symbol's own local frame,
@@ -1063,30 +1171,51 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// (`null` when absent) carrying the placement-quality providers' agent-fix
 /// metadata (see `eda_drc::FixHint`), which kicad-cli's own JSON has no
 /// concept of.
-/// GET /api/erc: `eda_kicad::check_erc` (the ERC engine, gap #4 in
-/// GAPS.md -- "built, zero UI exposure") run fresh on every call, same
-/// no-caching reasoning `drc_json`'s own doc gives. Flatter than
-/// `drc_json`'s `DrcViolation`/items shape: `check_erc` reports plain
-/// `CheckResult`s (check name, Fail/Warn, an optional "REF" or "REF.PIN"
-/// `location` string, a human `hint`) rather than DRC's richer
-/// positioned-item list, so there is no canvas-marker position to extract
-/// here the way DRC's `it.pos` gives one -- `ErcDialog.tsx`'s row click
-/// resolves `location` back to a symbol/pin to select instead. `Excluded`
-/// results are dropped (nothing in this app writes to `Exclusions` yet, so
-/// there is never one to show); `Pass` is never present in `check_erc`'s
+/// GET /api/erc: `eda_kicad::check_erc_excluding` (the ERC engine, gap #4
+/// in GAPS.md -- "built, zero UI exposure" when this doc was first
+/// written; exclusions followed in a later session) run fresh on every
+/// call, same no-caching reasoning `drc_json`'s own doc gives. Flatter
+/// than `drc_json`'s `DrcViolation`/items shape: `check_erc` reports
+/// plain `CheckResult`s (check name, Fail/Warn/Excluded, an optional
+/// "REF" or "REF.PIN" `location` string, a human `hint`) rather than
+/// DRC's richer positioned-item list, so there is no ready-made
+/// canvas-marker position to extract here the way DRC's `it.pos` gives
+/// one -- `SchematicView.tsx`'s own `ercMarkerPosition` resolves
+/// `location` back to a point client-side instead (several different
+/// shapes: "REF.PIN", "NET:REF.PIN", a literal "x,y", "NET@x,y", ... --
+/// see its own doc). An `Excluded` result is kept (not dropped) and
+/// reported with its own `"excluded"` severity, so `ErcDialog.tsx` can
+/// still show and un-exclude it; `Pass` is never present in `check_erc`'s
 /// own output in the first place.
 fn erc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    let found = eda_kicad::check_erc(&design, &model);
+    // `dialog_erc.cpp`'s own accepted-findings list, applied the same way
+    // `check_erc_excluding` always has: a finding whose (check, location)
+    // matches a persisted exclusion downgrades from Fail/Warn to
+    // `CheckStatus::Excluded` rather than disappearing, so `ErcDialog.tsx`
+    // can still show (and un-exclude) it instead of it just going quiet.
+    let mut exclusions = eda_kicad::Exclusions::new();
+    if let Some(sch) = &design.schematic {
+        for e in &sch.erc_exclusions {
+            exclusions.exclude(e.check.clone(), e.location.clone());
+        }
+    }
+    let found = eda_kicad::check_erc_excluding(&design, &model, &exclusions);
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     let violations: Vec<Value> = found
         .iter()
-        .filter(|c| !matches!(c.status, CheckStatus::Pass | CheckStatus::Excluded))
+        .filter(|c| !matches!(c.status, CheckStatus::Pass))
         .map(|c| {
-            *counts.entry(c.check.as_str()).or_default() += 1;
+            // Only a still-live finding counts toward the dialog's own
+            // Errors/Warnings tally -- an excluded one is accounted for by
+            // its own severity (the frontend's own exclusions filter), not
+            // double-counted into "error"/"warning" too.
+            if !matches!(c.status, CheckStatus::Excluded) {
+                *counts.entry(c.check.as_str()).or_default() += 1;
+            }
             json!({
                 "check": c.check,
-                "severity": match c.status { CheckStatus::Fail => "error", _ => "warning" },
+                "severity": match c.status { CheckStatus::Fail => "error", CheckStatus::Excluded => "excluded", _ => "warning" },
                 "location": c.location,
                 "hint": c.hint,
             })

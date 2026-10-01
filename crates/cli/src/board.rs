@@ -171,7 +171,7 @@ fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut Constrain
         let lib = resolve(&sym.lib_id, model).unwrap_or_else(|| crate::studio::synthesize_generic_symbol(&format!("eda:{}", sym.id), model));
         let angle_deg = sym.rot as f64 / 1000.0;
         for p in &lib.pins {
-            let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored);
+            let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
             pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
         }
     }
@@ -576,17 +576,37 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DragSymbol { id, x, y, .. } => format!("schematic drag {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::RotateSymbol { id, quarter_turns } => format!("schematic rotate {id} --quarters {quarter_turns}"),
         Cmd::MirrorSymbol { id } => format!("schematic mirror {id}"),
+        Cmd::MirrorSymbolVertical { id } => format!("schematic mirror-vertical {id}"),
         Cmd::DeleteSymbol { id } => format!("schematic delete-symbol {id}"),
         Cmd::AddWire { pts: p } => format!("schematic wire --pts \"{}\"", pts(p)),
         Cmd::DeleteWire { id } => format!("schematic delete-wire {id}"),
         Cmd::AddNoConnect { at } => format!("schematic no-connect --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteNoConnect { id } => format!("schematic delete-no-connect {id}"),
+        Cmd::AddErcExclusion { check, location } => format!("schematic erc-exclude {check:?} {location:?}"),
+        Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
+        Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::DeleteSchText { id } => format!("schematic text delete {id}"),
+        Cmd::EditSymbolFields { id, value, footprint, datasheet } => format!(
+            "schematic edit-fields {id}{}{}{}",
+            value.as_ref().map(|v| format!(" --value {v:?}")).unwrap_or_default(),
+            footprint.as_ref().map(|f| format!(" --footprint {f:?}")).unwrap_or_default(),
+            datasheet.as_ref().map(|d| format!(" --datasheet {d:?}")).unwrap_or_default(),
+        ),
+        Cmd::RenameSymbol { id, new_id } => format!("schematic rename {id} {new_id}"),
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
-        Cmd::Annotate { reset_existing } => format!("schematic annotate{}", if *reset_existing { " --reset" } else { "" }),
+        Cmd::Annotate { reset_existing, order, ids } => format!(
+            "schematic annotate{}{}{}",
+            if *reset_existing { " --reset" } else { "" },
+            match order {
+                eda_ops::AnnotateOrder::XThenY => " --order x-then-y",
+                eda_ops::AnnotateOrder::YThenX => "",
+            },
+            ids.as_ref().map(|v| format!(" --selection {}", v.join(","))).unwrap_or_default(),
+        ),
         Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids } => {
             format!("route: +{} track(s) +{} via(s), -{} track(s) -{} via(s)", tracks.len(), vias.len(), remove_track_ids.len(), remove_via_ids.len())
         }
@@ -650,12 +670,17 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
         Cmd::RotateSymbol { .. } => "schematic-rotate",
         Cmd::MirrorSymbol { .. } => "schematic-mirror",
+        Cmd::MirrorSymbolVertical { .. } => "schematic-mirror-vertical",
         Cmd::DeleteSymbol { .. } => "schematic-delete-symbol",
         Cmd::AddWire { .. } | Cmd::DeleteWire { .. } => "schematic-wire",
         Cmd::AddNoConnect { .. } | Cmd::DeleteNoConnect { .. } => "schematic-no-connect",
+        Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } => "schematic-erc-exclusion",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
+        Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
         Cmd::AddSymbol { .. } => "schematic-place",
+        Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
+        Cmd::RenameSymbol { .. } => "schematic-rename",
         Cmd::Annotate { .. } => "schematic-annotate",
     }
 }
@@ -1191,6 +1216,7 @@ mod tests {
             on_board: true,
             datasheet: String::new(),
             description: String::new(),
+            reference_prefix: "R".into(),
             unit_count: 1,
         };
         let model = ConstraintModel {
@@ -1202,7 +1228,7 @@ mod tests {
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
-        let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
+        let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
         let design = Design {
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
@@ -1210,8 +1236,10 @@ mod tests {
                 symbols: vec![sym("R1", 10_000, 10_000), sym("R2", 20_000, 10_000)],
                 wires: vec![],
                 labels: vec![],
+                texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
+                erc_exclusions: vec![],
                 title_block: None,
                 sheets: vec![],
             }),
@@ -1327,6 +1355,263 @@ mod tests {
         let (_, design, model) = load(&dir).unwrap();
         assert_eq!(design.schematic.as_ref().unwrap().labels.len(), 1);
         assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "removing one of the two labels must split R1 and R2 back onto separate nets");
+    }
+
+    /// `T`: free-standing text is purely cosmetic -- unlike `AddLabel`
+    /// above, it must have *no* effect on connectivity at all (it names no
+    /// net), while still getting the same id-backfill/undo treatment every
+    /// other schematic item gets.
+    #[test]
+    fn schematic_text_is_added_and_deleted_without_touching_connectivity() {
+        let dir = scratch("sch_text");
+        setup_schematic(&dir);
+
+        let (_, _, before) = load(&dir).unwrap();
+        assert_ne!(net_of(&before.nets, "R1.1").unwrap().name, net_of(&before.nets, "R2.1").unwrap().name, "sanity: starts on separate nets");
+
+        step(&dir, Cmd::AddSchText { content: "Power supply section".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_um: 1270 }, false, "test").unwrap();
+
+        // Reconciling at all (triggered by *any* Domain::Schematic Cmd, not
+        // just this one) is free to rename an unlabeled net to its own
+        // synthesized `NET_<n>` -- same as `schematic_wire_connects_and_
+        // disconnects_pins_on_one_netlist` above only ever asserts the two
+        // pins' nets differ, never a specific name. What free text must
+        // never do is *merge* them onto the same net.
+        let (_, design, model) = load(&dir).unwrap();
+        assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "free text must not merge R1 and R2 onto the same net");
+
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.texts.len(), 1);
+        let text = &sch.texts[0];
+        assert!(!text.id.is_empty(), "AddSchText's id must be backfilled, same as every other addressable schematic item");
+        assert_eq!(text.content, "Power supply section");
+        assert_eq!(text.at, Point { x: 15_000, y: 5_000 });
+
+        let text_id = text.id.clone();
+        step(&dir, Cmd::DeleteSchText { id: text_id }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(design.schematic.as_ref().unwrap().texts.is_empty());
+    }
+
+    /// `U`: a rename must not silently strand a power-symbol/no-connect
+    /// that named the old reference -- every `"REF.PIN"` string anywhere
+    /// on the sheet has to follow it. (The wire case is covered
+    /// separately, below, with real connected geometry -- a power symbol
+    /// or no-connect placed at the exact position of a *wired* pin would
+    /// make reconcile's own, unrelated "a no-connect point never
+    /// contributes a pin" rule suppress it regardless of what this method
+    /// does, so this fixture deliberately uses its own unconnected point
+    /// for each, to isolate the rename cascade itself from reconcile's
+    /// separate geometric re-derivation.)
+    #[test]
+    fn rename_symbol_cascades_through_power_symbol_and_no_connect_pin_references() {
+        let dir = scratch("sch_rename_cascade");
+        setup_schematic(&dir);
+
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: Point { x: 50_000, y: 50_000 }, rot: 0, net: "GND".into(), pin: "R1.1".into() });
+            sch.no_connects.push(eda_model::ir::NoConnect { id: String::new(), at: Point { x: 60_000, y: 60_000 }, pin: "R1.1".into() });
+        }
+        save(&dir, &design).unwrap();
+
+        step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R9".into() }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R9").unwrap().id, "R9");
+        assert!(sch.symbols.iter().all(|s| s.id != "R1"), "the old reference must not linger as a second symbol");
+        assert_eq!(sch.power_symbols[0].pin, "R9.1");
+        assert_eq!(sch.no_connects[0].pin, "R9.1");
+    }
+
+    /// The wire half of the same rule, through real connected geometry
+    /// instead of a hand-set `pins` string: renaming a symbol one end of
+    /// an existing wire lands on must not break that connection.
+    #[test]
+    fn rename_symbol_keeps_a_connected_wire_connected() {
+        let dir = scratch("sch_rename_wire");
+        setup_schematic(&dir);
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }] }, false, "test").unwrap();
+
+        let (_, design, model) = load(&dir).unwrap();
+        let before_net = net_of(&model.nets, "R2.1").unwrap().name.clone();
+        assert_eq!(design.schematic.as_ref().unwrap().wires[0].pins.len(), 2, "sanity: the wire starts connected to both pins");
+
+        step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R9".into() }, false, "test").unwrap();
+
+        let (_, design, model) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert!(sch.wires[0].pins.contains(&"R9.1".to_string()), "reconcile re-derives the wire's own pins from geometry using the renamed id -- the connection must survive the rename, not just the string");
+        assert!(sch.wires[0].pins.contains(&"R2.1".to_string()));
+        assert_eq!(net_of(&model.nets, "R9.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "still the same merged net");
+        assert_eq!(net_of(&model.nets, "R2.1").unwrap().name, before_net, "renaming one end must not even need to rename the net itself");
+    }
+
+    #[test]
+    fn rename_symbol_refuses_a_duplicate_id_and_an_unknown_source() {
+        let dir = scratch("sch_rename_refuse");
+        setup_schematic(&dir);
+        assert!(step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R2".into() }, false, "test").is_err(), "R2 already names another symbol on the sheet");
+        assert!(step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "".into() }, false, "test").is_err(), "a blank reference is refused");
+        assert!(step(&dir, Cmd::RenameSymbol { id: "R404".into(), new_id: "R9".into() }, false, "test").is_err(), "no symbol named R404 exists");
+        // Renaming to its own current id is a harmless no-op, not an error.
+        step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R1".into() }, false, "test").unwrap();
+    }
+
+    /// `X`/`Y`: KiCad's own symbols never carry both mirror flags at once
+    /// (only 3 states: none, X, Y) -- turning one axis on must turn the
+    /// other off, the same way a real `SetOrientation` call replaces the
+    /// whole orientation rather than adding a flag.
+    #[test]
+    fn mirror_x_and_mirror_y_are_mutually_exclusive() {
+        let dir = scratch("sch_mirror_exclusive");
+        setup_schematic(&dir);
+
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let r1 = |d: &eda_model::ir::Design| d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R1").unwrap().clone();
+        assert!(r1(&design).mirrored && !r1(&design).mirror_y, "X alone sets mirrored");
+
+        step(&dir, Cmd::MirrorSymbolVertical { id: "R1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!r1(&design).mirrored && r1(&design).mirror_y, "Y must clear the X flag it replaces, not add to it");
+
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(r1(&design).mirrored && !r1(&design).mirror_y, "and X must clear Y back, symmetrically");
+
+        // Each hotkey is still its own toggle: pressing the same one twice
+        // returns to "no mirror", not a stuck state.
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!r1(&design).mirrored && !r1(&design).mirror_y);
+    }
+
+    /// `dialog_erc.cpp`'s "Exclude this violation"/un-exclude: refuses a
+    /// blank location (nothing to key on, same limitation `Exclusions`
+    /// itself has), is idempotent (excluding the same finding twice does
+    /// not duplicate it), refuses un-excluding something never excluded,
+    /// and persists in `design.schematic.erc_exclusions` sorted by
+    /// (check, location).
+    #[test]
+    fn erc_exclusion_add_and_delete() {
+        let dir = scratch("sch_erc_exclusion");
+        setup_schematic(&dir);
+
+        assert!(
+            step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "".into() }, false, "test").is_err(),
+            "a blank location is refused -- nothing to key an exclusion on"
+        );
+
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        // Adding the same one again is a harmless no-op, not a duplicate.
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
+        assert_eq!(exclusions.len(), 2, "the repeated add must not duplicate");
+        assert_eq!(
+            exclusions,
+            &vec![
+                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() },
+                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() },
+            ],
+            "sorted by (check, location), not insertion order"
+        );
+
+        assert!(
+            step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R404.1".into() }, false, "test").is_err(),
+            "nothing excluded under this key"
+        );
+        step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
+        assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }]);
+    }
+
+    /// `E`/`V`/`F`: each field is independently settable -- editing just
+    /// the footprint must not reset a value set by an earlier, separate
+    /// edit back to blank.
+    #[test]
+    fn edit_symbol_fields_updates_only_the_fields_given() {
+        let dir = scratch("sch_edit_fields");
+        setup_schematic(&dir);
+
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k".into()), footprint: None, datasheet: None }, false, "test").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: None, footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let r1 = design.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R1").unwrap();
+        assert_eq!(r1.value, "10k", "the second edit (footprint only) must not have reset the first edit's value");
+        assert_eq!(r1.footprint, "Resistor_SMD:R_0603");
+        assert_eq!(r1.datasheet, "", "never touched, stays at its default");
+    }
+
+    /// `dialog_annotate.cpp`'s "Order Options": Y-then-X is the default
+    /// (top to bottom, left to right as the tiebreak) -- same numbering
+    /// this project always did before `AnnotateOrder` existed, confirmed
+    /// with two points chosen so the two orders actually disagree (A is
+    /// left-of and below B: Y-then-X puts B first, X-then-Y puts A
+    /// first).
+    #[test]
+    fn annotate_order_default_is_y_then_x_and_x_then_y_is_the_opposite_here() {
+        let dir = scratch("sch_annotate_order");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            // Neither point may collide with setup_schematic's own R1
+            // (10_000,10_000)/R2 (20_000,10_000) -- `.find(|s| s.at == ...)`
+            // below would silently match the wrong symbol otherwise.
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 5_000, y: 50_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "A": further left, further down
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 60_000, y: 40_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "B": further right, further up
+        }
+        save(&dir, &design).unwrap();
+
+        step(&dir, Cmd::Annotate { reset_existing: false, order: eda_ops::AnnotateOrder::YThenX, ids: None }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
+        let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000, y: 40_000 }).unwrap();
+        assert_eq!(b.id, "C1", "Y-then-X: B (lower Y) is numbered first");
+        assert_eq!(a.id, "C2");
+
+        // Reset and redo with X-then-Y -- the order must flip.
+        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::XThenY, ids: None }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
+        let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000, y: 40_000 }).unwrap();
+        assert_eq!(a.id, "C1", "X-then-Y: A (lower X) is numbered first -- the opposite of the Y-then-X result above");
+        assert_eq!(b.id, "C2");
+    }
+
+    /// `dialog_annotate.cpp`'s "Selection" scope: only the named symbols
+    /// are reset/renumbered, everything else on the sheet is left alone
+    /// even if `reset_existing` is set.
+    #[test]
+    fn annotate_with_an_explicit_id_list_only_touches_those_symbols() {
+        let dir = scratch("sch_annotate_selection");
+        setup_schematic(&dir);
+        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new() }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: 40_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new() }, false, "test").unwrap();
+
+        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]) }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert!(sch.symbols.iter().any(|s| s.id == "R1") && sch.symbols.iter().any(|s| s.id == "R2"), "R1/R2 were never in scope -- must be untouched");
+        assert!(sch.symbols.iter().any(|s| s.id == "R4"), "R4 was never in scope either, even though it's the same prefix as the one being reset");
+        // R3 was in scope: reset to "R?", then renumbered to the next free
+        // "R" number -- which is 5, not 3, since R4 (number 4, untouched
+        // and out of scope) is still on the sheet contributing to "next
+        // free" -- `annotate` fills the next free slot, it does not
+        // backfill gaps, same as before this field existed.
+        assert_eq!(sch.symbols.iter().find(|s| s.at == Point { x: 30_000, y: 10_000 }).unwrap().id, "R5");
+        assert!(!sch.symbols.iter().any(|s| s.id.ends_with('?')), "nothing should be left unannotated after the pass");
     }
 
     /// GAPS.md #15: "pressing Ctrl+Z while viewing the Schematic tab

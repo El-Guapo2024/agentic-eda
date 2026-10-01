@@ -31,7 +31,7 @@
 // the dangling-pin indicator circle is not drawn), and no electrical-pin
 // -type annotation text (off by default in the real schematic editor
 // too, so this is not actually a gap).
-import type { LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicWire } from "../../api/types";
+import type { ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
@@ -39,6 +39,8 @@ import { resolveLibSymbol, type ResolvedGraphic } from "./libSymbol";
 import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
 import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement } from "./labelShape";
 import { drawStrokeText } from "../text/strokeFont";
+import { ercMarkerPosition } from "./ercMarkerPosition";
+import { junctionPoints } from "./junctions";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -60,6 +62,10 @@ const BOLD_THICKNESS_FACTOR = 1 / 5;
 export interface SchematicPaintOptions {
   selection: Set<string>;
   netHighlight: string | null;
+  /** GET /api/erc's current report, or null when it hasn't been fetched this session -- same "only while the dialog cares" gating `state.erc` itself already has (see store.tsx's polling effect), not re-decided here. */
+  ercViolations?: ErcViolation[] | null;
+  /** `state.ercSelected` -- which `ercViolations` row the dialog's list currently has clicked/focused, drawn with the highlighted color instead of its own severity color (DRC markers' own `drcSelected` convention, mirrored here). */
+  ercSelected?: number | null;
 }
 
 const REF_FONT = 1.6;
@@ -69,6 +75,8 @@ const PIN_FONT = 1.1;
 const JUNCTION_RADIUS_UM = 457.2;
 /** eeschema/default_values.h DEFAULT_NOCONNECT_SIZE (48 mils, the marker's full width) -- half-width, um, i.e. how far each arm of the top-level `no_connects[]` X reaches from center. Read directly from sch_painter.cpp: `d = max(m_size, 3*defaultPen)/2 = max(48,18)/2 = 24 mil`. */
 const NOCONNECT_HALF_UM = 609.6;
+/** Radius, um, of an ERC marker's circle -- not a KiCad constant (real KiCad's MARKER_BASE is a small fixed-pixel icon, screen-space-constant regardless of zoom; this canvas has no such primitive, so markers scale with the sheet like everything else here). Sized against this file's own JUNCTION_RADIUS_UM/NOCONNECT_HALF_UM just above rather than canvas/painter.ts's PCB-scale DRC_MARKER_RADIUS_UM (300) -- a schematic's own features already read larger at a normal working zoom, so a marker sized to match sits comfortably between the two. */
+const ERC_MARKER_RADIUS_UM = 450;
 /** A pin whose own `electrical_type` is `no_connect` draws a *smaller* X at its own tip -- eeschema's TARGET_PIN_RADIUS (15 mil), confirmed in sch_painter.cpp as this exact pin-level marker's half-size, distinct from the top-level no-connect marker's own (larger) size above. */
 const PIN_NC_HALF_UM = 381;
 const FIELD_FONT = 1.0; // footprint field: small, per the task's "footprint field in purple and small"
@@ -131,20 +139,6 @@ function stubTip(port: ResolvedSymbol["ports"][number], lx: number, ly: number):
   }
 }
 
-/** Same-net wire *endpoints* (not interior polyline vertices) that coincide 3+ times -- a reasonable T-junction approximation of geometry.rs `wire_junction_points` for this app's simplified wire model. */
-function junctionPoints(wires: SchematicWire[]): Array<[number, number]> {
-  const counts = new Map<string, { at: [number, number]; n: number }>();
-  for (const w of wires) {
-    if (w.pts.length === 0) continue;
-    for (const p of [w.pts[0]!, w.pts[w.pts.length - 1]!]) {
-      const key = `${w.net}|${p[0]},${p[1]}`;
-      const e = counts.get(key);
-      if (e) e.n++;
-      else counts.set(key, { at: p, n: 1 });
-    }
-  }
-  return [...counts.values()].filter((e) => e.n >= 3).map((e) => e.at);
-}
 
 // ------------------------------------------------------------- box fallback
 
@@ -698,6 +692,11 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   }
 }
 
+/** `T`: free-standing text -- `SCH_TEXT`'s own render, drawn with the Newstroke font like every other schematic text (labels, pin names, fields). `t.angle` is already world-space (like `SymbolInstance.rot`, not a library-local `LibGraphic.angle_deg`), so it feeds `ctx.rotate`/`angleRad` directly, no Y-flip negation -- see `drawRealSymbol`'s own `ctx.rotate((symbol.rot * Math.PI) / 180)` for the parallel case this mirrors. */
+function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText) {
+  drawStrokeText(ctx, t.content, t.at[0], t.at[1], { sizeUm: t.size_um, angleRad: (t.angle * Math.PI) / 180, justify: "left", color: layerColor("LAYER_NOTES") });
+}
+
 function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: NoConnect) {
   const hair = 1 / view.scale;
   ctx.save();
@@ -714,6 +713,42 @@ function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: N
   ctx.restore();
 }
 
+/**
+ * ERC violation markers -- canvas/painter.ts's `drawDrcMarkers`, ported to
+ * this sheet: one circle per violation whose `location` resolves to a
+ * point (`ercMarkerPosition` -- not every shape does, see its own doc;
+ * an unresolved one is simply not drawn, same as a violation dialog row
+ * that still shows but can't additionally re-frame the view), color-coded
+ * by severity including the third `"excluded"` one DRC has no equivalent
+ * of (LAYER_ERC_EXCLUSION -- dialog_erc.cpp still draws an excluded
+ * marker, just visually muted, rather than hiding it outright). Drawn
+ * last, like DRC's own markers, so a marker is never hidden under a wire
+ * or symbol.
+ */
+function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, violations: ErcViolation[], selected: number | null) {
+  const hair = 1 / view.scale;
+  violations.forEach((v, i) => {
+    const resolved = ercMarkerPosition(v.location, sch);
+    if (!resolved) return;
+    const [x, y] = resolved.at;
+    const on = i === selected;
+    const color = on ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(v.severity === "error" ? "LAYER_ERC_ERR" : v.severity === "warning" ? "LAYER_ERC_WARN" : "LAYER_ERC_EXCLUSION");
+    const r = on ? ERC_MARKER_RADIUS_UM * 1.4 : ERC_MARKER_RADIUS_UM;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(100, hair);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.globalAlpha = v.severity === "excluded" ? 0.18 : 0.35;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.stroke();
+    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
+    ctx.restore();
+  });
+}
+
 // Background is filled once in screen-space by the caller, before the
 // world transform is applied (see canvas/Canvas.tsx's PCB equivalent) --
 // not here, which would mean computing an inverse-transformed rect on
@@ -721,9 +756,13 @@ function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: N
 export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
   const hair = 1 / view.scale;
 
-  // Wires.
+  // Wires. `on`: net-highlighted (click a wire with no modifier), or
+  // box/modified-click *selected* (new this session -- `opts.selection`
+  // previously only ever affected a symbol's own outline; a selected
+  // wire drew no differently from an unselected one, so Del on a box- or
+  // shift-selected wire had no visual confirmation it would do anything).
   for (const w of sch.wires) {
-    const on = opts.netHighlight === w.net;
+    const on = opts.netHighlight === w.net || opts.selection.has(w.id);
     ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_WIRE");
     ctx.lineWidth = Math.max(on ? 300 : 150, hair * (on ? 2.5 : 1));
     ctx.beginPath();
@@ -731,9 +770,12 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.stroke();
   }
 
-  // Junctions.
+  // Junctions -- see junctions.ts's own doc for exactly which points
+  // besides coincident wire endpoints (power symbol/label anchors landing
+  // on a wire's interior, i.e. a T) now also get a dot.
+  const junctionAnchors: Array<[number, number]> = [...sch.power_symbols.map((p) => p.at), ...sch.labels.map((l) => l.at)];
   ctx.fillStyle = layerColor("LAYER_JUNCTION");
-  for (const [x, y] of junctionPoints(sch.wires)) {
+  for (const [x, y] of junctionPoints(sch.wires, junctionAnchors)) {
     ctx.beginPath();
     ctx.arc(x, y, Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
     ctx.fill();
@@ -746,6 +788,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   for (const l of sch.labels) {
     drawLabel(ctx, view, l, sch.wires, opts.netHighlight === l.net);
   }
+
+  // Free text.
+  for (const t of sch.texts) drawSchText(ctx, t);
 
   // Power symbols (GND, +5V, PWR_FLAG, ...).
   for (const ps of sch.power_symbols) {
@@ -767,6 +812,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
       drawBoxSymbol(ctx, view, r, selected);
     }
   }
+
+  // ERC markers last of all -- an overlay above every sheet layer, matching real KiCad (and this app's own canvas/painter.ts for DRC).
+  if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null);
 }
 
 // Re-exported for SchematicView.tsx's bounds/hit-testing, which need the

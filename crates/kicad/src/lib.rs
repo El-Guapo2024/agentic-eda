@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_layout::{Port, Side};
-use eda_model::ir::{Design, NetLabel, NoConnect, PowerSymbol, SymbolInstance, Wire};
+use eda_model::ir::{Design, NetLabel, NoConnect, PowerSymbol, SchematicText, SymbolInstance, Wire};
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
@@ -31,7 +31,7 @@ mod footprint_lib;
 pub use footprint_lib::{default_footprint_library_root, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
 
 mod symbol_lib;
-pub use symbol_lib::{default_symbol_library_root, find_symbol_library_file, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+pub use symbol_lib::{default_symbol_library_root, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
 mod erc_style;
 
@@ -85,6 +85,9 @@ pub fn export_kicad_sch(
 
     let mut no_connects: Vec<&NoConnect> = sch.no_connects.iter().collect();
     no_connects.sort_by(|a, b| a.at.cmp(&b.at));
+
+    let mut texts: Vec<&SchematicText> = sch.texts.iter().collect();
+    texts.sort_by(|a, b| (&a.content, a.at).cmp(&(&b.content, b.at)));
 
     // ---- resolve every distinct lib_id used, once, into a `lib_symbols`-block entry ----
     let mut lib_ids: Vec<String> = symbols.iter().map(|s| sym_lib_id(s)).collect();
@@ -265,6 +268,21 @@ pub fn export_kicad_sch(
         }
         writeln!(out, " (at {x} {y} 0)").unwrap();
         writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify left))").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+
+    // ---- free text (`T`) -- same shape as a label's own s-expr, minus the
+    // net/shape fields a plain KiCad `(text ...)` has neither of ----
+    for t in &texts {
+        let x = mm(t.at.x);
+        let y = mm(t.at.y);
+        let angle_deg = t.angle as f64 / 1000.0;
+        let size_mm = t.size_um as f64 / 1000.0;
+        let uuid = duid(&format!("text:{}:{}:{}", t.content, t.at.x, t.at.y));
+        writeln!(out, "\t(text {}", sexpr_str(&t.content)).unwrap();
+        writeln!(out, "\t\t(at {x} {y} {angle_deg})").unwrap();
+        writeln!(out, "\t\t(effects (font (size {size_mm} {size_mm})))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         writeln!(out, "\t)").unwrap();
     }

@@ -2,21 +2,26 @@
 // GET /api/schematic's structured data (see schematic/painter.ts), not
 // the read-only viewer this used to be (GAPS.md gap #1): selection
 // (click + box-select, modifiers ported from kicad-port/selection.ts,
-// the same pure logic the PCB canvas's Canvas.tsx already uses) and Move
-// (`M`, armed then click-to-drop, live preview) are wired here; Rotate/
-// Mirror/Delete dispatch straight through useActionRunner.ts's registry
-// the same way the PCB tab's hotkeys do. PCB <-> Schematic cross-probing
-// (clicking U1 here highlights it there, and back) is still just both
-// views reading the same state.selection/state.netHighlight.
+// the same pure logic the PCB canvas's Canvas.tsx already uses), Move
+// (`M`, armed then click-to-drop, live preview) and Drag (`G`, same flow
+// plus wire rubber-banding -- wireAttachment.ts) are wired here, plus a
+// plain click-and-drag directly on a symbol (no hotkey needed first, same
+// click-vs-drag "moved" distinguisher Canvas.tsx's identical PCB-side
+// gesture already uses), which defaults to Drag's rubber-banding, same as
+// real eeschema's own default for a plain drag. Rotate/Mirror/Delete
+// dispatch straight through useActionRunner.ts's registry the same way
+// the PCB tab's hotkeys do. PCB <-> Schematic cross-probing (clicking U1
+// here highlights it there, and back) is still just both views reading
+// the same state.selection/state.netHighlight.
 //
 // Scope for this pass (see PARITY-sch.md for the full per-action table):
-// symbol select/move/rotate('R'/Shift+R)/mirror('X')/delete are wired.
-// Drag ('G', wire rubber-banding), wire/label/power-symbol/no-connect
-// drawing tools, and a real Properties('E') dialog are not yet -- a
-// click still only ever selects a symbol or highlights a wire's net.
+// symbol select/move/drag/rotate('R'/Shift+R)/mirror('X')/delete are
+// wired. Wire/label/power-symbol/no-connect drawing tools and a real
+// Properties('E') dialog are not yet -- a click still only ever selects a
+// symbol or highlights a wire's net.
 import { useEffect, useRef, useState } from "react";
-import type { Schematic } from "../api/types";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import type { LabelScope, Schematic } from "../api/types";
+import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { boundsOfPoints, fitTransform, zoomAbout } from "./canvas/view";
 import { paintSchematic, symbolBounds } from "./schematic/painter";
 import { resolveLibSymbol } from "./schematic/libSymbol";
@@ -26,9 +31,37 @@ import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, PAG
 import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, applyBoxSelectionModifiers, hasModifier } from "../kicad-port/selection";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { isMac } from "../platform";
+import { computeDragAttachment } from "./schematic/wireAttachment";
+import { nextReference } from "../kicad-port/nextReference";
+import { collectBoxSelection } from "./schematic/boxSelection";
 import "../styles/canvas.css";
 
-type DragState = { kind: "pan"; startScreen: [number, number]; startView: [number, number] } | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] };
+type DragState =
+  | { kind: "pan"; startScreen: [number, number]; startView: [number, number] }
+  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
+  /**
+   * A plain click-and-drag on a symbol, started without `M`/`G` armed
+   * first -- sch_selection_tool.cpp Main()'s own `IsDrag(BUT_LEFT)`
+   * handler (see this file's onPointerDown for the full port): KiCad's
+   * real default for a plain drag on a movable item is "Drag" (rubber-
+   * band), not "Move", so that's what this defaults to as well, same as
+   * `G` itself arms. `moved` is this app's existing click-vs-drag
+   * distinguisher (ported from Canvas.tsx's own identical PCB-side
+   * pattern -- "did the snapped position actually change" rather than
+   * tool_dispatcher.cpp's literal 8px/300ms thresholds, a documented
+   * simplification PARITY-pcb.md already notes for the PCB side): false
+   * until the live preview's delta is first nonzero, so a plain
+   * zero-movement click-release still falls through to an ordinary
+   * select instead of committing a no-op drag.
+   */
+  | { kind: "move"; refs: string[]; startWorld: [number, number]; moved: boolean };
+
+/** Which `add_label` scope each of the three label tools commits -- `L`/Ctrl+`L`/`H`, see useActionRunner.ts's own `eeschema.InteractiveDrawing.place*Label` bindings for how each one arms its tool id. */
+const LABEL_TOOL_SCOPE: Partial<Record<ToolId, LabelScope>> = {
+  sch_label_local: "local",
+  sch_label_global: "global",
+  sch_label_hier: "hierarchical",
+};
 
 /**
  * World-space bounds for the initial fit. KiCad opens a schematic framed
@@ -137,23 +170,30 @@ function hitWireNet(sch: Schematic, xUm: number, yUm: number, thresholdUm: numbe
   return best?.net ?? null;
 }
 
+// collectBoxSelection moved to ./schematic/boxSelection.ts this session
+// (symbols + wires now, previously symbols only -- see that file's own
+// doc) so it's unit-testable like this app's other pure geometry modules.
+
 /**
- * pcb_selection_tool.cpp SelectRectArea, narrowed to symbols (the only
- * box-selectable schematic item this pass ports -- wires/labels are a
- * documented gap, see this file's own header comment): "fully enclosed"
- * needs the whole bounding box inside the marquee, "crossing" only needs
- * an overlap.
+ * The live rubber-band preview: `attach` (state.dragAttach, resolved once
+ * at drag-start -- see its own doc) names which wire endpoints track
+ * which dragged ref, so this shifts exactly those points by the drag's
+ * current (dxUm, dyUm), leaving every other point (the wire's other end,
+ * interior bends, wires not attached to anything being dragged) exactly
+ * where it is. Pure/immutable -- `wires` itself is never mutated.
  */
-function collectBoxSelection(sch: Schematic, box: [number, number, number, number], crossing: boolean): string[] {
-  const [x0, y0, x1, y1] = box;
-  const hits: string[] = [];
-  for (const s of sch.symbols) {
-    const b = symbolBounds(s, sch.lib_symbols);
-    const overlaps = b.minX < x1 && b.maxX > x0 && b.minY < y1 && b.maxY > y0;
-    const enclosed = b.minX >= x0 && b.maxX <= x1 && b.minY >= y0 && b.maxY <= y1;
-    if (crossing ? overlaps : enclosed) hits.push(s.id);
+function shiftAttachedWires(wires: Schematic["wires"], attach: Record<string, [number, number][]> | null, refs: readonly string[], dxUm: number, dyUm: number): Schematic["wires"] {
+  if (!attach) return wires;
+  const next = wires.map((w) => ({ ...w, pts: [...w.pts] as [number, number][] }));
+  for (const ref of refs) {
+    for (const [wi, pi] of attach[ref] ?? []) {
+      const w = next[wi];
+      const p = w?.pts[pi];
+      if (!w || !p) continue;
+      w.pts[pi] = [p[0] + dxUm, p[1] + dyUm];
+    }
   }
-  return hits;
+  return next;
 }
 
 export function SchematicView() {
@@ -164,10 +204,15 @@ export function SchematicView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const userMovedRef = useRef(false);
+  /** The plain-click/drag symbol-drag distinguisher's deferred click (see DragState's own "move" kind doc) -- set only for a click that keeps a multi-selection's whole group for a potential drag, same as Canvas.tsx's own `pendingClickRef`. */
+  const pendingClickRef = useRef<string | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   const sch = state.schematic;
   const moveMode = state.activeTool === "move";
+  const dragMode = state.activeTool === "drag";
+  /** Which Cmd a committed move/drag preview becomes -- `M` and a plain click-drag move symbols with no wire attachment (`"symbol"`); `G` and a plain click-drag on a symbol both default to rubber-banding (`"symbol_drag"`, sch_selection_tool.cpp's own default for a plain drag -- see DragState's doc). */
+  const armedKind: "symbol" | "symbol_drag" | null = moveMode ? "symbol" : dragMode ? "symbol_drag" : null;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -190,14 +235,17 @@ export function SchematicView() {
   // A live move preview shows as a shifted copy of just the moving
   // symbols -- painter.ts's own paint loop is untouched; this is a
   // display-only substitution, the committed Cmd (api.commitMove) always
-  // reads the real position fresh.
-  const displaySch: Schematic | null =
-    sch && state.movePreview && state.movePreview.kind === "symbol"
-      ? {
-          ...sch,
-          symbols: sch.symbols.map((s) => (state.movePreview!.refs.includes(s.id) ? { ...s, at: [s.at[0] + state.movePreview!.dxUm, s.at[1] + state.movePreview!.dyUm] as [number, number] } : s)),
-        }
-      : sch;
+  // reads the real position fresh. A "symbol_drag" (`G`) preview also
+  // shifts whichever wire endpoints state.dragAttach resolved for this
+  // drag, for the live rubber-band -- shiftAttachedWires's own doc.
+  const dragPreviewActive = sch != null && state.movePreview != null && (state.movePreview.kind === "symbol" || state.movePreview.kind === "symbol_drag");
+  const displaySch: Schematic | null = dragPreviewActive
+    ? {
+        ...sch!,
+        symbols: sch!.symbols.map((s) => (state.movePreview!.refs.includes(s.id) ? { ...s, at: [s.at[0] + state.movePreview!.dxUm, s.at[1] + state.movePreview!.dyUm] as [number, number] } : s)),
+        wires: state.movePreview!.kind === "symbol_drag" ? shiftAttachedWires(sch!.wires, state.dragAttach, state.movePreview!.refs, state.movePreview!.dxUm, state.movePreview!.dyUm) : sch!.wires,
+      }
+    : sch;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -230,7 +278,7 @@ export function SchematicView() {
       fileName: `${state.board?.name || "schematic"}.kicad_sch`,
       sheetPath: "/",
     });
-    paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight });
+    paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercSelected: state.ercSelected });
     if (state.drawState?.kind === "wire") {
       const pts = state.cursorUm ? [...state.drawState.pts, [state.cursorUm.x, state.cursorUm.y] as [number, number]] : state.drawState.pts;
       ctx.strokeStyle = layerColor("LAYER_WIRE");
@@ -252,7 +300,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm]);
+  }, [sch, displaySch, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercSelected]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -273,7 +321,7 @@ export function SchematicView() {
     <div
       ref={containerRef}
       className="pcb-canvas-container"
-      style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : moveMode ? "move" : "default" }}
+      style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
       onWheel={(e) => {
         if (!sch) return;
         e.preventDefault();
@@ -317,14 +365,63 @@ export function SchematicView() {
           return;
         }
 
-        // `M`-armed move: this click drops whatever is being dragged,
-        // same two-step ("arm, then click to commit") flow
+        // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp SingleClickPlace/
+        // TwoClickPlace): every one of these tools stays armed after a
+        // click (same as the wire tool above) for chained placement --
+        // real eeschema does too (Escape, or the hotkey again, is how you
+        // leave the tool). `L`/`P` pin-snap the same way the wire tool
+        // does (a label commonly tags a wire/pin; a power symbol's own
+        // `pin` field needs to land on a real pin to resolve at all, see
+        // `Cmd::AddPowerSymbol`'s doc) -- `T` is free text, plain grid
+        // snap only.
+        const labelScope = LABEL_TOOL_SCOPE[state.activeTool];
+        if (labelScope) {
+          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          dispatch({ type: "SET_SCH_LABEL_PENDING", pending: { at: snapped, scope: labelScope } });
+          return;
+        }
+        if (state.activeTool === "sch_power") {
+          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          dispatch({ type: "SET_SCH_POWER_PENDING", pending: { at: snapped } });
+          return;
+        }
+        if (state.activeTool === "sch_text") {
+          dispatch({ type: "SET_SCH_TEXT_PENDING", pending: { at: snapToGrid(wx, wy) } });
+          return;
+        }
+        if (state.activeTool === "sch_no_connect") {
+          const [sx, sy] = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
+          return;
+        }
+        // `A`: SymbolChooserDialog already picked the symbol (state.
+        // armedSymbol); this click only decides where. `id` is a real,
+        // already-numbered reference assigned right now, not a "U?"
+        // placeholder -- see nextReference.ts's own doc for why. `value`
+        // defaults to the symbol's own bare name (e.g. "Device:R" ->
+        // "R"), matching what a real library's own default Value usually
+        // is for a part this simple.
+        if (state.activeTool === "sch_place_symbol" && state.armedSymbol) {
+          const { libId, referencePrefix } = state.armedSymbol;
+          const id = nextReference(sch.symbols, referencePrefix || "U");
+          const value = libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId;
+          const [sx, sy] = snapToGrid(wx, wy);
+          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: "" });
+          return;
+        }
+
+        // `M`/`G`-armed move/drag: this click drops whatever is being
+        // dragged, same two-step ("arm, then click to commit") flow
         // useActionRunner.ts's pcbnew.InteractiveMove.move already uses --
         // Escape (the ESCAPE reducer case, generic across tabs) cancels it
-        // instead, never this handler.
-        if (moveMode) {
+        // instead, never this handler. `state.movePreview.kind` already
+        // carries the right Cmd ("symbol" vs "symbol_drag") by the time a
+        // real drop happens -- armedKind is only its pre-first-move
+        // fallback (see tryTransformDuringMove's own copy of this
+        // fallback for why one is needed at all).
+        if (armedKind) {
           dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-          if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, "symbol", state.movePreview.rotateQuarterTurns);
+          if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind ?? armedKind, state.movePreview.rotateQuarterTurns);
           return;
         }
 
@@ -332,9 +429,39 @@ export function SchematicView() {
         const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
         const symId = hitSymbol(sch, wx, wy);
         if (symId) {
-          const refs = applySingleClickModifier(state.selection, symId, modifiers);
-          dispatch({ type: "SET_SELECTION", refs });
+          if (hasModifier(modifiers)) {
+            // Unchanged from before this pass: a modified click always
+            // applies immediately, never starts a drag -- real
+            // sch_selection_tool.cpp routes a modified drag to box-select
+            // instead, even one starting on a hit item (see this file's
+            // "nothing hit" box-select branch below), a refinement left
+            // for the wire box-select pass (PARITY-sch.md item 8) that
+            // already has to touch this same modifier/box interaction.
+            dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, symId, modifiers) });
+            dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
+            return;
+          }
+          // sch_selection_tool.cpp Main(): a plain click-and-drag starting
+          // on an item that's already part of a larger selection keeps the
+          // WHOLE group for the drag, deferring the "collapse to just this
+          // one" effect to onPointerUp in case no real drag happens;
+          // otherwise (re)select just this one symbol immediately, same as
+          // before this pass. Either way, arm a potential drag -- source's
+          // own default for a plain drag on a movable item is
+          // SCH_ACTIONS::drag (rubber-band), the same default `G` itself
+          // arms, not Move (see DragState's "move" kind doc).
+          const keepGroupForDrag = state.selection.has(symId) && state.selection.size > 1;
+          let refs: string[];
+          if (keepGroupForDrag) {
+            refs = [...state.selection];
+            pendingClickRef.current = symId;
+          } else {
+            refs = [symId];
+            dispatch({ type: "SET_SELECTION", refs });
+          }
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
+          dragRef.current = { kind: "move", refs, startWorld: [wx, wy], moved: false };
+          dispatch({ type: "SET_DRAG_ATTACH", attach: computeDragAttachment(sch, refs) });
           return;
         }
         const thresholdUm = 400 / state.schematicView.scale;
@@ -365,12 +492,12 @@ export function SchematicView() {
         const [wx, wy] = toWorld(e.clientX, e.clientY);
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
 
-        if (moveMode && state.selection.size > 0) {
+        if (armedKind && state.selection.size > 0) {
           const origin = state.moveOriginUm ?? { x: wx, y: wy };
           const [ox, oy] = snapToGrid(origin.x, origin.y);
           const [sx, sy] = snapToGrid(wx, wy);
           const { rotateQuarterTurns } = state.movePreview ?? {};
-          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind: "symbol", dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns } });
+          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind: armedKind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns } });
           return;
         }
 
@@ -388,6 +515,21 @@ export function SchematicView() {
           const x1 = e.clientX - rect.left,
             y1 = e.clientY - rect.top;
           setMarquee({ x0, y0, x1, y1, crossing: isCrossingSelection(x0, x1) });
+        } else if (drag.kind === "move") {
+          // The click-vs-drag distinguisher: "moved" flips true the first
+          // time the snapped position actually changes (see DragState's
+          // own doc on why this, not a literal 8px/300ms timer, is this
+          // app's existing threshold convention -- Canvas.tsx's identical
+          // PCB-side pattern). Until then the preview stays null, so a
+          // release here is still a plain click, not a committed no-op
+          // drag.
+          const [sx, sy] = snapToGrid(wx, wy);
+          const [ox, oy] = snapToGrid(drag.startWorld[0], drag.startWorld[1]);
+          const dx = sx - ox,
+            dy = sy - oy;
+          if (dx !== 0 || dy !== 0) drag.moved = true;
+          const { rotateQuarterTurns } = state.movePreview ?? {};
+          dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "symbol_drag", dxUm: dx, dyUm: dy, rotateQuarterTurns } : null });
         }
       }}
       onDoubleClick={() => {
@@ -400,6 +542,22 @@ export function SchematicView() {
         const drag = dragRef.current;
         dragRef.current = null;
         if (!drag) return;
+        if (drag.kind === "move") {
+          if (drag.moved && state.movePreview) {
+            api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, "symbol_drag", state.movePreview.rotateQuarterTurns);
+          } else {
+            // No real movement: a plain click, not a drag -- apply
+            // whatever selection effect onPointerDown deferred (see
+            // pendingClickRef's own doc comment) for the "clicked one
+            // member of a multi-selection" case; a fresh single-symbol
+            // selection was already applied immediately on pointerDown,
+            // so there's nothing left to do for that case here.
+            dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+            if (pendingClickRef.current) dispatch({ type: "SET_SELECTION", refs: [pendingClickRef.current] });
+          }
+          pendingClickRef.current = null;
+          return;
+        }
         if (drag.kind === "box" && sch) {
           if (marquee) {
             const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;

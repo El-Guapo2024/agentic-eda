@@ -132,6 +132,10 @@ pub struct SchematicSection {
     /// Net label placements, sorted by (net, at).
     #[serde(default)]
     pub labels: Vec<NetLabel>,
+    /// `T`: free-standing text, sorted by (content, at). See
+    /// [`SchematicText`]'s own doc for why it's separate from `labels`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<SchematicText>,
     /// Power symbols (KiCad's `power:GND`/`power:VCC`/... instances) —
     /// one per power/ground pin, in place of a wire to a rail. Sorted by
     /// `id`.
@@ -142,6 +146,11 @@ pub struct SchematicSection {
     /// by `at`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub no_connects: Vec<NoConnect>,
+    /// Accepted ("excluded") ERC findings -- `dialog_erc.cpp`'s own
+    /// per-sheet `SCHEMATIC::RecordERCExclusions`. Sorted by (check,
+    /// location); see [`ErcExclusion`]'s own doc for why it has no `id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub erc_exclusions: Vec<ErcExclusion>,
     /// Title block. `None` keeps relying on the caller-supplied
     /// `ExportMeta` (title/date) the way every export always has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,8 +177,22 @@ pub struct SymbolInstance {
     pub id: String,
     pub at: Point,
     pub rot: Millideg,
+    /// `X` ("Mirror Horizontally", KiCad's `SYM_MIRROR_Y`): negates local X
+    /// before rotation. See [`Cmd::MirrorSymbol`](../../eda_ops/enum.Cmd.html)'s
+    /// own doc.
     #[serde(default)]
     pub mirrored: bool,
+    /// `Y` ("Mirror Vertically", KiCad's `SYM_MIRROR_X`): the other axis --
+    /// never both at once in practice (KiCad's own symbols never carry two
+    /// mirror flags; `transform_local_point` composes them as "cancel the
+    /// library Y-up/Y-down flip instead of negating local X" rather than
+    /// a true second negation, see its own doc comment for why). Added
+    /// after `mirrored` already existed and was widely depended on, so
+    /// this is a new, separate field rather than widening `mirrored` into
+    /// an enum -- see PARITY-sch.md's own note on why that was deferred
+    /// originally.
+    #[serde(default)]
+    pub mirror_y: bool,
     /// KiCad library id this instance draws from ("Device:R",
     /// "Regulator_Linear:AMS1117-3.3"), resolved by
     /// `eda_model::symbol::resolve_lib_id` — see [`crate::Part::symbol`].
@@ -277,6 +300,34 @@ impl NetLabel {
     }
 }
 
+/// `T`: free-standing text (KiCad's own `(text ...)`) — purely cosmetic,
+/// unlike [`NetLabel`]: it names no net and never participates in
+/// [`crate::symbol::builtin`]/`reconcile`'s connectivity pass, so adding it
+/// touches none of the "one netlist" machinery `Wire`/`NetLabel`/
+/// `PowerSymbol`/`NoConnect` all feed. Deliberately minimal next to KiCad's
+/// own `SCH_TEXT` (no bold/italic/justify/color yet) — those are easy,
+/// independent additions later if a real need shows up; starting minimal
+/// keeps this first cut small and easy to review, per the IR's own
+/// "extend additively" rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchematicText {
+    /// Stable id (`txt_xxxxxxxxxxxx`) — see `Wire::id`'s doc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub content: String,
+    pub at: Point,
+    #[serde(default)]
+    pub angle: Millideg,
+    pub size_um: Um,
+}
+
+impl SchematicText {
+    fn id_seed(&self) -> String {
+        format!("{}|{},{}", self.content, self.at.x, self.at.y)
+    }
+}
+
 /// A KiCad power symbol instance (`power:GND`, `power:VCC`, a custom
 /// rail...) — what a power/ground pin gets instead of a wire to a rail.
 /// Placed with its own connection pin exactly on the host pin's stub tip
@@ -320,6 +371,27 @@ impl NoConnect {
     fn id_seed(&self) -> String {
         format!("{},{}", self.at.x, self.at.y)
     }
+}
+
+/// An accepted ERC finding (`dialog_erc.cpp`'s own "Exclude this
+/// violation" / `SCHEMATIC::RecordERCExclusions`): `(check, location)`
+/// matches `eda_kicad::erc::Exclusions`'s own key shape exactly (a
+/// `BTreeSet<(String, String)>`) so `crates/cli/src/studio.rs::erc_json`
+/// can build one directly from this list with no translation. No `id`
+/// field -- unlike `Wire`/`NetLabel`/etc., this has nothing geometric to
+/// derive one from, and the `(check, location)` pair is already a stable,
+/// natural key (unlike those others, there is never more than one
+/// exclusion for the same finding to disambiguate between).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErcExclusion {
+    /// `eda_kicad::erc`'s own check name ("pin_not_connected", ...).
+    pub check: String,
+    /// "REF", "REF.PIN", or whatever else `CheckResult::location` carried
+    /// for this finding -- a finding with no location at all can never be
+    /// excluded (nothing to key on), same limitation `Exclusions` itself
+    /// already has.
+    pub location: String,
 }
 
 /// Title block. Every field optional/empty by default; the exporter falls
@@ -367,6 +439,7 @@ impl SchematicSection {
             .iter()
             .map(|w| &w.id)
             .chain(self.labels.iter().map(|l| &l.id))
+            .chain(self.texts.iter().map(|t| &t.id))
             .chain(self.no_connects.iter().map(|nc| &nc.id))
             .filter(|s| !s.is_empty())
             .cloned()
@@ -389,6 +462,16 @@ impl SchematicSection {
                 let id = next_item_id("lbl", &self.labels[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.labels[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.texts.len()).collect();
+        order.sort_by(|&a, &b| (&self.texts[a].content, self.texts[a].at).cmp(&(&self.texts[b].content, self.texts[b].at)));
+        for i in order {
+            if self.texts[i].id.is_empty() {
+                let id = next_item_id("txt", &self.texts[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.texts[i].id = id;
             }
         }
 
@@ -1088,13 +1171,15 @@ mod tests {
             },
             schematic: Some(SchematicSection {
                 symbols: vec![
-                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
-                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
+                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
+                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                 ],
                 wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }] }],
                 labels: vec![],
+                texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
+                erc_exclusions: vec![],
                 title_block: None,
                 sheets: vec![],
             }),
