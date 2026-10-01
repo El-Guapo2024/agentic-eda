@@ -17,14 +17,19 @@ import { alignAxis, alignDeltas, getDeltasForDistributeByGaps, getDeltasForDistr
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 /**
- * One window, three tabs -- unlike real KiCad, which is a separate
- * window per editor (pcbnew/eeschema/the 3D viewer). Each tab keeps that
- * editor's own toolbars/menus/panels (App.tsx), but selection and net
- * highlight are shared app-wide (this same state.selection/
- * netHighlight), so cross-probing between PCB and Schematic is just both
- * views reading the same fields, not a separate sync mechanism.
+ * One window, four tabs -- unlike real KiCad, which is a separate window
+ * per editor (pcbnew/eeschema/the footprint editor/the 3D viewer). Each
+ * tab keeps that editor's own toolbars/menus/panels (App.tsx), but
+ * selection and net highlight are shared app-wide (this same
+ * state.selection/netHighlight) for PCB/Schematic, so cross-probing
+ * between them is just both views reading the same fields, not a
+ * separate sync mechanism. The Footprint Editor tab (GAPS.md #8) is the
+ * one exception: it is a genuinely separate document (a footprint
+ * definition, not the board), so it keeps its own selection/view/undo
+ * domain entirely in `state/footprintEditorStore.tsx` rather than reusing
+ * this file's -- see that file's own header comment.
  */
-export type EditorTab = "pcb" | "schematic" | "3d";
+export type EditorTab = "pcb" | "schematic" | "footprint" | "3d";
 
 /**
  * A minimal active-tool state -- just enough to give the status bar's

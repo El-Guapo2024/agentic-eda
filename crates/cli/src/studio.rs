@@ -674,6 +674,16 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "block": block_of.get(&part.reference),
             "placed": fp.is_some(),
             "size": size,
+            // GAPS.md #8: the name `ConstraintModel::footprint_of` actually
+            // resolved this part's pads from (`Part::footprint` first, then
+            // `package` -- same precedence, same key) -- not just `package`,
+            // which can disagree with it (an explicit `footprint: "Lib:Name"`
+            // naming a real library footprint while `package` is still a
+            // generic bare name like "0603"). `Ctrl+E` ("Edit Footprint")
+            // opens *this* name in the Footprint Editor, so it is editing
+            // the actual definition the board uses, not a same-shaped but
+            // different builtin.
+            "footprint": part.footprint.clone().or_else(|| part.package.clone()),
         });
         if let Some(fp) = fp {
             let pads: Vec<Value> = placed_pads(&model, part, fp)

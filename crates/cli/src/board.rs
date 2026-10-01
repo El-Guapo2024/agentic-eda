@@ -1496,6 +1496,7 @@ mod tests {
             id: String::new(),
             number: "3".into(),
             at: Point { x: 0, y: 2000 },
+            offset: Point { x: 0, y: 0 },
             size: (800, 800),
             shape: eda_model::ir::LibraryPadShape::Rect,
             kind: PadKind::Smd,

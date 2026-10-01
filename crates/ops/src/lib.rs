@@ -2361,6 +2361,7 @@ impl<'a> Board<'a> {
                 continue;
             }
             p.size = src.size;
+            p.offset = src.offset;
             p.shape = src.shape;
             p.drill = src.drill;
             p.drill_slot = src.drill_slot;

@@ -1141,6 +1141,12 @@ pub struct LibraryPad {
     pub number: String,
     pub at: Point,
     pub size: (Um, Um),
+    /// `PAD::SetOffset` -- the copper shape's center, relative to `at`
+    /// (the pad's drill/anchor position). `{0,0}` for the overwhelming
+    /// majority of pads; non-zero mainly shows up on an SMD pad shaped to
+    /// land a lead off-center from its footprint-grid position.
+    #[serde(default)]
+    pub offset: Point,
     #[serde(default)]
     pub shape: LibraryPadShape,
     #[serde(default)]
@@ -1274,6 +1280,7 @@ impl LibraryPad {
             number: p.number.clone(),
             at: Point { x: p.at.0, y: p.at.1 },
             size: p.size,
+            offset: Point::default(),
             shape,
             kind: p.kind,
             drill: p.drill,
@@ -1783,6 +1790,7 @@ mod tests {
             id: String::new(),
             number: number.into(),
             at: Point { x, y },
+            offset: Point::default(),
             size: (1000, 1000),
             shape: LibraryPadShape::RoundRect,
             kind: crate::footprint::PadKind::Smd,

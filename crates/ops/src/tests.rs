@@ -974,6 +974,7 @@ fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
         id: String::new(),
         number: number.into(),
         at: Point { x, y },
+        offset: Point { x: 0, y: 0 },
         size: (1000, 1000),
         shape: eda_model::ir::LibraryPadShape::RoundRect,
         kind: eda_model::PadKind::Smd,
