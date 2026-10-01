@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-01T19:27:35.218727+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-01T21:19:10.221398+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -20,9 +20,9 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 |---|---:|---:|
 | `connectivity_boards_evaluated` | 58 | 58 |
 | `connectivity_exact_match_rate` | 83.9% | 83.9% |
-| `drc_boards_evaluated` | 56 | 54 |
-| `drc_precision` | 8.0% | 5.9% |
-| `drc_recall` | 17.0% | 12.3% |
+| `drc_boards_evaluated` | 40 | 56 |
+| `drc_precision` | 10.9% | 8.0% |
+| `drc_recall` | 20.8% | 17.0% |
 | `erc_boards_evaluated` | 50 | 50 |
 | `erc_precision` | 74.6% | 74.6% |
 | `erc_recall` | 38.3% | 38.3% |
@@ -37,54 +37,50 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 
 _Caveat: `eda_drc` is this task's measurement target per its own instructions, but it is **not** the engine wired into production `eda check`/`eda board` today -- `eda_gates::pcb` still owns `check_placement`/`check_routing` there (see `crates/drc/src/lib.rs`'s own "Integration status" doc comment). Numbers below describe the standalone ported crate, not what a user driving `eda board` currently gets._
 
-Boards evaluated: 56 (of 57 attempted). Position-match tolerance: 50 um. `unconnected_items` excluded here -- measured instead under Connectivity.
+Boards evaluated: 40 (of 40 attempted) -- the full KiCad QA corpus, deliberately *not* including the 16 `examples/*.yaml`/`examples/ladder/*`/`work/*` boards the previous round's 56 did (see `drc_boards_evaluated`'s note in `scores.json`): every fix this round is in `import_kicad_pcb`'s pad/courtyard handling or in `.kicad_dru` condition evaluation, neither of which a synthetically-generated, rule-less board ever exercises, and re-measuring that portion would have meant paying `crates/freeroute`'s well-documented, unrelated cold-route cost (GAPS.md #2) for a number these fixes cannot move. Position-match tolerance: 50 um. `unconnected_items` excluded here -- measured instead under Connectivity.
 
-**Overall precision: 8.0%, recall: 17.0%.**
+**Overall precision: 10.9%, recall: 20.8%** (up from 8.0%/17.0% on the prior, larger sample -- see the board-count caveat above before comparing the two directly).
 
-_Reading this number_: `track_width` was last round's single largest false-positive source (~2900 extra, almost all on one board, `issue11814`) and is fixed this round (GAPS.md #10): this port was checking every track against its *net class's nominal width* as if that were KiCad's real minimum-width constraint, when `DRC_ENGINE::loadImplicitRules`'s `TRACK_WIDTH_CONSTRAINT` floor is always the board-wide `m_TrackMinWidth` (`.kicad_pro`'s `rules.min_track_width`), independent of net class -- a net class's own width only ever sets that constraint's advisory `Opt`, which the check never reads. `track_width` now matches every one of the 10 it reports, 0 extra (same nominal-vs-minimum bug and fix applied to `via_diameter`/hole-size minimums too). Two QA boards that previously timed out (`issue21482`, `issue22475`) now complete -- a real improvement, but it also surfaces pre-existing, already-documented bugs at a larger scale than before: `tracks_crossing` is 0 on the KiCad side across every one of these boards but 1005 on ours, concentrated on `issue22475` (a same-net-but-still-flagged pattern not yet root-caused, see GAPS.md #3). `clearance`/`shorting_items`/`hole_clearance` are now the dominant over-firing group (2230/2203/1008 extra) -- diffed item-by-item this round on `issue11814` (GAPS.md #3's latest update): violations cluster just under the clearance threshold rather than being wildly wrong, which rules out footprint net-tie exclusion and 90-degree rotation-sign bugs and points at a smaller-scale geometry fidelity gap (pad shape/size import precision, possibly compounded by `kimath::Shape` having no rotated-rectangle primitive for non-90-degree placements) that is diagnosed but not yet fixed.
+_Reading this number_: this round traced GAPS.md #3's dominant `clearance`/`shorting_items`/`hole_clearance` over-firing to its actual root cause, one level below where the previous round's trace stopped -- not pad-shape fidelity or a rotation-sign bug (both were checked and ruled out again), but a plain position bug: a real back-side footprint's pad `(at x y)` needs its `x` un-mirrored on import (this port's own `to_board` mirrors it again at placement time, by design, for this workspace's *own* canonically-authored footprints), and this importer was passing it through unmirrored, landing a pad on top of its own sibling's position 1-2mm away and fabricating copper-on-foreign-net overlaps. Fixed along with two bugs the fix surfaced/shares a cause with: pad geometry cached by bare lib id broke when the same lib id is placed on both sides of one board (`dedup_footprint_key`), and a real `F.CrtYd`/`B.CrtYd` courtyard is now read instead of a pad-bbox-plus-margin fallback that had `courtyards_overlap` at a 100% false-positive rate. A fourth, independent fix landed alongside it: `A.insideCourtyard(name)` in a `.kicad_dru` condition now actually evaluates (it was an always-unsupported function before), so a board's own courtyard-scoped clearance override for a tight package no longer loses to a stricter board-wide default. Measured together on `issue11814` (kicad-cli: 48 violations, 2 of them genuine `clearance` hits this port still doesn't model -- copper teardrops): `clearance`+`shorting_items`+`hole_clearance` went 571 -> 65 -> 47 -> 30 across the three import fixes plus the fourth. Project-wide, `tracks_crossing` (0 kicad vs 1005 ours, concentrated on `issue22475`) and the `track_width`/`via_diameter`/`annular_width` manufacturability checks are unchanged pre-existing gaps, not touched this round; `track_width` showing `ours=0` here (vs `10` matched on the old 56-board number) is the board-count caveat above, not a regression -- GAPS.md #10's fix lives in boards this sample doesn't include. See GAPS.md #3's latest update for the full trail and what's still open (`insideArea`/rule-area polygons, a residual `HvUnderConformal`-adjacent cluster, trapezoid/chamfered-rect/custom pad shapes, and the true rotated-rectangle primitive `kimath::Shape` still lacks for non-90-degree placements).
 
 | type | kicad | ours | matched | missing | extra |
 |---|---:|---:|---:|---:|---:|
-| `annular_width` | 23 | 25 | 12 | 11 | 13 |
+| `annular_width` | 23 | 31 | 18 | 5 | 13 |
 | `assertion_failure` | 2 | 0 | 0 | 2 | 0 |
-| `clearance` | 902 | 2278 | 48 | 854 | 2230 |
+| `clearance` | 1057 | 1984 | 114 | 943 | 1870 |
 | `connection_width` | 3 | 0 | 0 | 3 | 0 |
-| `copper_edge_clearance` | 45 | 86 | 4 | 41 | 82 |
+| `copper_edge_clearance` | 45 | 82 | 4 | 41 | 78 |
 | `copper_sliver` | 1 | 0 | 0 | 1 | 0 |
-| `courtyards_overlap` | 0 | 92 | 0 | 0 | 92 |
+| `courtyards_overlap` | 0 | 48 | 0 | 0 | 48 |
 | `creepage` | 58 | 0 | 0 | 58 | 0 |
 | `drill_out_of_range` | 341 | 374 | 203 | 138 | 171 |
 | `duplicate_footprints` | 0 | 56 | 0 | 0 | 56 |
-| `hole_clearance` | 378 | 1187 | 179 | 199 | 1008 |
+| `hole_clearance` | 378 | 1074 | 179 | 199 | 895 |
 | `holes_co_located` | 4 | 4 | 4 | 0 | 0 |
 | `invalid_outline` | 12 | 1 | 0 | 12 | 1 |
 | `isolated_copper` | 63 | 0 | 0 | 63 | 0 |
 | `items_not_allowed` | 46 | 0 | 0 | 46 | 0 |
-| `lib_footprint_issues` | 379 | 0 | 0 | 379 | 0 |
-| `lib_footprint_mismatch` | 155 | 0 | 0 | 155 | 0 |
+| `lib_footprint_issues` | 85 | 0 | 0 | 85 | 0 |
+| `lib_footprint_mismatch` | 151 | 0 | 0 | 151 | 0 |
 | `mirrored_text_on_front_layer` | 4 | 0 | 0 | 4 | 0 |
 | `missing_tuning_profile` | 1 | 0 | 0 | 1 | 0 |
 | `nonmirrored_text_on_back_layer` | 4 | 0 | 0 | 4 | 0 |
-| `shorting_items` | 32 | 2207 | 4 | 28 | 2203 |
-| `silk_edge_clearance` | 44 | 30 | 0 | 44 | 30 |
-| `silk_over_copper` | 183 | 280 | 0 | 183 | 280 |
-| `silk_overlap` | 232 | 231 | 0 | 232 | 231 |
+| `shorting_items` | 137 | 1940 | 67 | 70 | 1873 |
+| `silk_edge_clearance` | 22 | 11 | 0 | 22 | 11 |
+| `silk_over_copper` | 115 | 167 | 0 | 115 | 167 |
+| `silk_overlap` | 218 | 222 | 0 | 218 | 222 |
 | `skew_out_of_range` | 3 | 0 | 0 | 3 | 0 |
-| `solder_mask_bridge` | 320 | 293 | 1 | 319 | 292 |
-| `starved_thermal` | 9 | 0 | 0 | 9 | 0 |
-| `track_dangling` | 7 | 92 | 1 | 6 | 91 |
-| `track_width` | 209 | 10 | 10 | 199 | 0 |
+| `solder_mask_bridge` | 314 | 26 | 1 | 313 | 25 |
+| `starved_thermal` | 8 | 0 | 0 | 8 | 0 |
+| `track_dangling` | 7 | 4 | 1 | 6 | 3 |
+| `track_width` | 199 | 0 | 0 | 199 | 0 |
 | `tracks_crossing` | 0 | 1005 | 0 | 0 | 1005 |
 | `via_dangling` | 316 | 163 | 36 | 280 | 127 |
 | `via_diameter` | 337 | 368 | 199 | 138 | 169 |
 | `zones_intersect` | 12 | 0 | 0 | 12 | 0 |
 
-_Excluded from the above: 3214 occurrences of this project's own placement-quality/netclass checks (no KiCad counterpart by design), which would only add noise to precision/recall._
+_Excluded from the above: 3222 occurrences of this project's own placement-quality/netclass checks (no KiCad counterpart by design), which would only add noise to precision/recall._
 
-
-### Boards that errored (1, excluded from totals above)
-
-- unroutable_tiny_outline [example]: place/route: TIMEOUT after 2700s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)
 
 ## 2. ERC -- `check_erc` vs `kicad-cli sch erc`
 
