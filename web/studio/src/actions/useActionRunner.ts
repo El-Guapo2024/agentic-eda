@@ -17,6 +17,9 @@ import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { commitRoute, dropViaAndSwitchLayer } from "../components/canvas/routing";
+import { openPropertiesFor } from "../components/canvas/properties";
+import { findNetAtCursor } from "../components/canvas/netAtCursor";
+import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
 import { GRID_OPTIONS_UM } from "../components/Toolbar";
 
 function canvasRect(): DOMRect | null {
@@ -48,8 +51,46 @@ export function useActionRunner() {
         if (state.tab === "pcb") fn(...args);
       };
 
-    m.set("pcbnew.InteractiveEdit.rotateCcw", pcbOnly(() => api.rotateSelection(1)));
-    m.set("pcbnew.InteractiveEdit.rotateCw", pcbOnly(() => api.rotateSelection(3)));
+    /**
+     * edit_tool.cpp Rotate()/Flip()'s own `m_dragging` branch:
+     * during an active Move, R/Shift+R/F act on the live preview instead
+     * of committing a separate Rotate/Flip Cmd immediately -- the
+     * eventual commit (Canvas.tsx's onPointerUp/onPointerDown "click to
+     * place" path, via api.commitMove) applies the accumulated rotation/
+     * flip together with the move as one step. Returns false (and does
+     * nothing) when no move is active, so the caller falls back to the
+     * plain immediate-commit behavior. A mouse-drag that hasn't moved
+     * the pointer even once yet (state.movePreview still null,
+     * state.activeTool still "select") can't be detected here -- this
+     * app's drag state lives in Canvas.tsx's own ref, not the store; see
+     * PARITY-pcb.md for this narrow, documented gap.
+     */
+    const tryTransformDuringMove = (addQuarterTurns: number, toggleFlip: boolean): boolean => {
+      const moving = state.activeTool === "move" || state.movePreview != null;
+      if (!moving) return false;
+      const refs = state.movePreview?.refs ?? [...state.selection];
+      if (refs.length === 0) return false;
+      const first = refs[0]!;
+      const kind = state.movePreview?.kind ?? (api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
+      const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0 };
+      const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
+      const flipped = toggleFlip ? !base.flipped : base.flipped;
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped } });
+      return true;
+    };
+
+    m.set(
+      "pcbnew.InteractiveEdit.rotateCcw",
+      pcbOnly(() => {
+        if (!tryTransformDuringMove(1, false)) api.rotateSelection(1);
+      })
+    );
+    m.set(
+      "pcbnew.InteractiveEdit.rotateCw",
+      pcbOnly(() => {
+        if (!tryTransformDuringMove(3, false)) api.rotateSelection(3);
+      })
+    );
     m.set(
       "common.Interactive.delete",
       pcbOnly(() => {
@@ -91,7 +132,12 @@ export function useActionRunner() {
         })
       );
     } else {
-      m.set("pcbnew.InteractiveEdit.flip", pcbOnly(() => api.flipSelection()));
+      m.set(
+        "pcbnew.InteractiveEdit.flip",
+        pcbOnly(() => {
+          if (!tryTransformDuringMove(0, true)) api.flipSelection();
+        })
+      );
     }
     m.set(
       "pcbnew.Control.layerToggle",
@@ -139,6 +185,20 @@ export function useActionRunner() {
     );
     m.set("common.Interactive.undo", () => api.undo());
     m.set("common.Interactive.redo", () => api.redo());
+    m.set("common.Interactive.duplicate", pcbOnly(() => api.duplicateSelection()));
+    m.set("common.Interactive.copy", pcbOnly(() => api.copySelection()));
+    m.set("common.Interactive.paste", pcbOnly(() => api.pasteClipboard()));
+    m.set(
+      "pcbnew.InteractiveEdit.moveExact",
+      pcbOnly(() => {
+        // Only meaningful with something placed/selected to move -- a
+        // footprint, or any of item 7's track/via/zone/shape/text (the
+        // dialog itself, MoveExactDialog.tsx, resolves which and reads
+        // its own position/bbox fresh when it opens).
+        if (state.selection.size === 0) return;
+        dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true });
+      })
+    );
 
     m.set(
       "pcbnew.EditorControl.toggleNetHighlight",
@@ -147,6 +207,62 @@ export function useActionRunner() {
         const part = ref ? api.partByRef(ref) : undefined;
         const net = part?.pads?.[0]?.net ?? null;
         dispatch({ type: "SET_NET_HIGHLIGHT", net: state.netHighlight ? null : net });
+      })
+    );
+    // board_inspection_tool.cpp BOARD_INSPECTION_TOOL::highlightNet, the
+    // real "`" key (cursor-driven, NOT selection-driven -- a different
+    // action, `highlightNetSelection`, is the selection-based one, and
+    // this app has no hotkey/menu entry point for it since the plain "`"
+    // is what the task names): find the net under the cursor (pads/vias/
+    // tracks preferred, zones only as a fallback) and toggle it -- the
+    // same net clicked twice clears the highlight, a different one
+    // replaces it, nothing under the cursor clears it.
+    m.set(
+      "pcbnew.EditorControl.highlightNet",
+      pcbOnly(() => {
+        if (!state.board || !state.cursorUm) return;
+        const toleranceUm = 10 / (state.view.scale || 1);
+        const net = findNetAtCursor(state.board, state.cursorUm.x, state.cursorUm.y, toleranceUm);
+        dispatch({ type: "SET_NET_HIGHLIGHT", net: net && net === state.netHighlight ? null : net });
+      })
+    );
+    // board_inspection_tool.cpp BOARD_INSPECTION_TOOL::ClearHighlight ("~").
+    m.set("pcbnew.EditorControl.clearHighlight", pcbOnly(() => dispatch({ type: "SET_NET_HIGHLIGHT", net: null })));
+
+    // pcb_selection_tool.cpp expandConnection ("U" -- Select/Expand
+    // Connection): seed points from every currently-selected track/via's
+    // own endpoints plus every pad of a selected footprint, each on its
+    // own net, and flood outward (kicad-port/expandConnection.ts).
+    m.set(
+      "pcbnew.InteractiveSelection.SelectConnection",
+      pcbOnly(() => {
+        const board = state.board;
+        if (!board) return;
+        const tracks: ConnTrack[] = (board.routing?.tracks ?? []).map((t) => ({ id: t.id, net: t.net, start: t.pts[0]!, end: t.pts[t.pts.length - 1]! })).filter((t) => t.start && t.end);
+        const vias: ConnVia[] = (board.routing?.vias ?? []).map((v) => ({ id: v.id, net: v.net, at: [v.x, v.y] }));
+        const startPoints: StartPoint[] = [];
+        const selectedTrackIds: string[] = [];
+        const selectedViaIds: string[] = [];
+        for (const id of state.selection) {
+          const t = api.trackById(id);
+          const v = api.viaById(id);
+          const p = api.partByRef(id);
+          if (t) {
+            selectedTrackIds.push(id);
+            startPoints.push({ point: t.pts[0]!, net: t.net }, { point: t.pts[t.pts.length - 1]!, net: t.net });
+          } else if (v) {
+            selectedViaIds.push(id);
+            startPoints.push({ point: [v.x, v.y], net: v.net });
+          } else if (p?.placed) {
+            for (const pad of p.pads ?? []) if (pad.net) startPoints.push({ point: [pad.x, pad.y], net: pad.net });
+          }
+        }
+        if (startPoints.length === 0) return;
+        const result = expandConnection(tracks, vias, startPoints, { trackIds: selectedTrackIds, viaIds: selectedViaIds });
+        const refs = new Set(state.selection);
+        for (const id of result.trackIds) refs.add(id);
+        for (const id of result.viaIds) refs.add(id);
+        dispatch({ type: "SET_SELECTION", refs: [...refs] });
       })
     );
 
@@ -244,24 +360,26 @@ export function useActionRunner() {
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
       })
     );
-    m.set("common.Interactive.cancel", () => {
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-      dispatch({ type: "CLEAR_SELECTION" }); // also resets activeTool to "select"
-    });
+    // pcb_selection_tool.cpp's IsCancel() handler (see state/store.tsx's
+    // "ESCAPE" reducer case for the full tiered semantics this replaced
+    // a plain CLEAR_SELECTION with: an in-progress move/draw/arm cancels
+    // itself first *without* touching the selection; only once nothing
+    // is running does Escape clear the selection, and only once that's
+    // also empty does it clear the net highlight).
+    m.set("common.Interactive.cancel", () => dispatch({ type: "ESCAPE" }));
 
     m.set(
       "pcbnew.InteractiveEdit.properties",
       pcbOnly(() => {
-        const ref = [...state.selection][0];
-        if (!ref) return;
         // "E" opens whichever properties view actually applies to what's
         // selected -- a real Text gets the full edit_text-backed dialog
         // (item 6's own "E to edit"); everything else this app models
         // (a part, or item 7's track/via/zone/shape) is read-only-ish, so
         // it keeps the existing footprint-properties dialog's pattern.
-        if (api.textById(ref)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id: ref } });
-        else if (api.trackById(ref) || api.viaById(ref) || api.zoneById(ref) || api.shapeById(ref)) dispatch({ type: "SET_ITEM_PROPERTIES_ID", id: ref });
-        else dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+        // Shared with Canvas.tsx's double-click (properties.ts) so the
+        // two can never disagree.
+        const ref = [...state.selection][0];
+        if (ref) openPropertiesFor(ref, api, dispatch);
       })
     );
     m.set("pcbnew.DRCTool.runDRC", () => dispatch({ type: "SET_DRC_OPEN", open: true }));
@@ -297,6 +415,51 @@ export function useActionRunner() {
     m.set("pcbnew.Control.padDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_PADS" }));
     m.set("pcbnew.Control.trackDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_TRACKS" }));
     m.set("pcbnew.Control.viaDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_VIAS" }));
+
+    // pcb_control.cpp LayerNext/LayerPrev ("+"/"-"): step the active
+    // layer through the copper stack in UI order, skipping hidden
+    // layers, wrapping around, a no-op (source: wxBell()) if every other
+    // copper layer is hidden. Source jumps straight to B.Cu/F.Cu when the
+    // active layer isn't a copper one at all; this app's activeLayer can
+    // be a non-copper layer (or null) via the Appearance panel, so that
+    // fallback is reachable here too, not just a defensive branch.
+    const cycleActiveLayer = (dir: 1 | -1) => {
+      const layers = state.board?.layers ?? [];
+      if (layers.length === 0) return;
+      const visible = (l: string) => state.layerVisible[l] !== false;
+      const cur = state.activeLayer;
+      if (cur == null || !layers.includes(cur)) {
+        dispatch({ type: "SET_ACTIVE_LAYER", layer: (dir === 1 ? layers[layers.length - 1] : layers[0]) ?? null });
+        return;
+      }
+      const i = layers.indexOf(cur);
+      for (let step = 1; step <= layers.length; step++) {
+        const j = ((i + dir * step) % layers.length + layers.length) % layers.length;
+        if (visible(layers[j]!)) {
+          dispatch({ type: "SET_ACTIVE_LAYER", layer: layers[j]! });
+          return;
+        }
+      }
+      // every other copper layer is hidden -- source rings the bell and does nothing.
+    };
+    m.set("pcbnew.Control.layerNext", pcbOnly(() => cycleActiveLayer(1)));
+    m.set("pcbnew.Control.layerPrev", pcbOnly(() => cycleActiveLayer(-1)));
+
+    // pcb_control.cpp LayerAlphaInc/Dec ("}"/"{"): the real constants
+    // (`#define ALPHA_MIN 0.20` / `ALPHA_MAX 1.00` / `ALPHA_STEP 0.05`),
+    // applied to whichever layer is currently active.
+    const ALPHA_MIN = 0.2,
+      ALPHA_MAX = 1.0,
+      ALPHA_STEP = 0.05;
+    const stepActiveLayerAlpha = (delta: number) => {
+      const layer = state.activeLayer;
+      if (!layer) return;
+      const cur = state.layerOpacity[layer] ?? 1;
+      const next = Math.min(ALPHA_MAX, Math.max(ALPHA_MIN, Math.round((cur + delta) * 100) / 100));
+      if (next !== cur) dispatch({ type: "SET_LAYER_OPACITY", layer, opacity: next });
+    };
+    m.set("pcbnew.Control.layerAlphaInc", pcbOnly(() => stepActiveLayerAlpha(ALPHA_STEP)));
+    m.set("pcbnew.Control.layerAlphaDec", pcbOnly(() => stepActiveLayerAlpha(-ALPHA_STEP)));
 
     const cycleGrid = (dir: 1 | -1) => {
       const i = GRID_OPTIONS_UM.indexOf(state.gridUm);

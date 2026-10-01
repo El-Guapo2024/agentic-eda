@@ -347,6 +347,19 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditText { id, content, layer, .. } => format!("text edit {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteText { id } => format!("text delete {id}"),
         Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
+
+        Cmd::Duplicate { ids } => format!("duplicate {}", ids.join(" ")),
+        Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
+            format!("paste --tracks {} --vias {} --zones {} --shapes {} --texts {}", tracks.len(), vias.len(), zones.len(), shapes.len(), texts.len())
+        }
+        Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => format!(
+            "move-exact {} --by {},{} --rotate {:.3} --pivot {}",
+            parts.join(" "),
+            mm(*dx),
+            mm(*dy),
+            *rotate_millideg as f64 / 1000.0,
+            pivot.map_or("self".to_string(), |p| format!("{},{}", mm(p.x), mm(p.y)))
+        ),
     }
 }
 
@@ -398,6 +411,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddZone { .. } | Cmd::DeleteZone { .. } => "zone",
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } => "shape",
         Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
+        Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
+        Cmd::MoveExact { .. } => "move-exact",
     }
 }
 

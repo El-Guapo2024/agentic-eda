@@ -381,7 +381,7 @@ pub struct RoutingSection {
     pub zones: Vec<Zone>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Track {
     /// Stable id (`trk_xxxxxxxxxxxx`). Deterministic from `net`, `layer`
@@ -408,7 +408,7 @@ impl Track {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Via {
     /// Stable id (`via_xxxxxxxxxxxx`). Deterministic from every field
@@ -432,7 +432,7 @@ impl Via {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Zone {
     /// Stable id (`zone_xxxxxxxxxxxx`). Deterministic from `net`, `layer`

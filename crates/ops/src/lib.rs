@@ -230,6 +230,47 @@ pub enum Cmd {
     DeleteText { id: String },
     /// Move a text to a new position, keeping its id and styling.
     MoveText { id: String, x: Um, y: Um },
+
+    /// Copy existing tracks/vias/zones/shapes/texts named by id, in
+    /// place (same position, fresh ids) -- the studio's Cmd+D. Footprints
+    /// are deliberately not supported: duplicating one would add a part
+    /// instance the intent/BOM does not have, which needs a human
+    /// decision this verb cannot make on its own (see the report). An id
+    /// naming a footprint, or anything else this can't duplicate, is
+    /// simply not among the ones found -- only refused if NONE of the
+    /// given ids match anything duplicable.
+    Duplicate { ids: Vec<String> },
+    /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
+    /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
+    /// the studio's Cmd+V. Unlike `Duplicate` (which looks up existing
+    /// board items by id), the pasted items' full data travels with the
+    /// command itself, so paste still works after the original was
+    /// deleted, or even against a different board than the one they were
+    /// copied from.
+    PasteItems {
+        #[serde(default)]
+        tracks: Vec<Track>,
+        #[serde(default)]
+        vias: Vec<Via>,
+        #[serde(default)]
+        zones: Vec<Zone>,
+        #[serde(default)]
+        shapes: Vec<Shape>,
+        #[serde(default)]
+        texts: Vec<Text>,
+    },
+
+    /// Move/rotate one or more placed parts by an exact cartesian offset
+    /// and angle -- pcbnew's "Move Exactly..." (Shift+M) dialog.
+    /// `rotate_millideg` adds to each part's own orientation regardless
+    /// of `pivot`; `pivot` is `None` to rotate a part in place around its
+    /// own (already-translated) anchor -- a pure spin, no further
+    /// position change, exactly like `Rotate` -- or `Some(point)` to
+    /// rotate around a shared point instead (dialog's "selection center"/
+    /// "local coordinates origin" anchor choices), which the caller
+    /// resolves to an actual board point since this crate has no
+    /// selection/UI-origin concept of its own.
+    MoveExact { parts: Vec<String>, dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point> },
 }
 
 impl Cmd {
@@ -259,6 +300,9 @@ impl Cmd {
             | Cmd::MoveText { id, .. } => vec![id.as_str()],
             Cmd::AddShape { shape } => vec![shape.layer()],
             Cmd::AddText { text } => vec![text.content.as_str()],
+            Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
+            Cmd::PasteItems { .. } => vec!["paste"],
+            Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
         }
     }
 
@@ -281,6 +325,7 @@ impl Cmd {
                 | Cmd::Swap { .. }
                 | Cmd::Rip { .. }
                 | Cmd::Flip { .. }
+                | Cmd::MoveExact { .. }
         )
     }
 }
@@ -519,6 +564,10 @@ impl<'a> Board<'a> {
             }
             Cmd::DeleteText { id } => self.delete_text(id),
             Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
+
+            Cmd::Duplicate { ids } => self.duplicate_items(ids),
+            Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
+            Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
         }
     }
 
@@ -1135,6 +1184,129 @@ impl<'a> Board<'a> {
         t.at = Point { x, y };
         Ok(())
     }
+
+    // ------------------------------------------------- duplicate / paste
+
+    /// `Cmd::Duplicate`: resolve each id against whichever collection
+    /// actually has it (a track, via, zone, shape or text -- never a
+    /// footprint, which has no match in any of these and so is simply
+    /// skipped, not specially detected) and hand the found copies to
+    /// `insert_copies`.
+    fn duplicate_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_duplicate", "duplicate", "no ids given")]);
+        }
+
+        let mut tracks = Vec::new();
+        let mut vias = Vec::new();
+        let mut zones = Vec::new();
+        if let Some(rt) = self.design.routing.as_ref() {
+            tracks.extend(rt.tracks.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
+            vias.extend(rt.vias.iter().filter(|v| ids.iter().any(|id| id == &v.id)).cloned());
+            zones.extend(rt.zones.iter().filter(|z| ids.iter().any(|id| id == &z.id)).cloned());
+        }
+        let mut shapes = Vec::new();
+        let mut texts = Vec::new();
+        if let Some(dr) = self.design.drawings.as_ref() {
+            shapes.extend(dr.shapes.iter().filter(|s| ids.iter().any(|id| id == s.id())).cloned());
+            texts.extend(dr.texts.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
+        }
+
+        if tracks.is_empty() && vias.is_empty() && zones.is_empty() && shapes.is_empty() && texts.is_empty() {
+            return Err(vec![CheckResult::fail(
+                "ops_unknown_duplicate",
+                "duplicate",
+                "none of the given ids name a track, via, zone, shape or text (footprints cannot be duplicated this way)",
+            )]);
+        }
+
+        self.insert_copies(tracks, vias, zones, shapes, texts)
+    }
+
+    /// Shared by `Duplicate` (copies resolved from existing ids) and
+    /// `PasteItems` (copies that travelled with the command): blank every
+    /// incoming id -- never trust a caller's or a stale copy's id, same
+    /// rule `add_shape`/`add_track`/etc. already follow -- insert, and
+    /// assign fresh deterministic ones the same way a brand new item
+    /// would get.
+    fn insert_copies(&mut self, mut tracks: Vec<Track>, mut vias: Vec<Via>, mut zones: Vec<Zone>, mut shapes: Vec<Shape>, mut texts: Vec<Text>) -> Result<(), Vec<CheckResult>> {
+        for t in &mut tracks {
+            t.id.clear();
+        }
+        for v in &mut vias {
+            v.id.clear();
+        }
+        for z in &mut zones {
+            z.id.clear();
+        }
+        for s in &mut shapes {
+            s.set_id(String::new());
+        }
+        for t in &mut texts {
+            t.id.clear();
+        }
+
+        if !tracks.is_empty() || !vias.is_empty() || !zones.is_empty() {
+            let rt = self.routing_mut();
+            rt.tracks.append(&mut tracks);
+            rt.vias.append(&mut vias);
+            rt.zones.append(&mut zones);
+            rt.assign_missing_ids();
+            self.sort_routing();
+        }
+        if !shapes.is_empty() || !texts.is_empty() {
+            let dr = self.drawings_mut();
+            dr.shapes.append(&mut shapes);
+            dr.texts.append(&mut texts);
+            dr.assign_missing_ids();
+        }
+        Ok(())
+    }
+
+    // ----------------------------------------------------- move exact
+
+    /// `Cmd::MoveExact`: translate by `(dx, dy)`, then rotate by
+    /// `rotate_millideg` around `pivot` (or, if `None`, around the part's
+    /// own just-translated anchor -- a pure in-place spin, since rotating
+    /// a point about itself cannot move it). Every part moves/rotates by
+    /// the SAME translation and angle, matching source's dialog (one
+    /// shared delta/angle for the whole selection); each part's `pivot`,
+    /// when given, is still the one shared point (the caller resolves
+    /// "selection center" to a single coordinate before sending this).
+    fn move_exact(&mut self, parts: &[String], dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point>) -> Result<(), Vec<CheckResult>> {
+        if parts.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_move_exact", "move_exact", "no parts given")]);
+        }
+        // Validate every part is placed before moving any of them, so a
+        // bad name among several refuses cleanly instead of leaving a
+        // partial edit applied.
+        for part in parts {
+            self.require_placed(part)?;
+        }
+        for part in parts {
+            let fp = self.require_placed(part)?;
+            let moved = Point { x: fp.at.x + dx, y: fp.at.y + dy };
+            let final_pos = match pivot {
+                None => moved,
+                Some(p) => rotate_point_about(moved, p, rotate_millideg),
+            };
+            let final_rot = (fp.rot as i64 + rotate_millideg).rem_euclid(360_000) as u32;
+            self.set_pose(part, final_pos, final_rot)?;
+        }
+        Ok(())
+    }
+}
+
+/// Rotate `pt` by `angle_millideg` around `pivot` -- the same matrix
+/// `crates/model/src/footprint.rs`'s `to_board` applies to a pad's local
+/// offset (no Y-axis flip either side), so a part moved this way lands
+/// exactly where its own rendering will subsequently draw it.
+fn rotate_point_about(pt: Point, pivot: Point, angle_millideg: i64) -> Point {
+    let rad = (angle_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
+    let (sin, cos) = rad.sin_cos();
+    let dx = (pt.x - pivot.x) as f64;
+    let dy = (pt.y - pivot.y) as f64;
+    Point { x: pivot.x + (dx * cos - dy * sin).round() as Um, y: pivot.y + (dx * sin + dy * cos).round() as Um }
 }
 
 /// How far a `Place` will slide along the anchor before giving up.

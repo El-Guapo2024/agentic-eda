@@ -228,6 +228,36 @@ export interface CmdText {
   mirror: boolean;
 }
 
+// crates/model/src/ir.rs `Track`/`Via`/`Zone`, full IR shape (PointXY,
+// not the display [x,y] pairs) -- only `paste_items` needs a whole one of
+// these at once; every other Cmd that touches a track/via/zone takes
+// flat fields instead (`add_track`/`add_via`/`add_zone`/`move_via`/...).
+// `id` is accepted but always ignored by the backend (`insert_copies`
+// blanks and reassigns it, same as `add_shape`/`add_text`) -- optional
+// here for callers that would rather not bother clearing it themselves.
+export interface CmdTrack {
+  id?: string;
+  net: string;
+  layer: string;
+  width: Um;
+  pts: PointXY[];
+}
+export interface CmdVia {
+  id?: string;
+  net: string;
+  at: PointXY;
+  drill: Um;
+  diameter: Um;
+  from_layer: string;
+  to_layer: string;
+}
+export interface CmdZone {
+  id?: string;
+  net: string;
+  layer: string;
+  outline: PointXY[];
+}
+
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
   | { op: "place_edge"; part: string; edge: Dir; fraction: number }
@@ -253,7 +283,13 @@ export type Cmd =
   | { op: "add_text"; text: CmdText }
   | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
   | { op: "delete_text"; id: string }
-  | { op: "move_text"; id: string; x: Um; y: Um };
+  | { op: "move_text"; id: string; x: Um; y: Um }
+  /** Cmd+D: copy existing tracks/vias/zones/shapes/texts named by id, in place, with fresh ids. Never footprints -- see crates/ops/src/lib.rs `Cmd::Duplicate`'s own doc comment. */
+  | { op: "duplicate"; ids: string[] }
+  /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
+  | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
+  /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */
+  | { op: "move_exact"; parts: string[]; dx: Um; dy: Um; rotate_millideg: number; pivot: PointXY | null };
 
 export interface CmdReply {
   ok: boolean;
