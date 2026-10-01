@@ -78,6 +78,20 @@ pub struct Design {
     /// name has ever been opened here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footprint_library: Option<FootprintLibrarySection>,
+    /// Every non-root sheet's own drawn content (GAPS.md #6), keyed by its
+    /// `SheetInstance::file` name -- KiCad's own "one `SCH_SCREEN` per
+    /// unique file" convention: two `SheetInstance`s naming the same file
+    /// (the same screen placed more than once) share the one entry here.
+    /// `schematic` above is always the *root* sheet's own content, never an
+    /// entry in this map -- a single-sheet design (everything before this
+    /// field existed, and most designs even now) has this as `None`, same
+    /// "absent means nothing to add" convention as every other optional
+    /// section. See `crate::hierarchy`'s own doc (eda-kicad) for how this
+    /// flattens into one netlist, and `SchematicSection::instance_overrides`
+    /// for how a multiply-placed screen's own symbols get a different
+    /// Reference per placement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet_contents: Option<std::collections::BTreeMap<String, SchematicSection>>,
 }
 
 impl Design {
@@ -100,6 +114,11 @@ impl Design {
         }
         if let Some(lib) = &mut self.footprint_library {
             lib.assign_missing_ids();
+        }
+        if let Some(screens) = &mut self.sheet_contents {
+            for sch in screens.values_mut() {
+                sch.assign_missing_ids();
+            }
         }
     }
 }
@@ -177,12 +196,20 @@ pub struct SchematicSection {
     /// `ExportMeta` (title/date) the way every export always has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_block: Option<TitleBlock>,
-    /// Child hierarchical sheets. Always empty today (one sheet only) —
-    /// carried so the format can grow into a hierarchy without another
-    /// schema break; the reader accepts and preserves sheets it finds in
-    /// an imported file without descending into their own content.
+    /// Child hierarchical sheets placed directly on *this* sheet -- each
+    /// one's own content lives in `Design::sheet_contents[sheet.file]`, not
+    /// here (GAPS.md #6). Empty for a single-sheet design, same as always.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sheets: Vec<SheetInstance>,
+    /// `SCH_SYMBOL_INSTANCE`-style per-placement overrides for this
+    /// screen's own symbols, keyed by `SymbolPathOverride::parent_sheet_instance_id` --
+    /// only ever non-empty on a screen placed by more than one
+    /// [`SheetInstance`] (the content this `SchematicSection` belongs to is
+    /// reused), and empty on the root sheet (nothing ever places it). See
+    /// [`SymbolPathOverride`]'s own doc for why `at`, not a stored id, is
+    /// the per-symbol key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instance_overrides: Vec<SymbolPathOverride>,
     /// True when this section was built by `eda_kicad::import_kicad_sch`
     /// from a real `.kicad_sch` file, rather than by this project's own
     /// `derive_schematic`. The two disagree on what `SymbolInstance::at`
@@ -463,19 +490,88 @@ pub struct TitleBlock {
     pub comments: Vec<String>,
 }
 
-/// A child hierarchical sheet, as placed on its parent sheet. Deferred:
-/// `derive_schematic` never creates one, and the reader does not descend
-/// into `file` — this only records that a sheet symbol was there (its
-/// name/file/position/size), so re-exporting a file that had one does not
-/// silently drop it, and so the schema has a place to grow into real
-/// hierarchy later.
+/// A child hierarchical sheet, as placed on its parent sheet (GAPS.md #6).
+/// `id` is this *placement*'s own stable identity -- a real file's own
+/// sheet `(uuid ...)` when imported, or a deterministic id assigned the
+/// same way a wire/label gets one when this project creates a sheet fresh
+/// -- distinct from `file`, the name of the *content* this placement
+/// shows: the same `file` can be placed more than once (KiCad's own
+/// `SCH_SCREEN` sharing -- see `Design::sheet_contents`'s own doc), each
+/// such placement getting its own `id` and, through it, its own
+/// `SchematicSection::instance_overrides` entries for that shared
+/// content's symbols. `derive_schematic` never creates one; the reader
+/// descends into `file` (`sch_import::import_kicad_sch_tree`) when given a
+/// directory to resolve sibling sheet files against, and only records the
+/// placement without descending (as before) when given bare text with no
+/// filesystem context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SheetInstance {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub name: String,
     pub file: String,
     pub at: Point,
     pub size: (Um, Um),
+    /// Sheet pins on this placement's own border (`SCH_SHEET_PIN`), each
+    /// tied *by name* (not by any stored link) to a hierarchical label of
+    /// the same name in `file`'s own content -- see
+    /// `crate::hierarchy`'s own doc for how that join flattens into one
+    /// netlist, and `check_erc`'s `hier_label_mismatch` for the name-only
+    /// matching rule (shape is cosmetic, confirmed against
+    /// `connection_graph.cpp::ercCheckHierSheets`, which never compares
+    /// it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pins: Vec<SheetPin>,
+}
+
+/// One pin on a [`SheetInstance`]'s own border. `shape` is the same
+/// 5-value vocabulary a hierarchical label carries (`LabelShape`) --
+/// KiCad's own `SCH_SHEET_PIN : public SCH_HIERLABEL` inheritance, which is
+/// why the two share a shape type here too.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SheetPin {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub shape: LabelShape,
+    /// Sheet coordinates (not sheet-local) -- always on the placement's
+    /// own border rectangle, same as a real `SCH_SHEET_PIN` is always
+    /// `ConstrainOnEdge`-clamped there.
+    pub at: Point,
+}
+
+impl SheetPin {
+    fn id_seed(&self) -> String {
+        format!("{}|{},{}", self.name, self.at.x, self.at.y)
+    }
+}
+
+/// One placed symbol's Reference/Value/Footprint/unit *as seen through one
+/// specific parent sheet placement*, for a screen ([`Design::sheet_contents`]
+/// entry) that is placed more than once -- real KiCad's `SCH_SYMBOL_INSTANCE`
+/// (`sch_sheet_path.h`), keyed there by a full root-to-leaf sheet-uuid path;
+/// keyed here by just `parent_sheet_instance_id` (the *immediate* parent
+/// [`SheetInstance::id`] that placed this screen), since that one id is
+/// already globally unique across the whole design and nothing deeper is
+/// needed to tell two placements of the same file apart. `at` identifies
+/// *which* symbol in this screen's own content the override is for (a
+/// screen's own drawn content is placement-invariant, so a symbol's own
+/// position is already a stable, unique-enough key within it -- the same
+/// reasoning `Wire`/`NetLabel` id derivation already leans on elsewhere in
+/// this file). Absent entirely for the overwhelming common case (a sheet
+/// placed exactly once), where [`SymbolInstance::id`] is already the only
+/// answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolPathOverride {
+    pub at: Point,
+    pub parent_sheet_instance_id: String,
+    pub reference: String,
+    #[serde(default = "d_unit_one")]
+    pub unit: u32,
 }
 
 impl SchematicSection {
@@ -532,6 +628,31 @@ impl SchematicSection {
                 let id = next_item_id("nc", &self.no_connects[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.no_connects[i].id = id;
+            }
+        }
+
+        // Sheets and their own pins: imported from a real file carries
+        // real uuids already (see `sch_import`'s own sheet-parsing loop),
+        // so this only ever fires for a sheet this project placed itself
+        // (the `S` tool, once it exists) with no id yet.
+        existing.extend(self.sheets.iter().map(|s| s.id.clone()).filter(|s| !s.is_empty()));
+        existing.extend(self.sheets.iter().flat_map(|s| s.pins.iter()).map(|p| p.id.clone()).filter(|s| !s.is_empty()));
+        let mut order: Vec<usize> = (0..self.sheets.len()).collect();
+        order.sort_by(|&a, &b| (&self.sheets[a].file, self.sheets[a].at).cmp(&(&self.sheets[b].file, self.sheets[b].at)));
+        for i in order {
+            if self.sheets[i].id.is_empty() {
+                let id = next_item_id("sheet", &format!("{}|{},{}", self.sheets[i].file, self.sheets[i].at.x, self.sheets[i].at.y), &existing);
+                existing.insert(id.clone());
+                self.sheets[i].id = id;
+            }
+            let mut pin_order: Vec<usize> = (0..self.sheets[i].pins.len()).collect();
+            pin_order.sort_by(|&a, &b| (&self.sheets[i].pins[a].name, self.sheets[i].pins[a].at).cmp(&(&self.sheets[i].pins[b].name, self.sheets[i].pins[b].at)));
+            for j in pin_order {
+                if self.sheets[i].pins[j].id.is_empty() {
+                    let id = next_item_id("shpin", &self.sheets[i].pins[j].id_seed(), &existing);
+                    existing.insert(id.clone());
+                    self.sheets[i].pins[j].id = id;
+                }
             }
         }
     }
@@ -1750,12 +1871,14 @@ mod tests {
                 erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
+                instance_overrides: vec![],
             }),
             nets: None,
             placement: None,
             routing: None,
             drawings: None,
             footprint_library: None,
+            sheet_contents: None,
         }
     }
 

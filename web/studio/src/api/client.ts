@@ -30,9 +30,15 @@ export async function fetchState(): Promise<BoardState> {
  * Schematic Editor's own KiCad-style renderer. /api/schematic.svg (a
  * single baked image) still exists on the backend but nothing in this
  * app fetches it anymore.
+ *
+ * `sheetPath` (GAPS.md #6): the root-to-here list of `SheetInstance::id`s
+ * the Hierarchy panel has navigated into (`state.currentSheetPath`) --
+ * omitted/empty fetches the root sheet, exactly as every call before
+ * hierarchy support existed already did.
  */
-export async function fetchSchematic(): Promise<Schematic> {
-  const s = await getJson<Schematic & { error?: string }>("/api/schematic");
+export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Schematic> {
+  const query = sheetPath && sheetPath.length > 0 ? `?sheet=${sheetPath.join("/")}` : "";
+  const s = await getJson<Schematic & { error?: string }>(`/api/schematic${query}`);
   if (s.error) throw new ApiError(s.error);
   // Defensive defaults for the lib_symbols/power_symbols/no_connects
   // fields, and per-symbol/per-label fields, the Eeschema-port merge
@@ -51,6 +57,8 @@ export async function fetchSchematic(): Promise<Schematic> {
     no_connects: s.no_connects ?? [],
     texts: s.texts ?? [],
     title_block: s.title_block ?? null,
+    sheets: s.sheets ?? [],
+    sheet_path: s.sheet_path ?? [],
     symbols: (s.symbols ?? []).map((sym) => {
       // `mirror` replaces an earlier `mirrored: boolean` (see types.ts's
       // SchematicSymbol doc comment) that could only ever express one of

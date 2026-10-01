@@ -1002,7 +1002,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
         placement: None,
         routing: None,
         drawings: None,
-        footprint_library: None,
+        footprint_library: None, sheet_contents: None,
     };
 
     let design = match cx.args.cmd.as_str() {
@@ -1182,7 +1182,7 @@ fn main() -> ExitCode {
                 placement: None,
                 routing: None,
                 drawings: None,
-                footprint_library: None,
+                footprint_library: None, sheet_contents: None,
             };
             seed_outline(&empty, model)
         });

@@ -42,7 +42,7 @@ function SymbolPreview({ entry, library, unit }: { entry: SymbolLibraryEntry | n
     const resolved = entry && library?.lib_symbols[entry.lib_id];
     if (!resolved) return;
     const fakeSymbol: SchematicSymbol = { id: "?", lib_id: entry.lib_id, at: [0, 0], rot: 0, mirror: null, unit, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [] };
-    const fakeSch: Schematic = { lib_symbols: { [entry.lib_id]: resolved }, symbols: [fakeSymbol], power_symbols: [], wires: [], no_connects: [], labels: [], texts: [], title_block: null };
+    const fakeSch: Schematic = { lib_symbols: { [entry.lib_id]: resolved }, symbols: [fakeSymbol], power_symbols: [], wires: [], no_connects: [], labels: [], texts: [], title_block: null, sheets: [], sheet_path: [] };
     const bounds = symbolBounds(fakeSymbol, fakeSch.lib_symbols);
     const view = fitTransform(bounds, PREVIEW_W, PREVIEW_H, 14);
     ctx.save();

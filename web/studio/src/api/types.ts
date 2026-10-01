@@ -946,6 +946,30 @@ export interface TitleBlock {
   comment4: string;
 }
 
+/** A hierarchical sheet pin (`SCH_SHEET_PIN`) on a placed sheet's own border -- GAPS.md #6. Tied *by name only* to a hierarchical label of the same name inside the sheet's own file (see crates/kicad/src/erc.rs's `check_hierarchy` doc for why shape is never compared). */
+export interface SheetPin {
+  id: string;
+  name: string;
+  shape: LabelShape;
+  at: [Um, Um];
+}
+
+/** One child sheet placed directly on the schematic view currently being shown -- `GET /api/schematic`'s own `sheets` field, not the whole project's tree (see `sheet_path` for how deep the current view already is). */
+export interface Sheet {
+  id: string;
+  name: string;
+  file: string;
+  at: [Um, Um];
+  size: [Um, Um];
+  pins: SheetPin[];
+}
+
+/** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */
+export interface SheetPathEntry {
+  id: string;
+  name: string;
+}
+
 export interface Schematic {
   /** Empty object on a board with no schematic yet, never absent -- see api/client.ts's fetchSchematic for the defensive `?? {}` this file's other optional-till-populated collections already use. */
   lib_symbols: LibSymbols;
@@ -956,6 +980,10 @@ export interface Schematic {
   labels: SchematicLabel[];
   texts: SchematicText[];
   title_block: TitleBlock | null;
+  /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
+  sheets: Sheet[];
+  /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */
+  sheet_path: SheetPathEntry[];
 }
 
 // ---------------------------------------------------------------- Symbol library

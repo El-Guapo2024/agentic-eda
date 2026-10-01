@@ -42,7 +42,7 @@ function label(id: string, net: string, at: [number, number]): SchematicLabel {
 }
 
 function schematic(partial: Partial<Schematic>): Schematic {
-  return { lib_symbols: R_LIB, symbols: [], power_symbols: [], wires: [], no_connects: [], labels: [], texts: [], title_block: null, ...partial };
+  return { lib_symbols: R_LIB, symbols: [], power_symbols: [], wires: [], no_connects: [], labels: [], texts: [], title_block: null, sheets: [], sheet_path: [], ...partial };
 }
 
 test("ercMarkerPosition: null location or null schematic resolves to null", () => {

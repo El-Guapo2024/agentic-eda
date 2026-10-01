@@ -40,7 +40,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use eda_model::ir::{Design, Point};
+use eda_model::ir::{Design, Point, SchematicSection};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 
 /// KiCad's `ELECTRICAL_PINTYPE`, in its own declared order (this order is
@@ -361,11 +361,29 @@ fn native_imported_pin_at(sch: &eda_model::ir::SchematicSection, sym: &eda_model
 /// tool. Returns one `CheckResult` per finding, plus a `Pass` for any
 /// check that found nothing.
 pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
-    let Some(sch) = &design.schematic else {
+    if design.schematic.is_none() {
         let mut out = vec![CheckResult::fail("lib_symbol_issues", "design", "design has no schematic section")];
         out.extend(crate::erc_style::check_style(design, model));
         return out;
     };
+
+    // GAPS.md #6/#20: a hierarchical design's *own* pin-electrical checks
+    // (pin_to_pin, pin_not_connected, driven-pin, dangling-wire/label, ...)
+    // must see the whole hierarchy flattened to one netlist first -- the
+    // same "one netlist" rule this project applies everywhere else (see
+    // `crate::hierarchy`'s own doc) -- while the two checks that are
+    // specifically *about* the hierarchy's own structure
+    // (`hier_label_mismatch`/`duplicate_sheet_names`, in `check_hierarchy`
+    // below) read the original, unflattened `design` directly, since
+    // flattening is exactly what erases the sheet-pin/hierarchical-label
+    // pairing they inspect. A single-sheet design (`sheet_contents` is
+    // `None`, the overwhelmingly common case) skips this clone entirely.
+    let owned_flat: Option<(Design, ConstraintModel)> = design.sheet_contents.is_some().then(|| crate::hierarchy::flatten(design, model)).flatten().map(|(sch, nets)| {
+        (Design { schematic: Some(sch), nets: None, ..design.clone() }, ConstraintModel { nets, ..model.clone() })
+    });
+    let (design, model) = owned_flat.as_ref().map(|(d, m)| (d, m)).unwrap_or((design, model));
+    let sch = design.schematic.as_ref().expect("checked above");
+
     let pins = resolve_pins(design, model);
     let pins_by_ref: BTreeMap<String, &ResolvedPin> = pins.iter().map(|p| (p.pin_ref(), p)).collect();
 
@@ -381,6 +399,7 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     check_footprint_link_issues(sch, &mut out);
     check_duplicate_references(sch, &mut out);
     check_multi_unit_symbols(sch, model, &mut out);
+    check_hierarchy(design, &mut out);
     out.extend(crate::erc_style::check_style(design, model));
     out
 }
@@ -988,6 +1007,92 @@ fn check_duplicate_references(sch: &eda_model::ir::SchematicSection, out: &mut V
     }
 }
 
+// ---------------------------------------------------------------- hierarchy (GAPS.md #6/#20)
+
+/// Every screen in `design`'s own tree, as `(path prefix for messages,
+/// &SchematicSection)` pairs: the root plus every entry
+/// `design.sheet_contents` has, visited once each (not once per
+/// *placement* -- `duplicate_sheet_names`/`hier_label_mismatch` are both
+/// about one screen's own direct children, which is the same question
+/// regardless of how many times that screen itself happens to be placed).
+fn every_screen(design: &Design) -> Vec<(String, &SchematicSection)> {
+    let mut out = Vec::new();
+    if let Some(root) = &design.schematic {
+        out.push((String::new(), root));
+    }
+    if let Some(screens) = &design.sheet_contents {
+        for (file, sch) in screens {
+            out.push((file.clone(), sch));
+        }
+    }
+    out
+}
+
+/// (o) `duplicate_sheet_names`, ported from `ERC_TESTER::TestDuplicateSheetNames`
+/// (`erc.cpp`): screen-scoped (once per unique screen, not once per
+/// placement of a screen that is itself instanced more than once -- see
+/// this function's own `every_screen`), case-insensitive, direct siblings
+/// only (a sheet nested two levels down never collides with one at the
+/// top). One finding per colliding pair, matching source's own pairwise
+/// `for i; for j` loop.
+///
+/// (p) `hier_label_mismatch`, ported from `CONNECTION_GRAPH::ercCheckHierSheets`
+/// (`connection_graph.cpp`): for every sheet *placement*, compare its own
+/// pins against the placed file's own hierarchical labels, **by name
+/// only** -- shape/direction is never compared (confirmed directly against
+/// source: `ercCheckHierSheets` builds its two maps keyed on `GetShownText()`
+/// alone). A name on one side with nothing matching on the other is one
+/// finding, regardless of which side it's missing from (source itself
+/// reports both directions under the one same error code).
+fn check_hierarchy(design: &Design, out: &mut Vec<CheckResult>) {
+    let mut ok_dup = true;
+    for (screen_name, sch) in every_screen(design) {
+        for i in 0..sch.sheets.len() {
+            for j in (i + 1)..sch.sheets.len() {
+                if sch.sheets[i].name.eq_ignore_ascii_case(&sch.sheets[j].name) {
+                    out.push(CheckResult::fail(
+                        "duplicate_sheet_names",
+                        format!("{screen_name}:{}", sch.sheets[i].name),
+                        format!("sheet name '{}' is used by more than one sheet on {}", sch.sheets[i].name, if screen_name.is_empty() { "the root sheet".to_string() } else { screen_name.clone() }),
+                    ));
+                    ok_dup = false;
+                }
+            }
+        }
+    }
+    if ok_dup {
+        out.push(CheckResult::pass("duplicate_sheet_names"));
+    }
+
+    let mut ok_hier = true;
+    for (_, sch) in every_screen(design) {
+        for sheet in &sch.sheets {
+            let Some(child) = design.sheet_contents.as_ref().and_then(|s| s.get(&sheet.file)) else { continue };
+            let pin_names: BTreeSet<&str> = sheet.pins.iter().map(|p| p.name.as_str()).collect();
+            let hier_label_names: BTreeSet<&str> = child.labels.iter().filter(|l| matches!(l.kind, eda_model::ir::LabelKind::Hierarchical { .. })).map(|l| l.net.as_str()).collect();
+            for name in pin_names.difference(&hier_label_names) {
+                out.push(CheckResult::fail(
+                    "hier_label_mismatch",
+                    format!("{}:{name}", sheet.name),
+                    format!("sheet pin '{name}' on sheet '{}' has no matching hierarchical label inside '{}'", sheet.name, sheet.file),
+                ));
+                ok_hier = false;
+            }
+            for name in hier_label_names.difference(&pin_names) {
+                out.push(CheckResult::fail(
+                    "hier_label_mismatch",
+                    format!("{}:{name}", sheet.name),
+                    format!("hierarchical label '{name}' inside '{}' has no matching sheet pin on sheet '{}'", sheet.file, sheet.name),
+                ));
+                ok_hier = false;
+            }
+        }
+    }
+    if ok_hier {
+        out.push(CheckResult::pass("hier_label_mismatch"));
+    }
+}
+
 // ---------------------------------------------------------------- multi-unit symbols (GAPS.md #21)
 
 /// One reference's placed units, plus what its resolved library symbol (if
@@ -1012,14 +1117,14 @@ struct UnitGroup<'a> {
 /// point instead of rebuilding the whole sheet's connectivity. `None` when
 /// nothing drawn actually reaches this point (an unwired duplicate pin, or
 /// one this port cannot resolve a position for at all).
-fn net_at_point(sch: &eda_model::ir::SchematicSection, at: Point) -> Option<String> {
-    if let Some(w) = sch.wires.iter().find(|w| w.pts.contains(&at) || point_on_segment_interior_any(w, at)) {
+pub(crate) fn net_at_point(wires: &[eda_model::ir::Wire], labels: &[eda_model::ir::NetLabel], power_symbols: &[eda_model::ir::PowerSymbol], at: Point) -> Option<String> {
+    if let Some(w) = wires.iter().find(|w| w.pts.contains(&at) || point_on_segment_interior_any(w, at)) {
         return Some(w.net.clone());
     }
-    if let Some(l) = sch.labels.iter().find(|l| l.at == at) {
+    if let Some(l) = labels.iter().find(|l| l.at == at) {
         return Some(l.net.clone());
     }
-    if let Some(p) = sch.power_symbols.iter().find(|p| p.at == at) {
+    if let Some(p) = power_symbols.iter().find(|p| p.at == at) {
         return Some(p.net.clone());
     }
     None
@@ -1199,7 +1304,7 @@ fn check_multi_unit_symbols(sch: &eda_model::ir::SchematicSection, model: &Const
                     let angle_deg = inst.rot as f64 / 1000.0;
                     let world = crate::sch_import::transform_local_point(lp.at, angle_deg, inst.mirrored, inst.mirror_y);
                     let at = Point { x: inst.at.x + crate::import::mm_to_um(world.x), y: inst.at.y + crate::import::mm_to_um(world.y) };
-                    if let Some(net) = net_at_point(sch, at) {
+                    if let Some(net) = net_at_point(&sch.wires, &sch.labels, &sch.power_symbols, at) {
                         nets_here.insert(net);
                     }
                 }
@@ -1468,12 +1573,12 @@ mod tests {
         Design {
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], imported_from_kicad: false }),
+            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }),
             nets: None,
             placement: None,
             routing: None,
             drawings: None,
-            footprint_library: None,
+            footprint_library: None, sheet_contents: None,
         }
     }
 
@@ -1563,5 +1668,82 @@ mod tests {
         let conflicting = sch_design(symbols, vec![NetLabel { id: String::new(), net: "VCC".into(), at: Point { x: 0, y: 5_000 }, kind: LabelKind::Local }, NetLabel { id: String::new(), net: "GND".into(), at: Point { x: 10_000, y: 5_000 }, kind: LabelKind::Local }]);
         let results = check_erc(&conflicting, &model);
         assert!(results.iter().any(|r| r.check == "different_unit_net" && r.status == CheckStatus::Fail), "{results:#?}");
+    }
+
+    // ------------------------------------------------- hierarchy (GAPS.md #6/#20)
+
+    use eda_model::ir::{SheetInstance, SheetPin};
+
+    fn hierarchy_design(root_sheets: Vec<SheetInstance>, screens: std::collections::BTreeMap<String, SchematicSection>) -> Design {
+        Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(SchematicSection { sheets: root_sheets, ..sch_design(vec![], vec![]).schematic.unwrap() }),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: (!screens.is_empty()).then_some(screens),
+        }
+    }
+
+    fn leaf_screen(labels: Vec<NetLabel>) -> SchematicSection {
+        SchematicSection { labels, ..sch_design(vec![], vec![]).schematic.unwrap() }
+    }
+
+    #[test]
+    fn duplicate_sheet_names_fires_for_two_siblings_sharing_a_name_case_insensitively() {
+        let a = SheetInstance { id: "s1".into(), name: "Power".into(), file: "a.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![] };
+        let b = SheetInstance { id: "s2".into(), name: "POWER".into(), file: "b.kicad_sch".into(), at: Point { x: 2000, y: 0 }, size: (1000, 1000), pins: vec![] };
+        let mut screens = std::collections::BTreeMap::new();
+        screens.insert("a.kicad_sch".to_string(), leaf_screen(vec![]));
+        screens.insert("b.kicad_sch".to_string(), leaf_screen(vec![]));
+        let design = hierarchy_design(vec![a, b], screens);
+        let results = check_erc(&design, &ConstraintModel::default());
+        assert!(results.iter().any(|r| r.check == "duplicate_sheet_names" && r.status == CheckStatus::Fail), "{results:#?}");
+    }
+
+    #[test]
+    fn distinct_sheet_names_pass_duplicate_sheet_names() {
+        let a = SheetInstance { id: "s1".into(), name: "Power".into(), file: "a.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![] };
+        let b = SheetInstance { id: "s2".into(), name: "Digital".into(), file: "b.kicad_sch".into(), at: Point { x: 2000, y: 0 }, size: (1000, 1000), pins: vec![] };
+        let mut screens = std::collections::BTreeMap::new();
+        screens.insert("a.kicad_sch".to_string(), leaf_screen(vec![]));
+        screens.insert("b.kicad_sch".to_string(), leaf_screen(vec![]));
+        let design = hierarchy_design(vec![a, b], screens);
+        let results = check_erc(&design, &ConstraintModel::default());
+        assert!(results.iter().any(|r| r.check == "duplicate_sheet_names" && r.status == CheckStatus::Pass), "{results:#?}");
+    }
+
+    #[test]
+    fn hier_label_mismatch_fires_in_both_directions_by_name_only_never_by_shape() {
+        // "A" has a matching pin+label of DIFFERENT shapes (input vs output)
+        // -- must still pass, since the real check never compares shape.
+        // "B" (sheet pin, no matching label) and "C" (hier label, no
+        // matching sheet pin) must each fire exactly once.
+        let sheet = SheetInstance {
+            id: "s1".into(),
+            name: "child".into(),
+            file: "child.kicad_sch".into(),
+            at: Point { x: 0, y: 0 },
+            size: (1000, 1000),
+            pins: vec![
+                SheetPin { id: "p1".into(), name: "A".into(), shape: eda_model::ir::LabelShape::Input, at: Point { x: 0, y: 0 } },
+                SheetPin { id: "p2".into(), name: "B".into(), shape: eda_model::ir::LabelShape::Passive, at: Point { x: 100, y: 0 } },
+            ],
+        };
+        let child = leaf_screen(vec![
+            NetLabel { id: String::new(), net: "A".into(), at: Point { x: 0, y: 0 }, kind: LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Output } },
+            NetLabel { id: String::new(), net: "C".into(), at: Point { x: 200, y: 0 }, kind: LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Passive } },
+        ]);
+        let mut screens = std::collections::BTreeMap::new();
+        screens.insert("child.kicad_sch".to_string(), child);
+        let design = hierarchy_design(vec![sheet], screens);
+        let results = check_erc(&design, &ConstraintModel::default());
+        let mismatches: Vec<&CheckResult> = results.iter().filter(|r| r.check == "hier_label_mismatch").collect();
+        assert!(mismatches.iter().any(|r| r.location.as_deref() == Some("child:B") && r.status == CheckStatus::Fail), "sheet pin B has no matching label: {results:#?}");
+        assert!(mismatches.iter().any(|r| r.location.as_deref() == Some("child:C") && r.status == CheckStatus::Fail), "hier label C has no matching pin: {results:#?}");
+        assert!(!mismatches.iter().any(|r| r.location.as_deref() == Some("child:A")), "A matches by name despite differing shape -- must not be reported");
     }
 }

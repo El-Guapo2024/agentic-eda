@@ -21,7 +21,8 @@
 //! resulting group's net name prefers a label's text, then a power
 //! symbol's asserted net, else a synthesized `NET_<n>`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::Path;
 
 use eda_model::ir::{Design, LabelKind, LabelShape, Millideg, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
 use eda_model::symbol::{LibSymbol, SPoint};
@@ -100,6 +101,15 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         datasheet: String,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
+    // `SCH_SYMBOL_INSTANCE`-style per-sheet-instance overrides -- only ever
+    // non-empty when this screen is placed by more than one `SheetInstance`
+    // (see `SymbolPathOverride`'s own doc). Parsed unconditionally here
+    // (not just when this read is part of a multi-file tree walk) because
+    // the data lives in *this* file's own `(symbol ... (instances ...))`
+    // blocks regardless of whether the caller goes on to assemble a tree
+    // around it -- a bare single-file `import_kicad_sch` on a screen that
+    // happens to be shared just carries overrides nothing yet queries.
+    let mut overrides: Vec<eda_model::ir::SymbolPathOverride> = Vec::new();
 
     for item in sexpr::find_all(root, "symbol") {
         let Some(lib_id) = sexpr::find(item, "lib_id").and_then(|l| sexpr::txt(l, 1)) else { continue };
@@ -139,6 +149,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
             continue;
         }
 
+        overrides.extend(parse_instance_overrides(item, at_um));
         raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, reference, value, footprint, datasheet });
     }
 
@@ -271,17 +282,27 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
+        let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
         let file = sheet_property_text(s, "Sheetfile").unwrap_or_default();
         let at = sexpr::find(s, "at").and_then(point_mm).unwrap_or(SPoint::new(0.0, 0.0));
         let size = sexpr::find(s, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))).unwrap_or((0.0, 0.0));
-        sheets.push(SheetInstance { name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)) });
+        let pins = sexpr::find_all(s, "pin")
+            .filter_map(|p| {
+                let name = sexpr::txt(p, 1)?.to_string();
+                let shape = sexpr::txt(p, 2).map(label_shape_from_token).unwrap_or_default();
+                let at = sexpr::find(p, "at").and_then(point_mm)?;
+                let id = sexpr::find(p, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
+                Some(eda_model::ir::SheetPin { id, name, shape, at: mm_point_to_um(at) })
+            })
+            .collect();
+        sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)), pins });
         notes.sheets_not_descended += 1;
     }
 
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, erc_exclusions: Vec::new(), imported_from_kicad: true, title_block, sheets };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, erc_exclusions: Vec::new(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -290,11 +311,84 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         placement: None,
         routing: None,
         drawings: None,
-        footprint_library: None,
+        footprint_library: None, sheet_contents: None,
     };
     design.assign_missing_ids();
 
     let model = ConstraintModel { parts, nets, symbols: lib_table.into_values().collect(), ..Default::default() };
+    Ok((design, model, notes))
+}
+
+/// `import_kicad_sch`'s multi-file counterpart (GAPS.md #6): reads `path`
+/// as the root sheet, then recursively follows every `(sheet ...)` it (and
+/// each sheet it finds) names, resolving each `Sheetfile` against *its own
+/// parent's* directory -- the convention every sheet-bearing fixture in
+/// KiCad's own QA corpus actually uses (confirmed directly: every
+/// `Sheetfile` found there is a bare filename sitting next to the sheet
+/// that names it, never a subpath) -- and folds the result into
+/// `Design::sheet_contents`. The *same* file named by more than one
+/// `SheetInstance` (KiCad's own shared-`SCH_SCREEN` case -- see that
+/// field's own doc) is read exactly once, no matter how many places name
+/// it or how deep the recursion that reaches it goes. A cycle (a sheet
+/// that, through some chain, names itself) is broken by the same
+/// "already read this file" set, matching `SCH_SHEET_PATH::TestForRecursion`'s
+/// own intent without reproducing its full path-based algorithm.
+///
+/// A sheet naming a file that does not exist, or does not parse, is left
+/// exactly as `import_kicad_sch` alone would leave it -- recorded (name/
+/// file/position/pins) but with no entry in `sheet_contents`, so a
+/// consumer that cares (`hierarchy::flatten`, `check_hierarchy`) can tell
+/// "placed but unreadable" apart from "placed and empty". `notes.
+/// sheets_not_descended` is recomputed at the end to count only sheets
+/// that are *still* un-descended after this whole walk, not the
+/// per-file-read tally `import_kicad_sch` itself would have left it at.
+pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
+    let text = std::fs::read_to_string(path).map_err(|e| vec![CheckResult::fail("kicad_import.read", path.display().to_string(), format!("{e}"))])?;
+    let (mut design, mut model, mut notes) = import_kicad_sch(&text)?;
+    let Some(dir) = path.parent() else { return Ok((design, model, notes)) };
+
+    let mut sheet_contents: BTreeMap<String, SchematicSection> = BTreeMap::new();
+    let mut read_files: BTreeSet<String> = BTreeSet::new();
+    let root_sheets: Vec<(String, std::path::PathBuf)> = design.schematic.as_ref().map(|s| s.sheets.iter().map(|sh| (sh.file.clone(), dir.to_path_buf())).collect()).unwrap_or_default();
+    let mut queue: Vec<(String, std::path::PathBuf)> = root_sheets;
+
+    while let Some((file, resolve_dir)) = queue.pop() {
+        if !read_files.insert(file.clone()) {
+            continue; // same screen reached again through another placement/path -- already have its content
+        }
+        let child_path = resolve_dir.join(&file);
+        let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
+        let Ok((child_design, child_model, child_notes)) = import_kicad_sch(&child_text) else { continue };
+        notes.unresolved_symbols += child_notes.unresolved_symbols;
+        model.parts.extend(child_model.parts);
+        model.symbols.extend(child_model.symbols);
+        if let Some(child_sch) = child_design.schematic {
+            let child_dir = child_path.parent().unwrap_or(&resolve_dir).to_path_buf();
+            for s in &child_sch.sheets {
+                queue.push((s.file.clone(), child_dir.clone()));
+            }
+            sheet_contents.insert(file, child_sch);
+        }
+    }
+
+    // Recount, over the whole final tree, rather than trust the
+    // per-file incremental tally `import_kicad_sch` left on each piece.
+    let mut still_not_descended = 0usize;
+    let mut all_screens: Vec<&SchematicSection> = Vec::new();
+    if let Some(root) = &design.schematic {
+        all_screens.push(root);
+    }
+    all_screens.extend(sheet_contents.values());
+    for screen in &all_screens {
+        for s in &screen.sheets {
+            if !sheet_contents.contains_key(&s.file) {
+                still_not_descended += 1;
+            }
+        }
+    }
+    notes.sheets_not_descended = still_not_descended;
+    design.sheet_contents = (!sheet_contents.is_empty()).then_some(sheet_contents);
+
     Ok((design, model, notes))
 }
 
@@ -321,6 +415,33 @@ fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
 /// A symbol instance's own `(property "Name" "Value" ...)` text, by name.
 fn property_text(item: &[Sexpr], name: &str) -> Option<String> {
     sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).map(String::from)
+}
+
+/// Every `(path "..." (reference "X") (unit N))` entry inside a placed
+/// symbol's own `(instances (project "..." (path ...) ...) ...)` block
+/// (real KiCad nests these under one or more `(project ...)` wrappers --
+/// walked here regardless of project name, matching real QA data's own
+/// inconsistent `""` vs the real project name across sibling symbols in
+/// the same file) -- the per-sheet-instance Reference/unit overrides
+/// `hierarchy::flatten` applies when a screen is placed more than once.
+/// `parent_sheet_instance_id` is the *last* component of the recorded path
+/// (`/<root-uuid>/<this-placement's-own-sheet-uuid>` -> the sheet uuid) --
+/// see `SymbolPathOverride`'s own doc for why only that one component is
+/// needed. A path with no components at all (shouldn't happen in a real
+/// file) is skipped, not guessed at.
+fn parse_instance_overrides(item: &[Sexpr], at: Point) -> Vec<eda_model::ir::SymbolPathOverride> {
+    let Some(instances) = sexpr::find(item, "instances") else { return Vec::new() };
+    let mut out = Vec::new();
+    for project in sexpr::find_all(instances, "project") {
+        for path in sexpr::find_all(project, "path") {
+            let Some(path_str) = sexpr::txt(path, 1) else { continue };
+            let Some(parent_sheet_instance_id) = path_str.rsplit('/').find(|s| !s.is_empty()) else { continue };
+            let Some(reference) = sexpr::find(path, "reference").and_then(|r| sexpr::txt(r, 1)) else { continue };
+            let unit = sexpr::find(path, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
+            out.push(eda_model::ir::SymbolPathOverride { at, parent_sheet_instance_id: parent_sheet_instance_id.to_string(), reference: reference.to_string(), unit });
+        }
+    }
+    out
 }
 
 fn sheet_property_text(item: &[Sexpr], name: &str) -> Option<String> {
@@ -844,10 +965,10 @@ mod tests {
             no_connects: vec![],
             erc_exclusions: vec![],
             title_block: None,
-            sheets: vec![],
+            sheets: vec![], instance_overrides: vec![],
             imported_from_kicad: false,
         };
-        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None };
+        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None };
 
         let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "multi_unit" }).unwrap();
         assert!(text.contains("(unit 1)"), "{text}");
@@ -875,5 +996,94 @@ mod tests {
         let unit2 = back_sch.symbols.iter().find(|s| s.unit == 2).unwrap();
         assert_eq!(unit1.at.x, 0);
         assert_eq!(unit2.at.x, 50_000);
+    }
+
+    /// GAPS.md #6: `import_kicad_sch_tree` actually follows a `(sheet ...)`
+    /// placement onto disk and reads the file it names, unlike bare
+    /// `import_kicad_sch` (which only ever records that a sheet was there).
+    /// The child file here is this crate's own ordinary export (already
+    /// covered by `parses_our_own_export`); this test is about the
+    /// multi-file *walk* on top of it, not re-proving single-file import.
+    #[test]
+    fn import_kicad_sch_tree_descends_into_a_sibling_sheet_file() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_sch_tree_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let child_model = ConstraintModel { parts: vec![part("R1", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)])], ..Default::default() };
+        let child_design = derive_schematic(&child_model, &EngineOptions::new(1, "tree_child")).unwrap();
+        let child_text = export_kicad_sch(&child_design, &child_model, &ExportMeta { date: "2026-01-01", title: "child" }).unwrap();
+        std::fs::write(dir.join("child.kicad_sch"), child_text).unwrap();
+
+        let root_text = r#"(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "11111111-1111-1111-1111-111111111111")
+	(paper "A4")
+	(sheet
+		(at 100 100) (size 20 20)
+		(stroke (width 0.1524) (type solid))
+		(fill (color 255 255 194 1.0000))
+		(uuid "22222222-2222-2222-2222-222222222222")
+		(property "Sheetname" "child" (at 100 99 0) (effects (font (size 1.27 1.27))))
+		(property "Sheetfile" "child.kicad_sch" (at 100 121 0) (effects (font (size 1.27 1.27))))
+		(pin "AD0" passive
+			(at 100 110 180)
+			(uuid "33333333-3333-3333-3333-333333333333")
+			(effects (font (size 1.27 1.27)) (justify left)))
+		(instances (project "test" (path "/11111111-1111-1111-1111-111111111111" (page "2")))))
+	(sheet_instances (path "/" (page "1"))))
+"#;
+        std::fs::write(dir.join("root.kicad_sch"), root_text).unwrap();
+
+        let (design, model, notes) = import_kicad_sch_tree(&dir.join("root.kicad_sch")).expect("tree import succeeds");
+        assert_eq!(notes.sheets_not_descended, 0, "the one sheet named was successfully read");
+        let root_sch = design.schematic.expect("root schematic");
+        assert_eq!(root_sch.sheets.len(), 1);
+        assert_eq!(root_sch.sheets[0].file, "child.kicad_sch");
+        assert_eq!(root_sch.sheets[0].pins.len(), 1);
+        assert_eq!(root_sch.sheets[0].pins[0].name, "AD0");
+
+        let screens = design.sheet_contents.expect("sheet_contents populated");
+        let child = screens.get("child.kicad_sch").expect("child content present");
+        assert_eq!(child.symbols.len(), 1);
+        assert_eq!(child.symbols[0].id, "R1");
+        assert!(model.parts.iter().any(|p| p.reference == "R1"), "child's own Part folded into the combined model");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Real KiCad data, not a hand-built fixture: `topology_mismatch.kicad_sch`
+    /// places `i2c_thingy.kicad_sch` *twice* (ch0/ch1), each instance
+    /// giving its own shared symbols a different Reference via per-path
+    /// `(instances (project ... (path ...)))` overrides (confirmed directly
+    /// against the file this session's own research read: the same drawn
+    /// `Device:R`/`Interface_Expansion:MAX7325AEG+` show up as "R1"/"U1"
+    /// through one sheet path and "R2"/"U2" through the other). Skipped
+    /// gracefully, like every other QA-corpus test in this crate, when the
+    /// corpus isn't present in this environment.
+    #[test]
+    fn real_qa_shared_screen_gets_a_different_reference_per_sheet_instance() {
+        let root = std::path::PathBuf::from("/private/tmp/claude-501/-Users-juanantonioluera-ws/8eb77140-1019-4605-b5f4-960e15f5bf6d/scratchpad/kicad_qa_boards/qa/data/pcbnew/issue21739/topology_mismatch.kicad_sch");
+        if !root.exists() {
+            eprintln!("QA corpus not found at {}; skipping", root.display());
+            return;
+        }
+        let (design, _model, notes) = import_kicad_sch_tree(&root).expect("real QA file imports");
+        assert_eq!(notes.sheets_not_descended, 0, "both ch0/ch1 placements of i2c_thingy.kicad_sch are the same file, read once");
+        assert_eq!(design.schematic.as_ref().expect("root schematic").sheets.len(), 2, "ch0 and ch1");
+        {
+            let screens = design.sheet_contents.as_ref().expect("sheet_contents populated");
+            let child = screens.get("i2c_thingy.kicad_sch").expect("child content present");
+            assert!(!child.instance_overrides.is_empty(), "a twice-placed screen must carry per-instance overrides");
+        }
+
+        // Flatten and confirm BOTH references appear with real pins -- the
+        // override mechanism actually produced two distinct components,
+        // not one reference silently shadowing the other.
+        let model = _model;
+        let (flat, _nets) = crate::hierarchy::flatten(&design, &model).expect("root exists");
+        let refs: std::collections::BTreeSet<&str> = flat.symbols.iter().map(|s| s.id.as_str()).collect();
+        assert!(refs.contains("R1") && refs.contains("R2"), "both R1 and R2 (one resistor, two sheet instances) must appear: {refs:?}");
+        assert!(refs.contains("U1") && refs.contains("U2"), "both U1 and U2 (one port expander, two sheet instances) must appear: {refs:?}");
     }
 }

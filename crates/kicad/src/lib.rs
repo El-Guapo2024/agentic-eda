@@ -39,7 +39,10 @@ mod erc;
 pub use erc::{check_erc, check_erc_excluding, Exclusions};
 
 mod sch_import;
-pub use sch_import::{import_kicad_sch, pin_kind_from_electrical_type, reconcile, transform_local_point};
+pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
+
+mod hierarchy;
+pub use hierarchy::flatten as flatten_hierarchy;
 
 const STUB_MM: f64 = 1.27;
 
@@ -306,6 +309,41 @@ pub fn export_kicad_sch(
         writeln!(out, "\t)").unwrap();
     }
 
+    // ---- child hierarchical sheets (GAPS.md #6), with their own pins ----
+    let mut sheets: Vec<&eda_model::ir::SheetInstance> = sch.sheets.iter().collect();
+    sheets.sort_by(|a, b| (&a.file, a.at).cmp(&(&b.file, b.at)));
+    for s in &sheets {
+        let x = mm(s.at.x);
+        let y = mm(s.at.y);
+        let w = mm(s.size.0);
+        let h = mm(s.size.1);
+        let uuid = if s.id.is_empty() { duid(&format!("sheet:{}:{}", s.file, s.at.x)) } else { s.id.clone() };
+        writeln!(out, "\t(sheet").unwrap();
+        writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
+        writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
+        writeln!(out, "\t\t(fill (color 255 255 194 1.0000))").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        let name_y = mm(s.at.y - 600);
+        let file_y = mm(s.at.y + s.size.1 + 600);
+        writeln!(out, "\t\t(property \"Sheetname\" {} (at {x} {name_y} 0) (effects (font (size 1.27 1.27))))", sexpr_str(&s.name)).unwrap();
+        writeln!(out, "\t\t(property \"Sheetfile\" {} (at {x} {file_y} 0) (effects (font (size 1.27 1.27))))", sexpr_str(&s.file)).unwrap();
+        for p in &s.pins {
+            let px = mm(p.at.x);
+            let py = mm(p.at.y);
+            let pin_uuid = if p.id.is_empty() { duid(&format!("sheetpin:{uuid}:{}", p.name)) } else { p.id.clone() };
+            writeln!(out, "\t\t(pin {} {}", sexpr_str(&p.name), label_shape_token(p.shape)).unwrap();
+            writeln!(out, "\t\t\t(at {px} {py} 0)").unwrap();
+            writeln!(out, "\t\t\t(uuid \"{pin_uuid}\")").unwrap();
+            writeln!(out, "\t\t\t(effects (font (size 1.27 1.27)) (justify left)))").unwrap();
+        }
+        writeln!(out, "\t\t(instances").unwrap();
+        writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
+        writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\" (page \"1\"))").unwrap();
+        writeln!(out, "\t\t\t)").unwrap();
+        writeln!(out, "\t\t)").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+
     // ---- sheet instances (required by KiCad 9 for a valid project-less sheet) ----
     writeln!(out, "\t(sheet_instances").unwrap();
     writeln!(out, "\t\t(path \"/\" (page \"1\"))").unwrap();
@@ -313,6 +351,30 @@ pub fn export_kicad_sch(
     writeln!(out, "\t(embedded_fonts no)").unwrap();
 
     writeln!(out, ")").unwrap();
+    Ok(out)
+}
+
+/// `export_kicad_sch`'s multi-file counterpart (GAPS.md #6): the root
+/// (`root_filename`, `design.schematic`) plus one file per
+/// `design.sheet_contents` entry, each written through the exact same
+/// per-screen `export_kicad_sch` -- a screen's own `(sheet ...)` placements
+/// (if it has grandchildren) are written by that same call, since
+/// `sch.sheets` is read identically regardless of whether the caller is
+/// the root or some other screen. Returns `(filename, text)` pairs rather
+/// than doing any filesystem I/O itself, same convention `export_kicad_sch`
+/// already set (the caller decides where/whether to write them -- see
+/// `crate::sch_import::import_kicad_sch_tree`'s own doc for the inverse
+/// direction's equivalent "caller resolves paths" choice).
+pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &ExportMeta, root_filename: &str) -> Result<Vec<(String, String)>, Vec<CheckResult>> {
+    let mut out = vec![(root_filename.to_string(), export_kicad_sch(design, model, meta)?)];
+    if let Some(screens) = &design.sheet_contents {
+        for (file, sch) in screens {
+            let child_design = Design { schematic: Some(sch.clone()), sheet_contents: None, nets: None, ..design.clone() };
+            let title = file.strip_suffix(".kicad_sch").unwrap_or(file);
+            let child_meta = ExportMeta { date: meta.date, title };
+            out.push((file.clone(), export_kicad_sch(&child_design, model, &child_meta)?));
+        }
+    }
     Ok(out)
 }
 
@@ -1002,7 +1064,7 @@ mod tests {
     #[test]
     fn missing_schematic_errors() {
         let design = Design {
-            footprint_library: None,
+            footprint_library: None, sheet_contents: None,
             schema: 1,
             provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
@@ -1033,5 +1095,74 @@ mod tests {
         assert_ne!(a, c);
         assert_eq!(a.len(), 36);
         assert_eq!(a.chars().filter(|&c| c == '-').count(), 4);
+    }
+
+    /// GAPS.md #6: `export_kicad_sch_tree` writes a real `(sheet ...)`
+    /// placement (with its own pin) on the root, and the child screen it
+    /// names as its own standalone file -- round-tripped end to end
+    /// through `import_kicad_sch_tree` (actual disk files, not just
+    /// in-memory structs), confirming the two directions agree on the
+    /// file format this task's own research pinned down.
+    #[test]
+    fn multi_sheet_design_round_trips_through_export_tree_and_import_tree() {
+        use eda_model::ir::{LabelKind, LabelShape, Point, SchematicSection, SheetInstance, SheetPin};
+
+        let r1 = part("R1", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)]);
+        let model = ConstraintModel { parts: vec![r1], ..Default::default() };
+        let mut child_design = derive_schematic(&model, &EngineOptions::new(1, "tree_export_child")).unwrap();
+        let child_sch = child_design.schematic.as_mut().unwrap();
+        // A hierarchical label landing exactly on R1's own pin 1 stub tip
+        // -- reuse the already-reconciled wire-free single-pin convention
+        // this crate's other tests already rely on, rather than
+        // re-deriving the exact stub-tip offset by hand.
+        let r1_at = child_sch.symbols[0].at;
+        let pin1_tip = Point { x: r1_at.x, y: r1_at.y - 3810 };
+        child_sch.labels.push(eda_model::ir::NetLabel { id: String::new(), net: "AD0".into(), at: pin1_tip, kind: LabelKind::Hierarchical { shape: LabelShape::Passive } });
+
+        let root_sch = SchematicSection {
+            symbols: vec![],
+            wires: vec![],
+            labels: vec![],
+            texts: vec![],
+            power_symbols: vec![],
+            no_connects: vec![],
+            erc_exclusions: vec![],
+            title_block: None,
+            sheets: vec![SheetInstance {
+                id: String::new(),
+                name: "child".into(),
+                file: "child.kicad_sch".into(),
+                at: Point { x: 10_000, y: 10_000 },
+                size: (20_000, 20_000),
+                pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000, y: 30_000 } }],
+            }],
+            instance_overrides: vec![],
+            imported_from_kicad: false,
+        };
+        let mut screens = std::collections::BTreeMap::new();
+        screens.insert("child.kicad_sch".to_string(), child_sch.clone());
+        let design = Design { sheet_contents: Some(screens), schematic: Some(root_sch), ..child_design };
+
+        let files = export_kicad_sch_tree(&design, &model, &ExportMeta { date: "2026-01-01", title: "root" }, "root.kicad_sch").unwrap();
+        assert_eq!(files.len(), 2, "root + one child");
+
+        let dir = std::env::temp_dir().join(format!("eda_kicad_export_tree_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, text) in &files {
+            std::fs::write(dir.join(name), text).unwrap();
+        }
+
+        let (back_design, _model, notes) = crate::import_kicad_sch_tree(&dir.join("root.kicad_sch")).expect("round trips");
+        assert_eq!(notes.sheets_not_descended, 0);
+        let back_root = back_design.schematic.unwrap();
+        assert_eq!(back_root.sheets.len(), 1);
+        assert_eq!(back_root.sheets[0].file, "child.kicad_sch");
+        assert_eq!(back_root.sheets[0].pins.len(), 1, "the sheet pin survives the round trip");
+        assert_eq!(back_root.sheets[0].pins[0].name, "AD0");
+        let back_child = back_design.sheet_contents.unwrap().remove("child.kicad_sch").unwrap();
+        assert_eq!(back_child.symbols.len(), 1);
+        assert!(back_child.labels.iter().any(|l| l.net == "AD0" && matches!(l.kind, LabelKind::Hierarchical { .. })));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

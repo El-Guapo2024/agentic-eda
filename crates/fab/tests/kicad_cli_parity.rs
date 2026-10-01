@@ -121,7 +121,7 @@ fn fixture() -> (Design, ConstraintModel) {
         provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None,
         nets: None,
-        footprint_library: None,
+        footprint_library: None, sheet_contents: None,
         placement: Some(placement),
         routing: Some(routing),
         drawings: Some(DrawingsSection {

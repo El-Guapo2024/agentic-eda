@@ -280,6 +280,8 @@ export interface StudioState {
   version: string | null;
 
   tab: EditorTab;
+  /** GAPS.md #6: root-to-here `SheetInstance::id`s for whichever sheet the Hierarchy panel has navigated into on the Schematic tab -- `[]` is the root, same as every board before hierarchy support existed. See `StudioApi.navigateToSheet`. */
+  currentSheetPath: string[];
   rightDockTab: RightDockTab;
   viewer3d: Viewer3DOptions;
   /** See `GlbStatus`. Read by Viewer3D (the "loading models…" badge) and Viewer3DToolbar (the KiCad Models toggle's tooltip after a failure). */
@@ -488,6 +490,7 @@ const initialState: StudioState = {
   boardError: null,
   version: null,
   tab: "pcb",
+  currentSheetPath: [],
   rightDockTab: "appearance",
   viewer3d: DEFAULT_VIEWER3D_OPTIONS,
   glbStatus: "idle",
@@ -569,6 +572,7 @@ export type Action =
   | { type: "BOARD_ERR"; message: string }
   | { type: "VERSION"; version: string }
   | { type: "SET_TAB"; tab: EditorTab }
+  | { type: "SET_SHEET_PATH"; path: string[] }
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
   | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
@@ -669,6 +673,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, version: action.version };
     case "SET_TAB":
       return { ...state, tab: action.tab };
+    case "SET_SHEET_PATH":
+      return { ...state, currentSheetPath: action.path };
     case "SET_RIGHT_DOCK_TAB":
       return { ...state, rightDockTab: action.tab };
     case "SET_VIEWER3D_OPTIONS":
@@ -901,6 +907,8 @@ export interface StudioApi {
   /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
   commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
+  /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
+  navigateToSheet: (path: string[]) => Promise<void>;
   route: () => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
@@ -975,7 +983,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const refreshSchematic = useCallback(async () => {
     try {
-      const schematic = await fetchSchematic();
+      const schematic = await fetchSchematic(stateRef.current.currentSheetPath);
       dispatch({ type: "SCHEMATIC_OK", schematic });
     } catch (e) {
       dispatch({ type: "SCHEMATIC_ERR", message: e instanceof Error ? e.message : String(e) });
@@ -1266,6 +1274,20 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_ARMED", ref: null });
       const ok = await runCmd({ op: "place_at", part: ref, x: xUm, y: yUm });
       if (ok) dispatch({ type: "SET_SELECTION", refs: [ref] });
+    },
+    navigateToSheet: async (path) => {
+      dispatch({ type: "SET_SHEET_PATH", path });
+      // Clearing the selection/net-highlight on navigation matches real
+      // eeschema's own `SCH_SHEET_PATH::UpdateAllScreenReferences`-adjacent
+      // behavior (switching sheets repaints the view fresh) and avoids a
+      // stale ref from the old sheet lingering selected/hot on the new one.
+      dispatch({ type: "SET_SELECTION", refs: [] });
+      try {
+        const schematic = await fetchSchematic(path);
+        dispatch({ type: "SCHEMATIC_OK", schematic });
+      } catch (e) {
+        dispatch({ type: "SCHEMATIC_ERR", message: e instanceof Error ? e.message : String(e) });
+      }
     },
     route: async () => {
       const reply = await postRoute();

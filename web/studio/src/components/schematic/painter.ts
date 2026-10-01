@@ -31,7 +31,7 @@
 // the dangling-pin indicator circle is not drawn), and no electrical-pin
 // -type annotation text (off by default in the real schematic editor
 // too, so this is not actually a gap).
-import type { ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire } from "../../api/types";
+import type { ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, Sheet } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
@@ -698,6 +698,39 @@ function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText) {
   drawStrokeText(ctx, t.content, t.at[0], t.at[1], { sizeUm: t.size_um, angleRad: (t.angle * Math.PI) / 180, justify: "left", color: layerColor("LAYER_NOTES") });
 }
 
+/**
+ * A child hierarchical sheet (GAPS.md #6) -- `SCH_SHEET`'s own on-canvas
+ * look: a plain rectangle (`LAYER_SHEET` border, transparent fill, same as
+ * real eeschema's default sheet color scheme), its name above the
+ * top-left corner (`LAYER_SHEETNAME`) and filename below the bottom-left
+ * corner (`LAYER_SHEETFILENAME`), and each of its own pins as a short stub
+ * on the border with its name (`LAYER_SHEETLABEL`) -- not full
+ * `SCH_SHEET_PIN` arrow glyphs (shape-specific triangle/chevron outlines,
+ * `labelShape.ts`'s own `hierLabelOutline`), since this pass is about
+ * making the hierarchy visible and navigable at all (previously nothing
+ * drew here, the view simply had no sheets to show) rather than full
+ * pixel-parity with source's own pin glyphs.
+ */
+function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet) {
+  const hair = 1 / view.scale;
+  const [x, y] = s.at;
+  const [w, h] = s.size;
+  ctx.save();
+  ctx.strokeStyle = layerColor("LAYER_SHEET");
+  ctx.lineWidth = Math.max(152.4, hair);
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
+
+  const nameSizeUm = 1270;
+  drawStrokeText(ctx, s.name, x, y - 400, { sizeUm: nameSizeUm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
+  drawStrokeText(ctx, s.file, x, y + h + 400 + nameSizeUm * 0.8, { sizeUm: nameSizeUm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
+
+  for (const p of s.pins) {
+    const [px, py] = p.at;
+    drawStrokeText(ctx, p.name, px + 300, py, { sizeUm: 1000, justify: "left", color: layerColor("LAYER_SHEETLABEL") });
+  }
+}
+
 function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: NoConnect) {
   const hair = 1 / view.scale;
   ctx.save();
@@ -781,6 +814,12 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.arc(x, y, Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
     ctx.fill();
   }
+
+  // Hierarchical sheets (GAPS.md #6) -- drawn early, like the wires/
+  // junctions pass above, so a sheet's own local wires/labels/symbols
+  // (all drawn later below) read as sitting "on" the page rather than
+  // under it.
+  for (const s of sch.sheets) drawSheet(ctx, view, s);
 
   // No-connects.
   for (const nc of sch.no_connects) drawNoConnect(ctx, view, nc);

@@ -752,6 +752,17 @@ export function useActionRunner() {
 
     m.set("eeschema.InspectionTool.runERC", () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: true }));
 
+    // `Alt+Backspace`/`Alt+Up` (sch_navigate_tool.cpp::LeaveSheet/Up -- `Up()`
+    // itself just calls `LeaveSheet` in source, so both bind the same
+    // handler here): pop one level off `state.currentSheetPath`. A no-op
+    // at the root, same as source's own `CanGoUp()` guard.
+    const leaveSheet = schematicOnly(() => {
+      if (state.currentSheetPath.length === 0) return;
+      api.navigateToSheet(state.currentSheetPath.slice(0, -1));
+    });
+    m.set("eeschema.NavigateTool.leaveSheet", leaveSheet);
+    m.set("eeschema.NavigateTool.up", leaveSheet);
+
     // `Ctrl+A`: opens AnnotateDialog.tsx (scope/order/reset options) --
     // the dialog itself issues the real `annotate` Cmd on confirm.
     m.set("eeschema.EditorControl.annotate", schematicOnly(() => dispatch({ type: "SET_ANNOTATE_DIALOG_OPEN", open: true })));

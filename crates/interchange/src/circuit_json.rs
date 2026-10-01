@@ -457,10 +457,10 @@ mod tests {
 
     fn design() -> Design {
         Design {
-            footprint_library: None,
+            footprint_library: None, sheet_contents: None,
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![], texts: vec![], erc_exclusions: vec![], imported_from_kicad: false,
+            schematic: Some(SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], texts: vec![], erc_exclusions: vec![], imported_from_kicad: false,
                 symbols: vec![
                     SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "R1".into(), at: Point { x: 1_000, y: 2_000 }, rot: 0, mirrored: false, mirror_y: false },
                     SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "C1".into(), at: Point { x: 3_000, y: 2_000 }, rot: 0, mirrored: false, mirror_y: false },

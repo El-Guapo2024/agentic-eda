@@ -45,6 +45,9 @@ const REGISTERED: &[&str] = &[
     "missing_power_pin",
     "missing_unit",
     "unit_value_mismatch",
+    // -- hierarchy, GAPS.md #6/#20 (erc.rs::check_hierarchy) --
+    "duplicate_sheet_names",
+    "hier_label_mismatch",
     // -- readability/style (erc_style.rs) -----------------------------
     "schematic_cluster_split",
     "schematic_column_overflow",

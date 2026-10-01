@@ -1110,7 +1110,7 @@ mod tests {
     #[test]
     fn malformed_design_no_schematic_returns_check_result_not_panic() {
         let design = Design {
-            footprint_library: None,
+            footprint_library: None, sheet_contents: None,
             schema: 1,
             provenance: eda_model::ir::Provenance {
                 engine_version: "0".into(),

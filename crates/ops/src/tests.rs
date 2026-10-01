@@ -34,7 +34,7 @@ fn model(parts: Vec<Part>, nets: &[(&str, &[&str])], rules: Vec<PlacementRule>) 
 /// An empty 100x100mm board.
 fn empty_design() -> Design {
     Design {
-        footprint_library: None,
+        footprint_library: None, sheet_contents: None,
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,

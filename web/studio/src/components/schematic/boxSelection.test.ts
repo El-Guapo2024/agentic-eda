@@ -23,7 +23,7 @@ function wire(id: string, pts: [number, number][]): SchematicWire {
 }
 
 function schematic(symbols: SchematicSymbol[], wires: SchematicWire[]): Schematic {
-  return { lib_symbols: R_LIB, symbols, power_symbols: [], wires, no_connects: [], labels: [], texts: [], title_block: null };
+  return { lib_symbols: R_LIB, symbols, power_symbols: [], wires, no_connects: [], labels: [], texts: [], title_block: null, sheets: [], sheet_path: [] };
 }
 
 test("collectBoxSelection: a symbol fully inside the box is collected either way (crossing or enclosed)", () => {
