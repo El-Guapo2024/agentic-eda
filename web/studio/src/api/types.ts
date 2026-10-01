@@ -478,3 +478,47 @@ export interface Schematic {
   labels: SchematicLabel[];
   title_block: TitleBlock | null;
 }
+
+// ---------------------------------------------------------------- DRC
+//
+// GET /api/drc. Source of truth: crates/cli/src/studio.rs `drc_json()`,
+// crates/drc/src/item.rs `DrcViolation`/`DrcRefItem`/`FixHint`, shaped
+// like kicad-cli's own `pcb drc --format json` report (`type`/
+// `description`/`severity`/`items`) plus an extra `fix` key kicad-cli's
+// own JSON has no concept of.
+
+export type DrcSeverity = "error" | "warning";
+
+export interface DrcItem {
+  description: string;
+  /** Board-space um, like every other position in this file -- *not* kicad-cli's own mm. */
+  pos: [Um, Um];
+  /** Stable id of the referenced item (track/via/zone id, or `<ref>.<pad>`/`<ref>` for a footprint/pad) -- enough to select it without re-matching on position. */
+  id: string;
+}
+
+/** `crates/drc::FixHint` -- this workspace's own agent-repair metadata, no real-KiCad equivalent. Absent (not null -- `#[serde(skip_serializing_if = "Option::is_none")]`) when a violation has no computed fix; the `?? null` this file's other optional fields already use handles either. */
+export interface DrcFix {
+  /** Reference designator of the part a fix would move. */
+  mover: string;
+  /** What to move it toward: another part's reference, "board center", "nearest edge", or similar. */
+  toward: string;
+  distance_to_close_um: Um;
+  /** Human-readable next step. */
+  suggested_command: string;
+}
+
+export interface DrcViolation {
+  /** `crates/drc::ErrorType`'s own snake_case name ("clearance", "courtyards_overlap", ...) -- real KiCad's own DRC type names, per `kicad-cli pcb drc`'s report. */
+  type: string;
+  description: string;
+  severity: DrcSeverity;
+  items: DrcItem[];
+  fix?: DrcFix | null;
+}
+
+export interface DrcReport {
+  violations: DrcViolation[];
+  /** Violation count by `type`. */
+  counts: Record<string, number>;
+}

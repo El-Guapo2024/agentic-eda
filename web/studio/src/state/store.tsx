@@ -7,8 +7,8 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, Cmd, Part, Ratsnest, Schematic, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
-import { fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
+import type { BoardState, Cmd, DrcReport, Part, Ratsnest, Schematic, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
+import { fetchDrc, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 
@@ -196,6 +196,16 @@ export interface StudioState {
    * `tab === "pcb"`, the only tab that ever draws it.
    */
   ratsnest: Ratsnest | null;
+
+  /**
+   * GET /api/drc (crates/drc's ported KiCad DRC engine, see
+   * api/client.ts's fetchDrc) -- fetched only while `drcDialogOpen`,
+   * the one place this app shows it (DrcDialog.tsx, and the PCB canvas's
+   * violation markers while that dialog is up).
+   */
+  drc: DrcReport | null;
+  /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
+  drcSelected: number | null;
 }
 
 const initialState: StudioState = {
@@ -249,6 +259,8 @@ const initialState: StudioState = {
   schematic: null,
   schematicError: null,
   ratsnest: null,
+  drc: null,
+  drcSelected: null,
 };
 
 type Action =
@@ -299,6 +311,8 @@ type Action =
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
   | { type: "SCHEMATIC_ERR"; message: string }
   | { type: "RATSNEST_OK"; ratsnest: Ratsnest }
+  | { type: "DRC_OK"; drc: DrcReport }
+  | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] };
@@ -421,6 +435,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":
       return { ...state, ratsnest: action.ratsnest };
+    case "DRC_OK":
+      // A fresh report invalidates any previous selection -- indices (and
+      // the violations they pointed at) aren't stable across re-runs.
+      return { ...state, drc: action.drc, drcSelected: null };
+    case "SET_DRC_SELECTED":
+      return { ...state, drcSelected: action.index };
     case "SET_DRAW_STATE":
       return { ...state, drawState: action.draw };
     case "SET_ZONE_PENDING":
@@ -491,6 +511,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshDrc = useCallback(async () => {
+    try {
+      const drc = await fetchDrc();
+      dispatch({ type: "DRC_OK", drc });
+    } catch {
+      // same reasoning as refreshRatsnest -- keep the last good report.
+    }
+  }, []);
+
   // Poll /api/version (cheap) and only refetch the full /api/state when it
   // changes -- mirrors the old studio.html poll loop so CLI edits and
   // other browser tabs show up here within ~1s without hammering the
@@ -504,6 +533,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     let lastVersion: string | null = null;
     let lastSchematicFetch: string | null = null;
     let lastRatsnestFetch: string | null = null;
+    let lastDrcFetch: string | null = null;
     const tick = async () => {
       try {
         const v = await fetchVersion();
@@ -521,6 +551,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           lastRatsnestFetch = v;
           await refreshRatsnest();
         }
+        // Gated on the dialog being open, not a tab -- DRC has no tab of
+        // its own (it overlays whichever tab is showing), and running
+        // the DRC engine on every tick regardless of whether anyone's
+        // looking at it would be pure waste.
+        if (stateRef.current.drcDialogOpen && lastDrcFetch !== v) {
+          lastDrcFetch = v;
+          await refreshDrc();
+        }
       } catch {
         // backend restarting or unreachable; try again next tick
       }
@@ -531,7 +569,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       stopped = true;
       clearInterval(id);
     };
-  }, [refresh, refreshSchematic, refreshRatsnest]);
+  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc]);
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {

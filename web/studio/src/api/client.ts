@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
 
 export class ApiError extends Error {}
 
@@ -73,6 +73,13 @@ export async function fetchSchematic(): Promise<Schematic> {
  */
 export async function fetchRatsnest(): Promise<Ratsnest> {
   const r = await getJson<Ratsnest & { error?: string }>("/api/ratsnest");
+  if (r.error) throw new ApiError(r.error);
+  return r;
+}
+
+/** The ported KiCad DRC engine (crates/drc), run fresh server-side on every call -- no caching, matching studio.rs's own doc comment on why (cheap enough on these board sizes). */
+export async function fetchDrc(): Promise<DrcReport> {
+  const r = await getJson<DrcReport & { error?: string }>("/api/drc");
   if (r.error) throw new ApiError(r.error);
   return r;
 }
