@@ -34,10 +34,15 @@
 //!   one child-instance's local net: a second pass unions the two
 //!   (path-qualified) net names together wherever a sheet pin's own
 //!   position and a child's own hierarchical label agree on a name.
-//!
-//! Known, documented scope limit: this does not yet understand buses
-//! (GAPS.md #20's other half) -- a bus-aware join is `crates/kicad/src/bus.rs`'s
-//! own follow-up, not this module's.
+//! - A *bus*-shaped sheet pin (GAPS.md #20 -- `crate::bus::expand_bus_members`)
+//!   joins member-by-member instead: each of its expanded member names
+//!   (e.g. `"DATA3"` out of a `"DATA[0..7]"` pin) gets its own
+//!   parent-scoped name unioned directly with the same member's
+//!   child-scoped name, with no requirement that the two sides' bus *names*
+//!   match textually (a `"DATA[0..7]"` parent pin and a `"DATA[0..3]"`
+//!   child hierarchical label is a valid partial join -- real KiCad's own
+//!   "any shared member is fine" rule, reported when it *isn't* met by
+//!   `erc::check_hierarchy`'s own `bus_to_bus_conflict`, not here).
 
 use std::collections::BTreeMap;
 
@@ -246,6 +251,7 @@ fn visit(design: &Design, model: &ConstraintModel, sch: &SchematicSection, path:
             texts: sch.texts.clone(),
             power_symbols,
             no_connects,
+            bus_entries: sch.bus_entries.clone(),
             erc_exclusions: sch.erc_exclusions.clone(),
             title_block: sch.title_block.clone(),
             sheets: sch.sheets.clone(),
@@ -318,10 +324,33 @@ pub fn flatten(design: &Design, model: &ConstraintModel) -> Option<(SchematicSec
     // function; `erc::check_hier_label_mismatch` is what reports it.
     let mut uf = NameUnionFind::default();
     for v in &visited {
+        let parent_prefix = path_prefix(&v.path);
         for child in &v.sch.sheets {
             let Some(child_visited) = visited.iter().find(|c| c.path == { let mut p = v.path.clone(); p.push(child.id.clone()); p }) else { continue };
             let child_prefix = path_prefix(&child_visited.path);
             for pin in &child.pins {
+                // A bus-shaped pin (GAPS.md #20) joins member-by-member
+                // instead of as one single name: `sheet_pin_net`'s anchor
+                // only ever captures the pin's own *one* point, but a
+                // bus's individual signals are tapped in via a
+                // `BusEntry` elsewhere on each sheet's own canvas (see
+                // `crate::bus`'s own doc), so each member's scoped name is
+                // constructed directly on both sides rather than looked
+                // up. Harmless when a given member is unused on either
+                // side -- a pin-less union-find group never survives the
+                // final collapse below, same as always. This does not
+                // require the two sides to *name* the bus identically
+                // (`"DATA[0..7]"` parent, `"DATA[0..3]"` child is a valid
+                // partial join) -- `erc::check_hierarchy`'s own
+                // `bus_to_bus_conflict` is what reports when they share no
+                // member at all; this function just joins whatever they do
+                // share.
+                if let Some(members) = crate::bus::expand_bus_members(&pin.name, &design.bus_aliases) {
+                    for member in &members {
+                        uf.union(&scoped_name(&parent_prefix, member, false), &scoped_name(&child_prefix, member, false));
+                    }
+                    continue;
+                }
                 let Some(parent_net) = v.sheet_pin_net.get(&(child.id.clone(), pin.name.clone())) else { continue };
                 // The child's own hierarchical label of the same name, if
                 // it declared one -- `child_visited.sch.labels` already
@@ -434,6 +463,7 @@ pub fn flatten(design: &Design, model: &ConstraintModel) -> Option<(SchematicSec
         texts: Vec::new(),
         power_symbols: Vec::new(),
         no_connects: Vec::new(),
+        bus_entries: Vec::new(),
         erc_exclusions: root.erc_exclusions.clone(),
         title_block: root.title_block.clone(),
         sheets: root.sheets.clone(),
@@ -480,7 +510,7 @@ mod tests {
     }
 
     fn empty_sch(symbols: Vec<SymbolInstance>) -> SchematicSection {
-        SchematicSection { symbols, wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
+        SchematicSection { symbols, wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
     }
 
     fn design_with(root: SchematicSection, screens: Map<String, SchematicSection>) -> Design {
@@ -494,6 +524,7 @@ mod tests {
             drawings: None,
             footprint_library: None,
             sheet_contents: (!screens.is_empty()).then_some(screens),
+            bus_aliases: vec![],
         }
     }
 
@@ -615,5 +646,43 @@ mod tests {
         let (_flat, nets) = flatten(&design, &model).expect("root exists");
         let vbus = nets.iter().find(|n| n.name == "VBUS").unwrap_or_else(|| panic!("no single VBUS net: {nets:#?}"));
         assert!(vbus.pins.contains(&"R1.1".to_string()) && vbus.pins.contains(&"R2.1".to_string()), "a global label must merge both sheets onto one net: {vbus:?}");
+    }
+
+    /// A *bus*-shaped sheet pin (GAPS.md #20) joins member-by-member: a
+    /// parent-side local label naming one specific member ("DATA0") reaches
+    /// the child's own same-member local label, even though the two sides'
+    /// own *bus* names differ ("DATA[0..1]" vs "DATA[0..3]") and share only
+    /// that one member -- real KiCad's own "any shared member is fine"
+    /// rule (`erc::check_hierarchy`'s `bus_to_bus_conflict` is what reports
+    /// when it is *not* met; this is purely the connectivity side). No
+    /// `BusEntry`/bus wire is needed for this test -- `crate::bus`'s own
+    /// tests already cover that geometric/ERC side; this one is about the
+    /// union-find join alone, same minimal style as this module's other
+    /// tests above (a bare label standing in for "something names this
+    /// point").
+    #[test]
+    fn bus_sheet_pin_joins_matching_members_even_when_the_two_bus_names_differ() {
+        let model = ConstraintModel { parts: vec![r1_part(), Part { reference: "R2".into(), ..r1_part() }], ..Default::default() };
+
+        let pin_at = Point { x: 5_000, y: 10_000 };
+        let root = SchematicSection {
+            sheets: vec![SheetInstance { id: "sheetA".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (10_000, 10_000), pins: vec![SheetPin { id: "p1".into(), name: "DATA[0..1]".into(), shape: LabelShape::Passive, at: pin_at }] }],
+            labels: vec![NetLabel { id: String::new(), net: "DATA0".into(), at: r1_pin1_world(Point { x: 0, y: 0 }), kind: LabelKind::Local }],
+            ..empty_sch(vec![r1_instance(Point { x: 0, y: 0 })])
+        };
+
+        let r2_at = Point { x: 0, y: 0 };
+        let child = SchematicSection {
+            labels: vec![NetLabel { id: String::new(), net: "DATA0".into(), at: r1_pin1_world(r2_at), kind: LabelKind::Local }],
+            ..empty_sch(vec![SymbolInstance { id: "R2".into(), ..r1_instance(r2_at) }])
+        };
+
+        let mut screens = Map::new();
+        screens.insert("child.kicad_sch".to_string(), child);
+        let design = design_with(root, screens);
+
+        let (_flat, nets) = flatten(&design, &model).expect("root exists");
+        let joined = nets.iter().find(|n| n.pins.contains(&"R2.1".to_string())).unwrap_or_else(|| panic!("R2.1 on no net at all: {nets:#?}"));
+        assert!(joined.pins.contains(&"R1.1".to_string()), "R1 (parent, member DATA0) and R2 (child, member DATA0) must share one net: {joined:?}");
     }
 }

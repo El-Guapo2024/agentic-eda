@@ -109,7 +109,7 @@ mod tests {
         let model = model_two_pads();
         let footprints = vec![FootprintInstance { id: "R1".into(), at: Point { x: 5_000, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() }, FootprintInstance { id: "R2".into(), at: Point { x: 6_650, y: 5_000 }, rot: 0, side: Side::Top, label: Default::default() }];
         let design = Design {
-            footprint_library: None, sheet_contents: None,
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
@@ -126,7 +126,7 @@ mod tests {
         let mut model = model_two_pads();
         model.nets = vec![]; // no pads on any net -- track's own net is unconnected to anything
         let design = Design {
-            footprint_library: None, sheet_contents: None,
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,

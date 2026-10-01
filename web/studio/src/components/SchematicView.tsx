@@ -281,7 +281,9 @@ export function SchematicView() {
     paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercSelected: state.ercSelected });
     if (state.drawState?.kind === "wire") {
       const pts = state.cursorUm ? [...state.drawState.pts, [state.cursorUm.x, state.cursorUm.y] as [number, number]] : state.drawState.pts;
-      ctx.strokeStyle = layerColor("LAYER_WIRE");
+      // GAPS.md #20: the bus tool shares this exact preview (same
+      // `DrawState` kind), colored to match whichever is actually armed.
+      ctx.strokeStyle = layerColor(state.activeTool === "bus" ? "LAYER_BUS" : "LAYER_WIRE");
       ctx.lineWidth = Math.max(150, (1 / state.schematicView.scale) * 1.5);
       ctx.beginPath();
       pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
@@ -300,7 +302,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercSelected]);
+  }, [sch, displaySch, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercSelected, state.activeTool]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -342,7 +344,7 @@ export function SchematicView() {
         if (e.button !== 0) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
 
-        if (state.activeTool === "wire") {
+        if (state.activeTool === "wire" || state.activeTool === "bus") {
           const thresholdUm = 400 / state.schematicView.scale;
           const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, thresholdUm) ?? snapToGrid(wx, wy);
           const draw = state.drawState;
@@ -357,7 +359,7 @@ export function SchematicView() {
           // the pin case (see this file's header comment for the rest).
           const onPin = pinSnapPoints(sch).some(([px, py]) => px === snapped[0] && py === snapped[1]);
           if (onPin && next.pts.length >= 2) {
-            if (next.pts.length >= 2) api.cmd({ op: "add_wire", pts: next.pts.map(([x, y]) => ({ x, y })) });
+            if (next.pts.length >= 2) api.cmd({ op: "add_wire", pts: next.pts.map(([x, y]) => ({ x, y })), bus: state.activeTool === "bus" });
             dispatch({ type: "SET_DRAW_STATE", draw: null });
           } else {
             dispatch({ type: "SET_DRAW_STATE", draw: next });
@@ -392,6 +394,11 @@ export function SchematicView() {
         if (state.activeTool === "sch_no_connect") {
           const [sx, sy] = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
           api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
+          return;
+        }
+        if (state.activeTool === "sch_bus_entry") {
+          const [sx, sy] = snapToGrid(wx, wy);
+          api.cmd({ op: "add_bus_entry", at: { x: sx, y: sy }, size: { x: 2_540, y: 2_540 } });
           return;
         }
         // `A`: SymbolChooserDialog already picked the symbol (state.
@@ -535,7 +542,7 @@ export function SchematicView() {
       onDoubleClick={() => {
         const draw = state.drawState;
         if (draw?.kind !== "wire") return;
-        if (draw.pts.length >= 2) api.cmd({ op: "add_wire", pts: draw.pts.map(([x, y]) => ({ x, y })) });
+        if (draw.pts.length >= 2) api.cmd({ op: "add_wire", pts: draw.pts.map(([x, y]) => ({ x, y })), bus: state.activeTool === "bus" });
         dispatch({ type: "SET_DRAW_STATE", draw: null });
       }}
       onPointerUp={(e) => {

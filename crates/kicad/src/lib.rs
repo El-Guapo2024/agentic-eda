@@ -44,6 +44,9 @@ pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_elec
 mod hierarchy;
 pub use hierarchy::flatten as flatten_hierarchy;
 
+mod bus;
+pub use bus::{expand_bus_members, is_bus_name};
+
 const STUB_MM: f64 = 1.27;
 
 /// Fixed provenance for the title block. Passed explicitly (never system
@@ -231,20 +234,59 @@ pub fn export_kicad_sch(
         writeln!(out, "\t)").unwrap();
     }
 
-    // ---- wires (each polyline segment as one KiCad wire) ----
+    // ---- wires and bus wires (GAPS.md #20 -- `SCH_LINE`'s own `LAYER_WIRE`
+    // vs `LAYER_BUS`, the same shape either way) -- each polyline segment
+    // as one KiCad wire/bus ----
     for (i, w) in wires.iter().enumerate() {
+        let tag = if w.bus { "bus" } else { "wire" };
         for (j, pair) in w.pts.windows(2).enumerate() {
             let x1 = mm(pair[0].x);
             let y1 = mm(pair[0].y);
             let x2 = mm(pair[1].x);
             let y2 = mm(pair[1].y);
-            let uuid = duid(&format!("wire:{}:{}:{}", w.net, i, j));
-            writeln!(out, "\t(wire").unwrap();
+            let uuid = duid(&format!("{tag}:{}:{}:{}", w.net, i, j));
+            writeln!(out, "\t({tag}").unwrap();
             writeln!(out, "\t\t(pts (xy {x1} {y1}) (xy {x2} {y2}))").unwrap();
             writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
             writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
             writeln!(out, "\t)").unwrap();
         }
+    }
+
+    // ---- bus entries (GAPS.md #20) ----
+    let mut bus_entries: Vec<&eda_model::ir::BusEntry> = sch.bus_entries.iter().collect();
+    bus_entries.sort_by(|a, b| a.at.cmp(&b.at));
+    for be in &bus_entries {
+        let x = mm(be.at.x);
+        let y = mm(be.at.y);
+        let dx = mm(be.size.x);
+        let dy = mm(be.size.y);
+        let uuid = if be.id.is_empty() { duid(&format!("bent:{}:{}", be.at.x, be.at.y)) } else { be.id.clone() };
+        writeln!(out, "\t(bus_entry (at {x} {y}) (size {dx} {dy})").unwrap();
+        writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+
+    // ---- bus aliases (GAPS.md #20) -- see `BusAlias`'s own doc for why
+    // this legacy per-screen block (not a `.kicad_pro` project file this
+    // project has no writer for) is where this project round-trips them.
+    // `export_kicad_sch` has no way to tell "am I the root of a tree
+    // export" from its own arguments alone (`export_kicad_sch_tree` clones
+    // the *whole* design, `bus_aliases` included, into every child screen's
+    // own call) -- rather than invent one, every screen's own file just
+    // carries the full project-wide list. Harmless duplication: real
+    // project-wide *visibility* never depended on which screen's text
+    // "owns" an alias, and `sch_import::import_kicad_sch_tree`'s own
+    // by-name merge on the way back in already de-duplicates it.
+    for alias in &design.bus_aliases {
+        writeln!(out, "\t(bus_alias {}", sexpr_str(&alias.name)).unwrap();
+        write!(out, "\t\t(members").unwrap();
+        for m in &alias.members {
+            write!(out, " {}", sexpr_str(m)).unwrap();
+        }
+        writeln!(out, ")").unwrap();
+        writeln!(out, "\t)").unwrap();
     }
 
     // ---- junctions: every point where 3+ same-net wire-segment endpoints
@@ -1064,7 +1106,7 @@ mod tests {
     #[test]
     fn missing_schematic_errors() {
         let design = Design {
-            footprint_library: None, sheet_contents: None,
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
             schema: 1,
             provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,
@@ -1125,7 +1167,7 @@ mod tests {
             labels: vec![],
             texts: vec![],
             power_symbols: vec![],
-            no_connects: vec![],
+            no_connects: vec![], bus_entries: vec![],
             erc_exclusions: vec![],
             title_block: None,
             sheets: vec![SheetInstance {

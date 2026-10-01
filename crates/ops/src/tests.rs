@@ -34,7 +34,7 @@ fn model(parts: Vec<Part>, nets: &[(&str, &[&str])], rules: Vec<PlacementRule>) 
 /// An empty 100x100mm board.
 fn empty_design() -> Design {
     Design {
-        footprint_library: None, sheet_contents: None,
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
@@ -1285,7 +1285,7 @@ fn footprint_editor_commands_are_their_own_undo_domain() {
     assert_eq!(Cmd::UpdateFootprintOnBoard { name: "x".into() }.domain(), Domain::FootprintEditor);
     // Sanity: the other two domains are unaffected by this addition.
     assert_eq!(Cmd::MoveTo { part: "U1".into(), x: 0, y: 0 }.domain(), Domain::Pcb);
-    assert_eq!(Cmd::AddWire { pts: vec![] }.domain(), Domain::Schematic);
+    assert_eq!(Cmd::AddWire { pts: vec![], bus: false }.domain(), Domain::Schematic);
 }
 
 // ------------------------------------------------------------ multi-unit symbols (GAPS.md #21)

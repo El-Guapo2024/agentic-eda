@@ -66,7 +66,7 @@ fn obstacle_course() -> (Design, ConstraintModel) {
         ..Default::default()
     };
     let design = Design {
-        footprint_library: None, sheet_contents: None,
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
         schema: 1,
         provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
         schematic: None,

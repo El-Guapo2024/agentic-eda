@@ -53,6 +53,11 @@ export type ToolId =
   | "draw_polygon"
   | "text"
   | "wire"
+  /** `B` (GAPS.md #20): same click-to-add-point/finish state machine as
+   * "wire" (`DrawState`'s `"wire"` kind is shared by both -- see
+   * SchematicView.tsx's own doc), just tagged `Cmd::AddWire { bus: true }`
+   * at commit time instead of a plain wire. */
+  | "bus"
   | "measure"
   // ---------------------------------------------------- eeschema placement
   // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp TwoClickPlace/
@@ -66,6 +71,14 @@ export type ToolId =
   | "sch_power"
   | "sch_text"
   | "sch_no_connect"
+  /** GAPS.md #20: `eeschema.InteractiveDrawing.placeBusWireEntry` -- a
+   * single click drops a fixed-size (±100mil, same as real KiCad's own
+   * default) bus entry there, same one-click-commits-and-stays-armed shape
+   * as `sch_no_connect` above (no orientation picker -- a documented
+   * simplification; the IR itself places no restriction on `size`'s sign,
+   * so an imported file's own entry in any of the 4 diagonal quadrants
+   * still round-trips/renders correctly). */
+  | "sch_bus_entry"
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
   | "sch_place_symbol";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
@@ -82,6 +95,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
   text: "Click to place text",
   wire: "Wire: click to start/add a point (snaps to a pin when close), double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
+  bus: "Bus: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   measure: "Measure: click a start point, click again for the end point. Click anywhere to start a new measurement, Esc to clear",
   sch_label_local: "Label: click where to place it",
   sch_label_global: "Global Label: click where to place it",
@@ -89,6 +103,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_power: "Power Symbol: click a pin (snaps to the nearest one)",
   sch_text: "Text: click where to place it",
   sch_no_connect: "No Connect: click a pin to flag it unconnected",
+  sch_bus_entry: "Bus Entry: click a point on a bus to tap a wire into it",
   sch_place_symbol: "Place Symbol: click where to place it",
 };
 

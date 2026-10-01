@@ -34,7 +34,7 @@ function powerSymbol(id: string, net: string, at: [number, number]): PowerSymbol
 }
 
 function wire(id: string, net: string, pts: [number, number][]): SchematicWire {
-  return { id, net, pins: [], pts };
+  return { id, net, pins: [], pts, bus: false };
 }
 
 function label(id: string, net: string, at: [number, number]): SchematicLabel {
@@ -42,7 +42,7 @@ function label(id: string, net: string, at: [number, number]): SchematicLabel {
 }
 
 function schematic(partial: Partial<Schematic>): Schematic {
-  return { lib_symbols: R_LIB, symbols: [], power_symbols: [], wires: [], no_connects: [], labels: [], texts: [], title_block: null, sheets: [], sheet_path: [], ...partial };
+  return { lib_symbols: R_LIB, symbols: [], power_symbols: [], wires: [], no_connects: [], labels: [], texts: [], title_block: null, bus_entries: [], sheets: [], sheet_path: [], ...partial };
 }
 
 test("ercMarkerPosition: null location or null schematic resolves to null", () => {

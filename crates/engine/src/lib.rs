@@ -254,6 +254,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                 net: net.clone(),
                 pins: pins.clone(),
                 pts: poly.iter().map(|p| Point { x: p.x + off.x, y: p.y + off.y }).collect(),
+                bus: false,
             });
         }
     }
@@ -385,6 +386,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                         net: net.clone(),
                         pins: run.iter().map(|(pin_ref, _)| pin_ref.clone()).collect(),
                         pts: points.into_iter().map(|p| Point { x: p.x, y: p.y }).collect(),
+                        bus: false,
                     });
                 }
             }
@@ -488,12 +490,12 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             seed: opts.seed,
             stage_hashes: Vec::new(),
         },
-        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, erc_exclusions: vec![], imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![] }),
+        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![] }),
         nets: None,
         placement: None,
         routing: None,
         drawings: None,
-        footprint_library: None, sheet_contents: None,
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![],
     })
 }
 

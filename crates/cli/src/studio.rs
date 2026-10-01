@@ -911,7 +911,7 @@ fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String
 fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model::ir::SchematicSection, Vec<(String, String)>) {
     let mut current = design.schematic.clone().unwrap_or(eda_model::ir::SchematicSection {
         power_symbols: vec![],
-        no_connects: vec![],
+        no_connects: vec![], bus_entries: vec![],
         erc_exclusions: vec![],
         imported_from_kicad: false,
         title_block: None,
@@ -950,7 +950,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         (
             eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection {
                 power_symbols: vec![],
-                no_connects: vec![],
+                no_connects: vec![], bus_entries: vec![],
                 erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
@@ -1022,7 +1022,10 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
             })
         })
         .collect();
-    let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect();
+    let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus })).collect();
+    // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
+    // diagonal stub on canvas.
+    let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y] })).collect();
     let labels: Vec<Value> = sch
         .labels
         .iter()
@@ -1096,6 +1099,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "texts": texts,
         "power_symbols": power_symbols,
         "no_connects": no_connects,
+        "bus_entries": bus_entries,
         "title_block": title_block,
         "lib_symbols": lib_symbols,
         "sheets": sheets,
@@ -1489,7 +1493,7 @@ mod tests {
     use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
 
     fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
-        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], title_block: None, sheets, instance_overrides: vec![], imported_from_kicad: false }
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets, instance_overrides: vec![], imported_from_kicad: false }
     }
 
     fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {
@@ -1503,6 +1507,7 @@ mod tests {
             drawings: None,
             footprint_library: None,
             sheet_contents: (!screens.is_empty()).then_some(screens),
+            bus_aliases: vec![],
         }
     }
 

@@ -31,7 +31,7 @@
 // the dangling-pin indicator circle is not drawn), and no electrical-pin
 // -type annotation text (off by default in the real schematic editor
 // too, so this is not actually a gap).
-import type { ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, Sheet } from "../../api/types";
+import type { BusEntry, ErcViolation, LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire, Sheet } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
@@ -748,6 +748,29 @@ function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: N
 }
 
 /**
+ * A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a single diagonal stub
+ * from `at` to `at + size` -- real KiCad gives it no outline/fill
+ * distinction of its own, just a `LAYER_BUS`-colored line the same width
+ * as a bus wire, which of `at`/`at + size` is "the bus side" is purely
+ * geometric (whichever end lands on a bus wire's own point -- see
+ * `crates/kicad/src/bus.rs`'s own doc) and irrelevant to drawing it: both
+ * ends are simply connected by one straight segment.
+ */
+function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: BusEntry) {
+  const hair = 1 / view.scale;
+  const [x, y] = be.at;
+  const [dx, dy] = be.size;
+  ctx.save();
+  ctx.strokeStyle = layerColor("LAYER_BUS");
+  ctx.lineWidth = Math.max(150, hair);
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + dx, y + dy);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
  * ERC violation markers -- canvas/painter.ts's `drawDrcMarkers`, ported to
  * this sheet: one circle per violation whose `location` resolves to a
  * point (`ercMarkerPosition` -- not every shape does, see its own doc;
@@ -797,12 +820,20 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // shift-selected wire had no visual confirmation it would do anything).
   for (const w of sch.wires) {
     const on = opts.netHighlight === w.net || opts.selection.has(w.id);
-    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_WIRE");
+    // Bus wires (GAPS.md #20) are the same `SCH_LINE` shape as a plain
+    // wire, just `LAYER_BUS` instead of `LAYER_WIRE` -- same convention
+    // real eeschema uses (a visibly different, blue by default, color; not
+    // a different line width).
+    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor(w.bus ? "LAYER_BUS" : "LAYER_WIRE");
     ctx.lineWidth = Math.max(on ? 300 : 150, hair * (on ? 2.5 : 1));
     ctx.beginPath();
     w.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.stroke();
   }
+
+  // Bus entries (GAPS.md #20) -- a short diagonal stub from `at` to
+  // `at + size`, `LAYER_BUS`-colored same as the bus wire it taps.
+  for (const be of sch.bus_entries) drawBusEntry(ctx, view, be);
 
   // Junctions -- see junctions.ts's own doc for exactly which points
   // besides coincident wire endpoints (power symbol/label anchors landing

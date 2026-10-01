@@ -92,6 +92,11 @@ pub struct Design {
     /// Reference per placement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sheet_contents: Option<std::collections::BTreeMap<String, SchematicSection>>,
+    /// Project-scoped bus aliases (GAPS.md #20) — see [`BusAlias`]'s own
+    /// doc for why these live here (one list for the whole design) rather
+    /// than inside each `SchematicSection`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bus_aliases: Vec<BusAlias>,
 }
 
 impl Design {
@@ -187,6 +192,9 @@ pub struct SchematicSection {
     /// by `at`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub no_connects: Vec<NoConnect>,
+    /// Bus entries (GAPS.md #20) — see [`BusEntry`]'s own doc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bus_entries: Vec<BusEntry>,
     /// Accepted ("excluded") ERC findings -- `dialog_erc.cpp`'s own
     /// per-sheet `SCHEMATIC::RecordERCExclusions`. Sorted by (check,
     /// location); see [`ErcExclusion`]'s own doc for why it has no `id`.
@@ -313,6 +321,16 @@ pub struct Wire {
     pub pins: Vec<String>,
     /// Polyline in sheet coordinates.
     pub pts: Vec<Point>,
+    /// True for a bus wire (KiCad's `LAYER_BUS` vs `LAYER_WIRE` -- the same
+    /// `SCH_LINE`, just a different layer; GAPS.md #20). `net` on a bus
+    /// wire carries whatever name/vector/group text a touching label gave
+    /// it, same mechanism as a plain wire -- this flag is what tells
+    /// `crate::bus` (eda-kicad) that name needs bus *expansion* rather than
+    /// being one plain net, and is also what `bus_to_net_conflict` compares
+    /// across a resolved group to catch a plain wire touching a bus
+    /// directly with no [`BusEntry`] between them.
+    #[serde(default)]
+    pub bus: bool,
 }
 
 impl Wire {
@@ -448,6 +466,59 @@ impl NoConnect {
     fn id_seed(&self) -> String {
         format!("{},{}", self.at.x, self.at.y)
     }
+}
+
+/// A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub
+/// tying one specific member net into a bus. `at` and `at + size` are its
+/// two endpoints in sheet coordinates (`size` carries the sign of each
+/// axis, same as KiCad's own `(at)(size)` pair -- a negative component
+/// picks one of the other three diagonal quadrants); which endpoint is
+/// "the bus side" is never stored, only read off geometry at ERC/connectivity
+/// time (`crate::bus` (eda-kicad): whichever endpoint lands on a [`Wire`]
+/// with `bus: true`). KiCad's companion `SCH_BUS_BUS_ENTRY` (bus-to-bus) is
+/// deliberately not ported: real KiCad's own file writer never emits one
+/// any more (it silently downgrades to a plain bus line on save) and no UI
+/// action in current KiCad creates one, so there is nothing to round-trip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BusEntry {
+    /// Stable id (`bent_xxxxxxxxxxxx`) — see `Wire::id`'s doc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub at: Point,
+    /// Signed offset from `at` to this entry's other endpoint — real KiCad
+    /// always uses a fixed ±100mil (±2540um) magnitude on each axis, but
+    /// nothing here enforces that; an imported file's own stored size is
+    /// kept exactly.
+    pub size: Point,
+}
+
+impl BusEntry {
+    fn id_seed(&self) -> String {
+        format!("{},{}|{},{}", self.at.x, self.at.y, self.size.x, self.size.y)
+    }
+}
+
+/// A project-scoped bus alias (`BUS_ALIAS`, GAPS.md #20): a name that
+/// stands in for a fixed list of member net names anywhere a bus vector/
+/// group name could otherwise be written (`{MY_ALIAS}`) or, bare, as a bus
+/// wire's own name directly. Real KiCad stores these in the `.kicad_pro`
+/// project file (`SCHEMATIC::updateProjectBusAliases`) with a *legacy*
+/// per-screen `(bus_alias ...)` `.kicad_sch` reader kept only for
+/// backward compatibility (`SCH_IO_KICAD_SEXPR_PARSER::parseBusAlias`,
+/// forwarding into the same project-level list) -- this project has no
+/// `.kicad_pro` reader/writer at all yet, so `crate::import`/`crate::lib`
+/// (eda-kicad) round-trip aliases through that same legacy per-screen
+/// `(bus_alias "NAME" (members "A" "B"))` block instead, written into the
+/// root screen's own file on export and collected from every screen on
+/// import. Scoped at the `Design` level (not per-sheet) because that is
+/// how real KiCad actually resolves them: `SCHEMATIC::GetBusAlias` searches
+/// the one project-wide list regardless of which sheet is asking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BusAlias {
+    pub name: String,
+    pub members: Vec<String>,
 }
 
 /// An accepted ERC finding (`dialog_erc.cpp`'s own "Exclude this
@@ -587,6 +658,7 @@ impl SchematicSection {
             .chain(self.labels.iter().map(|l| &l.id))
             .chain(self.texts.iter().map(|t| &t.id))
             .chain(self.no_connects.iter().map(|nc| &nc.id))
+            .chain(self.bus_entries.iter().map(|be| &be.id))
             .filter(|s| !s.is_empty())
             .cloned()
             .collect();
@@ -628,6 +700,16 @@ impl SchematicSection {
                 let id = next_item_id("nc", &self.no_connects[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.no_connects[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.bus_entries.len()).collect();
+        order.sort_by(|&a, &b| self.bus_entries[a].at.cmp(&self.bus_entries[b].at));
+        for i in order {
+            if self.bus_entries[i].id.is_empty() {
+                let id = next_item_id("bent", &self.bus_entries[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.bus_entries[i].id = id;
             }
         }
 
@@ -1863,11 +1945,12 @@ mod tests {
                     SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                     SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                 ],
-                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }] }],
+                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }], bus: false }],
                 labels: vec![],
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
+                bus_entries: vec![],
                 erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
@@ -1879,6 +1962,7 @@ mod tests {
             drawings: None,
             footprint_library: None,
             sheet_contents: None,
+            bus_aliases: vec![],
         }
     }
 

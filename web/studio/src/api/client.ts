@@ -59,6 +59,10 @@ export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Sch
     title_block: s.title_block ?? null,
     sheets: s.sheets ?? [],
     sheet_path: s.sheet_path ?? [],
+    bus_entries: s.bus_entries ?? [],
+    // `bus` is new (GAPS.md #20) -- a wire from a backend built before it
+    // existed has no such field at all, not even `false`.
+    wires: (s.wires ?? []).map((w) => ({ ...w, bus: w.bus ?? false })),
     symbols: (s.symbols ?? []).map((sym) => {
       // `mirror` replaces an earlier `mirrored: boolean` (see types.ts's
       // SchematicSymbol doc comment) that could only ever express one of

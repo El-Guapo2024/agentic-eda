@@ -442,7 +442,15 @@ pub enum Cmd {
     /// one wherever 3+ wire endpoints/segments meet, computed fresh from
     /// `wires` every paint, same as a real schematic's junction dots are
     /// implied by geometry, not placed by hand in this port.
-    AddWire { pts: Vec<Point> },
+    /// `bus: true` (GAPS.md #20 -- the `B` tool) draws a bus wire
+    /// (`Wire::bus`) instead of a plain one; `#[serde(default)]` so a
+    /// `design.json`/client written before this field existed keeps
+    /// drawing plain wires exactly as before.
+    AddWire {
+        pts: Vec<Point>,
+        #[serde(default)]
+        bus: bool,
+    },
     /// Backspace mid-draw is purely a frontend undo of the in-progress
     /// polyline (never reaches the backend at all); this is `Del` on an
     /// already-committed wire, by its `Wire::id`.
@@ -453,6 +461,13 @@ pub enum Cmd {
     /// `AddWire`'s `net`/`pins`.
     AddNoConnect { at: Point },
     DeleteNoConnect { id: String },
+    /// GAPS.md #20: a bus entry stub at `at`, reaching to `at + size` --
+    /// `size` is the caller's choice (the frontend defaults to KiCad's own
+    /// ±100mil/±2540um diagonal, picking the sign from which side of the
+    /// bus wire was clicked), not fixed here, so an imported file's own
+    /// exact stored size and a freshly-drawn one share the same verb.
+    AddBusEntry { at: Point, size: Point },
+    DeleteBusEntry { id: String },
 
     /// `dialog_erc.cpp`'s own "Exclude this violation" (right-click a
     /// finding, or the dialog's own Exclude button): accepts one ERC
@@ -696,6 +711,8 @@ impl Cmd {
             | Cmd::DeleteWire { .. }
             | Cmd::AddNoConnect { .. }
             | Cmd::DeleteNoConnect { .. }
+            | Cmd::AddBusEntry { .. }
+            | Cmd::DeleteBusEntry { .. }
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
             | Cmd::AddLabel { .. }
@@ -782,8 +799,9 @@ impl Cmd {
             | Cmd::EditSymbolFields { id, .. }
             | Cmd::RenameSymbol { id, .. } => vec![id],
             Cmd::AddWire { .. } => vec!["wire"],
-            Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } | Cmd::DeleteSchText { id } => vec![id],
+            Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } | Cmd::DeleteSchText { id } | Cmd::DeleteBusEntry { id } => vec![id],
             Cmd::AddNoConnect { .. } => vec!["no_connect"],
+            Cmd::AddBusEntry { .. } => vec!["bus_entry"],
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
@@ -1128,9 +1146,11 @@ impl<'a> Board<'a> {
             Cmd::MirrorSymbol { id, unit } => self.mirror_symbol(id, *unit),
             Cmd::MirrorSymbolVertical { id, unit } => self.mirror_symbol_vertical(id, *unit),
             Cmd::DeleteSymbol { id, unit } => self.delete_symbol(id, *unit),
-            Cmd::AddWire { pts } => self.add_wire(pts.clone()),
+            Cmd::AddWire { pts, bus } => self.add_wire(pts.clone(), *bus),
             Cmd::DeleteWire { id } => self.delete_wire(id),
             Cmd::AddNoConnect { at } => self.add_no_connect(*at),
+            Cmd::AddBusEntry { at, size } => self.add_bus_entry(*at, *size),
+            Cmd::DeleteBusEntry { id } => self.delete_bus_entry(id),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
             Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
             Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
@@ -2099,7 +2119,7 @@ impl<'a> Board<'a> {
     /// `derive_schematic` never ran); everything else targets an id that
     /// can only already exist inside a section that is already there.
     fn schematic_mut_or_create(&mut self) -> &mut SchematicSection {
-        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![] })
+        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![] })
     }
 
     fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {
@@ -2207,11 +2227,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn add_wire(&mut self, pts: Vec<Point>) -> Result<(), Vec<CheckResult>> {
+    fn add_wire(&mut self, pts: Vec<Point>, bus: bool) -> Result<(), Vec<CheckResult>> {
         if pts.len() < 2 {
             return Err(vec![CheckResult::fail("ops_bad_wire", "wire", "a wire needs at least two points")]);
         }
-        self.schematic_mut_or_create().wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts });
+        self.schematic_mut_or_create().wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus });
         Ok(())
     }
 
@@ -2236,6 +2256,21 @@ impl<'a> Board<'a> {
         sch.no_connects.retain(|nc| nc.id != id);
         if sch.no_connects.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_no_connect", id, "no no-connect flag with this id")]);
+        }
+        Ok(())
+    }
+
+    fn add_bus_entry(&mut self, at: Point, size: Point) -> Result<(), Vec<CheckResult>> {
+        self.schematic_mut_or_create().bus_entries.push(eda_model::ir::BusEntry { id: String::new(), at, size });
+        Ok(())
+    }
+
+    fn delete_bus_entry(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.bus_entries.len();
+        sch.bus_entries.retain(|be| be.id != id);
+        if sch.bus_entries.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_bus_entry", id, "no bus entry with this id")]);
         }
         Ok(())
     }

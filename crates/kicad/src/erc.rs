@@ -14,7 +14,10 @@
 //! (`different_unit_net`, `unit_value_mismatch`, `different_unit_footprint`,
 //! `missing_unit`, `extra_units`, `missing_input_pin`, `missing_bidi_pin`,
 //! `missing_power_pin` -- see [`check_multi_unit_symbols`]) is the same kind
-//! of port, scoped the same way.
+//! of port, scoped the same way. GAPS.md #6/#20's hierarchy/bus pass
+//! (`duplicate_sheet_names`, `hier_label_mismatch`, `bus_to_bus_conflict` --
+//! see [`check_hierarchy`]; `bus_to_net_conflict`, `net_not_bus_member` --
+//! see `crate::bus::check_bus`) likewise.
 //!
 //! Severities match KiCad's own shipped defaults (`ERC_SETTINGS::ERC_SETTINGS()`):
 //! `pin_not_connected`/`pin_not_driven`/`power_pin_not_driven`/
@@ -33,10 +36,12 @@
 //! (a/b/c/g below); the dangling-wire/dangling-label checks (d/e/f) instead
 //! reconcile the *drawn* schematic geometry, since those are inherently
 //! about what got exported, not what was intended. This is not a
-//! byte-for-byte port of KiCad's `CONNECTION_GRAPH` (subgraphs, bus
-//! members, hierarchical-sheet propagation) — it is scoped to what a
-//! single-sheet schematic like this project's own generator produces, and
-//! to what a human-authored single-sheet KiCad file needs.
+//! byte-for-byte port of KiCad's `CONNECTION_GRAPH` (subgraphs are not
+//! modeled as their own data structure here) — it is scoped to what this
+//! project's own IR already represents directly: single-sheet, hierarchical
+//! (`crate::hierarchy`), and bus (`crate::bus`) connectivity are each
+//! handled, but not e.g. net classes or power-flag propagation nuances
+//! `CONNECTION_GRAPH` also carries.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -378,6 +383,14 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     // flattening is exactly what erases the sheet-pin/hierarchical-label
     // pairing they inspect. A single-sheet design (`sheet_contents` is
     // `None`, the overwhelmingly common case) skips this clone entirely.
+    // Kept by its own name (not just the `design` parameter) because the
+    // very next statement shadows `design` with the flattened stand-in --
+    // `crate::bus::check_bus` needs the *original* per-screen wires/
+    // bus_entries (a flattened mega-sheet's `wires` is every visited
+    // sheet's geometry dumped into one list, which would make a bus entry
+    // match a point from the wrong sheet's own bus run entirely).
+    let original_design = design;
+
     let owned_flat: Option<(Design, ConstraintModel)> = design.sheet_contents.is_some().then(|| crate::hierarchy::flatten(design, model)).flatten().map(|(sch, nets)| {
         (Design { schematic: Some(sch), nets: None, ..design.clone() }, ConstraintModel { nets, ..model.clone() })
     });
@@ -400,6 +413,7 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     check_duplicate_references(sch, &mut out);
     check_multi_unit_symbols(sch, model, &mut out);
     check_hierarchy(design, &mut out);
+    crate::bus::check_bus(original_design, &mut out);
     out.extend(crate::erc_style::check_style(design, model));
     out
 }
@@ -1015,7 +1029,7 @@ fn check_duplicate_references(sch: &eda_model::ir::SchematicSection, out: &mut V
 /// *placement* -- `duplicate_sheet_names`/`hier_label_mismatch` are both
 /// about one screen's own direct children, which is the same question
 /// regardless of how many times that screen itself happens to be placed).
-fn every_screen(design: &Design) -> Vec<(String, &SchematicSection)> {
+pub(crate) fn every_screen(design: &Design) -> Vec<(String, &SchematicSection)> {
     let mut out = Vec::new();
     if let Some(root) = &design.schematic {
         out.push((String::new(), root));
@@ -1044,6 +1058,18 @@ fn every_screen(design: &Design) -> Vec<(String, &SchematicSection)> {
 /// alone). A name on one side with nothing matching on the other is one
 /// finding, regardless of which side it's missing from (source itself
 /// reports both directions under the one same error code).
+///
+/// (q) `bus_to_bus_conflict` (GAPS.md #20), ported from
+/// `CONNECTION_GRAPH::ercCheckBusToBusConflicts`: when (p)'s own exact-text
+/// match fails for a name that is itself bus-shaped (`crate::bus::expand_bus_members`),
+/// that is not automatically a mismatch -- a parent sheet pin
+/// `"DATA[0..7]"` and a child hierarchical label `"DATA[0..3]"` share no
+/// identical text but *do* share real members, and source only ever flags
+/// this pairing when the two share **zero** members at all, same "any
+/// overlap is fine" rule as real KiCad. The actual per-member net joining
+/// this implies (the parent's own `"DATA3"` reaching the child's own
+/// `"DATA3"`) is `crate::hierarchy::flatten`'s concern, not this function's
+/// -- this is ERC reporting only.
 fn check_hierarchy(design: &Design, out: &mut Vec<CheckResult>) {
     let mut ok_dup = true;
     for (screen_name, sch) in every_screen(design) {
@@ -1065,31 +1091,60 @@ fn check_hierarchy(design: &Design, out: &mut Vec<CheckResult>) {
     }
 
     let mut ok_hier = true;
+    let mut ok_bus = true;
     for (_, sch) in every_screen(design) {
         for sheet in &sch.sheets {
             let Some(child) = design.sheet_contents.as_ref().and_then(|s| s.get(&sheet.file)) else { continue };
             let pin_names: BTreeSet<&str> = sheet.pins.iter().map(|p| p.name.as_str()).collect();
             let hier_label_names: BTreeSet<&str> = child.labels.iter().filter(|l| matches!(l.kind, eda_model::ir::LabelKind::Hierarchical { .. })).map(|l| l.net.as_str()).collect();
+            // Every child hier label's own expanded member set, computed
+            // once per sheet -- both unmatched-pin and unmatched-label
+            // branches below need "does *some* hier label share a member
+            // with this bus name", not just the one with the identical
+            // raw text (already handled for free by the exact-string-set
+            // difference above, same as the pre-bus scalar behavior).
+            let child_members: Vec<Vec<String>> = hier_label_names.iter().filter_map(|n| crate::bus::expand_bus_members(n, &design.bus_aliases)).collect();
+            let pin_members: Vec<Vec<String>> = pin_names.iter().filter_map(|n| crate::bus::expand_bus_members(n, &design.bus_aliases)).collect();
             for name in pin_names.difference(&hier_label_names) {
-                out.push(CheckResult::fail(
-                    "hier_label_mismatch",
-                    format!("{}:{name}", sheet.name),
-                    format!("sheet pin '{name}' on sheet '{}' has no matching hierarchical label inside '{}'", sheet.name, sheet.file),
-                ));
-                ok_hier = false;
+                // (ERCE_BUS_TO_BUS_CONFLICT) ported from
+                // `CONNECTION_GRAPH::ercCheckBusToBusConflicts`: when the
+                // raw text didn't match on either side (the exact-string
+                // set difference above), a *bus-shaped* pin is still fine
+                // as long as its own member set shares at least one name
+                // with some child hier label's own expanded members --
+                // source's own "any shared member" rule, not a full-set
+                // match. A pin that isn't bus-shaped at all has no such
+                // fallback and keeps today's plain `hier_label_mismatch`.
+                let Some(members) = crate::bus::expand_bus_members(name, &design.bus_aliases) else {
+                    out.push(CheckResult::fail("hier_label_mismatch", format!("{}:{name}", sheet.name), format!("sheet pin '{name}' on sheet '{}' has no matching hierarchical label inside '{}'", sheet.name, sheet.file)));
+                    ok_hier = false;
+                    continue;
+                };
+                if child_members.iter().any(|cm| cm.iter().any(|m| members.contains(m))) {
+                    continue; // shares at least one real member with some child hier label -- a valid partial bus join, not an error
+                }
+                out.push(CheckResult::fail("bus_to_bus_conflict", format!("{}:{name}", sheet.name), format!("bus sheet pin '{name}' on sheet '{}' shares no member with any hierarchical label inside '{}'", sheet.name, sheet.file)));
+                ok_bus = false;
             }
             for name in hier_label_names.difference(&pin_names) {
-                out.push(CheckResult::fail(
-                    "hier_label_mismatch",
-                    format!("{}:{name}", sheet.name),
-                    format!("hierarchical label '{name}' inside '{}' has no matching sheet pin on sheet '{}'", sheet.file, sheet.name),
-                ));
-                ok_hier = false;
+                let Some(members) = crate::bus::expand_bus_members(name, &design.bus_aliases) else {
+                    out.push(CheckResult::fail("hier_label_mismatch", format!("{}:{name}", sheet.name), format!("hierarchical label '{name}' inside '{}' has no matching sheet pin on sheet '{}'", sheet.file, sheet.name)));
+                    ok_hier = false;
+                    continue;
+                };
+                if pin_members.iter().any(|pm| pm.iter().any(|m| members.contains(m))) {
+                    continue;
+                }
+                out.push(CheckResult::fail("bus_to_bus_conflict", format!("{}:{name}", sheet.name), format!("bus hierarchical label '{name}' inside '{}' shares no member with any sheet pin on sheet '{}'", sheet.file, sheet.name)));
+                ok_bus = false;
             }
         }
     }
     if ok_hier {
         out.push(CheckResult::pass("hier_label_mismatch"));
+    }
+    if ok_bus {
+        out.push(CheckResult::pass("bus_to_bus_conflict"));
     }
 }
 
@@ -1573,12 +1628,12 @@ mod tests {
         Design {
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }),
+            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }),
             nets: None,
             placement: None,
             routing: None,
             drawings: None,
-            footprint_library: None, sheet_contents: None,
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
         }
     }
 
@@ -1685,6 +1740,7 @@ mod tests {
             drawings: None,
             footprint_library: None,
             sheet_contents: (!screens.is_empty()).then_some(screens),
+            bus_aliases: vec![],
         }
     }
 
@@ -1745,5 +1801,98 @@ mod tests {
         assert!(mismatches.iter().any(|r| r.location.as_deref() == Some("child:B") && r.status == CheckStatus::Fail), "sheet pin B has no matching label: {results:#?}");
         assert!(mismatches.iter().any(|r| r.location.as_deref() == Some("child:C") && r.status == CheckStatus::Fail), "hier label C has no matching pin: {results:#?}");
         assert!(!mismatches.iter().any(|r| r.location.as_deref() == Some("child:A")), "A matches by name despite differing shape -- must not be reported");
+    }
+
+    // ------------------------------------------------------- bus (GAPS.md #20)
+
+    fn bus_wire(net: &str, bus: bool, pts: Vec<Point>) -> eda_model::ir::Wire {
+        eda_model::ir::Wire { id: String::new(), net: net.into(), pins: vec![], pts, bus }
+    }
+
+    /// A correctly-drawn bus (a vector-named bus wire, a bus entry tapping
+    /// one real member, a label naming that member) must not false-fire any
+    /// of the four bus checks `check_erc` now runs end to end -- the
+    /// "wiring, not just the per-function logic" sanity test every one of
+    /// `crate::bus`'s own unit tests already covers in isolation.
+    #[test]
+    fn a_correctly_drawn_bus_passes_every_bus_check() {
+        let bus_pt = Point { x: 10_000, y: 10_000 };
+        let net_pt = Point { x: 12_540, y: 12_540 };
+        let sch = SchematicSection {
+            wires: vec![bus_wire("DATA[0..3]", true, vec![Point { x: 0, y: 10_000 }, bus_pt])],
+            bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540, y: 2_540 } }],
+            labels: vec![NetLabel { id: String::new(), net: "DATA2".into(), at: net_pt, kind: LabelKind::Local }],
+            ..sch_design(vec![], vec![]).schematic.unwrap()
+        };
+        let design = Design { schematic: Some(sch), ..sch_design(vec![], vec![]) };
+        let results = check_erc(&design, &ConstraintModel::default());
+        for check in ["bus_to_net_conflict", "net_not_bus_member", "bus_to_bus_conflict"] {
+            assert!(results.iter().any(|r| r.check == check && r.status == CheckStatus::Pass), "{check} should pass: {:#?}", results.iter().filter(|r| r.check == check).collect::<Vec<_>>());
+        }
+    }
+
+    /// A plain wire landing directly on a bus wire's own point, with no
+    /// entry between them, fires `bus_to_net_conflict` through the full
+    /// `check_erc` path (not just `crate::bus`'s own unit test of the
+    /// underlying helper).
+    #[test]
+    fn check_erc_surfaces_bus_to_net_conflict() {
+        let junction = Point { x: 10_000, y: 10_000 };
+        let sch = SchematicSection {
+            wires: vec![bus_wire("DATA[0..3]", true, vec![Point { x: 0, y: 10_000 }, junction]), bus_wire("DATA[0..3]", false, vec![junction, Point { x: 20_000, y: 10_000 }])],
+            ..sch_design(vec![], vec![]).schematic.unwrap()
+        };
+        let design = Design { schematic: Some(sch), ..sch_design(vec![], vec![]) };
+        let results = check_erc(&design, &ConstraintModel::default());
+        assert!(results.iter().any(|r| r.check == "bus_to_net_conflict" && r.status == CheckStatus::Fail), "{results:#?}");
+    }
+
+    /// A bus entry whose net-side label names something outside the bus's
+    /// own member list fires `net_not_bus_member` through the full
+    /// `check_erc` path.
+    #[test]
+    fn check_erc_surfaces_net_not_bus_member() {
+        let bus_pt = Point { x: 10_000, y: 10_000 };
+        let net_pt = Point { x: 12_540, y: 12_540 };
+        let sch = SchematicSection {
+            wires: vec![bus_wire("DATA[0..3]", true, vec![Point { x: 0, y: 10_000 }, bus_pt])],
+            bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540, y: 2_540 } }],
+            labels: vec![NetLabel { id: String::new(), net: "RESET".into(), at: net_pt, kind: LabelKind::Local }],
+            ..sch_design(vec![], vec![]).schematic.unwrap()
+        };
+        let design = Design { schematic: Some(sch), ..sch_design(vec![], vec![]) };
+        let results = check_erc(&design, &ConstraintModel::default());
+        assert!(results.iter().any(|r| r.check == "net_not_bus_member" && r.status == CheckStatus::Fail), "{results:#?}");
+    }
+
+    /// A bus sheet pin and a child hierarchical label whose raw text
+    /// differs but whose expanded member sets overlap must NOT be reported
+    /// as `hier_label_mismatch` *or* `bus_to_bus_conflict` -- real KiCad's
+    /// own "any shared member is fine" rule.
+    #[test]
+    fn bus_sheet_pin_and_partially_overlapping_child_label_pass() {
+        let sheet = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![SheetPin { id: "p1".into(), name: "DATA[0..7]".into(), shape: eda_model::ir::LabelShape::Passive, at: Point { x: 0, y: 0 } }] };
+        let child = leaf_screen(vec![NetLabel { id: String::new(), net: "DATA[0..3]".into(), at: Point { x: 0, y: 0 }, kind: LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Passive } }]);
+        let mut screens = std::collections::BTreeMap::new();
+        screens.insert("child.kicad_sch".to_string(), child);
+        let design = hierarchy_design(vec![sheet], screens);
+        let results = check_erc(&design, &ConstraintModel::default());
+        assert!(!results.iter().any(|r| (r.check == "hier_label_mismatch" || r.check == "bus_to_bus_conflict") && r.status == CheckStatus::Fail), "{results:#?}");
+        assert!(results.iter().any(|r| r.check == "bus_to_bus_conflict" && r.status == CheckStatus::Pass));
+    }
+
+    /// A bus sheet pin and a child hierarchical label that share *zero*
+    /// members fires `bus_to_bus_conflict`, not the plain scalar
+    /// `hier_label_mismatch`.
+    #[test]
+    fn bus_sheet_pin_and_disjoint_child_label_fires_bus_to_bus_conflict() {
+        let sheet = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![SheetPin { id: "p1".into(), name: "DATA[0..3]".into(), shape: eda_model::ir::LabelShape::Passive, at: Point { x: 0, y: 0 } }] };
+        let child = leaf_screen(vec![NetLabel { id: String::new(), net: "FOO[0..3]".into(), at: Point { x: 0, y: 0 }, kind: LabelKind::Hierarchical { shape: eda_model::ir::LabelShape::Passive } }]);
+        let mut screens = std::collections::BTreeMap::new();
+        screens.insert("child.kicad_sch".to_string(), child);
+        let design = hierarchy_design(vec![sheet], screens);
+        let results = check_erc(&design, &ConstraintModel::default());
+        assert!(results.iter().any(|r| r.check == "bus_to_bus_conflict" && r.status == CheckStatus::Fail), "{results:#?}");
+        assert!(!results.iter().any(|r| r.check == "hier_label_mismatch" && r.status == CheckStatus::Fail), "a bus-shaped pin must never fall back to the plain scalar mismatch: {results:#?}");
     }
 }

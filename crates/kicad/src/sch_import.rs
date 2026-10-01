@@ -242,8 +242,45 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     let mut wires: Vec<Wire> = Vec::new();
     for w in sexpr::find_all(root, "wire") {
         if let Some(pts) = import_pts(w) {
-            wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts });
+            wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: false });
         }
+    }
+    // `(bus ...)` (GAPS.md #20): the exact same `SCH_LINE`/`(pts ...)` shape
+    // as `(wire ...)`, just `LAYER_BUS` instead of `LAYER_WIRE` -- see
+    // `Wire::bus`'s own doc.
+    for b in sexpr::find_all(root, "bus") {
+        if let Some(pts) = import_pts(b) {
+            wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: true });
+        }
+    }
+
+    let mut bus_entries: Vec<eda_model::ir::BusEntry> = Vec::new();
+    for be in sexpr::find_all(root, "bus_entry") {
+        let Some(at) = sexpr::find(be, "at").and_then(point_mm) else { continue };
+        let Some(size) = sexpr::find(be, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))) else { continue };
+        let id = sexpr::find(be, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
+        bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::mm_to_um(size.0), y: crate::import::mm_to_um(size.1) } });
+    }
+
+    // `(bus_alias "NAME" (members "A" "B"))` (GAPS.md #20): real modern
+    // KiCad only *writes* these into the `.kicad_pro` project file this
+    // project has no reader/writer for at all -- this legacy per-screen
+    // `.kicad_sch` block is kept only for backward compatibility with
+    // older files (`SCH_IO_KICAD_SEXPR_PARSER::parseBusAlias`, itself still
+    // forwarding into the same project-wide list on import) -- see
+    // `BusAlias`'s own doc for why this project round-trips aliases through
+    // it instead. Collected here per-screen; `import_kicad_sch_tree`
+    // merges every screen's own list into one project-wide
+    // `Design::bus_aliases` the same way real KiCad's project-wide
+    // visibility already treats them.
+    let mut bus_aliases: Vec<eda_model::ir::BusAlias> = Vec::new();
+    for a in sexpr::find_all(root, "bus_alias") {
+        let Some(name) = sexpr::txt(a, 1).map(String::from) else { continue };
+        // `(members "A" "B" "C")` -- bare string atoms, not sub-lists, so
+        // this walks past the "members" tag itself (index 0) rather than
+        // using `find`/`find_all` (which only ever match nested lists).
+        let members = sexpr::find(a, "members").map(|m| m.iter().skip(1).filter_map(|s| s.text().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
+        bus_aliases.push(eda_model::ir::BusAlias { name, members });
     }
 
     let mut labels: Vec<eda_model::ir::NetLabel> = Vec::new();
@@ -302,7 +339,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, erc_exclusions: Vec::new(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, erc_exclusions: Vec::new(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -311,7 +348,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         placement: None,
         routing: None,
         drawings: None,
-        footprint_library: None, sheet_contents: None,
+        footprint_library: None, sheet_contents: None, bus_aliases,
     };
     design.assign_missing_ids();
 
@@ -362,6 +399,17 @@ pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, Sc
         notes.unresolved_symbols += child_notes.unresolved_symbols;
         model.parts.extend(child_model.parts);
         model.symbols.extend(child_model.symbols);
+        // Bus aliases (GAPS.md #20) are project-wide, not per-screen (see
+        // `BusAlias`'s own doc) -- every sheet's own legacy `(bus_alias ...)`
+        // block feeds the *one* design-level list, by name, first
+        // definition wins (matching `SCHEMATIC::AddBusAlias`'s own
+        // same-name-same-members dedup intent closely enough: a real
+        // project only ever declares one alias per name in practice).
+        for alias in child_design.bus_aliases {
+            if !design.bus_aliases.iter().any(|a| a.name == alias.name) {
+                design.bus_aliases.push(alias);
+            }
+        }
         if let Some(child_sch) = child_design.schematic {
             let child_dir = child_path.parent().unwrap_or(&resolve_dir).to_path_buf();
             for s in &child_sch.sheets {
@@ -962,13 +1010,13 @@ mod tests {
             labels: vec![],
             texts: vec![],
             power_symbols: vec![],
-            no_connects: vec![],
+            no_connects: vec![], bus_entries: vec![],
             erc_exclusions: vec![],
             title_block: None,
             sheets: vec![], instance_overrides: vec![],
             imported_from_kicad: false,
         };
-        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None };
+        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![] };
 
         let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "multi_unit" }).unwrap();
         assert!(text.contains("(unit 1)"), "{text}");
@@ -1085,5 +1133,48 @@ mod tests {
         let refs: std::collections::BTreeSet<&str> = flat.symbols.iter().map(|s| s.id.as_str()).collect();
         assert!(refs.contains("R1") && refs.contains("R2"), "both R1 and R2 (one resistor, two sheet instances) must appear: {refs:?}");
         assert!(refs.contains("U1") && refs.contains("U2"), "both U1 and U2 (one port expander, two sheet instances) must appear: {refs:?}");
+    }
+
+    /// A bus wire, a bus entry, and a bus alias (GAPS.md #20) all survive
+    /// `export_kicad_sch` -> `import_kicad_sch` -- no real symbols/parts
+    /// needed, this is purely about the three new sexpr shapes
+    /// (`crate::lib`'s writer / this module's own `(bus ...)`/`(bus_entry
+    /// ...)`/`(bus_alias ...)` readers above) agreeing with each other.
+    #[test]
+    fn bus_wire_entry_and_alias_round_trip_through_export_and_import() {
+        let bus_pt = Point { x: 10_000, y: 10_000 };
+        let net_pt = Point { x: 12_540, y: 12_540 };
+        let sch = SchematicSection {
+            wires: vec![Wire { id: String::new(), net: "DATA[0..3]".into(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, bus_pt], bus: true }],
+            bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540, y: 2_540 } }],
+            labels: vec![eda_model::ir::NetLabel { id: String::new(), net: "DATA2".into(), at: net_pt, kind: LabelKind::Local }],
+            ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
+        };
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(sch),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![eda_model::ir::BusAlias { name: "USB".into(), members: vec!["D+".into(), "D-".into()] }],
+        };
+        let model = ConstraintModel::default();
+        let text = crate::export_kicad_sch(&design, &model, &crate::ExportMeta { date: "2026-01-01", title: "bus test" }).expect("exports cleanly with zero symbols");
+
+        let (reimported, _model, _notes) = import_kicad_sch(&text).expect("re-imports cleanly");
+        let sch = reimported.schematic.expect("schematic present");
+        assert_eq!(sch.wires.len(), 1);
+        assert!(sch.wires[0].bus, "the bus wire's own layer flag must survive the round trip");
+        assert_eq!(sch.wires[0].pts, vec![Point { x: 0, y: 10_000 }, bus_pt]);
+        assert_eq!(sch.bus_entries.len(), 1);
+        assert_eq!(sch.bus_entries[0].at, bus_pt);
+        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540, y: 2_540 });
+        assert_eq!(reimported.bus_aliases.len(), 1);
+        assert_eq!(reimported.bus_aliases[0].name, "USB");
+        assert_eq!(reimported.bus_aliases[0].members, vec!["D+".to_string(), "D-".to_string()]);
     }
 }

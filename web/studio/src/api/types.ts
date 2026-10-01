@@ -555,10 +555,12 @@ export type Cmd =
   | { op: "mirror_symbol"; id: string; unit?: number }
   | { op: "mirror_symbol_vertical"; id: string; unit?: number }
   | { op: "delete_symbol"; id: string; unit?: number }
-  | { op: "add_wire"; pts: PointXY[] }
+  | { op: "add_wire"; pts: PointXY[]; bus?: boolean }
   | { op: "delete_wire"; id: string }
   | { op: "add_no_connect"; at: PointXY }
   | { op: "delete_no_connect"; id: string }
+  | { op: "add_bus_entry"; at: PointXY; size: PointXY }
+  | { op: "delete_bus_entry"; id: string }
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
@@ -914,6 +916,15 @@ export interface SchematicWire {
   /** "REF.PIN" refs this wire lands on. */
   pins: string[];
   pts: [Um, Um][];
+  /** True for a bus wire (GAPS.md #20) -- KiCad's `LAYER_BUS` vs `LAYER_WIRE`, same shape either way. */
+  bus: boolean;
+}
+
+/** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
+export interface BusEntry {
+  id: string;
+  at: [Um, Um];
+  size: [Um, Um];
 }
 
 export interface SchematicLabel {
@@ -980,6 +991,8 @@ export interface Schematic {
   labels: SchematicLabel[];
   texts: SchematicText[];
   title_block: TitleBlock | null;
+  /** Bus entries (GAPS.md #20) -- see `BusEntry`'s own doc. */
+  bus_entries: BusEntry[];
   /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */

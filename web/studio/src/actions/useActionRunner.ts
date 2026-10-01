@@ -775,6 +775,15 @@ export function useActionRunner() {
       "eeschema.InteractiveDrawingLineWireBus.drawWires",
       schematicOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "wire" ? "select" : "wire" }))
     );
+    // `B` (GAPS.md #20): arm/disarm the bus tool -- shares the exact same
+    // click-to-add-point/finish state machine as the wire tool above
+    // (`drawState.kind` stays `"wire"` either way; `SchematicView.tsx`
+    // reads `state.activeTool === "bus"` at commit time to tag the result
+    // `Cmd::AddWire { bus: true }` instead of a plain wire).
+    m.set(
+      "eeschema.InteractiveDrawingLineWireBus.drawBuses",
+      schematicOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "bus" ? "select" : "bus" }))
+    );
     // Backspace mid-draw: pop the in-progress wire's last point (never a
     // committed-command undo -- see `Cmd::DeleteWire`'s own doc on why
     // this never reaches the backend at all).
@@ -799,6 +808,7 @@ export function useActionRunner() {
     m.set("eeschema.InteractiveDrawing.placePowerSymbol", toggleSchTool("sch_power"));
     m.set("eeschema.InteractiveDrawing.placeSchematicText", toggleSchTool("sch_text"));
     m.set("eeschema.InteractiveDrawing.placeNoConnect", toggleSchTool("sch_no_connect"));
+    m.set("eeschema.InteractiveDrawing.placeBusWireEntry", toggleSchTool("sch_bus_entry"));
     // `A`: unlike the others above, this opens the chooser dialog first
     // (real source's own order too, for this one tool -- see
     // SymbolChooserDialog.tsx's header comment) rather than arming a tool

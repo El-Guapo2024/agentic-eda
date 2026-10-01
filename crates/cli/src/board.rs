@@ -611,10 +611,12 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MirrorSymbol { id, .. } => format!("schematic mirror {id}"),
         Cmd::MirrorSymbolVertical { id, .. } => format!("schematic mirror-vertical {id}"),
         Cmd::DeleteSymbol { id, .. } => format!("schematic delete-symbol {id}"),
-        Cmd::AddWire { pts: p } => format!("schematic wire --pts \"{}\"", pts(p)),
+        Cmd::AddWire { pts: p, bus } => format!("schematic {} --pts \"{}\"", if *bus { "bus" } else { "wire" }, pts(p)),
         Cmd::DeleteWire { id } => format!("schematic delete-wire {id}"),
         Cmd::AddNoConnect { at } => format!("schematic no-connect --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteNoConnect { id } => format!("schematic delete-no-connect {id}"),
+        Cmd::AddBusEntry { at, size } => format!("schematic bus-entry --at {},{} --size {},{}", mm(at.x), mm(at.y), mm(size.x), mm(size.y)),
+        Cmd::DeleteBusEntry { id } => format!("schematic delete-bus-entry {id}"),
         Cmd::AddErcExclusion { check, location } => format!("schematic erc-exclude {check:?} {location:?}"),
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
@@ -731,6 +733,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::DeleteSymbol { .. } => "schematic-delete-symbol",
         Cmd::AddWire { .. } | Cmd::DeleteWire { .. } => "schematic-wire",
         Cmd::AddNoConnect { .. } | Cmd::DeleteNoConnect { .. } => "schematic-no-connect",
+        Cmd::AddBusEntry { .. } | Cmd::DeleteBusEntry { .. } => "schematic-bus-entry",
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } => "schematic-erc-exclusion",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
@@ -1142,7 +1145,7 @@ mod tests {
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
         let design = Design {
-            footprint_library: None, sheet_contents: None,
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
@@ -1293,7 +1296,7 @@ mod tests {
 
         let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
         let design = Design {
-            footprint_library: None, sheet_contents: None,
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: Some(eda_model::ir::SchematicSection {
@@ -1302,7 +1305,7 @@ mod tests {
                 labels: vec![],
                 texts: vec![],
                 power_symbols: vec![],
-                no_connects: vec![],
+                no_connects: vec![], bus_entries: vec![],
                 erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
@@ -1358,7 +1361,7 @@ mod tests {
         let (_, _, model) = load(&dir).unwrap();
         assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "sanity: R1 and R2 start on separate nets");
 
-        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }] }, false, "test").expect("R1.1 and R2.1 both sit exactly on this wire's endpoints");
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }], bus: false }, false, "test").expect("R1.1 and R2.1 both sit exactly on this wire's endpoints");
 
         let (_, design, model) = load(&dir).unwrap();
         assert!(design.nets.is_some(), "a schematic Cmd must persist the reconciled net list onto the design, not just compute it in-memory for this one request");
@@ -1380,6 +1383,35 @@ mod tests {
         let (_, design, model) = load(&dir).unwrap();
         assert!(design.schematic.as_ref().unwrap().wires.is_empty());
         assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "deleting the connecting wire must split R1 and R2 back onto separate nets");
+    }
+
+    /// GAPS.md #20: `AddWire { bus: true }` and `AddBusEntry` both survive
+    /// `reconcile_schematic`'s own in-place mutation of `sch.wires`
+    /// (`Wire::bus`/`SchematicSection::bus_entries` are never touched by
+    /// `eda_kicad::reconcile` -- it only ever writes `.net`/`.pins`), and
+    /// `DeleteBusEntry` removes exactly the one entry by id, the same shape
+    /// `DeleteWire`'s own test above already covers for plain wires.
+    #[test]
+    fn schematic_bus_wire_and_entry_persist_through_reconcile() {
+        let dir = scratch("sch_bus_entry");
+        setup_schematic(&dir);
+
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 0, y: 30_000 }, Point { x: 30_000, y: 30_000 }], bus: true }, false, "test").unwrap();
+        step(&dir, Cmd::AddBusEntry { at: Point { x: 10_000, y: 30_000 }, size: Point { x: 2_540, y: 2_540 } }, false, "test").unwrap();
+
+        let (_, design, _model) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.wires.len(), 1);
+        assert!(sch.wires[0].bus, "the wire's own bus flag must survive reconcile_schematic's in-place mutation");
+        assert_eq!(sch.bus_entries.len(), 1);
+        assert_eq!(sch.bus_entries[0].at, Point { x: 10_000, y: 30_000 });
+        assert_eq!(sch.bus_entries[0].size, Point { x: 2_540, y: 2_540 });
+        let entry_id = sch.bus_entries[0].id.clone();
+        assert!(!entry_id.is_empty(), "AddBusEntry's id must be backfilled, same as every other addressable item");
+
+        step(&dir, Cmd::DeleteBusEntry { id: entry_id }, false, "test").unwrap();
+        let (_, design, _model) = load(&dir).unwrap();
+        assert!(design.schematic.as_ref().unwrap().bus_entries.is_empty());
     }
 
     /// The other half of the "one netlist" hard rule `schematic_wire_
@@ -1498,7 +1530,7 @@ mod tests {
     fn rename_symbol_keeps_a_connected_wire_connected() {
         let dir = scratch("sch_rename_wire");
         setup_schematic(&dir);
-        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }], bus: false }, false, "test").unwrap();
 
         let (_, design, model) = load(&dir).unwrap();
         let before_net = net_of(&model.nets, "R2.1").unwrap().name.clone();

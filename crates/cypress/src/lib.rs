@@ -1167,7 +1167,7 @@ mod tests {
     #[test]
     fn unavailable_install_is_a_clean_failure() {
         let o = CypressOptions { install: PathBuf::from("/definitely/not/here"), ..Default::default() };
-        let d = Design { schema: 1, provenance: eda_model::ir::Provenance { engine_version: "t".into(), intent_hash: "h".into(), seed: 0, stage_hashes: vec![] }, schematic: None, nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None };
+        let d = Design { schema: 1, provenance: eda_model::ir::Provenance { engine_version: "t".into(), intent_hash: "h".into(), seed: 0, stage_hashes: vec![] }, schematic: None, nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![] };
         let err = place_with_cypress(&d, &ConstraintModel::default(), 0, &o).unwrap_err();
         assert_eq!(err[0].check, "cypress_unavailable");
     }
