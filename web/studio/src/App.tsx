@@ -25,6 +25,8 @@ import { MoveExactDialog } from "./components/MoveExactDialog";
 import { RouterSettingsDialog } from "./components/RouterSettingsDialog";
 import { LengthTuningDialog } from "./components/LengthTuningDialog";
 import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
+import { GlobalEditTracksAndViasDialog } from "./components/GlobalEditTracksAndViasDialog";
+import { GlobalEditTextAndGraphicsDialog } from "./components/GlobalEditTextAndGraphicsDialog";
 import { BoardSetupDialog } from "./components/BoardSetupDialog";
 import { LabelDialog } from "./components/LabelDialog";
 import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
@@ -171,6 +173,8 @@ function StudioFrame() {
       <RouterSettingsDialog />
       <LengthTuningDialog />
       <CleanupTracksDialog />
+      <GlobalEditTracksAndViasDialog />
+      <GlobalEditTextAndGraphicsDialog />
       <BoardSetupDialog />
       <LabelDialog />
       <PowerSymbolDialog />

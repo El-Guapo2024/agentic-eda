@@ -499,6 +499,74 @@ fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
     assert_eq!(e[0].check, "ops_bad_via");
 }
 
+// ------------------------------------------- global edit: tracks & vias
+
+#[test]
+fn edit_tracks_and_vias_sets_explicit_width_diameter_drill_and_layer() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    let track_id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+    let via_id = b.design().routing.as_ref().unwrap().vias[0].id.clone();
+
+    b.apply(&Cmd::EditTracksAndVias {
+        ids: vec![track_id.clone(), via_id.clone()],
+        track_width: Some(SizeSpec::Value { um: 350 }),
+        via_size: Some(ViaSizeSpec::Value { diameter: 900, drill: 450 }),
+        layer: Some("B.Cu".into()),
+    })
+    .unwrap();
+
+    let t = &b.design().routing.as_ref().unwrap().tracks[0];
+    assert_eq!(t.width, 350);
+    assert_eq!(t.layer, "B.Cu", "a track's layer is editable; a via's layer span is not touched by this command");
+    assert_eq!(t.id, track_id, "style/layer edits must not move the id");
+    let v = &b.design().routing.as_ref().unwrap().vias[0];
+    assert_eq!((v.diameter, v.drill), (900, 450));
+    assert_eq!((v.from_layer.as_str(), v.to_layer.as_str()), ("F.Cu", "B.Cu"));
+}
+
+#[test]
+fn edit_tracks_and_vias_net_class_resolves_each_items_own_net() {
+    let mut m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[("FAST", &["U1"]), ("SLOW", &["U2"])], vec![]);
+    m.board.net_classes = vec![eda_model::NetClass { name: "fast".into(), nets: vec!["FAST".into()], track_width: Some(500), clearance: None, via_diameter: Some(1000), via_drill: Some(500), microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }];
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "FAST".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "SLOW".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 2000 }, Point { x: 1000, y: 2000 }] }).unwrap();
+    let ids: Vec<String> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
+
+    b.apply(&Cmd::EditTracksAndVias { ids, track_width: Some(SizeSpec::NetClass), via_size: None, layer: None }).unwrap();
+
+    let widths: std::collections::BTreeMap<String, Um> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| (t.net.clone(), t.width)).collect();
+    assert_eq!(widths["FAST"], 500, "FAST is in the fast net class, which overrides track width");
+    assert_eq!(widths["SLOW"], m.board.track_width, "SLOW has no class, so it falls back to the board default");
+}
+
+#[test]
+fn edit_tracks_and_vias_refuses_empty_ids_and_bad_explicit_values() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::EditTracksAndVias { ids: vec![], track_width: Some(SizeSpec::NetClass), via_size: None, layer: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_global_edit");
+
+    let e = b.apply(&Cmd::EditTracksAndVias { ids: vec!["whatever".into()], track_width: Some(SizeSpec::Value { um: 0 }), via_size: None, layer: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_track");
+
+    let e = b.apply(&Cmd::EditTracksAndVias { ids: vec!["whatever".into()], track_width: None, via_size: Some(ViaSizeSpec::Value { diameter: 300, drill: 300 }), layer: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_via");
+}
+
+#[test]
+fn edit_tracks_and_vias_tolerates_unknown_ids_among_known_ones() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+    b.apply(&Cmd::EditTracksAndVias { ids: vec![id, "nope".into()], track_width: Some(SizeSpec::Value { um: 500 }), via_size: None, layer: None }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks[0].width, 500);
+}
+
 // --------------------------------------------------------------- zones
 
 #[test]
@@ -702,6 +770,53 @@ fn add_edit_move_delete_text() {
     assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
 }
 
+// ------------------------------------- global edit: text & graphics
+
+#[test]
+fn edit_text_and_graphics_touches_only_the_fields_given() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REF".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    let shape_id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
+    let text_id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
+
+    // Only a line-width change for the shape -- its layer must be untouched.
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![], layer: None, line_width: Some(250), text_size: None, text_thickness: None }).unwrap();
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.shapes[0].layer(), "F.SilkS");
+    assert_eq!(dr.shapes[0].id(), shape_id, "a style edit must not move the id");
+    match &dr.shapes[0] {
+        Shape::Segment { stroke_width, .. } => assert_eq!(*stroke_width, 250),
+        other => panic!("expected a Segment, got {other:?}"),
+    }
+
+    // Layer + text size/thickness for the text, same command touching both kinds at once.
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![text_id.clone()], layer: Some("F.Fab".into()), line_width: None, text_size: Some(1200), text_thickness: Some(200) })
+        .unwrap();
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.shapes[0].layer(), "F.Fab", "the shared `layer` field must still reach the shape on a mixed call");
+    let t = dr.texts.iter().find(|t| t.id == text_id).unwrap();
+    assert_eq!(t.layer, "F.Fab");
+    assert_eq!(t.size_um, 1200);
+    assert_eq!(t.stroke_width, 200);
+    assert_eq!(t.content, "REF", "content is not one of this command's fields");
+}
+
+#[test]
+fn edit_text_and_graphics_refuses_empty_input_and_bad_values() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec![], layer: None, line_width: None, text_size: None, text_thickness: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_global_edit");
+
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], layer: None, line_width: Some(0), text_size: None, text_thickness: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_shape");
+
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec!["x".into()], layer: None, line_width: None, text_size: Some(-5), text_thickness: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_text");
+}
+
 // ---------------------------------------------------- clears_routing
 
 #[test]
@@ -724,6 +839,8 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::MoveText { id: "x".into(), x: 0, y: 0 },
         Cmd::Duplicate { ids: vec!["x".into()] },
         Cmd::PasteItems { tracks: vec![], vias: vec![], zones: vec![], shapes: vec![], texts: vec![] },
+        Cmd::EditTracksAndVias { ids: vec!["x".into()], track_width: None, via_size: None, layer: None },
+        Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], layer: None, line_width: None, text_size: None, text_thickness: None },
     ];
     for c in &copper_and_drawing_cmds {
         assert!(!c.clears_routing(), "{c:?} must not clear routing -- only part edits do");

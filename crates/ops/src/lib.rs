@@ -116,6 +116,27 @@ pub enum Region {
     SouthEast,
 }
 
+/// `Cmd::EditTracksAndVias`'s track-width field: either leave every
+/// matched track at its own net class's width (`BoardRules::width_of`,
+/// falling back to the board default), or set them all to one explicit
+/// value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SizeSpec {
+    NetClass,
+    Value { um: Um },
+}
+
+/// Same idea as [`SizeSpec`], for a via's diameter+drill pair (which
+/// always travel together -- there is no meaningful "set the diameter but
+/// leave the drill" on its own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViaSizeSpec {
+    NetClass,
+    Value { diameter: Um, drill: Um },
+}
+
 impl Region {
     pub const ALL: [Region; 9] = [
         Region::NorthWest, Region::North, Region::NorthEast,
@@ -241,6 +262,33 @@ pub enum Cmd {
     /// Same idea as `SetTrackWidthPresets`, for `m_ViaSizeList`.
     SetViaPresets { presets: Vec<ViaPreset> },
 
+    /// `dialog_global_edit_tracks_and_vias.cpp`'s "Apply and Close": bulk-
+    /// set width (tracks/arcs) and/or diameter+drill (vias) and/or layer
+    /// (tracks only) on every named id, as one atomic undo step. `ids` is
+    /// already filtered by the caller (net/net-class/layer/width/
+    /// "selected only" are UI concepts this crate has no model of, same
+    /// split every other global-edit-style dialog here uses -- see
+    /// `CleanupOptions`/`cleanup.rs`). `track_width`/`via_size` are `None`
+    /// to leave that property alone (source's `INDETERMINATE_ACTION`);
+    /// `Some(SizeSpec::NetClass)` resolves each item's *own* net's class
+    /// at apply time (`BoardRules::width_of`/`via_diameter_of`/
+    /// `via_drill_of`), so a mixed-net-class selection lands each item on
+    /// its own class's value from one command, matching
+    /// `SetTrackSegmentWidth`'s per-item resolution rather than a single
+    /// shared value. This model has only one via "type" (no through/
+    /// micro/blind/buried distinction, no padstack/annular-ring/IPC4761
+    /// protection-feature concept), so those parts of the real dialog
+    /// have no field here at all.
+    EditTracksAndVias {
+        ids: Vec<String>,
+        #[serde(default)]
+        track_width: Option<SizeSpec>,
+        #[serde(default)]
+        via_size: Option<ViaSizeSpec>,
+        #[serde(default)]
+        layer: Option<String>,
+    },
+
     /// Add a copper pour.
     AddZone { net: String, layer: String, outline: Vec<Point> },
     /// Remove a zone by id.
@@ -303,6 +351,35 @@ pub enum Cmd {
     DeleteText { id: String },
     /// Move a text to a new position, keeping its id and styling.
     MoveText { id: String, x: Um, y: Um },
+    /// `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
+    /// scoped to this model's two free-standing board drawing kinds
+    /// (`Shape`/`Text` -- no footprint reference/value fields, dimensions,
+    /// tables or barcodes exist as editable board items here, see
+    /// PARITY-pcb.md section 2). Every field `None` leaves that property
+    /// alone (source's `INDETERMINATE_ACTION`); `shape_ids`/`text_ids` are
+    /// already filtered by the caller, same "no UI-filter concept in this
+    /// crate" split `EditTracksAndVias` uses. This model has no "layer
+    /// default values" to reset to (no `BOARD_DESIGN_SETTINGS::
+    /// m_LineThickness`/`m_TextSize` per-layer-class arrays), so unlike
+    /// source there is only the one "specified values" mode.
+    EditTextAndGraphics {
+        #[serde(default)]
+        shape_ids: Vec<String>,
+        #[serde(default)]
+        text_ids: Vec<String>,
+        #[serde(default)]
+        layer: Option<String>,
+        /// Shapes' `stroke_width`.
+        #[serde(default)]
+        line_width: Option<Um>,
+        /// Texts' `size_um` (applied to both the width and height this
+        /// model draws text at -- see `Text::size_um`'s own doc).
+        #[serde(default)]
+        text_size: Option<Um>,
+        /// Texts' `stroke_width`.
+        #[serde(default)]
+        text_thickness: Option<Um>,
+    },
 
     /// Copy existing tracks/vias/zones/shapes/texts named by id, in
     /// place (same position, fresh ids) -- the studio's Cmd+D. Footprints
@@ -788,6 +865,8 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
+            Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::EditTextAndGraphics { shape_ids, text_ids, .. } => shape_ids.iter().chain(text_ids.iter()).map(String::as_str).collect(),
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -1077,6 +1156,7 @@ impl<'a> Board<'a> {
             Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
+            Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
@@ -1134,6 +1214,9 @@ impl<'a> Board<'a> {
             }
             Cmd::DeleteText { id } => self.delete_text(id),
             Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
+            Cmd::EditTextAndGraphics { shape_ids, text_ids, layer, line_width, text_size, text_thickness } => {
+                self.edit_text_and_graphics(shape_ids, text_ids, layer.as_deref(), *line_width, *text_size, *text_thickness)
+            }
 
             Cmd::Duplicate { ids } => self.duplicate_items(ids),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
@@ -1745,6 +1828,120 @@ impl<'a> Board<'a> {
             }
         }
         self.routing_mut().via_presets = presets.to_vec();
+        Ok(())
+    }
+
+    /// `Cmd::EditTracksAndVias` -- see that variant's own doc. Unknown ids
+    /// among `ids` are tolerated (silently match nothing), same convention
+    /// `CommitRoute`'s own doc already established for a caller-computed
+    /// id list; refused only when `ids` itself is empty (nothing named at
+    /// all, almost certainly a caller bug) or an explicit `Value` is out
+    /// of range.
+    fn edit_tracks_and_vias(&mut self, ids: &[String], track_width: Option<&SizeSpec>, via_size: Option<&ViaSizeSpec>, layer: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_global_edit", "edit_tracks_and_vias", "no items given")]);
+        }
+        if let Some(l) = layer {
+            self.known_layer(l)?;
+        }
+        if let Some(SizeSpec::Value { um }) = track_width {
+            if *um <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_track", "edit_tracks_and_vias", "track width must be positive")]);
+            }
+        }
+        if let Some(ViaSizeSpec::Value { diameter, drill }) = via_size {
+            if *drill <= 0 || *diameter <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_via", "edit_tracks_and_vias", "via drill and diameter must be positive")]);
+            }
+            if *drill >= *diameter {
+                return Err(vec![CheckResult::fail("ops_bad_via", "edit_tracks_and_vias", "drill must be smaller than diameter")]);
+            }
+        }
+
+        let id_set: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+        let model = self.model;
+        if let Some(rt) = self.design.routing.as_mut() {
+            for t in rt.tracks.iter_mut().filter(|t| id_set.contains(t.id.as_str())) {
+                if let Some(spec) = track_width {
+                    t.width = match spec {
+                        SizeSpec::NetClass => model.board.width_of(&t.net),
+                        SizeSpec::Value { um } => *um,
+                    };
+                }
+                if let Some(l) = layer {
+                    t.layer = l.to_string();
+                }
+            }
+            for v in rt.vias.iter_mut().filter(|v| id_set.contains(v.id.as_str())) {
+                if let Some(spec) = via_size {
+                    match spec {
+                        ViaSizeSpec::NetClass => {
+                            v.diameter = model.board.via_diameter_of(&v.net);
+                            v.drill = model.board.via_drill_of(&v.net);
+                        }
+                        ViaSizeSpec::Value { diameter, drill } => {
+                            v.diameter = *diameter;
+                            v.drill = *drill;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `Cmd::EditTextAndGraphics` -- see that variant's own doc. Same
+    /// unknown-id/empty-input tolerance as `edit_tracks_and_vias`.
+    fn edit_text_and_graphics(&mut self, shape_ids: &[String], text_ids: &[String], layer: Option<&str>, line_width: Option<Um>, text_size: Option<Um>, text_thickness: Option<Um>) -> Result<(), Vec<CheckResult>> {
+        if shape_ids.is_empty() && text_ids.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_global_edit", "edit_text_and_graphics", "no items given")]);
+        }
+        // Not `known_layer` -- that validates against the board's *copper*
+        // layer list only, and silkscreen/fab/edge layers (where a shape
+        // or text normally lives) are deliberately not on it. Same "just
+        // non-empty" convention `edit_shape`/`edit_text` already use.
+        if matches!(layer, Some(l) if l.is_empty()) {
+            return Err(vec![CheckResult::fail("ops_bad_shape", "edit_text_and_graphics", "a layer, if given, cannot be empty")]);
+        }
+        if let Some(w) = line_width {
+            if w <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_shape", "edit_text_and_graphics", "line width must be positive")]);
+            }
+        }
+        if let Some(s) = text_size {
+            if s <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_text", "edit_text_and_graphics", "text size must be positive")]);
+            }
+        }
+        if let Some(t) = text_thickness {
+            if t <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_text", "edit_text_and_graphics", "text thickness must be positive")]);
+            }
+        }
+
+        let shape_set: BTreeSet<&str> = shape_ids.iter().map(String::as_str).collect();
+        let text_set: BTreeSet<&str> = text_ids.iter().map(String::as_str).collect();
+        if let Some(dr) = self.design.drawings.as_mut() {
+            for s in dr.shapes.iter_mut().filter(|s| shape_set.contains(s.id())) {
+                if let Some(l) = layer {
+                    s.set_layer(l.to_string());
+                }
+                if let Some(w) = line_width {
+                    s.set_stroke_width(w);
+                }
+            }
+            for t in dr.texts.iter_mut().filter(|t| text_set.contains(t.id.as_str())) {
+                if let Some(l) = layer {
+                    t.layer = l.to_string();
+                }
+                if let Some(s) = text_size {
+                    t.size_um = s;
+                }
+                if let Some(th) = text_thickness {
+                    t.stroke_width = th;
+                }
+            }
+        }
         Ok(())
     }
 

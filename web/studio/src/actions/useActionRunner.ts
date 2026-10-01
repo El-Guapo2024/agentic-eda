@@ -304,6 +304,11 @@ export function useActionRunner() {
     // LengthTuner above) -- source's own dialog opens unconditionally and
     // scans the whole board.
     m.set("pcbnew.GlobalEdit.cleanupTracksAndVias", pcbOnly(() => dispatch({ type: "SET_CLEANUP_TRACKS_DIALOG_OPEN", open: true })));
+    // `dialog_global_edit_tracks_and_vias.cpp` / `dialog_global_edit_text_
+    // and_graphics.cpp` (task item 2) -- see GlobalEditTracksAndViasDialog.tsx
+    // / GlobalEditTextAndGraphicsDialog.tsx for scope.
+    m.set("pcbnew.GlobalEdit.editTracksAndVias", pcbOnly(() => dispatch({ type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN", open: true })));
+    m.set("pcbnew.GlobalEdit.editTextAndGraphics", pcbOnly(() => dispatch({ type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN", open: true })));
     m.set(
       "pcbnew.InteractiveDrawing.via",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))

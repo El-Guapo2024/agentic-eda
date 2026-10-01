@@ -86,6 +86,10 @@ export type IslandRemovalMode = "Always" | "Never" | "Area";
 /** `ZONE_FILL_MODE`. */
 export type FillMode = "Polygons" | "HatchPattern";
 
+/** `crates/ops/src/lib.rs` `SizeSpec`/`ViaSizeSpec`, `#[serde(tag = "kind")]` -- `edit_tracks_and_vias`'s track-width/via-size fields: either resolve from the item's own net class (`BoardRules::width_of`/`via_diameter_of`/`via_drill_of`), or an explicit value. */
+export type SizeSpec = { kind: "net_class" } | { kind: "value"; um: Um };
+export type ViaSizeSpec = { kind: "net_class" } | { kind: "value"; diameter: Um; drill: Um };
+
 /**
  * `crates/model/src/ir.rs` `Zone`'s `ZONE_SETTINGS` fill-engine fields
  * (dialog_copper_zones.cpp's panel) -- everything but id/net/layer/
@@ -510,6 +514,16 @@ export type Cmd =
   | { op: "set_track_width_presets"; widths: Um[] }
   /** Same panel's via-size-cycle preset list. */
   | { op: "set_via_presets"; presets: ViaPreset[] }
+  /**
+   * `dialog_global_edit_tracks_and_vias.cpp`'s "Apply and Close": bulk-set
+   * width/via-size/layer on every named id in one atomic undo step. `ids`
+   * is already filtered (net/net-class/layer/width/"selected only" are
+   * this dialog's own client-side job -- see `GlobalEditTracksAndViasDialog.tsx`).
+   * `track_width`/`via_size` omitted (or `null`) leaves that property
+   * alone; this model has only one via "type" (no through/micro/blind/
+   * buried distinction, no padstack/annular-ring concept).
+   */
+  | { op: "edit_tracks_and_vias"; ids: string[]; track_width?: SizeSpec | null; via_size?: ViaSizeSpec | null; layer?: string | null }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**
@@ -530,6 +544,16 @@ export type Cmd =
   | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
   | { op: "delete_text"; id: string }
   | { op: "move_text"; id: string; x: Um; y: Um }
+  /**
+   * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
+   * scoped to this model's two free-standing board drawing kinds (no
+   * footprint reference/value fields, dimensions, tables or barcodes
+   * exist as editable board items here -- see PARITY-pcb.md). Every
+   * field omitted (or `null`) leaves that property alone; filtering
+   * (item type/layer/"selected only") is `GlobalEditTextAndGraphicsDialog.tsx`'s
+   * own client-side job.
+   */
+  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
   /** Cmd+D: copy existing tracks/vias/zones/shapes/texts named by id, in place, with fresh ids. Never footprints -- see crates/ops/src/lib.rs `Cmd::Duplicate`'s own doc comment. */
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */

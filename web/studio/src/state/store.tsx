@@ -554,6 +554,10 @@ export interface StudioState {
   lengthTuningDialogOpen: boolean;
   /** `pcbnew.GlobalEdit.cleanupTracksAndVias` -- components/CleanupTracksDialog.tsx. */
   cleanupTracksDialogOpen: boolean;
+  /** `pcbnew.GlobalEdit.editTracksAndVias` -- components/GlobalEditTracksAndViasDialog.tsx. */
+  editTracksAndViasDialogOpen: boolean;
+  /** `pcbnew.GlobalEdit.editTextAndGraphics` -- components/GlobalEditTextAndGraphicsDialog.tsx. */
+  editTextAndGraphicsDialogOpen: boolean;
   /**
    * `eda_pns::RoutingSettings`, the subset this app's router actually
    * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
@@ -654,6 +658,8 @@ const initialState: StudioState = {
   routerSettingsDialogOpen: false,
   lengthTuningDialogOpen: false,
   cleanupTracksDialogOpen: false,
+  editTracksAndViasDialogOpen: false,
+  editTextAndGraphicsDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
   routerSettings: { mode: "walkaround", removeLoops: true },
 };
@@ -743,7 +749,9 @@ export type Action =
   | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
   | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean }
-  | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean };
+  | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN"; open: boolean };
 
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
@@ -992,6 +1000,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, lengthTuningDialogOpen: action.open };
     case "SET_CLEANUP_TRACKS_DIALOG_OPEN":
       return { ...state, cleanupTracksDialogOpen: action.open };
+    case "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN":
+      return { ...state, editTracksAndViasDialogOpen: action.open };
+    case "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN":
+      return { ...state, editTextAndGraphicsDialogOpen: action.open };
     default:
       return state;
   }

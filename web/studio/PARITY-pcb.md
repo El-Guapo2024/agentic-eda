@@ -447,3 +447,30 @@ UI: `CleanupTracksDialog.tsx`, wired to the existing
 `pcbnew.GlobalEdit.cleanupTracksAndVias` action (already present in
 `menus.json`'s Edit menu from the original extraction, just unregistered
 until now).
+
+## 13. Global edits: Track/Via and Text/Graphics properties
+
+Port of `pcbnew/dialogs/dialog_global_edit_tracks_and_vias{,_base}.cpp`
+(`pcbnew.GlobalEdit.editTracksAndVias`) and `dialog_global_edit_text_
+and_graphics{,_base}.cpp` (`pcbnew.GlobalEdit.editTextAndGraphics`).
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Edit Track & Via Properties: scope (Tracks/Vias checkboxes, both unchecked by default, matching the base dialog's own ctor) | identical | `DIALOG_GLOBAL_EDIT_TRACKS_AND_VIAS_BASE`'s ctor |
+| "Set to specified values" (width/via diameter+drill/layer) vs "Set to net class / custom rule values" | identical in effect for width/via-size -- resolves each item's *own* net's class (`BoardRules::width_of`/`via_diameter_of`/`via_drill_of`, falling back to the board default), same per-item resolution `SetTrackSegmentWidth` uses | `processItem`'s `m_setToSpecifiedValues` branch |
+| Filter by net, "selected items only" | ported | `visitItem`'s `m_netFilterOpt`/`m_selectedItemsFilter` |
+| Filter by layer | ported for tracks; does not apply to vias (this model's `Via` has no single `GetLayer()` -- it spans `from_layer`/`to_layer`) | `visitItem`'s `m_layerFilterOpt` |
+| Filter by net class, by exact track width/via size; through/micro/blind/buried via type distinction; annular-ring (`UNCONNECTED_LAYER_MODE`) and IPC4761 protection-feature presets | not ported -- no net-class-membership-of-an-item/padstack/via-type concept in this model | `m_netclassFilterOpt`, `m_filterByTrackWidth`/`m_filterByViaSize`, `m_throughVias`/`m_microVias`/`m_blindVias`/`m_buriedVias`, `m_annularRingsCtrl`/`m_protectionFeatures` |
+| Edit Text & Graphics Properties: scope (board graphics/board text checkboxes), filter by layer + "selected items only" | ported, restricted to this model's two free-standing board drawing kinds (`Shape`/`Text`) | `DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS_BASE`'s ctor, `visitItem` |
+| Set layer / line width (shapes) / text size + thickness (texts), "specified values" only | ported | `processItem`'s `m_setToSpecifiedValues` branch |
+| Footprint reference/value/other-field scope, dimension items, tables, barcodes, bold/italic/font/auto-thickness/keep-upright, "center text on footprint", "Set to layer (and dimension) default values" | not ported -- a footprint's reference/value are the read-only intent-derived `Part` (section 10), and this model has no dimension/table/barcode item, no font/style concept on `Text`, and no per-layer-class default-style arrays (`BOARD_DESIGN_SETTINGS::m_LineThickness`/`m_TextSize`/...) to reset to | `processItem`'s `text`/`barcode`/`field`/`parentFP` branches, `onActionButtonChange`'s `else` arm |
+| One atomic undo step for the whole bulk edit | identical | `SaveCopyInUndoList`/`BOARD_COMMIT::Push()` once per dialog "Apply" -- `Cmd::EditTracksAndVias`/`Cmd::EditTextAndGraphics` are each a single `Cmd`, single `board::step` call |
+
+Rust: `crates/ops/src/lib.rs`'s `Cmd::EditTracksAndVias` (+ `SizeSpec`/
+`ViaSizeSpec`) and `Cmd::EditTextAndGraphics`, 7 new tests in
+`crates/ops/src/tests.rs`. No new HTTP endpoint -- both reach the backend
+through the existing `POST /api/cmd`, since each is a single `Cmd` rather
+than a preview/apply pair. Net/layer/selection filtering is computed
+client-side (this crate has no selection/UI-filter concept of its own,
+same split section 12's cleanup dialog uses) in
+`GlobalEditTracksAndViasDialog.tsx`/`GlobalEditTextAndGraphicsDialog.tsx`.
