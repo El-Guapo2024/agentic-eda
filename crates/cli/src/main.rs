@@ -342,14 +342,13 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
     let t0 = Instant::now();
     let opts = EngineOptions { seed: cx.args.seed, intent_hash: cx.ihash.clone(), ..Default::default() };
     let design = derive_schematic(&cx.model, &opts)?;
-    // Two complementary authorities, folded into one report: `check_schematic`
-    // judges the *auto-layout*'s own readability/tidiness (grid, overlap,
-    // wire length, ...) -- a concern KiCad itself never has, since its own
-    // schematics are hand-drawn -- while `check_erc` is the ported KiCad
-    // ERC, judging electrical correctness exactly as `kicad-cli sch erc`
-    // would on the exported file. Neither supersedes the other.
-    let mut checks = check_schematic(&design, &cx.model);
-    checks.extend(check_erc(&design, &cx.model));
+    // One engine: `check_erc` is the ported KiCad ERC's electrical checks
+    // *and* this generator's own readability/tidiness checks (grid,
+    // overlap, wire length, ...) folded in as additional tests -- the same
+    // way KiCad's own ERC runs non-electrical checks (similar labels,
+    // off-grid pins) alongside electrical ones, rather than as a second
+    // tool a caller has to remember to also run.
+    let checks = check_erc(&design, &cx.model);
     cx.log.candidate(Stage::Schematic, 0, cx.args.seed, &design, Tier::Geometry, &checks, serde_json::Value::Null).ok();
     // Always persist the candidate: a failed one is what review reads.
     save_design(&cx.args.out, &design)?;
@@ -1072,7 +1071,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "check", "check needs --design")])?;
             let mut ok = true;
             if d.schematic.is_some() {
-                ok &= print_checks("schematic gates", &{ let mut c = check_schematic(&d, &cx.model); c.extend(check_erc(&d, &cx.model)); c });
+                ok &= print_checks("schematic gates", &check_erc(&d, &cx.model));
             }
             if d.placement.is_some() {
                 ok &= print_checks("placement gates", &{ let mut c = check_placement(&d, &cx.model); c.extend(eda::preflight(&d, &cx.model, &cx.model.board)); c });

@@ -283,13 +283,20 @@ fn resolve_pins(design: &Design, model: &ConstraintModel) -> Vec<ResolvedPin> {
     out
 }
 
-/// Runs every ERC check this module implements and returns their
-/// `CheckResult`s (one `Pass` per check that found nothing, `Fail`/`Warn`
-/// per violation) — the same shape `eda_gates::check_schematic` uses, so a
-/// caller can fold both into one report.
+/// Runs every ERC check this module implements — the pin-electrical checks
+/// below, *and* [`crate::erc_style::check_style`]'s readability/style
+/// checks (grid, orthogonality, label placement, sheet density, ...),
+/// ported in from the former `eda-gates::check_schematic` so this one
+/// function is the whole engine a schematic is judged by, the same way
+/// KiCad's own ERC runs its non-electrical checks (similar labels,
+/// off-grid pins) alongside the electrical ones rather than as a separate
+/// tool. Returns one `CheckResult` per finding, plus a `Pass` for any
+/// check that found nothing.
 pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     let Some(sch) = &design.schematic else {
-        return vec![CheckResult::fail("lib_symbol_issues", "design", "design has no schematic section")];
+        let mut out = vec![CheckResult::fail("lib_symbol_issues", "design", "design has no schematic section")];
+        out.extend(crate::erc_style::check_style(design, model));
+        return out;
     };
     let pins = resolve_pins(design, model);
     let pins_by_ref: BTreeMap<String, &ResolvedPin> = pins.iter().map(|p| (p.pin_ref(), p)).collect();
@@ -301,6 +308,48 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     check_no_connects(sch, &pins, &mut out);
     check_dangling_wires_and_labels(model, sch, &pins, &mut out);
     check_duplicate_references(sch, &mut out);
+    out.extend(crate::erc_style::check_style(design, model));
+    out
+}
+
+/// One waived finding: a specific check at a specific location, reviewed
+/// and accepted the way KiCad's own ERC/DRC lets a human "Exclude" a
+/// violation without deleting it from the report. Matched on the exact
+/// `(check, location)` pair a [`CheckResult`] itself carries.
+#[derive(Debug, Clone, Default)]
+pub struct Exclusions(std::collections::BTreeSet<(String, String)>);
+
+impl Exclusions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Mark every future finding at this exact `(check, location)` as
+    /// excluded rather than failing or warning.
+    pub fn exclude(&mut self, check: impl Into<String>, location: impl Into<String>) -> &mut Self {
+        self.0.insert((check.into(), location.into()));
+        self
+    }
+    fn covers(&self, check: &str, location: Option<&str>) -> bool {
+        location.is_some_and(|loc| self.0.contains(&(check.to_string(), loc.to_string())))
+    }
+}
+
+/// [`check_erc`], with `exclusions` applied afterward: any non-`Pass`
+/// result whose `(check, location)` is in `exclusions` is downgraded to
+/// [`CheckStatus::Excluded`] in place, exactly KiCad's own "Exclude"
+/// action on an ERC/DRC violation -- still visible in the report (hint and
+/// location untouched), but no longer a failure or a warning. Applying
+/// this as one pass over the finished report, rather than threading
+/// `exclusions` through all thirty-odd individual checks, is exactly
+/// equivalent: an exclusion only ever suppresses a finding a check already
+/// made, it can never change what a check finds.
+pub fn check_erc_excluding(design: &Design, model: &ConstraintModel, exclusions: &Exclusions) -> Vec<CheckResult> {
+    let mut out = check_erc(design, model);
+    for r in &mut out {
+        if r.status != CheckStatus::Pass && exclusions.covers(&r.check, r.location.as_deref()) {
+            r.status = CheckStatus::Excluded;
+        }
+    }
     out
 }
 
@@ -721,5 +770,39 @@ mod tests {
         let design = derive_schematic(&model, &EngineOptions::new(1, "h")).unwrap();
         let results = check_erc(&design, &model);
         assert!(results.iter().any(|r| r.check == "pin_not_connected" && r.status == CheckStatus::Fail));
+    }
+
+    #[test]
+    fn check_erc_folds_in_the_style_checks_too() {
+        // One engine: a style/readability finding (ported from the former
+        // `eda-gates::check_schematic`) must show up from the same
+        // `check_erc` call as an electrical one, not a second tool a
+        // caller has to remember to also run.
+        let u1 = part("U1", vec![pin("1", "SIG", PinKind::Signal)]);
+        let model = ConstraintModel { parts: vec![u1], nets: vec![], ..Default::default() };
+        let design = derive_schematic(&model, &EngineOptions::new(1, "h")).unwrap();
+        let results = check_erc(&design, &model);
+        assert!(results.iter().any(|r| r.check == "schematic_offgrid"), "{results:#?}");
+    }
+
+    #[test]
+    fn an_excluded_finding_is_reported_but_no_longer_fails() {
+        let u1 = part("U1", vec![pin("1", "SIG", PinKind::Signal)]);
+        let model = ConstraintModel { parts: vec![u1], nets: vec![], ..Default::default() };
+        let design = derive_schematic(&model, &EngineOptions::new(1, "h")).unwrap();
+
+        let plain = check_erc(&design, &model);
+        let needy = plain.iter().find(|r| r.check == "pin_not_connected" && r.status == CheckStatus::Fail).expect("U1.1 is genuinely unconnected");
+        let location = needy.location.clone().unwrap();
+
+        let mut exclusions = Exclusions::new();
+        exclusions.exclude("pin_not_connected", location.clone());
+        let excluded = check_erc_excluding(&design, &model, &exclusions);
+        let found = excluded.iter().find(|r| r.check == "pin_not_connected" && r.location.as_deref() == Some(location.as_str())).expect("the finding is still reported");
+        assert_eq!(found.status, CheckStatus::Excluded);
+        assert!(!excluded.iter().any(|r| r.status == CheckStatus::Fail), "an excluded finding must not still fail the run: {excluded:#?}");
+        // An unrelated genuine failure elsewhere is untouched by an
+        // exclusion that does not name it.
+        assert_eq!(plain.iter().filter(|r| r.status == CheckStatus::Fail).count() - 1, excluded.iter().filter(|r| r.status == CheckStatus::Fail).count());
     }
 }

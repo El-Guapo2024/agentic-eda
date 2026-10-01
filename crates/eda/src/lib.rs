@@ -4,20 +4,19 @@
 //! let model  = eda::import_zen(path)?;
 //! let issues = eda::lint(&model);
 //! let design = eda::derive_schematic(&model, &opts)?;
-//! let checks = eda::check_schematic(&design, &model);
+//! let checks = eda::check_erc(&design, &model);
 //! let svg    = eda::render_schematic(&design, &model)?;
 //! let placed = eda::place(&design, &model, &PlaceOptions::default())?;
 //! let routed = eda::route(&placed, &model, &model.board, seed)?;
 //! ```
 
 pub use eda_engine::{derive_schematic, EngineOptions};
-pub use eda_gates::check_schematic;
 pub use eda_intent::{import_zen, import_zen_cli};
 pub use eda_intent::lint::lint;
 pub use eda_render::render_schematic;
 pub use eda_kicad::{export_kicad_pcb, export_kicad_pro, export_kicad_sch, import_kicad_pcb, import_kicad_sch, ExportMeta, ImportNotes};
 pub use eda_kicad::{default_footprint_library_root, resolve_library_footprints};
-pub use eda_kicad::{check_erc, default_symbol_library_root, resolve_library_symbols};
+pub use eda_kicad::{check_erc, check_erc_excluding, default_symbol_library_root, resolve_library_symbols, Exclusions};
 pub use eda_interchange::{from_bookshelf_pl, to_bookshelf, to_circuit_json, Bookshelf};
 pub use eda_grid::{check_pours, preflight, RouteRules};
 pub use eda_place::{hpwl, place, Anneal, PlaceOptions, Placer};
@@ -35,7 +34,7 @@ pub mod model {
 pub mod prelude {
     pub use eda_model::ir::{Design, Stage};
     pub use eda_model::{CheckResult, CheckStatus, ConstraintModel};
-    pub use super::{check_schematic, derive_schematic, import_zen, import_zen_cli, lint, render_schematic, EngineOptions};
+    pub use super::{derive_schematic, import_zen, import_zen_cli, lint, render_schematic, EngineOptions};
     pub use super::{check_erc, export_kicad_pcb, export_kicad_sch, route, to_circuit_json, RouteRules};
     pub use super::{check_placement, check_routing, hpwl, place, PlaceOptions};
     pub use super::{EscalationPolicy, Event, RunLog, Tier};

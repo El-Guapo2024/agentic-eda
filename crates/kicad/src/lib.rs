@@ -33,8 +33,10 @@ pub use footprint_lib::{default_footprint_library_root, find_footprint_file, par
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, find_symbol_library_file, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
+mod erc_style;
+
 mod erc;
-pub use erc::check_erc;
+pub use erc::{check_erc, check_erc_excluding, Exclusions};
 
 mod sch_import;
 pub use sch_import::import_kicad_sch;
