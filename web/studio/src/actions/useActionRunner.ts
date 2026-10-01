@@ -560,6 +560,26 @@ export function useActionRunner() {
 
     m.set("eeschema.InspectionTool.runERC", () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: true }));
 
+    // `W`: arm/disarm the wire tool -- SchematicView.tsx's own
+    // onPointerDown/onDoubleClick own the actual click-to-add-point/
+    // finish state machine (same split PCB's route/zone/shape tools use:
+    // this registry only ever flips `state.activeTool`).
+    m.set(
+      "eeschema.InteractiveDrawingLineWireBus.drawWires",
+      schematicOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "wire" ? "select" : "wire" }))
+    );
+    // Backspace mid-draw: pop the in-progress wire's last point (never a
+    // committed-command undo -- see `Cmd::DeleteWire`'s own doc on why
+    // this never reaches the backend at all).
+    m.set(
+      "eeschema.InteractiveDrawingLineWireBus.undoLastSegment",
+      schematicOnly(() => {
+        const draw = state.drawState;
+        if (draw?.kind !== "wire") return;
+        dispatch({ type: "SET_DRAW_STATE", draw: draw.pts.length <= 1 ? null : { ...draw, pts: draw.pts.slice(0, -1) } });
+      })
+    );
+
     return m;
   }, [api, dispatch, state]);
 

@@ -19,6 +19,7 @@ import type { Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { boundsOfPoints, fitTransform, zoomAbout } from "./canvas/view";
 import { paintSchematic, symbolBounds } from "./schematic/painter";
+import { resolveLibSymbol } from "./schematic/libSymbol";
 import { GRID } from "./schematic/layout";
 import { layerColor } from "./canvas/layers";
 import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, PAGE_WIDTH_UM, PAGE_HEIGHT_UM } from "./schematic/drawingSheet";
@@ -83,6 +84,37 @@ function hitWire(sch: Schematic, xUm: number, yUm: number, thresholdUm: number):
     }
   }
   return best?.id ?? null;
+}
+
+/**
+ * Every pin's resolved world-space tip, for the wire tool's "snap to a
+ * pin when close" (sch_line_wire_bus_tool.cpp's own grid.BestSnapAnchor
+ * on the GRID_CONNECTABLE grid, simplified here to a flat radius check,
+ * same scope reduction as `SchematicView.tsx`'s header comment notes for
+ * the move tool's own grid-only snap). Only symbols with real resolved
+ * `lib_symbols` graphics contribute a pin -- a symbol still drawn as the
+ * generic box (no `lib_id` resolved) has no world-space pin geometry
+ * computed on this side yet (`layout.ts`'s box layout is local-space
+ * only); a wire can still be drawn to one, it just won't snap-assist.
+ * See PARITY-sch.md.
+ */
+function pinSnapPoints(sch: Schematic): Array<[number, number]> {
+  const pts: Array<[number, number]> = [];
+  for (const s of sch.symbols) {
+    const real = resolveLibSymbol(s, sch.lib_symbols);
+    if (real) for (const p of real.pins) pts.push(p.tip);
+  }
+  for (const ps of sch.power_symbols) pts.push(ps.at);
+  return pts;
+}
+
+function nearestSnapPoint(pts: Array<[number, number]>, xUm: number, yUm: number, thresholdUm: number): [number, number] | null {
+  let best: { p: [number, number]; d: number } | null = null;
+  for (const p of pts) {
+    const d = Math.hypot(p[0] - xUm, p[1] - yUm);
+    if (d <= thresholdUm && (!best || d < best.d)) best = { p, d };
+  }
+  return best?.p ?? null;
 }
 
 function hitWireNet(sch: Schematic, xUm: number, yUm: number, thresholdUm: number): string | null {
@@ -199,6 +231,14 @@ export function SchematicView() {
       sheetPath: "/",
     });
     paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight });
+    if (state.drawState?.kind === "wire") {
+      const pts = state.cursorUm ? [...state.drawState.pts, [state.cursorUm.x, state.cursorUm.y] as [number, number]] : state.drawState.pts;
+      ctx.strokeStyle = layerColor("LAYER_WIRE");
+      ctx.lineWidth = Math.max(150, (1 / state.schematicView.scale) * 1.5);
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.stroke();
+    }
     if (marquee) {
       const x0 = (marquee.x0 - state.schematicView.x) / state.schematicView.scale;
       const y0 = (marquee.y0 - state.schematicView.y) / state.schematicView.scale;
@@ -212,7 +252,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee]);
+  }, [sch, displaySch, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -253,6 +293,29 @@ export function SchematicView() {
         }
         if (e.button !== 0) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
+
+        if (state.activeTool === "wire") {
+          const thresholdUm = 400 / state.schematicView.scale;
+          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, thresholdUm) ?? snapToGrid(wx, wy);
+          const draw = state.drawState;
+          if (draw?.kind !== "wire") {
+            dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [snapped] } });
+            return;
+          }
+          const next = { ...draw, pts: [...draw.pts, snapped] as [number, number][] };
+          // sch_screen.cpp IsTerminalPoint, simplified: landing back on a
+          // pin auto-finishes the wire, same as a real click on a pin/
+          // junction/other wire does in source -- this app only checks
+          // the pin case (see this file's header comment for the rest).
+          const onPin = pinSnapPoints(sch).some(([px, py]) => px === snapped[0] && py === snapped[1]);
+          if (onPin && next.pts.length >= 2) {
+            if (next.pts.length >= 2) api.cmd({ op: "add_wire", pts: next.pts.map(([x, y]) => ({ x, y })) });
+            dispatch({ type: "SET_DRAW_STATE", draw: null });
+          } else {
+            dispatch({ type: "SET_DRAW_STATE", draw: next });
+          }
+          return;
+        }
 
         // `M`-armed move: this click drops whatever is being dragged,
         // same two-step ("arm, then click to commit") flow
@@ -326,6 +389,12 @@ export function SchematicView() {
             y1 = e.clientY - rect.top;
           setMarquee({ x0, y0, x1, y1, crossing: isCrossingSelection(x0, x1) });
         }
+      }}
+      onDoubleClick={() => {
+        const draw = state.drawState;
+        if (draw?.kind !== "wire") return;
+        if (draw.pts.length >= 2) api.cmd({ op: "add_wire", pts: draw.pts.map(([x, y]) => ({ x, y })) });
+        dispatch({ type: "SET_DRAW_STATE", draw: null });
       }}
       onPointerUp={(e) => {
         const drag = dragRef.current;

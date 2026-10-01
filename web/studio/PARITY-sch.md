@@ -79,15 +79,14 @@ the intent YAML file.
 
 ## 2. Wires, junctions, no-connects (`sch_line_wire_bus_tool.cpp`)
 
-Backend verbs exist and are tested (`Cmd::AddWire`/`DeleteWire`,
-`AddNoConnect`/`DeleteNoConnect`); no frontend drawing tool yet.
-
 | Action | Status | KiCad file:function |
 |---|---|---|
-| `W`: draw wire, 90°-posture default, click to bend, auto-finish on a pin/wire/junction | missing (frontend tool not built) | `sch_line_wire_bus_tool.cpp::doDrawSegments`/`startSegments`/`finishSegments` |
+| `W`: draw wire, click to start/bend, snaps to a pin when close | partial — free-angle only, no 90°/45° auto-posture (every bend is wherever you click, not auto-right-angled); pin-snap only works for a symbol with real `lib_symbols` graphics resolved (see `pinSnapPoints`'s own doc for the generic-box-fallback gap) | `sch_line_wire_bus_tool.cpp::doDrawSegments`/`startSegments`/`finishSegments`; `SchematicView.tsx`'s wire-tool branch of `onPointerDown`, `Cmd::AddWire` |
 | Shift+Space: cycle Free/90°/45° posture | missing | `SCH_ACTIONS::lineModeNext` |
-| Backspace: undo last in-progress segment | missing | `SCH_ACTIONS::undoLastSegment` |
-| Escape discards the whole in-progress wire | missing | `doDrawSegments`'s `cleanup()` |
+| Double-click or Enter: finish the wire | partial — double-click wired (`onDoubleClick`); Enter is not (no generic "finish" hotkey action registered yet, unlike PCB's route/zone/shape tools, which also only wire double-click in practice) | `ACTIONS::finishInteractive` |
+| Landing back on a pin auto-finishes the wire | identical, pins only (not also wires/junctions/sheet-pins, per `sch_screen.cpp::IsTerminalPoint`'s fuller list) | `sch_screen.cpp::IsTerminalPoint` |
+| Backspace: undo last in-progress segment | identical | `SCH_ACTIONS::undoLastSegment`; `eeschema.InteractiveDrawingLineWireBus.undoLastSegment` |
+| Escape discards the whole in-progress wire | identical | `doDrawSegments`'s `cleanup()` (shared `ESCAPE` reducer case, already generic) |
 | Auto-junction at a T (3+ wire exit angles) | identical, **for connectivity** — the dot itself is drawn wherever 3+ wire endpoints/segments meet, computed live from geometry (`painter.ts::junctionPoints`, pre-existing); never a stored item, matching this project's own IR (no `junctions` field — see `Cmd::AddWire`'s own doc) | `junction_helpers.cpp::AnalyzePoint`; `reconcile`'s own T-junction union-find pass already gives correct electrical connectivity with or without a visible dot |
 | `J`: explicit junction at a plain crossing | missing (no stored concept to place one at — see above; connectivity is correct regardless, this is a cosmetic/explicit-marker gap only) | `SCH_DRAWING_TOOLS::SingleClickPlace` |
 | `Q`: no-connect flag, click to place/toggle | missing (frontend tool not built; backend verb ready) | same function, no-connect branch |
@@ -154,7 +153,18 @@ click through:
    move only; second undo is a no-op (check the status toast), and the
    PCB edit from step 1 is still there. Switch to the PCB tab and Ctrl+Z
    — *that* reverts the PCB edit. This is the gap #15 regression test.
-7. Open the ERC dialog (menu — Inspect/wherever `MenuBar.tsx` surfaces
+7. Press `W`, click near one pin (should snap exactly onto it), click
+   near another symbol's pin (should auto-finish the wire there);
+   confirm `GET /api/schematic` shows one wire whose `net`/`pins` name
+   both pins. Then switch to the PCB tab: since `ratsnest_json` and
+   `erc_json` both go through the same `board::load` that applies
+   `design.nets`, the two pins' footprints should now show a ratsnest
+   airwire between them if they weren't already connected — this is the
+   "PCB ratsnest follows schematic" hard rule, worth confirming with a
+   real board since it was only exercised by the Rust unit test, not
+   through the actual HTTP/ratsnest path, this session. Try Backspace
+   mid-draw (should remove the last bend) and Escape (discard the wire).
+8. Open the ERC dialog (menu — Inspect/wherever `MenuBar.tsx` surfaces
    `eeschema.InspectionTool.runERC`) on a board with known ERC issues;
    confirm the list is non-empty and matches roughly what `cargo run --
    board erc` / `kicad-cli sch erc` would report; click a row and confirm

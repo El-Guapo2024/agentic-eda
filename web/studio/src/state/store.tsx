@@ -33,7 +33,7 @@ export type EditorTab = "pcb" | "schematic" | "3d";
  * deeper (a whole TOOL_MANAGER with push/pop tool states); this is only
  * as much of that idea as this app's two real modes need.
  */
-export type ToolId = "select" | "move" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text";
+export type ToolId = "select" | "move" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "wire";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
@@ -46,6 +46,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   draw_circle: "Circle: click center, then a point on the edge",
   draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
   text: "Click to place text",
+  wire: "Wire: click to start/add a point (snaps to a pin when close), double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
 };
 
 /**
@@ -57,7 +58,12 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
  * "V drops a via" handling) rather than only at the end, so `pts` there
  * is just the CURRENT segment's points since the last via/start.
  */
-export type DrawState = { kind: "route"; net: string; layer: string; width: Um; pts: [Um, Um][] } | { kind: "zone"; pts: [Um, Um][] } | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] };
+export type DrawState =
+  | { kind: "route"; net: string; layer: string; width: Um; pts: [Um, Um][] }
+  | { kind: "zone"; pts: [Um, Um][] }
+  | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }
+  /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
+  | { kind: "wire"; pts: [Um, Um][] };
 
 export interface ViewTransform {
   /** Screen pixels per board µm. */
