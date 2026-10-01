@@ -314,6 +314,8 @@ export type Cmd =
   | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
   | { op: "delete_power_symbol"; id: string }
   | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string }
+  | { op: "edit_symbol_fields"; id: string; value?: string | null; footprint?: string | null; datasheet?: string | null }
+  | { op: "rename_symbol"; id: string; new_id: string }
   | { op: "annotate"; reset_existing: boolean };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */

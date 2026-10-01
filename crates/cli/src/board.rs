@@ -531,6 +531,13 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
         Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteSchText { id } => format!("schematic text delete {id}"),
+        Cmd::EditSymbolFields { id, value, footprint, datasheet } => format!(
+            "schematic edit-fields {id}{}{}{}",
+            value.as_ref().map(|v| format!(" --value {v:?}")).unwrap_or_default(),
+            footprint.as_ref().map(|f| format!(" --footprint {f:?}")).unwrap_or_default(),
+            datasheet.as_ref().map(|d| format!(" --datasheet {d:?}")).unwrap_or_default(),
+        ),
+        Cmd::RenameSymbol { id, new_id } => format!("schematic rename {id} {new_id}"),
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
@@ -599,6 +606,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
         Cmd::AddSymbol { .. } => "schematic-place",
+        Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
+        Cmd::RenameSymbol { .. } => "schematic-rename",
         Cmd::Annotate { .. } => "schematic-annotate",
     }
 }
@@ -1301,6 +1310,91 @@ mod tests {
         step(&dir, Cmd::DeleteSchText { id: text_id }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(design.schematic.as_ref().unwrap().texts.is_empty());
+    }
+
+    /// `U`: a rename must not silently strand a power-symbol/no-connect
+    /// that named the old reference -- every `"REF.PIN"` string anywhere
+    /// on the sheet has to follow it. (The wire case is covered
+    /// separately, below, with real connected geometry -- a power symbol
+    /// or no-connect placed at the exact position of a *wired* pin would
+    /// make reconcile's own, unrelated "a no-connect point never
+    /// contributes a pin" rule suppress it regardless of what this method
+    /// does, so this fixture deliberately uses its own unconnected point
+    /// for each, to isolate the rename cascade itself from reconcile's
+    /// separate geometric re-derivation.)
+    #[test]
+    fn rename_symbol_cascades_through_power_symbol_and_no_connect_pin_references() {
+        let dir = scratch("sch_rename_cascade");
+        setup_schematic(&dir);
+
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: Point { x: 50_000, y: 50_000 }, rot: 0, net: "GND".into(), pin: "R1.1".into() });
+            sch.no_connects.push(eda_model::ir::NoConnect { id: String::new(), at: Point { x: 60_000, y: 60_000 }, pin: "R1.1".into() });
+        }
+        save(&dir, &design).unwrap();
+
+        step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R9".into() }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R9").unwrap().id, "R9");
+        assert!(sch.symbols.iter().all(|s| s.id != "R1"), "the old reference must not linger as a second symbol");
+        assert_eq!(sch.power_symbols[0].pin, "R9.1");
+        assert_eq!(sch.no_connects[0].pin, "R9.1");
+    }
+
+    /// The wire half of the same rule, through real connected geometry
+    /// instead of a hand-set `pins` string: renaming a symbol one end of
+    /// an existing wire lands on must not break that connection.
+    #[test]
+    fn rename_symbol_keeps_a_connected_wire_connected() {
+        let dir = scratch("sch_rename_wire");
+        setup_schematic(&dir);
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }] }, false, "test").unwrap();
+
+        let (_, design, model) = load(&dir).unwrap();
+        let before_net = net_of(&model.nets, "R2.1").unwrap().name.clone();
+        assert_eq!(design.schematic.as_ref().unwrap().wires[0].pins.len(), 2, "sanity: the wire starts connected to both pins");
+
+        step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R9".into() }, false, "test").unwrap();
+
+        let (_, design, model) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert!(sch.wires[0].pins.contains(&"R9.1".to_string()), "reconcile re-derives the wire's own pins from geometry using the renamed id -- the connection must survive the rename, not just the string");
+        assert!(sch.wires[0].pins.contains(&"R2.1".to_string()));
+        assert_eq!(net_of(&model.nets, "R9.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "still the same merged net");
+        assert_eq!(net_of(&model.nets, "R2.1").unwrap().name, before_net, "renaming one end must not even need to rename the net itself");
+    }
+
+    #[test]
+    fn rename_symbol_refuses_a_duplicate_id_and_an_unknown_source() {
+        let dir = scratch("sch_rename_refuse");
+        setup_schematic(&dir);
+        assert!(step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R2".into() }, false, "test").is_err(), "R2 already names another symbol on the sheet");
+        assert!(step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "".into() }, false, "test").is_err(), "a blank reference is refused");
+        assert!(step(&dir, Cmd::RenameSymbol { id: "R404".into(), new_id: "R9".into() }, false, "test").is_err(), "no symbol named R404 exists");
+        // Renaming to its own current id is a harmless no-op, not an error.
+        step(&dir, Cmd::RenameSymbol { id: "R1".into(), new_id: "R1".into() }, false, "test").unwrap();
+    }
+
+    /// `E`/`V`/`F`: each field is independently settable -- editing just
+    /// the footprint must not reset a value set by an earlier, separate
+    /// edit back to blank.
+    #[test]
+    fn edit_symbol_fields_updates_only_the_fields_given() {
+        let dir = scratch("sch_edit_fields");
+        setup_schematic(&dir);
+
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k".into()), footprint: None, datasheet: None }, false, "test").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: None, footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let r1 = design.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R1").unwrap();
+        assert_eq!(r1.value, "10k", "the second edit (footprint only) must not have reset the first edit's value");
+        assert_eq!(r1.footprint, "Resistor_SMD:R_0603");
+        assert_eq!(r1.datasheet, "", "never touched, stays at its default");
     }
 
     /// GAPS.md #15: "pressing Ctrl+Z while viewing the Schematic tab

@@ -192,6 +192,8 @@ export interface StudioState {
   schTextPending: { at: [Um, Um] } | null;
   /** `A`: SymbolChooserDialog's own open/closed flag. */
   symbolChooserOpen: boolean;
+  /** `E`/`U`/`V`/`F` on a selected symbol: SymbolPropertiesDialog's own open/closed+focus state -- `field` picks which input autofocuses (`E` opens the same dialog with nothing singled out). */
+  symbolProperties: { id: string; field: "reference" | "value" | "footprint" | "datasheet" | null } | null;
   /** `A`: the symbol SymbolChooserDialog confirmed, waiting for a canvas click to place it (`sch_place_symbol` tool) -- `referencePrefix` seeds `nextReference`'s own next-free-number placement (this app's own choice: a real id immediately, not a "U?" placeholder -- see `Cmd::AddSymbol`'s doc and PARITY-sch.md). */
   armedSymbol: { libId: string; referencePrefix: string } | null;
   /** `createNewLabel`'s own "last text used" (`m_lastTextOrientation`-style session memory, see `incrementLabelText`) -- seeds the next LabelDialog with an auto-incremented suggestion instead of starting blank every time, so placing a same-shaped bus of labels (DATA0, DATA1, DATA2...) doesn't mean re-typing the whole name each click. */
@@ -343,6 +345,7 @@ const initialState: StudioState = {
   schTextPending: null,
   symbolChooserOpen: false,
   armedSymbol: null,
+  symbolProperties: null,
   lastLabelText: "",
   lastPowerLibId: "power:GND",
   view: { scale: 0, x: 0, y: 0 },
@@ -457,6 +460,7 @@ export type Action =
   | { type: "SET_LAST_POWER_LIB_ID"; libId: string }
   | { type: "SET_SYMBOL_CHOOSER_OPEN"; open: boolean }
   | { type: "SET_ARMED_SYMBOL"; symbol: StudioState["armedSymbol"] }
+  | { type: "SET_SYMBOL_PROPERTIES"; value: StudioState["symbolProperties"] }
   | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
   | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean };
 
@@ -517,6 +521,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         schPowerPending: null,
         schTextPending: null,
         armedSymbol: null,
+        symbolProperties: null,
       };
     case "ESCAPE": {
       // pcb_selection_tool.cpp's IsCancel() handler, tiered exactly like
@@ -530,7 +535,20 @@ function reducer(state: StudioState, action: Action): StudioState {
       // the move and leaves the pre-move selection exactly as it was.
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.movePreview != null;
       if (inProgress) {
-        return { ...state, armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null, schLabelPending: null, schPowerPending: null, schTextPending: null, armedSymbol: null };
+        return {
+          ...state,
+          armed: null,
+          movePreview: null,
+          activeTool: "select",
+          drawState: null,
+          zonePending: null,
+          textDialog: null,
+          schLabelPending: null,
+          schPowerPending: null,
+          schTextPending: null,
+          armedSymbol: null,
+          symbolProperties: null,
+        };
       }
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
@@ -650,6 +668,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, symbolChooserOpen: action.open };
     case "SET_ARMED_SYMBOL":
       return { ...state, armedSymbol: action.symbol };
+    case "SET_SYMBOL_PROPERTIES":
+      return { ...state, symbolProperties: action.value };
     case "SET_CLIPBOARD":
       return { ...state, clipboard: action.clipboard };
     case "SET_MOVE_EXACT_DIALOG_OPEN":

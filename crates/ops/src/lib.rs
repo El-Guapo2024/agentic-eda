@@ -358,6 +358,34 @@ pub enum Cmd {
     /// `eda board new` never heard of.
     AddSymbol { id: String, lib_id: String, at: Point, rot_millideg: Millideg, value: String, footprint: String },
 
+    /// `E` (Properties -- Value/Footprint/Datasheet only; see below for
+    /// `U`'s own reference rename) and `V`/`F` (`sch_edit_tool.cpp::
+    /// EditField`'s quick single-field edits): any of `value`/
+    /// `footprint`/`datasheet` left `None` is unchanged, so a single
+    /// quick-edit doesn't have to resend the other two just to leave them
+    /// alone. Deliberately does *not* touch `ConstraintModel::Part` (not
+    /// persisted across requests anyway, see `board::load`) -- same
+    /// "the schematic instance's own copy wins when set" precedent
+    /// `SymbolInstance::value`'s own doc already established, so the
+    /// Schematic tab reflects the edit immediately regardless.
+    EditSymbolFields { id: String, value: Option<String>, footprint: Option<String>, datasheet: Option<String> },
+
+    /// `U` (`editReference`): rename a symbol's own reference designator,
+    /// cascading the change through every `"REF.PIN"` string this sheet's
+    /// wires/power-symbols/no-connects hold (so a wire that named
+    /// `"R1.2"` still resolves after `R1` becomes `R5`). Refused if
+    /// `new_id` is blank or already names another symbol on this sheet.
+    /// Deliberately does *not* retarget `design.placement`'s own
+    /// `FootprintInstance` (the PCB side has no rename concept at all) or
+    /// touch intent.yaml (read-only to every verb in this file) -- the
+    /// next `reconcile_schematic` pass simply synthesizes a fresh `Part`
+    /// for the new id, same mechanism `AddSymbol`'s own doc describes,
+    /// while the old reference's PCB footprint (if any) is left exactly
+    /// where it was, now with no matching schematic symbol. A real
+    /// "rename and keep the PCB placement" is future work -- see
+    /// PARITY-sch.md.
+    RenameSymbol { id: String, new_id: String },
+
     /// `Ctrl+A` (Annotate): assign reference designators to every
     /// not-yet-annotated symbol (an `id` this project synthesizes as
     /// `"U?1"`/`"U?2"`/... when `AddSymbol` is given a blank prefix+number
@@ -403,6 +431,8 @@ impl Cmd {
             | Cmd::AddPowerSymbol { .. }
             | Cmd::DeletePowerSymbol { .. }
             | Cmd::AddSymbol { .. }
+            | Cmd::EditSymbolFields { .. }
+            | Cmd::RenameSymbol { .. }
             | Cmd::Annotate { .. } => Domain::Schematic,
             _ => Domain::Pcb,
         }
@@ -440,7 +470,14 @@ impl Cmd {
             Cmd::PasteItems { .. } => vec!["paste"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
 
-            Cmd::MoveSymbol { id, .. } | Cmd::DragSymbol { id, .. } | Cmd::RotateSymbol { id, .. } | Cmd::MirrorSymbol { id } | Cmd::DeleteSymbol { id } | Cmd::AddSymbol { id, .. } => vec![id],
+            Cmd::MoveSymbol { id, .. }
+            | Cmd::DragSymbol { id, .. }
+            | Cmd::RotateSymbol { id, .. }
+            | Cmd::MirrorSymbol { id }
+            | Cmd::DeleteSymbol { id }
+            | Cmd::AddSymbol { id, .. }
+            | Cmd::EditSymbolFields { id, .. }
+            | Cmd::RenameSymbol { id, .. } => vec![id],
             Cmd::AddWire { .. } => vec!["wire"],
             Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } | Cmd::DeleteSchText { id } => vec![id],
             Cmd::AddNoConnect { .. } => vec!["no_connect"],
@@ -730,6 +767,8 @@ impl<'a> Board<'a> {
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint),
+            Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
+            Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::Annotate { reset_existing } => self.annotate(*reset_existing),
         }
     }
@@ -1652,6 +1691,59 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, "a symbol with this reference is already on the sheet")]);
         }
         sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, lib_id: lib_id.into(), unit: 1, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
+        Ok(())
+    }
+
+    /// `E`/`V`/`F`: see `Cmd::EditSymbolFields`'s own doc.
+    fn edit_symbol_fields(&mut self, id: &str, value: Option<&str>, footprint: Option<&str>, datasheet: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        self.find_symbol(id)?;
+        let sch = self.schematic_mut()?;
+        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        if let Some(v) = value {
+            s.value = v.to_string();
+        }
+        if let Some(f) = footprint {
+            s.footprint = f.to_string();
+        }
+        if let Some(d) = datasheet {
+            s.datasheet = d.to_string();
+        }
+        Ok(())
+    }
+
+    /// `U`: see `Cmd::RenameSymbol`'s own doc.
+    fn rename_symbol(&mut self, id: &str, new_id: &str) -> Result<(), Vec<CheckResult>> {
+        if new_id.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a symbol needs a reference designator")]);
+        }
+        self.find_symbol(id)?;
+        if new_id != id && self.schematic()?.symbols.iter().any(|s| s.id == new_id) {
+            return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on the sheet")]);
+        }
+        if new_id == id {
+            return Ok(()); // renaming to the same id is a no-op, not an error
+        }
+        let sch = self.schematic_mut()?;
+        let old_prefix = format!("{id}.");
+        let new_prefix = format!("{new_id}.");
+        for w in &mut sch.wires {
+            for p in &mut w.pins {
+                if let Some(rest) = p.strip_prefix(&old_prefix) {
+                    *p = format!("{new_prefix}{rest}");
+                }
+            }
+        }
+        for ps in &mut sch.power_symbols {
+            if let Some(rest) = ps.pin.strip_prefix(&old_prefix) {
+                ps.pin = format!("{new_prefix}{rest}");
+            }
+        }
+        for nc in &mut sch.no_connects {
+            if let Some(rest) = nc.pin.strip_prefix(&old_prefix) {
+                nc.pin = format!("{new_prefix}{rest}");
+            }
+        }
+        sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above").id = new_id.to_string();
         Ok(())
     }
 

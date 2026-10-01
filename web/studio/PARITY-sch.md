@@ -23,9 +23,34 @@ label/no-connect/power-symbol/text placement, plus a new minimal
 `SchematicText` IR for `T`), and `A`'s symbol chooser (section 3 --
 `SymbolChooserDialog.tsx`, a new `GET /api/symbol_library` endpoint, and
 a new `LibSymbol::reference_prefix` field so a placed symbol gets a real
-reference immediately instead of a "U?" placeholder). Still not wired:
-`J` junction, Properties, and Annotate's dialog — see the bottom of each
-section.
+reference immediately instead of a "U?" placeholder), and `E`/`U`/`V`/`F`
+(section 1 -- `SymbolPropertiesDialog.tsx`, new `Cmd::RenameSymbol`/
+`EditSymbolFields`). Still not wired: `J` junction and Annotate's dialog
+— see the bottom of each section.
+
+**Found and fixed while wiring `E`/`U`/`V`/`F`'s hotkeys**: several
+physical keys are double-booked by one `pcbnew.*` and one `eeschema.*`
+action sharing the exact same extracted hotkey (R, M, G, X, E, U, V, F
+all collide this way in the real table) -- `useGlobalHotkeys.ts`'s own
+`hotkeyIndex.get(combo)?.find(isEnabled)` picked whichever name came
+first in `actions.json`'s own order, regardless of which tab was
+actually open, because `isEnabled` only ever checked "is a handler
+registered at all" (always true for both, since every `pcbOnly`/
+`schematicOnly` wrapper registers unconditionally and only its function
+*body* checks the tab). Concretely: `pcbnew.InteractiveEdit.rotateCcw`
+(R) and `pcbnew.InteractiveMove.move` (M) were **already silently dead
+on the PCB tab** before this session touched anything, shadowed by the
+previous session's own `eeschema.InteractiveEdit.rotateCCW`/
+`InteractiveMove.move` entries -- and this session's own new `E`/`V`/`F`
+registrations would have freshly broken `pcbnew.InteractiveEdit.
+properties`, `pcbnew.Control.layerToggle` and `pcbnew.InteractiveEdit.
+flip` (all three already implemented) the same way. Fixed at the root:
+`isEnabled` (`kicad-port/actionTabGate.ts::isActionEnabledForTab`, unit
+tested) now also gates on the action name's own module prefix, so the
+tab-irrelevant half of a colliding pair is correctly skipped. **Needs a
+real click-through to confirm** (see the list at the bottom) -- this was
+found by reading the dispatch code while researching where to add new
+bindings, not by exercising it in a browser.
 
 ## 0. Architecture: the "one netlist" rule
 
@@ -91,8 +116,10 @@ the intent YAML file.
 | Mirror during an active move | missing | `sch_edit_tool.cpp::Mirror`'s own `IsMoving()` branch (asymmetric from Rotate's in source itself — no `updateStoredPositions()` call) |
 | `Del`: delete symbol, wires left dangling (no cascade) | identical | `sch_edit_tool.cpp::DoDelete` (confirmed: wires are never auto-deleted); `Cmd::DeleteSymbol`, `common.Interactive.delete`'s schematic branch |
 | `Del`: delete wire | identical (wire must already be selected via a modified click — see the box-select gap above) | `Cmd::DeleteWire` |
-| `E` Properties | missing | `sch_edit_tool.cpp::Properties` — dispatches to one of 6 different dialogs by item type; none built this session |
-| `U`/`V`/`F`: quick-edit Reference/Value/Footprint | missing | `sch_edit_tool.cpp::EditField`/`sch_actions.cpp` (confirmed `U` = reference, not "unit" — a wrong guess here would have mis-bound a hotkey) |
+| `E` Properties | partial — `SymbolPropertiesDialog.tsx`: Reference/Value/Footprint/Datasheet, the fields this IR actually has (no unit/DeMorgan/pin-table editing source's full `DIALOG_SYMBOL_PROPERTIES` also offers) | `sch_edit_tool.cpp::Properties` — dispatches to one of 6 different dialogs by item type; this app only has symbols selectable, so always this one shape |
+| `U`/`V`/`F`: quick-edit Reference/Value/Footprint | partial — same dialog as `E`, just autofocused on the one field (source uses a separate, smaller single-field `DIALOG_FIELD_PROPERTIES` for these three; one shared component here, deliberately, since both ends run the same two Cmds either way) | `sch_edit_tool.cpp::EditField`/`sch_actions.cpp` (confirmed `U` = reference, not "unit" — a wrong guess here would have mis-bound a hotkey) |
+| `U`'s own rename: cascades every `"REF.PIN"` string this sheet's wires/power-symbols/no-connects hold | partial — refuses a blank or already-used new id; a wire/power-symbol/no-connect whose pin happens to sit exactly on a real resolvable pin gets its reference re-derived for free by the next `reconcile_schematic` pass (same geometric mechanism that already runs after every schematic `Cmd`, confirmed by a dedicated test with real connected wire geometry) -- the explicit string-cascade in `rename_symbol` only matters for the degenerate case where a power-symbol/no-connect's own position doesn't resolve to a real pin at all, a safety net, not the primary mechanism. Deliberately does **not** retarget `design.placement`'s `FootprintInstance` (no rename concept on the PCB side at all) or intent.yaml (read-only to every verb in this file) -- the old reference's PCB footprint, if any, is left exactly where it was, now matching no schematic symbol; the next reconcile pass synthesizes a fresh, unplaced `Part` for the new reference, the same mechanism `AddSymbol` already uses for a part with no intent counterpart. A real "rename and keep the PCB placement" is future work | new `Cmd::RenameSymbol`, `crates/ops` |
+| `E`'s Value/Footprint/Datasheet edits | identical for the Schematic tab's own display (the instance's own copy always wins when set, same precedent `SymbolInstance::value`'s doc already established); does not update `ConstraintModel::Part` (not persisted across requests anyway) | new `Cmd::EditSymbolFields`, `crates/ops` |
 | A plain click-and-drag directly on a symbol (no `M`/`G` needed first) | identical in spirit -- defaults to Drag's rubber-banding, matching source's own default for a plain drag (`sch_selection_tool.cpp Main()`'s `IsDrag(BUT_LEFT)` handler: `SCH_ACTIONS::drag` unless the `drag_is_move` preference is set, which this app has no settings UI for); a click on a member of a larger selection keeps the whole group, same `RequestSelection`/`selectionContains` reasoning | `sch_selection_tool.cpp` Main() (`SchematicView.tsx`'s new `DragState` "move" kind, ported from Canvas.tsx's identical PCB-side gesture) |
 | Click-vs-drag threshold (8px/300ms) | partial -- same approximation the PCB side already shipped (Canvas.tsx): "moved" is true once the *snapped* position first changes, not a literal pixel/time timer, so a release before the grid (or a nearby pin) actually moves is still a plain click. Good enough that a modifier-click is unaffected (that path never arms a drag at all) | `common/tool/tool_dispatcher.cpp` (`DragDistanceThreshold`/`DragTimeThreshold`) -- same documented simplification as PARITY-pcb.md's own row for this |
 
@@ -272,3 +299,25 @@ click through:
     real installed library (if one is configured) and confirm the
     chooser's list for that library name shows every symbol the real
     `.kicad_sym` file defines, not just the one part already used.
+16. **The hotkey-dispatch fix, highest priority to confirm**: on the PCB
+    tab, select a footprint and press `R` -- it must still rotate (this
+    was the already-broken-on-main case the fix targeted). Press `M`,
+    move it, click to drop -- must still work. Press `E` -- the PCB
+    FootprintPropertiesDialog must still open (not silently do nothing).
+    Select a track and press `V` (layer toggle) and `F` (flip a
+    footprint) -- both must still fire. Then switch to the Schematic tab
+    and confirm `R`/`M`/`E`/`V`/`F` all do the *schematic* thing instead
+    (rotate/move a symbol, open Symbol Properties, edit value, edit
+    footprint) -- not a silent no-op, and not the PCB action leaking
+    through.
+17. Select a symbol, press `E` -- Symbol Properties should open with
+    Reference/Value/Footprint/Datasheet pre-filled from the real symbol.
+    Change Value and Footprint, OK -- confirm `GET /api/schematic` shows
+    both updated and nothing else changed. Reopen, change Reference to
+    an id already used by another symbol -- confirm it's refused with a
+    message, dialog stays open. Change it to a fresh id instead -- confirm
+    the symbol renames and (if it had a wire/power-symbol/no-connect
+    attached) the connection survives the rename. Press `U`/`V`/`F`
+    directly (no `E` first) on a selected symbol -- confirm the same
+    dialog opens with the right field pre-selected/highlighted for
+    immediate typing.

@@ -15,6 +15,7 @@
 
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
+import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { commitRoute, dropViaAndSwitchLayer } from "../components/canvas/routing";
 import { openPropertiesFor } from "../components/canvas/properties";
@@ -574,6 +575,21 @@ export function useActionRunner() {
       })
     );
 
+    // `E`/`U`/`V`/`F` (sch_edit_tool.cpp::Properties/EditField): one
+    // shared dialog for all four -- see SymbolPropertiesDialog.tsx's own
+    // header comment on why U/V/F don't get source's own separate, far
+    // smaller single-field dialog.
+    const openSymbolProperties = (field: "reference" | "value" | "footprint" | "datasheet" | null) =>
+      schematicOnly(() => {
+        const id = [...state.selection][0];
+        if (id && api.symbolById(id)) dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id, field } });
+      });
+    m.set("eeschema.InteractiveEdit.properties", openSymbolProperties(null));
+    m.set("eeschema.InteractiveEdit.symbolProperties", openSymbolProperties(null));
+    m.set("eeschema.InteractiveEdit.editReference", openSymbolProperties("reference"));
+    m.set("eeschema.InteractiveEdit.editValue", openSymbolProperties("value"));
+    m.set("eeschema.InteractiveEdit.editFootprint", openSymbolProperties("footprint"));
+
     m.set("eeschema.InspectionTool.runERC", () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: true }));
 
     // `dialog_annotate.cpp`'s own default mode ("Keep existing
@@ -630,7 +646,34 @@ export function useActionRunner() {
     return m;
   }, [api, dispatch, state]);
 
-  const isEnabled = useCallback((name: string) => registry.has(name), [registry]);
+  // `registry.has(name)` alone used to be the whole check, but the
+  // registry holds EVERY action's handler regardless of tab (every
+  // `pcbOnly`/`schematicOnly` wrapper above is itself registered
+  // unconditionally -- only the function *body* it wraps checks the
+  // tab, and only once called). That made `isEnabled` blind to tab at
+  // exactly the place useGlobalHotkeys.ts needs it most: several
+  // physical keys are double-booked by one `pcbnew.*` and one
+  // `eeschema.*` action with the *same* hotkey (R, M, G, X, E, U, V, F
+  // all collide this way in the real, extracted hotkey table), and
+  // `hotkeyIndex.get(combo)?.find(isEnabled)` there picks the first
+  // name `isEnabled` accepts -- so whichever of the pair happened to
+  // come first in actions.json's own order permanently shadowed the
+  // other, on *every* tab, regardless of which one was actually
+  // relevant. `pcbnew.InteractiveEdit.rotateCcw` (R) and
+  // `pcbnew.InteractiveMove.move` (M) were already losing that race to
+  // their eeschema counterparts before this fix -- real, silent PCB
+  // regressions from the schematic port's own earlier sessions, not
+  // hypothetical. `isActionEnabledForTab` (kicad-port, unit tested) is
+  // the actual fix; MenuBar.tsx/Toolbar.tsx already load an entirely
+  // separate, per-tab menu/toolbar tree each (menus.json vs
+  // sch_menus.json, same for toolbars), so this changes nothing for
+  // them -- they never asked `isEnabled` about an action from the
+  // other tab's tree in the first place. HotkeysDialog.tsx is the one
+  // visible side effect: it lists every action in one place, so an
+  // eeschema action now dims while looking at it from the PCB tab (and
+  // vice versa) -- arguably more honest ("usable right now" instead of
+  // "usable somewhere"), not a regression.
+  const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)), [registry, state.tab]);
   const run = useCallback((name: string) => registry.get(name)?.(), [registry]);
   return { run, isEnabled };
 }
