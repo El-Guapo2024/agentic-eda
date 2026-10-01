@@ -12,6 +12,7 @@ import { fetchDrc, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, post
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
+import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 /**
@@ -234,6 +235,11 @@ export interface StudioState {
   drc: DrcReport | null;
   /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
   drcSelected: number | null;
+
+  /** Cmd+C's clipboard (Cmd-ready IR shapes, see components/canvas/clipboard.ts) -- client-side only, holds full item data so Cmd+V still works after the original was deleted, or pasted more than once. Null = nothing copied yet this session. */
+  clipboard: ClipboardContents | null;
+  /** Shift+M "Move Exactly..." dialog -- open with the selection's own default anchor/bbox already resolved (components/MoveExactDialog.tsx computes the rest). Null = closed. */
+  moveExactDialogOpen: boolean;
 }
 
 const initialState: StudioState = {
@@ -291,6 +297,8 @@ const initialState: StudioState = {
   ratsnest: null,
   drc: null,
   drcSelected: null,
+  clipboard: null,
+  moveExactDialogOpen: false,
 };
 
 export type Action =
@@ -348,7 +356,9 @@ export type Action =
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
-  | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] };
+  | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
+  | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
+  | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean };
 
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
@@ -504,6 +514,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, zonePending: action.outline };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.dialog };
+    case "SET_CLIPBOARD":
+      return { ...state, clipboard: action.clipboard };
+    case "SET_MOVE_EXACT_DIALOG_OPEN":
+      return { ...state, moveExactDialogOpen: action.open };
     default:
       return state;
   }
@@ -529,6 +543,20 @@ export interface StudioApi {
   textById: (id: string) => BoardText | undefined;
   /** Any other Cmd this file doesn't have a named wrapper for (the delete_ ops, set_track_width, edit_text, ...) -- returns whether the backend accepted it, same as every named wrapper's underlying runCmd. */
   cmd: (c: Cmd) => Promise<boolean>;
+  /**
+   * Cmd+D on the current selection's tracks/vias/zones/shapes/text
+   * (footprints excluded -- see `Cmd::Duplicate`'s own doc comment).
+   * Duplicates in place, then selects the new copies and arms the Move
+   * tool on them at the current cursor, same as EDIT_TOOL::Duplicate
+   * handing straight off to doMoveSelection in source.
+   */
+  duplicateSelection: () => Promise<void>;
+  /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
+  copySelection: () => void;
+  /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
+  pasteClipboard: () => Promise<void>;
+  /** Shift+M "Move Exactly..." dialog's OK action. */
+  moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
 }
 
 const StudioStateContext = createContext<StudioState | null>(null);
@@ -711,6 +739,54 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const reply = await postRedo();
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
+    },
+    // EDIT_TOOL::Duplicate hands straight off to doMoveSelection in
+    // source -- the duplicate appears glued to the cursor until the user
+    // clicks to drop it (or Escape, which now -- see the "ESCAPE" reducer
+    // case -- cancels the in-progress move without touching the
+    // selection, so the fresh duplicate stays selected right where it
+    // was created rather than being un-done; a real cancel-removes-the-
+    // duplicate would need this move to carry its own undo token, which
+    // the backend's plain undo-stack doesn't expose per-ref).
+    duplicateSelection: async () => {
+      const board = stateRef.current.board;
+      if (!board) return;
+      const ids = [...stateRef.current.selection].filter((id) => api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id));
+      if (ids.length === 0) return;
+      const before = allItemIds(board);
+      const ok = await runCmd({ op: "duplicate", ids });
+      if (!ok) return;
+      const after = stateRef.current.board;
+      if (!after) return;
+      const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
+      if (newIds.length === 0) return;
+      dispatch({ type: "SET_SELECTION", refs: newIds });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
+    },
+    copySelection: () => {
+      const board = stateRef.current.board;
+      if (!board) return;
+      const clipboard = collectClipboardContents(board, stateRef.current.selection);
+      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard });
+    },
+    pasteClipboard: async () => {
+      const clip = stateRef.current.clipboard;
+      const board = stateRef.current.board;
+      if (!clip || !board) return;
+      const before = allItemIds(board);
+      const ok = await runCmd({ op: "paste_items", tracks: clip.tracks, vias: clip.vias, zones: clip.zones, shapes: clip.shapes, texts: clip.texts });
+      if (!ok) return;
+      const after = stateRef.current.board;
+      if (!after) return;
+      const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
+      if (newIds.length === 0) return;
+      dispatch({ type: "SET_SELECTION", refs: newIds });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
+    },
+    moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
+      return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
     },
   };
 

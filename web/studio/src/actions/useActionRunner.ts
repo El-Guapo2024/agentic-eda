@@ -185,6 +185,20 @@ export function useActionRunner() {
     );
     m.set("common.Interactive.undo", () => api.undo());
     m.set("common.Interactive.redo", () => api.redo());
+    m.set("common.Interactive.duplicate", pcbOnly(() => api.duplicateSelection()));
+    m.set("common.Interactive.copy", pcbOnly(() => api.copySelection()));
+    m.set("common.Interactive.paste", pcbOnly(() => api.pasteClipboard()));
+    m.set(
+      "pcbnew.InteractiveEdit.moveExact",
+      pcbOnly(() => {
+        // Only meaningful with something placed/selected to move -- a
+        // footprint, or any of item 7's track/via/zone/shape/text (the
+        // dialog itself, MoveExactDialog.tsx, resolves which and reads
+        // its own position/bbox fresh when it opens).
+        if (state.selection.size === 0) return;
+        dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true });
+      })
+    );
 
     m.set(
       "pcbnew.EditorControl.toggleNetHighlight",

@@ -525,6 +525,8 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::EditText { id: "x".into(), content: String::new(), angle: 0, layer: "F.SilkS".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false },
         Cmd::DeleteText { id: "x".into() },
         Cmd::MoveText { id: "x".into(), x: 0, y: 0 },
+        Cmd::Duplicate { ids: vec!["x".into()] },
+        Cmd::PasteItems { tracks: vec![], vias: vec![], zones: vec![], shapes: vec![], texts: vec![] },
     ];
     for c in &copper_and_drawing_cmds {
         assert!(!c.clears_routing(), "{c:?} must not clear routing -- only part edits do");
@@ -541,8 +543,184 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::Swap { a: "U1".into(), b: "U2".into() },
         Cmd::Rip { part: "U1".into() },
         Cmd::Flip { part: "U1".into() },
+        Cmd::MoveExact { parts: vec!["U1".into()], dx: 0, dy: 0, rotate_millideg: 0, pivot: None },
     ];
     for c in &part_edit_cmds {
         assert!(c.clears_routing(), "{c:?} must clear routing -- it can move a part out from under a track");
     }
+}
+
+// ---------------------------------------------------- duplicate / paste
+
+#[test]
+fn duplicate_copies_a_track_via_zone_shape_and_text_with_fresh_ids() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+
+    let rt = b.design().routing.as_ref().unwrap();
+    let (track_id, via_id, zone_id) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.zones[0].id.clone());
+    let dr = b.design().drawings.as_ref().unwrap();
+    let (shape_id, text_id) = (dr.shapes[0].id().to_string(), dr.texts[0].id.clone());
+
+    b.apply(&Cmd::Duplicate { ids: vec![track_id.clone(), via_id.clone(), zone_id.clone(), shape_id.clone(), text_id.clone()] }).unwrap();
+
+    let rt = b.design().routing.as_ref().unwrap();
+    assert_eq!(rt.tracks.len(), 2, "the original plus one duplicate");
+    assert_eq!(rt.vias.len(), 2);
+    assert_eq!(rt.zones.len(), 2);
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.shapes.len(), 2);
+    assert_eq!(dr.texts.len(), 2);
+
+    // Every duplicate landed at the SAME position as its original (KiCad's
+    // own Duplicate: an exact copy, handed to the Move tool from there --
+    // this app commits move separately, so the backend verb's own job is
+    // just the exact copy) but got its own, different id.
+    let new_track = rt.tracks.iter().find(|t| t.id != track_id).unwrap();
+    assert_eq!(new_track.pts, vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }]);
+    assert_ne!(new_track.id, track_id);
+    assert!(!new_track.id.is_empty());
+
+    let new_via = rt.vias.iter().find(|v| v.id != via_id).unwrap();
+    assert_eq!(new_via.at, Point { x: 5000, y: 5000 });
+
+    let new_text = dr.texts.iter().find(|t| t.id != text_id).unwrap();
+    assert_eq!(new_text.content, "REV A");
+}
+
+#[test]
+fn duplicate_rejects_an_empty_or_fully_unmatched_id_list() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::Duplicate { ids: vec![] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_duplicate");
+
+    // A footprint ref (U1) is not a track/via/zone/shape/text id -- it
+    // simply never matches anything, same as any other unknown id.
+    let e = b.apply(&Cmd::Duplicate { ids: vec!["U1".into(), "nonexistent".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_duplicate");
+}
+
+#[test]
+fn duplicate_with_a_mix_of_known_and_unknown_ids_copies_only_the_known_ones() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    let track_id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+
+    b.apply(&Cmd::Duplicate { ids: vec![track_id, "U1".into(), "nonexistent".into()] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 2);
+}
+
+#[test]
+fn paste_items_inserts_fresh_copies_and_ignores_incoming_ids() {
+    let m = net_model();
+    let mut b = board(&m);
+    let track = Track { id: "stale-id-from-another-board".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2000, y: 2000 }, Point { x: 3000, y: 2000 }] };
+    let text = Text { id: "also-stale".into(), content: "PASTED".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false };
+
+    b.apply(&Cmd::PasteItems { tracks: vec![track], vias: vec![], zones: vec![], shapes: vec![], texts: vec![text] }).unwrap();
+
+    let rt = b.design().routing.as_ref().unwrap();
+    assert_eq!(rt.tracks.len(), 1);
+    assert_ne!(rt.tracks[0].id, "stale-id-from-another-board");
+    assert!(!rt.tracks[0].id.is_empty());
+    assert_eq!(rt.tracks[0].pts, vec![Point { x: 2000, y: 2000 }, Point { x: 3000, y: 2000 }]);
+
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_ne!(dr.texts[0].id, "also-stale");
+    assert_eq!(dr.texts[0].content, "PASTED");
+}
+
+#[test]
+fn paste_items_with_nothing_in_it_is_a_harmless_no_op() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::PasteItems { tracks: vec![], vias: vec![], zones: vec![], shapes: vec![], texts: vec![] }).unwrap();
+    assert!(b.design().routing.is_none());
+    assert!(b.design().drawings.is_none());
+}
+
+// ------------------------------------------------------- move exact
+
+#[test]
+fn move_exact_with_no_pivot_spins_a_single_part_in_place_around_its_own_anchor() {
+    let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 10_000, y: 10_000 }).unwrap();
+
+    b.apply(&Cmd::MoveExact { parts: vec!["U1".into()], dx: 0, dy: 0, rotate_millideg: 90_000, pivot: None }).unwrap();
+    let pose = b.pose_of("U1").unwrap();
+    assert_eq!(pose.at, Point { x: 10_000, y: 10_000 }, "no pivot given: rotating about its own anchor must not move it");
+    assert_eq!(pose.rot, 90_000);
+}
+
+#[test]
+fn move_exact_translates_then_rotates_about_its_own_already_moved_anchor() {
+    let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 10_000, y: 10_000 }).unwrap();
+
+    b.apply(&Cmd::MoveExact { parts: vec!["U1".into()], dx: 5000, dy: 1000, rotate_millideg: 45_000, pivot: None }).unwrap();
+    let pose = b.pose_of("U1").unwrap();
+    // Translation lands first, then the (pivot-less) rotation spins it in
+    // place at that new position -- the position is exactly the
+    // translation, regardless of the rotation angle.
+    assert_eq!(pose.at, Point { x: 15_000, y: 11_000 });
+    assert_eq!(pose.rot, 45_000);
+}
+
+#[test]
+fn move_exact_with_a_shared_pivot_orbits_the_part_around_it() {
+    let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    // Start 10mm due east of the pivot at (10mm, 10mm); a 90 degree
+    // rotation around that pivot (this crate's rotation matrix: no
+    // Y-axis flip, same as `to_board`) must swing it to due "south" of
+    // the pivot in this app's Y-down board coordinates.
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 20_000, y: 10_000 }).unwrap();
+
+    b.apply(&Cmd::MoveExact { parts: vec!["U1".into()], dx: 0, dy: 0, rotate_millideg: 90_000, pivot: Some(Point { x: 10_000, y: 10_000 }) }).unwrap();
+    let pose = b.pose_of("U1").unwrap();
+    assert_eq!(pose.at.x, 10_000, "rotated 90 degrees around the pivot, the +10000 x offset becomes 0 relative to it (within rounding)");
+    assert_eq!(pose.at.y, 20_000);
+    assert_eq!(pose.rot, 90_000, "orientation still turns by the same angle regardless of the pivot choice");
+}
+
+#[test]
+fn move_exact_applies_the_same_translation_and_angle_to_every_part_in_the_batch() {
+    let m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 10_000, y: 10_000 }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "U2".into(), x: 30_000, y: 10_000 }).unwrap();
+
+    b.apply(&Cmd::MoveExact { parts: vec!["U1".into(), "U2".into()], dx: 1000, dy: 2000, rotate_millideg: 90_000, pivot: None }).unwrap();
+    assert_eq!(b.pose_of("U1").unwrap().at, Point { x: 11_000, y: 12_000 });
+    assert_eq!(b.pose_of("U2").unwrap().at, Point { x: 31_000, y: 12_000 });
+    assert_eq!(b.pose_of("U1").unwrap().rot, 90_000);
+    assert_eq!(b.pose_of("U2").unwrap().rot, 90_000);
+}
+
+#[test]
+fn move_exact_refuses_an_unplaced_or_unknown_part_without_moving_the_others() {
+    let m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceAt { part: "U1".into(), x: 10_000, y: 10_000 }).unwrap();
+    // U2 is never placed.
+    let e = b.apply(&Cmd::MoveExact { parts: vec!["U1".into(), "U2".into()], dx: 1000, dy: 0, rotate_millideg: 0, pivot: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_not_placed");
+    assert_eq!(b.pose_of("U1").unwrap().at, Point { x: 10_000, y: 10_000 }, "the whole batch refuses atomically -- U1 must not have moved either");
+}
+
+#[test]
+fn move_exact_rejects_an_empty_part_list() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::MoveExact { parts: vec![], dx: 0, dy: 0, rotate_millideg: 0, pivot: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_move_exact");
 }

@@ -17,6 +17,7 @@ import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
+import { MoveExactDialog } from "./components/MoveExactDialog";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
@@ -136,6 +137,7 @@ function StudioFrame() {
       <ZoneDialog />
       <TextDialog />
       <ItemPropertiesDialog />
+      <MoveExactDialog />
     </div>
   );
 }
