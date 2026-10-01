@@ -317,7 +317,10 @@ export type Cmd =
   | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string }
   | { op: "edit_symbol_fields"; id: string; value?: string | null; footprint?: string | null; datasheet?: string | null }
   | { op: "rename_symbol"; id: string; new_id: string }
-  | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[] };
+  | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[] }
+  /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
+  | { op: "add_erc_exclusion"; check: string; location: string }
+  | { op: "delete_erc_exclusion"; check: string; location: string };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
 export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
@@ -640,13 +643,32 @@ export interface DrcReport {
 // back to something selectable/panable itself rather than reading a
 // ready-made position the way DRC's `DrcItem.pos` gives one.
 
-export type ErcSeverity = "error" | "warning";
+/** `"excluded"` is `dialog_erc.cpp`'s "Exclude this violation" (right-click a marker), persisted server-side in `design.schematic.erc_exclusions` and applied by `check_erc_excluding` -- a finding stays in `violations[]` (so `ErcDialog.tsx` can still show and un-exclude it) rather than disappearing the way an unexcluded Pass does. */
+export type ErcSeverity = "error" | "warning" | "excluded";
 
 export interface ErcViolation {
   /** `eda_kicad::erc`'s own check name ("pin_not_connected", "wire_dangling", ...) -- real KiCad's own ERC type names, per `kicad-cli sch erc`'s report. */
   check: string;
   severity: ErcSeverity;
-  /** "U1" or "U1.3" (REF or REF.PIN) when the finding is about one symbol/pin; otherwise whatever `CheckResult::location` carries ("design", a net name, ...), or null. */
+  /**
+   * An id into the schematic, in one of several shapes depending on which
+   * check produced it (`crates/kicad/src/erc.rs`, every `location: Some(format!(...))`
+   * call read directly) -- never a ready-made point the way DRC's `DrcItem.pos`
+   * is. `ercMarkerPosition` (components/schematic/ercMarkerPosition.ts) is the
+   * one place this app resolves any of these back to a canvas position:
+   *   "REF.PIN"      -- pin_not_connected (PIN is a pin *number*, not name).
+   *   "NET:REF.PIN"  -- pin_to_pin / pin_not_driven / power_pin_not_driven.
+   *   "NET:ID"       -- same two checks, when the flagged net member is a
+   *                     power symbol: ID is its own `PowerSymbol.id`, not
+   *                     a part ref (no dot).
+   *   "x,y"          -- no_connect_connected / no_connect_dangling: a
+   *                     literal point, board-space um.
+   *   "NET:x,y"      -- unconnected_wire_endpoint: same literal point,
+   *                     net name prefix ignored.
+   *   a bare net name -- wire_dangling: no symbol/point in the string at
+   *                     all.
+   * `null` on a (currently theoretical) location-less finding.
+   */
   location: string | null;
   hint: string | null;
 }

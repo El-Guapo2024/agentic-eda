@@ -528,6 +528,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteWire { id } => format!("schematic delete-wire {id}"),
         Cmd::AddNoConnect { at } => format!("schematic no-connect --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteNoConnect { id } => format!("schematic delete-no-connect {id}"),
+        Cmd::AddErcExclusion { check, location } => format!("schematic erc-exclude {check:?} {location:?}"),
+        Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
         Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
@@ -612,6 +614,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::DeleteSymbol { .. } => "schematic-delete-symbol",
         Cmd::AddWire { .. } | Cmd::DeleteWire { .. } => "schematic-wire",
         Cmd::AddNoConnect { .. } | Cmd::DeleteNoConnect { .. } => "schematic-no-connect",
+        Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } => "schematic-erc-exclusion",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
@@ -1169,6 +1172,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
+                erc_exclusions: vec![],
                 title_block: None,
                 sheets: vec![],
             }),
@@ -1416,6 +1420,49 @@ mod tests {
         step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(!r1(&design).mirrored && !r1(&design).mirror_y);
+    }
+
+    /// `dialog_erc.cpp`'s "Exclude this violation"/un-exclude: refuses a
+    /// blank location (nothing to key on, same limitation `Exclusions`
+    /// itself has), is idempotent (excluding the same finding twice does
+    /// not duplicate it), refuses un-excluding something never excluded,
+    /// and persists in `design.schematic.erc_exclusions` sorted by
+    /// (check, location).
+    #[test]
+    fn erc_exclusion_add_and_delete() {
+        let dir = scratch("sch_erc_exclusion");
+        setup_schematic(&dir);
+
+        assert!(
+            step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "".into() }, false, "test").is_err(),
+            "a blank location is refused -- nothing to key an exclusion on"
+        );
+
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        // Adding the same one again is a harmless no-op, not a duplicate.
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+
+        let (_, design, _) = load(&dir).unwrap();
+        let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
+        assert_eq!(exclusions.len(), 2, "the repeated add must not duplicate");
+        assert_eq!(
+            exclusions,
+            &vec![
+                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() },
+                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() },
+            ],
+            "sorted by (check, location), not insertion order"
+        );
+
+        assert!(
+            step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R404.1".into() }, false, "test").is_err(),
+            "nothing excluded under this key"
+        );
+        step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
+        assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }]);
     }
 
     /// `E`/`V`/`F`: each field is independently settable -- editing just

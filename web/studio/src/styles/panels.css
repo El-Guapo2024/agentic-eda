@@ -142,6 +142,10 @@
 .problem-row.warn {
   border-left-color: var(--chrome-warn);
 }
+.problem-row.excluded {
+  border-left-color: var(--chrome-text-dim);
+  opacity: 0.7;
+}
 .problem-row small {
   display: block;
   color: var(--chrome-text-dim);

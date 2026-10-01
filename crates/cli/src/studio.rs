@@ -795,6 +795,7 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection {
                 power_symbols: vec![],
                 no_connects: vec![],
+                erc_exclusions: vec![],
                 title_block: None,
                 sheets: vec![],
                 symbols: Vec::new(),
@@ -1099,30 +1100,51 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// (`null` when absent) carrying the placement-quality providers' agent-fix
 /// metadata (see `eda_drc::FixHint`), which kicad-cli's own JSON has no
 /// concept of.
-/// GET /api/erc: `eda_kicad::check_erc` (the ERC engine, gap #4 in
-/// GAPS.md -- "built, zero UI exposure") run fresh on every call, same
-/// no-caching reasoning `drc_json`'s own doc gives. Flatter than
-/// `drc_json`'s `DrcViolation`/items shape: `check_erc` reports plain
-/// `CheckResult`s (check name, Fail/Warn, an optional "REF" or "REF.PIN"
-/// `location` string, a human `hint`) rather than DRC's richer
-/// positioned-item list, so there is no canvas-marker position to extract
-/// here the way DRC's `it.pos` gives one -- `ErcDialog.tsx`'s row click
-/// resolves `location` back to a symbol/pin to select instead. `Excluded`
-/// results are dropped (nothing in this app writes to `Exclusions` yet, so
-/// there is never one to show); `Pass` is never present in `check_erc`'s
+/// GET /api/erc: `eda_kicad::check_erc_excluding` (the ERC engine, gap #4
+/// in GAPS.md -- "built, zero UI exposure" when this doc was first
+/// written; exclusions followed in a later session) run fresh on every
+/// call, same no-caching reasoning `drc_json`'s own doc gives. Flatter
+/// than `drc_json`'s `DrcViolation`/items shape: `check_erc` reports
+/// plain `CheckResult`s (check name, Fail/Warn/Excluded, an optional
+/// "REF" or "REF.PIN" `location` string, a human `hint`) rather than
+/// DRC's richer positioned-item list, so there is no ready-made
+/// canvas-marker position to extract here the way DRC's `it.pos` gives
+/// one -- `SchematicView.tsx`'s own `ercMarkerPosition` resolves
+/// `location` back to a point client-side instead (several different
+/// shapes: "REF.PIN", "NET:REF.PIN", a literal "x,y", "NET@x,y", ... --
+/// see its own doc). An `Excluded` result is kept (not dropped) and
+/// reported with its own `"excluded"` severity, so `ErcDialog.tsx` can
+/// still show and un-exclude it; `Pass` is never present in `check_erc`'s
 /// own output in the first place.
 fn erc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    let found = eda_kicad::check_erc(&design, &model);
+    // `dialog_erc.cpp`'s own accepted-findings list, applied the same way
+    // `check_erc_excluding` always has: a finding whose (check, location)
+    // matches a persisted exclusion downgrades from Fail/Warn to
+    // `CheckStatus::Excluded` rather than disappearing, so `ErcDialog.tsx`
+    // can still show (and un-exclude) it instead of it just going quiet.
+    let mut exclusions = eda_kicad::Exclusions::new();
+    if let Some(sch) = &design.schematic {
+        for e in &sch.erc_exclusions {
+            exclusions.exclude(e.check.clone(), e.location.clone());
+        }
+    }
+    let found = eda_kicad::check_erc_excluding(&design, &model, &exclusions);
     let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     let violations: Vec<Value> = found
         .iter()
-        .filter(|c| !matches!(c.status, CheckStatus::Pass | CheckStatus::Excluded))
+        .filter(|c| !matches!(c.status, CheckStatus::Pass))
         .map(|c| {
-            *counts.entry(c.check.as_str()).or_default() += 1;
+            // Only a still-live finding counts toward the dialog's own
+            // Errors/Warnings tally -- an excluded one is accounted for by
+            // its own severity (the frontend's own exclusions filter), not
+            // double-counted into "error"/"warning" too.
+            if !matches!(c.status, CheckStatus::Excluded) {
+                *counts.entry(c.check.as_str()).or_default() += 1;
+            }
             json!({
                 "check": c.check,
-                "severity": match c.status { CheckStatus::Fail => "error", _ => "warning" },
+                "severity": match c.status { CheckStatus::Fail => "error", CheckStatus::Excluded => "excluded", _ => "warning" },
                 "location": c.location,
                 "hint": c.hint,
             })

@@ -41,8 +41,8 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
 use eda_model::ir::{
-    Design, DrawingsSection, FootprintInstance, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance,
-    Text, TextJustify, Track, Um, Via, Wire, Zone,
+    Design, DrawingsSection, ErcExclusion, FootprintInstance, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side,
+    SymbolInstance, Text, TextJustify, Track, Um, Via, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -354,6 +354,19 @@ pub enum Cmd {
     AddNoConnect { at: Point },
     DeleteNoConnect { id: String },
 
+    /// `dialog_erc.cpp`'s own "Exclude this violation" (right-click a
+    /// finding, or the dialog's own Exclude button): accepts one ERC
+    /// finding by its own `(check, location)` key -- the same shape
+    /// `eda_kicad::erc::Exclusions` already keys on, so `erc_json` can
+    /// build one directly from the persisted list with no translation.
+    /// Refused if `location` is empty (nothing to key on -- the same
+    /// findings `Exclusions` itself can never exclude); adding one
+    /// already excluded is a harmless no-op, not an error.
+    AddErcExclusion { check: String, location: String },
+    /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"):
+    /// refused if no exclusion with this exact key exists.
+    DeleteErcExclusion { check: String, location: String },
+
     /// `L`/`Ctrl+L`/`H`: place a net label. `kind`/`shape` follow
     /// `eda_model::ir::LabelKind`'s own vocabulary (local has no shape).
     AddLabel { net: String, at: Point, kind: LabelKind },
@@ -453,6 +466,8 @@ impl Cmd {
             | Cmd::DeleteWire { .. }
             | Cmd::AddNoConnect { .. }
             | Cmd::DeleteNoConnect { .. }
+            | Cmd::AddErcExclusion { .. }
+            | Cmd::DeleteErcExclusion { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
             | Cmd::AddSchText { .. }
@@ -511,6 +526,7 @@ impl Cmd {
             Cmd::AddWire { .. } => vec!["wire"],
             Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } | Cmd::DeleteSchText { id } => vec![id],
             Cmd::AddNoConnect { .. } => vec!["no_connect"],
+            Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
@@ -791,6 +807,8 @@ impl<'a> Board<'a> {
             Cmd::DeleteWire { id } => self.delete_wire(id),
             Cmd::AddNoConnect { at } => self.add_no_connect(*at),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
+            Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
+            Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
             Cmd::DeleteLabel { id } => self.delete_label(id),
             Cmd::AddSchText { content, at, angle_millideg, size_um } => self.add_sch_text(content, *at, *angle_millideg, *size_um),
@@ -1545,7 +1563,7 @@ impl<'a> Board<'a> {
     /// `derive_schematic` never ran); everything else targets an id that
     /// can only already exist inside a section that is already there.
     fn schematic_mut_or_create(&mut self) -> &mut SchematicSection {
-        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![] })
+        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![] })
     }
 
     fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {
@@ -1652,6 +1670,29 @@ impl<'a> Board<'a> {
         sch.no_connects.retain(|nc| nc.id != id);
         if sch.no_connects.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_no_connect", id, "no no-connect flag with this id")]);
+        }
+        Ok(())
+    }
+
+    /// `dialog_erc.cpp`'s "Exclude this violation" -- see `Cmd::AddErcExclusion`'s own doc.
+    fn add_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
+        if location.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_erc_exclusion", check, "this finding has no location to key an exclusion on")]);
+        }
+        let sch = self.schematic_mut_or_create();
+        if !sch.erc_exclusions.iter().any(|e| e.check == check && e.location == location) {
+            sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into() });
+            sch.erc_exclusions.sort();
+        }
+        Ok(())
+    }
+
+    fn delete_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.erc_exclusions.len();
+        sch.erc_exclusions.retain(|e| !(e.check == check && e.location == location));
+        if sch.erc_exclusions.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_erc_exclusion", location, "no exclusion with this check+location exists")]);
         }
         Ok(())
     }

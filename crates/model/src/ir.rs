@@ -146,6 +146,11 @@ pub struct SchematicSection {
     /// by `at`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub no_connects: Vec<NoConnect>,
+    /// Accepted ("excluded") ERC findings -- `dialog_erc.cpp`'s own
+    /// per-sheet `SCHEMATIC::RecordERCExclusions`. Sorted by (check,
+    /// location); see [`ErcExclusion`]'s own doc for why it has no `id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub erc_exclusions: Vec<ErcExclusion>,
     /// Title block. `None` keeps relying on the caller-supplied
     /// `ExportMeta` (title/date) the way every export always has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -366,6 +371,27 @@ impl NoConnect {
     fn id_seed(&self) -> String {
         format!("{},{}", self.at.x, self.at.y)
     }
+}
+
+/// An accepted ERC finding (`dialog_erc.cpp`'s own "Exclude this
+/// violation" / `SCHEMATIC::RecordERCExclusions`): `(check, location)`
+/// matches `eda_kicad::erc::Exclusions`'s own key shape exactly (a
+/// `BTreeSet<(String, String)>`) so `crates/cli/src/studio.rs::erc_json`
+/// can build one directly from this list with no translation. No `id`
+/// field -- unlike `Wire`/`NetLabel`/etc., this has nothing geometric to
+/// derive one from, and the `(check, location)` pair is already a stable,
+/// natural key (unlike those others, there is never more than one
+/// exclusion for the same finding to disambiguate between).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErcExclusion {
+    /// `eda_kicad::erc`'s own check name ("pin_not_connected", ...).
+    pub check: String,
+    /// "REF", "REF.PIN", or whatever else `CheckResult::location` carried
+    /// for this finding -- a finding with no location at all can never be
+    /// excluded (nothing to key on), same limitation `Exclusions` itself
+    /// already has.
+    pub location: String,
 }
 
 /// Title block. Every field optional/empty by default; the exporter falls
@@ -962,6 +988,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
+                erc_exclusions: vec![],
                 title_block: None,
                 sheets: vec![],
             }),

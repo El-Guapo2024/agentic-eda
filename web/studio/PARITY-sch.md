@@ -26,10 +26,17 @@ a new `LibSymbol::reference_prefix` field so a placed symbol gets a real
 reference immediately instead of a "U?" placeholder), `E`/`U`/`V`/`F`
 (section 1 -- `SymbolPropertiesDialog.tsx`, new `Cmd::RenameSymbol`/
 `EditSymbolFields`), Annotate's dialog (section 5 --
-`AnnotateDialog.tsx`, new `Cmd::Annotate.order`/`.ids`), and `Y` mirror
+`AnnotateDialog.tsx`, new `Cmd::Annotate.order`/`.ids`), `Y` mirror
 (section 1 -- new `SymbolInstance::mirror_y`, `Cmd::MirrorSymbolVertical`,
-mutually exclusive with `X`/`mirrored`). Still not wired: `J` junction —
-see the bottom of each section.
+mutually exclusive with `X`/`mirrored`), and ERC canvas markers +
+exclusions (section 4 -- new `components/schematic/ercMarkerPosition.ts`
+resolving a `CheckResult::location` string to a canvas point/refs,
+`painter.ts`'s `drawErcMarkers`, and `Cmd::AddErcExclusion`/
+`DeleteErcExclusion` persisting to `design.schematic.erc_exclusions`,
+applied by the pre-existing `check_erc_excluding` and surfaced as a third
+`"excluded"` `ErcSeverity`). Still not wired: `J` junction, and wire
+box-select / the rest of `sch_line_wire_bus_tool.cpp`'s edge cases
+(section 2) — see the bottom of each section.
 
 **Found and fixed while wiring `E`/`U`/`V`/`F`'s hotkeys**: several
 physical keys are double-booked by one `pcbnew.*` and one `eeschema.*`
@@ -186,9 +193,9 @@ covers *placing* them, matching this pass's scope.
 |---|---|---|
 | Run ERC (menu item, no default hotkey) | identical | `SCH_INSPECTION_TOOL::RunERC`/`ShowERCDialog`; `eeschema.InspectionTool.runERC` → `ErcDialog.tsx`, `GET /api/erc` → `eda_kicad::check_erc` (unexposed before this session — GAPS.md #4) |
 | Results list: one row per finding, Errors/Warnings filter | identical in spirit, flatter structure | `dialog_erc.cpp` (`RC_TREE_MODEL`, flat list, not grouped by sheet — matches); `check_erc` reports plain `CheckResult`s (no item/position breakdown the way `DrcViolation` has), so `ErcDialog.tsx` is flatter than `DrcDialog.tsx` |
-| Click a row: cross-probe (select + pan/zoom to it) | partial — selects the named symbol and switches to the Schematic tab, but does not re-frame the view the way `DrcDialog.tsx`'s `jumpTo` zooms to a violation's exact point (no position data to zoom to — see above) | `DIALOG_ERC::OnERCItemSelected`/`FocusOnItem` |
-| Canvas markers independent of the dialog | missing | `SCH_MARKER` objects drawn via the normal VIEW; no canvas-marker rendering added this session |
-| Exclusions (persisted "accepted" findings) | missing | `SCHEMATIC::RecordERCExclusions`/`ERC_SETTINGS::m_ErcExclusions` — `eda_kicad::Exclusions` exists engine-side (`check_erc_excluding`) but nothing in studio.rs/the UI writes to it yet |
+| Click a row: cross-probe (select + pan/zoom to it) | identical in spirit | `DIALOG_ERC::OnERCItemSelected`/`FocusOnItem`; `ercMarkerPosition(v.location, state.schematic)` resolves `location`'s several shapes (see types.ts's `ErcViolation.location` doc) back to a point/refs, then `jumpTo` selects/hots the refs and re-frames the schematic view exactly like `DrcDialog.tsx`'s own `jumpTo` (2mm padding around the resolved point, same `fitTransform` call). A location that resolves to `null` (a dangling ref/net, or a shape `ercMarkerPosition` doesn't recognize) still selects the row and switches tabs, just without re-framing — not expected in practice since every shape `check_erc` actually emits today resolves |
+| Canvas markers independent of the dialog | identical in spirit, same gate DRC's own markers already have | `SCH_MARKER` objects drawn via the normal VIEW; `painter.ts`'s `drawErcMarkers` (ported from `canvas/painter.ts`'s `drawDrcMarkers`), one circle per violation whose `location` resolves to a point, color-coded by severity (`LAYER_ERC_ERR`/`WARN`/`EXCLUSION`), drawn whenever `state.erc` is populated -- same "only fetched while the dialog is open" gate `state.drc`/DRC markers already live with (store.tsx's poll loop), not a deeper ERC-specific gap |
+| Exclusions (persisted "accepted" findings) | partial | `SCHEMATIC::RecordERCExclusions`/`ERC_SETTINGS::m_ErcExclusions` — `eda_kicad::Exclusions`/`check_erc_excluding` already existed engine-side; new `Cmd::AddErcExclusion`/`DeleteErcExclusion` persist to `design.schematic.erc_exclusions` (`crates/model::ErcExclusion`, matched by exact `(check, location)` string pair), surfaced as a third `ErcSeverity::Excluded` so an excluded finding stays visible (dimmed row/marker, its own "Exclusions" filter toggle) instead of disappearing, with an Exclude/Un-exclude button per dialog row. Real KiCad also offers this from a right-click on the canvas marker itself (`DIALOG_ERC`'s context menu) -- this clone only has the dialog-row button, no canvas context menu |
 
 ## 5. Annotate
 
@@ -354,3 +361,23 @@ click through:
     *visually drawn* position, not where it would be pre-mirror -- this
     is the real correctness check (pin-snap and the renderer must agree
     on where a Y-mirrored pin actually is).
+20. Open the ERC dialog on a board with at least one `pin_not_connected`
+    finding (any symbol with an unwired pin). Confirm a red circle marker
+    with a "!" is drawn on the schematic canvas right at that pin, even
+    while the dialog covers part of the view. Click the finding's row --
+    confirm the canvas re-frames tightly around that exact pin (not just
+    "somewhere on screen"), and the marker's own circle briefly shows the
+    highlighted color while that row is selected. Click "Exclude" on the
+    row -- confirm the row dims, moves under the "Exclusions" count, and
+    the canvas marker turns gray immediately (no page reload needed --
+    this rides the same version-poll `refreshErc` every other live update
+    does). Reopen the dialog later (or toggle the "Exclusions" filter
+    off/on) -- the exclusion should still be there (it's in
+    `design.schematic.erc_exclusions`, not component state). Click
+    "Un-exclude" -- confirm it goes back to reporting as a real error/
+    warning, marker back to red/yellow. Also try a `pin_to_pin` or
+    `wire_dangling` finding if the test board has one, to exercise the
+    "NET:REF.PIN"/bare-net-name location shapes (not just plain
+    "REF.PIN") -- `ercMarkerPosition.ts`'s own unit tests cover every
+    shape in isolation, but only a real board proves `check_erc` actually
+    emits the shapes that module expects.

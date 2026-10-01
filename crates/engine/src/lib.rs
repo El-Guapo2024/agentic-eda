@@ -484,7 +484,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             seed: opts.seed,
             stage_hashes: Vec::new(),
         },
-        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, title_block: None, sheets: vec![] }),
+        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, erc_exclusions: vec![], title_block: None, sheets: vec![] }),
         nets: None,
         placement: None,
         routing: None,

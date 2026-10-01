@@ -45,6 +45,10 @@
     "src/components/schematic/wireAttachment.test.ts",
     "src/components/schematic/libSymbol.ts",
     "src/components/schematic/layout.ts",
-    "src/components/schematic/transform.ts"
+    "src/components/schematic/transform.ts",
+    // ERC canvas-marker/cross-probe location parsing -- same "pure,
+    // dependency-free" criterion, depends only on libSymbol.ts above.
+    "src/components/schematic/ercMarkerPosition.ts",
+    "src/components/schematic/ercMarkerPosition.test.ts"
   ]
 }
