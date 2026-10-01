@@ -299,6 +299,11 @@ export function useActionRunner() {
         dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
       })
     );
+    // `tracks_cleaner.cpp` (task item 1): "Cleanup Tracks & Vias..." --
+    // see components/CleanupTracksDialog.tsx. No selection gate (unlike
+    // LengthTuner above) -- source's own dialog opens unconditionally and
+    // scans the whole board.
+    m.set("pcbnew.GlobalEdit.cleanupTracksAndVias", pcbOnly(() => dispatch({ type: "SET_CLEANUP_TRACKS_DIALOG_OPEN", open: true })));
     m.set(
       "pcbnew.InteractiveDrawing.via",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))

@@ -27,6 +27,7 @@
 //! KiCad's own triangulated-fill collision.
 
 pub mod algo;
+pub mod cleanup;
 pub mod dangling;
 pub mod delaunay;
 pub mod geom;
@@ -35,6 +36,7 @@ pub mod items;
 pub mod ratsnest;
 
 pub use algo::{build_graph, search_clusters, Cluster, ConnGraph};
+pub use cleanup::{compute_cleanup, CleanupChange, CleanupKind, CleanupOptions, CleanupReport};
 pub use dangling::{dangling_tracks_and_vias, DanglingItem, DanglingKind};
 pub use items::{CnItem, ItemRef};
 pub use ratsnest::{compute_ratsnest, RatsnestEdge};

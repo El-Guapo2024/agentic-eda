@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, TuneLengthReply, Um } from "./types";
+import type { BoardGlbResult, BoardState, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, TuneLengthReply, Um } from "./types";
 
 export class ApiError extends Error {}
 
@@ -381,4 +381,15 @@ export function tuneLengthPreview(req: TuneLengthRequest): Promise<TuneLengthRep
 
 export function tuneLengthApply(req: TuneLengthRequest): Promise<TuneLengthReply> {
   return postJson("/api/tune_length/apply", tuneLengthBody(req));
+}
+
+// `pcbnew.GlobalEdit.cleanupTracksAndVias` (task item 1) -- stateless,
+// same shape as length tuning above. See api/types.ts's `CleanupReply`.
+
+export function cleanupTracksPreview(opts: CleanupOptions): Promise<CleanupReply> {
+  return postJson("/api/cleanup_tracks/preview", opts);
+}
+
+export function cleanupTracksApply(opts: CleanupOptions): Promise<CleanupReply> {
+  return postJson("/api/cleanup_tracks/apply", opts);
 }

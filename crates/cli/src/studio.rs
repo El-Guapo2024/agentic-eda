@@ -20,6 +20,7 @@
 //! was fixed to run in the background instead.
 
 use crate::board;
+use crate::cleanup_api;
 use crate::fab_api;
 use crate::route_api;
 use crate::tune_api;
@@ -644,6 +645,8 @@ fn handle(
         // doc comment on why this one differs from route/drag/dp above).
         ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
         // Fabrication outputs (Plot / Generate Drill Files / Footprint
         // Position Files dialogs, plus the plain BOM): `crate::fab_api`
         // runs the same `eda_fab` writers `eda fab ...` does and writes

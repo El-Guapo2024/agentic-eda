@@ -788,6 +788,44 @@ export interface TuneLengthReply {
   colliding?: boolean;
 }
 
+/** `dialog_cleanup_tracks_and_vias_base.cpp`'s checkboxes -- see
+ * `POST /api/cleanup_tracks/{preview,apply}` and
+ * `components/CleanupTracksDialog.tsx`. Every field defaults `false`,
+ * matching the base dialog's own ctor (no checkbox starts checked). */
+export interface CleanupOptions {
+  delete_shorting: boolean;
+  delete_redundant_vias: boolean;
+  delete_dangling_vias: boolean;
+  merge_segments: boolean;
+  delete_dangling_tracks: boolean;
+  delete_tracks_in_pads: boolean;
+}
+
+/** `crates/connectivity/src/cleanup.rs`'s `CleanupKind`, wire names. */
+export type CleanupChangeKind = "redundant_via" | "zero_length_track" | "duplicate_track" | "shorting_track" | "shorting_via" | "track_in_pad" | "dangling_track" | "dangling_via" | "merged_tracks";
+
+export interface CleanupChange {
+  kind: CleanupChangeKind;
+  /** Human-readable label (`CleanupKind::label()`), e.g. "dangling track". */
+  label: string;
+  net: string;
+  remove_track_ids: string[];
+  remove_via_ids: string[];
+}
+
+/** `POST /api/cleanup_tracks/{preview,apply}` (task item 1): "Cleanup
+ * Tracks & Vias..." -- stateless, same shape as `TuneLengthReply`. `apply`
+ * recomputes against the live board rather than trusting the client's own
+ * cached preview. */
+export interface CleanupReply {
+  ok: boolean;
+  message?: string;
+  changes?: CleanupChange[];
+  tracks_removed?: number;
+  vias_removed?: number;
+  tracks_added?: number;
+}
+
 // ---------------------------------------------------------------- Ratsnest
 //
 // GET /api/ratsnest. Source of truth: crates/cli/src/studio.rs

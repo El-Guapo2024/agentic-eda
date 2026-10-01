@@ -17,6 +17,7 @@
 //! ```
 
 mod board;
+mod cleanup_api;
 mod fab_api;
 mod fab_cmd;
 mod import_kicad;

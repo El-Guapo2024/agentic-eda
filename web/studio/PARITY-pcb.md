@@ -401,3 +401,49 @@ JSON exposure, no new endpoint) and `routing.track_width_presets`/
 | Right-click context menu built from the selection (GAPS.md #30) | partial: Copy/Cut/Duplicate/Move Exactly/Align/Distribute added to the existing static list, and a real per-kind Delete (`common.Interactive.delete`) replaces a footprint-only `ripSelection()` call that silently did nothing for a track/via/zone/shape/text right-click before this session | `Canvas.tsx:onContextMenu` -- still not source's fully dynamic per-item-type tool menu (GAPS.md #30's larger ask), but a meaningfully less-static list than before |
 | Zone outline editing: drag a corner, double-click an edge to add one, right-click a corner to delete it | ported | `pcbnew/tools/pcb_point_editor.cpp` -- `kicad-port/zonePointEditor.ts`, `Cmd::SetZoneOutline` (`crates/ops`, 1 new test), `Canvas.tsx`, `painter.ts:drawZoneHandles`. Scope, matching this app's existing point-editor-less baseline rather than a full port: a single selected zone only (no multi-select point editing, no graphic-shape point editor either -- see section 10's Shape Properties row); no 45/90-degree edge-angle constraint while dragging a corner (source's Ctrl-held behavior); no "equal length" guide overlay; corner drag snaps to the plain grid only, same as every other zone/route/shape placement click in this app (`gridHelper.ts:snapPoint`, not the anchor-aware `snapWithAnchors` the Move tool uses) |
 | Array tool, grouping, dimensioning | missing, unchanged | GAPS.md #26/#27/#28 -- out of scope this session |
+
+## 12. Cleanup Tracks & Vias
+
+Port of `pcbnew/tracks_cleaner.cpp` (`TRACKS_CLEANER`) and its dialog
+(`dialogs/dialog_cleanup_tracks_and_vias{,_base}.cpp`),
+`pcbnew.GlobalEdit.cleanupTracksAndVias`.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Delete redundant vias: same position+layer span, or a via sharing a position with a through-hole pad spanning the whole copper stack | identical in effect | `TRACKS_CLEANER::cleanup`'s `aDeleteDuplicateVias` branch |
+| Delete zero-length tracks | identical for a straight 2-point track (see below for the granularity note) | `cleanup`'s `aDeleteNullSegments` branch (`PCB_TRACK::IsNull`) |
+| Delete exact-duplicate tracks (same endpoints either direction, width, layer) | identical, and -- matching source -- runs regardless of every other checkbox | `cleanup`'s `aDeleteDuplicateSegments` branch |
+| Delete tracks connecting different nets (short circuit) | identical in effect, via the real connectivity graph (`eda_connectivity::build_graph`) | `removeShortingTrackSegments` |
+| Delete tracks fully inside pads | both endpoints inside the pad's shape (`PlacedPad::signed_distance`) rather than source's exact polygon boolean-subtract -- equivalent for every pad shape this model has | `deleteTracksInPads` |
+| Delete tracks unconnected at one end / vias connected on only one layer | identical -- reuses the existing `dangling_tracks_and_vias` port (`connectivity/src/dangling.rs`, the same function DRC's `track_dangling`/`via_dangling` already use), iterated to a fixed point same as source's own `do`/`while` loop | `deleteDanglingTracks`, `TestTrackEndpointDangling` |
+| Merge co-linear tracks | ported for the common case: two straight 2-point tracks sharing an endpoint, collinear, with nothing else touching the shared joint | `cleanup`'s merge pass, `testMergeCollinearSegments`/`mergeCollinearSegments` |
+| Call order (redundant/null/duplicate, then merge if asked, then shorting, then in-pad, then dangling, then a final merge pass if dangling actually deleted anything) | identical | `TRACKS_CLEANER::CleanupBoard` |
+| Dialog: six checkboxes, all unchecked by default (no `SetValue(true)` in the read snapshot), "Build Changes" (dry run, lists what would change) then "Update PCB" (commits), any checkbox edit resets back to "Build Changes" | identical | `DIALOG_CLEANUP_TRACKS_AND_VIAS` -- `CleanupTracksDialog.tsx` |
+| Net/net-class/layer/"selected items only" filters; "Refill zones before and after cleanup" | not ported -- this app's cleanup always scans the whole board and never touches zone fills itself (the existing Fill All Zones action covers that separately) | `m_netFilterOpt`/`m_netclassFilterOpt`/`m_layerFilterOpt`/`m_selectedItemsFilter`/`m_cbRefillZones` |
+| Cleanup Graphics... (a related but separate dialog, invalid-shape/duplicate-graphic cleanup) | missing, unchanged | `pcbnew.GlobalEdit.cleanupGraphics` -- a different dialog/engine, out of scope this item |
+
+**Model-shape adaptation, noted once here rather than per row above:**
+KiCad's `PCB_TRACK` is always a single two-point segment; this model's
+`Track` is a polyline of 2+ points (`crates/kicad`'s im/exporter already
+treats a multi-point `Track` as N-1 consecutive `(segment ...)`s, so this
+isn't a new approximation). Zero-length/duplicate detection operates at
+whole-`Track` granularity; the merge pass only ever considers straight
+2-point tracks as candidates (same scope `tune_api.rs`'s length tuner
+already has), so an already-merged multi-point `Track` is left alone
+rather than re-walked segment by segment. The merge pass's node check
+also doesn't model source's one narrow exception for a true 3-way
+junction where two of three meeting tracks happen to be collinear --
+this port simply declines to merge there (a missed merge, never a wrong
+one). See `crates/connectivity/src/cleanup.rs`'s own header comment for
+the full list.
+
+Rust: `crates/connectivity/src/cleanup.rs` (`compute_cleanup`, 13 unit
+tests) -- pure logic, no new `Cmd`: both apply and preview reuse the
+existing `Cmd::CommitRoute` (remove track/via ids, add the merged
+tracks) as one atomic undo step, same pattern `tune_api.rs` already
+established. `crates/cli/src/cleanup_api.rs`'s stateless `POST
+/api/cleanup_tracks/{preview,apply}` (same shape as `/api/tune_length`).
+UI: `CleanupTracksDialog.tsx`, wired to the existing
+`pcbnew.GlobalEdit.cleanupTracksAndVias` action (already present in
+`menus.json`'s Edit menu from the original extraction, just unregistered
+until now).
