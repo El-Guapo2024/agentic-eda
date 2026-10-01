@@ -14,7 +14,7 @@
 use crate::board::DrcBoard;
 use crate::constraints;
 use crate::item::{format_um, DrcRefItem, DrcViolation, ErrorType};
-use crate::providers::copper_clearance::facts_of_track;
+use crate::providers::copper_clearance::{facts_of_track, CourtyardMembership};
 use eda_model::BoardRules;
 
 /// `TRACK_WIDTH_CONSTRAINT`: the board's real minimum (never the net
@@ -27,8 +27,14 @@ use eda_model::BoardRules;
 pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     let mut out = Vec::new();
     let compiled = constraints::CompiledWidthRules::new(rules);
+    // Same reasoning as `copper_clearance::CourtyardMembership`'s own doc
+    // comment: compiled once per board, not per track, even though this
+    // provider only needs it for `A.insideCourtyard(...)`-conditioned
+    // `track_width` rules (none sampled yet, but the condition subset is
+    // shared and must not silently stop supporting the function here).
+    let courtyards = CourtyardMembership::new(board);
     for t in &board.tracks {
-        let facts = facts_of_track(rules, t);
+        let facts = facts_of_track(rules, t, &courtyards);
         let (min, max) = constraints::track_width_bounds(rules, &t.layer, &facts, &compiled);
         let item = || DrcRefItem { description: format!("Track [{}] on {}", t.net.as_deref().unwrap_or("<no net>"), t.layer), pos: (t.a.x, t.a.y), id: t.id.clone() };
         if t.width < min {

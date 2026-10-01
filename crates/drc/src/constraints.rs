@@ -307,7 +307,7 @@ mod tests {
     }
 
     fn facts(item_type: &'static str, net_class: &'static str, net_name: &'static str) -> crate::pcbexpr::Facts<'static> {
-        crate::pcbexpr::Facts { item_type, net_class, net_name, reference: "" }
+        crate::pcbexpr::Facts { item_type, net_class, net_name, reference: "", inside_courtyards: &[] }
     }
 
     #[test]

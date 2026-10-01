@@ -60,6 +60,15 @@ pub struct Facts<'a> {
     /// have none (an empty string never matches a real reference pattern,
     /// a safe default rather than a special case).
     pub reference: &'a str,
+    /// Every footprint whose courtyard contains this item's own
+    /// representative point (a pad/via's centre, a track's midpoint) --
+    /// `A.insideCourtyard('NAME')`/`B.insideCourtyard('NAME')`'s only data
+    /// source (task item 4; `insideArea`, a zone/rule-area containment test,
+    /// stays unsupported -- this model has no rule-area concept at all).
+    /// Precomputed once per board by `providers::copper_clearance::
+    /// CourtyardMembership` (and `providers::track_width`'s own copy of the
+    /// same) rather than recomputed per pair -- see that type's doc comment.
+    pub inside_courtyards: &'a [String],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -280,6 +289,7 @@ impl<'a, 'f> Parser<'a, 'f> {
         let func = &id[2..];
         match func {
             "hasNetclass" => Value::Bool(facts.net_class == arg),
+            "insideCourtyard" => Value::Bool(facts.inside_courtyards.iter().any(|fp_id| glob_match(arg, fp_id))),
             _ => Value::Unknown,
         }
     }
@@ -376,11 +386,11 @@ mod tests {
     use super::*;
 
     fn pad<'a>(net_class: &'a str, net_name: &'a str, reference: &'a str) -> Facts<'a> {
-        Facts { item_type: "Pad", net_class, net_name, reference }
+        Facts { item_type: "Pad", net_class, net_name, reference, inside_courtyards: &[] }
     }
 
     fn via<'a>(net_class: &'a str, net_name: &'a str) -> Facts<'a> {
-        Facts { item_type: "Via", net_class, net_name, reference: "" }
+        Facts { item_type: "Via", net_class, net_name, reference: "", inside_courtyards: &[] }
     }
 
     #[test]
@@ -418,6 +428,24 @@ mod tests {
         let c = pad("BI", "N3", "J2");
         assert!(!matches(cond, &a, &c));
         assert!(!matches(cond, &c, &a));
+    }
+
+    /// GAPS.md #3's `issue11814` tail: a real `.kicad_dru` rule
+    /// (`A.insideCourtyard('U4') || A.insideCourtyard('CW*')`) loosens
+    /// clearance for anything inside a tight WSON/connector courtyard.
+    /// Before `inside_courtyards` existed this function was unconditionally
+    /// `Value::Unknown` (unsupported), so the rule could never match and
+    /// every such pair fell back to the board's stricter default clearance.
+    #[test]
+    fn inside_courtyard_matches_by_name_or_glob() {
+        let near_u4 = Facts { inside_courtyards: &["U4".to_string()], ..pad("Default", "GND", "") };
+        let elsewhere = Facts { inside_courtyards: &[], ..pad("Default", "GND", "") };
+        assert!(matches(Some("A.insideCourtyard('U4')"), &near_u4, &elsewhere));
+        assert!(!matches(Some("A.insideCourtyard('U4')"), &elsewhere, &elsewhere));
+
+        let near_cw2 = Facts { inside_courtyards: &["CW2".to_string()], ..pad("Default", "GND", "") };
+        assert!(matches(Some("A.insideCourtyard('CW*')"), &near_cw2, &elsewhere), "the real rule's glob side ('CW*') must match a specific courtyard name");
+        assert!(!matches(Some("A.insideCourtyard('CW*')"), &near_u4, &elsewhere), "U4 must not satisfy a pattern it doesn't match");
     }
 
     #[test]
