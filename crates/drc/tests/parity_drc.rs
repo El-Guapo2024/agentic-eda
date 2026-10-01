@@ -22,6 +22,18 @@
 //! `crates/connectivity/tests/parity_connectivity.rs`), so counting it here
 //! would just show a permanent, uninformative 100% "missing".
 //!
+//! **Harness independence from `crates/freeroute`** (task item 1): an
+//! `examples/*.yaml` board's `place`+`route_best_effort` output is cached
+//! to disk under `target/parity_route_cache/` (gitignored, like every
+//! other build artifact), keyed by the board's intent YAML content, seed,
+//! and a cache-schema version -- see [`cached_place_and_route`]. The first
+//! run pays the router's real cost per board (GAPS.md #2 measured
+//! `l4_control_hub` at 1850s+); every run after that is a cache hit and
+//! costs nothing. This is what lets `drc_boards_evaluated` be a ratcheted
+//! metric again instead of hostage to autorouter performance: the
+//! per-board watchdog ([`BOARD_TIMEOUT`]) now only has to cover
+//! `eda_drc::run` + kicad-cli, not schematic/place/route.
+//!
 //! Writes `docs/parity/raw/drc.json`; `tools/parity_report.py` folds every
 //! `raw/*.json` into `docs/parity/REPORT.md` + `docs/parity/scores.json`.
 //! `#[ignore]`d like this workspace's other `kicad_cli_*` oracle tests --
@@ -34,6 +46,7 @@
 //! boards still run either way.
 
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -190,27 +203,121 @@ fn catch<F: FnOnce() -> R + panic::UnwindSafe, R>(f: F) -> Result<R, String> {
     })
 }
 
-/// Per-board time budget. Added after a real hang during this harness's own
-/// development run: one KiCad QA-corpus board drove `eda_drc::run` into
-/// what looked like quadratic-or-worse behavior on real geometry -- 95% CPU,
-/// *no* kicad-cli child process (so the hang is inside our own Rust code,
-/// not the oracle), running for 35+ minutes before the orchestrator
-/// flagged it. Every board now runs under this watchdog instead.
+/// Per-board time budget for the part of this harness that's actually
+/// under measurement: export + kicad-cli + `eda_drc::run`. Added after a
+/// real hang during this harness's own development run: one KiCad
+/// QA-corpus board drove `eda_drc::run` into what looked like
+/// quadratic-or-worse behavior on real geometry -- 95% CPU, *no* kicad-cli
+/// child process (so the hang is inside our own Rust code, not the
+/// oracle), running for 35+ minutes before the orchestrator flagged it.
+/// Every board now runs under this watchdog instead.
+///
+/// This budget deliberately does **not** cover schematic/place/route for an
+/// `examples/*.yaml` board any more (see [`cached_place_and_route`] and
+/// [`ROUTE_TIMEOUT`]) -- GAPS.md #2's follow-up measured `crates/freeroute`
+/// alone taking 1850s+ on `l4_control_hub`, which no sane per-board DRC
+/// budget can absorb, and a 60s-or-die watchdog around the *whole* pipeline
+/// made `drc_boards_evaluated` a referendum on the autorouter's performance
+/// instead of this crate's DRC parity. Splitting the budgets is the actual
+/// fix (harness independence, task item 1); this one stays tight because
+/// `eda_drc::run` + kicad-cli genuinely are fast once routing is out of the
+/// way (milliseconds to low seconds -- see `crates/drc/tests/perf_profile.rs`).
 const BOARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Runs `f` on a background thread and waits up to [`BOARD_TIMEOUT`]. A
-/// board that blows the budget is reported as a timeout (named in
+/// Runs `f` on a background thread and waits up to `timeout`. A call that
+/// blows its budget is reported as a timeout (named in
 /// `docs/parity/GAPS.md`/REPORT.md as a gap, same as any other per-board
 /// error) and abandoned -- Rust has no portable "kill this thread", so the
 /// hung thread is leaked, but since the whole test *process* exits the
 /// moment `parity_drc_harness` returns, the leak costs nothing beyond that
 /// thread's own memory for the rest of this one run.
-fn with_timeout<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+fn with_timeout<T: Send + 'static>(timeout: std::time::Duration, f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
     });
-    rx.recv_timeout(BOARD_TIMEOUT).map_err(|_| format!("TIMEOUT after {}s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)", BOARD_TIMEOUT.as_secs()))
+    rx.recv_timeout(timeout).map_err(|_| format!("TIMEOUT after {}s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)", timeout.as_secs()))
+}
+
+/// Schema/format version for [`route_cache_dir`]'s cache entries -- bump by
+/// hand if a change here (or to `route_best_effort`/`place`'s call shape)
+/// should invalidate every entry a prior run wrote, rather than silently
+/// reusing a stale routed board that no longer reflects today's pipeline.
+const ROUTE_CACHE_SCHEMA: u32 = 1;
+
+/// Generous, one-time-cost budget for the part of the pipeline this harness
+/// must still pay for on a cache miss: `place` + `route_best_effort`.
+/// Separate from [`BOARD_TIMEOUT`] on purpose -- see that constant's doc
+/// comment. GAPS.md #2 measured `l4_control_hub` taking 1850s+ end to end
+/// (and still 30+ minutes under a *quiet* machine, ruling out contention as
+/// the main cause), so this has to be large enough to let a cold cache
+/// entry actually finish at least once; a board that still can't route
+/// inside this budget is reported as a genuine per-board error (same as
+/// any other), not silently dropped.
+const ROUTE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45 * 60);
+
+fn route_cache_dir(repo: &Path) -> PathBuf {
+    // `target/` is gitignored workspace-wide already, so this needs no new
+    // `.gitignore` entry and no cleanup step: `cargo clean` (or just
+    // deleting the directory) costs one slow re-route per board next run,
+    // never a correctness difference -- see task item 1's "gitignored or
+    // scratch cache" instruction.
+    repo.join("target/parity_route_cache")
+}
+
+/// Cache key: the board's own name (for a legible filename) plus a hash of
+/// everything that can change what a route *should* look like -- the
+/// intent YAML's own bytes (so editing an example invalidates its cache
+/// entry automatically, no manual bump needed), the seed, and
+/// [`ROUTE_CACHE_SCHEMA`]. This is a cache-invalidation key, not a security
+/// boundary, so the stdlib's non-cryptographic hasher is the right tool --
+/// no new dependency for it.
+fn route_cache_key(name: &str, yaml_text: &str, seed: u64) -> String {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    ROUTE_CACHE_SCHEMA.hash(&mut h);
+    seed.hash(&mut h);
+    yaml_text.hash(&mut h);
+    format!("{name}-{:016x}", h.finish())
+}
+
+/// `place` then `route_best_effort`, the two pipeline stages whose cost
+/// depends on this workspace's own placer/router rather than anything
+/// `eda_drc` is being measured on (see [`BOARD_TIMEOUT`]'s doc comment) --
+/// cached to disk keyed by [`route_cache_key`] so a repeat run (the normal
+/// case once a board's entry exists) pays none of that cost. A cache miss
+/// still runs under [`ROUTE_TIMEOUT`] and is cached on success; a
+/// placement/routing panic (e.g. `unroutable_tiny_outline`'s intentional
+/// failure) propagates uncaught here, exactly as it did before this
+/// existed, for the caller's own `catch` to turn into a per-board error.
+fn cached_place_and_route(repo: &Path, name: &str, yaml_text: &str, seed: u64, design: &Design, model: &ConstraintModel) -> Design {
+    let path = route_cache_dir(repo).join(format!("{}.json", route_cache_key(name, yaml_text, seed)));
+    if let Ok(bytes) = std::fs::read(&path) {
+        match serde_json::from_slice::<Design>(&bytes) {
+            Ok(cached) => return cached,
+            Err(e) => eprintln!("  (route cache entry at {} unreadable ({e}); re-routing)", path.display()),
+        }
+    }
+
+    let (design, model) = (design.clone(), model.clone());
+    let routed = with_timeout(ROUTE_TIMEOUT, move || {
+        let placed = place(&design, &model, &PlaceOptions { seed, ..Default::default() }).unwrap_or_else(|e| panic!("place: {e:?}"));
+        route_best_effort(&placed, &model)
+    })
+    .unwrap_or_else(|e| panic!("place/route: {e}"));
+
+    if let Err(e) = std::fs::create_dir_all(path.parent().expect("cache path has a parent")) {
+        eprintln!("  (could not create route cache dir: {e}; will re-route every run)");
+    } else {
+        match routed.canonical_bytes() {
+            Ok(bytes) => {
+                if let Err(e) = std::fs::write(&path, bytes) {
+                    eprintln!("  (could not write route cache entry: {e}; will re-route every run)");
+                }
+            }
+            Err(e) => eprintln!("  (could not encode routed board for caching: {e:?}; will re-route every run)"),
+        }
+    }
+    routed
 }
 
 fn kicad_positions_by_type(report: &serde_json::Value) -> BTreeMap<String, Vec<(i64, i64)>> {
@@ -329,28 +436,41 @@ fn example_boards(repo: &Path) -> Vec<PathBuf> {
     v
 }
 
-fn process_example(cli: &Path, yaml_path: &Path, source: &'static str) -> BoardResult {
+fn process_example(cli: &Path, repo: &Path, yaml_path: &Path, source: &'static str) -> BoardResult {
     let name = yaml_path.file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
-    let (cli, yaml_path, name2) = (cli.to_path_buf(), yaml_path.to_path_buf(), name.clone());
-    let result = with_timeout(move || {
-        catch(AssertUnwindSafe(|| {
-            let name = name2;
-            let text = std::fs::read_to_string(&yaml_path).unwrap_or_else(|e| panic!("read {}: {e}", yaml_path.display()));
-            let mut model: ConstraintModel = serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", yaml_path.display()));
-            let fp_root = eda_kicad::default_footprint_library_root();
-            for w in eda_kicad::resolve_library_footprints(&mut model, &fp_root) {
-                eprintln!("  footprint library: {w}");
-            }
-            let opts = EngineOptions { seed: 0, intent_hash: format!("parity_drc_{name}"), ..Default::default() };
-            let design = derive_schematic(&model, &opts).unwrap_or_else(|e| panic!("derive_schematic: {e:?}"));
-            let placed = place(&design, &model, &PlaceOptions { seed: 0, ..Default::default() }).unwrap_or_else(|e| panic!("place: {e:?}"));
-            let routed = route_best_effort(&placed, &model);
 
-            let meta = ExportMeta { date: "2026-01-01", title: &name };
+    // ---- phase 1: schematic -> place -> route, cached, its own budget ----
+    // Not wrapped in `with_timeout(BOARD_TIMEOUT, ...)`: that watchdog is
+    // for the fast stuff actually under measurement (see its doc comment).
+    // `cached_place_and_route` applies its own, much larger, one-time-cost
+    // timeout internally.
+    let phase1 = catch(AssertUnwindSafe(|| -> (Design, ConstraintModel) {
+        let text = std::fs::read_to_string(yaml_path).unwrap_or_else(|e| panic!("read {}: {e}", yaml_path.display()));
+        let mut model: ConstraintModel = serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", yaml_path.display()));
+        let fp_root = eda_kicad::default_footprint_library_root();
+        for w in eda_kicad::resolve_library_footprints(&mut model, &fp_root) {
+            eprintln!("  footprint library: {w}");
+        }
+        let opts = EngineOptions { seed: 0, intent_hash: format!("parity_drc_{name}"), ..Default::default() };
+        let design = derive_schematic(&model, &opts).unwrap_or_else(|e| panic!("derive_schematic: {e:?}"));
+        let routed = cached_place_and_route(repo, &name, &text, 0, &design, &model);
+        (routed, model)
+    }));
+    let (routed, model) = match phase1 {
+        Ok(v) => v,
+        Err(e) => return BoardResult { board: name, source, error: Some(e), types: BTreeMap::new(), non_kicad_counts: BTreeMap::new() },
+    };
+
+    // ---- phase 2: export + kicad-cli + eda_drc::run -- the thing under
+    // measurement, kept under the normal per-board watchdog. ----
+    let (cli, name2) = (cli.to_path_buf(), name.clone());
+    let result = with_timeout(BOARD_TIMEOUT, move || {
+        catch(AssertUnwindSafe(|| {
+            let meta = ExportMeta { date: "2026-01-01", title: &name2 };
             let pcb_text = export_kicad_pcb(&routed, &model, &meta).unwrap_or_else(|e| panic!("export_kicad_pcb: {e:?}"));
-            let dir = std::env::temp_dir().join("eda_parity_drc").join(&name);
+            let dir = std::env::temp_dir().join("eda_parity_drc").join(&name2);
             std::fs::create_dir_all(&dir).unwrap();
-            let pcb_path = dir.join(format!("{name}.kicad_pcb"));
+            let pcb_path = dir.join(format!("{name2}.kicad_pcb"));
             std::fs::write(&pcb_path, &pcb_text).unwrap();
 
             let kicad_report = run_kicad_drc(&cli, &pcb_path, true);
@@ -373,7 +493,7 @@ fn process_example(cli: &Path, yaml_path: &Path, source: &'static str) -> BoardR
 fn process_work_board(cli: &Path, repo: &Path, name: &'static str, design_json: &Path, intent_yaml: &Path, pcb: &Path) -> BoardResult {
     let _ = repo;
     let (cli, design_json, intent_yaml, pcb) = (cli.to_path_buf(), design_json.to_path_buf(), intent_yaml.to_path_buf(), pcb.to_path_buf());
-    let result = with_timeout(move || {
+    let result = with_timeout(BOARD_TIMEOUT, move || {
         catch(AssertUnwindSafe(|| {
             let model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent_yaml).unwrap_or_else(|e| panic!("read {}: {e}", intent_yaml.display())))
                 .unwrap_or_else(|e| panic!("parse {}: {e}", intent_yaml.display()));
@@ -397,7 +517,7 @@ fn process_work_board(cli: &Path, repo: &Path, name: &'static str, design_json: 
 fn process_qa_board(cli: &Path, pcb: &Path) -> BoardResult {
     let name = pcb.strip_prefix(pcb.ancestors().nth(2).unwrap_or(pcb)).unwrap_or(pcb).display().to_string();
     let (cli, pcb) = (cli.to_path_buf(), pcb.to_path_buf());
-    let result = with_timeout(move || {
+    let result = with_timeout(BOARD_TIMEOUT, move || {
         catch(AssertUnwindSafe(|| {
             let text = std::fs::read_to_string(&pcb).unwrap_or_else(|e| panic!("read {}: {e}", pcb.display()));
             let (design, mut model, _notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb failed: {e:?}"));
@@ -457,18 +577,20 @@ fn zone_fill_impact(cli: &Path, repo: &Path, qa_sample: &[PathBuf]) -> Vec<ZoneI
         if let Ok(model) = serde_yaml::from_str::<ConstraintModel>(&text) {
             let opts = EngineOptions { seed: 0, intent_hash: "parity_zone_impact".into(), ..Default::default() };
             if let Ok(design) = derive_schematic(&model, &opts) {
-                if let Ok(placed) = place(&design, &model, &PlaceOptions { seed: 0, ..Default::default() }) {
-                    let routed = route_best_effort(&placed, &model);
-                    let meta = ExportMeta { date: "2026-01-01", title: "l4_control_hub_zone" };
-                    if let Ok(pcb_text) = export_kicad_pcb(&routed, &model, &meta) {
-                        let dir = std::env::temp_dir().join("eda_parity_drc_zone");
-                        std::fs::create_dir_all(&dir).unwrap();
-                        let pcb_path = dir.join("l4_control_hub.kicad_pcb");
-                        std::fs::write(&pcb_path, &pcb_text).unwrap();
-                        let refill = counts_by_type(&run_kicad_drc(cli, &pcb_path, true));
-                        let no_refill = counts_by_type(&run_kicad_drc(cli, &pcb_path, false));
-                        out.push(ZoneImpact { board: "l4_control_hub (ours, routed)".into(), refill, no_refill });
-                    }
+                // Same cache as the main harness (task item 1): this
+                // opt-in sidebar re-derives the identical board, so it
+                // should never pay for its own cold route when the main
+                // run already has (or will have) a cache entry for it.
+                let routed = cached_place_and_route(repo, "l4_control_hub", &text, 0, &design, &model);
+                let meta = ExportMeta { date: "2026-01-01", title: "l4_control_hub_zone" };
+                if let Ok(pcb_text) = export_kicad_pcb(&routed, &model, &meta) {
+                    let dir = std::env::temp_dir().join("eda_parity_drc_zone");
+                    std::fs::create_dir_all(&dir).unwrap();
+                    let pcb_path = dir.join("l4_control_hub.kicad_pcb");
+                    std::fs::write(&pcb_path, &pcb_text).unwrap();
+                    let refill = counts_by_type(&run_kicad_drc(cli, &pcb_path, true));
+                    let no_refill = counts_by_type(&run_kicad_drc(cli, &pcb_path, false));
+                    out.push(ZoneImpact { board: "l4_control_hub (ours, routed)".into(), refill, no_refill });
                 }
             }
         }
@@ -500,7 +622,7 @@ fn parity_drc_harness() {
     for yaml in example_boards(&repo) {
         let source = if yaml.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("ladder") { "ladder" } else { "example" };
         println!("== example: {} ==", yaml.display());
-        boards.push(process_example(&cli, &yaml, source));
+        boards.push(process_example(&cli, &repo, &yaml, source));
     }
 
     let work_root = repo.join("work");
