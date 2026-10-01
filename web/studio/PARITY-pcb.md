@@ -141,10 +141,12 @@ Wiring: `components/canvas/selectionCandidates.ts`, `netAtCursor.ts`,
 | Router-driven drag of a **footprint** (so its attached tracks follow via the router, distinct from the row above) | **not implemented** -- `dragger.rs` only models `DM_CORNER`/via dragging, matching the task's explicit single-item-drag scope; `CanInlineDrag`'s footprint branch (`!(aDragMode & DM_FREE_ANGLE)`) has no backend counterpart to wire | `router_tool.cpp:InlineDrag`'s `footprints` path |
 | "Highlight collisions" router mode | **done this session** -- it's not a distinct concept from `Mode::MarkObstacles`, already fully implemented server-side since gap #7 stage 1 (`router_tool.cpp` literally labels `RM_MarkObstacles` as `"Highlight collisions"` in its own status-bar summary); the real gap was that nothing in the frontend ever let a person select any mode but Walkaround at all -- fixed by the settings dialog below | `router_tool.cpp`'s `RM_MarkObstacles` case, `PCB_ACTIONS::routerHighlightMode` |
 | Interactive Router Settings... (`Ctrl+<`) | **done this session, narrower than upstream's own dialog by necessity** -- only `Mode` (Highlight Collisions/Shove/Walk Around) and Remove Redundant Tracks have any real effect in `crates/pns` (confirmed by grepping every other `RoutingSettings` field for a reader outside `settings.rs` itself: none -- `ShoveVias`/`JumpOverObstacles`/`SmartPads`/`SmoothDraggedSegments`/`OptimizeEntireDraggedTrack`/`AutoPosture`/`FixAllSegments`/`AllowDrcViolations` either don't exist on this port's settings struct or exist but are never read), so only those two are real, working controls -- every other upstream field is left out entirely (same "nothing to show, not a bug" convention Board Setup/Zone dialogs already use), except Free Angle Mode, shown **disabled** with its reason rather than omitted since the task asked for it by name and this port's router only ever builds 45-degree traces (a scope decision from gap #7's very first session, not something a checkbox could flip). A setting change here takes effect on the next `X`/`D` session start, not live mid-route -- this app starts a brand-new backend session per route/drag (no persistent one upstream's live dialog could push an update into) | `dialog_pns_settings.cpp` -- `components/RouterSettingsDialog.tsx`, `state.routerSettings` (`state/store.tsx`), `POST /api/route/start`'s new `remove_loops` field and `POST /api/route/drag_start`'s new `mode` field (`crates/cli/src/route_api.rs`) |
+| Route Differential Pair (`6`, `pcbnew.InteractiveRouter.DiffPair`) -- two parallel, gap-matched lines from one session | **done this session, significantly narrower than upstream by necessity** -- see `crates/pns/PARITY.md`'s own "Stage 7" section for the full design. Pair detection by net-name suffix (`+`/`-`/`P`/`N`, trailing digits preserved) and gap/width from the net-class diff-pair fields, both exactly as the task asked; routing itself is a direct 45-trace spine offset into two lines (collision-*reporting* only, like a plain route in `mark_obstacles` mode) rather than upstream's own coupled-shove/walkaround `DIFF_PAIR_T` item -- that whole second collision model was out of proportion to the remaining task scope. No via/layer-switch mid-pair-route either (single layer only) | `pns_diff_pair_placer.cpp`, `board.cpp:MatchDpSuffix` -- `crates/pns/src/diff_pair.rs` (8 tests), `crates/model/src/lib.rs`'s `diff_pair_{width,gap,via_gap}_of` (3 tests), `crates/cli/src/route_api.rs`'s `dp_*` endpoints, `components/canvas/diffPairRouting.ts` + `kicad-port/dpTool.ts` (3 tests, mirroring `routing.ts`/`routeTool.ts`), `Canvas.tsx`, `useActionRunner.ts`, `painter.ts:drawInProgress`'s new `"diffpair"` branch |
 
 Pure logic: `kicad-port/localRatsnest.ts` (5 tests), `kicad-port/dragTool.ts`
-(2 tests). Wiring: `painter.ts`'s `movePreview` rotate/flip transform,
-`useActionRunner.ts:tryTransformDuringMove`; `components/canvas/dragging.ts`,
+(2 tests), `kicad-port/dpTool.ts` (3 tests). Wiring: `painter.ts`'s
+`movePreview` rotate/flip transform, `useActionRunner.ts:
+tryTransformDuringMove`; `components/canvas/dragging.ts`,
 `kicad-port/dragTool.ts`, `Canvas.tsx`, `useActionRunner.ts` for the `D`
 drag tool itself (see the new rows above); `components/RouterSettingsDialog.tsx`
 for the settings dialog.
@@ -192,7 +194,7 @@ resetLocalCoords -- see section 1). The context menu itself
 ### Hotkey coverage audit
 
 Of 766 extracted actions, 201 have a real default hotkey (hotkey or
-macHotkey non-null). 49 of those are registered in
+macHotkey non-null). 50 of those are registered in
 `useActionRunner.ts` (and therefore reachable from `useGlobalHotkeys.ts`,
 the menu bar, and the toolbars) -- a prior session added
 `selectAll`/`unselectAll` (Ctrl+A/Ctrl+Shift+A); a later one added
@@ -201,18 +203,19 @@ the menu bar, and the toolbars) -- a prior session added
 `layerNext`/`layerPrev` (+/-), and `layerAlphaInc`/`layerAlphaDec`
 (}/{) -- 11 more, picked (per the task's item 5 instruction) for
 user-visible impact once items 1-4 landed; **this session** added
-`Drag45Degree` (`D`, gap #7 stage 5's frontend) and `SettingsDialog`
-(`Ctrl+<`, the router settings dialog -- see section 4). 152 are
-not registered. 55 of those are `eeschema.*` -- out of scope for *pcbnew*
-parity specifically, since this app's Schematic tab is read-only by design
-(no schematic editing verbs exist in the backend yet). The remaining 97
-(57 `pcbnew.*`, 40 `common.*` that apply to both editors) are genuine
+`Drag45Degree` (`D`, gap #7 stage 5's frontend), `SettingsDialog`
+(`Ctrl+<`, the router settings dialog -- see section 4), and `DiffPair`
+(`6`, gap #7 stage 7 -- see section 4). 151 are not registered. 55 of
+those are `eeschema.*` -- out of scope for *pcbnew* parity specifically,
+since this app's Schematic tab is read-only by design (no schematic
+editing verbs exist in the backend yet). The remaining 96
+(56 `pcbnew.*`, 40 `common.*` that apply to both editors) are genuine
 pcbnew-parity gaps, listed here (alphabetically, same as before) per the
 task's "explicitly listed as missing" instruction rather than left
 silently unimplemented. The final report ranks what's left by
 user-visible impact; this table is for lookup, not priority order.
 
-#### `pcbnew.*` missing (57)
+#### `pcbnew.*` missing (56)
 
 | Action | Hotkey | Label |
 |---|---|---|
@@ -249,7 +252,6 @@ user-visible impact; this table is for lookup, not priority order.
 | `pcbnew.InteractiveMove.moveIndividually` | Ctrl+M | Move Individually |
 | `pcbnew.InteractiveRouter.Autoroute` | Shift+F | Attempt Finish Selected (Autoroute) |
 | `pcbnew.InteractiveRouter.ContinueFromEnd` | Ctrl+E | Route From Other End |
-| `pcbnew.InteractiveRouter.DiffPair` | 6 | Route Differential Pair |
 | `pcbnew.InteractiveRouter.DragFreeAngle` | G | Drag Free Angle |
 | `pcbnew.InteractiveRouter.RouteSelected` | Shift+X | Route Selected |
 | `pcbnew.InteractiveRouter.RouteSelectedFromEnd` | Shift+E | Route Selected From Other End |

@@ -275,3 +275,105 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
     }
 }
+
+// --------------------------------------------------------------- differential pairs (stage 6)
+//
+// `6` on a recognized diff-pair net: route two parallel, gap-matched lines
+// at once (`eda_pns::diff_pair::DiffPairPlacer`, driven through
+// `eda_pns::router::Router`'s `*_diff_pair` methods). Shares `RouteCell`/
+// `Router` with the route/drag sessions above -- `Router` itself keeps all
+// three mutually exclusive -- and the existing `cancel` above already ends
+// a diff-pair session too (it just drops the whole cell, session kind
+// notwithstanding).
+
+fn dp_preview_json(router: &Router, preview: &eda_pns::diff_pair::DiffPairPreview) -> Value {
+    let (net_a, net_b) = router.diff_pair_nets().unwrap_or((None, None));
+    let layer_name = router.layer_name(preview.layer);
+    json!({
+        "ok": true,
+        "net_a": net_a,
+        "net_b": net_b,
+        "layer": layer_name,
+        "width": preview.width,
+        "colliding": preview.colliding,
+        "head_a": pts_json(&preview.head_a.pts),
+        "head_b": pts_json(&preview.head_b.pts),
+        "runs_a": preview.runs_a.iter().map(|r| json!({ "layer": layer_name, "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
+        "runs_b": preview.runs_b.iter().map(|r| json!({ "layer": layer_name, "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
+        "snapped_end": preview.snapped_end,
+    })
+}
+
+/// `POST /api/route/dp_start`: `{x, y, layer}`.
+pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let (_, design, model) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let mut router = Router::new(&design, &model);
+    let at = point_of(&req);
+    let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
+    match router.start_diff_pair(at, layer) {
+        Ok(()) => {
+            let reply = router.diff_pair_preview(at).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
+            reply
+        }
+        Err(message) => err(message),
+    }
+}
+
+/// `POST /api/route/dp_move`: `{x, y, flip_posture?}`.
+pub fn dp_move(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    if req.get("flip_posture").and_then(Value::as_bool).unwrap_or(false) {
+        router.flip_diff_pair_posture();
+    }
+    let at = point_of(&req);
+    router.diff_pair_preview(at).map(|p| dp_preview_json(router, &p)).unwrap_or_else(|| err("not routing a diff pair"))
+}
+
+/// `POST /api/route/dp_fix`: `{x, y}`.
+pub fn dp_fix(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    let at = point_of(&req);
+    match router.fix_diff_pair(at) {
+        Some(FixOutcome::Fixed { real_end }) => {
+            let preview = router.diff_pair_preview(at).map(|p| dp_preview_json(router, &p)).unwrap_or_else(|| json!({}));
+            json!({ "ok": true, "blocked": false, "real_end": real_end, "preview": preview })
+        }
+        Some(FixOutcome::Blocked) => json!({ "ok": true, "blocked": true, "message": "still colliding; not fixed" }),
+        None => err("not routing a diff pair"),
+    }
+}
+
+/// `POST /api/route/dp_undo_segment` (Backspace): no body.
+pub fn dp_undo_segment(cell: &RouteCell) -> Value {
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    let popped = router.undo_diff_pair_segment();
+    json!({ "ok": true, "popped": popped })
+}
+
+/// `POST /api/route/dp_finish`: `{x, y}`.
+pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut router = match cell.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        Some(r) => r,
+        None => return err("not routing a diff pair"),
+    };
+    let at = point_of(&req);
+    let Some(commit) = router.finish_diff_pair(at) else {
+        return json!({ "ok": false, "message": "final segment still collides; diff pair left uncommitted" });
+    };
+    let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
+    match board::step(dir, cmd, true, "ui") {
+        Ok(summary) => json!({ "ok": true, "message": summary }),
+        Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+    }
+}

@@ -68,12 +68,16 @@ pub struct Router {
     /// a tri-state, since nothing here ever needs to ask "which one" in
     /// the abstract, only "is a drag in progress" or "is a route."
     drag: Option<crate::dragger::Dragger>,
+    /// Gap #7 task item 6: `crate::diff_pair::DiffPairPlacer`'s own
+    /// session, mutually exclusive with `session`/`drag` the same way
+    /// those two already are with each other.
+    diff: Option<crate::diff_pair::DiffPairPlacer>,
 }
 
 impl Router {
     pub fn new(design: &Design, model: &ConstraintModel) -> Self {
         let (world, layers) = crate::from_ir::build_node(design, model);
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None }
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None }
     }
 
     pub fn is_routing(&self) -> bool {
@@ -82,6 +86,10 @@ impl Router {
 
     pub fn is_dragging(&self) -> bool {
         self.drag.is_some()
+    }
+
+    pub fn is_routing_diff_pair(&self) -> bool {
+        self.diff.is_some()
     }
 
     pub fn layer_index(&self, name: &str) -> Option<i32> {
@@ -117,6 +125,8 @@ impl Router {
         let Some(net) = self.world.get(start_item).map(|i| i.net().clone()).filter(|n| n.is_some()) else {
             return Err("that item has no net to route".into());
         };
+        self.drag = None;
+        self.diff = None;
         self.session = Some(Session { placer: LinePlacer::start(&self.world, start_pos, Some(start_item), net, layer, width), pending_via_layer: None });
         Ok(())
     }
@@ -279,6 +289,7 @@ impl Router {
         let item_id = self.world.item_at(at, LayerRange::single(layer), START_SNAP_UM).ok_or("nothing to drag there")?;
         let dragger = crate::dragger::Dragger::start(&self.world, at, item_id).ok_or("that item can't be dragged (only track segments/corners and vias can)")?;
         self.session = None;
+        self.diff = None;
         self.drag = Some(dragger);
         Ok(())
     }
@@ -328,6 +339,100 @@ impl Router {
             commit.vias.push(eda_model::ir::Via { id: String::new(), net, at: *pos, drill: resolved_drill, diameter: resolved_diameter, from_layer, to_layer });
         }
         self.drag = None;
+        Some(commit)
+    }
+
+    // ------------------------------------------------------------- diff pairs (stage 6)
+    //
+    // `6` on a net with a recognized differential-pair suffix: route two
+    // parallel, gap-matched lines at once (`crate::diff_pair::
+    // DiffPairPlacer`). See that module's own doc comment for this port's
+    // scope (no shove/walkaround/via-switch for a pair yet -- a direct
+    // 45-trace with collision *reporting* only, same contract as
+    // `Mode::MarkObstacles`).
+
+    /// `DIFF_PAIR_PLACER::Start` plus upstream's own `FindDpPrimitivePair`:
+    /// resolve whatever's at `at` the same way [`Self::start`] does (a
+    /// real pad/via/track-end within [`START_SNAP_UM`]), then find its
+    /// differential-pair partner net and a real anchor on it already on
+    /// the board. Replaces any route/drag/diff-pair session already in
+    /// progress.
+    pub fn start_diff_pair(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
+        let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
+        let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_UM, None);
+        let Some((start_item, start_pos)) = hit else {
+            return Err("no pad, via, or track end there to route from".into());
+        };
+        let Some(net) = self.world.get(start_item).map(|i| i.net().clone()).filter(|n| n.is_some()) else {
+            return Err("that item has no net to route".into());
+        };
+        let Some(placer) = crate::diff_pair::DiffPairPlacer::start(&self.world, start_pos, &net, layer, &self.rules) else {
+            return Err("not a recognized differential-pair net (needs a +/-/P/N suffix, with a matching pad for the other half already on the board)".into());
+        };
+        self.session = None;
+        self.drag = None;
+        self.diff = Some(placer);
+        Ok(())
+    }
+
+    /// The net names of the diff-pair session currently in progress, if
+    /// any -- `(net_a, net_b)`, the UI's own readout (not consulted by
+    /// `Router` itself for any decision, same as [`Self::current_net`]).
+    pub fn diff_pair_nets(&self) -> Option<(Option<String>, Option<String>)> {
+        self.diff.as_ref().map(|d| (d.net_a.as_deref().map(str::to_string), d.net_b.as_deref().map(str::to_string)))
+    }
+
+    pub fn diff_pair_preview(&self, at: Point) -> Option<crate::diff_pair::DiffPairPreview> {
+        self.diff.as_ref().map(|d| d.preview(&self.world, &self.rules, at))
+    }
+
+    pub fn flip_diff_pair_posture(&mut self) {
+        if let Some(d) = &mut self.diff {
+            d.flip_posture();
+        }
+    }
+
+    /// `DIFF_PAIR_PLACER::FixRoute` for an intermediate click.
+    pub fn fix_diff_pair(&mut self, at: Point) -> Option<FixOutcome> {
+        let d = self.diff.as_mut()?;
+        Some(match d.fix(&self.world, &self.rules, at) {
+            Some(real_end) => FixOutcome::Fixed { real_end },
+            None => FixOutcome::Blocked,
+        })
+    }
+
+    pub fn undo_diff_pair_segment(&mut self) -> bool {
+        self.diff.as_mut().map(|d| d.undo_last_segment()).unwrap_or(false)
+    }
+
+    pub fn diff_pair_cancel(&mut self) {
+        self.diff = None;
+    }
+
+    /// `DIFF_PAIR_PLACER::FixRoute` with `aForceFinish`: both lines'
+    /// finished runs become ordinary `Track` IR entries on their own
+    /// nets, in the *same* [`RouteCommit`] (and so the same
+    /// `Cmd::CommitRoute` undo step) a single-track finish produces --
+    /// this port's diff pair needed no new commit shape at all, just more
+    /// tracks in the existing one.
+    pub fn finish_diff_pair(&mut self, at: Point) -> Option<RouteCommit> {
+        let (net_a, net_b, layer, width) = {
+            let d = self.diff.as_ref()?;
+            (d.net_a.clone(), d.net_b.clone(), d.layer, d.width)
+        };
+        let layer_name = self.layer_name(layer).to_string();
+        let (runs_a, runs_b) = self.diff.as_mut()?.finish(&self.world, &self.rules, at)?;
+        let mut commit = RouteCommit::default();
+        for (net, runs) in [(&net_a, &runs_a), (&net_b, &runs_b)] {
+            let net_name = net.as_deref().unwrap_or("").to_string();
+            for run in runs {
+                if run.point_count() < 2 {
+                    continue;
+                }
+                commit.tracks.push(eda_model::ir::Track { id: String::new(), net: net_name.clone(), pins: Vec::new(), layer: layer_name.clone(), width, pts: run.pts.clone() });
+            }
+        }
+        self.diff = None;
         Some(commit)
     }
 

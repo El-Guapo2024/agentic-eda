@@ -33,9 +33,12 @@ exists rather than letting you rediscover it.
    straight-segment polyline (`eda_model::ir::Track::pts`); nothing ever
    constructs an arc item. Every KiCad pass that branches on "does this
    line contain an arc" takes the non-arc path unconditionally here.
-4. **No diff pairs, no meandering/length-tuning, no component dragger,
-   no multi-selection drag.** Single track route and single-item
-   (segment/via) drag only, matching the task's explicit scope.
+4. **No meandering/length-tuning, no component dragger, no multi-
+   selection drag.** Single-item (segment/via) drag only. Diff pairs
+   (Stage 7) *are* now ported, but narrower than upstream's own
+   `DIFF_PAIR_T`-based implementation -- no coupled shove/walkaround for
+   a pair, no via/layer-switch mid-pair-route; see that stage's own
+   section for exactly why and what it still is.
 5. **Units**: integer micrometers throughout (`eda_model::ir::Um`), like
    the rest of this workspace, not KiCad's internal nanometers.
 
@@ -295,6 +298,72 @@ effect on the *next* `X`/`D` session, not a live one already in progress
 -- this app starts a brand new `Router`/session per route or drag (no
 persistent one to push a live update into the way upstream's own dialog
 does), a deliberate, documented adaptation rather than a gap.
+
+## Stage 7 -- differential pairs
+
+`pns_diff_pair_placer.{h,cpp}` -> `src/diff_pair.rs`, task item 6 (`6`
+key). See that module's own extensive header comment for the full
+design; the short version:
+
+- **Pair detection**: `dp_coupled_net_name` is `BOARD::MatchDpSuffix`
+  (`pcbnew/board.cpp`) ported verbatim -- walk a net name backward past
+  trailing digits/underscores, swap a trailing `+`/`-`/`P`/`N` for its
+  complement (`"LVDS_P0"` -> `"LVDS_N0"`).
+- **Sizing**: `BoardRules::diff_pair_width_of`/`diff_pair_gap_of`/
+  `diff_pair_via_gap_of` (new, `crates/model/src/lib.rs`) resolve the
+  net-class fields the task brief points at (`NetClass::diff_pair_*`,
+  which existed on the model already -- carried through `.kicad_pro`
+  import since an earlier session, per that field's own doc comment --
+  but nothing read them until now), falling back to upstream's own
+  `SIZES_SETTINGS` hardcoded defaults (125um width, 180um gap) when a
+  board has no diff-pair-specific class, which is every example board in
+  this workspace today.
+- **Routing itself is structurally simpler than upstream, on purpose**:
+  upstream routes a genuine new `PNS::ITEM` kind (`DIFF_PAIR_T`, not
+  modeled in this port's `Item` enum at all -- decision #3) with its own
+  dedicated hull/collision/shove/walkaround machinery, so the pair itself
+  is a first-class obstacle-resolution unit. Building that whole second
+  collision model was out of proportion to the remaining scope, so this
+  port instead builds one direct-45-trace **spine** centerline (no
+  walkaround/shove), offsets it perpendicular by `(gap + width) / 2` on
+  each side (`offset_polyline`, a standard "parallel curve of a
+  polyline" construction reusing `optimizer::intersect_lines` -- widened
+  to `pub(crate)` for this -- to miter each new corner), and snaps each
+  line's first/last point to its own real pad rather than the
+  geometrically offset point (so the pair always actually reaches the
+  pads it started from, regardless of their exact spacing relative to
+  `gap + width`). Each line is collision-checked independently; *either*
+  colliding flags the whole preview, matching `Mode::MarkObstacles`'s
+  report-only contract -- **there is no shove or walkaround for a pair in
+  this port**, and no via/layer-switch mid-pair-route either (single
+  layer only). A real, usable feature for the common case the task asks
+  for (lay a clean, gap-matched pair along an open path), just not a
+  collision-resolving one yet.
+- **Commit**: both lines' finished runs become ordinary `Track` IR
+  entries on their own nets in the *same* `RouteCommit`/`Cmd::CommitRoute`
+  a single-track finish produces -- needed no new commit shape at all,
+  just more tracks in the existing one (`Router::finish_diff_pair`).
+- **HTTP**: `POST /api/route/dp_{start,move,fix,undo_segment,finish}`
+  (`crates/cli/src/route_api.rs`), sharing `RouteCell`/`Router` with the
+  route/drag sessions (mutually exclusive, same as those two already are
+  with each other); the existing `/api/route/cancel` already ends a
+  diff-pair session too (it just drops the whole cell).
+- **Frontend**: `6` (`pcbnew.InteractiveRouter.DiffPair`) arms the tool
+  the same toggle-arm way `X` does; `components/canvas/diffPairRouting.ts`
+  + `kicad-port/dpTool.ts` mirror `routing.ts`/`routeTool.ts`'s own split
+  exactly. `/` flips the spine's posture; Backspace undoes the last leg;
+  no via/width hotkeys (not supported, see above). `painter.ts` draws
+  both lines, coloring both the violation color if *either* collides
+  (the pair reads as one unit to the user even though each line is its
+  own collision check).
+- **Test coverage note**: `diff_pair.rs`'s own algorithmic core (suffix
+  matching, polyline offsetting/mitering, pair-finding, full route/fix/
+  finish flows, collision reporting) has 8 direct unit tests; the
+  `Router`-level `*_diff_pair` methods are thin, direct delegations
+  (compiled and type-checked, same disjoint-field-borrow pattern the
+  already-tested `drag_*` methods use) without their own dedicated
+  integration test, to keep this task item's scope proportionate to the
+  remaining ones -- see the final report.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

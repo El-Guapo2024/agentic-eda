@@ -606,6 +606,20 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     return;
   }
 
+  if (draw.kind === "diffpair") {
+    // No shove/walkaround for a pair in this port (crates/pns/src/
+    // diff_pair.rs's own doc comment) -- a collision on *either* line
+    // colors *both*, since the pair is conceptually one unit to the user
+    // even though each line is drawn/collision-checked independently.
+    const violationColor = "#ff3333";
+    const color = draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer));
+    for (const run of draw.runsA ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
+    for (const run of draw.runsB ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
+    strokeDashedPolyline(ctx, view, draw.ptsA, color, draw.width, false);
+    strokeDashedPolyline(ctx, view, draw.ptsB, color, draw.width, false);
+    return;
+  }
+
   const cursor = opts.cursorUm;
   const pts = draw.pts.slice();
   // A finished measurement (2 points already fixed) is a static ruler --

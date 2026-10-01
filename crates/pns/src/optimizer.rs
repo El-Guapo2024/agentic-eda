@@ -120,7 +120,12 @@ fn merge_step(pts: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32
 /// without the bounding-box/parameter-range checks that make it a
 /// *segment* intersection instead of a *line* one. `None` only for
 /// (near-)parallel lines, which can't have a unique meeting point.
-fn intersect_lines(a1: eda_model::ir::Point, a2: eda_model::ir::Point, b1: eda_model::ir::Point, b2: eda_model::ir::Point) -> Option<eda_model::ir::Point> {
+///
+/// `pub(crate)`: `diff_pair.rs`'s own polyline-offset construction (its own
+/// doc comment) needs exactly this same "where would these two lines
+/// meet" query to re-join consecutive offset segments at their own
+/// mitered corner, and reuses this rather than duplicating it.
+pub(crate) fn intersect_lines(a1: eda_model::ir::Point, a2: eda_model::ir::Point, b1: eda_model::ir::Point, b2: eda_model::ir::Point) -> Option<eda_model::ir::Point> {
     let (dir1x, dir1y) = ((a2.x - a1.x) as i128, (a2.y - a1.y) as i128);
     let (dir2x, dir2y) = ((b2.x - b1.x) as i128, (b2.y - b1.y) as i128);
     let det = dir2x * dir1y - dir2y * dir1x; // dir2.Cross(dir1)

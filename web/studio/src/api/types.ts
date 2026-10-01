@@ -716,6 +716,43 @@ export interface DragPreview {
   fanout: { layer: string; width: Um; pts: [Um, Um][] }[];
 }
 
+/** `POST /api/route/dp_{start,move,fix,undo_segment,finish}` (gap #7 task
+ * item 6, `6`): route two parallel, gap-matched lines (a differential
+ * pair) from one session -- `eda_pns::diff_pair::DiffPairPlacer`. Shares
+ * the same backend session as the route/drag endpoints above; only one of
+ * a route, a drag, or a diff pair can be in progress at once. No shove/
+ * walkaround/via-switch for a pair in this port -- `colliding` is report-
+ * only, same contract as a plain route in `mark_obstacles` mode -- see
+ * `crates/pns/PARITY.md`'s own diff-pair section for why. */
+export interface DiffPairPreview {
+  ok: boolean;
+  message?: string;
+  net_a: string | null;
+  net_b: string | null;
+  layer: string;
+  width: Um;
+  colliding: boolean;
+  /** The live, not-yet-fixed head of each line -- already resolved
+   * (offset from the spine, snapped to the real pad(s) at either end)
+   * server-side, draw directly. */
+  head_a: [Um, Um][];
+  head_b: [Um, Um][];
+  /** Already-fixed runs from earlier in this session, one array per line. */
+  runs_a: RoutePreviewRun[];
+  runs_b: RoutePreviewRun[];
+  /** Both lines found a same-net anchor near the cursor at once --
+   * finishing now lands exactly on a real coupled pad pair. */
+  snapped_end: boolean;
+}
+
+export interface DpFixReply {
+  ok: boolean;
+  message?: string;
+  blocked: boolean;
+  real_end?: boolean;
+  preview?: DiffPairPreview;
+}
+
 // ---------------------------------------------------------------- Ratsnest
 //
 // GET /api/ratsnest. Source of truth: crates/cli/src/studio.rs

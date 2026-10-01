@@ -44,6 +44,8 @@ export type ToolId =
   | "move"
   | "drag"
   | "route"
+  /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair): route a differential pair -- see kicad-port/dpTool.ts's own header comment. */
+  | "diffpair"
   | "via"
   | "zone"
   | "draw_segment"
@@ -73,6 +75,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   move: "Move item(s)",
   drag: "Drag (keeps connections): click to drop, Esc to cancel",
   route: "Route track: click to add a point, V for via, Enter/double-click to finish, Esc to cancel",
+  diffpair: "Route differential pair: click to add a point, Enter/double-click to finish, Esc to cancel",
   via: "Click to place a via",
   zone: "Zone: click to add points, Enter/double-click to finish, Esc to cancel",
   draw_segment: "Line: click start, then end",
@@ -154,6 +157,25 @@ export type DrawState =
       /** Via drag only: its own directly-attached tracks, already
        * stretched to follow it live, each with its own real width. */
       fanout?: { layer: string; width: Um; pts: [Um, Um][] }[];
+    }
+  /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair ->
+   * `eda_pns::diff_pair::DiffPairPlacer`): an in-progress differential-
+   * pair route, both lines at once -- see kicad-port/dpTool.ts's own
+   * header comment for the full gesture and `DpDrawState`, which this
+   * duplicates (dependency-free module, manually kept in sync, same
+   * convention as the "route"/"drag" variants above). */
+  | {
+      kind: "diffpair";
+      netA: string | null;
+      netB: string | null;
+      layer: string;
+      width: Um;
+      ptsA: [Um, Um][];
+      ptsB: [Um, Um][];
+      colliding?: boolean;
+      runsA?: { layer: string; pts: [Um, Um][] }[];
+      runsB?: { layer: string; pts: [Um, Um][] }[];
+      snappedEnd?: boolean;
     }
   | { kind: "zone"; pts: [Um, Um][] }
   | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }

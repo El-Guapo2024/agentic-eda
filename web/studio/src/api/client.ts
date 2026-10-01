@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, Um } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, Um } from "./types";
 
 export class ApiError extends Error {}
 
@@ -320,4 +320,28 @@ export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
 
 export function routeDragFinish(x: Um, y: Um): Promise<CmdReply> {
   return postJson("/api/route/drag_finish", { x, y });
+}
+
+// `6`: route a differential pair (gap #7 task item 6) -- wired into
+// Canvas.tsx's own diff-pair tool, see components/canvas/diffPairRouting.ts.
+// `routeCancel` above already ends a dp session too (same backend session).
+
+export function dpStart(x: Um, y: Um, layer: string): Promise<DiffPairPreview> {
+  return postJson("/api/route/dp_start", { x, y, layer });
+}
+
+export function dpMove(x: Um, y: Um, flipPosture?: boolean): Promise<DiffPairPreview> {
+  return postJson("/api/route/dp_move", { x, y, flip_posture: flipPosture });
+}
+
+export function dpFix(x: Um, y: Um): Promise<DpFixReply> {
+  return postJson("/api/route/dp_fix", { x, y });
+}
+
+export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
+  return postJson("/api/route/dp_undo_segment", {});
+}
+
+export function dpFinish(x: Um, y: Um): Promise<CmdReply> {
+  return postJson("/api/route/dp_finish", { x, y });
 }

@@ -446,6 +446,34 @@ impl BoardRules {
         self.class_of(net).and_then(|c| c.via_drill).unwrap_or(self.via_drill)
     }
 
+    /// Differential-pair trace width for `net`'s class. Unlike every
+    /// resolver above, there is no board-wide `diff_pair_width` default
+    /// field to fall back to (`NetClass::diff_pair_width` was carried
+    /// additively on import with nothing reading it until now -- see that
+    /// field's own doc comment); absent a class value, this falls back to
+    /// `SIZES_SETTINGS`'s own hardcoded upstream default
+    /// (`pns_sizes_settings.h`'s constructor: `m_diffPairWidth(125000)`,
+    /// nanometers in KiCad's own internal unit -- 125um here).
+    pub fn diff_pair_width_of(&self, net: &str) -> ir::Um {
+        self.class_of(net).and_then(|c| c.diff_pair_width).unwrap_or(125)
+    }
+
+    /// Differential-pair gap for `net`'s class -- see
+    /// `diff_pair_width_of`'s own doc comment; upstream's matching default
+    /// is `m_diffPairGap(180000)` (180um).
+    pub fn diff_pair_gap_of(&self, net: &str) -> ir::Um {
+        self.class_of(net).and_then(|c| c.diff_pair_gap).unwrap_or(180)
+    }
+
+    /// Differential-pair via-to-via gap for `net`'s class -- upstream's
+    /// `SIZES_SETTINGS::DiffPairViaGap()` defaults to "same as the trace
+    /// gap" (`m_diffPairViaGapSameAsTraceGap(true)`), so this falls back to
+    /// [`Self::diff_pair_gap_of`] rather than its own separate 180um
+    /// literal when the class doesn't set one either.
+    pub fn diff_pair_via_gap_of(&self, net: &str) -> ir::Um {
+        self.class_of(net).and_then(|c| c.diff_pair_via_gap).unwrap_or_else(|| self.diff_pair_gap_of(net))
+    }
+
     /// Widest track any net on this board can take. The router's clearance
     /// summaries are precomputed for one querying width, so they are built
     /// at this one: conservative for narrow nets, correct for every net.
@@ -871,6 +899,36 @@ mod tests {
         assert_eq!(rules.clearance_of("CC2"), 150);
         assert_eq!(rules.clearance_of("GND"), 200, "a net outside the class keeps the board default");
         assert!(rules.validate().is_empty(), "{:?}", rules.validate());
+    }
+
+    #[test]
+    fn diff_pair_resolvers_fall_back_to_upstreams_own_sizes_settings_defaults() {
+        let rules = BoardRules::default();
+        // No net class at all -- SIZES_SETTINGS's own hardcoded constructor
+        // defaults (pns_sizes_settings.h): 125um width, 180um gap, via gap
+        // same as trace gap.
+        assert_eq!(rules.diff_pair_width_of("USB_DP"), 125);
+        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 180);
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 180);
+    }
+
+    #[test]
+    fn a_net_classs_own_diff_pair_fields_override_the_defaults() {
+        let mut rules = BoardRules::default();
+        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(200), diff_pair_gap: Some(150), diff_pair_via_gap: Some(300), priority: 0 });
+        assert_eq!(rules.diff_pair_width_of("USB_DP"), 200);
+        assert_eq!(rules.diff_pair_gap_of("USB_DP"), 150);
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 300);
+        // A net outside the class keeps the upstream defaults, same as
+        // every other per-class resolver.
+        assert_eq!(rules.diff_pair_width_of("GND"), 125);
+    }
+
+    #[test]
+    fn diff_pair_via_gap_falls_back_to_the_classs_own_trace_gap_not_the_180um_literal() {
+        let mut rules = BoardRules::default();
+        rules.net_classes.push(NetClass { name: "usb".into(), nets: vec!["USB_*".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: Some(150), diff_pair_via_gap: None, priority: 0 });
+        assert_eq!(rules.diff_pair_via_gap_of("USB_DP"), 150, "SIZES_SETTINGS::DiffPairViaGap()'s own \"same as trace gap\" default");
     }
 
     #[test]
