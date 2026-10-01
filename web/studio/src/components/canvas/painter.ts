@@ -13,6 +13,23 @@ import { posture45 } from "./routing";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
+import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
+import { offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
+
+/**
+ * pcb_painter.cpp GetColor's net-highlight branch (see kicad-port/
+ * netHighlight.ts's header comment for the exact source lines): a
+ * copper/connected item on the highlighted net brightens, everything
+ * else on a different net darkens, both by the same 0.5 factor. Returns
+ * `color` unchanged when no net is highlighted at all, or for an item
+ * with no net (`net` null/undefined -- a footprint's silkscreen/
+ * courtyard/body, which source's own `conItem` cast would be null for
+ * too, so this already matches: only genuinely connected items dim).
+ */
+function withNetHighlight(color: string, net: string | null | undefined, highlight: string | null): string {
+  if (!highlight || !net) return color;
+  return rgbToHex(netHighlightColor(hexToRgb(color), net === highlight));
+}
 
 export interface PaintOptions {
   selection: Set<string>;
@@ -28,7 +45,7 @@ export interface PaintOptions {
   highContrast: boolean;
   gridUm: number;
   gridVisible: boolean;
-  movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+  movePreview: { refs: string[]; dxUm: number; dyUm: number; rotateQuarterTurns?: number; flipped?: boolean } | null;
   /** The route/zone/drawing tool currently in progress (Canvas.tsx), and the cursor to rubber-band its next point toward -- null cursor (pointer left the canvas, or hasn't moved yet) just skips the rubber-band, still showing the fixed points so far. */
   drawState: DrawState | null;
   cursorUm: { x: number; y: number } | null;
@@ -97,7 +114,24 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   const preview = opts.movePreview?.refs.includes(part.ref) ? opts.movePreview : null;
 
   ctx.save();
-  if (preview) ctx.translate(preview.dxUm, preview.dyUm);
+  if (preview) {
+    ctx.translate(preview.dxUm, preview.dyUm);
+    // edit_tool.cpp Rotate()/Flip() during an active Move spin the
+    // dragged item in place around its own (already-moving) anchor --
+    // see useActionRunner.ts's `tryTransformDuringMove` doc comment for
+    // why that's an exact-not-approximate match for a single dragged
+    // part. `ctx.rotate` is clockwise-positive in a Y-down canvas,
+    // exactly like crates/model/src/footprint.rs's `to_board` (no axis
+    // flip in either), so the preview spins the same direction the
+    // committed `rotate` Cmd will once it lands.
+    if (preview.rotateQuarterTurns || preview.flipped) {
+      const [ax, ay] = part.at ?? [(x0 + x1) / 2, (y0 + y1) / 2];
+      ctx.translate(ax, ay);
+      if (preview.rotateQuarterTurns) ctx.rotate((preview.rotateQuarterTurns * 90 * Math.PI) / 180);
+      if (preview.flipped) ctx.scale(-1, 1);
+      ctx.translate(-ax, -ay);
+    }
+  }
 
   // Courtyard.
   const courtyardKey = part.side === "bottom" ? "b_courtyard" : "f_courtyard";
@@ -122,8 +156,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   // to size it, so only the wall stroke is drawn.
   const padCopperKey = part.side === "bottom" ? "b_cu" : "f_cu";
   for (const pad of part.pads ?? []) {
-    const highlighted = opts.netHighlight && pad.net === opts.netHighlight;
-    const fill = highlighted ? "#ffffff" : layerColor(padCopperKey);
+    const fill = withNetHighlight(layerColor(padCopperKey), pad.net, opts.netHighlight);
     pathForPad(ctx, pad);
     if (opts.sketchPads) {
       ctx.strokeStyle = fill;
@@ -198,7 +231,7 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
     withAlpha(ctx, layerAlpha(opts, t.layer) * 0.92, () => {
       ctx.beginPath();
       t.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-      ctx.strokeStyle = layerColor(key);
+      ctx.strokeStyle = withNetHighlight(layerColor(key), t.net, opts.netHighlight);
       ctx.lineWidth = opts.sketchTracks ? hairlineUm(view, 1.5) : Math.max(t.width, hairlineUm(view, 1));
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
@@ -209,12 +242,13 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
     for (const v of board.routing.vias) {
       ctx.beginPath();
       ctx.arc(v.x, v.y, v.d / 2, 0, Math.PI * 2);
+      const viaColor = withNetHighlight(layerColor("via"), v.net, opts.netHighlight);
       if (opts.sketchVias) {
-        ctx.strokeStyle = layerColor("via");
+        ctx.strokeStyle = viaColor;
         ctx.lineWidth = hairlineUm(view, 1.5);
         ctx.stroke();
       } else {
-        ctx.fillStyle = layerColor("via");
+        ctx.fillStyle = viaColor;
         ctx.fill();
       }
     }
@@ -241,7 +275,7 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
       ctx.beginPath();
       z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.closePath();
-      ctx.strokeStyle = selected ? layerColor("selection") : layerColor(key);
+      ctx.strokeStyle = selected ? layerColor("selection") : withNetHighlight(layerColor(key), z.net, opts.netHighlight);
       ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
       ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
       ctx.stroke();
@@ -567,7 +601,11 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawZones(ctx, view, board, opts, "f_cu");
       drawTracksAndVias(ctx, view, board, opts, "f_cu");
     },
-    ratsnest: () => opts.showRatsnest && opts.ratsnestEdges && drawRatsnest(ctx, view, opts.ratsnestEdges, opts.ratsnestCurved, opts.netHighlight),
+    // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: redraw
+    // the airwires live from a moving footprint's (previewed) position
+    // rather than waiting for the move to commit and the backend's next
+    // /api/ratsnest poll -- see kicad-port/localRatsnest.ts.
+    ratsnest: () => opts.showRatsnest && opts.ratsnestEdges && drawRatsnest(ctx, view, offsetRatsnestForPreview(opts.ratsnestEdges, board, opts.movePreview), opts.ratsnestCurved, opts.netHighlight),
   };
   for (const key of drawOrder()) byLayer[key]?.();
   // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.

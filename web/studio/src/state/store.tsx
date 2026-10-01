@@ -11,6 +11,7 @@ import type { BoardState, Cmd, DrcReport, Part, Ratsnest, Schematic, Shape, Trac
 import { fetchDrc, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
+import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 /**
@@ -72,6 +73,17 @@ export interface MovePreview {
   kind?: "part" | "via" | "shape" | "text";
   dxUm: number;
   dyUm: number;
+  /**
+   * edit_tool.cpp Rotate/Flip during an active Move: both act on the
+   * live preview instead of committing immediately (updateModificationPoint's
+   * `m_dragging && HasReferencePoint()` guard -- the item hasn't been
+   * pushed to the board yet, so there's nothing to commit to). Only
+   * meaningful for `kind === "part"` (the only kind with a real
+   * rotate/flip Cmd); harmless and ignored for the others. Quarter turns
+   * 0-3, same units as `Cmd::Rotate`.
+   */
+  rotateQuarterTurns?: number;
+  flipped?: boolean;
 }
 
 /** The 3D viewer's own view-option toggles -- KiCad's 3D viewer has all of these (View menu / its own toolbar): hide silkscreen, hide solder mask, hide the rendered component models, flip to view the board from the other side, and an orthographic/perspective projection switch. */
@@ -158,13 +170,13 @@ export interface StudioState {
   layerOpacity: Record<string, number>;
 
   /**
-   * pcbnew's selection filter lets a box-select skip whole item classes.
-   * Only `footprints` has any effect right now -- tracks/vias aren't
-   * individually selectable yet at all (see canvas/Canvas.tsx's
-   * `partHit`), so those two toggles are here for the panel's shape but
-   * are inert until track/via selection exists.
+   * pcbnew's real Selection Filter panel (panel_selection_filter.cpp):
+   * a click/box-select/select-all skips whole item classes that are
+   * toggled off. See selectionCandidates.ts's `SelectionFilter` for which
+   * of KiCad's real categories this app's simpler model has a selectable
+   * equivalent for.
    */
-  selectionFilter: { footprints: boolean; tracks: boolean; vias: boolean };
+  selectionFilter: SelectionFilter;
 
   /** Refuse a move/edit that adds gate failures. Not a KiCad feature -- see the task's Strict toggle. */
   strict: boolean;
@@ -262,7 +274,7 @@ const initialState: StudioState = {
   // model data to wait for, so they're defaulted here.
   layerVisible: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, true])),
   layerOpacity: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, 1])),
-  selectionFilter: { footprints: true, tracks: true, vias: true },
+  selectionFilter: DEFAULT_SELECTION_FILTER,
   strict: true,
   drcDialogOpen: false,
   hotkeysDialogOpen: false,
@@ -281,7 +293,7 @@ const initialState: StudioState = {
   drcSelected: null,
 };
 
-type Action =
+export type Action =
   | { type: "BOARD_OK"; board: BoardState }
   | { type: "BOARD_ERR"; message: string }
   | { type: "VERSION"; version: string }
@@ -292,6 +304,7 @@ type Action =
   | { type: "SET_SELECTION"; refs: string[] }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
+  | { type: "ESCAPE" }
   | { type: "SET_HOT"; refs: string[] }
   | { type: "SET_NET_HIGHLIGHT"; net: string | null }
   | { type: "SET_ARMED"; ref: string | null }
@@ -375,12 +388,32 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, selection: next };
     }
     case "CLEAR_SELECTION":
-      // The universal "cancel and go back to Select" -- Escape's own
-      // handler (common.Interactive.cancel, useActionRunner.ts) reaches
-      // this same action, so it has to drop whatever the route/zone/
-      // drawing/text tools were in the middle of too, not just a footprint
-      // selection/move.
+      // The universal "cancel and go back to Select" -- used by the box
+      // select's own "start a fresh (non-additive) drag on empty space"
+      // reset, and anywhere else that needs to drop whatever the route/
+      // zone/drawing/text tools were in the middle of, not just a
+      // footprint selection/move.
       return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null, itemPropertiesId: null };
+    case "ESCAPE": {
+      // pcb_selection_tool.cpp's IsCancel() handler, tiered exactly like
+      // source: an in-progress tool (move/draw/armed-place) owns Escape
+      // first and just reverts itself -- the SELECTION_TOOL's own
+      // handler (selection non-empty -> clear it; otherwise -> clear net
+      // highlight, m_ESCClearsNetHighlight default true) only runs once
+      // nothing else is running. The earlier plain CLEAR_SELECTION this
+      // replaced also wiped the selection on every Escape, even mid-move
+      // -- wrong: EDIT_TOOL::doMoveSelection's own cancel just reverts
+      // the move and leaves the pre-move selection exactly as it was.
+      const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.movePreview != null;
+      if (inProgress) {
+        return { ...state, armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null };
+      }
+      if (state.selection.size > 0) {
+        return { ...state, selection: new Set() };
+      }
+      // Idle, nothing selected: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
+      return { ...state, netHighlight: null };
+    }
     case "SET_HOT":
       return { ...state, hot: new Set(action.refs) };
     case "SET_NET_HIGHLIGHT":
@@ -482,8 +515,8 @@ export interface StudioApi {
   rotateSelection: (quarterTurns: number) => Promise<void>;
   ripSelection: () => Promise<void>;
   flipSelection: () => Promise<void>;
-  /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position. `kind` picks which Cmd this becomes (default "part") -- see MovePreview. */
-  commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"]) => Promise<void>;
+  /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
+  commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
   route: () => Promise<void>;
   undo: () => Promise<void>;
@@ -631,12 +664,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (p?.placed) await runCmd({ op: "flip", part: ref });
       }
     },
-    commitMove: async (refs, dxUm, dyUm, kind = "part") => {
+    commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       for (const ref of refs) {
         if (kind === "part") {
           const p = api.partByRef(ref);
           if (p?.placed && p.at) await runCmd({ op: "move_to", part: ref, x: p.at[0] + dxUm, y: p.at[1] + dyUm });
+          // Rotating/flipping about the part's own (already-moved) anchor
+          // is exactly what the backend's Rotate/Flip ops do regardless of
+          // when they're called, so applying them after the move lands on
+          // the same final pose as KiCad's live in-place spin during a
+          // single-item drag -- see MovePreview's own doc comment.
+          if (rotateQuarterTurns) await runCmd({ op: "rotate", part: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
+          if (flipped) await runCmd({ op: "flip", part: ref });
         } else if (kind === "via") {
           const v = api.viaById(ref);
           if (v) await runCmd({ op: "move_via", id: ref, x: v.x + dxUm, y: v.y + dyUm });

@@ -23,12 +23,17 @@ import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
 import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
 import { findRouteAnchor, posture45, commitRoute } from "./routing";
-import { itemHitsAt } from "./itemHitTest";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
 import { pickDefaultZoomController, type ZoomController } from "../../kicad-port/zoomController";
 import { isMac } from "../../platform";
+import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
+import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
+import { openPropertiesFor } from "./properties";
 import "../../styles/canvas.css";
+
+/** A candidate's own kind determines which Cmd a drag of it would commit through -- tracks/zones have no move_* Cmd (api/types.ts), so they're selectable but never draggable, same as before this session. */
+const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "via", "shape", "text"]);
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
@@ -83,7 +88,7 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, "segment" | "arc" | "rect" | "circ
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
   | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
-  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; additive: boolean };
+  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] };
 
 /** Every part whose courtyard contains the point, topmost (last drawn) first. */
 function partsAt(parts: Part[], xUm: number, yUm: number): Part[] {
@@ -133,6 +138,18 @@ export function Canvas() {
   const lastPointerScreenRef = useRef<{ x: number; y: number } | null>(null);
   /** Set by onPointerUp when a right-button pan-drag just ended with real movement, so the native `contextmenu` event that follows (a separate, later browser event) knows to suppress the menu instead of opening it -- see onContextMenu. */
   const justPannedRef = useRef(false);
+  /**
+   * pcb_selection_tool.cpp Main(): a plain click on an item that's
+   * already part of a multi-item selection does NOT collapse the
+   * selection down to just that one item if a drag follows ("Check if
+   * dragging has started within any of selected items bounding box" ->
+   * doDrag=true, selectPoint never runs) -- only a genuine click with no
+   * movement does. This app decides drag-vs-click only once movement
+   * either does or doesn't happen, so the click's own selection-modifier
+   * effect is deferred here at pointer-down and applied in onPointerUp
+   * ONLY if the drag never actually moved anything.
+   */
+  const pendingClickRef = useRef<{ id: string; modifiers: ClickModifiers } | null>(null);
 
   const board = state.board;
 
@@ -304,24 +321,53 @@ export function Canvas() {
     return [x, y];
   };
 
-  /** pcb_selection_tool.cpp: where several items overlap, Alt-click (and, here, a press-and-hold) shows a picker instead of always taking the topmost. */
+  /** A human-readable label for a disambiguation-menu row. */
+  const candidateLabel = useCallback(
+    (c: SelectionCandidate): string => {
+      switch (c.kind) {
+        case "part": {
+          const p = api.partByRef(c.id);
+          return `${c.id}${p?.value ? ` (${p.value})` : ""} [footprint]`;
+        }
+        case "track":
+          return `Track [${api.trackById(c.id)?.layer ?? c.id}]`;
+        case "via":
+          return `Via`;
+        case "zone":
+          return `Zone [${api.zoneById(c.id)?.layer ?? c.id}]`;
+        case "shape":
+          return `${api.shapeById(c.id)?.kind ?? "Shape"} [${c.layer ?? ""}]`;
+        case "text":
+          return `Text "${api.textById(c.id)?.content ?? ""}"`;
+      }
+    },
+    [api]
+  );
+
+  /**
+   * pcb_selection_tool.cpp doSelectionMenu: where several items overlap
+   * (GuessSelectionCandidates couldn't narrow it to one, or Alt/a
+   * press-and-hold skipped straight past it), show a picker instead of
+   * always taking the topmost -- plus source's own "Select All" entry,
+   * which applies the SAME click modifier to every candidate at once
+   * rather than just the one eventually clicked.
+   */
   const disambiguate = useCallback(
-    (candidates: Part[], screenX: number, screenY: number) => {
+    (candidates: SelectionCandidate[], modifiers: ClickModifiers, screenX: number, screenY: number) => {
       if (candidates.length === 0) return;
       if (candidates.length === 1) {
-        dispatch({ type: "SET_SELECTION", refs: [candidates[0]!.ref] });
+        dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, candidates[0]!.id, modifiers) });
         return;
       }
-      setContextMenu({
-        x: screenX,
-        y: screenY,
-        entries: candidates.map((p) => ({
-          label: `${p.ref}${p.value ? ` (${p.value})` : ""}`,
-          onSelect: () => dispatch({ type: "SET_SELECTION", refs: [p.ref] }),
-        })),
+      const pick = (c: SelectionCandidate) => dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, c.id, modifiers) });
+      const entries: MenuEntry[] = candidates.map((c) => ({ label: candidateLabel(c), onSelect: () => pick(c) }));
+      entries.push({
+        label: "Select All",
+        onSelect: () => dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, candidates.map((c) => c.id), modifiers) }),
       });
+      setContextMenu({ x: screenX, y: screenY, entries });
     },
-    [dispatch]
+    [dispatch, state.selection, candidateLabel]
   );
 
   const clearLongPress = () => {
@@ -431,7 +477,7 @@ export function Canvas() {
 
     if (moveMode) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm);
+      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped);
       return;
     }
     if (state.armed) {
@@ -451,14 +497,26 @@ export function Canvas() {
     }
     if (e.button !== 0) return;
 
-    if (e.altKey && board && state.selectionFilter.footprints) {
-      disambiguate(partsAt(board.parts, wx, wy), e.clientX, e.clientY);
+    pendingClickRef.current = null;
+    const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
+    const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
+    const toleranceUm = Math.max(150, 6 / state.view.scale);
+    const onePixelUm = 1 / state.view.scale;
+    const runPick = (skipHeuristics: boolean): SelectionCandidate[] =>
+      board ? pickSelectionCandidates(board, wx, wy, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics) : [];
+
+    // pcb_selection_tool.cpp SELECTION_TOOL::hasModifier's `m_skip_heuristics`
+    // (Alt): go straight to the full candidate list/clarification menu,
+    // same as a long-press (disambiguateCursor forces the same thing).
+    if (e.altKey) {
+      disambiguate(runPick(true), modifiers, e.clientX, e.clientY);
       return;
     }
 
-    // Long-press: if the pointer stays down here without much movement,
-    // fire the same disambiguation a moment from now, pre-empting
-    // whatever plain click/drag was about to happen.
+    // Long-press (ADVANCED_CFG::m_DisambiguationMenuDelay, 500ms default
+    // -- LONG_PRESS_MS): if the pointer stays down here without much
+    // movement, fire the same disambiguation a moment from now,
+    // pre-empting whatever plain click/drag was about to happen.
     const startScreen: [number, number] = [e.clientX, e.clientY];
     clearLongPress();
     longPressRef.current = {
@@ -467,47 +525,66 @@ export function Canvas() {
         longPressRef.current = null;
         dragRef.current = null;
         setMarquee(null);
-        if (board && state.selectionFilter.footprints) disambiguate(partsAt(board.parts, wx, wy), startScreen[0], startScreen[1]);
+        disambiguate(runPick(true), modifiers, startScreen[0], startScreen[1]);
       }, LONG_PRESS_MS),
     };
 
-    const hit = board && state.selectionFilter.footprints ? partHit(board.parts, wx, wy) : null;
-    if (hit) {
-      const additive = e.shiftKey;
-      const already = state.selection.has(hit.ref);
-      let refs: string[];
-      if (additive) {
-        dispatch({ type: "TOGGLE_SELECTION", ref: hit.ref });
-        refs = already ? [...state.selection].filter((r) => r !== hit.ref) : [...state.selection, hit.ref];
-      } else if (already && state.selection.size > 1) {
-        refs = [...state.selection]; // keep the group for a drag
-      } else {
-        dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
-        refs = [hit.ref];
-      }
-      dragRef.current = { kind: "move", refs, moveKind: "part", startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, hit.ref), moved: false };
+    const candidates = runPick(false);
+
+    if (candidates.length > 1) {
+      clearLongPress();
+      disambiguate(candidates, modifiers, e.clientX, e.clientY);
       return;
     }
 
-    // Tracks/vias/zones/shapes/text (item 7): tried only once no
-    // footprint is under the click, matching KiCad's own click priority
-    // (a copper/graphic item under a footprint never steals its click).
-    if (board) {
-      const itemHit = itemHitsAt(board, wx, wy, Math.max(150, 6 / state.view.scale))[0];
-      if (itemHit) {
-        const additive = e.shiftKey;
-        if (additive) dispatch({ type: "TOGGLE_SELECTION", ref: itemHit.id });
-        else dispatch({ type: "SET_SELECTION", refs: [itemHit.id] });
-        // Tracks/zones have no move_* Cmd (see api/types.ts) -- selectable, not draggable.
-        if (itemHit.kind === "via" || itemHit.kind === "shape" || itemHit.kind === "text") {
-          dragRef.current = { kind: "move", refs: [itemHit.id], moveKind: itemHit.kind, startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, itemHit.id), moved: false };
-        }
+    if (candidates.length === 1) {
+      clearLongPress();
+      const hit = candidates[0]!;
+
+      if (hasModifier(modifiers)) {
+        // pcb_selection_tool.cpp Main(): `hasModifier()` alone routes a
+        // drag to SelectRectArea/SelectMultiple -- a modifier+drag is
+        // ALWAYS a box-select, even one starting right on top of a hit
+        // item, never an item move. Defer the click's own effect (a
+        // plain Shift/Ctrl+click with no movement still has to toggle/
+        // add/remove exactly this one item) until onPointerUp knows
+        // whether a real drag happened; a real drag discards this and
+        // re-derives the result from the box's actual contents instead
+        // (see that handler -- the two converge to the same answer for
+        // a single-item "box" anyway, except a literal zero-movement
+        // click can't geometrically contain/touch anything, which is
+        // exactly why this deferral exists).
+        pendingClickRef.current = { id: hit.id, modifiers };
+        dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY] };
         return;
       }
+
+      // pcb_selection_tool.cpp Main(): "Check if dragging has started
+      // within any of selected items bounding box" -- a plain click (no
+      // modifier) on an item that's already part of a larger selection
+      // keeps the WHOLE group for a potential drag, deferring the
+      // click's own "collapse to just this one" effect until/unless the
+      // drag turns out not to move anything (onPointerUp).
+      const keepGroupForDrag = state.selection.has(hit.id) && state.selection.size > 1;
+      let refs: string[];
+      if (keepGroupForDrag) {
+        refs = [...state.selection];
+        pendingClickRef.current = { id: hit.id, modifiers };
+      } else {
+        refs = applySingleClickModifier(state.selection, hit.id, modifiers);
+        dispatch({ type: "SET_SELECTION", refs });
+      }
+      if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0) {
+        const soleRef = refs.length === 1 ? refs[0] : undefined;
+        dragRef.current = { kind: "move", refs, moveKind: hit.kind as "part" | "via" | "shape" | "text", startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, soleRef), moved: false };
+      }
+      return;
     }
 
-    dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY], additive: e.shiftKey };
-    if (!e.shiftKey) dispatch({ type: "CLEAR_SELECTION" });
+    // Nothing under the cursor: box select, or (no modifier) a plain
+    // click that just clears whatever was selected.
+    dragRef.current = { kind: "box", startWorld: [wx, wy], startScreen: [e.clientX, e.clientY] };
+    if (!hasModifier(modifiers)) dispatch({ type: "CLEAR_SELECTION" });
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -537,7 +614,11 @@ export function Canvas() {
       const soleRef = state.selection.size === 1 ? first : undefined;
       const [ox, oy] = snapRef(origin.x, origin.y, e, soleRef);
       const [sx, sy] = snapRef(wx, wy, e, soleRef);
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: sx - ox, dyUm: sy - oy } });
+      // Preserve whatever R/Shift+R/F have already accumulated on this
+      // same preview (useActionRunner.ts) -- a fresh preview object every
+      // pointer-move must not reset the live rotate/flip state.
+      const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns, flipped } });
       return;
     }
 
@@ -552,18 +633,19 @@ export function Canvas() {
       const dx = sx - drag.snapOrigin[0];
       const dy = sy - drag.snapOrigin[1];
       if (dx !== 0 || dy !== 0) drag.moved = true;
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: drag.moveKind, dxUm: dx, dyUm: dy } : null });
+      const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: drag.moveKind, dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped } : null });
     } else if (drag.kind === "box") {
       const rect = containerRef.current!.getBoundingClientRect();
       const x0 = drag.startScreen[0] - rect.left,
         y0 = drag.startScreen[1] - rect.top;
       const x1 = e.clientX - rect.left,
         y1 = e.clientY - rect.top;
-      setMarquee({ x0, y0, x1, y1, crossing: x1 < x0 });
+      setMarquee({ x0, y0, x1, y1, crossing: isCrossingSelection(x0, x1) });
     }
   };
 
-  const onPointerUp = () => {
+  const onPointerUp = (e: React.PointerEvent) => {
     clearLongPress();
     const drag = dragRef.current;
     dragRef.current = null;
@@ -571,27 +653,42 @@ export function Canvas() {
     if (drag.kind === "pan") {
       justPannedRef.current = drag.button === 2 && drag.moved;
     } else if (drag.kind === "move") {
-      if (drag.moved && state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind);
-      else dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-    } else if (drag.kind === "box" && board) {
-      const crossing = marquee?.crossing ?? false;
-      const [x0, y0] = drag.startWorld;
-      const [x1, y1] = marquee ? screenToWorld(state.view, marquee.x1, marquee.y1) : [x0, y0];
-      const minX = Math.min(x0, x1),
-        maxX = Math.max(x0, x1),
-        minY = Math.min(y0, y1),
-        maxY = Math.max(y0, y1);
-      const hits = state.selectionFilter.footprints
-        ? board.parts.filter((p) => {
-            if (!p.placed || !p.courtyard) return false;
-            const [px0, py0, px1, py1] = p.courtyard;
-            return crossing ? px0 <= maxX && px1 >= minX && py0 <= maxY && py1 >= minY : px0 >= minX && px1 <= maxX && py0 >= minY && py1 <= maxY;
-          })
-        : [];
-      if (hits.length > 0) {
-        const refs = drag.additive ? [...new Set([...state.selection, ...hits.map((p) => p.ref)])] : hits.map((p) => p.ref);
-        dispatch({ type: "SET_SELECTION", refs });
+      if (drag.moved && state.movePreview) {
+        api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped);
+      } else {
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        // No real movement: this was a plain click, not a drag -- apply
+        // whatever selection-modifier effect onPointerDown deferred (see
+        // pendingClickRef's own doc comment).
+        if (pendingClickRef.current) {
+          dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, pendingClickRef.current.id, pendingClickRef.current.modifiers) });
+        }
       }
+      pendingClickRef.current = null;
+    } else if (drag.kind === "box" && board) {
+      if (!marquee) {
+        // Truly zero movement (not even the sub-pixel jitter that
+        // normally produces a marquee) -- same deferred-click apply as
+        // above, for the "modifier held, landed on exactly one item"
+        // case (see onPointerDown's own comment on why this can't just
+        // reuse the box-select math: a zero-size box can't geometrically
+        // contain or touch anything).
+        if (pendingClickRef.current) {
+          dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, pendingClickRef.current.id, pendingClickRef.current.modifiers) });
+        }
+      } else {
+        const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
+        const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
+        const crossing = marquee.crossing;
+        const [x0, y0] = drag.startWorld;
+        const [x1, y1] = screenToWorld(state.view, marquee.x1, marquee.y1);
+        const selBox: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
+        const hits = collectBoxSelection(board, selBox, crossing, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+        if (hits.length > 0 || hasModifier(modifiers)) {
+          dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits.map((h) => h.id), modifiers) });
+        }
+      }
+      pendingClickRef.current = null;
       setMarquee(null);
     }
   };
@@ -669,8 +766,31 @@ export function Canvas() {
     }
   };
 
-  const onDoubleClick = () => {
-    if (state.drawState) finishDraw();
+  /**
+   * pcb_selection_tool.cpp Main()'s IsDblClick handler: if nothing's
+   * selected yet, selectPoint() at the click first; a single selected
+   * group enters it, anything else runs PCB_ACTIONS::properties. This
+   * app has no groups, so double-click always opens the clicked (or
+   * already-selected single) item's properties view -- the same
+   * dispatch useActionRunner.ts's "E" hotkey uses (properties.ts).
+   */
+  const onDoubleClick = (e: React.MouseEvent) => {
+    if (state.drawState) {
+      finishDraw();
+      return;
+    }
+    if (!board) return;
+    let refs = [...state.selection];
+    if (refs.length === 0) {
+      const [wx, wy] = worldAt(e);
+      const toleranceUm = Math.max(150, 6 / state.view.scale);
+      const onePixelUm = 1 / state.view.scale;
+      const candidates = pickSelectionCandidates(board, wx, wy, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
+      if (candidates.length === 0) return;
+      refs = [candidates[0]!.id];
+      dispatch({ type: "SET_SELECTION", refs });
+    }
+    if (refs.length === 1) openPropertiesFor(refs[0]!, api, dispatch);
   };
 
   return (
