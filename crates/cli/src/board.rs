@@ -1222,6 +1222,46 @@ mod tests {
         assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "deleting the connecting wire must split R1 and R2 back onto separate nets");
     }
 
+    /// The other half of the "one netlist" hard rule `schematic_wire_
+    /// connects_and_disconnects_pins_on_one_netlist` doesn't cover: two
+    /// same-named labels merge their nets with *no wire at all* between
+    /// them (`eda_kicad::sch_import::reconcile`'s own doc: "two same-
+    /// named local labels anywhere on the sheet are the same net"),
+    /// exactly how a real, spread-out schematic usually ties a rail
+    /// together. Deleting one label must not merely remove that one net
+    /// name -- once neither label exists, R1 and R2 have no shared
+    /// identity left at all and must split back onto two independent
+    /// (synthesized) nets, same as the wire-delete case.
+    #[test]
+    fn schematic_label_merges_nets_with_no_wire_between_them() {
+        let dir = scratch("sch_label_nets");
+        setup_schematic(&dir);
+
+        let (_, _, model) = load(&dir).unwrap();
+        assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "sanity: starts on separate nets");
+
+        // One label, exactly on each pin (no wire needed -- see reconcile's own doc).
+        step(&dir, Cmd::AddLabel { net: "SIG".into(), at: Point { x: 10_000, y: 10_000 }, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
+        step(&dir, Cmd::AddLabel { net: "SIG".into(), at: Point { x: 20_000, y: 10_000 }, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
+
+        let (_, design, model) = load(&dir).unwrap();
+        let merged = net_of(&model.nets, "R1.1").expect("R1.1 must still be on a net");
+        assert_eq!(merged.name, "SIG", "the merged net must take the label's own name, not a synthesized one");
+        assert_eq!(merged.name, net_of(&model.nets, "R2.1").unwrap().name, "two same-named labels must merge R1 and R2 onto one net with no wire drawn at all");
+
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.labels.len(), 2);
+        assert!(sch.labels.iter().all(|l| !l.id.is_empty()), "AddLabel's id must be backfilled");
+
+        // Delete one label: the two pins no longer share any identity, so
+        // the net must split back apart (not just rename itself).
+        let first_label_id = sch.labels[0].id.clone();
+        step(&dir, Cmd::DeleteLabel { id: first_label_id }, false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().labels.len(), 1);
+        assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "removing one of the two labels must split R1 and R2 back onto separate nets");
+    }
+
     /// GAPS.md #15: "pressing Ctrl+Z while viewing the Schematic tab
     /// silently undoes the last PCB edit instead of being a no-op." Proves
     /// the fix -- `board::undo`/`redo`'s `Domain` scope -- the long way:

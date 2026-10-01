@@ -40,10 +40,15 @@ truth (GAPS.md #1's hard rule):
 - A symbol placed with no intent counterpart (`AddSymbol`) gets a
   synthesized `Part` the same way, so it shows up unplaced on the PCB tab
   — `reconcile_schematic`'s own doc comment has the full mechanism.
-- Proven by `crates/cli/src/board.rs`'s
-  `schematic_wire_connects_and_disconnects_pins_on_one_netlist` test:
-  draws a wire between two previously-separate nets, asserts they merge
-  in `model.nets`, deletes the wire, asserts they split back apart.
+- Proven by two `crates/cli/src/board.rs` tests, covering all three cases
+  the hard rule names ("wire connects pins, label merges nets, delete
+  splits"): `schematic_wire_connects_and_disconnects_pins_on_one_netlist`
+  (draws a wire between two previously-separate nets, asserts they merge
+  in `model.nets`, deletes the wire, asserts they split back apart) and
+  `schematic_label_merges_nets_with_no_wire_between_them` (two same-named
+  labels merge two pins' nets with *no wire at all*, matching how a real
+  spread-out schematic usually ties a rail together; deleting one label
+  splits them back apart).
 
 KiCad files stay derived: nothing above touches `.kicad_sch` export or
 the intent YAML file.
@@ -120,7 +125,8 @@ yet.
 
 | Action | Status | KiCad file:function |
 |---|---|---|
-| Assign reference designators to unannotated (`"U?"`-style) symbols, top-to-bottom then left-to-right, keep-vs-reset modes | backend only — `Cmd::Annotate { reset_existing }` implemented and exercised indirectly (no dedicated test yet); no menu entry or dialog wired | `dialog_annotate.cpp` (`INCREMENTAL_BY_REF`, `SORT_BY_Y_POSITION` default — this project's numbering starts at 1 per prefix, not KiCad's configurable start-at-0 default) |
+| Assign reference designators to unannotated (`"U?"`-style) symbols, top-to-bottom then left-to-right | partial — wired to a menu item (`eeschema.EditorControl.annotate`) with no dialog: always whole-sheet, always "keep existing" (`reset_existing: false`), no scope/sort-order/numbering-scheme choices | `dialog_annotate.cpp` (`INCREMENTAL_BY_REF`, `SORT_BY_Y_POSITION` default — this project's numbering starts at 1 per prefix, not KiCad's configurable start-at-0 default) |
+| "Reset existing annotations" mode | backend only (`Cmd::Annotate { reset_existing: true }` implemented, unreachable from the UI — no dialog to offer the choice) | same |
 
 ## 6. Cross-tab undo/redo (gap #15)
 

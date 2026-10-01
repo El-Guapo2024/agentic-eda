@@ -560,6 +560,19 @@ export function useActionRunner() {
 
     m.set("eeschema.InspectionTool.runERC", () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: true }));
 
+    // `dialog_annotate.cpp`'s own default mode ("Keep existing
+    // annotations", not "Reset") -- no dialog yet to offer the reset
+    // choice or the sheet/selection scope options, so this always
+    // annotates the whole sheet, additively. See `Cmd::Annotate`'s own
+    // doc for the numbering scheme (top-to-bottom, per reference prefix).
+    m.set(
+      "eeschema.EditorControl.annotate",
+      schematicOnly(async () => {
+        const ok = await api.cmd({ op: "annotate", reset_existing: false });
+        dispatch({ type: "TOAST", message: ok ? "Annotated." : "Nothing to annotate.", kind: "info" });
+      })
+    );
+
     // `W`: arm/disarm the wire tool -- SchematicView.tsx's own
     // onPointerDown/onDoubleClick own the actual click-to-add-point/
     // finish state machine (same split PCB's route/zone/shape tools use:
