@@ -396,112 +396,6 @@
       }
     },
     {
-      "board": "work/mcu30",
-      "source": "work",
-      "error": null,
-      "types": {
-        "label_dangling": {
-          "kicad": 11,
-          "ours": 54,
-          "matched": 11,
-          "missing": 0,
-          "extra": 43
-        },
-        "lib_symbol_issues": {
-          "kicad": 30,
-          "ours": 0,
-          "matched": 0,
-          "missing": 30,
-          "extra": 0
-        },
-        "pin_not_connected": {
-          "kicad": 66,
-          "ours": 60,
-          "matched": 60,
-          "missing": 6,
-          "extra": 0
-        },
-        "power_pin_not_driven": {
-          "kicad": 6,
-          "ours": 0,
-          "matched": 0,
-          "missing": 6,
-          "extra": 0
-        },
-        "unconnected_wire_endpoint": {
-          "kicad": 22,
-          "ours": 13,
-          "matched": 13,
-          "missing": 9,
-          "extra": 0
-        },
-        "wire_dangling": {
-          "kicad": 6,
-          "ours": 2,
-          "matched": 2,
-          "missing": 4,
-          "extra": 0
-        }
-      },
-      "style_only": {
-        "schematic_wire_crossing_count": 1,
-        "schematic_wire_endpoint_off_pin": 23
-      }
-    },
-    {
-      "board": "work/l1-order",
-      "source": "work",
-      "error": null,
-      "types": {
-        "label_dangling": {
-          "kicad": 6,
-          "ours": 38,
-          "matched": 6,
-          "missing": 0,
-          "extra": 32
-        },
-        "lib_symbol_issues": {
-          "kicad": 17,
-          "ours": 0,
-          "matched": 0,
-          "missing": 17,
-          "extra": 0
-        },
-        "pin_not_connected": {
-          "kicad": 55,
-          "ours": 53,
-          "matched": 53,
-          "missing": 2,
-          "extra": 0
-        },
-        "power_pin_not_driven": {
-          "kicad": 20,
-          "ours": 0,
-          "matched": 0,
-          "missing": 20,
-          "extra": 0
-        },
-        "unconnected_wire_endpoint": {
-          "kicad": 16,
-          "ours": 14,
-          "matched": 14,
-          "missing": 2,
-          "extra": 0
-        },
-        "wire_dangling": {
-          "kicad": 8,
-          "ours": 0,
-          "matched": 0,
-          "missing": 8,
-          "extra": 0
-        }
-      },
-      "style_only": {
-        "schematic_cluster_split": 2,
-        "schematic_wire_crossing_count": 1
-      }
-    },
-    {
       "board": "pcbnew/component_classes.kicad_sch",
       "source": "qa",
       "error": null,
@@ -938,13 +832,6 @@
       "source": "qa",
       "error": null,
       "types": {
-        "pin_not_connected": {
-          "kicad": 0,
-          "ours": 4,
-          "matched": 0,
-          "missing": 0,
-          "extra": 4
-        },
         "power_pin_not_driven": {
           "kicad": 2,
           "ours": 2,
@@ -972,7 +859,7 @@
         "schematic_flow_direction": 1,
         "schematic_sheet_aspect": 1,
         "schematic_wire_crossing_count": 1,
-        "schematic_wire_endpoint_off_pin": 104,
+        "schematic_wire_endpoint_off_pin": 108,
         "schematic_wire_length": 1,
         "schematic_wire_through_symbol": 19
       }
@@ -1532,17 +1419,17 @@
       "extra": 0
     },
     "label_dangling": {
-      "kicad": 17,
-      "ours": 118,
-      "matched": 17,
+      "kicad": 0,
+      "ours": 26,
+      "matched": 0,
       "missing": 0,
-      "extra": 101
+      "extra": 26
     },
     "lib_symbol_issues": {
-      "kicad": 228,
+      "kicad": 181,
       "ours": 0,
       "matched": 0,
-      "missing": 228,
+      "missing": 181,
       "extra": 0
     },
     "lib_symbol_mismatch": {
@@ -1560,11 +1447,11 @@
       "extra": 65
     },
     "pin_not_connected": {
-      "kicad": 242,
-      "ours": 252,
-      "matched": 216,
-      "missing": 26,
-      "extra": 36
+      "kicad": 121,
+      "ours": 135,
+      "matched": 103,
+      "missing": 18,
+      "extra": 32
     },
     "pin_not_driven": {
       "kicad": 39,
@@ -1581,17 +1468,17 @@
       "extra": 1
     },
     "power_pin_not_driven": {
-      "kicad": 60,
+      "kicad": 34,
       "ours": 30,
       "matched": 25,
-      "missing": 35,
+      "missing": 9,
       "extra": 5
     },
     "unconnected_wire_endpoint": {
-      "kicad": 38,
-      "ours": 318,
-      "matched": 27,
-      "missing": 11,
+      "kicad": 0,
+      "ours": 291,
+      "matched": 0,
+      "missing": 0,
       "extra": 291
     },
     "undefined_netclass": {
@@ -1609,15 +1496,15 @@
       "extra": 0
     },
     "wire_dangling": {
-      "kicad": 16,
-      "ours": 53,
-      "matched": 2,
-      "missing": 14,
+      "kicad": 2,
+      "ours": 51,
+      "matched": 0,
+      "missing": 2,
       "extra": 51
     }
   },
   "style_only_totals": {
-    "schematic_cluster_split": 28,
+    "schematic_cluster_split": 26,
     "schematic_flow_direction": 2,
     "schematic_label_far_from_part": 1,
     "schematic_label_over_wire": 12,
@@ -1628,15 +1515,15 @@
     "schematic_sheet_density": 1,
     "schematic_symbol_overlap": 9,
     "schematic_text_overlap": 491,
-    "schematic_wire_crossing_count": 52,
+    "schematic_wire_crossing_count": 50,
     "schematic_wire_detour": 6,
-    "schematic_wire_endpoint_off_pin": 549,
+    "schematic_wire_endpoint_off_pin": 530,
     "schematic_wire_ink": 2,
     "schematic_wire_length": 1,
     "schematic_wire_overlap": 5,
     "schematic_wire_through_symbol": 47
   },
-  "precision": 0.34834123222748814,
-  "recall": 0.2388302193338749,
+  "precision": 0.22277227722772278,
+  "recall": 0.13946280991735538,
   "import_failures": []
 }

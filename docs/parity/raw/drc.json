@@ -1,5 +1,5 @@
 {
-  "generated_at": "SystemTime { tv_sec: 1790853783, tv_nsec: 246706000 }",
+  "generated_at": "SystemTime { tv_sec: 1790871663, tv_nsec: 299266000 }",
   "tolerance_um": 50,
   "not_in_scope": [
     "unconnected_items"
@@ -88,23 +88,120 @@
     {
       "board": "l2_sensor_hub",
       "source": "ladder",
-      "error": "TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
-      "types": {},
+      "error": null,
+      "types": {
+        "lib_footprint_issues": {
+          "kicad": 35,
+          "ours": 0,
+          "matched": 0,
+          "missing": 35,
+          "extra": 0
+        },
+        "silk_edge_clearance": {
+          "kicad": 3,
+          "ours": 3,
+          "matched": 0,
+          "missing": 3,
+          "extra": 3
+        },
+        "silk_over_copper": {
+          "kicad": 6,
+          "ours": 13,
+          "matched": 0,
+          "missing": 6,
+          "extra": 13
+        },
+        "silk_overlap": {
+          "kicad": 4,
+          "ours": 3,
+          "matched": 0,
+          "missing": 4,
+          "extra": 3
+        }
+      },
       "non_kicad_counts": {}
     },
     {
       "board": "l3_motor_hub",
       "source": "ladder",
-      "error": "TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
-      "types": {},
+      "error": null,
+      "types": {
+        "lib_footprint_issues": {
+          "kicad": 58,
+          "ours": 0,
+          "matched": 0,
+          "missing": 58,
+          "extra": 0
+        },
+        "silk_edge_clearance": {
+          "kicad": 8,
+          "ours": 8,
+          "matched": 0,
+          "missing": 8,
+          "extra": 8
+        },
+        "silk_over_copper": {
+          "kicad": 15,
+          "ours": 13,
+          "matched": 0,
+          "missing": 15,
+          "extra": 13
+        },
+        "silk_overlap": {
+          "kicad": 1,
+          "ours": 0,
+          "matched": 0,
+          "missing": 1,
+          "extra": 0
+        }
+      },
       "non_kicad_counts": {}
     },
     {
       "board": "l4_control_hub",
       "source": "ladder",
-      "error": "TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
-      "types": {},
-      "non_kicad_counts": {}
+      "error": null,
+      "types": {
+        "lib_footprint_issues": {
+          "kicad": 100,
+          "ours": 0,
+          "matched": 0,
+          "missing": 100,
+          "extra": 0
+        },
+        "silk_edge_clearance": {
+          "kicad": 11,
+          "ours": 11,
+          "matched": 0,
+          "missing": 11,
+          "extra": 11
+        },
+        "silk_over_copper": {
+          "kicad": 32,
+          "ours": 48,
+          "matched": 0,
+          "missing": 32,
+          "extra": 48
+        },
+        "silk_overlap": {
+          "kicad": 5,
+          "ours": 3,
+          "matched": 0,
+          "missing": 5,
+          "extra": 3
+        },
+        "starved_thermal": {
+          "kicad": 1,
+          "ours": 0,
+          "matched": 0,
+          "missing": 1,
+          "extra": 0
+        }
+      },
+      "non_kicad_counts": {
+        "placement_net_compactness": 1,
+        "placement_proximity": 1
+      }
     },
     {
       "board": "ldo",
@@ -160,8 +257,30 @@
     {
       "board": "mcu_board_30plus",
       "source": "example",
-      "error": "TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
-      "types": {},
+      "error": null,
+      "types": {
+        "lib_footprint_issues": {
+          "kicad": 30,
+          "ours": 0,
+          "matched": 0,
+          "missing": 30,
+          "extra": 0
+        },
+        "silk_over_copper": {
+          "kicad": 8,
+          "ours": 22,
+          "matched": 0,
+          "missing": 8,
+          "extra": 22
+        },
+        "silk_overlap": {
+          "kicad": 1,
+          "ours": 0,
+          "matched": 0,
+          "missing": 1,
+          "extra": 0
+        }
+      },
       "non_kicad_counts": {}
     },
     {
@@ -307,7 +426,7 @@
     {
       "board": "unroutable_tiny_outline",
       "source": "example",
-      "error": "place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }]",
+      "error": "place/route: TIMEOUT after 2700s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
       "types": {},
       "non_kicad_counts": {}
     },
@@ -512,6 +631,13 @@
           "missing": 0,
           "extra": 0
         },
+        "duplicate_footprints": {
+          "kicad": 0,
+          "ours": 3,
+          "matched": 0,
+          "missing": 0,
+          "extra": 3
+        },
         "holes_co_located": {
           "kicad": 4,
           "ours": 4,
@@ -568,10 +694,17 @@
       "types": {
         "clearance": {
           "kicad": 0,
-          "ours": 105,
+          "ours": 13,
           "matched": 0,
           "missing": 0,
-          "extra": 105
+          "extra": 13
+        },
+        "duplicate_footprints": {
+          "kicad": 0,
+          "ours": 1,
+          "matched": 0,
+          "missing": 0,
+          "extra": 1
         },
         "lib_footprint_mismatch": {
           "kicad": 2,
@@ -603,14 +736,14 @@
         },
         "track_width": {
           "kicad": 0,
-          "ours": 259,
+          "ours": 883,
           "matched": 0,
           "missing": 0,
-          "extra": 259
+          "extra": 883
         }
       },
       "non_kicad_counts": {
-        "routing_track_width": 259
+        "routing_track_width": 883
       }
     },
     {
@@ -733,13 +866,6 @@
           "matched": 0,
           "missing": 3,
           "extra": 0
-        },
-        "track_dangling": {
-          "kicad": 0,
-          "ours": 8,
-          "matched": 0,
-          "missing": 0,
-          "extra": 8
         }
       },
       "non_kicad_counts": {}
@@ -754,13 +880,6 @@
           "ours": 4,
           "matched": 3,
           "missing": 1,
-          "extra": 1
-        },
-        "hole_to_hole": {
-          "kicad": 0,
-          "ours": 1,
-          "matched": 0,
-          "missing": 0,
           "extra": 1
         }
       },
@@ -926,6 +1045,13 @@
       "source": "qa",
       "error": null,
       "types": {
+        "duplicate_footprints": {
+          "kicad": 0,
+          "ours": 1,
+          "matched": 0,
+          "missing": 0,
+          "extra": 1
+        },
         "invalid_outline": {
           "kicad": 1,
           "ours": 0,
@@ -1103,9 +1229,9 @@
         "hole_clearance": {
           "kicad": 179,
           "ours": 179,
-          "matched": 0,
-          "missing": 179,
-          "extra": 179
+          "matched": 179,
+          "missing": 0,
+          "extra": 0
         },
         "isolated_copper": {
           "kicad": 1,
@@ -1184,126 +1310,22 @@
     {
       "board": "issue22475/issue22475.kicad_pcb",
       "source": "qa",
-      "error": null,
-      "types": {
-        "clearance": {
-          "kicad": 309,
-          "ours": 746,
-          "matched": 35,
-          "missing": 274,
-          "extra": 711
-        },
-        "copper_edge_clearance": {
-          "kicad": 16,
-          "ours": 37,
-          "matched": 0,
-          "missing": 16,
-          "extra": 37
-        },
-        "courtyards_overlap": {
-          "kicad": 0,
-          "ours": 4,
-          "matched": 0,
-          "missing": 0,
-          "extra": 4
-        },
-        "drill_out_of_range": {
-          "kicad": 199,
-          "ours": 368,
-          "matched": 199,
-          "missing": 0,
-          "extra": 169
-        },
-        "hole_clearance": {
-          "kicad": 0,
-          "ours": 415,
-          "matched": 0,
-          "missing": 0,
-          "extra": 415
-        },
-        "items_not_allowed": {
-          "kicad": 42,
-          "ours": 0,
-          "matched": 0,
-          "missing": 42,
-          "extra": 0
-        },
-        "lib_footprint_issues": {
-          "kicad": 16,
-          "ours": 0,
-          "matched": 0,
-          "missing": 16,
-          "extra": 0
-        },
-        "lib_footprint_mismatch": {
-          "kicad": 36,
-          "ours": 0,
-          "matched": 0,
-          "missing": 36,
-          "extra": 0
-        },
-        "shorting_items": {
-          "kicad": 134,
-          "ours": 739,
-          "matched": 33,
-          "missing": 101,
-          "extra": 706
-        },
-        "silk_over_copper": {
-          "kicad": 1,
-          "ours": 93,
-          "matched": 0,
-          "missing": 1,
-          "extra": 93
-        },
-        "silk_overlap": {
-          "kicad": 0,
-          "ours": 208,
-          "matched": 0,
-          "missing": 0,
-          "extra": 208
-        },
-        "solder_mask_bridge": {
-          "kicad": 0,
-          "ours": 1,
-          "matched": 0,
-          "missing": 0,
-          "extra": 1
-        },
-        "tracks_crossing": {
-          "kicad": 0,
-          "ours": 1567,
-          "matched": 0,
-          "missing": 0,
-          "extra": 1567
-        },
-        "via_dangling": {
-          "kicad": 0,
-          "ours": 80,
-          "matched": 0,
-          "missing": 0,
-          "extra": 80
-        },
-        "via_diameter": {
-          "kicad": 199,
-          "ours": 368,
-          "matched": 199,
-          "missing": 0,
-          "extra": 169
-        }
-      },
-      "non_kicad_counts": {
-        "placement_board_use": 1,
-        "placement_net_compactness": 8,
-        "placement_refdes_clear": 12,
-        "placement_stub_crossings": 1
-      }
+      "error": "TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
+      "types": {},
+      "non_kicad_counts": {}
     },
     {
       "board": "pcbnew/intersectingzones.kicad_pcb",
       "source": "qa",
       "error": null,
       "types": {
+        "duplicate_footprints": {
+          "kicad": 0,
+          "ours": 1,
+          "matched": 0,
+          "missing": 0,
+          "extra": 1
+        },
         "via_dangling": {
           "kicad": 0,
           "ours": 1,
@@ -1370,6 +1392,13 @@
       "source": "qa",
       "error": null,
       "types": {
+        "duplicate_footprints": {
+          "kicad": 0,
+          "ours": 1,
+          "matched": 0,
+          "missing": 0,
+          "extra": 1
+        },
         "invalid_outline": {
           "kicad": 1,
           "ours": 0,
@@ -1423,17 +1452,10 @@
       "types": {
         "clearance": {
           "kicad": 0,
-          "ours": 141,
+          "ours": 214,
           "matched": 0,
           "missing": 0,
-          "extra": 141
-        },
-        "copper_edge_clearance": {
-          "kicad": 0,
-          "ours": 13,
-          "matched": 0,
-          "missing": 0,
-          "extra": 13
+          "extra": 214
         },
         "copper_sliver": {
           "kicad": 1,
@@ -1451,10 +1473,10 @@
         },
         "hole_clearance": {
           "kicad": 0,
-          "ours": 35,
+          "ours": 88,
           "matched": 0,
           "missing": 0,
-          "extra": 35
+          "extra": 88
         },
         "lib_footprint_mismatch": {
           "kicad": 46,
@@ -1463,19 +1485,12 @@
           "missing": 46,
           "extra": 0
         },
-        "pth_inside_courtyard": {
-          "kicad": 0,
-          "ours": 5,
-          "matched": 0,
-          "missing": 0,
-          "extra": 5
-        },
         "shorting_items": {
           "kicad": 0,
-          "ours": 156,
+          "ours": 267,
           "matched": 0,
           "missing": 0,
-          "extra": 156
+          "extra": 267
         },
         "silk_edge_clearance": {
           "kicad": 0,
@@ -1484,26 +1499,12 @@
           "missing": 0,
           "extra": 3
         },
-        "silk_over_copper": {
-          "kicad": 0,
-          "ours": 280,
-          "matched": 0,
-          "missing": 0,
-          "extra": 280
-        },
-        "silk_overlap": {
-          "kicad": 0,
-          "ours": 7,
-          "matched": 0,
-          "missing": 0,
-          "extra": 7
-        },
         "solder_mask_bridge": {
           "kicad": 0,
-          "ours": 156,
+          "ours": 267,
           "matched": 0,
           "missing": 0,
-          "extra": 156
+          "extra": 267
         },
         "track_dangling": {
           "kicad": 0,
@@ -1514,10 +1515,10 @@
         },
         "track_width": {
           "kicad": 0,
-          "ours": 686,
+          "ours": 2102,
           "matched": 0,
           "missing": 0,
-          "extra": 686
+          "extra": 2102
         },
         "via_dangling": {
           "kicad": 2,
@@ -1532,7 +1533,7 @@
         "placement_net_compactness": 3,
         "placement_refdes_clear": 95,
         "placement_stub_crossings": 1,
-        "routing_track_width": 686
+        "routing_track_width": 2102
       }
     },
     {
@@ -1540,6 +1541,13 @@
       "source": "qa",
       "error": null,
       "types": {
+        "duplicate_footprints": {
+          "kicad": 0,
+          "ours": 1,
+          "matched": 0,
+          "missing": 0,
+          "extra": 1
+        },
         "lib_footprint_mismatch": {
           "kicad": 2,
           "ours": 0,
@@ -1628,6 +1636,13 @@
           "missing": 138,
           "extra": 0
         },
+        "invalid_outline": {
+          "kicad": 0,
+          "ours": 1,
+          "matched": 0,
+          "missing": 0,
+          "extra": 1
+        },
         "items_not_allowed": {
           "kicad": 2,
           "ours": 0,
@@ -1671,10 +1686,10 @@
           "extra": 3
         },
         "solder_mask_bridge": {
-          "kicad": 199,
+          "kicad": 202,
           "ours": 0,
           "matched": 0,
-          "missing": 199,
+          "missing": 202,
           "extra": 0
         },
         "track_width": {
@@ -1714,11 +1729,11 @@
       "extra": 0
     },
     "clearance": {
-      "kicad": 530,
-      "ours": 1179,
-      "matched": 82,
-      "missing": 448,
-      "extra": 1097
+      "kicad": 221,
+      "ours": 414,
+      "matched": 47,
+      "missing": 174,
+      "extra": 367
     },
     "connection_width": {
       "kicad": 3,
@@ -1728,11 +1743,11 @@
       "extra": 0
     },
     "copper_edge_clearance": {
-      "kicad": 45,
-      "ours": 87,
+      "kicad": 29,
+      "ours": 37,
       "matched": 4,
-      "missing": 41,
-      "extra": 83
+      "missing": 25,
+      "extra": 33
     },
     "copper_sliver": {
       "kicad": 1,
@@ -1743,10 +1758,10 @@
     },
     "courtyards_overlap": {
       "kicad": 0,
-      "ours": 90,
+      "ours": 86,
       "matched": 0,
       "missing": 0,
-      "extra": 90
+      "extra": 86
     },
     "creepage": {
       "kicad": 1,
@@ -1756,25 +1771,25 @@
       "extra": 0
     },
     "drill_out_of_range": {
-      "kicad": 341,
-      "ours": 474,
-      "matched": 203,
+      "kicad": 142,
+      "ours": 106,
+      "matched": 4,
       "missing": 138,
-      "extra": 271
+      "extra": 102
+    },
+    "duplicate_footprints": {
+      "kicad": 0,
+      "ours": 8,
+      "matched": 0,
+      "missing": 0,
+      "extra": 8
     },
     "hole_clearance": {
       "kicad": 179,
-      "ours": 633,
-      "matched": 0,
-      "missing": 179,
-      "extra": 633
-    },
-    "hole_to_hole": {
-      "kicad": 0,
-      "ours": 1,
-      "matched": 0,
+      "ours": 271,
+      "matched": 179,
       "missing": 0,
-      "extra": 1
+      "extra": 92
     },
     "holes_co_located": {
       "kicad": 4,
@@ -1785,10 +1800,10 @@
     },
     "invalid_outline": {
       "kicad": 12,
-      "ours": 0,
+      "ours": 1,
       "matched": 0,
       "missing": 12,
-      "extra": 0
+      "extra": 1
     },
     "isolated_copper": {
       "kicad": 63,
@@ -1798,24 +1813,24 @@
       "extra": 0
     },
     "items_not_allowed": {
-      "kicad": 46,
+      "kicad": 4,
       "ours": 0,
       "matched": 0,
-      "missing": 46,
+      "missing": 4,
       "extra": 0
     },
     "lib_footprint_issues": {
-      "kicad": 156,
+      "kicad": 363,
       "ours": 0,
       "matched": 0,
-      "missing": 156,
+      "missing": 363,
       "extra": 0
     },
     "lib_footprint_mismatch": {
-      "kicad": 144,
+      "kicad": 108,
       "ours": 0,
       "matched": 0,
-      "missing": 144,
+      "missing": 108,
       "extra": 0
     },
     "mirrored_text_on_front_layer": {
@@ -1839,40 +1854,33 @@
       "missing": 4,
       "extra": 0
     },
-    "pth_inside_courtyard": {
-      "kicad": 0,
-      "ours": 5,
-      "matched": 0,
-      "missing": 0,
-      "extra": 5
-    },
     "shorting_items": {
-      "kicad": 135,
-      "ours": 918,
-      "matched": 34,
-      "missing": 101,
-      "extra": 884
+      "kicad": 1,
+      "ours": 290,
+      "matched": 1,
+      "missing": 0,
+      "extra": 289
     },
     "silk_edge_clearance": {
-      "kicad": 22,
-      "ours": 8,
+      "kicad": 44,
+      "ours": 30,
       "matched": 0,
-      "missing": 22,
-      "extra": 8
+      "missing": 44,
+      "extra": 30
     },
     "silk_over_copper": {
-      "kicad": 122,
-      "ours": 462,
+      "kicad": 182,
+      "ours": 185,
       "matched": 0,
-      "missing": 122,
-      "extra": 462
+      "missing": 182,
+      "extra": 185
     },
     "silk_overlap": {
-      "kicad": 217,
-      "ours": 232,
+      "kicad": 228,
+      "ours": 23,
       "matched": 0,
-      "missing": 217,
-      "extra": 232
+      "missing": 228,
+      "extra": 23
     },
     "skew_out_of_range": {
       "kicad": 3,
@@ -1882,17 +1890,17 @@
       "extra": 0
     },
     "solder_mask_bridge": {
-      "kicad": 312,
-      "ours": 180,
+      "kicad": 315,
+      "ours": 290,
       "matched": 1,
-      "missing": 311,
-      "extra": 179
+      "missing": 314,
+      "extra": 289
     },
     "starved_thermal": {
-      "kicad": 8,
+      "kicad": 9,
       "ours": 0,
       "matched": 0,
-      "missing": 8,
+      "missing": 9,
       "extra": 0
     },
     "text_height": {
@@ -1904,38 +1912,31 @@
     },
     "track_dangling": {
       "kicad": 7,
-      "ours": 100,
+      "ours": 92,
       "matched": 1,
       "missing": 6,
-      "extra": 99
+      "extra": 91
     },
     "track_width": {
       "kicad": 209,
-      "ours": 959,
+      "ours": 2999,
       "matched": 10,
       "missing": 199,
-      "extra": 949
-    },
-    "tracks_crossing": {
-      "kicad": 0,
-      "ours": 1567,
-      "matched": 0,
-      "missing": 0,
-      "extra": 1567
+      "extra": 2989
     },
     "via_dangling": {
       "kicad": 117,
-      "ours": 163,
+      "ours": 83,
       "matched": 36,
       "missing": 81,
-      "extra": 127
+      "extra": 47
     },
     "via_diameter": {
-      "kicad": 337,
-      "ours": 469,
-      "matched": 199,
+      "kicad": 138,
+      "ours": 101,
+      "matched": 0,
       "missing": 138,
-      "extra": 270
+      "extra": 101
     },
     "zones_intersect": {
       "kicad": 12,
@@ -1946,22 +1947,20 @@
     }
   },
   "non_kicad_totals": {
-    "placement_board_use": 21,
+    "placement_board_use": 20,
     "placement_edge_connector": 1,
-    "placement_net_compactness": 29,
-    "placement_refdes_clear": 166,
-    "placement_stub_crossings": 4,
-    "routing_track_width": 949
+    "placement_net_compactness": 22,
+    "placement_proximity": 1,
+    "placement_refdes_clear": 154,
+    "placement_stub_crossings": 3,
+    "routing_track_width": 2989
   },
-  "precision": 0.07752348194205583,
-  "recall": 0.19150326797385622,
+  "precision": 0.05923137876386688,
+  "recall": 0.123095924248662,
   "import_failures": [
-    "l2_sensor_hub [ladder]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
-    "l3_motor_hub [ladder]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
-    "l4_control_hub [ladder]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
-    "mcu_board_30plus [example]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
-    "unroutable_tiny_outline [example]: place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }]",
-    "issue21482/issue21482.kicad_pcb [qa]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)"
+    "unroutable_tiny_outline [example]: place/route: TIMEOUT after 2700s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
+    "issue21482/issue21482.kicad_pcb [qa]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)",
+    "issue22475/issue22475.kicad_pcb [qa]: TIMEOUT after 60s -- likely a hang or quadratic-plus blowup in our own engine on this board's geometry, not kicad-cli (no oracle child process was observed during the hang this was discovered from)"
   ],
   "zone_fill_impact": []
 }

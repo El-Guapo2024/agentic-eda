@@ -256,36 +256,6 @@
       }
     },
     {
-      "board": "work/mcu30",
-      "source": "work",
-      "error": null,
-      "ours": {
-        "unconnected": 0,
-        "track_dangling": 0,
-        "via_dangling": 0
-      },
-      "oracle": {
-        "unconnected": 0,
-        "track_dangling": 0,
-        "via_dangling": 0
-      }
-    },
-    {
-      "board": "work/l1-order",
-      "source": "work",
-      "error": null,
-      "ours": {
-        "unconnected": 2,
-        "track_dangling": 13,
-        "via_dangling": 0
-      },
-      "oracle": {
-        "unconnected": 0,
-        "track_dangling": 0,
-        "via_dangling": 0
-      }
-    },
-    {
       "board": "pcbnew/api_kitchen_sink.kicad_pcb",
       "source": "qa",
       "error": null,
@@ -726,8 +696,8 @@
       "error": null,
       "ours": {
         "unconnected": 141,
-        "track_dangling": 0,
-        "via_dangling": 113
+        "track_dangling": 1,
+        "via_dangling": 119
       },
       "oracle": {
         "unconnected": 0,
@@ -887,18 +857,18 @@
     }
   ],
   "totals_ours": {
-    "unconnected": 527,
-    "track_dangling": 77,
-    "via_dangling": 405
+    "unconnected": 525,
+    "track_dangling": 65,
+    "via_dangling": 411
   },
   "totals_oracle": {
     "unconnected": 76,
     "track_dangling": 7,
     "via_dangling": 316
   },
-  "exact_match_rate": 0.8390804597701149,
-  "exact_matches": 146,
-  "total_checks": 174,
+  "exact_match_rate": 0.8392857142857143,
+  "exact_matches": 141,
+  "total_checks": 168,
   "import_failures": [
     "unroutable_tiny_outline [example]: place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }]"
   ]
