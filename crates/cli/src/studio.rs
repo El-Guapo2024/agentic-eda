@@ -20,6 +20,7 @@
 //! was fixed to run in the background instead.
 
 use crate::board;
+use crate::board_stats;
 use crate::cleanup_api;
 use crate::fab_api;
 use crate::route_api;
@@ -647,6 +648,10 @@ fn handle(
         ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
+        // "Board Statistics..." (task item 8): read-only, same stateless
+        // no-Cmd shape as fab_api::bom below (nothing to undo -- it never
+        // touches design.json).
+        ("POST", "/api/board_stats") => respond(stream, "200 OK", "application/json", board_stats::compute(dir).to_string().as_bytes()),
         // Fabrication outputs (Plot / Generate Drill Files / Footprint
         // Position Files dialogs, plus the plain BOM): `crate::fab_api`
         // runs the same `eda_fab` writers `eda fab ...` does and writes

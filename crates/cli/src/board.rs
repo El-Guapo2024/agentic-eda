@@ -601,6 +601,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveDimension { id, dx, dy } => format!("dimension move {id} --by {},{}", mm(*dx), mm(*dy)),
         Cmd::EditDimension { id, .. } => format!("dimension edit {id}"),
         Cmd::SetDimensionSettings { .. } => "board-setup dimensions".to_string(),
+        Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
 
         Cmd::Duplicate { ids } => format!("duplicate {}", ids.join(" ")),
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
@@ -752,6 +753,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::MoveDimension { .. } => "dimension-move",
         Cmd::EditDimension { .. } => "dimension-edit",
         Cmd::SetDimensionSettings { .. } => "dimension-settings",
+        Cmd::SwapLayers { .. } => "swap-layers",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::MoveExact { .. } => "move-exact",
