@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, ErcReport, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, ErcReport, Ratsnest, RouteReply, Schematic, SchematicSymbol, SymbolLibrary } from "./types";
 
 export class ApiError extends Error {}
 
@@ -63,6 +63,13 @@ export async function fetchSchematic(): Promise<Schematic> {
     }),
     labels: (s.labels ?? []).map((l) => ({ ...l, scope: l.scope ?? "local", shape: l.shape ?? null })),
   };
+}
+
+/** `A`'s symbol-chooser catalog -- fetched once when the dialog opens (SymbolChooserDialog.tsx), not polled: it only changes when the project's own intent/already-placed symbols change, which is already a full-page board refresh via the normal version-poll loop. */
+export async function fetchSymbolLibrary(): Promise<SymbolLibrary> {
+  const s = await getJson<SymbolLibrary & { error?: string }>("/api/symbol_library");
+  if (s.error) throw new ApiError(s.error);
+  return { entries: s.entries ?? [], lib_symbols: s.lib_symbols ?? {} };
 }
 
 /**

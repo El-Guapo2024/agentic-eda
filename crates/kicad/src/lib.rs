@@ -31,7 +31,7 @@ mod footprint_lib;
 pub use footprint_lib::{default_footprint_library_root, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
 
 mod symbol_lib;
-pub use symbol_lib::{default_symbol_library_root, find_symbol_library_file, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+pub use symbol_lib::{default_symbol_library_root, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
 mod erc_style;
 

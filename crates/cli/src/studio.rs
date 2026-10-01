@@ -509,6 +509,10 @@ fn handle(
             let v = schematic_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/symbol_library") => {
+            let v = symbol_library_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job),
         ("GET", "/api/drc") => {
             let v = drc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
@@ -884,6 +888,62 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     }))
 }
 
+/// `A`'s symbol chooser's own catalog -- GET /api/symbol_library. "The
+/// libraries we already load" (the task brief's own framing, not "browse
+/// every installed library"): every library name this project's intent
+/// already resolved a part against, or that's already placed on the
+/// sheet, scanned for its *full* contents (`eda_kicad::
+/// list_symbols_in_library`) -- not just the one symbol some part
+/// happened to already use -- so placing a second, different part from an
+/// already-referenced library (say, a diode when only resistors are used
+/// so far) is possible without it being on the sheet first. Power symbols
+/// are excluded (`P` is their own tool, section 3) and so is the
+/// parametric `Connector_Generic:Conn_01x<N>` family (see
+/// `builtin_catalog`'s own doc) -- both documented gaps, not oversights.
+///
+/// `eda_model::symbol::builtin_catalog` fills in anything a real library
+/// file didn't already cover for a referenced name, same "real file
+/// first, builtin fallback" precedence every other symbol resolution in
+/// this codebase already uses -- the common case in this project's own
+/// test/example boards, which have no real KiCad install to read from at
+/// all (`default_symbol_library_root` points at a path that doesn't exist
+/// here), so without it the chooser would be empty on every board this
+/// session could actually try it against.
+fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let lib_root = eda_kicad::default_symbol_library_root();
+
+    let lib_name_of = |lib_id: &str| lib_id.split_once(':').map(|(l, _)| l.to_string());
+    let mut lib_names: std::collections::BTreeSet<String> = model.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)).collect();
+    if let Some(sch) = &design.schematic {
+        lib_names.extend(sch.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)));
+    }
+
+    let mut by_lib_id: std::collections::BTreeMap<String, eda_model::LibSymbol> = std::collections::BTreeMap::new();
+    for name in &lib_names {
+        for sym in eda_kicad::list_symbols_in_library(&lib_root, name) {
+            by_lib_id.insert(sym.lib_id.clone(), sym);
+        }
+    }
+    for sym in eda_model::symbol::builtin_catalog() {
+        by_lib_id.entry(sym.lib_id.clone()).or_insert(sym);
+    }
+
+    let entries: Vec<Value> = by_lib_id
+        .values()
+        .map(|s| {
+            json!({
+                "lib_id": s.lib_id,
+                "description": s.description,
+                "reference_prefix": if s.reference_prefix.is_empty() { "U" } else { s.reference_prefix.as_str() },
+            })
+        })
+        .collect();
+    let lib_symbols: Value = by_lib_id.iter().map(|(id, s)| (id.clone(), lib_symbol_json(s))).collect::<serde_json::Map<_, _>>().into();
+
+    Ok(json!({ "entries": entries, "lib_symbols": lib_symbols }))
+}
+
 fn label_shape_str(s: eda_model::ir::LabelShape) -> &'static str {
     use eda_model::ir::LabelShape;
     match s {
@@ -908,8 +968,25 @@ fn label_shape_str(s: eda_model::ir::LabelShape) -> &'static str {
 /// part (unlike a real lib_id, which can be shared), so this always has a
 /// `Part` to build from.
 pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::ConstraintModel) -> eda_model::LibSymbol {
-    let empty = || eda_model::LibSymbol { lib_id: lib_id.to_string(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), unit_count: 1 };
     let reference = lib_id.strip_prefix("eda:").unwrap_or(lib_id);
+    // This id already names one specific part (`"eda:<id>"` is 1:1 with a
+    // `Part`, unlike a real lib_id which many instances can share) -- its
+    // own reference's leading letters are the only "what kind of part is
+    // this" signal available here, same heuristic `annotate()` already
+    // uses to recover a prefix from an id.
+    let reference_prefix: String = reference.chars().take_while(|c| c.is_alphabetic()).collect();
+    let empty = || eda_model::LibSymbol {
+        lib_id: lib_id.to_string(),
+        graphics: vec![],
+        pins: vec![],
+        power: false,
+        in_bom: true,
+        on_board: true,
+        datasheet: String::new(),
+        description: String::new(),
+        reference_prefix: reference_prefix.clone(),
+        unit_count: 1,
+    };
     let Some(part) = model.part(reference) else { return empty() };
     let wireable: Vec<&eda_model::Pin> = part.pins.iter().filter(|p| p.kind != eda_model::PinKind::Nc).collect();
     if wireable.is_empty() {
@@ -952,7 +1029,18 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         .into_iter()
         .map(|(p, at, angle_deg)| eda_model::LibPin { number: p.number.clone(), name: p.name.clone().unwrap_or_default(), electrical_type: etype(p.kind).to_string(), shape: "line".to_string(), at, angle_deg, length_mm: 1.27, unit: 1 })
         .collect();
-    eda_model::LibSymbol { lib_id: lib_id.to_string(), graphics, pins: lib_pins, power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), unit_count: 1 }
+    eda_model::LibSymbol {
+        lib_id: lib_id.to_string(),
+        graphics,
+        pins: lib_pins,
+        power: false,
+        in_bom: true,
+        on_board: true,
+        datasheet: String::new(),
+        description: String::new(),
+        reference_prefix,
+        unit_count: 1,
+    }
 }
 
 /// One `LibSymbol` as JSON: graphics/pins in the symbol's own local frame,

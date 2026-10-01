@@ -1127,6 +1127,7 @@ mod tests {
             on_board: true,
             datasheet: String::new(),
             description: String::new(),
+            reference_prefix: "R".into(),
             unit_count: 1,
         };
         let model = ConstraintModel {

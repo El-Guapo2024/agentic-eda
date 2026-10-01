@@ -621,6 +621,11 @@ export function useActionRunner() {
     m.set("eeschema.InteractiveDrawing.placePowerSymbol", toggleSchTool("sch_power"));
     m.set("eeschema.InteractiveDrawing.placeSchematicText", toggleSchTool("sch_text"));
     m.set("eeschema.InteractiveDrawing.placeNoConnect", toggleSchTool("sch_no_connect"));
+    // `A`: unlike the others above, this opens the chooser dialog first
+    // (real source's own order too, for this one tool -- see
+    // SymbolChooserDialog.tsx's header comment) rather than arming a tool
+    // directly; confirming a choice there is what arms `sch_place_symbol`.
+    m.set("eeschema.InteractiveDrawing.placeSymbol", schematicOnly(() => dispatch({ type: "SET_SYMBOL_CHOOSER_OPEN", open: true })));
 
     return m;
   }, [api, dispatch, state]);

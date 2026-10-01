@@ -32,6 +32,7 @@ import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, a
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { isMac } from "../platform";
 import { computeDragAttachment } from "./schematic/wireAttachment";
+import { nextReference } from "../kicad-port/nextReference";
 import "../styles/canvas.css";
 
 type DragState =
@@ -405,6 +406,21 @@ export function SchematicView() {
         if (state.activeTool === "sch_no_connect") {
           const [sx, sy] = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
           api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
+          return;
+        }
+        // `A`: SymbolChooserDialog already picked the symbol (state.
+        // armedSymbol); this click only decides where. `id` is a real,
+        // already-numbered reference assigned right now, not a "U?"
+        // placeholder -- see nextReference.ts's own doc for why. `value`
+        // defaults to the symbol's own bare name (e.g. "Device:R" ->
+        // "R"), matching what a real library's own default Value usually
+        // is for a part this simple.
+        if (state.activeTool === "sch_place_symbol" && state.armedSymbol) {
+          const { libId, referencePrefix } = state.armedSymbol;
+          const id = nextReference(sch.symbols, referencePrefix || "U");
+          const value = libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId;
+          const [sx, sy] = snapToGrid(wx, wy);
+          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: "" });
           return;
         }
 

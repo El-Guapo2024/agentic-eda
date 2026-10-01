@@ -18,9 +18,12 @@ chooser, Annotate's dialog, and Properties were not yet wired.
 This session ports `G` (drag, with wire rubber-banding -- section 1),
 a plain click-and-drag directly on a symbol as part of the same change
 (no hotkey needed first, defaulting to Drag's rubber-banding, matching
-source's own default), and `L`/Ctrl+`L`/`H`/`P`/`Q`/`T` (section 2/3 --
+source's own default), `L`/Ctrl+`L`/`H`/`P`/`Q`/`T` (section 2/3 --
 label/no-connect/power-symbol/text placement, plus a new minimal
-`SchematicText` IR for `T`). Still not wired: `A`'s symbol chooser,
+`SchematicText` IR for `T`), and `A`'s symbol chooser (section 3 --
+`SymbolChooserDialog.tsx`, a new `GET /api/symbol_library` endpoint, and
+a new `LibSymbol::reference_prefix` field so a placed symbol gets a real
+reference immediately instead of a "U?" placeholder). Still not wired:
 `J` junction, Properties, and Annotate's dialog — see the bottom of each
 section.
 
@@ -141,7 +144,9 @@ covers *placing* them, matching this pass's scope.
 | Auto-increment: a chained label's suggested text advances a trailing number (DATA0 → DATA1...), a name with none is left alone | identical | `common/increment.cpp::IncrementString` (`SCH_LABEL_BASE::IncrementLabel`'s own function) ported directly, not re-derived -- `kicad-port/incrementLabelText.ts`, unit-tested including the zero-pad and "no digits -> unchanged" cases; `state.lastLabelText` is the per-session memory `createNewLabel`'s caller would otherwise keep on the tool instance |
 | `P`: place power symbol | partial — any `power:<net>` resolves to a real rail symbol (`eda_model::symbol::builtin`'s generic fallback), so typing a custom rail name works, but this app's own quick-pick (a `<datalist>` of the common presets) is not KiCad's real searchable `DIALOG_SYMBOL_CHOOSER`; orientation (0/90/180/270) is a dialog field instead of a live mid-placement spin | `SCH_DRAWING_TOOLS::PlaceSymbol` (power filter) → `DIALOG_SYMBOL_CHOOSER`; `eeschema.InteractiveDrawing.placePowerSymbol` |
 | `T`: place text | identical in effect, adapted flow (see intro) — new `SchematicText` IR (`id`/`content`/`at`/`angle`/`size_um`; deliberately minimal next to real `SCH_TEXT`, no bold/italic/justify/color yet), `Cmd::AddSchText`/`DeleteSchText`, exposed over `GET /api/schematic` (`texts[]`) and rendered with the same Newstroke font every other schematic text uses (`painter.ts::drawSchText`, `LAYER_NOTES`). Also wired into `export_kicad_sch` (a `(text ...)` block, same shape as a label's own) and `import_kicad_sch` (reads `(text ...)` back), so free text now round-trips through a real `.kicad_sch` file like every other schematic item -- not independently round-trip-tested this session beyond the Rust unit/compile checks, since the existing label-import/export code it mirrors line-for-line was the thing actually verified against real files | `TwoClickPlace`/`createNewText`; `eeschema.InteractiveDrawing.placeSchematicText` |
-| `A`: place symbol, via a chooser over the sheet's own `lib_symbols` | missing — no symbol-chooser dialog built (next task item) | `SCH_DRAWING_TOOLS::PlaceSymbol` → `DIALOG_SYMBOL_CHOOSER` (recently-used/already-placed pseudo-libraries, live preview — not replicated; this app's own chooser should search the libraries the sheet already loads, per the task brief, rather than browse installed libraries) |
+| `A`: place symbol, via a chooser over the sheet's own `lib_symbols` | partial — `SymbolChooserDialog.tsx`: search + live preview (reuses `paintSchematic` on a synthetic one-symbol sheet) over `GET /api/symbol_library`'s catalog, then click to place. Real differences from source, all deliberate: the dialog runs *before* a position is chosen (same order source uses, unlike `L`/`P`/`T`'s own click-first adaptation -- there's no sensible position to capture before you've picked *what*), but a plain search list, not source's recently-used/already-placed tabbed `DIALOG_SYMBOL_CHOOSER`; a placed symbol gets a real, already-numbered reference immediately (`R7`, via `nextReference.ts`) rather than a `"U?"` placeholder left for Annotate -- `Cmd::AddSymbol` refuses an exact duplicate id, so reusing the bare placeholder for a second placement in the same session would be refused outright, and `annotate()`'s own numbering only recognizes an id ending *exactly* in `?` | `SCH_DRAWING_TOOLS::PlaceSymbol` → `DIALOG_SYMBOL_CHOOSER`; `eeschema.InteractiveDrawing.placeSymbol` |
+| `GET /api/symbol_library`'s own catalog: "the libraries we already load" | partial — every library name this project's intent already resolved a part against, or that's already on the sheet, scanned for its *full* real-file contents (`eda_kicad::list_symbols_in_library`/`list_symbol_libraries`, both newly unit-tested) when a real `.kicad_sym` resolves (this session's own sandboxed environment has no real KiCad install, so every test board actually exercises the fallback path below, not this one); power symbols (own tool, `P`) and the parametric `Connector_Generic:Conn_01x<N>` family (40 variants, not worth hand-enumerating) are deliberately excluded | `DIALOG_SYMBOL_CHOOSER`'s own library-table-backed search, narrowed to what this app can search at all |
+| ... falling back to `eda_model::symbol::builtin_catalog` | identical in spirit to every other "real library first, builtin fallback" resolution in this codebase | new function, mirrors `builtin`'s own existing precedence; required adding `LibSymbol::reference_prefix` (from the library's own `Reference` property, already parsed by `build_symbol` but previously discarded) -- another `~27`-call-site field addition, same cost as `SchematicText`'s own (section 3's intro) |
 | Placing a symbol with no intent counterpart adds a synthesized `Part`, shows up unplaced on PCB | identical | `reconcile_schematic`, see section 0 |
 
 ## 4. ERC (gap #4) (`sch_inspection_tool.cpp`, `dialog_erc.cpp`)
@@ -250,3 +255,20 @@ click through:
     appears there and stays armed for a second click elsewhere. Note: a
     placed no-connect can't yet be selected/deleted from the canvas (see
     section 2's own row) — undo (Ctrl+Z) is the only way back right now.
+15. Press `A` — the Place Symbol dialog should open immediately (before
+    any click). Type "R" in the search box — the list should narrow to
+    resistor-shaped entries (at minimum "Device:R" from the builtin
+    fallback, since this environment has no real KiCad install at
+    `EDA_KICAD_SYMBOLS`/the default path); clicking one should draw its
+    real graphics in the preview pane, not a blank box. Confirm (double-
+    click the row, or the Place button) — the dialog should close and the
+    status bar should show the Place Symbol tool message. Click twice on
+    the canvas; confirm two new resistors appear with sequential
+    references (e.g. "R1" then "R2", or continuing from whatever `R`
+    count is already on the sheet) and `GET /api/schematic` shows both
+    with real pin/graphics data resolved. Press `A` again and place a
+    "Device:C" — confirm it gets "C1", independent of the resistor
+    numbering. Try a board with an intent that references a part from a
+    real installed library (if one is configured) and confirm the
+    chooser's list for that library name shows every symbol the real
+    `.kicad_sym` file defines, not just the one part already used.

@@ -560,6 +560,29 @@ export interface Schematic {
   title_block: TitleBlock | null;
 }
 
+// ---------------------------------------------------------------- Symbol library
+//
+// GET /api/symbol_library. Source of truth: crates/cli/src/studio.rs
+// `symbol_library_json()`. `A`'s symbol chooser's own catalog -- "the
+// libraries we already load" (every library name this project's intent
+// already resolved a part against, or that's already on the sheet,
+// scanned for its *full* contents), not a browse-every-installed-library
+// search. Power symbols and the parametric `Connector_Generic:Conn_01x*`
+// family are deliberately excluded -- see `symbol_library_json`'s own doc.
+
+export interface SymbolLibraryEntry {
+  lib_id: string;
+  description: string;
+  /** The library's own default `Reference` ("R", "C", "U", ...) -- "U" when unknown. Seeds `A`'s own next-free-number placement, same as a real reference designator always needs a letter prefix to start from. */
+  reference_prefix: string;
+}
+
+export interface SymbolLibrary {
+  entries: SymbolLibraryEntry[];
+  /** Resolved graphics for every entry above, keyed by `lib_id` -- same shape `Schematic.lib_symbols` already uses, so the chooser's live preview reuses the exact same renderer the canvas itself does. */
+  lib_symbols: LibSymbols;
+}
+
 // ---------------------------------------------------------------- DRC
 //
 // GET /api/drc. Source of truth: crates/cli/src/studio.rs `drc_json()`,

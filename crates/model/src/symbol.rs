@@ -174,6 +174,15 @@ pub struct LibSymbol {
     pub datasheet: String,
     #[serde(default)]
     pub description: String,
+    /// The library's own default `Reference` field ("R", "C", "U", "#PWR",
+    /// ...) -- `A`'s symbol-chooser placement uses this to synthesize a
+    /// real `"R?"`/`"U?"`-style placeholder id instead of always guessing
+    /// "U?" regardless of what's actually being placed (`Cmd::AddSymbol`'s
+    /// own doc). Empty when unknown (a generic/synthesized symbol with no
+    /// real library backing) -- callers fall back to "U", same as
+    /// `annotate`'s own default.
+    #[serde(default)]
+    pub reference_prefix: String,
     /// Highest unit index used by `pins`/`graphics`; 1 for every symbol
     /// this port actually places (multi-unit placement is deferred).
     #[serde(default = "d_unit_one")]
@@ -293,6 +302,22 @@ pub fn builtin(lib_id: &str) -> Option<LibSymbol> {
     }
 }
 
+/// Every non-power `builtin` symbol, for `A`'s symbol chooser to offer
+/// when no real `Device.kicad_sym`/etc. resolves one of these library
+/// names (`eda-cli`'s own "real file first, builtin fallback" precedence,
+/// same as everywhere else `builtin` is consulted). Power symbols
+/// (`power:GND`/`PWR_FLAG`/the generic rail) are deliberately left out --
+/// `P` is their own dedicated placement tool (PARITY-sch.md section 3),
+/// and `Cmd::AddSymbol` has no `net`/`pin` fields a power symbol needs
+/// anyway. `Connector_Generic:Conn_01x<N>` is parametric (40 variants) and
+/// also left out of this fixed catalog -- a real installed
+/// `Connector_Generic.kicad_sym` (which lists each one as its own named
+/// entry) is what a real search over it would need, not a hand-enumerated
+/// substitute.
+pub fn builtin_catalog() -> Vec<LibSymbol> {
+    vec![device_r(), device_c(), device_l(), device_d(), device_led()]
+}
+
 fn pin(number: &str, etype: &str, x: Mm, y: Mm, angle_deg: f64, length_mm: Mm) -> LibPin {
     LibPin { number: number.into(), name: String::new(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(x, y), angle_deg, length_mm, unit: 1 }
 }
@@ -308,6 +333,7 @@ fn device_r() -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: "Resistor".into(),
+        reference_prefix: "R".into(),
         unit_count: 1,
     }
 }
@@ -326,6 +352,7 @@ fn device_c() -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: "Capacitor".into(),
+        reference_prefix: "C".into(),
         unit_count: 1,
     }
 }
@@ -344,6 +371,7 @@ fn device_l() -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: "Inductor".into(),
+        reference_prefix: "L".into(),
         unit_count: 1,
     }
 }
@@ -367,6 +395,7 @@ fn device_d() -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: "Diode".into(),
+        reference_prefix: "D".into(),
         unit_count: 1,
     }
 }
@@ -402,6 +431,7 @@ fn conn_01x(n: u32) -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: format!("Generic connector, single row, 01x{n:02}"),
+        reference_prefix: "J".into(),
         unit_count: 1,
     }
 }
@@ -422,6 +452,7 @@ fn power_gnd() -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: "Power symbol creates a global label with name \"GND\", ground".into(),
+        reference_prefix: "#PWR".into(),
         unit_count: 1,
     }
 }
@@ -444,6 +475,7 @@ fn power_flag() -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: "Special symbol for telling ERC where power comes from".into(),
+        reference_prefix: "#PWR".into(),
         unit_count: 1,
     }
 }
@@ -467,6 +499,7 @@ fn power_rail(net: &str) -> LibSymbol {
         on_board: true,
         datasheet: String::new(),
         description: format!("Power symbol creates a global label with name \"{net}\""),
+        reference_prefix: "#PWR".into(),
         unit_count: 1,
     }
 }
