@@ -554,6 +554,20 @@ pub enum Cmd {
     /// source's own `StyleFromSettings` being called once, at creation.
     SetDimensionSettings { settings: DimensionSettings },
 
+    /// Task item 8: `GLOBAL_EDIT_TOOL::SwapLayers`/`DIALOG_SWAP_LAYERS`.
+    /// `mapping` is "move items on this layer to that one" pairs (a
+    /// layer absent from `mapping` is left untouched, matching source's
+    /// own per-row grid where every row defaults to itself). Applies to
+    /// every track/zone/shape/text/dimension whose own `layer` matches a
+    /// key -- vias are never remapped, since this model has no blind/
+    /// buried via concept and so every via is source's own skipped
+    /// `VIATYPE::THROUGH` case (`if (via->GetViaType() == VIATYPE::
+    /// THROUGH) continue;`); footprints aren't touched either, same as
+    /// source (a footprint's own "layer" is just `Side`, not a copper
+    /// layer this swaps). Each destination layer must already be one of
+    /// the board's own copper layers.
+    SwapLayers { mapping: Vec<(String, String)> },
+
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
     /// assigned here, the same deterministic way as everywhere else.
@@ -1103,6 +1117,7 @@ impl Cmd {
             Cmd::AddDimension { .. } => vec!["dimension"],
             Cmd::DeleteDimension { id } | Cmd::MoveDimension { id, .. } | Cmd::EditDimension { id, .. } => vec![id.as_str()],
             Cmd::SetDimensionSettings { .. } => vec!["dimension_settings"],
+            Cmd::SwapLayers { .. } => vec!["swap_layers"],
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -1420,6 +1435,7 @@ impl<'a> Board<'a> {
             Cmd::MoveDimension { id, dx, dy } => self.move_dimension(id, *dx, *dy),
             Cmd::EditDimension { id, dimension } => self.edit_dimension(id, dimension.clone()),
             Cmd::SetDimensionSettings { settings } => self.set_dimension_settings(*settings),
+            Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
@@ -2786,6 +2802,46 @@ impl<'a> Board<'a> {
 
     fn set_dimension_settings(&mut self, settings: DimensionSettings) -> Result<(), Vec<CheckResult>> {
         self.drawings_mut().dimension_settings = settings;
+        Ok(())
+    }
+
+    /// `Cmd::SwapLayers`. See that variant's own doc for exactly which
+    /// kinds this touches and why vias/footprints are excluded.
+    fn swap_layers(&mut self, mapping: &[(String, String)]) -> Result<(), Vec<CheckResult>> {
+        for (_, dest) in mapping {
+            self.known_layer(dest)?;
+        }
+        let map: std::collections::HashMap<&str, &str> = mapping.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+
+        if let Some(rt) = self.design.routing.as_mut() {
+            for t in rt.tracks.iter_mut() {
+                if let Some(dest) = map.get(t.layer.as_str()) {
+                    t.layer = (*dest).to_string();
+                }
+            }
+            for z in rt.zones.iter_mut() {
+                if let Some(dest) = map.get(z.layer.as_str()) {
+                    z.layer = (*dest).to_string();
+                }
+            }
+        }
+        if let Some(dr) = self.design.drawings.as_mut() {
+            for s in dr.shapes.iter_mut() {
+                if let Some(dest) = map.get(s.layer()) {
+                    s.set_layer((*dest).to_string());
+                }
+            }
+            for t in dr.texts.iter_mut() {
+                if let Some(dest) = map.get(t.layer.as_str()) {
+                    t.layer = (*dest).to_string();
+                }
+            }
+            for d in dr.dimensions.iter_mut() {
+                if let Some(dest) = map.get(d.layer.as_str()) {
+                    d.layer = (*dest).to_string();
+                }
+            }
+        }
         Ok(())
     }
 

@@ -17,6 +17,7 @@
 //! ```
 
 mod board;
+mod board_stats;
 mod cleanup_api;
 mod fab_api;
 mod fab_cmd;

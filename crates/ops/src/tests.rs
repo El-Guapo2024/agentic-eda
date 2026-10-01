@@ -2042,3 +2042,51 @@ fn dimension_commands_never_clear_routing() {
         assert!(!c.clears_routing(), "{c:?} must not clear routing -- it never moves a part");
     }
 }
+
+// ------------------------------------------------------- swap layers (task item 8)
+
+#[test]
+fn swap_layers_remaps_every_kind_but_leaves_vias_and_unmapped_layers_alone() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.Cu".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap(); // aligned_dim's own layer is "Dwgs.User", not swapped by this test's mapping
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+
+    b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into())] }).unwrap();
+
+    let rt = b.design().routing.as_ref().unwrap();
+    assert_eq!(rt.tracks[0].layer, "B.Cu", "a track on a mapped layer must move");
+    assert_eq!(rt.zones[0].layer, "B.Cu", "a zone on a mapped layer must move");
+    assert_eq!(rt.vias[0].from_layer, "F.Cu", "vias are never remapped -- every via here is source's own skipped THROUGH case");
+    assert_eq!(rt.vias[0].to_layer, "B.Cu");
+
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.shapes[0].layer(), "F.SilkS", "a layer absent from the mapping must be left untouched");
+    assert_eq!(dr.texts[0].layer, "B.Cu", "a text on a mapped layer must move");
+    assert_eq!(dr.dimensions[0].layer, "Dwgs.User", "a dimension on a layer absent from the mapping must be left untouched");
+}
+
+#[test]
+fn swap_layers_remaps_a_dimension_on_a_mapped_layer() {
+    let m = net_model();
+    let mut b = board(&m);
+    let mut dim = aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 });
+    dim.layer = "F.Cu".into();
+    b.apply(&Cmd::AddDimension { dimension: dim }).unwrap();
+
+    b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into())] }).unwrap();
+
+    assert_eq!(b.design().drawings.as_ref().unwrap().dimensions[0].layer, "B.Cu");
+}
+
+#[test]
+fn swap_layers_rejects_an_unknown_destination_layer() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "In1.Cu".into())] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_layer");
+}
