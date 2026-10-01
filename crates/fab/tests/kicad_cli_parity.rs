@@ -302,11 +302,29 @@ fn gerber_drill_pos_match_kicad_cli() {
     let oracle_pos = std::fs::read_to_string(&pos_path).expect("read oracle pos file");
     let pos_meta = PosMeta { date: date.into(), generator_version: "0.1.0".into() };
     let ours_pos = position::write_pos(&design, &model, &pos_meta, PosOptions::default()).expect("write_pos");
-    assert_eq!(ours_pos.lines().next(), oracle_pos.lines().next(), "position CSV header must match kicad-cli's own");
-    assert_eq!(ours_pos.lines().count(), oracle_pos.lines().count(), "position CSV row count mismatch");
+    // Full row-for-row equality, not just counts: both writers sort the
+    // same way (bottom-side footprints first, then natural reference
+    // order within a side -- see `position::side_rank`'s own doc comment
+    // for why, which this very assertion is what caught the opposite
+    // assumption), so this also catches formatting drift (e.g. a stray
+    // `-0.000000`) that a bare count comparison would miss.
+    assert_eq!(ours_pos, oracle_pos, "position CSV must match kicad-cli's own byte for byte");
     report.push_str("\n## Position (CSV)\n\n");
     report.push_str(&format!("kicad-cli header: `{}`\n\nours: `{}`\n\n", oracle_pos.lines().next().unwrap_or(""), ours_pos.lines().next().unwrap_or("")));
     report.push_str(&format!("rows -- kicad-cli: {}, ours: {}\n", oracle_pos.lines().count() - 1, ours_pos.lines().count() - 1));
+
+    // ASCII format: the first two lines carry kicad-cli's own real-time
+    // timestamp and version, so only the data from "## Unit" down (same
+    // sort, same column values, modulo KiCad's data-dependent column
+    // widths, which this writer reproduces -- see `position::gen_ascii`)
+    // is compared.
+    let ascii_pos_path = tmp.join("oracle_pos.txt");
+    let out = Command::new(&cli).args(["pcb", "export", "pos", "--format", "ascii", "--units", "mm", "-o"]).arg(&ascii_pos_path).arg(&pcb_path).output().expect("run kicad-cli");
+    assert!(out.status.success(), "kicad-cli ascii pos failed: {}", String::from_utf8_lossy(&out.stderr));
+    let oracle_ascii = std::fs::read_to_string(&ascii_pos_path).expect("read oracle ascii pos file");
+    let ours_ascii = position::write_pos(&design, &model, &pos_meta, PosOptions { format: position::PosFormat::Ascii, ..PosOptions::default() }).expect("write_pos ascii");
+    let skip2 = |s: &str| s.lines().skip(2).collect::<Vec<_>>().join("\n");
+    assert_eq!(skip2(&ours_ascii), skip2(&oracle_ascii), "position ASCII body (past the timestamped header) must match kicad-cli's own");
 
     std::fs::write(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("PARITY.md"), report).ok();
     let _ = std::fs::remove_dir_all(&tmp);

@@ -117,8 +117,13 @@ fn rows(design: &Design, model: &ConstraintModel, opts: &PosOptions) -> Result<V
     Ok(out)
 }
 
+/// `sortFPlist`'s `ref.m_Layer > tst.m_Layer`: KiCad's internal layer id
+/// for `B_Cu` is *greater* than `F_Cu`'s, so despite that function's own
+/// "top layer first" comment, a real `kicad-cli pcb export pos` sorts
+/// bottom-side footprints before top-side ones -- checked directly (this
+/// crate's own comparator test caught the opposite assumption).
 fn side_rank(s: Side) -> u8 {
-    if s == Side::Top {
+    if s == Side::Bottom {
         0
     } else {
         1
@@ -142,6 +147,19 @@ fn conv_mm(um: Um, units_mm: bool) -> f64 {
     }
 }
 
+/// `-0.0 == 0.0` is true (IEEE 754), but `format!("{:.6}", -0.0)` still
+/// prints the sign, so a part at Y=0 or with rotation 0 -- common, not an
+/// edge case -- would print `-0.000000` once negated. A real KiCad
+/// position file prints a plain `0.000000` there (checked directly), so
+/// this clears the sign bit on an exact zero before formatting.
+fn clear_negative_zero(v: f64) -> f64 {
+    if v == 0.0 {
+        0.0
+    } else {
+        v
+    }
+}
+
 fn side_name(s: Side) -> &'static str {
     if s == Side::Top {
         "top"
@@ -157,8 +175,8 @@ fn csv_field(s: &str) -> String {
 fn gen_csv(rows: &[Row], opts: &PosOptions) -> String {
     let mut out = String::from("Ref,Val,Package,PosX,PosY,Rot,Side\n");
     for r in rows {
-        let (x, y) = (conv_mm(r.x_um, opts.units_mm), -conv_mm(r.y_um, opts.units_mm));
-        let rot = -(r.rot_mdeg as f64) / 1000.0;
+        let (x, y) = (conv_mm(r.x_um, opts.units_mm), clear_negative_zero(-conv_mm(r.y_um, opts.units_mm)));
+        let rot = clear_negative_zero(-(r.rot_mdeg as f64) / 1000.0);
         out.push_str(&format!("{},{},{},{:.6},{:.6},{:.6},{}\n", csv_field(&r.reference), csv_field(&r.value), csv_field(&r.package), x, y, rot, side_name(r.side)));
     }
     out
@@ -183,8 +201,8 @@ fn gen_ascii(rows: &[Row], opts: &PosOptions, meta_date: &str, generator_version
     out.push('\n');
     out.push_str(&format!("{:<len_ref$}  {:<len_val$}  {:<len_pkg$}  {:>9}  {:>9}  {:>8}  {}\n", "# Ref", "Val", "Package", "PosX", "PosY", "Rot", "Side"));
     for r in rows {
-        let (x, y) = (conv_mm(r.x_um, opts.units_mm), -conv_mm(r.y_um, opts.units_mm));
-        let rot = -(r.rot_mdeg as f64) / 1000.0;
+        let (x, y) = (conv_mm(r.x_um, opts.units_mm), clear_negative_zero(-conv_mm(r.y_um, opts.units_mm)));
+        let rot = clear_negative_zero(-(r.rot_mdeg as f64) / 1000.0);
         out.push_str(&format!(
             "{:<len_ref$}  {:<len_val$}  {:<len_pkg$}  {:>9.4}  {:>9.4}  {:>8.4}  {}\n",
             underscored(&r.reference),
