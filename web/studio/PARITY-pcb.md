@@ -330,3 +330,41 @@ tests in `crates/ops/src/tests.rs`. `crates/cli/src/studio.rs`'s
 `fill_json`'s endpoint was already there; `state()`'s `zones` JSON and
 `routing` JSON both gained the new fields (full settings; track/via preset
 lists, see section 9).
+
+## 9. Board Setup
+
+Port of `pcbnew/dialogs/dialog_board_setup.cpp`, which is really a tree of
+~15 `panel_setup_*.cpp` pages. `BoardSetupDialog.tsx` only builds the pages
+this app's constraint model (`crates/model/src/lib.rs` `BoardRules`) has
+real data for; a page with no IR backing at all is left out.
+
+A hard split runs through every page: `BoardRules` (net classes, hole/
+clearance/text defaults, stackup) lives on the *intent*-derived
+`ConstraintModel`, loaded read-only (`crates/cli/src/board.rs::load`) --
+there is no `Cmd` that can change it without a second edit/undo path into
+the intent file, which this session did not build (GAPS.md #10 sizes that
+"L", same size the custom-rule-language page would be). Only the new
+`RoutingSection.track_width_presets`/`via_presets` live on the editable
+`design.json` IR, so only that one page is genuinely editable -- every
+other page is a read-only mirror.
+
+| Page | Status | KiCad file |
+|---|---|---|
+| Net Classes: name, net-pattern list, track width, clearance, via size/drill, priority | read-only (no edit command -- see this section's intro) | `panel_setup_rules.cpp`'s net-class grid (the pattern-assignment side of it; `dialog_copper_zones.cpp`'s own net-class picker is the same gap) |
+| Track Widths & Vias: the W/Shift+W and via-size-cycle preset lists, add/remove entries | editable | `panel_setup_tracks_and_vias.cpp` -- `Cmd::SetTrackWidthPresets`/`SetViaPresets` (whole-list replace, no per-entry Cmd, same spirit `paste_items` already uses for several items in one commit) |
+| Design Rules: the custom per-net/per-item constraint expression language | not ported -- no IR concept at all | `panel_setup_rules.cpp`'s actual subject (a small expression language over `DRC_ENGINE::EvalRules`) -- shown instead: the board-wide numeric defaults `eda_drc` does check (clearance, track width, annular ring, hole-to-hole, hole clearance, silk clearance), read-only |
+| Text & Graphics Defaults: refdes font size, minimum silk text height/thickness | read-only | `panel_setup_text_and_graphics.cpp` |
+| Layer Stackup: name/material/thickness per layer | read-only, and usually empty (most intents never set one) | `panel_setup_layers.cpp` -- `crates/model/src/lib.rs` `Stackup`/`StackupLayer` already existed on `ConstraintModel`, just never exposed in `/api/state` before this session |
+| Constraints / Teardrops / Tuning Patterns / Mask & Paste / Formatting / Zones defaults / Severities | not ported -- no IR concept | no model field for any of these; left out entirely rather than faked |
+
+W/Shift+W (`pcbnew.EditorControl.trackWidthInc`/`Dec`) and the via-size
+cycle (`viaSizeInc`/`Dec`) now read this page's lists -- `useActionRunner.ts`:
+cycling updates `state.currentTrackWidthUm`/`currentViaPreset` (read by
+Canvas.tsx's route/via tools for the *next* item) and, matching source's
+own dual-purpose behavior, also applies the new size to every selected
+track/via in the same keypress via `set_track_width`/`edit_via`.
+
+Rust: `crates/cli/src/studio.rs`'s `state()` gained `board_rules.
+net_classes`/`stackup`/the hole-clearance-and-text-default fields (plain
+JSON exposure, no new endpoint) and `routing.track_width_presets`/
+`via_presets`.
