@@ -309,6 +309,15 @@ export function useActionRunner() {
     // / GlobalEditTextAndGraphicsDialog.tsx for scope.
     m.set("pcbnew.GlobalEdit.editTracksAndVias", pcbOnly(() => dispatch({ type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN", open: true })));
     m.set("pcbnew.GlobalEdit.editTextAndGraphics", pcbOnly(() => dispatch({ type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN", open: true })));
+    // Ctrl+T (task item 6): `ARRAY_TOOL::CreateArray`'s own
+    // `if (selection.Empty()) return 0;` guard -- see CreateArrayDialog.tsx.
+    m.set(
+      "pcbnew.Array.createArray",
+      pcbOnly(() => {
+        if (state.selection.size === 0) return;
+        dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: true });
+      })
+    );
     m.set(
       "pcbnew.InteractiveDrawing.via",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))

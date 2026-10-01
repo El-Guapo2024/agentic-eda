@@ -91,6 +91,20 @@ export type SizeSpec = { kind: "net_class" } | { kind: "value"; um: Um };
 export type ViaSizeSpec = { kind: "net_class" } | { kind: "value"; diameter: Um; drill: Um };
 
 /**
+ * `crates/ops/src/lib.rs` `ArrayGeometry` (task item 6), `#[serde(tag =
+ * "kind")]` -- `create_array`'s geometry. Angles are millidegrees in the
+ * backend's own `rotate_point_about` convention: positive = clockwise in
+ * this app's Y-down board coordinates. `circular.clockwise` is the
+ * user-facing direction choice (matching KiCad's own dialog radio
+ * button, clockwise default) and needs no sign flip the way `move_exact`'s
+ * single signed rotation field does -- pass the typed angle magnitude as
+ * entered.
+ */
+export type ArrayGeometry =
+  | { kind: "grid"; nx: number; ny: number; dx: Um; dy: Um; offset_x?: Um; offset_y?: Um; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean }
+  | { kind: "circular"; center: PointXY; count: number; angle_millideg: number; angle_offset_millideg?: number; clockwise?: boolean; rotate_items?: boolean };
+
+/**
  * `crates/model/src/ir.rs` `Zone`'s `ZONE_SETTINGS` fill-engine fields
  * (dialog_copper_zones.cpp's panel) -- everything but id/net/layer/
  * outline, factored out so `Zone` (always populated) and `Cmd`'s
@@ -579,6 +593,17 @@ export type Cmd =
   | { op: "add_to_group"; group_id: string; ids: string[] }
   /** Remove `ids` from whatever group each belongs to; a group left with fewer than 2 members dissolves. */
   | { op: "remove_from_group"; ids: string[] }
+  /**
+   * Ctrl+T (task item 6): `pcbnew.Array.createArray`. `arrange: false`
+   * (the dialog's "Duplicate" default) creates `geometry`'s size minus
+   * one new copies of each resolved track/via/zone/shape/text (never a
+   * part or a group -- same scope `duplicate` already has); `arrange:
+   * true` ("Arrange selection") repositions the given `ids` into the
+   * array's own slots instead, creating nothing -- a placed part is
+   * allowed there, since that only ever moves something that already
+   * exists. See `ArrayGeometry`'s own doc for the angle-sign convention.
+   */
+  | { op: "create_array"; ids: string[]; geometry: ArrayGeometry; arrange?: boolean }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**

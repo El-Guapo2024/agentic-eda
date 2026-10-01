@@ -595,6 +595,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Ungroup { ids } => format!("ungroup {}", ids.join(" ")),
         Cmd::AddToGroup { group_id, ids } => format!("group add-to {group_id} {}", ids.join(" ")),
         Cmd::RemoveFromGroup { ids } => format!("group remove-from {}", ids.join(" ")),
+        Cmd::CreateArray { ids, arrange, .. } => format!("array{} {}", if *arrange { " --arrange" } else { "" }, ids.join(" ")),
 
         Cmd::Duplicate { ids } => format!("duplicate {}", ids.join(" ")),
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
@@ -740,6 +741,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::Ungroup { .. } => "ungroup",
         Cmd::AddToGroup { .. } => "group-add-to",
         Cmd::RemoveFromGroup { .. } => "group-remove-from",
+        Cmd::CreateArray { .. } => "create-array",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::MoveExact { .. } => "move-exact",

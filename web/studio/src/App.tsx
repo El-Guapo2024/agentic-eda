@@ -27,6 +27,7 @@ import { LengthTuningDialog } from "./components/LengthTuningDialog";
 import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
 import { GlobalEditTracksAndViasDialog } from "./components/GlobalEditTracksAndViasDialog";
 import { GlobalEditTextAndGraphicsDialog } from "./components/GlobalEditTextAndGraphicsDialog";
+import { CreateArrayDialog } from "./components/CreateArrayDialog";
 import { BoardSetupDialog } from "./components/BoardSetupDialog";
 import { LabelDialog } from "./components/LabelDialog";
 import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
@@ -175,6 +176,7 @@ function StudioFrame() {
       <CleanupTracksDialog />
       <GlobalEditTracksAndViasDialog />
       <GlobalEditTextAndGraphicsDialog />
+      <CreateArrayDialog />
       <BoardSetupDialog />
       <LabelDialog />
       <PowerSymbolDialog />

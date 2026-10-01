@@ -579,6 +579,40 @@ entering/leaving one. A group is its own IR type (`Group`: id, name,
 | Nested groups (a group containing another group) | not ported, by design -- see the flattening row above | `EDA_GROUP`'s recursive member list |
 | `.kicad_pcb` export/import of a `(group ...)` block | not ported, same documented gap as sections 14-15 | `crates/kicad/src/pcb.rs` |
 
+## 17. Create Array
+
+Port of `pcbnew/tools/array_tool.cpp` (`ARRAY_TOOL::CreateArray`,
+`pcbnew.Array.createArray`, Ctrl+T) and `include`/`common/array_options.cpp`'s
+`ARRAY_GRID_OPTIONS`/`ARRAY_CIRCULAR_OPTIONS` geometry (task item 6).
+`ARRAY_OPTIONS` is a dialog-session object in source too -- never written
+to the board file -- so this ships as a `Cmd` payload (`ArrayGeometry`),
+not a new IR field.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Grid geometry: Nx/Ny, X/Y spacing, X/Y offset (an oblique/skewed grid), centred-on-original vs corner-anchored, stagger (brick/honeycomb pattern) every Nth row or column | identical | `ARRAY_GRID_OPTIONS::GetTransform`/`gtItemPosRelativeToItem0`/`getGridCoords` |
+| Circular geometry: centre, point count, angle between points (typed directly, plus a "divide evenly" checkbox that pre-fills 360/count -- a dialog-only convenience, same as source's own `calculateCircularArrayProperties`), angle offset, clockwise/counterclockwise, "rotate items" (spin each item in place as well as moving it along the circle) | identical in effect | `ARRAY_CIRCULAR_OPTIONS::GetTransform` |
+| "Duplicate" (default): create `size - 1` new copies of each resolved track/via/zone/shape/text; the *original* item is also transformed, into the array's own last slot -- not left at slot 0 -- so a centred array's slots are evenly occupied | identical in effect | `ARRAY_TOOL::CreateArray`'s reverse `ptN` loop, `TransformItem` |
+| "Arrange selection": reposition the given items into the array's own slots instead of creating anything; a placed part is a valid target here (only `Cmd::MoveExact`-style `set_pose`, nothing created) | identical in effect, including that an id naming nothing arrayable is skipped *without* consuming a slot (source's own inner `selectionIndex` cursor advancing independently of the outer `arrayIndex`) | `ARRAY_TOOL::CreateArray`'s `ShouldArrangeSelection()` branch |
+| A track/via/zone/shape only ever *translates* in a circular array, never spins in place, even with "rotate items" on; a `Part` or `Text` does spin (the two kinds with a simple scalar position+orientation this model can rotate without a generic per-point shape-rotation capability) | ported with this one explicit narrowing -- see `ArrayGeometry::Circular::rotate_items`'s own doc | `TransformItem`'s unconditional `aItem.Rotate(aItem.GetPosition(), transform.m_rotation)` -- source rotates every kind the same way, since every `BOARD_ITEM` has a generic `Rotate()` |
+| A multi-point item (a track or a zone) is translated rigidly by reading just its first point as the position `GetTransform` expects, same as a via/text's single point -- its own shape is never otherwise altered | ported, a model-shape adaptation rather than a behavior gap (same "one position, whole item moves together" result `PCB_TRACK`/`ZONE`'s real `GetPosition()`-based move already has) | `BOARD_ITEM::Move` |
+| Validation: a grid needs 1+ rows/columns and a nonzero spacing wherever there's more than one of them; a circular array needs 1+ points and a nonzero angle wherever there's more than one | identical | `DIALOG_CREATE_ARRAY::TransferDataFromWindow`'s own zero-delta checks |
+| Arraying a footprint (placed part), in either mode other than a plain "Arrange selection" reposition | not ported -- `FootprintInstance::id` *is* its schematic symbol's id (see that struct's own doc); there is no "conjure a new placed copy" operation this model's ops layer has, the same reason `Cmd::Duplicate` already excludes footprints. Source has no such restriction (a `PCB_FOOTPRINT` duplicates like anything else) | `ARRAY_TOOL::CreateArray`'s `PCB_FOOTPRINT_T` branch |
+| Grouping all of one array "block" together automatically (`PCB_GROUP_T`/`PCB_GENERATOR_T` deep-duplication, so an arrayed sub-assembly stays one unit) | not ported -- a group id in `ids` is skipped the same way an unknown id is (no group-aware duplicate/move yet, PARITY-pcb.md section 16) | `ARRAY_TOOL::CreateArray`'s `PCB_GROUP_T`/`PCB_GENERATOR_T` branches |
+| Footprint reannotation ("Unique references" -- assign fresh R/C/U numbers to the new copies) | not ported, and not a scope gap so much as a structural mismatch -- see the footprint row above; a PCB-side "rename this reference" has nothing to write without a matching schematic symbol to rename too | `BOARD_REANNOTATE_TOOL::ReannotateDuplicates`, `m_radioBtnKeepRefs`/`m_radioBtnUniqueRefs` |
+| Footprint-editor pad numbering: "Renumber pads" checkbox (grid) / always-on (circular), the `ARRAY_AXIS` numeric/hex/alphabetic-minus-IOSQXZ/full-alphabetic numbering schemes, `ARRAY_PAD_NUMBER_PROVIDER`'s skip-already-used-numbers logic, 2D (primary+secondary axis) numbering | not ported -- source's own `enableArrayNumbering = m_isFootprintEditor` means this entire half of the dialog never shows in the board editor either; this app's footprint editor (`LibraryFootprint`'s pads) has no multi-pad array/selection tooling of its own yet to extend with it (it does already have a simpler, non-array `Cmd::RenumberPads` -- reading-order renumber, no scheme/skip logic -- for the existing "Renumber Pads" tool, a different KiCad feature) | `DIALOG_CREATE_ARRAY`'s numbering panels, `array_pad_number_provider.cpp`, `include/array_axis.h` |
+| Interactive "select centre point/item" buttons for the circular centre | not ported -- the dialog's centre fields are plain numeric inputs, pre-filled with the selection's own average reference point, same numeric-entry convention every other dialog in this app uses (no canvas-picker mode) | `DIALOG_CREATE_ARRAY::OnSelectCenterButton`, `PCB_PICKER_TOOL` |
+| A live canvas preview of the array before committing | not ported -- same "fill the form, Create, see the result" shape every dialog in this app other than section 12's cleanup preview already has | n/a -- source has no such preview either; this row exists only to note it was considered |
+
+Rust: `crates/ops/src/lib.rs`'s `ArrayGeometry` (`Grid`/`Circular`, a `Cmd`
+payload type, not IR) and `Cmd::CreateArray`, `create_array`/
+`arrange_into_array`/`duplicate_into_array`, 10 new tests. No IR/model
+changes. Frontend: `ArrayGeometry` in `api/types.ts`,
+`CreateArrayDialog.tsx`, `pcbnew.Array.createArray` wired in
+`useActionRunner.ts` (gated on a non-empty selection, matching source's
+own `if (selection.Empty()) return 0;`) and a "Create Array... (Ctrl+T)"
+context-menu entry in `Canvas.tsx`.
+
 Rust: `crates/model/src/ir.rs`'s `Group` struct and `DrawingsSection::groups`
 (chosen over `Design` or `RoutingSection` purely on construction-site count,
 documented in `Group`'s own doc comment; `DrawingsSection::assign_missing_ids`

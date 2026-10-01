@@ -894,6 +894,7 @@ export function Canvas() {
       { label: "Rotate Counterclockwise (R)", onSelect: () => api.rotateSelection(1), disabled: placedRefs.length === 0 },
       { label: "Flip Side (F)", onSelect: () => api.flipSelection(), disabled: placedRefs.length === 0 },
       { label: "Move Exactly... (Shift+M)", onSelect: () => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true }), disabled: placedRefs.length === 0 },
+      { label: "Create Array... (Ctrl+T)", onSelect: () => dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: true }), disabled: refs.length === 0 },
       { label: "Copy (Cmd+C)", onSelect: () => api.copySelection(), disabled: refs.length === 0 },
       { label: "Cut (Cmd+X)", onSelect: () => run("common.Interactive.cut"), disabled: refs.length === 0 },
       { label: "Duplicate (Cmd+D)", onSelect: () => api.duplicateSelection(), disabled: refs.length === 0 },

@@ -590,6 +590,8 @@ export interface StudioState {
   editTracksAndViasDialogOpen: boolean;
   /** `pcbnew.GlobalEdit.editTextAndGraphics` -- components/GlobalEditTextAndGraphicsDialog.tsx. */
   editTextAndGraphicsDialogOpen: boolean;
+  /** `pcbnew.Array.createArray` (Ctrl+T, task item 6) -- components/CreateArrayDialog.tsx. */
+  createArrayDialogOpen: boolean;
   /**
    * `eda_pns::RoutingSettings`, the subset this app's router actually
    * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
@@ -695,6 +697,7 @@ const initialState: StudioState = {
   cleanupTracksDialogOpen: false,
   editTracksAndViasDialogOpen: false,
   editTextAndGraphicsDialogOpen: false,
+  createArrayDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
   routerSettings: { mode: "walkaround", removeLoops: true },
 };
@@ -789,7 +792,8 @@ export type Action =
   | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
   | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
-  | { type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN"; open: boolean };
+  | { type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_CREATE_ARRAY_DIALOG_OPEN"; open: boolean };
 
 /**
  * `pcb_selection_tool.cpp`'s "clicking a group member selects the group"
@@ -1076,6 +1080,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, editTracksAndViasDialogOpen: action.open };
     case "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN":
       return { ...state, editTextAndGraphicsDialogOpen: action.open };
+    case "SET_CREATE_ARRAY_DIALOG_OPEN":
+      return { ...state, createArrayDialogOpen: action.open };
     default:
       return state;
   }
