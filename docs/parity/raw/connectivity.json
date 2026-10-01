@@ -1,0 +1,905 @@
+{
+  "boards": [
+    {
+      "board": "all_power_ground_net",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "dense_small_outline",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "l1_usb_mcu",
+      "source": "ladder",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "l2_sensor_hub",
+      "source": "ladder",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "l3_motor_hub",
+      "source": "ladder",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "l4_control_hub",
+      "source": "ladder",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "ldo",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "ldo_proximity_heavy",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "mcu_board_30plus",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "mixed_track_widths",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "nc_pins",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "opamp_filter",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "passive_divider_ladder",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "star_net",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "through_hole_headers",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "two_pin_nets",
+      "source": "example",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "unroutable_tiny_outline",
+      "source": "example",
+      "error": "place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }]",
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "work/mcu30",
+      "source": "work",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "work/l1-order",
+      "source": "work",
+      "error": null,
+      "ours": {
+        "unconnected": 2,
+        "track_dangling": 13,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/api_kitchen_sink.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue12964/issue12964.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 29,
+        "track_dangling": 0,
+        "via_dangling": 30
+      },
+      "oracle": {
+        "unconnected": 29,
+        "track_dangling": 0,
+        "via_dangling": 30
+      }
+    },
+    {
+      "board": "pcbnew/bad_triangulation_case.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue16658/issue16658.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 2,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/complex_hierarchy.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 24,
+        "track_dangling": 1,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue17967/issue17967.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 2,
+        "track_dangling": 8,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/component_classes.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue18045/test_proj.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 3,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/component_classes_drc.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 4,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue19090/issue19090.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 1,
+        "track_dangling": 1,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/connection_width_rules.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 8,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue19325/issue19325.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/custom_fields.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue19956/issue19956.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/custom_pads.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue20480/issue20480.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/drc_missing_tuning_profile.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue21184/issue21184.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 4,
+        "track_dangling": 0,
+        "via_dangling": 6
+      },
+      "oracle": {
+        "unconnected": 1,
+        "track_dangling": 0,
+        "via_dangling": 2
+      }
+    },
+    {
+      "board": "pcbnew/fill_bad.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue21482/issue21482.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 199
+      }
+    },
+    {
+      "board": "pcbnew/footprints_load_save.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue21564/issue21564.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 1,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 1,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/graphics_load_save_v20240108.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue21739/topology_mismatch.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 11,
+        "track_dangling": 0,
+        "via_dangling": 4
+      },
+      "oracle": {
+        "unconnected": 7,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/groups_load_save.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue21746/issue21746.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 33,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 16,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/groups_load_save_v20231212.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue22010/issue22010.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 43,
+        "track_dangling": 0,
+        "via_dangling": 100
+      },
+      "oracle": {
+        "unconnected": 19,
+        "track_dangling": 0,
+        "via_dangling": 81
+      }
+    },
+    {
+      "board": "pcbnew/incorrect_text_mirroring_drc.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue22475/issue22475.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 141,
+        "track_dangling": 0,
+        "via_dangling": 113
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/intersectingzones.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 2,
+        "track_dangling": 0,
+        "via_dangling": 1
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue22548/issue22548.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/issue10906.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "issue22597/issue22597.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/issue10916.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 1
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 1
+      }
+    },
+    {
+      "board": "issue22751/issue22751.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 2,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 2,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/issue11814.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 231,
+        "track_dangling": 42,
+        "via_dangling": 149
+      },
+      "oracle": {
+        "unconnected": 2,
+        "track_dangling": 0,
+        "via_dangling": 2
+      }
+    },
+    {
+      "board": "issue22809/issue22809.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 2,
+        "via_dangling": 0
+      }
+    },
+    {
+      "board": "pcbnew/issue12109.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 1
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 1
+      }
+    },
+    {
+      "board": "issue22826/issue22826.kicad_pcb",
+      "source": "qa",
+      "error": null,
+      "ours": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      },
+      "oracle": {
+        "unconnected": 0,
+        "track_dangling": 0,
+        "via_dangling": 0
+      }
+    }
+  ],
+  "totals_ours": {
+    "unconnected": 527,
+    "track_dangling": 77,
+    "via_dangling": 405
+  },
+  "totals_oracle": {
+    "unconnected": 76,
+    "track_dangling": 7,
+    "via_dangling": 316
+  },
+  "exact_match_rate": 0.8390804597701149,
+  "exact_matches": 146,
+  "total_checks": 174,
+  "import_failures": [
+    "unroutable_tiny_outline [example]: place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }]"
+  ]
+}

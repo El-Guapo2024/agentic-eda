@@ -1,0 +1,509 @@
+{
+  "own_pipeline_roundtrip": [
+    {
+      "board": "all_power_ground_net",
+      "error": null,
+      "survival": {
+        "footprints_before": 3,
+        "footprints_after": 3,
+        "footprint_pose_exact_matches": 3,
+        "segments_before": 16,
+        "segments_after_exact_matches": 16,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "dense_small_outline",
+      "error": null,
+      "survival": {
+        "footprints_before": 5,
+        "footprints_after": 5,
+        "footprint_pose_exact_matches": 5,
+        "segments_before": 21,
+        "segments_after_exact_matches": 21,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "l1_usb_mcu",
+      "error": null,
+      "survival": {
+        "footprints_before": 17,
+        "footprints_after": 17,
+        "footprint_pose_exact_matches": 17,
+        "segments_before": 158,
+        "segments_after_exact_matches": 158,
+        "vias_before": 3,
+        "vias_after_exact_matches": 3,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "l2_sensor_hub",
+      "error": null,
+      "survival": {
+        "footprints_before": 35,
+        "footprints_after": 35,
+        "footprint_pose_exact_matches": 35,
+        "segments_before": 354,
+        "segments_after_exact_matches": 354,
+        "vias_before": 16,
+        "vias_after_exact_matches": 16,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "l3_motor_hub",
+      "error": null,
+      "survival": {
+        "footprints_before": 58,
+        "footprints_after": 58,
+        "footprint_pose_exact_matches": 58,
+        "segments_before": 618,
+        "segments_after_exact_matches": 618,
+        "vias_before": 36,
+        "vias_after_exact_matches": 36,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "l4_control_hub",
+      "error": null,
+      "survival": {
+        "footprints_before": 100,
+        "footprints_after": 100,
+        "footprint_pose_exact_matches": 100,
+        "segments_before": 1273,
+        "segments_after_exact_matches": 1273,
+        "vias_before": 87,
+        "vias_after_exact_matches": 87,
+        "zones_before": 1,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "ldo",
+      "error": null,
+      "survival": {
+        "footprints_before": 6,
+        "footprints_after": 6,
+        "footprint_pose_exact_matches": 6,
+        "segments_before": 33,
+        "segments_after_exact_matches": 33,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "ldo_proximity_heavy",
+      "error": null,
+      "survival": {
+        "footprints_before": 8,
+        "footprints_after": 8,
+        "footprint_pose_exact_matches": 8,
+        "segments_before": 52,
+        "segments_after_exact_matches": 52,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "mcu_board_30plus",
+      "error": null,
+      "survival": {
+        "footprints_before": 30,
+        "footprints_after": 30,
+        "footprint_pose_exact_matches": 30,
+        "segments_before": 221,
+        "segments_after_exact_matches": 221,
+        "vias_before": 7,
+        "vias_after_exact_matches": 7,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "mixed_track_widths",
+      "error": null,
+      "survival": {
+        "footprints_before": 6,
+        "footprints_after": 6,
+        "footprint_pose_exact_matches": 6,
+        "segments_before": 35,
+        "segments_after_exact_matches": 35,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "nc_pins",
+      "error": null,
+      "survival": {
+        "footprints_before": 3,
+        "footprints_after": 3,
+        "footprint_pose_exact_matches": 3,
+        "segments_before": 20,
+        "segments_after_exact_matches": 20,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "opamp_filter",
+      "error": null,
+      "survival": {
+        "footprints_before": 7,
+        "footprints_after": 7,
+        "footprint_pose_exact_matches": 7,
+        "segments_before": 43,
+        "segments_after_exact_matches": 43,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "passive_divider_ladder",
+      "error": null,
+      "survival": {
+        "footprints_before": 6,
+        "footprints_after": 6,
+        "footprint_pose_exact_matches": 6,
+        "segments_before": 22,
+        "segments_after_exact_matches": 22,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "star_net",
+      "error": null,
+      "survival": {
+        "footprints_before": 6,
+        "footprints_after": 6,
+        "footprint_pose_exact_matches": 6,
+        "segments_before": 14,
+        "segments_after_exact_matches": 14,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "through_hole_headers",
+      "error": null,
+      "survival": {
+        "footprints_before": 5,
+        "footprints_after": 5,
+        "footprint_pose_exact_matches": 5,
+        "segments_before": 39,
+        "segments_after_exact_matches": 39,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "two_pin_nets",
+      "error": null,
+      "survival": {
+        "footprints_before": 3,
+        "footprints_after": 3,
+        "footprint_pose_exact_matches": 3,
+        "segments_before": 9,
+        "segments_after_exact_matches": 9,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    },
+    {
+      "board": "unroutable_tiny_outline",
+      "error": "place: [CheckResult { check: \"place_legalize\", status: Fail, location: Some(\"design\"), hint: Some(\"could not resolve all courtyard overlaps within the outline; enlarge the board or relax rules\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C1\"), hint: Some(\"14232600 µm² outside its bound (keepout (-3050, 76, 50, 4674), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"C2\"), hint: Some(\"14833680 µm² outside its bound (keepout (326, -3050, 4874, 220), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }, CheckResult { check: \"place_outside\", status: Fail, location: Some(\"U1\"), hint: Some(\"78455000 µm² outside its bound (keepout (200, 350, 10200, 8200), bound (0, 0, 500, 500); non-connectors keep the edge margin)\"), detail: None }]",
+      "survival": {
+        "footprints_before": 0,
+        "footprints_after": 0,
+        "footprint_pose_exact_matches": 0,
+        "segments_before": 0,
+        "segments_after_exact_matches": 0,
+        "vias_before": 0,
+        "vias_after_exact_matches": 0,
+        "zones_before": 0,
+        "zones_after": 0,
+        "modules_before": 0,
+        "modules_after": 0
+      }
+    }
+  ],
+  "qa_corpus_pcb_import_notes": {
+    "total": 185,
+    "imported_ok": 184,
+    "import_failed": 1,
+    "zones_skipped": 5847,
+    "track_arcs_approximated": 3120,
+    "non_rect_pad_shapes_approximated": 157,
+    "outline_open": 6,
+    "outline_source_counts": {
+      "lines": 143,
+      "none": 38,
+      "poly": 3
+    },
+    "failures": [
+      "pcbnew/plugins/fakeboard.kicad_pcb: [CheckResult { check: \"kicad_import.parse\", status: Fail, location: Some(\"file\"), hint: Some(\"not a valid s-expression file: expected '(' at byte 0\"), detail: None }]"
+    ]
+  },
+  "qa_corpus_sch_import_notes": {
+    "total": 33,
+    "imported_ok": 33,
+    "import_failed": 0,
+    "sheets_not_descended": 9,
+    "unresolved_symbols": 0,
+    "failures": []
+  },
+  "reexport_fidelity_subset": [
+    {
+      "board": "api_kitchen_sink",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "clearance": 1,
+        "isolated_copper": 1,
+        "lib_footprint_mismatch": 3,
+        "silk_overlap": 2
+      },
+      "reexport_types": {
+        "invalid_outline": 1,
+        "lib_footprint_issues": 2,
+        "lib_footprint_mismatch": 3
+      },
+      "identical_type_counts": false
+    },
+    {
+      "board": "bad_triangulation_case",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "invalid_outline": 1,
+        "isolated_copper": 59,
+        "zones_intersect": 12
+      },
+      "reexport_types": {
+        "invalid_outline": 1
+      },
+      "identical_type_counts": false
+    },
+    {
+      "board": "complex_hierarchy",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "annular_width": 12,
+        "clearance": 112,
+        "copper_edge_clearance": 14,
+        "drill_out_of_range": 4,
+        "holes_co_located": 4,
+        "silk_edge_clearance": 14,
+        "silk_over_copper": 104,
+        "silk_overlap": 199,
+        "solder_mask_bridge": 112
+      },
+      "reexport_types": {
+        "annular_width": 12,
+        "clearance": 77,
+        "copper_edge_clearance": 26,
+        "drill_out_of_range": 4,
+        "holes_co_located": 4,
+        "lib_footprint_issues": 72,
+        "shorting_items": 2,
+        "silk_edge_clearance": 2,
+        "silk_over_copper": 2,
+        "silk_overlap": 5,
+        "solder_mask_bridge": 43,
+        "track_dangling": 1
+      },
+      "identical_type_counts": false
+    },
+    {
+      "board": "component_classes",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "invalid_outline": 1,
+        "items_not_allowed": 2,
+        "lib_footprint_mismatch": 14
+      },
+      "reexport_types": {
+        "invalid_outline": 1,
+        "lib_footprint_mismatch": 14
+      },
+      "identical_type_counts": false
+    },
+    {
+      "board": "component_classes_drc",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "assertion_failure": 2,
+        "lib_footprint_mismatch": 4,
+        "track_dangling": 4
+      },
+      "reexport_types": {
+        "lib_footprint_mismatch": 4
+      },
+      "identical_type_counts": false
+    },
+    {
+      "board": "connection_width_rules",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "connection_width": 3
+      },
+      "reexport_types": {
+        "clearance": 1,
+        "track_dangling": 8
+      },
+      "identical_type_counts": false
+    },
+    {
+      "board": "custom_fields",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "lib_footprint_mismatch": 2
+      },
+      "reexport_types": {
+        "lib_footprint_mismatch": 2
+      },
+      "identical_type_counts": true
+    },
+    {
+      "board": "custom_pads",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "lib_footprint_mismatch": 1
+      },
+      "reexport_types": {
+        "lib_footprint_mismatch": 1
+      },
+      "identical_type_counts": true
+    },
+    {
+      "board": "drc_missing_tuning_profile",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "invalid_outline": 1,
+        "missing_tuning_profile": 1
+      },
+      "reexport_types": {
+        "invalid_outline": 1
+      },
+      "identical_type_counts": false
+    },
+    {
+      "board": "fill_bad",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {},
+      "reexport_types": {
+        "lib_footprint_issues": 2
+      },
+      "identical_type_counts": false
+    },
+    {
+      "board": "footprints_load_save",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "invalid_outline": 1,
+        "lib_footprint_mismatch": 2
+      },
+      "reexport_types": {
+        "invalid_outline": 1,
+        "lib_footprint_mismatch": 2
+      },
+      "identical_type_counts": true
+    },
+    {
+      "board": "graphics_load_save_v20240108",
+      "error": null,
+      "original_parses": true,
+      "reexport_parses": true,
+      "original_types": {
+        "invalid_outline": 1
+      },
+      "reexport_types": {
+        "invalid_outline": 1
+      },
+      "identical_type_counts": true
+    }
+  ]
+}
