@@ -13,6 +13,7 @@ import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
+import { alignAxis, alignDeltas, getDeltasForDistributeByGaps, getDeltasForDistributeByPoints, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 /**
@@ -33,7 +34,7 @@ export type EditorTab = "pcb" | "schematic" | "3d";
  * deeper (a whole TOOL_MANAGER with push/pop tool states); this is only
  * as much of that idea as this app's two real modes need.
  */
-export type ToolId = "select" | "move" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "wire";
+export type ToolId = "select" | "move" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "wire" | "measure";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
@@ -47,6 +48,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
   text: "Click to place text",
   wire: "Wire: click to start/add a point (snaps to a pin when close), double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
+  measure: "Measure: click a start point, click again for the end point. Click anywhere to start a new measurement, Esc to clear",
 };
 
 /**
@@ -63,7 +65,9 @@ export type DrawState =
   | { kind: "zone"; pts: [Um, Um][] }
   | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
-  | { kind: "wire"; pts: [Um, Um][] };
+  | { kind: "wire"; pts: [Um, Um][] }
+  /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
+  | { kind: "measure"; pts: [Um, Um][] };
 
 export interface ViewTransform {
   /** Screen pixels per board µm. */
@@ -154,6 +158,38 @@ export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
  * settings panel (or `api.addZone`'s unchanged-settings check) touches
  * anything.
  */
+/**
+ * `PCB_SELECTION::GetCenter()`'s real meaning: the center of the union
+ * bounding box of every selected item, not an average of their individual
+ * centers. Shared by `MoveExactDialog.tsx` (its own "selection center"
+ * pivot option) and this file's `rotateSelection`/`flipSelection` (the
+ * same shared-pivot rule `edit_tool.cpp`'s `updateModificationPoint` uses
+ * for a plain multi-item R/Shift+R/F, not just the Move Exactly dialog).
+ * Placed footprints only -- see `alignDistribute.ts`'s identical scope
+ * note for why this app's Rotate/Flip/Align/Distribute family stops at
+ * footprints rather than every selectable kind.
+ */
+export function selectionBoundsCenter(
+  parts: ReadonlyArray<{ ref: string; placed: boolean; courtyard?: readonly [number, number, number, number] | null }>,
+  refs: readonly string[]
+): { x: number; y: number } | null {
+  let x0 = Infinity,
+    y0 = Infinity,
+    x1 = -Infinity,
+    y1 = -Infinity;
+  let any = false;
+  for (const ref of refs) {
+    const p = parts.find((q) => q.ref === ref);
+    if (!p?.placed || !p.courtyard) continue;
+    any = true;
+    x0 = Math.min(x0, p.courtyard[0]);
+    y0 = Math.min(y0, p.courtyard[1]);
+    x1 = Math.max(x1, p.courtyard[2]);
+    y1 = Math.max(y1, p.courtyard[3]);
+  }
+  return any ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : null;
+}
+
 export const DEFAULT_ZONE_SETTINGS: ZoneSettingsFields = {
   clearance: 500,
   min_thickness: 250,
@@ -674,6 +710,10 @@ export interface StudioApi {
   rotateSelection: (quarterTurns: number) => Promise<void>;
   ripSelection: () => Promise<void>;
   flipSelection: () => Promise<void>;
+  /** pcbnew.AlignAndDistribute.align* (no default hotkey in source either -- reached from the right-click menu, Canvas.tsx's onContextMenu). Placed footprints only -- see kicad-port/alignDistribute.ts's own scope note. A no-op under 2 placed parts, same floor source's menu-visibility condition enforces. */
+  alignSelection: (edge: AlignEdge) => Promise<void>;
+  /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
+  distributeSelection: (axis: "x" | "y", mode: "gaps" | "centers") => Promise<void>;
   /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
   commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
@@ -893,21 +933,93 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       await runCmd({ op: "delete_symbol", id });
     },
     cmd: (c) => runCmd(c),
+    // edit_tool.cpp's real Rotate: a single selected item spins about its
+    // own anchor (dx=dy=0, no pivot -- Cmd::MoveExact's own pivot:None
+    // branch lands on exactly the same pose Cmd::Rotate's simpler
+    // part+quarter_turns shape would); 2+ items share ONE pivot --
+    // updateModificationPoint's `aSelection.GetCenter()`, the selection's
+    // union-bounding-box center -- and commit as ONE MoveExact, matching
+    // source's own single BOARD_COMMIT::Push() for the whole group
+    // (previously: one independent Cmd::Rotate per part, each spinning in
+    // place about its own anchor -- see PARITY-pcb.md's "Edit tool"
+    // section for why that was a documented simplification, not the real
+    // behavior).
     rotateSelection: async (quarterTurns) => {
-      for (const ref of stateRef.current.selection) {
-        const p = api.partByRef(ref);
-        if (p?.placed) await runCmd({ op: "rotate", part: ref, quarter_turns: ((quarterTurns % 4) + 4) % 4 });
-      }
+      const refs = [...stateRef.current.selection].filter((r) => api.partByRef(r)?.placed);
+      if (refs.length === 0) return;
+      const rotateMillideg = (((quarterTurns % 4) + 4) % 4) * 90_000;
+      const pivot = refs.length > 1 ? selectionBoundsCenter(stateRef.current.board?.parts ?? [], refs) : null;
+      await runCmd({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
     },
     ripSelection: async () => {
       const refs = [...stateRef.current.selection];
       dispatch({ type: "CLEAR_SELECTION" });
       for (const ref of refs) await runCmd({ op: "rip", part: ref });
     },
+    // edit_tool.cpp's real Flip: a single item flips about its own anchor
+    // (no position change, only `side` toggles -- Cmd::Flip's existing
+    // shape already does exactly this); 2+ items share the selection's
+    // bounding-box center as the mirror line's X, same `updateModification
+    // Point`/`GetCenter()` rule Rotate uses above. Cmd::Flip has no pivot
+    // concept of its own (it only ever toggles `side`), so a group flip is
+    // composed client-side as "move to the mirrored X, then flip" per
+    // part, the same two-Cmd composition `commitMove` already uses for a
+    // single dragged-and-flipped part.
     flipSelection: async () => {
-      for (const ref of stateRef.current.selection) {
-        const p = api.partByRef(ref);
-        if (p?.placed) await runCmd({ op: "flip", part: ref });
+      const refs = [...stateRef.current.selection].filter((r) => api.partByRef(r)?.placed);
+      if (refs.length === 0) return;
+      const center = refs.length > 1 ? selectionBoundsCenter(stateRef.current.board?.parts ?? [], refs) : null;
+      for (const ref of refs) {
+        if (center) {
+          const p = api.partByRef(ref)!;
+          const [x, y] = p.at!;
+          await runCmd({ op: "move_to", part: ref, x: 2 * center.x - x, y });
+        }
+        await runCmd({ op: "flip", part: ref });
+      }
+    },
+    alignSelection: async (edge) => {
+      const refs = [...stateRef.current.selection].filter((r) => {
+        const p = api.partByRef(r);
+        return p?.placed && p.courtyard && p.at;
+      });
+      if (refs.length < 2) return;
+      const boxes: Box[] = refs.map((r) => api.partByRef(r)!.courtyard!);
+      const deltas = alignDeltas(boxes, edge);
+      const axis = alignAxis(edge);
+      for (let i = 0; i < refs.length; i++) {
+        const d = deltas[i]!;
+        if (d === 0) continue;
+        const p = api.partByRef(refs[i]!)!;
+        const [x, y] = p.at!;
+        await runCmd({ op: "move_to", part: refs[i]!, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
+      }
+    },
+    distributeSelection: async (axis, mode) => {
+      const refs = [...stateRef.current.selection].filter((r) => {
+        const p = api.partByRef(r);
+        return p?.placed && p.courtyard && p.at;
+      });
+      if (refs.length < 3) return;
+      // align_distribute_tool.cpp's doDistributeGaps/doDistributeCenters:
+      // sort by start (gaps) or by center (centers) along the chosen axis
+      // before computing deltas -- the end caps of THIS sort never move.
+      const key = (box: Box): number => {
+        const lo = axis === "x" ? box[0] : box[1];
+        const hi = axis === "x" ? box[2] : box[3];
+        return mode === "gaps" ? lo : (lo + hi) / 2;
+      };
+      const sorted = refs.map((r) => ({ r, box: api.partByRef(r)!.courtyard! })).sort((a, b) => key(a.box) - key(b.box));
+      const deltas =
+        mode === "gaps"
+          ? getDeltasForDistributeByGaps(sorted.map(({ box }) => (axis === "x" ? [box[0], box[2]] : [box[1], box[3]]) as [number, number]))
+          : getDeltasForDistributeByPoints(sorted.map(({ box }) => key(box)));
+      for (let i = 0; i < sorted.length; i++) {
+        const d = deltas[i]!;
+        if (d === 0) continue;
+        const p = api.partByRef(sorted[i]!.r)!;
+        const [x, y] = p.at!;
+        await runCmd({ op: "move_to", part: sorted[i]!.r, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
       }
     },
     commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped) => {

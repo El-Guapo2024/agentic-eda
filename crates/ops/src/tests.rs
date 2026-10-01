@@ -601,6 +601,26 @@ fn edit_zone_rejects_an_unknown_net_or_id() {
     assert_eq!(e[0].check, "ops_unknown_zone");
 }
 
+#[test]
+fn set_zone_outline_replaces_the_outline_only() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.priority = 5)).unwrap();
+
+    let new_outline = vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }];
+    b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: new_outline.clone() }).unwrap();
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!(z.id, id, "id is stable across an outline edit");
+    assert_eq!(z.outline, new_outline);
+    assert_eq!(z.priority, 5, "SetZoneOutline must not touch any other setting");
+
+    let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 1 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_zone");
+    assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline }).unwrap_err()[0].check, "ops_unknown_zone");
+}
+
 // -------------------------------------------------------------- shapes
 
 #[test]

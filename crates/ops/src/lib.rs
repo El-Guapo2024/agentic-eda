@@ -230,6 +230,12 @@ pub enum Cmd {
     AddZone { net: String, layer: String, outline: Vec<Point> },
     /// Remove a zone by id.
     DeleteZone { id: String },
+    /// `pcb_point_editor.cpp`'s zone-outline editing (drag a corner, add/
+    /// remove one) -- this app has no live point-by-point drag state on
+    /// the backend, so the whole edited outline is sent at once, same
+    /// "replace wholesale" shape `EditZone`'s settings already use. Net/
+    /// layer/settings untouched.
+    SetZoneOutline { id: String, outline: Vec<Point> },
     /// `dialog_copper_zones.cpp`'s "OK": replace a zone's net/layer and
     /// every `ZONE_SETTINGS` field at once -- KiCad has no concept of
     /// editing just one field of the panel, the whole thing commits
@@ -475,6 +481,7 @@ impl Cmd {
             | Cmd::EditVia { id, .. }
             | Cmd::DeleteZone { id }
             | Cmd::EditZone { id, .. }
+            | Cmd::SetZoneOutline { id, .. }
             | Cmd::DeleteShape { id }
             | Cmd::MoveShape { id, .. }
             | Cmd::EditShape { id, .. }
@@ -750,6 +757,7 @@ impl<'a> Board<'a> {
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
+            Cmd::SetZoneOutline { id, outline } => self.set_zone_outline(id, outline),
             Cmd::EditZone {
                 id,
                 net,
@@ -1397,6 +1405,18 @@ impl<'a> Board<'a> {
         if rt.zones.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")]);
         }
+        Ok(())
+    }
+
+    /// `pcb_point_editor.cpp`'s zone corner drag/add/remove -- see
+    /// `Cmd::SetZoneOutline`'s own doc on why the whole outline is sent.
+    fn set_zone_outline(&mut self, id: &str, outline: &[Point]) -> Result<(), Vec<CheckResult>> {
+        if outline.len() < 3 {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "a zone outline needs at least three points")]);
+        }
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
+        let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
+        z.outline = outline.to_vec();
         Ok(())
     }
 

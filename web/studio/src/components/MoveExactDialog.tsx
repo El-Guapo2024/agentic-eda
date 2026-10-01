@@ -27,28 +27,10 @@
 // turns a part the same visual direction +90 would in the status bar's
 // polar readout.
 import { useEffect, useState } from "react";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { selectionBoundsCenter, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom } from "../state/units";
 
 type Anchor = "item" | "center" | "origin";
-
-function selectionBoundsCenter(parts: ReadonlyArray<{ ref: string; placed: boolean; courtyard?: readonly [number, number, number, number] | null }>, refs: readonly string[]): { x: number; y: number } | null {
-  let x0 = Infinity,
-    y0 = Infinity,
-    x1 = -Infinity,
-    y1 = -Infinity;
-  let any = false;
-  for (const ref of refs) {
-    const p = parts.find((q) => q.ref === ref);
-    if (!p?.placed || !p.courtyard) continue;
-    any = true;
-    x0 = Math.min(x0, p.courtyard[0]);
-    y0 = Math.min(y0, p.courtyard[1]);
-    x1 = Math.max(x1, p.courtyard[2]);
-    y1 = Math.max(y1, p.courtyard[3]);
-  }
-  return any ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : null;
-}
 
 export function MoveExactDialog() {
   const state = useStudioState();

@@ -96,6 +96,35 @@ export function useActionRunner() {
         if (!tryTransformDuringMove(3, false)) api.rotateSelection(3);
       })
     );
+
+    // align_distribute_tool.cpp -- no default hotkey in source either
+    // (reached from its own right-click submenu there); this app surfaces
+    // them from Canvas.tsx's context menu the same way. Placed footprints
+    // only -- see kicad-port/alignDistribute.ts's scope note.
+    m.set("pcbnew.AlignAndDistribute.alignTop", pcbOnly(() => api.alignSelection("top")));
+    m.set("pcbnew.AlignAndDistribute.alignBottom", pcbOnly(() => api.alignSelection("bottom")));
+    m.set("pcbnew.AlignAndDistribute.alignLeft", pcbOnly(() => api.alignSelection("left")));
+    m.set("pcbnew.AlignAndDistribute.alignRight", pcbOnly(() => api.alignSelection("right")));
+    m.set("pcbnew.AlignAndDistribute.alignCenterX", pcbOnly(() => api.alignSelection("centerX")));
+    m.set("pcbnew.AlignAndDistribute.alignCenterY", pcbOnly(() => api.alignSelection("centerY")));
+    m.set("pcbnew.AlignAndDistribute.distributeHorizontallyGaps", pcbOnly(() => api.distributeSelection("x", "gaps")));
+    m.set("pcbnew.AlignAndDistribute.distributeHorizontallyCenters", pcbOnly(() => api.distributeSelection("x", "centers")));
+    m.set("pcbnew.AlignAndDistribute.distributeVerticallyGaps", pcbOnly(() => api.distributeSelection("y", "gaps")));
+    m.set("pcbnew.AlignAndDistribute.distributeVerticallyCenters", pcbOnly(() => api.distributeSelection("y", "centers")));
+
+    // common.Interactive.cut (Ctrl+X): trivially "copy then delete" -- the
+    // one honorable-mention gap PARITY-pcb.md's hotkey audit named as
+    // exactly that. copySelection is synchronous and reads straight off
+    // the current board/selection, so there is no race with the delete
+    // that follows it.
+    m.set(
+      "common.Interactive.cut",
+      pcbOnly(() => {
+        api.copySelection();
+        m.get("common.Interactive.delete")?.();
+      })
+    );
+
     m.set("common.Interactive.delete", () => {
       // One selection can only ever be one kind of thing at a time in
       // practice (Canvas.tsx/SchematicView.tsx's hit-testing always
@@ -191,6 +220,13 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveDrawing.text",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "text" ? "select" : "text" }))
+    );
+    // pcb_viewer_tools.cpp's measure tool -- a client-side-only ruler
+    // (state.drawState's "measure" kind), same arm/toggle pattern every
+    // other click-to-place tool here uses.
+    m.set(
+      "common.Interactive.measureTool",
+      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "measure" ? "select" : "measure" }))
     );
     m.set("common.Interactive.undo", () => api.undo());
     m.set("common.Interactive.redo", () => api.redo());

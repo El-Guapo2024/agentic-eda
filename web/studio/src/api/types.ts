@@ -398,6 +398,8 @@ export type Cmd =
    * untouched (no point editor yet, see PARITY-pcb.md).
    */
   | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields)
+  /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
+  | { op: "set_zone_outline"; id: string; outline: PointXY[] }
   | { op: "add_shape"; shape: CmdShape }
   | { op: "delete_shape"; id: string }
   | { op: "move_shape"; id: string; dx: Um; dy: Um }

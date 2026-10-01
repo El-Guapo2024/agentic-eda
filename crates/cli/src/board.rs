@@ -542,6 +542,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditZone { id, net, layer, clearance, min_thickness, priority, .. } => {
             format!("zone edit {id} --net {net} --layer {layer} --clearance {} --min-width {} --priority {priority}", mm(*clearance), mm(*min_thickness))
         }
+        Cmd::SetZoneOutline { id, outline } => format!("zone outline {id} --pts \"{}\"", pts(outline)),
 
         Cmd::AddShape { shape } => format!("shape add --kind {} --layer {}", shape_kind(shape), shape.layer()),
         Cmd::DeleteShape { id } => format!("shape delete {id}"),
@@ -636,7 +637,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddTrack { .. } | Cmd::DeleteTrack { .. } | Cmd::SetTrackWidth { .. } => "track",
         Cmd::AddVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } | Cmd::EditVia { .. } => "via",
         Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } => "board-setup",
-        Cmd::AddZone { .. } | Cmd::DeleteZone { .. } | Cmd::EditZone { .. } => "zone",
+        Cmd::AddZone { .. } | Cmd::DeleteZone { .. } | Cmd::EditZone { .. } | Cmd::SetZoneOutline { .. } => "zone",
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } | Cmd::EditShape { .. } => "shape",
         Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
