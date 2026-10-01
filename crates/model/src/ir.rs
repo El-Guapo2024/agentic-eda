@@ -432,6 +432,70 @@ impl Via {
     }
 }
 
+/// `ZONE_CONNECTION` (`pcbnew/zones.h`), minus `INHERITED`: that value only
+/// matters with per-netclass connection overrides, which this model doesn't
+/// have -- a zone's own `pad_connection` is the only source consulted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PadConnection {
+    None,
+    /// `ZONE_SETTINGS::ZONE_SETTINGS()`: `m_padConnection = ZONE_CONNECTION::THERMAL`.
+    #[default]
+    Thermal,
+    Full,
+    ThtThermal,
+}
+
+/// `ISLAND_REMOVAL_MODE` (`pcbnew/zone_settings.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum IslandRemovalMode {
+    /// `m_removeIslands = ISLAND_REMOVAL_MODE::ALWAYS`.
+    #[default]
+    Always,
+    Never,
+    Area,
+}
+
+/// `ZONE_FILL_MODE` (`pcbnew/zone_settings.h`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FillMode {
+    #[default]
+    Polygons,
+    HatchPattern,
+}
+
+// `ZONE_SETTINGS::ZONE_SETTINGS()`'s hardcoded defaults (`pcbnew/zone_settings.cpp`),
+// converted from KiCad's mm literals to this model's Um (micrometers).
+fn default_zone_clearance() -> Um {
+    500 // ZONE_CLEARANCE_MM = 0.5
+}
+fn default_zone_min_thickness() -> Um {
+    250 // ZONE_THICKNESS_MM = 0.25
+}
+fn default_thermal_gap() -> Um {
+    500 // ZONE_THERMAL_RELIEF_GAP_MM = 0.5
+}
+fn default_thermal_spoke_width() -> Um {
+    500 // ZONE_THERMAL_RELIEF_COPPER_WIDTH_MM = 0.5
+}
+fn default_min_island_area() -> i64 {
+    10_000_000 // 10 * IU_PER_MM^2, i.e. 10 mm^2, in um^2
+}
+fn default_hatch_thickness() -> Um {
+    1000 // max(min_thickness(250)*4, 1mm(1000))
+}
+fn default_hatch_gap() -> Um {
+    1500 // max(min_thickness(250)*6, 1.5mm(1500))
+}
+fn default_hatch_smoothing_value() -> f64 {
+    0.1
+}
+fn default_hatch_hole_min_area() -> f64 {
+    0.15
+}
+fn default_hatch_border_algorithm() -> i32 {
+    1
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Zone {
@@ -442,12 +506,95 @@ pub struct Zone {
     pub net: String,
     pub layer: String,
     pub outline: Vec<Point>,
+
+    // ---- fill settings (ZONE_SETTINGS), added additively with KiCad's own
+    // defaults so existing design.json files without these fields keep
+    // behaving exactly as before. Fills are always *derived* from these
+    // (plus the outline/net/layer above) -- never stored as a second master.
+    /// `m_ZoneClearance`.
+    #[serde(default = "default_zone_clearance")]
+    pub clearance: Um,
+    /// `m_ZoneMinThickness`.
+    #[serde(default = "default_zone_min_thickness")]
+    pub min_thickness: Um,
+    /// `m_ThermalReliefGap`.
+    #[serde(default = "default_thermal_gap")]
+    pub thermal_gap: Um,
+    /// `m_ThermalReliefSpokeWidth`.
+    #[serde(default = "default_thermal_spoke_width")]
+    pub thermal_spoke_width: Um,
+    /// `ZONE_SETTINGS::GetPadConnection()`.
+    #[serde(default)]
+    pub pad_connection: PadConnection,
+    /// `m_ZonePriority`.
+    #[serde(default)]
+    pub priority: u32,
+    /// `ZONE_SETTINGS::GetIslandRemovalMode()`.
+    #[serde(default)]
+    pub island_removal_mode: IslandRemovalMode,
+    /// `ZONE_SETTINGS::GetMinIslandArea()`, in um^2.
+    #[serde(default = "default_min_island_area")]
+    pub min_island_area: i64,
+    /// `m_FillMode`.
+    #[serde(default)]
+    pub fill_mode: FillMode,
+    /// `m_HatchThickness` (only meaningful when `fill_mode == HatchPattern`).
+    #[serde(default = "default_hatch_thickness")]
+    pub hatch_thickness: Um,
+    /// `m_HatchGap`.
+    #[serde(default = "default_hatch_gap")]
+    pub hatch_gap: Um,
+    /// `m_HatchOrientation`, in millidegrees.
+    #[serde(default)]
+    pub hatch_orientation_mdeg: Millideg,
+    /// `m_HatchSmoothingLevel`.
+    #[serde(default)]
+    pub hatch_smoothing_level: i32,
+    /// `m_HatchSmoothingValue`.
+    #[serde(default = "default_hatch_smoothing_value")]
+    pub hatch_smoothing_value: f64,
+    /// `m_HatchHoleMinArea`.
+    #[serde(default = "default_hatch_hole_min_area")]
+    pub hatch_hole_min_area: f64,
+    /// `m_HatchBorderAlgorithm`.
+    #[serde(default = "default_hatch_border_algorithm")]
+    pub hatch_border_algorithm: i32,
 }
 
 impl Zone {
     fn id_seed(&self) -> String {
         let pts: Vec<String> = self.outline.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
         format!("{}|{}|{}", self.net, self.layer, pts.join(";"))
+    }
+}
+
+impl Default for Zone {
+    /// KiCad's own `ZONE_SETTINGS` defaults for every setting field (see
+    /// each field's `default_*` function above); `id`/`net`/`layer`/`outline`
+    /// are empty, matching a zone that's about to be filled in.
+    fn default() -> Self {
+        Zone {
+            id: String::new(),
+            net: String::new(),
+            layer: String::new(),
+            outline: Vec::new(),
+            clearance: default_zone_clearance(),
+            min_thickness: default_zone_min_thickness(),
+            thermal_gap: default_thermal_gap(),
+            thermal_spoke_width: default_thermal_spoke_width(),
+            pad_connection: PadConnection::default(),
+            priority: 0,
+            island_removal_mode: IslandRemovalMode::default(),
+            min_island_area: default_min_island_area(),
+            fill_mode: FillMode::default(),
+            hatch_thickness: default_hatch_thickness(),
+            hatch_gap: default_hatch_gap(),
+            hatch_orientation_mdeg: 0,
+            hatch_smoothing_level: 0,
+            hatch_smoothing_value: default_hatch_smoothing_value(),
+            hatch_hole_min_area: default_hatch_hole_min_area(),
+            hatch_border_algorithm: default_hatch_border_algorithm(),
+        }
     }
 }
 

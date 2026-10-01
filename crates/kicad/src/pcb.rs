@@ -742,6 +742,7 @@ mod tests {
                 Point { x: 20_000, y: 0 },
                 Point { x: 20_000, y: 20_000 },
             ],
+            ..Default::default()
         }];
         let err = export_kicad_pcb(&design, &model, &meta()).unwrap_err();
         assert!(err.iter().any(|c| c.check == "kicad.unknown_net"), "got {err:?}");

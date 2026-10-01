@@ -721,6 +721,8 @@ name = "eda-zone-filler"
 version = "0.1.0"
 dependencies = [
  "eda-clipper2",
+ "eda-model",
+ "eda-shape-poly-set",
 ]
 
 [[package]]
