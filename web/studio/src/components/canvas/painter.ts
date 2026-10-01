@@ -477,51 +477,76 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
   }
 }
 
-/**
- * The route/via/zone/drawing tool currently in progress (Canvas.tsx's
- * state.drawState), rendered as a dashed "not committed yet" preview:
- * the fixed points so far plus a rubber-band to wherever the next click
- * would actually land -- the exact same posture45+grid-snap Canvas.tsx's
- * own click handler applies, so the preview never lies about where a
- * click will go.
- */
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, opts: PaintOptions) {
-  const draw = opts.drawState;
-  if (!draw) return;
-  const cursor = opts.cursorUm;
-  const pts = draw.pts.slice();
-  let rubberEnd: [number, number] | null = null;
-  if (cursor) {
-    const last = pts[pts.length - 1]!;
-    const usePosture = draw.kind === "route" || (draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect"));
-    const raw: [number, number] = usePosture ? posture45(last, [cursor.x, cursor.y]) : [cursor.x, cursor.y];
-    rubberEnd = snapPoint(raw[0], raw[1], opts.gridUm);
-  }
-
-  const color = draw.kind === "route" ? layerColor(copperColorKey(draw.layer)) : layerColor("selection");
+function strokeDashedPolyline(ctx: CanvasRenderingContext2D, view: ViewTransform, pts: [number, number][], color: string, width: number, closed: boolean) {
+  if (pts.length === 0) return;
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineWidth = draw.kind === "route" ? Math.max(draw.width, hairlineUm(view, 1)) : hairlineUm(view, 1.5);
+  ctx.lineWidth = Math.max(width, hairlineUm(view, 1));
   ctx.setLineDash([hairlineUm(view, 4), hairlineUm(view, 3)]);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
   pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-  if (rubberEnd) ctx.lineTo(rubberEnd[0], rubberEnd[1]);
-  if (draw.kind === "zone" && pts.length >= 2) ctx.closePath(); // preview the closing edge back to the start
+  if (closed && pts.length >= 2) ctx.closePath();
   ctx.stroke();
   ctx.setLineDash([]);
-
-  // A small dot on every fixed point so far, so the operator can see
-  // exactly where each click landed (especially useful once several
-  // route segments or zone corners are down).
   for (const [x, y] of pts) {
     ctx.beginPath();
     ctx.arc(x, y, hairlineUm(view, 2.5), 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
+}
+
+/**
+ * The route/via/zone/drawing tool currently in progress (Canvas.tsx's
+ * state.drawState), rendered as a dashed "not committed yet" preview.
+ *
+ * The route tool's own preview (`draw.pts`) is the backend's own resolved
+ * head (`eda_pns::Router`'s walkaround/shove/mark-obstacles already
+ * applied, see kicad-port/routeTool.ts) -- no client-side rubber-band to
+ * add on top of it, unlike the plain shape tools below, which still do
+ * their own single-segment posture45+grid-snap preview locally. A
+ * colliding head draws in KiCad's own violation red; `runs` (earlier legs
+ * from before a via/layer switch), a pending `via`, and (shove mode)
+ * `displaced` tracks each get their own pass so the whole live state is
+ * visible, not just the current leg.
+ */
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, opts: PaintOptions) {
+  const draw = opts.drawState;
+  if (!draw) return;
+
+  if (draw.kind === "route") {
+    const violationColor = "#ff3333";
+    for (const run of draw.runs ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
+    strokeDashedPolyline(ctx, view, draw.pts, draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer)), draw.width, false);
+    for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width, false);
+    if (draw.via) {
+      ctx.save();
+      ctx.strokeStyle = draw.colliding ? violationColor : layerColor("via");
+      ctx.lineWidth = hairlineUm(view, 1.5);
+      ctx.setLineDash([hairlineUm(view, 3), hairlineUm(view, 2)]);
+      ctx.beginPath();
+      ctx.arc(draw.via.x, draw.via.y, draw.via.diameter / 2, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+    return;
+  }
+
+  const cursor = opts.cursorUm;
+  const pts = draw.pts.slice();
+  let rubberEnd: [number, number] | null = null;
+  if (cursor) {
+    const last = pts[pts.length - 1]!;
+    const usePosture = draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect");
+    const raw: [number, number] = usePosture ? posture45(last, [cursor.x, cursor.y]) : [cursor.x, cursor.y];
+    rubberEnd = snapPoint(raw[0], raw[1], opts.gridUm);
+  }
+  if (rubberEnd) pts.push(rubberEnd);
+  strokeDashedPolyline(ctx, view, pts, layerColor("selection"), hairlineUm(view, 1.5), draw.kind === "zone" && pts.length >= 2);
 }
 
 /** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */

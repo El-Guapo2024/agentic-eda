@@ -327,6 +327,92 @@ export interface RouteReply {
   message: string;
 }
 
+// ------------------------------------------------------- interactive router
+//
+// POST /api/route/{start,move,fix,undo_segment,via,finish,cancel}
+// (crates/cli/src/route_api.rs, gap #7's interactive push-and-shove
+// router). Unlike every other POST here, these drive a session that lives
+// in the backend's memory between calls (see that file's own doc comment)
+// rather than reading/writing design.json on every request -- only
+// `finish`'s reply actually changes the board.
+
+export type RouteMode = "mark_obstacles" | "walkaround" | "shove";
+
+/** A fixed (already-placed-this-session) or displaced run of track. */
+export interface RoutePreviewRun {
+  layer: string;
+  pts: [Um, Um][];
+}
+
+export interface RouteDisplacedLine {
+  source_track: string | null;
+  layer: string;
+  pts: [Um, Um][];
+}
+
+export interface RouteVia {
+  x: Um;
+  y: Um;
+  diameter: Um;
+  drill: Um;
+}
+
+/** The shape every one of start/move/fix's successful replies carries
+ * (fix nests it under `preview`; see `RouteFixReply`). */
+export interface RoutePreview {
+  ok: boolean;
+  message?: string;
+  net: string | null;
+  colliding: boolean;
+  layer: string;
+  /** The live, not-yet-fixed head: last fixed point (or the route's
+   * origin) to the cursor, already resolved (walked/shoved/mark-obstacled)
+   * server-side -- draw this directly, no client-side posture math needed. */
+  head: [Um, Um][];
+  /** Already-fixed runs from earlier in this session (e.g. before a via/
+   * layer switch) -- empty until the route has more than one leg. */
+  runs: RoutePreviewRun[];
+  via: RouteVia | null;
+  /** A same-net anchor near the cursor the route would snap onto and
+   * finish at, if fixed now. */
+  snapped_end: [Um, Um] | null;
+  /** `Mode::Shove` only: other tracks this preview would push out of the
+   * way if accepted. */
+  displaced: RouteDisplacedLine[];
+}
+
+export interface RouteFixReply {
+  ok: boolean;
+  message?: string;
+  /** `true` if the head still collides and the active mode refused to fix
+   * it (nothing changed; keep moving the cursor and try again). */
+  blocked: boolean;
+  /** `true` if this fix reached a same-net anchor and finished the whole
+   * connection -- call `postRouteFinish` at the same point next, or just
+   * read `preview` (the route is already fully committed into the
+   * session's own runs at this point). */
+  real_end?: boolean;
+  preview?: RoutePreview;
+}
+
+/** `POST /api/route/drag_{start,move,finish}` (gap #7 stage 5, `D`):
+ * dragging an existing track segment/corner or via while it keeps its
+ * connections -- `eda_pns::dragger::Dragger`. Shares the same backend
+ * session as the route endpoints above (`crates/cli/src/route_api.rs`'s
+ * own doc comment); only one of a route or a drag can be in progress at
+ * once. */
+export interface DragPreview {
+  ok: boolean;
+  message?: string;
+  colliding: boolean;
+  /** The dragged item's own new shape: two points for a via (its old and
+   * new position is not needed -- just read the last point as where it
+   * landed) or N points for a stretched track. */
+  pts: [Um, Um][];
+  /** `shove` mode only: other tracks this drag would push out of the way. */
+  displaced: RouteDisplacedLine[];
+}
+
 // ---------------------------------------------------------------- Ratsnest
 //
 // GET /api/ratsnest. Source of truth: crates/cli/src/studio.rs

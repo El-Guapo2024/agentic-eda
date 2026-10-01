@@ -1,43 +1,75 @@
-// Helpers for the interactive routing/drawing tools (Canvas.tsx): where a
-// route/track/via/zone/shape can legally start or snap to, and the 45/90
-// "posture" constraint pcbnew's interactive router applies to the segment
-// currently being dragged toward the cursor.
-//
-// Scope, stated up front: this is a single-segment-per-click router, not
-// pcbnew's own (which previews a two-segment L/diagonal path and offers
-// posture-cycling with Space). No push-and-shove, no live clearance
-// check -- the task spec is explicit that the gates judge the committed
-// result, not a live preview. What's here is the part of "45°/90°
-// posture and grid snap" a single dragged segment can honestly provide.
-import type { BoardState, Cmd } from "../../api/types";
-import type { DrawState } from "../../state/store";
+// Helpers for the interactive routing tool (Canvas.tsx) and the plain
+// drawing tools (shape/zone). The route tool (X) is now backed by
+// `crates/pns` -- KiCad's own push-and-shove router, ported -- driven
+// through `crates/cli/src/route_api.rs`'s `POST /api/route/*` session
+// (gap #7): every call here resolves obstacles exactly the way real
+// pcbnew's interactive router does (walkaround/shove/mark-obstacles),
+// server-side. This module is the thin client-side half of that --
+// turning a click/move/key into the right API call and `DrawState`
+// update -- not a second copy of the routing algorithm. `posture45`
+// below is unrelated to the route tool now; it remains the plain-45-
+// degree-snap helper the shape tools (segment/rect) still use for their
+// own, much simpler, single-segment preview.
+import type { BoardState } from "../../api/types";
+import { routeCancel, routeFinish, routeFix, routeStart } from "../../api/client";
+import type { Action, StudioApi } from "../../state/store";
+import type { Dispatch } from "react";
+import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
 
-type RunCmd = (c: Cmd) => Promise<boolean>;
-
-/** Shared by the F ("Attempt Finish") hotkey (useActionRunner.ts, only while routing -- see its own comment on the Flip/AttemptFinish key collision) and Canvas.tsx's Enter/double-click finish, so the two can never commit a route differently. Committing `add_track` needs at least a start and an end. */
-export async function commitRoute(draw: Extract<DrawState, { kind: "route" }>, cmd: RunCmd): Promise<void> {
-  if (draw.pts.length < 2) return;
-  await cmd({ op: "add_track", net: draw.net, layer: draw.layer, width: draw.width, pts: draw.pts.map(([x, y]) => ({ x, y })) });
+/** `X` / the first click after arming the route tool: start a session from
+ * whatever pad/via/track-end is at `(x, y)`. Shows an error toast and
+ * leaves `drawState` untouched if there's nothing routable there --
+ * `isStartingPointRoutable`'s own refusal, ported. */
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, dispatch: Dispatch<Action>): Promise<void> {
+  const preview = await routeStart(x, y, layer, width, "walkaround");
+  if (!preview.ok) {
+    dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
+    return;
+  }
+  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced };
+  dispatch({ type: "SET_DRAW_STATE", draw });
 }
 
-/** V while routing (pcbnew.Control.layerToggle, "Toggle Layer"): commit what's drawn so far, drop a via at the current end, and restart the route on the *other* board layer from there -- KiCad's own via-mid-route mechanic, ported as two immediate commits instead of one deferred multi-layer track (see this file's header comment on scope). */
-export async function dropViaAndSwitchLayer(draw: Extract<DrawState, { kind: "route" }>, board: BoardState, cmd: RunCmd): Promise<DrawState> {
-  const last = draw.pts[draw.pts.length - 1]!;
-  const otherLayer = board.layers.find((l) => l !== draw.layer) ?? draw.layer;
-  if (draw.pts.length >= 2) {
-    await cmd({ op: "add_track", net: draw.net, layer: draw.layer, width: draw.width, pts: draw.pts.map(([x, y]) => ({ x, y })) });
+/** A click while routing: fix the current head. Finishes the whole
+ * connection automatically when the head reached a same-net anchor
+ * (`real_end`), same as a plain click landing on one in real pcbnew. */
+export async function fixInteractiveRoute(x: number, y: number, draw: RouteDrawState, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">): Promise<void> {
+  const reply = await routeFix(x, y);
+  if (!reply.ok) {
+    dispatch({ type: "TOAST", message: reply.message ?? "Route error.", kind: "error" });
+    return;
   }
-  await cmd({
-    op: "add_via",
-    net: draw.net,
-    x: last[0],
-    y: last[1],
-    drill: board.board_rules?.via_drill ?? 300,
-    diameter: board.board_rules?.via_diameter ?? 600,
-    from_layer: draw.layer,
-    to_layer: otherLayer,
-  });
-  return { kind: "route", net: draw.net, layer: otherLayer, width: draw.width, pts: [last] };
+  if (reply.blocked) {
+    dispatch({ type: "TOAST", message: "Can't fix here -- still colliding.", kind: "error" });
+    return;
+  }
+  if (reply.real_end) {
+    await finishInteractiveRoute(x, y, dispatch, api);
+    return;
+  }
+  if (reply.preview) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, reply.preview) });
+}
+
+/** Finish the route at `(x, y)` -- Enter/double-click/"F" (AttemptFinish),
+ * and the automatic finish inside `fixInteractiveRoute` above. Shared by
+ * every one of those call sites so they can never disagree about what
+ * finishing a route commits (the same role `commitRoute` played for the
+ * old client-only router). Commits through `Cmd::CommitRoute`
+ * server-side, then refreshes the board so the new track/via show up
+ * without waiting for the next 700ms version poll. */
+export async function finishInteractiveRoute(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">): Promise<void> {
+  const reply = await routeFinish(x, y);
+  if (!reply.ok) dispatch({ type: "TOAST", message: reply.message || "Could not finish the route.", kind: "error" });
+  dispatch({ type: "SET_DRAW_STATE", draw: null });
+  await api.refresh();
+}
+
+/** Esc while routing: cancel server-side (fire-and-forget -- the UI
+ * doesn't need to wait for the ack) and clear the local preview
+ * immediately. */
+export function cancelInteractiveRoute(dispatch: Dispatch<Action>): void {
+  void routeCancel();
+  dispatch({ type: "SET_DRAW_STATE", draw: null });
 }
 
 export interface RouteAnchor {
@@ -48,7 +80,7 @@ export interface RouteAnchor {
   from: string;
 }
 
-/** Nearest anchor (a pad, a via, or a track endpoint) within `thresholdUm`, or null. Ties broken by distance, then by this search order (pads first, matching pcbnew: a pad "wins" a track landing exactly on it). */
+/** Nearest anchor (a pad, a via, or a track endpoint) within `thresholdUm`, or null. Ties broken by distance, then by this search order (pads first, matching pcbnew: a pad "wins" a track landing exactly on it). Used by the standalone via tool (which has no multi-step session of its own) and as `startInteractiveRoute`'s own pre-flight hint for the "nothing routable here" toast. */
 export function findRouteAnchor(board: BoardState, xUm: number, yUm: number, thresholdUm: number): RouteAnchor | null {
   let best: RouteAnchor | null = null;
   let bestD = thresholdUm;
@@ -78,7 +110,11 @@ export function findRouteAnchor(board: BoardState, xUm: number, yUm: number, thr
 
 const POSTURE_STEP_DEG = 45;
 
-/** `to`, constrained onto the nearest 45-degree ray from `from` -- pcbnew's "45 Degree" line mode (the default; free-angle is its own separate mode this app doesn't implement). */
+/** `to`, constrained onto the nearest 45-degree ray from `from` -- used by
+ * the shape tools' (segment/rect) own single-segment preview. The route
+ * tool no longer needs this client-side: the backend's `Direction45`
+ * (`crates/pns/src/direction45.rs`) resolves posture server-side and
+ * sends back the real head to draw (see `previewInteractiveRoute`). */
 export function posture45(from: [number, number], to: [number, number]): [number, number] {
   const dx = to[0] - from[0];
   const dy = to[1] - from[1];

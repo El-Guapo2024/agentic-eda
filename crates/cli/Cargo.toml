@@ -19,6 +19,7 @@ eda-ops = { path = "../ops" }
 eda-judge = { path = "../judge" }
 eda-fab = { path = "../fab" }
 eda-drc = { path = "../drc" }
+eda-pns = { path = "../pns" }
 eda-connectivity = { path = "../connectivity" }
 eda-kicad = { path = "../kicad" }
 eda-shape-poly-set = { path = "../shape-poly-set" }

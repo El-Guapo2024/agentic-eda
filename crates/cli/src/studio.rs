@@ -20,6 +20,7 @@
 //! was fixed to run in the background instead.
 
 use crate::board;
+use crate::route_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::{LabelSide, Shape, Side};
 use eda_model::{CheckResult, CheckStatus};
@@ -87,9 +88,14 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     // version string /api/version returns, same reasoning as `schematic`
     // above: an unchanged board should never re-run kicad-cli.
     let glb_job: GlbJob = Arc::new(Mutex::new(None));
+    // The in-progress interactive-router session (gap #7), if any -- lives
+    // only in memory for the span of one route/drag gesture; see
+    // `route_api`'s own doc comment for why it's safe to hold across
+    // requests without re-reading the board each time.
+    let route_session: crate::route_api::RouteCell = Mutex::new(None);
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_job, ui_root.as_deref()) {
+        if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_job, &route_session, ui_root.as_deref()) {
             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
         }
     }
@@ -457,12 +463,14 @@ fn mime_of(path: &Path) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // mirrors the existing job/schematic/glb_job cells this one more (route_session) joins.
 fn handle(
     stream: &mut TcpStream,
     dir: &Path,
     job: &Job,
     schematic: &Mutex<Option<(std::time::SystemTime, String)>>,
     glb_job: &GlbJob,
+    route_session: &crate::route_api::RouteCell,
     ui_root: Option<&Path>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
@@ -573,6 +581,24 @@ fn handle(
             });
             respond(stream, "200 OK", "application/json", json!({ "ok": true, "message": "routing" }).to_string().as_bytes())
         }
+        // Interactive router (gap #7): one session lives in `route_session`
+        // across this whole sequence of calls -- see `route_api`'s doc
+        // comment. Preview state never touches `design.json`; only
+        // `finish` does, through the same `board::step` seam as any other
+        // edit.
+        ("POST", "/api/route/start") => respond(stream, "200 OK", "application/json", route_api::start(dir, route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/move") => respond(stream, "200 OK", "application/json", route_api::mv(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/fix") => respond(stream, "200 OK", "application/json", route_api::fix(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/undo_segment") => respond(stream, "200 OK", "application/json", route_api::undo_segment(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/via") => respond(stream, "200 OK", "application/json", route_api::via(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/cancel") => respond(stream, "200 OK", "application/json", route_api::cancel(route_session).to_string().as_bytes()),
+        // D (stage 5): drag an existing track segment/corner or via,
+        // keeping its connections -- shares `route_session` with the
+        // route endpoints above (see route_api::drag_start's doc comment).
+        ("POST", "/api/route/drag_start") => respond(stream, "200 OK", "application/json", route_api::drag_start(dir, route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/drag_move") => respond(stream, "200 OK", "application/json", route_api::drag_move(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/drag_finish") => respond(stream, "200 OK", "application/json", route_api::drag_finish(dir, route_session, &body).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }
