@@ -95,33 +95,88 @@ Pure logic: `src/kicad-port/gridSnap.ts`, 12 unit tests. Wiring:
 
 ## 3. Selection
 
-Mostly not started this session (click/box-select/clarification-menu/net-
-highlight predate this session -- see Canvas.tsx's own header comments).
-Added: `common.Interactive.selectAll`/`unselectAll` (Ctrl+A/Ctrl+Shift+A
--- `useActionRunner.ts`, every placed footprint plus every track/via/
-zone/shape/text id; Unselect All only clears the selection, unlike Escape
-which also cancels whatever tool/drawing is in progress). Port target for
-everything else: `pcbnew/tools/pcb_selection_tool.cpp`, `common/tool/
-selection_tool.cpp`.
+Rewritten this session against `pcbnew/tools/pcb_selection_tool.cpp` and
+`common/tool/selection_tool.cpp`'s real click/drag decision tree --
+replacing a pre-existing footprints-only, Shift-only, two-tier-priority
+click/box-select with the actual model: every selectable kind is a
+candidate at once, `GuessSelectionCandidates` (or a clarification menu)
+picks among them, and the real add/subtract/toggle/skip-heuristics
+modifiers apply throughout. `common.Interactive.selectAll`/`unselectAll`
+(Ctrl+A/Ctrl+Shift+A) predate this session and weren't revisited.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Click modifiers: Shift=add, Ctrl/Cmd+Shift=subtract, Ctrl/Cmd=toggle | identical | `selection_tool.cpp:setModifiersState` -- `ctrlClickHighlights()` (which would turn plain Ctrl+click into "highlight this net" instead) isn't modeled; it defaults off in a stock KiCad install too, so this is the real out-of-the-box behavior, not a gap |
+| Alt = skip heuristics, always disambiguate for 2+ candidates | identical | `setModifiersState`'s `m_skip_heuristics` (source's Windows-only exception for a wx/MSW menu-key conflict doesn't apply here) |
+| Long-press (500ms) = same as Alt | identical | `ADVANCED_CFG::m_DisambiguationMenuDelay` (default 500) + `disambiguateCursor`'s own `m_skip_heuristics = true` |
+| GuessSelectionCandidates: prefer exact hits (within 1px), then the smallest of nested items (1.5x ratio), then the active layer | 3 of the real function's passes ported | `pcb_selection_tool.cpp:GuessSelectionCandidates` -- `kicad-port/selection.ts`. Not ported: the silk/courtyard active-layer preference (no distinct silk-text item type in this app's model to special-case), the footprint coverage-ratio override (no Clipper, so no exact polygon-overlap area -- `selectionCandidates.ts` approximates per-kind area instead), `pruneObscuredSelectionCandidates` (an advanced-config-gated visibility-ratio pass, default off anyway) |
+| Clarification menu for 2+ remaining candidates, "Select All" entry | same effect, simpler widget | `common/tool/selection_tool.cpp:doSelectionMenu` -- reuses `ContextMenu.tsx` rather than source's own numbered-hotkey/hover-highlight menu (no per-row highlight-on-hover) |
+| A modifier+drag is always a box-select, even one starting on top of a selected item -- never an item move | identical | `pcb_selection_tool.cpp:Main`'s `hasModifier() \|\| dragAction == SELECT` branch, checked *before* any "drag the selection" path. Easy to miss: Shift/Ctrl+drag never moves anything, regardless of where the drag starts |
+| A plain click on an already-multi-selected item keeps the whole group for a drag, collapsing to just that item only if the drag never actually moves | identical | `Main`'s "dragging started within the selection's bounding box" check vs. `selectPoint`'s unconditional replace -- this app defers the decision (`Canvas.tsx`'s `pendingClickRef`) until `onPointerUp` knows whether real movement happened |
+| Box select: left→right = window (fully enclosed), right→left = crossing (touching) | identical (predates this session; reverified against source, unchanged) | `pcb_selection_tool.cpp:SelectRectArea`'s `greedySelection` |
+| Box select across every selectable kind, with the same add/subtract/toggle modifiers as a click | identical (was footprints-only) | `SelectMultiple`'s per-item apply -- `selectionCandidates.ts:collectBoxSelection`, `kicad-port/selection.ts:applyBoxSelectionModifiers` |
+| Selection Filter panel really filters (footprints/tracks/vias/zones/graphics/text) | identical for the categories this model has | `panel_selection_filter.cpp`/`itemPassesFilter` -- no pads/keepouts/dimensions/points/locked-items/other-items categories (no such selectable concept exists here); was three checkboxes, two of them permanently `disabled` and doing nothing |
+| A hidden layer's items are unselectable; in high-contrast mode, off-active-layer items are too | identical | `Selectable()`'s layer-visibility and `GetHighContrast()`/`GetHighContrastLayers()` checks |
+| Double-click opens properties | identical (was a no-op outside active drawing) | `Main`'s `IsDblClick` handler -- this app has no groups, so it's always "open properties," never "enter group" |
+| Escape: cancel the active tool/drag/arm without touching the selection; else clear the selection; else clear the net highlight | identical | `Main`'s `IsCancel` handler + `m_ESCClearsNetHighlight` (default on). Replaces a flat reset that wiped the selection on every Escape, even mid-move -- `EDIT_TOOL`'s own move-cancel never touches the selection in source |
+| Select/Expand Connection (U): 3-stage junction/pad/never flood, widening one stage per press | ported, net-restricted | `pcb_selection_tool.cpp:expandConnection`/`selectAllConnectedTracks` -- `kicad-port/expandConnection.ts`. Source's `IGNORE_NETS` cross-net traversal isn't modeled (two different nets touching is a DRC violation this app doesn't need to tolerate mid-traversal). Pads are start points only, never graph nodes to cross through -- which makes this model's "pad" and "never" stages compute identically (a footprint's other pads aren't bridged by copper in this model either way), documented in that file |
+| Net highlight (`` ` ``): cursor-driven lookup (pads/vias/tracks preferred, zones fallback), toggles off when re-picking the same net | identical | `board_inspection_tool.cpp:highlightNet` (the `!aUseSelection` branch) -- `components/canvas/netAtCursor.ts`. Was entirely unregistered (no hotkey handler at all) |
+| Net highlight dimming: brighten the matching net, darken everything else, real 0.5 factor | identical | `pcb_painter.cpp:GetColor`'s highlight branch, `COLOR4D::Brighten`/`Darken` -- `kicad-port/netHighlight.ts`. Applies only to pads/tracks/vias/zones (connected items), never a footprint's silkscreen/courtyard/reference -- matches source's `conItem` null-check. Was a flat white fill on the matching net and no dimming of anything else |
+| Clear Net Highlighting (`~`) | identical | `board_inspection_tool.cpp:ClearHighlight` -- was unregistered |
+| `toggleNetHighlight` (Alt+`` ` ``) | pre-existing, still simplified | real semantics are "toggle the *last* highlighted net set back on/off" (`m_lastHighlighted`), independent of selection; this app's existing handler is selection-driven instead. Not revisited this session -- a different, secondary action from the one the task names |
+
+Pure logic: `kicad-port/selection.ts` (23 tests), `kicad-port/
+expandConnection.ts` (8 tests), `kicad-port/netHighlight.ts` (4 tests).
+Wiring: `components/canvas/selectionCandidates.ts`, `netAtCursor.ts`,
+`properties.ts`, `Canvas.tsx`.
 
 ## 4. Edit tool
 
-Move's snap behavior got real anchor-snapping this session (section 2);
-move/rotate/flip/delete/the live preview-on-commit pattern predate this
-session and weren't otherwise touched. Not started: `pcbnew.
-InteractiveEdit.moveExact` (**Shift+M**, "Move Exactly..." -- a dialog
-for an exact relative offset) and `common.Interactive.duplicate`
-(**Cmd+D**/Ctrl+D) -- both explicitly named in this task and both
-confirmed **missing** (no handler anywhere in this app, not even a
-backend `Cmd` verb for "duplicate an item"; see the audit below). Adding
-`duplicate` properly needs a new backend verb per the task's hard rule
-("add it in Rust with a test") -- `crates/ops`'s `Cmd` enum
-(`web/studio/src/api/types.ts`'s `Cmd` union mirrors it 1:1) has no
-duplicate-anything op today, for parts, vias, shapes, or text. Not
-attempted this session; ranked as the top follow-up in the final report.
-Port target: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`.
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Rotate/flip a footprint (standalone, not mid-move) | identical (predates this session) | `edit_tool.cpp:Rotate`/`Flip`, `updateModificationPoint` |
+| Rotate (R/Shift+R) / Flip (F) *during* an active Move | identical for the common case: a dragged footprint spins in place | `edit_tool.cpp`'s own `m_dragging` branch of `Rotate`/`Flip`: the live item is mutated directly mid-drag rather than committing a separate op, and a further rotate during the same drag reuses the *first* rotate's reference point (`updateModificationPoint`'s `m_dragging && HasReferencePoint()` guard). This app can't mutate an uncommitted backend item, so it accumulates the transform on the client-side preview instead (`MovePreview.rotateQuarterTurns`/`flipped`, applied in `painter.ts`'s preview render) and commits move+rotate+flip together as sequential Cmds on drop -- for a **single** selected part this is mathematically identical to source (rotating/flipping about a part's own anchor doesn't move it, so composing the translation and the spin in either order lands on the same pose). **Documented simplification:** a **multi-part** selection rotates/flips each part individually about its own anchor instead of the whole group swinging around one shared pivot the way source's `ROTATE_AROUND_SEL_CENTER`-style group rotation would. **Documented gap:** if R/F is pressed before the mouse has moved even once during a *click-drag* (not the M-armed path, which has no such window), there's no preview yet to attach the rotation to and the keypress is dropped -- `useActionRunner.ts`'s `tryTransformDuringMove` can only see `state.movePreview`/`state.activeTool`, not `Canvas.tsx`'s own pending-drag ref |
+| Move: connected track ends follow the dragged footprint | **does not happen in source either** -- task premise corrected after reading `edit_tool_move_fct.cpp:doMoveSelection` directly: a plain (non-router) Move only ever does `item->Move(movement)` on the selection itself; it never touches a connected-but-unselected track. What source *does* do instead is redraw a live/dynamic ratsnest during the drag (`PCB_ACTIONS::updateLocalRatsnest`) | ported: `kicad-port/localRatsnest.ts:offsetRatsnestForPreview` shifts ratsnest edges touching a moving part's pads by the live preview delta, so the airwire updates every frame instead of only after the move commits and `/api/ratsnest` is re-polled |
+| Router-driven drag (D, "Drag 45 Degree Mode") -- the *actual* mechanism that keeps a part's tracks attached while moving it | **partial: not implemented, and genuinely needs PNS** | `pcbnew.InteractiveRouter.Drag45Degree`/`DragFreeAngle` push-and-shove the attached tracks' far ends live as the part moves, via the full interactive router (`ROUTER_TOOL`, `PNS::DRAG` and friends) -- collision-aware, multi-segment, not a geometry one-liner. This app has no router UI loop (`routing.ts`'s header comment: "a single-segment-per-click router, not pcbnew's own"), so this stays unported; listed under `pcbnew.InteractiveRouter.Drag45Degree` in the hotkey audit below rather than silently missing |
 
-## 5. Context menus and hotkeys
+Pure logic: `kicad-port/localRatsnest.ts` (5 tests). Wiring:
+`painter.ts`'s `movePreview` rotate/flip transform,
+`useActionRunner.ts:tryTransformDuringMove`.
+
+## 5. Duplicate (Cmd+D) and copy/paste (Cmd+C/V)
+
+New backend verbs (`crates/ops/src/lib.rs`), since none existed for
+"copy an item" at all before this session.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Duplicate: copy in place, select the copies, immediately arm Move on them at the cursor | identical in effect | `edit_tool.cpp:Duplicate` hands straight to `doMoveSelection` -- `Cmd::Duplicate { ids }` (new, with tests) copies existing tracks/vias/zones/shapes/texts server-side; `state/store.tsx:duplicateSelection` diffs the board's id set before/after to find the new ones (the HTTP reply has no structured "here's what I made" field) and arms Move |
+| Copy/Cut/Paste | Copy + Paste identical in effect; **Cut not implemented** | `common.Interactive.copy`/`paste` -- `Cmd::PasteItems { tracks, vias, zones, shapes, texts }` (new, with tests) inserts fresh copies of whole items carried with the command itself (not references), so paste survives the original being deleted first. `components/canvas/clipboard.ts` converts this app's display shapes to the Cmd's IR shape and holds the result in `state.clipboard`. `common.Interactive.cut` (Ctrl+X) -- trivially "copy then delete" -- was not wired this session; still shows "not ported yet" |
+| Footprints | **explicitly out of scope, needs a design decision** | Duplicating a footprint would add a part instance the intent/BOM doesn't have -- `Cmd::Duplicate`'s own doc comment states this; an id naming a footprint just never matches anything duplicable rather than being specially rejected |
+
+Rust tests: 8 new (`crates/ops/src/tests.rs`'s "duplicate / paste"
+section) covering fresh-id assignment, same-position copies, a mixed
+known/unknown id list, an all-unknown refusal, and an empty clipboard
+no-op.
+
+## 6. Move Exact (Shift+M)
+
+Port of `pcbnew/dialogs/dialog_move_exact.cpp` + `edit_tool.cpp:MoveExact`.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Cartesian (Move X/Move Y) or polar (Distance/Angle) offset | identical | `GetTranslationInIU`/`ToPolarDeg` -- `MoveExactDialog.tsx`, reusing `state/units.ts`'s existing `umTo`/`umFrom` |
+| Independent rotation angle, applied regardless of anchor choice | identical | `TransferDataFromWindow`'s `m_rotation` |
+| Anchor: item's own position (default for 1 item), selection center (default for 2+), local coordinates origin | identical for these three | `buildRotationAnchorMenu`'s `ROTATE_AROUND_ITEM_ANCHOR`/`_SEL_CENTER`/`_USER_ORIGIN`. KiCad's 4th choice, `ROTATE_AROUND_AUX_ORIGIN` (a board-wide "drill/place origin" setting), has no model equivalent in this app and is left out |
+| Translate first, then rotate by the same angle around the chosen pivot (or each part's own anchor, which a pure rotation can't move) | identical | `EDIT_TOOL::MoveExact`'s `boardItem->Move(translation)` then `boardItem->Rotate(pivot, angle)` -- `Cmd::MoveExact`'s `rotate_point_about`, same matrix as `crates/model/src/footprint.rs:to_board` (no Y-axis flip either side, so a part lands exactly where its own subsequent rendering will draw it) |
+| Whole batch refuses atomically if any named part is unplaced/unknown | identical in effect | source validates via the selection itself (always placed); this app's dialog can in principle be asked to move an unplaced ref, so the backend verb checks every part before moving any of them |
+| Rotation sign | identical effect, bridged the same way | source: `if (!m_Display.m_DisplayInvertYAxis) rotation = -rotation;` before calling `Rotate()` -- negates the dialog's own CCW-positive, user-facing angle to match the CW-positive-in-Y-down rotation matrix underneath. This app's dialog does the same negation, landing on the same visual direction as `state/units.ts`'s existing `toPolar` (also CCW-positive) |
+
+Rust tests: 6 new, covering the no-pivot in-place spin, translate-then-
+spin, a shared pivot actually orbiting the part, one shared transform
+applied to a whole batch, atomic refusal, and the empty-list refusal.
+
+## 7. Context menus and hotkeys
 
 `useActionRunner.ts`'s zoom-action registry was corrected/extended this
 session (zoomIn/zoomOut/zoomFitObjects/zoomCenter/zoomRedraw/
@@ -131,34 +186,34 @@ resetLocalCoords -- see section 1). The context menu itself
 ### Hotkey coverage audit
 
 Of 766 extracted actions, 201 have a real default hotkey (hotkey or
-macHotkey non-null). 36 of those are registered in
+macHotkey non-null). 47 of those are registered in
 `useActionRunner.ts` (and therefore reachable from `useGlobalHotkeys.ts`,
-the menu bar, and the toolbars) -- including `selectAll`/`unselectAll`
-(Ctrl+A/Ctrl+Shift+A), added this session since they were trivial, safe,
-and directly in item 3's (Selection) territory. 165 are not registered.
-55 of those are `eeschema.*` -- out of scope for *pcbnew* parity
-specifically, since this app's Schematic tab is read-only by design (no
-schematic editing verbs exist in the backend yet). The remaining 110 (67
-`pcbnew.*`, 43 `common.*` that apply to both editors) are genuine
-pcbnew-parity gaps, listed here per the task's "explicitly listed as
-missing" instruction rather than left silently unimplemented:
+the menu bar, and the toolbars) -- a prior session added
+`selectAll`/`unselectAll` (Ctrl+A/Ctrl+Shift+A); this one added
+`highlightNet`/`clearHighlight` (`` ` ``/`~`), `SelectConnection` (U),
+`moveExact` (Shift+M), `duplicate`/`copy`/`paste` (Cmd+D/C/V),
+`layerNext`/`layerPrev` (+/-), and `layerAlphaInc`/`layerAlphaDec`
+(}/{) -- 11 more, picked (per the task's item 5 instruction) for
+user-visible impact once items 1-4 landed. 154 are not registered. 55 of
+those are `eeschema.*` -- out of scope for *pcbnew* parity specifically,
+since this app's Schematic tab is read-only by design (no schematic
+editing verbs exist in the backend yet). The remaining 99 (59
+`pcbnew.*`, 40 `common.*` that apply to both editors) are genuine
+pcbnew-parity gaps, listed here (alphabetically, same as before) per the
+task's "explicitly listed as missing" instruction rather than left
+silently unimplemented. The final report ranks what's left by
+user-visible impact; this table is for lookup, not priority order.
 
-#### `pcbnew.*` missing (67)
+#### `pcbnew.*` missing (59)
 
 | Action | Hotkey | Label |
 |---|---|---|
 | `pcbnew.Array.createArray` | Ctrl+T | Create Array... |
 | `pcbnew.Control.changeTrackLayerNext` | Ctrl++ | Switch Track to Next Layer |
 | `pcbnew.Control.changeTrackLayerPrev` | Ctrl+- | Switch Track to Previous Layer |
-| `pcbnew.Control.layerAlphaDec` | { | Decrease Layer Opacity |
-| `pcbnew.Control.layerAlphaInc` | } | Increase Layer Opacity |
-| `pcbnew.Control.layerNext` | + | Switch to Next Layer |
 | `pcbnew.Control.layerPairPresetCycle` | Shift+V | Cycle Layer Pair Presets |
-| `pcbnew.Control.layerPrev` | - | Switch to Previous Layer |
-| `pcbnew.EditorControl.clearHighlight` | ~ | Clear Net Highlighting |
 | `pcbnew.EditorControl.EditFpInFpEditor` | Ctrl+E | Open in Footprint Editor |
 | `pcbnew.EditorControl.EditLibFpInFpEditor` | Ctrl+Shift+E | Edit Library Footprint... |
-| `pcbnew.EditorControl.highlightNet` | \` | Highlight Net |
 | `pcbnew.EditorControl.lineModeNext` | Shift+Space | Line Modes |
 | `pcbnew.EditorControl.placeFootprint` | A | Place Footprints |
 | `pcbnew.EditorControl.toggleLock` | L | Toggle Lock |
@@ -180,7 +235,6 @@ missing" instruction rather than left silently unimplemented:
 | `pcbnew.InteractiveEdit.deleteFull` | Shift+Del | Delete Full Track |
 | `pcbnew.InteractiveEdit.duplicateIncrementPads` | Ctrl+Shift+D | Duplicate and Increment |
 | `pcbnew.InteractiveEdit.FindMove` | T | Get and Move Footprint |
-| `pcbnew.InteractiveEdit.moveExact` | Shift+M | Move Exactly... |
 | `pcbnew.InteractiveEdit.packAndMoveFootprints` | P | Pack and Move Footprints |
 | `pcbnew.InteractiveEdit.skip` | Tab | Skip |
 | `pcbnew.InteractiveEdit.swap` | Alt+S | Swap |
@@ -195,7 +249,6 @@ missing" instruction rather than left silently unimplemented:
 | `pcbnew.InteractiveRouter.SettingsDialog` | Ctrl+< | Interactive Router Settings... |
 | `pcbnew.InteractiveRouter.UndoLastSegment` | Backspace | Undo Last Segment |
 | `pcbnew.InteractiveSelection.GrabUnconnected` | Shift+O | Grab Nearest Unconnected Footprints |
-| `pcbnew.InteractiveSelection.SelectConnection` | U | Select/Expand Connection |
 | `pcbnew.InteractiveSelection.SelectUnconnected` | O | Select All Unconnected Footprints |
 | `pcbnew.InteractiveSelection.unrouteSegment` | Backspace | Unroute Segment |
 | `pcbnew.lengthTuner.AmplDecrease` | 4 | Decrease Amplitude |
@@ -215,7 +268,7 @@ missing" instruction rather than left silently unimplemented:
 | `pcbnew.ZoneFiller.zoneFillAll` | B | Fill All Zones |
 | `pcbnew.ZoneFiller.zoneUnfillAll` | Ctrl+B | Unfill All Zones |
 
-#### `common.*` missing, relevant to pcbnew (43)
+#### `common.*` missing, relevant to pcbnew (40)
 
 | Action | Hotkey | Label |
 |---|---|---|
@@ -231,9 +284,8 @@ missing" instruction rather than left silently unimplemented:
 | `common.Control.toggleGridOverrides` | Ctrl+Shift+G | Grid Overrides |
 | `common.Control.updatePcbFromSchematic` | F8 | Update PCB from Schematic... (no schematic editing to update from) |
 | `common.Control.zoomTool` | Ctrl+F5 | Zoom to Selection Area (drag-to-zoom-box; see section 1) |
-| `common.Interactive.copy`/`cut`/`paste`/`pasteSpecial`/`copyAsText` | Ctrl+C/X/V/Shift+V/Shift+C | Clipboard -- no backend verb for any of these yet |
+| `common.Interactive.cut`/`pasteSpecial`/`copyAsText` | Ctrl+X/Shift+V/Shift+C | `copy`/`paste`/`duplicate` done this session (section 5) -- `cut` (trivially "copy then delete") wasn't wired; `pasteSpecial`/`copyAsText` have no real analogue in this app (no "paste without net/position" variant, no text-serialized clipboard format) |
 | `common.Interactive.cycleArcEditMode` | Ctrl+Space | Cycle Arc Editing Mode |
-| `common.Interactive.duplicate` | **Ctrl+D** | **Duplicate -- explicitly named in this task's Edit tool item; see section 4** |
 | `common.Interactive.find`/`findAndReplace`/`findNext`/`findPrevious`/`findNextMarker` | Ctrl+F, ... | Find/Replace |
 | `common.Interactive.finish` | End | Finish (generic "end the current interactive action") |
 | `common.Interactive.measureTool` | Ctrl+Shift+M | Measure Tool |

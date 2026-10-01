@@ -416,6 +416,51 @@ export function useActionRunner() {
     m.set("pcbnew.Control.trackDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_TRACKS" }));
     m.set("pcbnew.Control.viaDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_VIAS" }));
 
+    // pcb_control.cpp LayerNext/LayerPrev ("+"/"-"): step the active
+    // layer through the copper stack in UI order, skipping hidden
+    // layers, wrapping around, a no-op (source: wxBell()) if every other
+    // copper layer is hidden. Source jumps straight to B.Cu/F.Cu when the
+    // active layer isn't a copper one at all; this app's activeLayer can
+    // be a non-copper layer (or null) via the Appearance panel, so that
+    // fallback is reachable here too, not just a defensive branch.
+    const cycleActiveLayer = (dir: 1 | -1) => {
+      const layers = state.board?.layers ?? [];
+      if (layers.length === 0) return;
+      const visible = (l: string) => state.layerVisible[l] !== false;
+      const cur = state.activeLayer;
+      if (cur == null || !layers.includes(cur)) {
+        dispatch({ type: "SET_ACTIVE_LAYER", layer: (dir === 1 ? layers[layers.length - 1] : layers[0]) ?? null });
+        return;
+      }
+      const i = layers.indexOf(cur);
+      for (let step = 1; step <= layers.length; step++) {
+        const j = ((i + dir * step) % layers.length + layers.length) % layers.length;
+        if (visible(layers[j]!)) {
+          dispatch({ type: "SET_ACTIVE_LAYER", layer: layers[j]! });
+          return;
+        }
+      }
+      // every other copper layer is hidden -- source rings the bell and does nothing.
+    };
+    m.set("pcbnew.Control.layerNext", pcbOnly(() => cycleActiveLayer(1)));
+    m.set("pcbnew.Control.layerPrev", pcbOnly(() => cycleActiveLayer(-1)));
+
+    // pcb_control.cpp LayerAlphaInc/Dec ("}"/"{"): the real constants
+    // (`#define ALPHA_MIN 0.20` / `ALPHA_MAX 1.00` / `ALPHA_STEP 0.05`),
+    // applied to whichever layer is currently active.
+    const ALPHA_MIN = 0.2,
+      ALPHA_MAX = 1.0,
+      ALPHA_STEP = 0.05;
+    const stepActiveLayerAlpha = (delta: number) => {
+      const layer = state.activeLayer;
+      if (!layer) return;
+      const cur = state.layerOpacity[layer] ?? 1;
+      const next = Math.min(ALPHA_MAX, Math.max(ALPHA_MIN, Math.round((cur + delta) * 100) / 100));
+      if (next !== cur) dispatch({ type: "SET_LAYER_OPACITY", layer, opacity: next });
+    };
+    m.set("pcbnew.Control.layerAlphaInc", pcbOnly(() => stepActiveLayerAlpha(ALPHA_STEP)));
+    m.set("pcbnew.Control.layerAlphaDec", pcbOnly(() => stepActiveLayerAlpha(-ALPHA_STEP)));
+
     const cycleGrid = (dir: 1 | -1) => {
       const i = GRID_OPTIONS_UM.indexOf(state.gridUm);
       const next = GRID_OPTIONS_UM[Math.max(0, Math.min(GRID_OPTIONS_UM.length - 1, (i === -1 ? 0 : i) + dir))]!;
