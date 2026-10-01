@@ -41,7 +41,8 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
 use eda_model::ir::{
-    Design, DrawingsSection, FootprintInstance, LabelSide, Millideg, Point, RoutingSection, Shape, Side, Text, TextJustify, Track, Um, Via, Zone,
+    Design, DrawingsSection, FootprintInstance, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, Point, PowerSymbol, RoutingSection, SchematicSection, Shape, Side, SymbolInstance, Text,
+    TextJustify, Track, Um, Via, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -271,6 +272,133 @@ pub enum Cmd {
     /// resolves to an actual board point since this crate has no
     /// selection/UI-origin concept of its own.
     MoveExact { parts: Vec<String>, dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point> },
+
+    // ---------------------------------------------------------- eeschema
+    //
+    // Mirrors the PCB verbs above one-for-one where the shape allows
+    // (MoveSymbol/RotateSymbol ~ MoveTo/Rotate), schematic-specific where
+    // it does not. Every one of these is a `Domain::Schematic` command
+    // (see `Cmd::domain`) -- `step_quiet` reconciles `design.schematic`'s
+    // own connectivity (and, through it, `design.nets`) after any of them
+    // lands, so a wire/label edit's effect on "what's on what net" is
+    // never a separate step the caller has to remember to take.
+    /// `M`: move a symbol to an absolute sheet position, keeping rotation/
+    /// mirror. A wire's endpoint is a bare coordinate, not a reference to
+    /// the pin it happens to land on (see `Wire::pts`), so moving the
+    /// symbol out from under it is *exactly* what "breaks the connection"
+    /// means here -- no separate bookkeeping, the next connectivity pass
+    /// just finds nothing at that point any more.
+    MoveSymbol { id: String, x: Um, y: Um },
+    /// `G`: move a symbol AND drag along the endpoint of every wire
+    /// presently attached to one of its pins (KiCad's rubber-band) --
+    /// `attached_wire_endpoints` names which (wire index, endpoint index)
+    /// pairs the caller found glued to this symbol before the drag
+    /// started, so this moves exactly those points by the same delta
+    /// rather than re-deriving attachment from the new position.
+    DragSymbol { id: String, x: Um, y: Um, attached_wire_endpoints: Vec<(usize, usize)> },
+    /// `R`: quarter turns, same convention as `Rotate`.
+    RotateSymbol { id: String, quarter_turns: u8 },
+    /// `X` ("Mirror Horizontally", KiCad's `SYM_MIRROR_Y` / negate-X):
+    /// toggles `SymbolInstance::mirrored`, the one axis this project's
+    /// schematic IR currently models (confirmed against
+    /// `transform_local_point`: `mirrored` already negates X, matching
+    /// this hotkey exactly). `Y` ("Mirror Vertically" / negate-Y) has no
+    /// field to toggle yet -- see `PARITY-sch.md`'s eeschema row for that
+    /// gap; left unwired rather than overloading this one flag with a
+    /// second meaning.
+    MirrorSymbol { id: String },
+    /// `Del` on a symbol: removes the instance (and its synthesized
+    /// `Part`, if `reconcile_schematic` had added one for a symbol with no
+    /// intent counterpart) from the sheet. Matches real eeschema: wires
+    /// that landed on this symbol's pins are left exactly where they are,
+    /// now dangling -- ERC's existing dangling-wire checks are what
+    /// surfaces that, not a cascade delete.
+    DeleteSymbol { id: String },
+
+    /// `W`: add a hand-drawn wire. `net`/`pins` are left for the next
+    /// connectivity reconciliation to fill in (same as a freshly-imported
+    /// `.kicad_sch`'s wires start out) -- the caller only knows geometry.
+    /// Junction dots are not a stored item at all (eeschema's own
+    /// `(junction ...)` record is purely cosmetic -- a T-intersection
+    /// reconciles into one net with or without the dot, see
+    /// `eda_kicad::sch_import::reconcile`'s own doc): the renderer draws
+    /// one wherever 3+ wire endpoints/segments meet, computed fresh from
+    /// `wires` every paint, same as a real schematic's junction dots are
+    /// implied by geometry, not placed by hand in this port.
+    AddWire { pts: Vec<Point> },
+    /// Backspace mid-draw is purely a frontend undo of the in-progress
+    /// polyline (never reaches the backend at all); this is `Del` on an
+    /// already-committed wire, by its `Wire::id`.
+    DeleteWire { id: String },
+    /// `Q`: no-connect flag at a point (normally a pin's own position --
+    /// the caller resolves that, this just records the flag). `pin` is
+    /// left blank for the next reconciliation to fill in, same as
+    /// `AddWire`'s `net`/`pins`.
+    AddNoConnect { at: Point },
+    DeleteNoConnect { id: String },
+
+    /// `L`/`Ctrl+L`/`H`: place a net label. `kind`/`shape` follow
+    /// `eda_model::ir::LabelKind`'s own vocabulary (local has no shape).
+    AddLabel { net: String, at: Point, kind: LabelKind },
+    DeleteLabel { id: String },
+    /// `P`: place a power symbol on a pin.
+    AddPowerSymbol { lib_id: String, at: Point, rot_millideg: Millideg, net: String, pin: String },
+    DeletePowerSymbol { id: String },
+
+    /// `A`: place a new symbol instance from the library -- the one verb
+    /// here that can grow the part list itself (`reconcile_schematic`
+    /// synthesizes a `Part` for an `id` with no intent counterpart), so it
+    /// shows up unplaced on the PCB tab exactly like any other part
+    /// `eda board new` never heard of.
+    AddSymbol { id: String, lib_id: String, at: Point, rot_millideg: Millideg, value: String, footprint: String },
+
+    /// `Ctrl+A` (Annotate): assign reference designators to every
+    /// not-yet-annotated symbol (an `id` this project synthesizes as
+    /// `"U?1"`/`"U?2"`/... when `AddSymbol` is given a blank prefix+number
+    /// -- see `sch_drawing_tools`' own symbol-chooser flow), in `order`
+    /// (top-to-bottom sheet position, left-to-right as the tiebreak,
+    /// matching `dialog_annotate.cpp`'s default). `reset_existing` mirrors
+    /// the dialog's "Clear and re-annotate" vs "Keep existing" modes.
+    Annotate { reset_existing: bool },
+}
+
+/// Which editor a `Cmd` belongs to -- `eeschema`'s `design.schematic`, or
+/// everything pcbnew touches (`placement`/`routing`/`drawings`). Two uses:
+/// `crates/cli/src/board.rs`'s undo/redo scopes a stack entry by this (see
+/// its own doc comment on why pressing Ctrl+Z on the Schematic tab used to
+/// silently undo a PCB edit -- GAPS.md #15), and `step_quiet` only runs
+/// `reconcile_schematic` after a `Schematic` command, so a PCB-only board
+/// (nothing in this project's own test/parity corpus has ever executed a
+/// schematic `Cmd`) never pays for or risks that pass at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Domain {
+    Pcb,
+    Schematic,
+}
+
+impl Cmd {
+    /// Which editor this command belongs to -- see [`Domain`].
+    pub fn domain(&self) -> Domain {
+        match self {
+            Cmd::MoveSymbol { .. }
+            | Cmd::DragSymbol { .. }
+            | Cmd::RotateSymbol { .. }
+            | Cmd::MirrorSymbol { .. }
+            | Cmd::DeleteSymbol { .. }
+            | Cmd::AddWire { .. }
+            | Cmd::DeleteWire { .. }
+            | Cmd::AddNoConnect { .. }
+            | Cmd::DeleteNoConnect { .. }
+            | Cmd::AddLabel { .. }
+            | Cmd::DeleteLabel { .. }
+            | Cmd::AddPowerSymbol { .. }
+            | Cmd::DeletePowerSymbol { .. }
+            | Cmd::AddSymbol { .. }
+            | Cmd::Annotate { .. } => Domain::Schematic,
+            _ => Domain::Pcb,
+        }
+    }
 }
 
 impl Cmd {
@@ -303,6 +431,14 @@ impl Cmd {
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } => vec!["paste"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
+
+            Cmd::MoveSymbol { id, .. } | Cmd::DragSymbol { id, .. } | Cmd::RotateSymbol { id, .. } | Cmd::MirrorSymbol { id } | Cmd::DeleteSymbol { id } | Cmd::AddSymbol { id, .. } => vec![id],
+            Cmd::AddWire { .. } => vec!["wire"],
+            Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } => vec![id],
+            Cmd::AddNoConnect { .. } => vec!["no_connect"],
+            Cmd::AddLabel { net, .. } => vec![net.as_str()],
+            Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
+            Cmd::Annotate { .. } => vec!["annotate"],
         }
     }
 
@@ -568,6 +704,22 @@ impl<'a> Board<'a> {
             Cmd::Duplicate { ids } => self.duplicate_items(ids),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
+
+            Cmd::MoveSymbol { id, x, y } => self.move_symbol(id, *x, *y),
+            Cmd::DragSymbol { id, x, y, attached_wire_endpoints } => self.drag_symbol(id, *x, *y, attached_wire_endpoints),
+            Cmd::RotateSymbol { id, quarter_turns } => self.rotate_symbol(id, *quarter_turns),
+            Cmd::MirrorSymbol { id } => self.mirror_symbol(id),
+            Cmd::DeleteSymbol { id } => self.delete_symbol(id),
+            Cmd::AddWire { pts } => self.add_wire(pts.clone()),
+            Cmd::DeleteWire { id } => self.delete_wire(id),
+            Cmd::AddNoConnect { at } => self.add_no_connect(*at),
+            Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
+            Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
+            Cmd::DeleteLabel { id } => self.delete_label(id),
+            Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
+            Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
+            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint),
+            Cmd::Annotate { reset_existing } => self.annotate(*reset_existing),
         }
     }
 
@@ -1292,6 +1444,221 @@ impl<'a> Board<'a> {
             };
             let final_rot = (fp.rot as i64 + rotate_millideg).rem_euclid(360_000) as u32;
             self.set_pose(part, final_pos, final_rot)?;
+        }
+        Ok(())
+    }
+
+    // ---------------------------------------------------------- eeschema
+
+    fn schematic(&self) -> Result<&SchematicSection, Vec<CheckResult>> {
+        self.design.schematic.as_ref().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])
+    }
+
+    fn schematic_mut(&mut self) -> Result<&mut SchematicSection, Vec<CheckResult>> {
+        self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])
+    }
+
+    /// Creates an empty schematic section on first use -- `AddSymbol`/
+    /// `AddWire`/`AddLabel`/`AddNoConnect` are the only verbs allowed to
+    /// start one from nothing (a brand-new design, or an intent whose own
+    /// `derive_schematic` never ran); everything else targets an id that
+    /// can only already exist inside a section that is already there.
+    fn schematic_mut_or_create(&mut self) -> &mut SchematicSection {
+        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![] })
+    }
+
+    fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {
+        self.schematic()?.symbols.iter().find(|s| s.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", id, "no symbol instance with this reference")])
+    }
+
+    fn move_symbol(&mut self, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
+        self.find_symbol(id)?;
+        let sch = self.schematic_mut()?;
+        sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above").at = Point { x, y };
+        Ok(())
+    }
+
+    /// `G`: move a symbol and drag along the endpoint of every wire the
+    /// caller found attached to one of its pins before the drag started
+    /// (`(wire index, point index)` pairs into `wires`/`wires[i].pts`) --
+    /// see `Cmd::DragSymbol`'s own doc for why resolving "attached" is the
+    /// caller's job, not this method's.
+    fn drag_symbol(&mut self, id: &str, x: Um, y: Um, attached: &[(usize, usize)]) -> Result<(), Vec<CheckResult>> {
+        let before = self.find_symbol(id)?.at;
+        let (dx, dy) = (x - before.x, y - before.y);
+        let sch = self.schematic_mut()?;
+        for &(wi, pi) in attached {
+            if let Some(p) = sch.wires.get_mut(wi).and_then(|w| w.pts.get_mut(pi)) {
+                p.x += dx;
+                p.y += dy;
+            }
+        }
+        sch.symbols.iter_mut().find(|s| s.id == id).expect("find_symbol just found it").at = Point { x, y };
+        Ok(())
+    }
+
+    /// `R`/Shift+`R`: quarter turns, same sign convention as `Rotate`
+    /// (positive = CCW, matching `sch_edit_tool.cpp`'s own 'R' default).
+    fn rotate_symbol(&mut self, id: &str, quarter_turns: u8) -> Result<(), Vec<CheckResult>> {
+        self.find_symbol(id)?;
+        let sch = self.schematic_mut()?;
+        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        let add = (quarter_turns as i64 % 4) * 90_000;
+        s.rot = (s.rot as i64 + add).rem_euclid(360_000) as Millideg;
+        Ok(())
+    }
+
+    /// `X` ("Mirror Horizontally") -- see `Cmd::MirrorSymbol`'s doc on why
+    /// this is the one axis the IR models.
+    fn mirror_symbol(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        self.find_symbol(id)?;
+        let sch = self.schematic_mut()?;
+        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        s.mirrored = !s.mirrored;
+        Ok(())
+    }
+
+    fn delete_symbol(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.symbols.len();
+        sch.symbols.retain(|s| s.id != id);
+        if sch.symbols.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_symbol", id, "no symbol instance with this reference")]);
+        }
+        Ok(())
+    }
+
+    fn add_wire(&mut self, pts: Vec<Point>) -> Result<(), Vec<CheckResult>> {
+        if pts.len() < 2 {
+            return Err(vec![CheckResult::fail("ops_bad_wire", "wire", "a wire needs at least two points")]);
+        }
+        self.schematic_mut_or_create().wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts });
+        Ok(())
+    }
+
+    fn delete_wire(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.wires.len();
+        sch.wires.retain(|w| w.id != id);
+        if sch.wires.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_wire", id, "no wire with this id")]);
+        }
+        Ok(())
+    }
+
+    fn add_no_connect(&mut self, at: Point) -> Result<(), Vec<CheckResult>> {
+        self.schematic_mut_or_create().no_connects.push(NoConnect { id: String::new(), at, pin: String::new() });
+        Ok(())
+    }
+
+    fn delete_no_connect(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.no_connects.len();
+        sch.no_connects.retain(|nc| nc.id != id);
+        if sch.no_connects.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_no_connect", id, "no no-connect flag with this id")]);
+        }
+        Ok(())
+    }
+
+    fn add_label(&mut self, net: &str, at: Point, kind: LabelKind) -> Result<(), Vec<CheckResult>> {
+        if net.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_label", "label", "a label needs a net name")]);
+        }
+        self.schematic_mut_or_create().labels.push(NetLabel { id: String::new(), net: net.into(), at, kind });
+        Ok(())
+    }
+
+    fn delete_label(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.labels.len();
+        sch.labels.retain(|l| l.id != id);
+        if sch.labels.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_label", id, "no label with this id")]);
+        }
+        Ok(())
+    }
+
+    /// `P`: place a power symbol. `id` follows KiCad's own synthetic
+    /// `#PWR01`/`#PWR02`/... numbering (`PowerSymbol::id`'s own doc).
+    fn add_power_symbol(&mut self, lib_id: &str, at: Point, rot: Millideg, net: &str, pin: &str) -> Result<(), Vec<CheckResult>> {
+        if net.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_power_symbol", "power_symbol", "a power symbol needs a net name")]);
+        }
+        let sch = self.schematic_mut_or_create();
+        let mut n = sch.power_symbols.len() as u32 + 1;
+        let mut id = format!("#PWR{n:02}");
+        while sch.power_symbols.iter().any(|p| p.id == id) {
+            n += 1;
+            id = format!("#PWR{n:02}");
+        }
+        sch.power_symbols.push(PowerSymbol { id, lib_id: lib_id.into(), at, rot, net: net.into(), pin: pin.into() });
+        Ok(())
+    }
+
+    fn delete_power_symbol(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.power_symbols.len();
+        sch.power_symbols.retain(|p| p.id != id);
+        if sch.power_symbols.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_power_symbol", id, "no power symbol with this id")]);
+        }
+        Ok(())
+    }
+
+    /// `A`: place a new symbol instance. The caller names `id` (a real
+    /// reference like "R12", or a KiCad-style placeholder like "U?" for
+    /// `Annotate` to number later) -- this only refuses an exact
+    /// duplicate of an id already on the sheet.
+    #[allow(clippy::too_many_arguments)]
+    fn add_symbol(&mut self, id: &str, lib_id: &str, at: Point, rot: Millideg, value: &str, footprint: &str) -> Result<(), Vec<CheckResult>> {
+        if id.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_symbol", "symbol", "a symbol needs a reference designator")]);
+        }
+        let sch = self.schematic_mut_or_create();
+        if sch.symbols.iter().any(|s| s.id == id) {
+            return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, "a symbol with this reference is already on the sheet")]);
+        }
+        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, lib_id: lib_id.into(), unit: 1, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
+        Ok(())
+    }
+
+    /// `Ctrl+A` (Annotate), `dialog_annotate.cpp`'s default mode
+    /// (`INCREMENTAL_BY_REF`, sort "top to bottom" -- by Y then X):
+    /// assigns the next free number, per reference-letter prefix, to
+    /// every symbol whose id is blank or ends in `?` (this project's own
+    /// placeholder for "not yet annotated", e.g. `AddSymbol`'s "U?").
+    /// `reset_existing` first strips every symbol's id back to
+    /// "<prefix>?" (dialog's "Reset existing annotations"), so the whole
+    /// sheet renumbers from scratch instead of only filling gaps.
+    fn annotate(&mut self, reset_existing: bool) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if reset_existing {
+            for s in &mut sch.symbols {
+                let prefix: String = s.id.chars().take_while(|c| c.is_alphabetic()).collect();
+                if !prefix.is_empty() {
+                    s.id = format!("{prefix}?");
+                }
+            }
+        }
+        let mut next: BTreeMap<String, u32> = BTreeMap::new();
+        for s in &sch.symbols {
+            if s.id.ends_with('?') {
+                continue;
+            }
+            let prefix: String = s.id.chars().take_while(|c| c.is_alphabetic()).collect();
+            let num: u32 = s.id[prefix.len()..].parse().unwrap_or(0);
+            let e = next.entry(prefix).or_insert(0);
+            *e = (*e).max(num);
+        }
+        let mut order: Vec<usize> = (0..sch.symbols.len()).filter(|&i| sch.symbols[i].id.ends_with('?')).collect();
+        order.sort_by(|&a, &b| (sch.symbols[a].at.y, sch.symbols[a].at.x).cmp(&(sch.symbols[b].at.y, sch.symbols[b].at.x)));
+        for i in order {
+            let prefix = sch.symbols[i].id.trim_end_matches('?').to_string();
+            let prefix = if prefix.is_empty() { "U".to_string() } else { prefix };
+            let n = next.entry(prefix.clone()).or_insert(0);
+            *n += 1;
+            sch.symbols[i].id = format!("{prefix}{n}");
         }
         Ok(())
     }

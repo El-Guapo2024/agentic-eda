@@ -104,7 +104,7 @@ mod tests {
         let design = Design {
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: None,
+            schematic: None, nets: None,
             placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints, modules: vec![] }),
             routing: None,
             drawings: None,
@@ -120,7 +120,7 @@ mod tests {
         let design = Design {
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: None,
+            schematic: None, nets: None,
             placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints: vec![], modules: vec![] }),
             routing: Some(RoutingSection { tracks: vec![Track { id: "t1".into(), net: "A".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 1000, y: 1000 }, Point { x: 5000, y: 1000 }] }], vias: vec![], zones: vec![] }),
             drawings: None,

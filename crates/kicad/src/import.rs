@@ -117,6 +117,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
             stage_hashes: vec![],
         },
         schematic: None,
+        nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones: vec![] }) },
         drawings: if shapes.is_empty() && texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts }) },
@@ -142,7 +143,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     Ok((design, model, notes))
 }
 
-pub(crate) fn mm_to_um(mm: f64) -> i64 {
+pub fn mm_to_um(mm: f64) -> i64 {
     (mm * 1000.0).round() as i64
 }
 

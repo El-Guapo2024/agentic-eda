@@ -143,7 +143,7 @@ fn round_trips_shapes_and_text() {
     let design = Design {
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "drawings_rt".into(), seed: 0, stage_hashes: vec![] },
-        schematic: None,
+        schematic: None, nets: None,
         placement: Some(PlacementSection {
             outline: vec![Point { x: 0, y: 0 }, Point { x: 30_000, y: 0 }, Point { x: 30_000, y: 30_000 }, Point { x: 0, y: 30_000 }],
             footprints: vec![],

@@ -1,0 +1,161 @@
+# Schematic editor parity with KiCad eeschema
+
+One row per action. Status is **identical** (same logic/behavior, adapted
+only where the browser platform genuinely requires it, noted inline),
+**partial** (core behavior ported, a real gap remains, noted), or
+**missing** (not started). Mirrors `PARITY-pcb.md`'s own format.
+
+KiCad source snapshot read this session: the same `kicad-src` scratchpad
+copy `PARITY-pcb.md` cites (commit `8303b2ad`, version 10.99).
+
+Before this session: 0 of eeschema's 240 cataloged actions were wired
+(read-only viewer, measured ~5% parity in `docs/parity/REPORT.md`). This
+session ports selection/move/rotate/mirror/delete end to end (frontend +
+backend), the ERC dialog (gap #4), and fixes the cross-tab undo bug (gap
+#15). Wire/label/power-symbol drawing tools, a symbol chooser, Annotate's
+dialog, and Properties are not yet wired — see the bottom of each section.
+
+## 0. Architecture: the "one netlist" rule
+
+Every schematic edit is a `POST /api/cmd` verb (new `Cmd` variants in
+`crates/ops/src/lib.rs`, one per action below), with undo/redo, that
+changes `design.json`'s `schematic` section — same contract the PCB side
+already has. Two pieces make connectivity itself stay a single source of
+truth (GAPS.md #1's hard rule):
+
+- `crates/kicad/src/sch_import.rs::reconcile` (already existed, for
+  reading a real `.kicad_sch` file) is now also `pub` and reused by
+  `crates/cli/src/board.rs::reconcile_schematic`, which runs after every
+  `Domain::Schematic` command (`Cmd::domain`): it retraces wire/label/
+  power-symbol/no-connect geometry with the same union-find and writes
+  the result back into `design.schematic`'s own `Wire::net`/`pins`,
+  `PowerSymbol::pin`, `NoConnect::pin` fields, and into a new
+  `Design::nets` field.
+- `crates/cli/src/board.rs::load` applies `design.nets` as an override on
+  top of the intent-derived `ConstraintModel::nets` *only when it is
+  `Some`* — i.e. only once a board has actually been hand-edited in the
+  studio. Every board in this project's own test/parity corpus has never
+  executed a schematic `Cmd`, so `design.nets` stays `None` for all of
+  them and `docs/parity/scores.json`'s ratchet is untouched.
+- A symbol placed with no intent counterpart (`AddSymbol`) gets a
+  synthesized `Part` the same way, so it shows up unplaced on the PCB tab
+  — `reconcile_schematic`'s own doc comment has the full mechanism.
+- Proven by `crates/cli/src/board.rs`'s
+  `schematic_wire_connects_and_disconnects_pins_on_one_netlist` test:
+  draws a wire between two previously-separate nets, asserts they merge
+  in `model.nets`, deletes the wire, asserts they split back apart.
+
+KiCad files stay derived: nothing above touches `.kicad_sch` export or
+the intent YAML file.
+
+## 1. Selection and move (`sch_selection_tool.cpp`, `sch_move_tool.cpp`, `sch_edit_tool.cpp`)
+
+| Action | Status | KiCad file:function |
+|---|---|---|
+| Click a symbol: select, replacing the current selection | identical | `sch_selection_tool.cpp::selectPoint` (`SchematicView.tsx::hitSymbol` + `kicad-port/selection.ts::applySingleClickModifier`) |
+| Shift+click: add to selection | identical | `common/tool/selection_tool.cpp` modifier table (`computeClickModifiers`, shared with the PCB port) |
+| Ctrl/Cmd+click: toggle (exclusive-or) | identical | same (confirmed `ctrlClickHighlights()` is off by default, same as pcbnew) |
+| Ctrl/Cmd+Shift+click: subtract | identical | same |
+| Box select, left→right = fully enclosed, right→left = crossing | identical for symbols | `common/tool/selection_tool.cpp::SelectRectArea` (`isCrossingSelection`, shared with the PCB port); `SchematicView.tsx::collectBoxSelection` |
+| Box select: wires (crossing = whole wire if touched at all; enclosed = both endpoints, or one if it's dangling) | missing (wires are not box-selectable yet) | `sch_selection_tool.cpp::SelectMultiple` lines ~2640-2666 — researched this session, not yet ported; see `collectBoxSelection`'s own doc |
+| Pins/junctions win ties over symbol body/wire at an exact hit | missing (no finer-than-symbol hit test yet) | `sch_selection_tool.cpp::GuessSelectionCandidates`/`narrowSelection` |
+| `M`: move (breaks wire connections — a wire's endpoint is a bare coordinate, not a pin reference) | identical | `sch_move_tool.cpp` (`setupItemsForDrag` never adds connected wires in MOVE mode); `Cmd::MoveSymbol`, `SchematicView.tsx`'s `moveMode` branch |
+| `G`: drag (attached wire endpoints rubber-band; new stub at an unselected 3-way junction) | missing — bound to plain Move for now rather than left as a dead key | `sch_move_tool.cpp::getConnectedDragItems`/`ptHasUnselectedJunction`. Backend verb (`Cmd::DragSymbol`, takes caller-resolved `(wire, point)` attachment pairs) exists; no frontend attachment-detection yet |
+| Grid snap during move | identical (grid only) | `edit_tool_move_fct.cpp` (`kicad-port/gridSnap.ts::alignToGrid`, reused) |
+| Anchor/pin snap during move | missing | `ee_grid_helper.cpp` — per-item-category grids + pin-anchor snap not ported; PCB side has the analogous gap too (`PARITY-pcb.md`) |
+| Escape cancels an in-progress move without touching the prior selection | identical | shared `ESCAPE` reducer case (already generic across tabs) |
+| `R`: rotate CCW | identical | `sch_edit_tool.cpp::Rotate` (confirmed default is CCW, not CW); `Cmd::RotateSymbol` |
+| Shift+`R`: rotate CW | identical | same function, `rotateCW` action |
+| R/Shift+R during an active move updates the live preview instead of committing separately | identical | `sch_move_tool.cpp::handleMoveToolActions` (`tryTransformDuringMove`, shared helper, now tab-aware) |
+| Rotate pivot: own anchor (single item) / collective bbox center (multi-select) | partial — only single-selection rotate is wired (one symbol id) | `sch_edit_tool.cpp::Rotate` |
+| `X`: mirror horizontally (negate-X, KiCad's `SYM_MIRROR_Y`) | identical | `sch_edit_tool.cpp::Mirror` (`mirrorH`); `Cmd::MirrorSymbol`, toggles `SymbolInstance::mirrored` |
+| `Y`: mirror vertically (negate-Y, `SYM_MIRROR_X`) | missing — the IR models one mirror axis only (`SymbolInstance::mirrored`, confirmed against `transform_local_point` to be the X/negate-X one) | `sch_edit_tool.cpp::Mirror` (`mirrorV`). Needs a second bool on `SymbolInstance` plus an axis-aware `transform_local_point`/painter.ts change — deferred to avoid widening a function `sch_import.rs` also depends on, under this session's time budget |
+| Mirror during an active move | missing | `sch_edit_tool.cpp::Mirror`'s own `IsMoving()` branch (asymmetric from Rotate's in source itself — no `updateStoredPositions()` call) |
+| `Del`: delete symbol, wires left dangling (no cascade) | identical | `sch_edit_tool.cpp::DoDelete` (confirmed: wires are never auto-deleted); `Cmd::DeleteSymbol`, `common.Interactive.delete`'s schematic branch |
+| `Del`: delete wire | identical (wire must already be selected via a modified click — see the box-select gap above) | `Cmd::DeleteWire` |
+| `E` Properties | missing | `sch_edit_tool.cpp::Properties` — dispatches to one of 6 different dialogs by item type; none built this session |
+| `U`/`V`/`F`: quick-edit Reference/Value/Footprint | missing | `sch_edit_tool.cpp::EditField`/`sch_actions.cpp` (confirmed `U` = reference, not "unit" — a wrong guess here would have mis-bound a hotkey) |
+| Click-vs-drag threshold (8px/300ms) | missing (same gap as the PCB side) | `common/tool/tool_dispatcher.cpp` (`DragDistanceThreshold`/`DragTimeThreshold`) |
+
+## 2. Wires, junctions, no-connects (`sch_line_wire_bus_tool.cpp`)
+
+Backend verbs exist and are tested (`Cmd::AddWire`/`DeleteWire`,
+`AddNoConnect`/`DeleteNoConnect`); no frontend drawing tool yet.
+
+| Action | Status | KiCad file:function |
+|---|---|---|
+| `W`: draw wire, 90°-posture default, click to bend, auto-finish on a pin/wire/junction | missing (frontend tool not built) | `sch_line_wire_bus_tool.cpp::doDrawSegments`/`startSegments`/`finishSegments` |
+| Shift+Space: cycle Free/90°/45° posture | missing | `SCH_ACTIONS::lineModeNext` |
+| Backspace: undo last in-progress segment | missing | `SCH_ACTIONS::undoLastSegment` |
+| Escape discards the whole in-progress wire | missing | `doDrawSegments`'s `cleanup()` |
+| Auto-junction at a T (3+ wire exit angles) | identical, **for connectivity** — the dot itself is drawn wherever 3+ wire endpoints/segments meet, computed live from geometry (`painter.ts::junctionPoints`, pre-existing); never a stored item, matching this project's own IR (no `junctions` field — see `Cmd::AddWire`'s own doc) | `junction_helpers.cpp::AnalyzePoint`; `reconcile`'s own T-junction union-find pass already gives correct electrical connectivity with or without a visible dot |
+| `J`: explicit junction at a plain crossing | missing (no stored concept to place one at — see above; connectivity is correct regardless, this is a cosmetic/explicit-marker gap only) | `SCH_DRAWING_TOOLS::SingleClickPlace` |
+| `Q`: no-connect flag, click to place/toggle | missing (frontend tool not built; backend verb ready) | same function, no-connect branch |
+| Wire merges two nets / delete splits them | identical | proven by this session's Rust test, see section 0 |
+
+## 3. Labels, text, power symbols, symbol placement (`sch_drawing_tools.cpp`)
+
+Backend verbs exist (`Cmd::AddLabel`/`DeleteLabel`,
+`AddPowerSymbol`/`DeletePowerSymbol`, `Cmd::AddSymbol`); no frontend tool
+yet.
+
+| Action | Status | KiCad file:function |
+|---|---|---|
+| `L`/Ctrl+`L`/`H`: place local/global/hierarchical label | missing | `SCH_DRAWING_TOOLS::TwoClickPlace`/`createNewLabel` |
+| `P`: place power symbol | missing | `SCH_DRAWING_TOOLS::PlaceSymbol` (power filter) |
+| `T`: place text | missing | `TwoClickPlace`/`createNewText` |
+| `A`: place symbol, via a chooser over the sheet's own `lib_symbols` | missing — no symbol-chooser dialog built | `SCH_DRAWING_TOOLS::PlaceSymbol` → `DIALOG_SYMBOL_CHOOSER` (recently-used/already-placed pseudo-libraries, live preview — not replicated; this app's own chooser should search the libraries the sheet already loads, per the task brief, rather than browse installed libraries) |
+| Placing a symbol with no intent counterpart adds a synthesized `Part`, shows up unplaced on PCB | identical | `reconcile_schematic`, see section 0 |
+
+## 4. ERC (gap #4) (`sch_inspection_tool.cpp`, `dialog_erc.cpp`)
+
+| Action | Status | KiCad file:function |
+|---|---|---|
+| Run ERC (menu item, no default hotkey) | identical | `SCH_INSPECTION_TOOL::RunERC`/`ShowERCDialog`; `eeschema.InspectionTool.runERC` → `ErcDialog.tsx`, `GET /api/erc` → `eda_kicad::check_erc` (unexposed before this session — GAPS.md #4) |
+| Results list: one row per finding, Errors/Warnings filter | identical in spirit, flatter structure | `dialog_erc.cpp` (`RC_TREE_MODEL`, flat list, not grouped by sheet — matches); `check_erc` reports plain `CheckResult`s (no item/position breakdown the way `DrcViolation` has), so `ErcDialog.tsx` is flatter than `DrcDialog.tsx` |
+| Click a row: cross-probe (select + pan/zoom to it) | partial — selects the named symbol and switches to the Schematic tab, but does not re-frame the view the way `DrcDialog.tsx`'s `jumpTo` zooms to a violation's exact point (no position data to zoom to — see above) | `DIALOG_ERC::OnERCItemSelected`/`FocusOnItem` |
+| Canvas markers independent of the dialog | missing | `SCH_MARKER` objects drawn via the normal VIEW; no canvas-marker rendering added this session |
+| Exclusions (persisted "accepted" findings) | missing | `SCHEMATIC::RecordERCExclusions`/`ERC_SETTINGS::m_ErcExclusions` — `eda_kicad::Exclusions` exists engine-side (`check_erc_excluding`) but nothing in studio.rs/the UI writes to it yet |
+
+## 5. Annotate
+
+| Action | Status | KiCad file:function |
+|---|---|---|
+| Assign reference designators to unannotated (`"U?"`-style) symbols, top-to-bottom then left-to-right, keep-vs-reset modes | backend only — `Cmd::Annotate { reset_existing }` implemented and exercised indirectly (no dedicated test yet); no menu entry or dialog wired | `dialog_annotate.cpp` (`INCREMENTAL_BY_REF`, `SORT_BY_Y_POSITION` default — this project's numbering starts at 1 per prefix, not KiCad's configurable start-at-0 default) |
+
+## 6. Cross-tab undo/redo (gap #15)
+
+| Action | Status | KiCad file:function |
+|---|---|---|
+| Ctrl+Z/Y on the Schematic tab only ever reverts/replays that tab's own edits (a clean no-op once its own stack is empty, never a silent PCB revert) | identical | Internal fix, no KiCad source counterpart (KiCad has genuinely separate editor processes/undo buffers; this app has one shared `design.json`). `crates/ops::Domain` + `Cmd::domain`, `crates/cli/src/board.rs`'s `push_snapshot`/`pop_snapshot`/`restore_domain` (tag each undo-stack entry by domain, splice only that domain's fields back on restore), `POST /api/undo`/`/api/redo`'s new `{"domain": ...}` body, `store.tsx`'s `api.undo`/`redo` (always pass `state.tab`). Proven by `board.rs`'s `undo_redo_are_scoped_to_the_tab_that_asked` test: one PCB edit + one schematic edit, every undo/redo combination checked. `eda board undo`/`redo` (CLI, no tab concept) keep the original unscoped behavior (`scope: None`) |
+
+## Manual click-through needed
+
+The in-app browser pane could not be used this session (hidden pane, per
+the task brief) — everything above is verified by `cargo test`/`npm run
+test:unit`/`typecheck`/`build` only. Before trusting this in real use,
+click through:
+
+1. Open the Schematic tab on a board with 2+ symbols. Click a symbol
+   (selects, highlights); Shift/Ctrl-click a second (adds/toggles); drag a
+   box around several (crossing vs. enclosed — drag direction matters).
+2. Press `M`, move the mouse (ghost should follow, snapped to the 1.27mm
+   grid), click to drop. Confirm `GET /api/schematic` now shows the new
+   position and the PCB tab's part (same ref) did *not* move.
+3. With a symbol selected, `R`/Shift+`R` a few times, then `X`. Confirm
+   the symbol visibly rotates/mirrors and the backend accepts it (no
+   toast error).
+4. Select a symbol, `M`, then `R` *mid-move* before clicking to drop —
+   confirm it rotates live and commits rotated-and-moved in one step.
+5. `Del` a symbol; confirm any wire that was touching its pins is now
+   drawn landing on nothing (dangling), not deleted itself.
+6. Make a PCB edit (e.g. nudge a footprint), switch to the Schematic tab,
+   move a symbol, then Ctrl+Z twice: first undo reverts the schematic
+   move only; second undo is a no-op (check the status toast), and the
+   PCB edit from step 1 is still there. Switch to the PCB tab and Ctrl+Z
+   — *that* reverts the PCB edit. This is the gap #15 regression test.
+7. Open the ERC dialog (menu — Inspect/wherever `MenuBar.tsx` surfaces
+   `eeschema.InspectionTool.runERC`) on a board with known ERC issues;
+   confirm the list is non-empty and matches roughly what `cargo run --
+   board erc` / `kicad-cli sch erc` would report; click a row and confirm
+   it selects a symbol and switches tabs.

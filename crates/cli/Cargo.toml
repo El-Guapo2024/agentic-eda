@@ -20,3 +20,4 @@ eda-judge = { path = "../judge" }
 eda-fab = { path = "../fab" }
 eda-drc = { path = "../drc" }
 eda-connectivity = { path = "../connectivity" }
+eda-kicad = { path = "../kicad" }

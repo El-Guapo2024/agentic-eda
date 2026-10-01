@@ -7,8 +7,8 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, Cmd, DrcReport, Part, Ratsnest, Schematic, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
-import { fetchDrc, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
+import type { BoardState, Cmd, DrcReport, ErcReport, Part, Ratsnest, Schematic, SchematicSymbol, SchematicWire, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
+import { fetchDrc, fetchErc, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
@@ -70,8 +70,8 @@ export interface ViewTransform {
 /** A part being dragged, previewed locally before `move_to` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
 export interface MovePreview {
   refs: string[];
-  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text: their own move_* by id). Defaults to "part" (every pre-existing caller moves parts). */
-  kind?: "part" | "via" | "shape" | "text";
+  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text: their own move_* by id; symbol: schematic move_symbol). Defaults to "part" (every pre-existing caller moves parts). */
+  kind?: "part" | "via" | "shape" | "text" | "symbol";
   dxUm: number;
   dyUm: number;
   /**
@@ -236,6 +236,16 @@ export interface StudioState {
   /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
   drcSelected: number | null;
 
+  ercDialogOpen: boolean;
+  /**
+   * GET /api/erc (crates/kicad's `check_erc`, gap #4 -- see api/client.ts's
+   * fetchErc) -- fetched only while `ercDialogOpen`, same reasoning as
+   * `drc`/`drcDialogOpen` above.
+   */
+  erc: ErcReport | null;
+  /** Index into `erc.violations` the dialog's list has clicked -- null selects nothing. */
+  ercSelected: number | null;
+
   /** Cmd+C's clipboard (Cmd-ready IR shapes, see components/canvas/clipboard.ts) -- client-side only, holds full item data so Cmd+V still works after the original was deleted, or pasted more than once. Null = nothing copied yet this session. */
   clipboard: ClipboardContents | null;
   /** Shift+M "Move Exactly..." dialog -- open with the selection's own default anchor/bbox already resolved (components/MoveExactDialog.tsx computes the rest). Null = closed. */
@@ -297,6 +307,9 @@ const initialState: StudioState = {
   ratsnest: null,
   drc: null,
   drcSelected: null,
+  ercDialogOpen: false,
+  erc: null,
+  ercSelected: null,
   clipboard: null,
   moveExactDialogOpen: false,
 };
@@ -354,6 +367,9 @@ export type Action =
   | { type: "RATSNEST_OK"; ratsnest: Ratsnest }
   | { type: "DRC_OK"; drc: DrcReport }
   | { type: "SET_DRC_SELECTED"; index: number | null }
+  | { type: "SET_ERC_DIALOG_OPEN"; open: boolean }
+  | { type: "ERC_OK"; erc: ErcReport }
+  | { type: "SET_ERC_SELECTED"; index: number | null }
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
@@ -508,6 +524,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drc: action.drc, drcSelected: null };
     case "SET_DRC_SELECTED":
       return { ...state, drcSelected: action.index };
+    case "SET_ERC_DIALOG_OPEN":
+      return { ...state, ercDialogOpen: action.open };
+    case "ERC_OK":
+      return { ...state, erc: action.erc, ercSelected: null };
+    case "SET_ERC_SELECTED":
+      return { ...state, ercSelected: action.index };
     case "SET_DRAW_STATE":
       return { ...state, drawState: action.draw };
     case "SET_ZONE_PENDING":
@@ -541,6 +563,14 @@ export interface StudioApi {
   zoneById: (id: string) => Zone | undefined;
   shapeById: (id: string) => Shape | undefined;
   textById: (id: string) => BoardText | undefined;
+  symbolById: (id: string) => SchematicSymbol | undefined;
+  wireById: (id: string) => SchematicWire | undefined;
+  /** R/Shift+R on the Schematic tab: rotate a symbol in place (quarterTurns: 1 = CCW/'R', 3 = CW/Shift+R, matching sch_edit_tool.cpp's own default). */
+  rotateSymbol: (id: string, quarterTurns: number) => Promise<void>;
+  /** X on the Schematic tab ("Mirror Horizontally") -- see `Cmd::MirrorSymbol`'s own doc on why this is the one axis wired. */
+  mirrorSymbol: (id: string) => Promise<void>;
+  /** Del on the Schematic tab: removes the symbol instance; any wire landed on its pins is left dangling, same as real eeschema. */
+  deleteSymbol: (id: string) => Promise<void>;
   /** Any other Cmd this file doesn't have a named wrapper for (the delete_ ops, set_track_width, edit_text, ...) -- returns whether the backend accepted it, same as every named wrapper's underlying runCmd. */
   cmd: (c: Cmd) => Promise<boolean>;
   /**
@@ -605,6 +635,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshErc = useCallback(async () => {
+    try {
+      const erc = await fetchErc();
+      dispatch({ type: "ERC_OK", erc });
+    } catch {
+      // same reasoning as refreshDrc -- keep the last good report.
+    }
+  }, []);
+
   // Poll /api/version (cheap) and only refetch the full /api/state when it
   // changes -- mirrors the old studio.html poll loop so CLI edits and
   // other browser tabs show up here within ~1s without hammering the
@@ -619,6 +658,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     let lastSchematicFetch: string | null = null;
     let lastRatsnestFetch: string | null = null;
     let lastDrcFetch: string | null = null;
+    let lastErcFetch: string | null = null;
     const tick = async () => {
       try {
         const v = await fetchVersion();
@@ -644,6 +684,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           lastDrcFetch = v;
           await refreshDrc();
         }
+        // Same reasoning as DRC above -- ERC overlays whichever tab is
+        // showing (normally the Schematic one, but nothing stops running
+        // it from the PCB tab), gated on the dialog, not a tab.
+        if (stateRef.current.ercDialogOpen && lastErcFetch !== v) {
+          lastErcFetch = v;
+          await refreshErc();
+        }
       } catch {
         // backend restarting or unreachable; try again next tick
       }
@@ -654,7 +701,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       stopped = true;
       clearInterval(id);
     };
-  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc]);
+  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc, refreshErc]);
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {
@@ -674,6 +721,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     zoneById: (id) => stateRef.current.board?.routing?.zones.find((z) => z.id === id),
     shapeById: (id) => stateRef.current.board?.drawings?.shapes.find((s) => s.id === id),
     textById: (id) => stateRef.current.board?.drawings?.texts.find((t) => t.id === id),
+    symbolById: (id) => stateRef.current.schematic?.symbols.find((s) => s.id === id),
+    wireById: (id) => stateRef.current.schematic?.wires.find((w) => w.id === id),
+    rotateSymbol: async (id, quarterTurns) => {
+      await runCmd({ op: "rotate_symbol", id, quarter_turns: ((quarterTurns % 4) + 4) % 4 });
+    },
+    mirrorSymbol: async (id) => {
+      await runCmd({ op: "mirror_symbol", id });
+    },
+    deleteSymbol: async (id) => {
+      dispatch({ type: "CLEAR_SELECTION" });
+      await runCmd({ op: "delete_symbol", id });
+    },
     cmd: (c) => runCmd(c),
     rotateSelection: async (quarterTurns) => {
       for (const ref of stateRef.current.selection) {
@@ -713,6 +772,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         } else if (kind === "text") {
           const t = api.textById(ref);
           if (t) await runCmd({ op: "move_text", id: ref, x: t.x + dxUm, y: t.y + dyUm });
+        } else if (kind === "symbol") {
+          const s = api.symbolById(ref);
+          if (s) await runCmd({ op: "move_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm });
+          // sch_edit_tool.cpp's R/Shift+R-during-move branch (see
+          // useActionRunner.ts's tryTransformDuringMove): applied after
+          // the move, same reasoning commitMove's own doc comment gives
+          // for parts -- rotating about the symbol's own (already-moved)
+          // anchor lands on the same final pose as a live in-place spin.
+          if (rotateQuarterTurns) await runCmd({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
         }
       }
     },
@@ -728,15 +796,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "TOAST", message: reply.message, kind: reply.ok ? "info" : "error" });
       await refresh();
     },
+    // Scoped to the tab that asked (GAPS.md #15): Ctrl+Z while looking at
+    // the Schematic tab reverts that tab's own last edit (or is a no-op
+    // once its stack is empty), never the PCB tab's, and vice versa -- see
+    // `postUndo`/`board::undo`'s own doc for the backend half of this.
     undo: async () => {
       dispatch({ type: "CLEAR_SELECTION" });
-      const reply = await postUndo();
+      const reply = await postUndo(stateRef.current.tab === "schematic" ? "schematic" : "pcb");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
     },
     redo: async () => {
       dispatch({ type: "CLEAR_SELECTION" });
-      const reply = await postRedo();
+      const reply = await postRedo(stateRef.current.tab === "schematic" ? "schematic" : "pcb");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
     },

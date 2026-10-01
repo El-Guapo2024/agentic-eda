@@ -71,7 +71,12 @@ export function useActionRunner() {
       const refs = state.movePreview?.refs ?? [...state.selection];
       if (refs.length === 0) return false;
       const first = refs[0]!;
-      const kind = state.movePreview?.kind ?? (api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
+      // The Schematic tab's only moveable kind is a symbol -- checked
+      // first so a ref that happens to share an id with nothing on the
+      // PCB side (every schematic symbol's id IS a part reference, so
+      // api.partByRef would also resolve on the Schematic tab) still
+      // lands on "symbol", not "part".
+      const kind = state.movePreview?.kind ?? (state.tab === "schematic" ? "symbol" : api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
       const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0 };
       const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
@@ -91,20 +96,24 @@ export function useActionRunner() {
         if (!tryTransformDuringMove(3, false)) api.rotateSelection(3);
       })
     );
-    m.set(
-      "common.Interactive.delete",
-      pcbOnly(() => {
-        // One selection can only ever be one kind of thing at a time in
-        // practice (Canvas.tsx's hit-testing always replaces the
-        // selection with a single item; shift-click can still mix kinds
-        // by accumulating them), so this deletes each ref through
-        // whichever Cmd actually matches what it is, rather than
-        // assuming "selection" always means "footprints" the way
-        // ripSelection alone did before tracks/vias/zones/shapes/text
-        // existed to select at all.
-        const refs = [...state.selection];
-        dispatch({ type: "CLEAR_SELECTION" });
-        for (const id of refs) {
+    m.set("common.Interactive.delete", () => {
+      // One selection can only ever be one kind of thing at a time in
+      // practice (Canvas.tsx/SchematicView.tsx's hit-testing always
+      // replaces the selection with a single item; shift-click can still
+      // mix kinds by accumulating them), so this deletes each ref through
+      // whichever Cmd actually matches what it is. Tab-scoped the same
+      // way `common.Interactive.undo`/`redo` are now scoped (GAPS.md
+      // #15): a schematic ref deleted from the PCB tab, or vice versa,
+      // would otherwise be a silent no-op that still cleared the
+      // selection -- same bug shape as the undo one, if either tab's
+      // branch ran unconditionally.
+      const refs = [...state.selection];
+      dispatch({ type: "CLEAR_SELECTION" });
+      for (const id of refs) {
+        if (state.tab === "schematic") {
+          if (api.symbolById(id)) api.deleteSymbol(id);
+          else if (api.wireById(id)) api.cmd({ op: "delete_wire", id });
+        } else if (state.tab === "pcb") {
           if (api.trackById(id)) api.cmd({ op: "delete_track", id });
           else if (api.viaById(id)) api.cmd({ op: "delete_via", id });
           else if (api.zoneById(id)) api.cmd({ op: "delete_zone", id });
@@ -112,8 +121,8 @@ export function useActionRunner() {
           else if (api.textById(id)) api.cmd({ op: "delete_text", id });
           else if (api.partByRef(id)?.placed) api.cmd({ op: "rip", part: id });
         }
-      })
-    );
+      }
+    });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
     // AttemptFinish's while actively routing -- KiCad's own tool stack
     // resolves this by context (which tool currently owns the keyboard),
@@ -498,6 +507,58 @@ export function useActionRunner() {
       })
     );
     m.set("common.Interactive.unselectAll", pcbOnly(() => dispatch({ type: "SET_SELECTION", refs: [] })));
+
+    // ---------------------------------------------------------- eeschema
+    //
+    // Mirrors the `pcbOnly` guard above -- a stray M/R/X/Del while looking
+    // at the PCB tab must never reach a schematic Cmd, same reasoning.
+    const schematicOnly =
+      <Args extends unknown[]>(fn: (...args: Args) => void) =>
+      (...args: Args) => {
+        if (state.tab === "schematic") fn(...args);
+      };
+
+    m.set(
+      "eeschema.InteractiveMove.move",
+      schematicOnly(() => {
+        const first = [...state.selection][0];
+        if (!first || !api.symbolById(first)) return;
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
+      })
+    );
+    // `G` (drag, with wire rubber-banding) isn't ported yet -- see
+    // PARITY-sch.md. Bound to plain Move for now (better than a dead key)
+    // rather than left silently unregistered.
+    m.set("eeschema.InteractiveMove.drag", schematicOnly(() => m.get("eeschema.InteractiveMove.move")?.()));
+
+    m.set(
+      "eeschema.InteractiveEdit.rotateCCW",
+      schematicOnly(() => {
+        if (tryTransformDuringMove(1, false)) return;
+        const id = [...state.selection][0];
+        if (id && api.symbolById(id)) api.rotateSymbol(id, 1);
+      })
+    );
+    m.set(
+      "eeschema.InteractiveEdit.rotateCW",
+      schematicOnly(() => {
+        if (tryTransformDuringMove(3, false)) return;
+        const id = [...state.selection][0];
+        if (id && api.symbolById(id)) api.rotateSymbol(id, 3);
+      })
+    );
+    // `Y` (Mirror Vertically) has no IR field to toggle yet -- see
+    // `Cmd::MirrorSymbol`'s own doc -- so only `X` is wired.
+    m.set(
+      "eeschema.InteractiveEdit.mirrorH",
+      schematicOnly(() => {
+        const id = [...state.selection][0];
+        if (id && api.symbolById(id)) api.mirrorSymbol(id);
+      })
+    );
+
+    m.set("eeschema.InspectionTool.runERC", () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: true }));
 
     return m;
   }, [api, dispatch, state]);

@@ -1117,7 +1117,7 @@ mod tests {
                 seed: 0,
                 stage_hashes: vec![],
             },
-            schematic: None,
+            schematic: None, nets: None,
             placement: None,
             routing: None,
             drawings: None,

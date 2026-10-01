@@ -262,6 +262,7 @@ mod tests {
             schema: 1,
             provenance: crate::ir::Provenance { engine_version: "0".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
             schematic: None,
+            nets: None,
             placement: Some(crate::ir::PlacementSection { outline: Vec::new(), footprints: Vec::new(), modules: Vec::new() }),
             routing: None,
             drawings: None,

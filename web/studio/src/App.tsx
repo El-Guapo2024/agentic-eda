@@ -11,6 +11,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Canvas } from "./components/canvas/Canvas";
 import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
+import { ErcDialog } from "./components/ErcDialog";
 import { HotkeysDialog } from "./components/HotkeysDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
@@ -131,6 +132,7 @@ function StudioFrame() {
         <StatusBar />
       </div>
       <DrcDialog />
+      <ErcDialog />
       <HotkeysDialog />
       <FootprintPropertiesDialog />
       <NetInspectorDialog />

@@ -289,7 +289,33 @@ export type Cmd =
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */
-  | { op: "move_exact"; parts: string[]; dx: Um; dy: Um; rotate_millideg: number; pivot: PointXY | null };
+  | { op: "move_exact"; parts: string[]; dx: Um; dy: Um; rotate_millideg: number; pivot: PointXY | null }
+
+  // -------------------------------------------------------- eeschema
+  // crates/ops/src/lib.rs's eeschema `Cmd` variants -- see that enum's
+  // own doc comment for what each hotkey/tool sends. `rot_millideg`
+  // (not `rot`) on purpose, same convention `move_exact`'s own
+  // `rotate_millideg` already set: a write-side angle is always named
+  // for its unit, since the read side (`SchematicSymbol.rot`, `Degrees`)
+  // uses plain degrees instead.
+  | { op: "move_symbol"; id: string; x: Um; y: Um }
+  | { op: "drag_symbol"; id: string; x: Um; y: Um; attached_wire_endpoints: [number, number][] }
+  | { op: "rotate_symbol"; id: string; quarter_turns: number }
+  | { op: "mirror_symbol"; id: string }
+  | { op: "delete_symbol"; id: string }
+  | { op: "add_wire"; pts: PointXY[] }
+  | { op: "delete_wire"; id: string }
+  | { op: "add_no_connect"; at: PointXY }
+  | { op: "delete_no_connect"; id: string }
+  | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
+  | { op: "delete_label"; id: string }
+  | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
+  | { op: "delete_power_symbol"; id: string }
+  | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string }
+  | { op: "annotate"; reset_existing: boolean };
+
+/** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
+export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
 
 export interface CmdReply {
   ok: boolean;
@@ -472,6 +498,8 @@ export interface PowerSymbol {
 }
 
 export interface NoConnect {
+  /** Stable id (`nc_xxxxxxxxxxxx`) -- for `delete_no_connect`. */
+  id: string;
   at: [Um, Um];
 }
 
@@ -480,6 +508,8 @@ export type LabelScope = "local" | "global" | "hierarchical";
 export type LabelShape = "input" | "output" | "bidirectional" | "tri_state" | "passive";
 
 export interface SchematicWire {
+  /** Stable id (`wire_xxxxxxxxxxxx`) -- for `delete_wire`/selecting this one wire. */
+  id: string;
   net: string;
   /** "REF.PIN" refs this wire lands on. */
   pins: string[];
@@ -487,6 +517,8 @@ export interface SchematicWire {
 }
 
 export interface SchematicLabel {
+  /** Stable id (`lbl_xxxxxxxxxxxx`) -- for `delete_label`. */
+  id: string;
   net: string;
   at: [Um, Um];
   scope: LabelScope;
@@ -556,5 +588,32 @@ export interface DrcViolation {
 export interface DrcReport {
   violations: DrcViolation[];
   /** Violation count by `type`. */
+  counts: Record<string, number>;
+}
+
+// ---------------------------------------------------------------- ERC
+//
+// GET /api/erc. Source of truth: crates/cli/src/studio.rs `erc_json()`,
+// crates/kicad/src/erc.rs `check_erc`. Flatter than `DrcReport`: ERC
+// reports plain `CheckResult`s, not DRC's richer positioned-item list --
+// `location` is a "REF" or "REF.PIN" string (an id into `Schematic.
+// symbols`/pin, not a sheet coordinate), which `ErcDialog.tsx` resolves
+// back to something selectable/panable itself rather than reading a
+// ready-made position the way DRC's `DrcItem.pos` gives one.
+
+export type ErcSeverity = "error" | "warning";
+
+export interface ErcViolation {
+  /** `eda_kicad::erc`'s own check name ("pin_not_connected", "wire_dangling", ...) -- real KiCad's own ERC type names, per `kicad-cli sch erc`'s report. */
+  check: string;
+  severity: ErcSeverity;
+  /** "U1" or "U1.3" (REF or REF.PIN) when the finding is about one symbol/pin; otherwise whatever `CheckResult::location` carries ("design", a net name, ...), or null. */
+  location: string | null;
+  hint: string | null;
+}
+
+export interface ErcReport {
+  violations: ErcViolation[];
+  /** Violation count by `check`. */
   counts: Record<string, number>;
 }

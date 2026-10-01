@@ -36,7 +36,7 @@ fn place_one() {
     let design = Design {
         schema: 1,
         provenance: eda_model::ir::Provenance { engine_version: "diag".into(), intent_hash: "x".into(), seed, stage_hashes: vec![] },
-        schematic: None,
+        schematic: None, nets: None,
         placement: None,
         routing: None,
         drawings: None,

@@ -1429,7 +1429,7 @@ mod tests {
     }
 
     fn design(sch: SchematicSection) -> Design {
-        Design { schema: 1, provenance: provenance(), schematic: Some(sch), placement: None, routing: None, drawings: None }
+        Design { schema: 1, provenance: provenance(), schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None }
     }
 
     /// One part: a 2-pin passive with pins at Left(offset 1270)/Right
@@ -1488,7 +1488,7 @@ mod tests {
         let model = one_part_model();
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
-            wires: vec![Wire { net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }, IrPoint { x: 1270, y: 1270 }] }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }, IrPoint { x: 1270, y: 1270 }] }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1500,7 +1500,7 @@ mod tests {
         let model = one_part_model();
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
-            wires: vec![Wire { net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 1270 }] }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 1270 }] }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1538,7 +1538,7 @@ mod tests {
         let model = one_part_model();
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
-            wires: vec![Wire { net: "N".into(), pins: vec![], pts: vec![IrPoint { x: -5000, y: -5000 }, IrPoint { x: -5000, y: -6000 }] }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: -5000, y: -5000 }, IrPoint { x: -5000, y: -6000 }] }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1553,7 +1553,7 @@ mod tests {
         let mid_y = (top + bottom) / 2;
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
-            wires: vec![Wire { net: "N".into(), pins: vec![], pts: vec![IrPoint { x: left - 100, y: mid_y }, IrPoint { x: right + 100, y: mid_y }] }],
+            wires: vec![Wire { id: String::new(), net: "N".into(), pins: vec![], pts: vec![IrPoint { x: left - 100, y: mid_y }, IrPoint { x: right + 100, y: mid_y }] }],
             labels: vec![],
         };
         let results = check_style(&design(sch), &model);
@@ -1593,7 +1593,7 @@ mod tests {
                 SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "J2".into(), at: IrPoint { x: 12700, y: 0 }, rot: 0, mirrored: false },
                 SymbolInstance { lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), id: "U1".into(), at: IrPoint { x: u1_x, y: 0 }, rot: 0, mirrored: false },
             ],
-            wires: vec![Wire {
+            wires: vec![Wire { id: String::new(),
                 net: "SIG".into(),
                 pins: vec!["J1.1".into(), "J2.1".into(), "U1.1".into()],
                 pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 25400, y: 0 }],
@@ -1625,7 +1625,7 @@ mod tests {
         // A wire stretching the extent out to ~1:1 keeps the sheet in shape.
         let square = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
-            wires: vec![Wire {
+            wires: vec![Wire { id: String::new(),
                 net: "N".into(),
                 pins: vec![],
                 pts: vec![IrPoint { x: left, y: top }, IrPoint { x: left + 4 * w, y: top }, IrPoint { x: left + 4 * w, y: top + 4 * w }],
@@ -1638,7 +1638,7 @@ mod tests {
         // The same extent stretched only downward is a tall ribbon.
         let ribbon = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
-            wires: vec![Wire {
+            wires: vec![Wire { id: String::new(),
                 net: "N".into(),
                 pins: vec![],
                 pts: vec![IrPoint { x: left, y: top }, IrPoint { x: left, y: top + 40 * w }],
@@ -1659,7 +1659,7 @@ mod tests {
         let p2 = geo.stub_tip_for_pin_number("2").unwrap();
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
-            wires: vec![Wire {
+            wires: vec![Wire { id: String::new(),
                 net: "N".into(),
                 pins: vec!["R1.1".into(), "R1.2".into()],
                 pts: vec![IrPoint { x: p1.x, y: p1.y }, IrPoint { x: p2.x, y: p2.y }],
@@ -1678,7 +1678,7 @@ mod tests {
         let p2 = geo.stub_tip_for_pin_number("2").unwrap();
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })],
-            wires: vec![Wire {
+            wires: vec![Wire { id: String::new(),
                 net: "N".into(),
                 pins: vec!["R1.1".into(), "R1.2".into()],
                 // first point is on the box boundary, not the stub tip.
@@ -1699,13 +1699,13 @@ mod tests {
             symbols: vec![],
             wires: vec![
                 // A: horizontal 0..1270 at y=0
-                Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }] },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }] },
                 // B: horizontal 1270..2540 at y=0 -- only touches A at a point.
-                Wire { net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 2540, y: 0 }] },
+                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 2540, y: 0 }] },
                 // C: horizontal at y=1270 (offset, parallel but not collinear).
-                Wire { net: "C".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 1270 }, IrPoint { x: 1270, y: 1270 }] },
+                Wire { id: String::new(), net: "C".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 1270 }, IrPoint { x: 1270, y: 1270 }] },
                 // D: vertical crossing A, not collinear.
-                Wire { net: "D".into(), pins: vec![], pts: vec![IrPoint { x: 600, y: -600 }, IrPoint { x: 600, y: 600 }] },
+                Wire { id: String::new(), net: "D".into(), pins: vec![], pts: vec![IrPoint { x: 600, y: -600 }, IrPoint { x: 600, y: 600 }] },
             ],
             labels: vec![],
         };
@@ -1719,9 +1719,9 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
-                Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2540, y: 0 }] },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2540, y: 0 }] },
                 // Overlaps A over x in [1270, 2540].
-                Wire { net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 3810, y: 0 }] },
+                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 3810, y: 0 }] },
             ],
             labels: vec![],
         };
@@ -1735,8 +1735,8 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
-                Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2540, y: 0 }] },
-                Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 3810, y: 0 }] },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 2540, y: 0 }] },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 1270, y: 0 }, IrPoint { x: 3810, y: 0 }] },
             ],
             labels: vec![],
         };
@@ -1752,8 +1752,8 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
-                Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }] },
-                Wire { net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 5080 }, IrPoint { x: 1270, y: 5080 }] },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 0 }, IrPoint { x: 1270, y: 0 }] },
+                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: 5080 }, IrPoint { x: 1270, y: 5080 }] },
             ],
             labels: vec![],
         };
@@ -1769,8 +1769,8 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![
-                Wire { net: "A".into(), pins: vec![], pts: vec![IrPoint { x: -1270, y: 0 }, IrPoint { x: 1270, y: 0 }] },
-                Wire { net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: -1270 }, IrPoint { x: 0, y: 1270 }] },
+                Wire { id: String::new(), net: "A".into(), pins: vec![], pts: vec![IrPoint { x: -1270, y: 0 }, IrPoint { x: 1270, y: 0 }] },
+                Wire { id: String::new(), net: "B".into(), pins: vec![], pts: vec![IrPoint { x: 0, y: -1270 }, IrPoint { x: 0, y: 1270 }] },
             ],
             labels: vec![],
         };
@@ -1798,7 +1798,7 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![],
             symbols: vec![],
             wires: vec![],
-            labels: vec![NetLabel { kind: eda_model::ir::LabelKind::Local, net: "GND".into(), at: IrPoint { x: 3, y: 7 } }],
+            labels: vec![NetLabel { id: String::new(), kind: eda_model::ir::LabelKind::Local, net: "GND".into(), at: IrPoint { x: 3, y: 7 } }],
         };
         let results = check_style(&design(sch), &model);
         assert!(results.iter().all(|r| r.check != "schematic_offgrid" || r.status == CheckStatus::Pass));

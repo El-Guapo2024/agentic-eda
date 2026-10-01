@@ -467,6 +467,7 @@ mod tests {
                 wires: vec![],
                 labels: vec![],
             }),
+            nets: None,
             placement: None,
             routing: None,
             drawings: None,
@@ -578,6 +579,7 @@ mod tests {
         let m = model();
         let mut d = design();
         d.schematic.as_mut().unwrap().wires.push(eda_model::ir::Wire {
+            id: String::new(),
             net: "VIN".into(),
             pins: vec![],
             pts: vec![Point { x: 1_000, y: 2_000 }, Point { x: 3_000, y: 2_000 }],
