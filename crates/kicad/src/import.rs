@@ -275,7 +275,46 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
             Some(NetClass { name, nets, track_width, clearance, via_diameter, via_drill, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 })
         })
         .collect();
+    import_legacy_setup_minimums(root, &mut board);
     board
+}
+
+/// Board-wide *minimum* constraints (`BOARD_DESIGN_SETTINGS`'s `rules.min_*`
+/// -- see [`merge_project_design_rules`]'s doc comment for the nominal-vs-
+/// minimum distinction this is one half of) from a bare `.kicad_pcb`'s own
+/// legacy `(setup ...)` block -- the pre-KiCad-7 tokens
+/// `PCB_IO_KICAD_SEXPR_PARSER::parseSetup` still reads for a file saved
+/// before board design settings moved into the sidecar `.kicad_pro`
+/// (`pcb_io_kicad_sexpr_parser.cpp`'s `T_trace_min`/`T_clearance_min`/
+/// `T_via_min_size`/`T_through_hole_min`/`T_via_min_drill`/
+/// `T_hole_to_hole_min`/`T_via_min_annulus` cases, read directly from the
+/// source). A modern multi-file project typically has none of these at all
+/// (confirmed empirically against the QA corpus: a current `.kicad_pcb`'s
+/// `(setup ...)` carries stackup/mask/zone defaults, never these) -- in
+/// that case [`merge_project_design_rules`] is the real source and should
+/// run after this, same ordering as net classes
+/// ([`merge_project_net_classes`]'s own doc comment).
+fn import_legacy_setup_minimums(root: &[Sexpr], board: &mut BoardRules) {
+    let Some(setup) = sexpr::find(root, "setup") else { return };
+    if let Some(v) = sexpr::find(setup, "trace_min").and_then(|f| sexpr::num(f, 1)) {
+        board.track_width_min_um = mm_to_um(v);
+    }
+    if let Some(v) = sexpr::find(setup, "clearance_min").and_then(|f| sexpr::num(f, 1)) {
+        board.min_clearance_um = mm_to_um(v);
+    }
+    if let Some(v) = sexpr::find(setup, "via_min_size").and_then(|f| sexpr::num(f, 1)) {
+        board.via_diameter_min_um = mm_to_um(v);
+    }
+    let through_hole_min = sexpr::find(setup, "through_hole_min").or_else(|| sexpr::find(setup, "via_min_drill"));
+    if let Some(v) = through_hole_min.and_then(|f| sexpr::num(f, 1)) {
+        board.via_drill_min_um = mm_to_um(v);
+    }
+    if let Some(v) = sexpr::find(setup, "hole_to_hole_min").and_then(|f| sexpr::num(f, 1)) {
+        board.hole_to_hole_min_um = mm_to_um(v);
+    }
+    if let Some(v) = sexpr::find(setup, "via_min_annulus").and_then(|f| sexpr::num(f, 1)) {
+        board.annular_width_min_um = mm_to_um(v);
+    }
 }
 
 /// A KiCad 7+ project's real net-class source: `net_settings.classes[]` +
@@ -389,6 +428,66 @@ pub fn merge_project_net_classes(model: &mut eda_model::ConstraintModel, project
     if !project_classes.is_empty() {
         project_classes.append(&mut model.board.net_classes);
         model.board.net_classes = project_classes;
+    }
+}
+
+/// Merge a `.kicad_pro`'s `board.design_settings.rules` object -- the
+/// absolute board-wide *minimums* `DRC_ENGINE::loadImplicitRules`'s "board
+/// setup constraints" implicit rule reads straight from
+/// `BOARD_DESIGN_SETTINGS` (`pcbnew/board_design_settings.cpp`'s
+/// `rules.min_*` `PARAM_SCALED` entries, confirmed directly against the
+/// source) -- entirely distinct from a net class's own nominal width/
+/// clearance/via size ([`parse_project_net_classes`]/[`merge_project_net_classes`]),
+/// which only ever sets the *default*/`Opt` value a new route or via is
+/// drawn at, never the `Min` a DRC check enforces. Conflating the two was
+/// GAPS.md #10: this crate used to have no field at all for
+/// `rules.min_track_width` and checked every track against its net
+/// class's (often much larger) nominal width instead, which alone produced
+/// ~2900 false `track_width` positives on one QA-corpus board
+/// (`issue11814`). Same "absent/unrecognized JSON is a no-op, never an
+/// error" convention as this module's other `.kicad_pro` readers; a
+/// caller with both files should call this after [`import_kicad_pcb`],
+/// same ordering as [`merge_project_net_classes`]/[`merge_project_rule_severities`]
+/// (and after those two, in practice -- order does not matter between
+/// these three, since each only ever touches its own fields).
+pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, project_json: &str) {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else {
+        return;
+    };
+    let Some(rules) = root.get("board").and_then(|b| b.get("design_settings")).and_then(|d| d.get("rules")) else {
+        return;
+    };
+    let mm = |key: &str| rules.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+    let b = &mut model.board;
+    if let Some(v) = mm("min_track_width") {
+        b.track_width_min_um = v;
+    }
+    if let Some(v) = mm("min_clearance") {
+        b.min_clearance_um = v;
+    }
+    if let Some(v) = mm("min_via_diameter") {
+        b.via_diameter_min_um = v;
+    }
+    if let Some(v) = mm("min_through_hole_diameter") {
+        b.via_drill_min_um = v;
+    }
+    if let Some(v) = mm("min_hole_to_hole") {
+        b.hole_to_hole_min_um = v;
+    }
+    if let Some(v) = mm("min_hole_clearance") {
+        b.hole_clearance_um = v;
+    }
+    if let Some(v) = mm("min_via_annular_width") {
+        b.annular_width_min_um = v;
+    }
+    if let Some(v) = mm("min_silk_clearance") {
+        b.silk_clearance_um = v;
+    }
+    if let Some(v) = mm("min_text_height") {
+        b.min_silk_text_height_um = v;
+    }
+    if let Some(v) = mm("min_text_thickness") {
+        b.min_silk_text_thickness_um = v;
     }
 }
 
@@ -1036,6 +1135,84 @@ mod tests {
         assert!(parse_project_net_classes("not json").is_empty());
         assert!(parse_project_net_classes("{}").is_empty());
         assert!(parse_project_net_classes(r#"{"net_settings": {}}"#).is_empty());
+    }
+
+    /// Shape confirmed against a real `.kicad_pro` in the KiCad QA corpus
+    /// (`issue11814.kicad_pro`'s `board.design_settings.rules`),
+    /// field-for-field -- note this board's own `min_track_width`
+    /// (0.1016mm) is deliberately *smaller* than its `net_settings`
+    /// Default class's nominal `track_width` (0.1524mm, GAPS.md #10's
+    /// exact shape): [`merge_project_design_rules`] must read the former,
+    /// never the latter.
+    const SAMPLE_DESIGN_RULES_JSON: &str = r#"{
+        "board": {
+            "design_settings": {
+                "rules": {
+                    "min_clearance": 0.0,
+                    "min_copper_edge_clearance": 0.25,
+                    "min_hole_clearance": 0.254,
+                    "min_hole_to_hole": 0.25,
+                    "min_silk_clearance": 0.15,
+                    "min_text_height": 0.8,
+                    "min_text_thickness": 0.12,
+                    "min_through_hole_diameter": 0.2,
+                    "min_track_width": 0.1016,
+                    "min_via_annular_width": 0.125,
+                    "min_via_diameter": 0.45
+                }
+            }
+        }
+    }"#;
+
+    #[test]
+    fn merge_project_design_rules_reads_the_board_wide_minimums() {
+        let mut model = eda_model::ConstraintModel::default();
+        merge_project_design_rules(&mut model, SAMPLE_DESIGN_RULES_JSON);
+        assert_eq!(model.board.track_width_min_um, 102, "0.1016mm rounds to 102um");
+        assert_eq!(model.board.min_clearance_um, 0);
+        assert_eq!(model.board.via_diameter_min_um, 450);
+        assert_eq!(model.board.via_drill_min_um, 200);
+        assert_eq!(model.board.hole_to_hole_min_um, 250);
+        assert_eq!(model.board.hole_clearance_um, 254);
+        assert_eq!(model.board.annular_width_min_um, 125);
+        assert_eq!(model.board.silk_clearance_um, 150);
+        assert_eq!(model.board.min_silk_text_height_um, 800);
+        assert_eq!(model.board.min_silk_text_thickness_um, 120);
+    }
+
+    #[test]
+    fn merge_project_design_rules_is_a_no_op_without_a_rules_object() {
+        let mut model = eda_model::ConstraintModel::default();
+        let before = model.board.clone();
+        merge_project_design_rules(&mut model, SAMPLE_PROJECT_JSON); // has net_settings but no board.design_settings.rules
+        assert_eq!(model.board, before);
+        merge_project_design_rules(&mut model, "not json");
+        assert_eq!(model.board, before);
+    }
+
+    /// The pre-KiCad-7 fallback path: a bare `.kicad_pcb` with no sidecar
+    /// `.kicad_pro` can still carry these as legacy `(setup ...)` tokens.
+    #[test]
+    fn legacy_setup_minimums_are_imported() {
+        let text = r#"(kicad_pcb (version 20221018) (generator "pcbnew")
+            (setup
+                (trace_min 0.15)
+                (clearance_min 0.1)
+                (via_min_size 0.4)
+                (via_min_drill 0.25)
+                (hole_to_hole_min 0.2)
+                (via_min_annulus 0.09)
+            )
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (net 0 "")
+        )"#;
+        let (_design, model, _notes) = import_kicad_pcb(text).expect("parses");
+        assert_eq!(model.board.track_width_min_um, 150);
+        assert_eq!(model.board.min_clearance_um, 100);
+        assert_eq!(model.board.via_diameter_min_um, 400);
+        assert_eq!(model.board.via_drill_min_um, 250, "falls back to the legacy via_min_drill token when through_hole_min is absent");
+        assert_eq!(model.board.hole_to_hole_min_um, 200);
+        assert_eq!(model.board.annular_width_min_um, 90);
     }
 
     #[test]

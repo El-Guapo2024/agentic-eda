@@ -241,19 +241,25 @@ def render_report(drc, erc, conn, rt, scores):
                       f"`{', '.join(drc.get('not_in_scope', []))}` excluded here -- measured instead under Connectivity.\n")
         lines.append(f"**Overall precision: {fmt(drc['precision'])}, recall: {fmt(drc['recall'])}.**\n")
         lines.append(
-            "_Reading this number_: precision is low enough to call out specifically, and it isn't evenly spread. "
-            "`tracks_crossing` is 0 on the KiCad side across every one of these boards but 1567 on ours -- a 100% "
-            "disagreement rate for that one check, which looks like a real correctness bug rather than a tolerance "
-            "or scope difference (see GAPS.md #3). `hole_clearance` has zero *matched* instances despite 179/633 "
-            "raw counts -- the positions disagree every time, not just the totals (a same-net exclusion bug that "
-            "inflated the raw count further was fixed this round; the remaining zero-match issue is a separate "
-            "position/scope mismatch, still open). Several clearance-family checks (`clearance`, `track_width`, "
-            "`shorting_items`, `silk_over_copper`) over-fire 2-7x -- down from 4-10x before real per-net/netclass "
-            "rules were imported from the sidecar `.kicad_pro`, but still consistent with remaining gaps in how "
-            "`import_kicad_pcb` resolves per-net overrides (GAPS.md #10). Three of the four "
-            "`examples/ladder/*.yaml` rungs are additionally missing from these totals entirely (load-sensitive "
-            "`crates/freeroute` route times, not `eda_drc` itself -- see GAPS.md #2) -- see the timeout entries "
-            "below.\n"
+            "_Reading this number_: `track_width` was last round's single largest false-positive source "
+            "(~2900 extra, almost all on one board, `issue11814`) and is fixed this round (GAPS.md #10): this "
+            "port was checking every track against its *net class's nominal width* as if that were KiCad's "
+            "real minimum-width constraint, when `DRC_ENGINE::loadImplicitRules`'s `TRACK_WIDTH_CONSTRAINT` "
+            "floor is always the board-wide `m_TrackMinWidth` (`.kicad_pro`'s `rules.min_track_width`), "
+            "independent of net class -- a net class's own width only ever sets that constraint's advisory "
+            "`Opt`, which the check never reads. `track_width` now matches every one of the 10 it reports, "
+            "0 extra (same nominal-vs-minimum bug and fix applied to `via_diameter`/hole-size minimums too). "
+            "Two QA boards that previously timed out (`issue21482`, `issue22475`) now complete -- a real "
+            "improvement, but it also surfaces pre-existing, already-documented bugs at a larger scale than "
+            "before: `tracks_crossing` is 0 on the KiCad side across every one of these boards but 1005 on "
+            "ours, concentrated on `issue22475` (a same-net-but-still-flagged pattern not yet root-caused, "
+            "see GAPS.md #3). `clearance`/`shorting_items`/`hole_clearance` are now the dominant over-firing "
+            "group (2230/2203/1008 extra) -- diffed item-by-item this round on `issue11814` (GAPS.md #3's "
+            "latest update): violations cluster just under the clearance threshold rather than being wildly "
+            "wrong, which rules out footprint net-tie exclusion and 90-degree rotation-sign bugs and points "
+            "at a smaller-scale geometry fidelity gap (pad shape/size import precision, possibly compounded "
+            "by `kimath::Shape` having no rotated-rectangle primitive for non-90-degree placements) that is "
+            "diagnosed but not yet fixed.\n"
         )
         lines.append(type_table(drc["totals"]))
         non_kicad = drc.get("non_kicad_totals") or {}
