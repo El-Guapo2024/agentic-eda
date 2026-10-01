@@ -437,7 +437,34 @@ export type Cmd =
   | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
   | { op: "delete_power_symbol"; id: string }
   | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string }
-  | { op: "annotate"; reset_existing: boolean };
+  | { op: "annotate"; reset_existing: boolean }
+
+  // -------------------------------------------------- footprint editor
+  //
+  // GAPS.md #8. crates/ops/src/lib.rs's own "footprint editor" Cmd
+  // section, same order. `Domain::FootprintEditor` (api/client.ts's
+  // `postUndo`/`postRedo` `domain` param) -- its own undo/redo scope,
+  // independent of "pcb"/"schematic".
+  | { op: "open_footprint_for_edit"; name: string }
+  | { op: "delete_library_footprint"; name: string }
+  | ({ op: "edit_footprint_properties"; name: string } & FootprintPropertiesFields)
+  | { op: "set_footprint_anchor"; name: string; at: PointXY }
+  | { op: "update_footprint_on_board"; name: string }
+  | { op: "add_pad"; footprint: string; pad: LibraryPad }
+  | { op: "move_pad"; footprint: string; id: string; x: Um; y: Um }
+  | { op: "rotate_pad"; footprint: string; id: string; quarter_turns: number }
+  | { op: "delete_pad"; footprint: string; id: string }
+  | { op: "edit_pad"; footprint: string; id: string; pad: LibraryPad }
+  | { op: "push_pad_properties"; footprint: string; source_pad_id: string; filter_shape: boolean; filter_orientation: boolean; filter_layers: boolean; filter_type: boolean }
+  | { op: "renumber_pads"; footprint: string; start: number; prefix: string; step: number }
+  | { op: "add_footprint_graphic"; footprint: string; shape: CmdShape }
+  | { op: "delete_footprint_graphic"; footprint: string; id: string }
+  | { op: "move_footprint_graphic"; footprint: string; id: string; dx: Um; dy: Um }
+  | { op: "edit_footprint_graphic"; footprint: string; id: string; layer: string; stroke_width: Um; filled: boolean }
+  | { op: "add_footprint_text"; footprint: string; text: CmdText }
+  | { op: "edit_footprint_text"; footprint: string; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
+  | { op: "delete_footprint_text"; footprint: string; id: string }
+  | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
 export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
