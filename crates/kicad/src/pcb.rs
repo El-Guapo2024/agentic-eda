@@ -244,12 +244,18 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         }
 
         // ---- copper pours ----
-        // The outline is ours; the fill is KiCad's. We emit the polygon
-        // and the connectivity rules, and let the viewer's filler lay the
-        // copper -- our own reachability check (routing_pour_unreachable)
-        // is what decides whether the plane is honest, not the render.
+        // The outline is ours; so is the fill now (`eda_zone_filler`,
+        // stage 3/4 of the zone-filling port) -- computed fresh here and
+        // written as `filled_polygon`, so KiCad shows (and plots/exports
+        // gerbers for) our fill directly without needing its own refill
+        // pass. `(filled_areas_thickness no)` tells KiCad the polygon
+        // itself is already the final min-thickness-correct shape (true
+        // for every fill `eda_zone_filler::fill_zone` produces), not a
+        // centerline needing a stroke width added.
         let mut zones: Vec<&Zone> = routing.zones.iter().collect();
         zones.sort_by(|a, b| (&a.net, &a.layer).cmp(&(&b.net, &b.layer)));
+        let drc_board_for_fill = eda_drc::board::build(design, model);
+        let fills = eda_drc::fill::fill_all_zones(&drc_board_for_fill, &model.board);
         for z in &zones {
             if z.outline.len() < 3 {
                 continue;
@@ -259,13 +265,29 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             writeln!(out, "\t(zone (net {n}) (net_name {}) (layer {}) (uuid \"{uuid}\")", sexpr_str(&z.net), sexpr_str(&z.layer)).unwrap();
             writeln!(out, "\t\t(hatch edge 0.5)").unwrap();
             writeln!(out, "\t\t(connect_pads (clearance {clearance_mm}))").unwrap();
-            writeln!(out, "\t\t(min_thickness {track_mm})").unwrap();
+            writeln!(out, "\t\t(min_thickness {track_mm}) (filled_areas_thickness no)").unwrap();
             writeln!(out, "\t\t(fill yes (thermal_gap {clearance_mm}) (thermal_bridge_width {track_mm}))").unwrap();
             writeln!(out, "\t\t(polygon (pts").unwrap();
             for p in &z.outline {
                 writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
             }
             writeln!(out, "\t\t))").unwrap();
+            if let Some(fill) = fills.get(&z.id) {
+                for poly in &fill.polys {
+                    let Some(outline) = poly.first() else { continue };
+                    if outline.len() < 3 {
+                        continue;
+                    }
+                    writeln!(out, "\t\t(filled_polygon").unwrap();
+                    writeln!(out, "\t\t\t(layer {})", sexpr_str(&z.layer)).unwrap();
+                    writeln!(out, "\t\t\t(pts").unwrap();
+                    for p in outline {
+                        writeln!(out, "\t\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
+                    }
+                    writeln!(out, "\t\t\t)").unwrap();
+                    writeln!(out, "\t\t)").unwrap();
+                }
+            }
             writeln!(out, "\t)").unwrap();
         }
     }

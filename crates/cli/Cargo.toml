@@ -20,3 +20,5 @@ eda-judge = { path = "../judge" }
 eda-fab = { path = "../fab" }
 eda-drc = { path = "../drc" }
 eda-connectivity = { path = "../connectivity" }
+eda-shape-poly-set = { path = "../shape-poly-set" }
+eda-zone-filler = { path = "../zone-filler" }

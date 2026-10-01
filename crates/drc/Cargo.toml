@@ -7,6 +7,9 @@ edition = "2021"
 serde = { workspace = true }
 serde_json = { workspace = true }
 eda-model = { path = "../model" }
+eda-clipper2 = { path = "../clipper2" }
+eda-shape-poly-set = { path = "../shape-poly-set" }
+eda-zone-filler = { path = "../zone-filler" }
 
 [dev-dependencies]
 serde_yaml = { workspace = true }

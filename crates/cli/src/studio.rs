@@ -518,6 +518,10 @@ fn handle(
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/fill") => {
+            let v = fill_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -1006,4 +1010,33 @@ fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let report = eda_connectivity::analyze(&design, &model);
     let edges: Vec<Value> = report.ratsnest.iter().map(|e| json!({ "net": e.net, "from": [e.from.x, e.from.y], "to": [e.to.x, e.to.y] })).collect();
     Ok(json!({ "edges": edges }))
+}
+
+/// `GET /api/fill`: every zone's real computed fill (`eda_zone_filler`, via
+/// `eda_drc::fill::fill_all_zones`) as polygons, in the same raw-micrometre
+/// coordinate space `/api/ratsnest` already uses, for the UI to draw -- see
+/// the task's stage 4. Each zone's fill may be several disjoint fragments
+/// (islands); `outline` is always a single closed ring (post-`Fracture`,
+/// already slitted, never a separate holes list).
+fn fill_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
+    let drc_board = eda_drc::board::build(&design, &model);
+    let results = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
+
+    let zones_json: Vec<Value> = zones
+        .iter()
+        .map(|z| {
+            let fill = results.get(&z.id);
+            let fragments: Vec<Value> = fill
+                .map(|f| f.polys.iter().map(|poly| json!(poly[0].iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())).collect())
+                .unwrap_or_default();
+            json!({
+                "id": z.id, "net": z.net, "layer": z.layer,
+                "area_um2": fill.map(|f| f.area()).unwrap_or(0.0),
+                "fragments": fragments,
+            })
+        })
+        .collect();
+    Ok(json!({ "zones": zones_json }))
 }

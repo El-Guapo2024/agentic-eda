@@ -1,12 +1,16 @@
 //! Ported from `pcbnew/drc/drc_test_provider_copper_clearance.cpp`: copper
-//! clearance between pads, tracks, vias and zones (by outline -- see the
-//! crate report for the zone-fill gap) on different nets, per layer.
+//! clearance between pads, tracks, vias and zones on different nets, per
+//! layer. Zone-vs-item and zone-vs-zone checks test against each zone's
+//! real, computed fill (`eda_drc::fill::fill_all_zones`) -- one check per
+//! disjoint fragment, keeping the worst (closest) -- falling back to the
+//! zone's raw outline only when it has no stable id to look a fill up by.
 //!
 //! Generated: `DRCE_CLEARANCE`, `DRCE_HOLE_CLEARANCE`, `DRCE_TRACKS_CROSSING`,
 //! `DRCE_SHORTING_ITEMS`, `DRCE_ZONES_INTERSECT`.
 
 use crate::board::{DrcBoard, DrcPad, DrcTrackSeg, DrcVia, DrcZone};
 use crate::constraints;
+use crate::fill::FillResults;
 use crate::item::{format_um, DrcRefItem, DrcViolation, ErrorType};
 use crate::kimath::Shape;
 use eda_model::{BoardRules, PadKind};
@@ -75,12 +79,42 @@ fn hole_clearance(rules: &BoardRules, hole_a: Option<&Shape>, copper_a: &Shape, 
     }
 }
 
+/// `shape`'s closest collision against any of `zone`'s real-fill fragments
+/// (or its raw outline, if it has none on record), i.e. the same
+/// `Option<(actual, pos)>` a single `.collides()` call would give against
+/// one shape -- `fill_zone`'s islands can leave a zone's net nowhere near
+/// where its outline alone would suggest, so every fragment needs its own
+/// test rather than one test against the outline as a whole.
+fn collides_zone(shape: &Shape, zone: &DrcZone, fills: &FillResults, clearance: i64) -> Option<(i64, eda_model::ir::Point)> {
+    fills.fragments_or(&zone.id, zone.shape()).iter().filter_map(|frag| shape.collides(frag, clearance)).min_by_key(|(actual, _)| *actual)
+}
+
+/// Same idea, both sides a zone's own fragments.
+fn collides_zone_zone(a: &DrcZone, b: &DrcZone, fills: &FillResults, clearance: i64) -> Option<(i64, eda_model::ir::Point)> {
+    let frags_a = fills.fragments_or(&a.id, a.shape());
+    let frags_b = fills.fragments_or(&b.id, b.shape());
+    frags_a.iter().flat_map(|fa| frags_b.iter().filter_map(move |fb| fa.collides(fb, clearance))).min_by_key(|(actual, _)| *actual)
+}
+
+/// `hole_clearance`'s zone-side special case: the zone side never has a
+/// hole of its own, so only "does `hole`, if any, come too close to the
+/// zone's copper" applies -- against every fragment, not just the outline.
+fn hole_clearance_zone(rules: &BoardRules, hole: Option<&Shape>, hole_ref: &DrcRefItem, zone: &DrcZone, zone_ref: &DrcRefItem, fills: &FillResults, out: &mut Vec<DrcViolation>) {
+    let clearance = constraints::hole_clearance_min(rules).max(0);
+    if let Some(h) = hole {
+        if let Some((actual, _)) = collides_zone(h, zone, fills, clearance) {
+            out.push(DrcViolation::new(ErrorType::HoleClearance, format!("(clearance {}; actual {})", format_um(clearance), format_um(actual)), vec![hole_ref.clone(), zone_ref.clone()]));
+        }
+    }
+}
+
 fn same_logical_pad(a: &DrcPad, b: &DrcPad) -> bool {
     a.footprint_ref == b.footprint_ref && a.number == b.number
 }
 
 pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     let mut out = Vec::new();
+    let fills = crate::fill::fill_all_zones(board, rules);
 
     for layer in &board.layers {
         let pads: Vec<&DrcPad> = board.pads.iter().filter(|p| p.layers.iter().any(|l| l == layer)).collect();
@@ -155,7 +189,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
             }
         }
 
-        // ---- item vs zone (by outline), same layer, different net ----
+        // ---- item vs zone (by real fill, one test per disjoint fragment), same layer, different net ----
         for z in &zones {
             for p in &pads {
                 if p.net.is_some() && p.net == z.net {
@@ -163,11 +197,11 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 }
                 let c = constraints::clearance(rules, p.net.as_deref(), z.net.as_deref());
                 if flashed(p) && c > 0 {
-                    if let Some((actual, _)) = p.copper.collides(&z.shape(), c) {
+                    if let Some((actual, _)) = collides_zone(&p.copper, z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![pad_ref(p), zone_ref(z)]));
                     }
                 }
-                hole_clearance(rules, p.hole.as_ref(), &p.copper, &pad_ref(p), None, &z.shape(), &zone_ref(z), &mut out);
+                hole_clearance_zone(rules, p.hole.as_ref(), &pad_ref(p), z, &zone_ref(z), &fills, &mut out);
             }
             for t in &tracks {
                 if t.net.is_some() && t.net == z.net {
@@ -175,7 +209,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 }
                 let c = constraints::clearance(rules, t.net.as_deref(), z.net.as_deref());
                 if c > 0 {
-                    if let Some((actual, _)) = t.shape().collides(&z.shape(), c) {
+                    if let Some((actual, _)) = collides_zone(&t.shape(), z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![track_ref(t), zone_ref(z)]));
                     }
                 }
@@ -186,27 +220,27 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 }
                 let c = constraints::clearance(rules, v.net.as_deref(), z.net.as_deref());
                 if c > 0 {
-                    if let Some((actual, _)) = v.shape().collides(&z.shape(), c) {
+                    if let Some((actual, _)) = collides_zone(&v.shape(), z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![via_ref(v), zone_ref(z)]));
                     }
                 }
-                hole_clearance(rules, Some(&v.hole()), &v.shape(), &via_ref(v), None, &z.shape(), &zone_ref(z), &mut out);
+                hole_clearance_zone(rules, Some(&v.hole()), &via_ref(v), z, &zone_ref(z), &fills, &mut out);
             }
         }
 
-        // ---- zone vs zone, same layer ----
+        // ---- zone vs zone, same layer (by real fill) ----
         for i in 0..zones.len() {
             for j in (i + 1)..zones.len() {
                 let (a, b) = (zones[i], zones[j]);
                 let same_net = a.net.is_some() && a.net == b.net;
                 if same_net {
-                    if let Some(_actual) = a.shape().collides(&b.shape(), 0) {
+                    if collides_zone_zone(a, b, &fills, 0).is_some() {
                         out.push(DrcViolation::new(ErrorType::ZonesIntersect, "(intersecting zones must have distinct priorities)", vec![zone_ref(a), zone_ref(b)]));
                     }
                 } else {
                     let c = constraints::clearance(rules, a.net.as_deref(), b.net.as_deref());
                     if c > 0 {
-                        if let Some((actual, _)) = a.shape().collides(&b.shape(), c) {
+                        if let Some((actual, _)) = collides_zone_zone(a, b, &fills, c) {
                             out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![zone_ref(a), zone_ref(b)]));
                         }
                     }

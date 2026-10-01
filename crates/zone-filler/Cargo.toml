@@ -8,3 +8,7 @@ description = "A port of KiCad's ZONE_FILLER (pcbnew/zone_filler.cpp), adapted t
 eda-clipper2 = { path = "../clipper2" }
 eda-shape-poly-set = { path = "../shape-poly-set" }
 eda-model = { path = "../model" }
+
+[dev-dependencies]
+eda-drc = { path = "../drc" }
+eda-kicad = { path = "../kicad" }

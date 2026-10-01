@@ -501,6 +501,8 @@ dependencies = [
  "eda-judge",
  "eda-model",
  "eda-ops",
+ "eda-shape-poly-set",
+ "eda-zone-filler",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -514,11 +516,15 @@ version = "0.1.0"
 name = "eda-connectivity"
 version = "0.1.0"
 dependencies = [
+ "eda-clipper2",
+ "eda-drc",
  "eda-engine",
  "eda-freeroute",
  "eda-kicad",
  "eda-model",
  "eda-place",
+ "eda-shape-poly-set",
+ "eda-zone-filler",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -538,11 +544,14 @@ dependencies = [
 name = "eda-drc"
 version = "0.1.0"
 dependencies = [
+ "eda-clipper2",
  "eda-engine",
  "eda-freeroute",
  "eda-kicad",
  "eda-model",
  "eda-place",
+ "eda-shape-poly-set",
+ "eda-zone-filler",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -634,12 +643,14 @@ name = "eda-kicad"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "eda-drc",
  "eda-engine",
  "eda-freeroute",
  "eda-layout",
  "eda-model",
  "eda-place",
  "eda-render",
+ "eda-zone-filler",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -721,6 +732,8 @@ name = "eda-zone-filler"
 version = "0.1.0"
 dependencies = [
  "eda-clipper2",
+ "eda-drc",
+ "eda-kicad",
  "eda-model",
  "eda-shape-poly-set",
 ]
