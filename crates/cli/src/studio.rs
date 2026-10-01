@@ -796,6 +796,7 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 symbols: Vec::new(),
                 wires: Vec::new(),
                 labels: Vec::new(),
+                texts: Vec::new(),
             })
         }
     };
@@ -836,6 +837,11 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str) })
         })
         .collect();
+    let texts: Vec<Value> = sch
+        .texts
+        .iter()
+        .map(|t| json!({ "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_um": t.size_um }))
+        .collect();
     let power_symbols: Vec<Value> = sch
         .power_symbols
         .iter()
@@ -870,6 +876,7 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         "symbols": symbols,
         "wires": wires,
         "labels": labels,
+        "texts": texts,
         "power_symbols": power_symbols,
         "no_connects": no_connects,
         "title_block": title_block,

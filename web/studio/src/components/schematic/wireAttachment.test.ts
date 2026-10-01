@@ -31,7 +31,7 @@ function wire(id: string, pts: [number, number][]): SchematicWire {
 }
 
 function schematic(symbols: SchematicSymbol[], wires: SchematicWire[]): Schematic {
-  return { lib_symbols: R_LIB, symbols, power_symbols: [], wires, no_connects: [], labels: [], title_block: null };
+  return { lib_symbols: R_LIB, symbols, power_symbols: [], wires, no_connects: [], labels: [], texts: [], title_block: null };
 }
 
 test("attachedWireEndpoints: a wire landing exactly on a pin tip is attached at that endpoint", () => {

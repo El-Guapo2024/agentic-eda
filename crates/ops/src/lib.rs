@@ -41,8 +41,8 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
 use eda_model::ir::{
-    Design, DrawingsSection, FootprintInstance, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, Point, PowerSymbol, RoutingSection, SchematicSection, Shape, Side, SymbolInstance, Text,
-    TextJustify, Track, Um, Via, Wire, Zone,
+    Design, DrawingsSection, FootprintInstance, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance,
+    Text, TextJustify, Track, Um, Via, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -341,6 +341,12 @@ pub enum Cmd {
     /// `eda_model::ir::LabelKind`'s own vocabulary (local has no shape).
     AddLabel { net: String, at: Point, kind: LabelKind },
     DeleteLabel { id: String },
+    /// `T`: place free-standing text -- see `SchematicText`'s own doc for
+    /// why this is a separate verb from `AddText` (the PCB one, a
+    /// different shape entirely: layer/stroke/justify/mirror, none of
+    /// which a schematic has).
+    AddSchText { content: String, at: Point, angle_millideg: Millideg, size_um: Um },
+    DeleteSchText { id: String },
     /// `P`: place a power symbol on a pin.
     AddPowerSymbol { lib_id: String, at: Point, rot_millideg: Millideg, net: String, pin: String },
     DeletePowerSymbol { id: String },
@@ -392,6 +398,8 @@ impl Cmd {
             | Cmd::DeleteNoConnect { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
+            | Cmd::AddSchText { .. }
+            | Cmd::DeleteSchText { .. }
             | Cmd::AddPowerSymbol { .. }
             | Cmd::DeletePowerSymbol { .. }
             | Cmd::AddSymbol { .. }
@@ -434,9 +442,10 @@ impl Cmd {
 
             Cmd::MoveSymbol { id, .. } | Cmd::DragSymbol { id, .. } | Cmd::RotateSymbol { id, .. } | Cmd::MirrorSymbol { id } | Cmd::DeleteSymbol { id } | Cmd::AddSymbol { id, .. } => vec![id],
             Cmd::AddWire { .. } => vec!["wire"],
-            Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } => vec![id],
+            Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } | Cmd::DeleteSchText { id } => vec![id],
             Cmd::AddNoConnect { .. } => vec!["no_connect"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
+            Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
             Cmd::Annotate { .. } => vec!["annotate"],
         }
@@ -716,6 +725,8 @@ impl<'a> Board<'a> {
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
             Cmd::DeleteLabel { id } => self.delete_label(id),
+            Cmd::AddSchText { content, at, angle_millideg, size_um } => self.add_sch_text(content, *at, *angle_millideg, *size_um),
+            Cmd::DeleteSchText { id } => self.delete_sch_text(id),
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint),
@@ -1464,7 +1475,7 @@ impl<'a> Board<'a> {
     /// `derive_schematic` never ran); everything else targets an id that
     /// can only already exist inside a section that is already there.
     fn schematic_mut_or_create(&mut self) -> &mut SchematicSection {
-        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![] })
+        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], title_block: None, sheets: vec![] })
     }
 
     fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {
@@ -1575,6 +1586,27 @@ impl<'a> Board<'a> {
         sch.labels.retain(|l| l.id != id);
         if sch.labels.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_label", id, "no label with this id")]);
+        }
+        Ok(())
+    }
+
+    /// `T`: place free-standing text. Unlike `add_label`, an empty
+    /// `content` isn't refused here -- the frontend dialog itself requires
+    /// non-blank text before it will even submit (same convention
+    /// `TextDialog.tsx` already uses for the PCB side's own `add_text`),
+    /// so a backend-level refusal would never actually trigger in
+    /// practice; this keeps the verb itself simple.
+    fn add_sch_text(&mut self, content: &str, at: Point, angle: Millideg, size_um: Um) -> Result<(), Vec<CheckResult>> {
+        self.schematic_mut_or_create().texts.push(SchematicText { id: String::new(), content: content.into(), at, angle, size_um });
+        Ok(())
+    }
+
+    fn delete_sch_text(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.texts.len();
+        sch.texts.retain(|t| t.id != id);
+        if sch.texts.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_sch_text", id, "no text with this id")]);
         }
         Ok(())
     }

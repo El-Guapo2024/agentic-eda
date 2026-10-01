@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, Cmd, DrcReport, ErcReport, Part, Ratsnest, Schematic, SchematicSymbol, SchematicWire, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
+import type { BoardState, Cmd, DrcReport, ErcReport, LabelScope, Part, Ratsnest, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
 import { fetchDrc, fetchErc, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -33,7 +33,32 @@ export type EditorTab = "pcb" | "schematic" | "3d";
  * deeper (a whole TOOL_MANAGER with push/pop tool states); this is only
  * as much of that idea as this app's two real modes need.
  */
-export type ToolId = "select" | "move" | "drag" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "wire";
+export type ToolId =
+  | "select"
+  | "move"
+  | "drag"
+  | "route"
+  | "via"
+  | "zone"
+  | "draw_segment"
+  | "draw_arc"
+  | "draw_rect"
+  | "draw_circle"
+  | "draw_polygon"
+  | "text"
+  | "wire"
+  // ---------------------------------------------------- eeschema placement
+  // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp TwoClickPlace/
+  // SingleClickPlace) -- SchematicView.tsx's own doc has the full
+  // click-then-small-dialog flow these arm (a deliberate, documented
+  // simplification of source's "dialog pops up immediately, item then
+  // follows the cursor" order -- see PARITY-sch.md).
+  | "sch_label_local"
+  | "sch_label_global"
+  | "sch_label_hier"
+  | "sch_power"
+  | "sch_text"
+  | "sch_no_connect";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
@@ -48,6 +73,12 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
   text: "Click to place text",
   wire: "Wire: click to start/add a point (snaps to a pin when close), double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
+  sch_label_local: "Label: click where to place it",
+  sch_label_global: "Global Label: click where to place it",
+  sch_label_hier: "Hierarchical Label: click where to place it",
+  sch_power: "Power Symbol: click a pin (snaps to the nearest one)",
+  sch_text: "Text: click where to place it",
+  sch_no_connect: "No Connect: click a pin to flag it unconnected",
 };
 
 /**
@@ -150,6 +181,16 @@ export interface StudioState {
   zonePending: [Um, Um][] | null;
   /** The text tool/E-to-edit dialog: "add" (fresh, at a clicked point) or "edit" (an existing text's id). */
   textDialog: { mode: "add"; at: [Um, Um] } | { mode: "edit"; id: string } | null;
+  /** `L`/Ctrl+`L`/`H`: a just-clicked point waiting for LabelDialog to confirm its text (and, for global/hierarchical, its shape) before `add_label` commits -- same "draw/click first, dialog last" shape as `zonePending`. */
+  schLabelPending: { at: [Um, Um]; scope: LabelScope } | null;
+  /** `P`: a just-clicked point (already pin-snapped, see SchematicView.tsx's `pinSnapPoints`) waiting for PowerSymbolDialog to confirm which rail. */
+  schPowerPending: { at: [Um, Um] } | null;
+  /** `T`: a just-clicked point waiting for SchTextDialog to confirm the content. */
+  schTextPending: { at: [Um, Um] } | null;
+  /** `createNewLabel`'s own "last text used" (`m_lastTextOrientation`-style session memory, see `incrementLabelText`) -- seeds the next LabelDialog with an auto-incremented suggestion instead of starting blank every time, so placing a same-shaped bus of labels (DATA0, DATA1, DATA2...) doesn't mean re-typing the whole name each click. */
+  lastLabelText: string;
+  /** `P`'s own last-chosen rail (e.g. "power:GND") -- seeds PowerSymbolDialog so placing several of the same rail in a row (common -- a row of decoupling caps all going to GND) only needs one pick. */
+  lastPowerLibId: string;
 
   view: ViewTransform;
   viewInitialized: boolean;
@@ -290,6 +331,11 @@ const initialState: StudioState = {
   drawState: null,
   zonePending: null,
   textDialog: null,
+  schLabelPending: null,
+  schPowerPending: null,
+  schTextPending: null,
+  lastLabelText: "",
+  lastPowerLibId: "power:GND",
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
   schematicView: { scale: 0, x: 0, y: 0 },
@@ -395,6 +441,11 @@ export type Action =
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
+  | { type: "SET_SCH_LABEL_PENDING"; pending: StudioState["schLabelPending"] }
+  | { type: "SET_SCH_POWER_PENDING"; pending: StudioState["schPowerPending"] }
+  | { type: "SET_SCH_TEXT_PENDING"; pending: StudioState["schTextPending"] }
+  | { type: "SET_LAST_LABEL_TEXT"; text: string }
+  | { type: "SET_LAST_POWER_LIB_ID"; libId: string }
   | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
   | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean };
 
@@ -441,7 +492,20 @@ function reducer(state: StudioState, action: Action): StudioState {
       // reset, and anywhere else that needs to drop whatever the route/
       // zone/drawing/text tools were in the middle of, not just a
       // footprint selection/move.
-      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null, itemPropertiesId: null };
+      return {
+        ...state,
+        selection: new Set(),
+        armed: null,
+        movePreview: null,
+        activeTool: "select",
+        drawState: null,
+        zonePending: null,
+        textDialog: null,
+        itemPropertiesId: null,
+        schLabelPending: null,
+        schPowerPending: null,
+        schTextPending: null,
+      };
     case "ESCAPE": {
       // pcb_selection_tool.cpp's IsCancel() handler, tiered exactly like
       // source: an in-progress tool (move/draw/armed-place) owns Escape
@@ -454,7 +518,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       // the move and leaves the pre-move selection exactly as it was.
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.movePreview != null;
       if (inProgress) {
-        return { ...state, armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null };
+        return { ...state, armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null, schLabelPending: null, schPowerPending: null, schTextPending: null };
       }
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
@@ -560,6 +624,16 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, zonePending: action.outline };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.dialog };
+    case "SET_SCH_LABEL_PENDING":
+      return { ...state, schLabelPending: action.pending };
+    case "SET_SCH_POWER_PENDING":
+      return { ...state, schPowerPending: action.pending };
+    case "SET_SCH_TEXT_PENDING":
+      return { ...state, schTextPending: action.pending };
+    case "SET_LAST_LABEL_TEXT":
+      return { ...state, lastLabelText: action.text };
+    case "SET_LAST_POWER_LIB_ID":
+      return { ...state, lastPowerLibId: action.libId };
     case "SET_CLIPBOARD":
       return { ...state, clipboard: action.clipboard };
     case "SET_MOVE_EXACT_DIALOG_OPEN":
@@ -589,6 +663,7 @@ export interface StudioApi {
   textById: (id: string) => BoardText | undefined;
   symbolById: (id: string) => SchematicSymbol | undefined;
   wireById: (id: string) => SchematicWire | undefined;
+  schTextById: (id: string) => SchematicText | undefined;
   /** R/Shift+R on the Schematic tab: rotate a symbol in place (quarterTurns: 1 = CCW/'R', 3 = CW/Shift+R, matching sch_edit_tool.cpp's own default). */
   rotateSymbol: (id: string, quarterTurns: number) => Promise<void>;
   /** X on the Schematic tab ("Mirror Horizontally") -- see `Cmd::MirrorSymbol`'s own doc on why this is the one axis wired. */
@@ -747,6 +822,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     textById: (id) => stateRef.current.board?.drawings?.texts.find((t) => t.id === id),
     symbolById: (id) => stateRef.current.schematic?.symbols.find((s) => s.id === id),
     wireById: (id) => stateRef.current.schematic?.wires.find((w) => w.id === id),
+    schTextById: (id) => stateRef.current.schematic?.texts.find((t) => t.id === id),
     rotateSymbol: async (id, quarterTurns) => {
       await runCmd({ op: "rotate_symbol", id, quarter_turns: ((quarterTurns % 4) + 4) % 4 });
     },

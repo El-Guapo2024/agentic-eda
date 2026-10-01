@@ -31,7 +31,7 @@
 // the dangling-pin indicator circle is not drawn), and no electrical-pin
 // -type annotation text (off by default in the real schematic editor
 // too, so this is not actually a gap).
-import type { LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicWire } from "../../api/types";
+import type { LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicText, SchematicWire } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
@@ -698,6 +698,11 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   }
 }
 
+/** `T`: free-standing text -- `SCH_TEXT`'s own render, drawn with the Newstroke font like every other schematic text (labels, pin names, fields). `t.angle` is already world-space (like `SymbolInstance.rot`, not a library-local `LibGraphic.angle_deg`), so it feeds `ctx.rotate`/`angleRad` directly, no Y-flip negation -- see `drawRealSymbol`'s own `ctx.rotate((symbol.rot * Math.PI) / 180)` for the parallel case this mirrors. */
+function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText) {
+  drawStrokeText(ctx, t.content, t.at[0], t.at[1], { sizeUm: t.size_um, angleRad: (t.angle * Math.PI) / 180, justify: "left", color: layerColor("LAYER_NOTES") });
+}
+
 function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: NoConnect) {
   const hair = 1 / view.scale;
   ctx.save();
@@ -746,6 +751,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   for (const l of sch.labels) {
     drawLabel(ctx, view, l, sch.wires, opts.netHighlight === l.net);
   }
+
+  // Free text.
+  for (const t of sch.texts) drawSchText(ctx, t);
 
   // Power symbols (GND, +5V, PWR_FLAG, ...).
   for (const ps of sch.power_symbols) {

@@ -529,6 +529,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteNoConnect { id } => format!("schematic delete-no-connect {id}"),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
+        Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::DeleteSchText { id } => format!("schematic text delete {id}"),
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
@@ -594,6 +596,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddWire { .. } | Cmd::DeleteWire { .. } => "schematic-wire",
         Cmd::AddNoConnect { .. } | Cmd::DeleteNoConnect { .. } => "schematic-no-connect",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
+        Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
         Cmd::AddSymbol { .. } => "schematic-place",
         Cmd::Annotate { .. } => "schematic-annotate",
@@ -1143,6 +1146,7 @@ mod tests {
                 symbols: vec![sym("R1", 10_000, 10_000), sym("R2", 20_000, 10_000)],
                 wires: vec![],
                 labels: vec![],
+                texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
                 title_block: None,
@@ -1260,6 +1264,42 @@ mod tests {
         let (_, design, model) = load(&dir).unwrap();
         assert_eq!(design.schematic.as_ref().unwrap().labels.len(), 1);
         assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "removing one of the two labels must split R1 and R2 back onto separate nets");
+    }
+
+    /// `T`: free-standing text is purely cosmetic -- unlike `AddLabel`
+    /// above, it must have *no* effect on connectivity at all (it names no
+    /// net), while still getting the same id-backfill/undo treatment every
+    /// other schematic item gets.
+    #[test]
+    fn schematic_text_is_added_and_deleted_without_touching_connectivity() {
+        let dir = scratch("sch_text");
+        setup_schematic(&dir);
+
+        let (_, _, before) = load(&dir).unwrap();
+        assert_ne!(net_of(&before.nets, "R1.1").unwrap().name, net_of(&before.nets, "R2.1").unwrap().name, "sanity: starts on separate nets");
+
+        step(&dir, Cmd::AddSchText { content: "Power supply section".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_um: 1270 }, false, "test").unwrap();
+
+        // Reconciling at all (triggered by *any* Domain::Schematic Cmd, not
+        // just this one) is free to rename an unlabeled net to its own
+        // synthesized `NET_<n>` -- same as `schematic_wire_connects_and_
+        // disconnects_pins_on_one_netlist` above only ever asserts the two
+        // pins' nets differ, never a specific name. What free text must
+        // never do is *merge* them onto the same net.
+        let (_, design, model) = load(&dir).unwrap();
+        assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "free text must not merge R1 and R2 onto the same net");
+
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.texts.len(), 1);
+        let text = &sch.texts[0];
+        assert!(!text.id.is_empty(), "AddSchText's id must be backfilled, same as every other addressable schematic item");
+        assert_eq!(text.content, "Power supply section");
+        assert_eq!(text.at, Point { x: 15_000, y: 5_000 });
+
+        let text_id = text.id.clone();
+        step(&dir, Cmd::DeleteSchText { id: text_id }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(design.schematic.as_ref().unwrap().texts.is_empty());
     }
 
     /// GAPS.md #15: "pressing Ctrl+Z while viewing the Schematic tab

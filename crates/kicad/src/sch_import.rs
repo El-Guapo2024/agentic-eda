@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use eda_model::ir::{Design, LabelKind, LabelShape, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SheetInstance, SymbolInstance, TitleBlock, Wire};
+use eda_model::ir::{Design, LabelKind, LabelShape, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
 use eda_model::symbol::{LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
@@ -151,6 +151,25 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         }
     }
 
+    // `T`: standalone text, no net -- see `SchematicText`'s own doc. Unlike
+    // a label, its content is purely cosmetic, so it never feeds `reconcile`
+    // below.
+    let mut texts: Vec<SchematicText> = Vec::new();
+    for t in sexpr::find_all(root, "text") {
+        let Some(content) = sexpr::txt(t, 1).map(String::from) else { continue };
+        let Some(at) = sexpr::find(t, "at") else { continue };
+        let (Some(x_mm), Some(y_mm)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
+        let angle_deg = sexpr::num(at, 3).unwrap_or(0.0);
+        let size_mm = sexpr::find(t, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).unwrap_or(1.27);
+        texts.push(SchematicText {
+            id: String::new(),
+            content,
+            at: mm_point_to_um(SPoint::new(x_mm, y_mm)),
+            angle: import_rot_millideg_sch(angle_deg),
+            size_um: crate::import::mm_to_um(size_mm),
+        });
+    }
+
     let mut sheets: Vec<SheetInstance> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
@@ -163,7 +182,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects);
 
-    let sch = SchematicSection { symbols, wires, labels, power_symbols, no_connects, title_block, sheets };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, title_block, sheets };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },

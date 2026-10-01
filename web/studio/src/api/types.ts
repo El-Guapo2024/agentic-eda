@@ -309,6 +309,8 @@ export type Cmd =
   | { op: "delete_no_connect"; id: string }
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
+  | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
+  | { op: "delete_sch_text"; id: string }
   | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
   | { op: "delete_power_symbol"; id: string }
   | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string }
@@ -525,6 +527,16 @@ export interface SchematicLabel {
   shape: LabelShape | null;
 }
 
+/** `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, deliberately minimal next to a PCB `BoardText` (no layer/justify/mirror -- a schematic has none of those concepts). */
+export interface SchematicText {
+  /** Stable id (`txt_xxxxxxxxxxxx`) -- for `delete_sch_text`. */
+  id: string;
+  content: string;
+  at: [Um, Um];
+  angle: Degrees;
+  size_um: Um;
+}
+
 export interface TitleBlock {
   title: string;
   date: string;
@@ -544,6 +556,7 @@ export interface Schematic {
   wires: SchematicWire[];
   no_connects: NoConnect[];
   labels: SchematicLabel[];
+  texts: SchematicText[];
   title_block: TitleBlock | null;
 }
 

@@ -20,8 +20,8 @@
 // Properties('E') dialog are not yet -- a click still only ever selects a
 // symbol or highlights a wire's net.
 import { useEffect, useRef, useState } from "react";
-import type { Schematic } from "../api/types";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import type { LabelScope, Schematic } from "../api/types";
+import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { boundsOfPoints, fitTransform, zoomAbout } from "./canvas/view";
 import { paintSchematic, symbolBounds } from "./schematic/painter";
 import { resolveLibSymbol } from "./schematic/libSymbol";
@@ -53,6 +53,13 @@ type DragState =
    * select instead of committing a no-op drag.
    */
   | { kind: "move"; refs: string[]; startWorld: [number, number]; moved: boolean };
+
+/** Which `add_label` scope each of the three label tools commits -- `L`/Ctrl+`L`/`H`, see useActionRunner.ts's own `eeschema.InteractiveDrawing.place*Label` bindings for how each one arms its tool id. */
+const LABEL_TOOL_SCOPE: Partial<Record<ToolId, LabelScope>> = {
+  sch_label_local: "local",
+  sch_label_global: "global",
+  sch_label_hier: "hierarchical",
+};
 
 /**
  * World-space bounds for the initial fit. KiCad opens a schematic framed
@@ -368,6 +375,36 @@ export function SchematicView() {
           } else {
             dispatch({ type: "SET_DRAW_STATE", draw: next });
           }
+          return;
+        }
+
+        // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp SingleClickPlace/
+        // TwoClickPlace): every one of these tools stays armed after a
+        // click (same as the wire tool above) for chained placement --
+        // real eeschema does too (Escape, or the hotkey again, is how you
+        // leave the tool). `L`/`P` pin-snap the same way the wire tool
+        // does (a label commonly tags a wire/pin; a power symbol's own
+        // `pin` field needs to land on a real pin to resolve at all, see
+        // `Cmd::AddPowerSymbol`'s doc) -- `T` is free text, plain grid
+        // snap only.
+        const labelScope = LABEL_TOOL_SCOPE[state.activeTool];
+        if (labelScope) {
+          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          dispatch({ type: "SET_SCH_LABEL_PENDING", pending: { at: snapped, scope: labelScope } });
+          return;
+        }
+        if (state.activeTool === "sch_power") {
+          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          dispatch({ type: "SET_SCH_POWER_PENDING", pending: { at: snapped } });
+          return;
+        }
+        if (state.activeTool === "sch_text") {
+          dispatch({ type: "SET_SCH_TEXT_PENDING", pending: { at: snapToGrid(wx, wy) } });
+          return;
+        }
+        if (state.activeTool === "sch_no_connect") {
+          const [sx, sy] = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
           return;
         }
 

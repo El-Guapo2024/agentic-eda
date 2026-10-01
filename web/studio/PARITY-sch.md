@@ -15,12 +15,14 @@ That session ported selection/move/rotate/mirror/delete end to end
 undo bug (gap #15). Wire/label/power-symbol drawing tools, a symbol
 chooser, Annotate's dialog, and Properties were not yet wired.
 
-This session ports `G` (drag, with wire rubber-banding -- section 1) and,
-as part of the same change, a plain click-and-drag directly on a symbol
+This session ports `G` (drag, with wire rubber-banding -- section 1),
+a plain click-and-drag directly on a symbol as part of the same change
 (no hotkey needed first, defaulting to Drag's rubber-banding, matching
-source's own default). Still not wired: wire/label/power-symbol drawing
-tools, a symbol chooser, Annotate's dialog, and Properties — see the
-bottom of each section.
+source's own default), and `L`/Ctrl+`L`/`H`/`P`/`Q`/`T` (section 2/3 --
+label/no-connect/power-symbol/text placement, plus a new minimal
+`SchematicText` IR for `T`). Still not wired: `A`'s symbol chooser,
+`J` junction, Properties, and Annotate's dialog — see the bottom of each
+section.
 
 ## 0. Architecture: the "one netlist" rule
 
@@ -103,21 +105,43 @@ the intent YAML file.
 | Escape discards the whole in-progress wire | identical | `doDrawSegments`'s `cleanup()` (shared `ESCAPE` reducer case, already generic) |
 | Auto-junction at a T (3+ wire exit angles) | identical, **for connectivity** — the dot itself is drawn wherever 3+ wire endpoints/segments meet, computed live from geometry (`painter.ts::junctionPoints`, pre-existing); never a stored item, matching this project's own IR (no `junctions` field — see `Cmd::AddWire`'s own doc) | `junction_helpers.cpp::AnalyzePoint`; `reconcile`'s own T-junction union-find pass already gives correct electrical connectivity with or without a visible dot |
 | `J`: explicit junction at a plain crossing | missing (no stored concept to place one at — see above; connectivity is correct regardless, this is a cosmetic/explicit-marker gap only) | `SCH_DRAWING_TOOLS::SingleClickPlace` |
-| `Q`: no-connect flag, click to place/toggle | missing (frontend tool not built; backend verb ready) | same function, no-connect branch |
+| `Q`: no-connect flag, click to place | partial — place only; source's own "click again on one to remove it" isn't ported, and neither is selecting/`Del`-ing an already-placed no-connect by any other means (`Cmd::DeleteNoConnect` exists; no frontend hit-test for this item kind yet, same documented gap as the labels/power-symbols/text this session also only ever *adds* — see this section's own intro) | `SCH_DRAWING_TOOLS::SingleClickPlace`, no-connect branch; `SchematicView.tsx`'s `sch_no_connect` tool branch pin-snaps the same way `W` does, then `Cmd::AddNoConnect` commits immediately -- stays armed for the next click, same as the wire tool |
 | Wire merges two nets / delete splits them | identical | proven by this session's Rust test, see section 0 |
 
 ## 3. Labels, text, power symbols, symbol placement (`sch_drawing_tools.cpp`)
 
-Backend verbs exist (`Cmd::AddLabel`/`DeleteLabel`,
-`AddPowerSymbol`/`DeletePowerSymbol`, `Cmd::AddSymbol`); no frontend tool
-yet.
+`L`/Ctrl+`L`/`H`/`P`/`T` are wired this session, all through the same
+adapted flow: arm the tool (stays armed for chained placement, like `W`),
+click to capture a position (pin-snapped for `L`/`P`, since a power
+symbol's own `pin` field needs to land on a real pin to resolve at all --
+see `Cmd::AddPowerSymbol`'s doc -- and a label commonly tags a wire/pin
+too; plain grid-snap for `T`), then a small dialog
+(`LabelDialog.tsx`/`PowerSymbolDialog.tsx`/`SchTextDialog.tsx`) confirms
+the text/symbol/content before the real `Cmd` commits. This is a
+deliberate adaptation of source's own order -- real eeschema pops
+`DIALOG_LABEL_PROPERTIES`/a full `DIALOG_SYMBOL_CHOOSER`/
+`DIALOG_TEXT_PROPERTIES` *immediately* on the hotkey, then the item
+follows the cursor for a final placement click -- chosen to reuse this
+app's own established "draw/click first, small dialog last" shape
+(ZoneDialog/TextDialog already work this way for the PCB side) rather
+than build a second, different interaction pattern. No live ghost/preview
+follows the cursor before that first click (the status bar's tool message
+-- now shown on the Schematic tab too, see StatusBar.tsx -- is the only
+"what will clicking do" affordance); a real canvas preview is a further,
+not-yet-done step.
+
+Newly placed labels/power symbols/free text cannot yet be clicked to
+select/move/`Del` afterward (no hit-test for those item kinds in
+`SchematicView.tsx` yet, only for symbols/wires) -- this section only
+covers *placing* them, matching this pass's scope.
 
 | Action | Status | KiCad file:function |
 |---|---|---|
-| `L`/Ctrl+`L`/`H`: place local/global/hierarchical label | missing | `SCH_DRAWING_TOOLS::TwoClickPlace`/`createNewLabel` |
-| `P`: place power symbol | missing | `SCH_DRAWING_TOOLS::PlaceSymbol` (power filter) |
-| `T`: place text | missing | `TwoClickPlace`/`createNewText` |
-| `A`: place symbol, via a chooser over the sheet's own `lib_symbols` | missing — no symbol-chooser dialog built | `SCH_DRAWING_TOOLS::PlaceSymbol` → `DIALOG_SYMBOL_CHOOSER` (recently-used/already-placed pseudo-libraries, live preview — not replicated; this app's own chooser should search the libraries the sheet already loads, per the task brief, rather than browse installed libraries) |
+| `L`/Ctrl+`L`/`H`: place local/global/hierarchical label | partial — see this section's intro for the click/dialog adaptation; no 90°/auto-rotate-on-placement (this IR's `NetLabel` has no orientation field at all -- `drawLabel` always infers the spin live from nearby wire geometry, `inferSpin`, so there is nothing to set during placement the way source's `SetSpinStyle`/`AutoRotateOnPlacement` do) | `SCH_DRAWING_TOOLS::TwoClickPlace`/`createNewLabel`; `eeschema.InteractiveDrawing.place{Label,GlobalLabel,HierarchicalLabel}` |
+| Auto-increment: a chained label's suggested text advances a trailing number (DATA0 → DATA1...), a name with none is left alone | identical | `common/increment.cpp::IncrementString` (`SCH_LABEL_BASE::IncrementLabel`'s own function) ported directly, not re-derived -- `kicad-port/incrementLabelText.ts`, unit-tested including the zero-pad and "no digits -> unchanged" cases; `state.lastLabelText` is the per-session memory `createNewLabel`'s caller would otherwise keep on the tool instance |
+| `P`: place power symbol | partial — any `power:<net>` resolves to a real rail symbol (`eda_model::symbol::builtin`'s generic fallback), so typing a custom rail name works, but this app's own quick-pick (a `<datalist>` of the common presets) is not KiCad's real searchable `DIALOG_SYMBOL_CHOOSER`; orientation (0/90/180/270) is a dialog field instead of a live mid-placement spin | `SCH_DRAWING_TOOLS::PlaceSymbol` (power filter) → `DIALOG_SYMBOL_CHOOSER`; `eeschema.InteractiveDrawing.placePowerSymbol` |
+| `T`: place text | identical in effect, adapted flow (see intro) — new `SchematicText` IR (`id`/`content`/`at`/`angle`/`size_um`; deliberately minimal next to real `SCH_TEXT`, no bold/italic/justify/color yet), `Cmd::AddSchText`/`DeleteSchText`, exposed over `GET /api/schematic` (`texts[]`) and rendered with the same Newstroke font every other schematic text uses (`painter.ts::drawSchText`, `LAYER_NOTES`). Also wired into `export_kicad_sch` (a `(text ...)` block, same shape as a label's own) and `import_kicad_sch` (reads `(text ...)` back), so free text now round-trips through a real `.kicad_sch` file like every other schematic item -- not independently round-trip-tested this session beyond the Rust unit/compile checks, since the existing label-import/export code it mirrors line-for-line was the thing actually verified against real files | `TwoClickPlace`/`createNewText`; `eeschema.InteractiveDrawing.placeSchematicText` |
+| `A`: place symbol, via a chooser over the sheet's own `lib_symbols` | missing — no symbol-chooser dialog built (next task item) | `SCH_DRAWING_TOOLS::PlaceSymbol` → `DIALOG_SYMBOL_CHOOSER` (recently-used/already-placed pseudo-libraries, live preview — not replicated; this app's own chooser should search the libraries the sheet already loads, per the task brief, rather than browse installed libraries) |
 | Placing a symbol with no intent counterpart adds a synthesized `Part`, shows up unplaced on PCB | identical | `reconcile_schematic`, see section 0 |
 
 ## 4. ERC (gap #4) (`sch_inspection_tool.cpp`, `dialog_erc.cpp`)
@@ -201,3 +225,28 @@ click through:
     `/api/cmd` POST in the network tab). With 2+ symbols selected, click
     and drag one member of the group — the whole group should move
     together, not just the one clicked.
+11. Press `L`, click near a wire/pin (should snap exactly onto it) — the
+    Label dialog should open pre-filled with an empty (first time) or
+    auto-incremented (after a prior placement) net name; confirm, then
+    click again elsewhere and confirm a second time with the suggested
+    text incremented by one (e.g. DATA0 → DATA1 if you typed "DATA0" the
+    first time). Confirm the tool stays armed (status bar still shows the
+    Label tool message) until Escape or `L` again. Repeat for Ctrl+`L`
+    (global) and `H` (hierarchical) — both should also show the Shape
+    dropdown the local-scope dialog doesn't.
+12. Press `P`, click near a pin — the Power Symbol dialog should open;
+    type/pick "power:GND", confirm, and check the symbol renders (a GND
+    tee/rail shape) at the clicked pin, and `GET /api/schematic` shows a
+    new `power_symbols[]` entry whose `net` is "GND". Try a custom rail
+    name (e.g. "power:+1V8") and confirm it still renders (the generic
+    rail shape) rather than erroring.
+13. Press `T`, click anywhere, type some text, confirm — check it renders
+    in the schematic (plain stroke-font text, no net) and
+    `GET /api/schematic` shows a new `texts[]` entry. Select it on the PCB
+    tab's export (`cargo run -- board export-kicad-sch` or equivalent) and
+    confirm a real KiCad instance (or at least `kicad-cli sch export`)
+    doesn't choke on the new `(text ...)` block.
+14. Press `Q`, click a pin that has nothing on it — confirm an X marker
+    appears there and stays armed for a second click elsewhere. Note: a
+    placed no-connect can't yet be selected/deleted from the canvas (see
+    section 2's own row) — undo (Ctrl+Z) is the only way back right now.

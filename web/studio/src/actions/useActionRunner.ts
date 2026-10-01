@@ -14,7 +14,7 @@
 // Canvas.tsx no longer needs any keydown handling of its own.
 
 import { useCallback, useMemo } from "react";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { commitRoute, dropViaAndSwitchLayer } from "../components/canvas/routing";
 import { openPropertiesFor } from "../components/canvas/properties";
@@ -608,6 +608,19 @@ export function useActionRunner() {
         dispatch({ type: "SET_DRAW_STATE", draw: draw.pts.length <= 1 ? null : { ...draw, pts: draw.pts.slice(0, -1) } });
       })
     );
+
+    // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp): arm/disarm each
+    // placement tool, same toggle shape as the wire tool above --
+    // SchematicView.tsx's onPointerDown owns the actual click behavior
+    // (pin-snap, open the right pending-dialog state, or for `Q`, commit
+    // immediately).
+    const toggleSchTool = (tool: Exclude<ToolId, "select">) => schematicOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool }));
+    m.set("eeschema.InteractiveDrawing.placeLabel", toggleSchTool("sch_label_local"));
+    m.set("eeschema.InteractiveDrawing.placeGlobalLabel", toggleSchTool("sch_label_global"));
+    m.set("eeschema.InteractiveDrawing.placeHierarchicalLabel", toggleSchTool("sch_label_hier"));
+    m.set("eeschema.InteractiveDrawing.placePowerSymbol", toggleSchTool("sch_power"));
+    m.set("eeschema.InteractiveDrawing.placeSchematicText", toggleSchTool("sch_text"));
+    m.set("eeschema.InteractiveDrawing.placeNoConnect", toggleSchTool("sch_no_connect"));
 
     return m;
   }, [api, dispatch, state]);

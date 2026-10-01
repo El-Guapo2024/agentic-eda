@@ -132,6 +132,10 @@ pub struct SchematicSection {
     /// Net label placements, sorted by (net, at).
     #[serde(default)]
     pub labels: Vec<NetLabel>,
+    /// `T`: free-standing text, sorted by (content, at). See
+    /// [`SchematicText`]'s own doc for why it's separate from `labels`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<SchematicText>,
     /// Power symbols (KiCad's `power:GND`/`power:VCC`/... instances) —
     /// one per power/ground pin, in place of a wire to a rail. Sorted by
     /// `id`.
@@ -277,6 +281,34 @@ impl NetLabel {
     }
 }
 
+/// `T`: free-standing text (KiCad's own `(text ...)`) — purely cosmetic,
+/// unlike [`NetLabel`]: it names no net and never participates in
+/// [`crate::symbol::builtin`]/`reconcile`'s connectivity pass, so adding it
+/// touches none of the "one netlist" machinery `Wire`/`NetLabel`/
+/// `PowerSymbol`/`NoConnect` all feed. Deliberately minimal next to KiCad's
+/// own `SCH_TEXT` (no bold/italic/justify/color yet) — those are easy,
+/// independent additions later if a real need shows up; starting minimal
+/// keeps this first cut small and easy to review, per the IR's own
+/// "extend additively" rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchematicText {
+    /// Stable id (`txt_xxxxxxxxxxxx`) — see `Wire::id`'s doc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub content: String,
+    pub at: Point,
+    #[serde(default)]
+    pub angle: Millideg,
+    pub size_um: Um,
+}
+
+impl SchematicText {
+    fn id_seed(&self) -> String {
+        format!("{}|{},{}", self.content, self.at.x, self.at.y)
+    }
+}
+
 /// A KiCad power symbol instance (`power:GND`, `power:VCC`, a custom
 /// rail...) — what a power/ground pin gets instead of a wire to a rail.
 /// Placed with its own connection pin exactly on the host pin's stub tip
@@ -367,6 +399,7 @@ impl SchematicSection {
             .iter()
             .map(|w| &w.id)
             .chain(self.labels.iter().map(|l| &l.id))
+            .chain(self.texts.iter().map(|t| &t.id))
             .chain(self.no_connects.iter().map(|nc| &nc.id))
             .filter(|s| !s.is_empty())
             .cloned()
@@ -389,6 +422,16 @@ impl SchematicSection {
                 let id = next_item_id("lbl", &self.labels[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.labels[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.texts.len()).collect();
+        order.sort_by(|&a, &b| (&self.texts[a].content, self.texts[a].at).cmp(&(&self.texts[b].content, self.texts[b].at)));
+        for i in order {
+            if self.texts[i].id.is_empty() {
+                let id = next_item_id("txt", &self.texts[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.texts[i].id = id;
             }
         }
 
@@ -902,6 +945,7 @@ mod tests {
                 ],
                 wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }] }],
                 labels: vec![],
+                texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
                 title_block: None,

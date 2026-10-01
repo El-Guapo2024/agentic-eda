@@ -19,6 +19,9 @@ import { ZoneDialog } from "./components/ZoneDialog";
 import { TextDialog } from "./components/TextDialog";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
 import { MoveExactDialog } from "./components/MoveExactDialog";
+import { LabelDialog } from "./components/LabelDialog";
+import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
+import { SchTextDialog } from "./components/SchTextDialog";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
@@ -140,6 +143,9 @@ function StudioFrame() {
       <TextDialog />
       <ItemPropertiesDialog />
       <MoveExactDialog />
+      <LabelDialog />
+      <PowerSymbolDialog />
+      <SchTextDialog />
     </div>
   );
 }

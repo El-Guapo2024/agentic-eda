@@ -49,6 +49,7 @@ export async function fetchSchematic(): Promise<Schematic> {
     lib_symbols: s.lib_symbols ?? {},
     power_symbols: s.power_symbols ?? [],
     no_connects: s.no_connects ?? [],
+    texts: s.texts ?? [],
     title_block: s.title_block ?? null,
     symbols: (s.symbols ?? []).map((sym) => {
       // `mirror` replaces an earlier `mirrored: boolean` (see types.ts's
