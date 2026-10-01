@@ -631,6 +631,17 @@ export interface RouteDisplacedLine {
   pts: [Um, Um][];
 }
 
+/** `Mode::Shove` only: a via the live preview would push aside -- no
+ * diameter/drill of its own (the board still carries the real via, by
+ * `source_via`, until a commit actually replaces it; the frontend looks
+ * those up from `BoardState.routing.vias` itself rather than this
+ * repeating them over the wire). */
+export interface RouteDisplacedVia {
+  source_via: string;
+  x: Um;
+  y: Um;
+}
+
 export interface RouteVia {
   x: Um;
   y: Um;
@@ -660,6 +671,8 @@ export interface RoutePreview {
   /** `Mode::Shove` only: other tracks this preview would push out of the
    * way if accepted. */
   displaced: RouteDisplacedLine[];
+  /** `Mode::Shove` only: other vias this preview would push out of the way. */
+  displaced_vias: RouteDisplacedVia[];
 }
 
 export interface RouteFixReply {
@@ -686,12 +699,21 @@ export interface DragPreview {
   ok: boolean;
   message?: string;
   colliding: boolean;
-  /** The dragged item's own new shape: two points for a via (its old and
-   * new position is not needed -- just read the last point as where it
-   * landed) or N points for a stretched track. */
+  /** The dragged item's own new shape: just its live position (1 point)
+   * for a via, or N points for a stretched track corner drag. */
   pts: [Um, Um][];
   /** `shove` mode only: other tracks this drag would push out of the way. */
   displaced: RouteDisplacedLine[];
+  /** `shove` mode only: other vias this drag would push out of the way. */
+  displaced_vias: RouteDisplacedVia[];
+  /** Via drag only: the via's own directly-attached tracks, each already
+   * stretched to follow `pts[0]` -- draw these too, or a dragged via's
+   * connections won't visibly follow it until the drag commits. Always
+   * empty for a corner drag (see `DragPreview::fanout` on the Rust side).
+   * Carries its own `width` (unlike `RoutePreviewRun`'s `runs`/`displaced`,
+   * which reuse the one active session width) since each attached track
+   * can genuinely have a different width from its neighbors. */
+  fanout: { layer: string; width: Um; pts: [Um, Um][] }[];
 }
 
 // ---------------------------------------------------------------- Ratsnest

@@ -199,15 +199,43 @@ up the real via before building its `Cmd::CommitRoute` entry; see
 `router.rs`'s `shove_mode_drag_displaces_a_via_and_the_commit_carries_its_real_size`
 test, which fails without the fix.
 
-**Not done**: the frontend. `D` (`pcbnew.InteractiveRouter.Drag45Degree`
-upstream) isn't wired into Canvas.tsx's move/drag tool -- `api/client.ts`
-has the three `routeDrag*` functions ready to call, but hooking them into
-the existing pointer-down/move/up move system (which today only
-understands translating a part/via/shape/text by a uniform `(dx, dy)`,
-not an arbitrary reshape) needs its own preview state and rendering path,
-the same scope of work the route tool's own frontend wiring was. This is
-the single largest remaining piece of gap #7 -- see the final report's
-ranked "what's left" list.
+A second real gap surfaced while wiring the frontend's live preview (below):
+`DragPreview` never carried the via-drag case's own attached tracks (its
+"fanout" -- the ones stretching to follow the via), only the via's own new
+point. `Dragger::candidate` always computed that fanout (it needs it for
+the mode's own collision check), but `preview()` dropped it on the floor
+rather than returning it, so a frontend drawing only `pts` would show the
+via jumping across the board with nothing visibly following it until the
+drag actually committed. Fixed: `DragPreview` gained a `fanout: Vec<Line>`
+field (always empty for a corner drag), covered by
+`dragging_a_via_drags_its_connected_track_with_it`'s new assertions. While
+in there: `crates/cli/src/route_api.rs`'s `preview_json`/`drag_preview_json`
+also never serialized `Preview`/`DragPreview`'s existing `displaced_vias`
+field into JSON at all (route AND drag alike) -- a shove-mode preview that
+would push a *via* out of the way never showed it moving until commit,
+even though the Rust-side data already existed. Both now send
+`displaced_vias: [{source_via, x, y}]`; the frontend looks up each one's
+real diameter from the board's own still-there via by id rather than this
+repeating it over the wire.
+
+**Frontend: done.** `D` (`pcbnew.InteractiveRouter.Drag45Degree`) is wired
+into Canvas.tsx's tool system, as its own one-shot action rather than
+through the uniform-`(dx,dy)` move/drag system `MovePreview` already
+handles for parts/vias/shapes/text (a drag session's shape is an arbitrary
+reshape, not a translation -- it needed its own preview state and render
+path, the same shape of work the route tool's own frontend wiring was):
+see `web/studio/PARITY-pcb.md` section 4 for the click-through. Still not
+done, same as upstream's own scope split (`InlineDrag` vs. a plain
+footprint `Move`): dragging a *footprint* through the router (so its
+attached tracks follow) -- this port's `Dragger` only ever drags a track
+segment/corner or a lone via (see the scope list above), matching real
+pcbnew's own `CanInlineDrag` rejecting a free-angle footprint drag too
+(`DM_FREE_ANGLE`, this port's only mode -- see "Free-angle corner
+relocation" above). A plain (non-router) footprint `Move` was already
+confirmed, by reading `edit_tool_move_fct.cpp` directly, to **not** drag
+attached tracks in real KiCad either -- see `PARITY-pcb.md` section 4's
+"Move: connected track ends follow the dragged footprint" row -- so there
+is no gap here to close, just a premise the task brief got wrong.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

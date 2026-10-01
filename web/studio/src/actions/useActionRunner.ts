@@ -20,6 +20,7 @@ import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta
 import { finishInteractiveRoute, cancelInteractiveRoute } from "../components/canvas/routing";
 import { routeMove, routeToggleVia, routeUndoSegment } from "../api/client";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
+import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
@@ -230,6 +231,27 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveRouter.SingleTrack",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "route" ? "select" : "route" }))
+    );
+    // `D` (ROUTER_TOOL::InlineDrag): a one-shot action, not a toggle-arm
+    // like `X` above -- grab whatever's under the cursor right now (or,
+    // failing that, a single already-selected track/via -- see
+    // dragging.ts's `findDraggableAt`) and start dragging it immediately.
+    // Refuses while another click-to-place session (route/zone/shape/wire/
+    // measure) is already mid-flight (`state.drawState`), same as real
+    // pcbnew's tool stack never overlapping two interactive placements.
+    m.set(
+      "pcbnew.InteractiveRouter.Drag45Degree",
+      pcbOnly(() => {
+        if (!state.board || !state.cursorUm || state.drawState) return;
+        const toleranceUm = Math.max(150, 6 / state.view.scale);
+        const onePixelUm = 1 / state.view.scale;
+        const hit = findDraggableAt(state.board, state.selection, state.cursorUm.x, state.cursorUm.y, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+        if (!hit) {
+          dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
+          return;
+        }
+        void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, dispatch);
+      })
     );
     m.set(
       "pcbnew.InteractiveDrawing.via",
@@ -457,9 +479,11 @@ export function useActionRunner() {
       // Tell the backend's router session to end too (fire-and-forget --
       // see cancelInteractiveRoute's own doc comment) before the ordinary
       // ESCAPE reducer case clears `drawState` locally; otherwise the
-      // session would linger server-side until the next `start` silently
-      // replaces it.
-      if (state.drawState?.kind === "route") cancelInteractiveRoute(dispatch);
+      // session would linger server-side until the next `start`/
+      // `drag_start` silently replaces it. One backend call covers both
+      // kinds (`POST /api/route/cancel` drops whatever's active on the
+      // shared `Router`), so route and drag share this same branch.
+      if (state.drawState?.kind === "route" || state.drawState?.kind === "drag") cancelInteractiveRoute(dispatch);
       dispatch({ type: "ESCAPE" });
     });
 

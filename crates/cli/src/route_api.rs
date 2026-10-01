@@ -58,6 +58,14 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
         "via": preview.via.map(|(p, diameter, drill)| json!({ "x": p.x, "y": p.y, "diameter": diameter, "drill": drill })),
         "snapped_end": preview.snapped_end.map(|p| json!([p.x, p.y])),
         "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
+        // `Preview::displaced_vias` existed on the Rust side since stage 3
+        // (shove) but was never actually serialized here -- a shove-mode
+        // route preview that would push a via out of the way never showed
+        // that via moving until the route was actually finished. The
+        // board still carries that via's real diameter/drill (it isn't
+        // removed until commit), so the frontend looks those up by id
+        // itself rather than this needing to repeat them.
+        "displaced_vias": preview.displaced_vias.iter().map(|d| json!({ "source_via": d.source_via, "x": d.pos.x, "y": d.pos.y })).collect::<Vec<_>>(),
     })
 }
 
@@ -191,6 +199,13 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
         "colliding": preview.colliding,
         "pts": pts_json(&preview.pts),
         "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
+        // See `preview_json`'s matching comment -- same previously-dropped field.
+        "displaced_vias": preview.displaced_vias.iter().map(|d| json!({ "source_via": d.source_via, "x": d.pos.x, "y": d.pos.y })).collect::<Vec<_>>(),
+        // `DragKind::Via` only: the attached tracks' own live stretched
+        // shape, so the frontend can draw them following the via while
+        // the drag is still in progress (see `DragPreview::fanout`'s own
+        // doc comment) -- empty for a corner drag.
+        "fanout": preview.fanout.iter().map(|l| json!({ "layer": router.layer_name(l.layer), "width": l.width, "pts": pts_json(&l.pts) })).collect::<Vec<_>>(),
     })
 }
 

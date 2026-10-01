@@ -24,7 +24,9 @@ import { layerColor } from "./layers";
 import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
 import { findRouteAnchor, posture45, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
-import { routeMove } from "../../api/client";
+import { routeMove, routeDragMove } from "../../api/client";
+import { finishInlineDrag } from "./dragging";
+import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
 import { pickDefaultZoomController, type ZoomController } from "../../kicad-port/zoomController";
@@ -472,6 +474,19 @@ export function Canvas() {
         return;
       }
 
+      // `D` (gap #7 stage 5, pcbnew.InteractiveRouter.Drag45Degree): the
+      // drag session itself is started by the hotkey the moment it's
+      // pressed (useActionRunner.ts -- there's no separate "click to
+      // start" step the way the route tool's `X` has, matching source's
+      // own one-shot `InlineDrag` activation), so a click here only ever
+      // commits it -- see dragging.ts's own doc on why that's always a
+      // finish, never a "fix this leg and keep going".
+      if (state.activeTool === "drag") {
+        if (state.drawState?.kind === "drag") void finishInlineDrag(sx, sy, dispatch, api);
+        else dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+        return;
+      }
+
       if (state.activeTool === "zone") {
         const draw = state.drawState;
         const pts: [number, number][] = draw?.kind === "zone" ? [...draw.pts, [sx, sy]] : [[sx, sy]];
@@ -680,6 +695,21 @@ export function Canvas() {
         routeMove(sx, sy).then((preview) => {
           if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
           dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
+        });
+      }
+    }
+
+    // `D`'s own live preview -- same throttle/guard pair as the route tool
+    // above (never both active at once: `Router` keeps a route session and
+    // a drag session mutually exclusive, see crates/pns/src/router.rs).
+    if (board && state.activeTool === "drag" && state.drawState?.kind === "drag") {
+      const draw = state.drawState;
+      if (routeMoveThrottleRef.current.shouldSend(performance.now())) {
+        const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+        const token = routeMoveGuardRef.current.next();
+        routeDragMove(sx, sy).then((preview) => {
+          if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
+          dispatch({ type: "SET_DRAW_STATE", draw: dragStateFromPreview(draw, preview) });
         });
       }
     }

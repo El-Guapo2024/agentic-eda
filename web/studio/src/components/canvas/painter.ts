@@ -556,7 +556,22 @@ function strokeDashedPolyline(ctx: CanvasRenderingContext2D, view: ViewTransform
  * `displaced` tracks each get their own pass so the whole live state is
  * visible, not just the current leg.
  */
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, opts: PaintOptions) {
+/** A dashed ghost circle at `(x, y)` -- a via about to land somewhere (the
+ * route tool's pending via) or one `Mode::Shove` would push there (a
+ * displaced via, for either the route or drag tool's live preview). */
+function strokeViaGhost(ctx: CanvasRenderingContext2D, view: ViewTransform, x: number, y: number, diameter: number, color: string) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = hairlineUm(view, 1.5);
+  ctx.setLineDash([hairlineUm(view, 3), hairlineUm(view, 2)]);
+  ctx.beginPath();
+  ctx.arc(x, y, diameter / 2, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   const draw = opts.drawState;
   if (!draw) return;
 
@@ -565,16 +580,28 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, opts
     for (const run of draw.runs ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     strokeDashedPolyline(ctx, view, draw.pts, draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer)), draw.width, false);
     for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width, false);
-    if (draw.via) {
-      ctx.save();
-      ctx.strokeStyle = draw.colliding ? violationColor : layerColor("via");
-      ctx.lineWidth = hairlineUm(view, 1.5);
-      ctx.setLineDash([hairlineUm(view, 3), hairlineUm(view, 2)]);
-      ctx.beginPath();
-      ctx.arc(draw.via.x, draw.via.y, draw.via.diameter / 2, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
+    for (const v of draw.displacedVias ?? []) {
+      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? draw.width;
+      strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
+    }
+    if (draw.via) strokeViaGhost(ctx, view, draw.via.x, draw.via.y, draw.via.diameter, draw.colliding ? violationColor : layerColor("via"));
+    return;
+  }
+
+  if (draw.kind === "drag") {
+    const violationColor = "#ff3333";
+    const color = draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer));
+    if (draw.dragKind === "via") {
+      const [x, y] = draw.pts[0] ?? [0, 0];
+      strokeViaGhost(ctx, view, x, y, draw.viaDiameter ?? 600, color);
+      for (const leg of draw.fanout ?? []) strokeDashedPolyline(ctx, view, leg.pts, layerColor(copperColorKey(leg.layer)), leg.width, false);
+    } else {
+      strokeDashedPolyline(ctx, view, draw.pts, color, draw.width, false);
+    }
+    for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width || 150, false);
+    for (const v of draw.displacedVias ?? []) {
+      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600;
+      strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
     }
     return;
   }
@@ -702,8 +729,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
   drawShapes(ctx, view, board, opts);
   drawTexts(ctx, view, board, opts);
-  // In-progress route/via/zone/drawing tool preview, on top of everything committed.
-  drawInProgress(ctx, view, opts);
+  // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
+  drawInProgress(ctx, view, board, opts);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
   // pcb_point_editor.cpp: a single selected zone's outline corners are
   // draggable handles, shown only in the plain Select tool (same as
