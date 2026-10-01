@@ -95,21 +95,146 @@ Pure logic: `src/kicad-port/gridSnap.ts`, 12 unit tests. Wiring:
 
 ## 3. Selection
 
-Not started this session beyond what already existed (see Canvas.tsx's
-own header comments). Port target: `pcbnew/tools/pcb_selection_tool.cpp`,
-`common/tool/selection_tool.cpp`.
+Mostly not started this session (click/box-select/clarification-menu/net-
+highlight predate this session -- see Canvas.tsx's own header comments).
+Added: `common.Interactive.selectAll`/`unselectAll` (Ctrl+A/Ctrl+Shift+A
+-- `useActionRunner.ts`, every placed footprint plus every track/via/
+zone/shape/text id; Unselect All only clears the selection, unlike Escape
+which also cancels whatever tool/drawing is in progress). Port target for
+everything else: `pcbnew/tools/pcb_selection_tool.cpp`, `common/tool/
+selection_tool.cpp`.
 
 ## 4. Edit tool
 
-Not started this session beyond what already existed. Port target:
-`pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`. Note: `delete`'s
-real per-platform hotkey (Del vs. Backspace) is now correctly extracted
-(see above) but `useActionRunner.ts`'s delete handler itself wasn't
-otherwise touched this session.
+Move's snap behavior got real anchor-snapping this session (section 2);
+move/rotate/flip/delete/the live preview-on-commit pattern predate this
+session and weren't otherwise touched. Not started: `pcbnew.
+InteractiveEdit.moveExact` (**Shift+M**, "Move Exactly..." -- a dialog
+for an exact relative offset) and `common.Interactive.duplicate`
+(**Cmd+D**/Ctrl+D) -- both explicitly named in this task and both
+confirmed **missing** (no handler anywhere in this app, not even a
+backend `Cmd` verb for "duplicate an item"; see the audit below). Adding
+`duplicate` properly needs a new backend verb per the task's hard rule
+("add it in Rust with a test") -- `crates/ops`'s `Cmd` enum
+(`web/studio/src/api/types.ts`'s `Cmd` union mirrors it 1:1) has no
+duplicate-anything op today, for parts, vias, shapes, or text. Not
+attempted this session; ranked as the top follow-up in the final report.
+Port target: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`.
 
 ## 5. Context menus and hotkeys
 
 `useActionRunner.ts`'s zoom-action registry was corrected/extended this
 session (zoomIn/zoomOut/zoomFitObjects/zoomCenter/zoomRedraw/
-resetLocalCoords -- see section 1). The rest of the context-menu/hotkey
-surface wasn't otherwise revisited this session.
+resetLocalCoords -- see section 1). The context menu itself
+(`Canvas.tsx:onContextMenu`) wasn't otherwise revisited.
+
+### Hotkey coverage audit
+
+Of 766 extracted actions, 201 have a real default hotkey (hotkey or
+macHotkey non-null). 36 of those are registered in
+`useActionRunner.ts` (and therefore reachable from `useGlobalHotkeys.ts`,
+the menu bar, and the toolbars) -- including `selectAll`/`unselectAll`
+(Ctrl+A/Ctrl+Shift+A), added this session since they were trivial, safe,
+and directly in item 3's (Selection) territory. 165 are not registered.
+55 of those are `eeschema.*` -- out of scope for *pcbnew* parity
+specifically, since this app's Schematic tab is read-only by design (no
+schematic editing verbs exist in the backend yet). The remaining 110 (67
+`pcbnew.*`, 43 `common.*` that apply to both editors) are genuine
+pcbnew-parity gaps, listed here per the task's "explicitly listed as
+missing" instruction rather than left silently unimplemented:
+
+#### `pcbnew.*` missing (67)
+
+| Action | Hotkey | Label |
+|---|---|---|
+| `pcbnew.Array.createArray` | Ctrl+T | Create Array... |
+| `pcbnew.Control.changeTrackLayerNext` | Ctrl++ | Switch Track to Next Layer |
+| `pcbnew.Control.changeTrackLayerPrev` | Ctrl+- | Switch Track to Previous Layer |
+| `pcbnew.Control.layerAlphaDec` | { | Decrease Layer Opacity |
+| `pcbnew.Control.layerAlphaInc` | } | Increase Layer Opacity |
+| `pcbnew.Control.layerNext` | + | Switch to Next Layer |
+| `pcbnew.Control.layerPairPresetCycle` | Shift+V | Cycle Layer Pair Presets |
+| `pcbnew.Control.layerPrev` | - | Switch to Previous Layer |
+| `pcbnew.EditorControl.clearHighlight` | ~ | Clear Net Highlighting |
+| `pcbnew.EditorControl.EditFpInFpEditor` | Ctrl+E | Open in Footprint Editor |
+| `pcbnew.EditorControl.EditLibFpInFpEditor` | Ctrl+Shift+E | Edit Library Footprint... |
+| `pcbnew.EditorControl.highlightNet` | \` | Highlight Net |
+| `pcbnew.EditorControl.lineModeNext` | Shift+Space | Line Modes |
+| `pcbnew.EditorControl.placeFootprint` | A | Place Footprints |
+| `pcbnew.EditorControl.toggleLock` | L | Toggle Lock |
+| `pcbnew.EditorControl.trackWidthDec` | Shift+W | Switch Track Width to Previous |
+| `pcbnew.EditorControl.trackWidthInc` | W | Switch Track Width to Next |
+| `pcbnew.EditorControl.viaSizeInc` | \\ | Increase Via Size |
+| `pcbnew.InteractiveDrawing.arcPosture` | / | Switch Arc Posture |
+| `pcbnew.InteractiveDrawing.bezier` | Ctrl+Shift+B | Draw Bezier Curve |
+| `pcbnew.InteractiveDrawing.decWidth` | Ctrl+- | Decrease Line Width |
+| `pcbnew.InteractiveDrawing.deleteLastPoint` | Backspace | Delete Last Point |
+| `pcbnew.InteractiveDrawing.incWidth` | Ctrl++ | Increase Line Width |
+| `pcbnew.InteractiveDrawing.orthogonalDimension` | Ctrl+Shift+H | Draw Orthogonal Dimensions |
+| `pcbnew.InteractiveDrawing.placeDesignBlock` | Shift+B | Place Design Block |
+| `pcbnew.InteractiveDrawing.placeImportedGraphics` | Ctrl+Shift+F | Import Graphics... |
+| `pcbnew.InteractiveDrawing.ruleArea` | Ctrl+Shift+K | Draw Rule Areas |
+| `pcbnew.InteractiveDrawing.setAnchor` | Ctrl+Shift+N | Place the Footprint Anchor |
+| `pcbnew.InteractiveDrawing.similarZone` | Ctrl+Shift+. | Add a Similar Zone |
+| `pcbnew.InteractiveDrawing.zoneCutout` | Shift+C | Add a Zone Cutout |
+| `pcbnew.InteractiveEdit.deleteFull` | Shift+Del | Delete Full Track |
+| `pcbnew.InteractiveEdit.duplicateIncrementPads` | Ctrl+Shift+D | Duplicate and Increment |
+| `pcbnew.InteractiveEdit.FindMove` | T | Get and Move Footprint |
+| `pcbnew.InteractiveEdit.moveExact` | Shift+M | Move Exactly... |
+| `pcbnew.InteractiveEdit.packAndMoveFootprints` | P | Pack and Move Footprints |
+| `pcbnew.InteractiveEdit.skip` | Tab | Skip |
+| `pcbnew.InteractiveEdit.swap` | Alt+S | Swap |
+| `pcbnew.InteractiveMove.moveIndividually` | Ctrl+M | Move Individually |
+| `pcbnew.InteractiveRouter.Autoroute` | Shift+F | Attempt Finish Selected (Autoroute) |
+| `pcbnew.InteractiveRouter.ContinueFromEnd` | Ctrl+E | Route From Other End |
+| `pcbnew.InteractiveRouter.DiffPair` | 6 | Route Differential Pair |
+| `pcbnew.InteractiveRouter.Drag45Degree` | D | Drag 45 Degree Mode |
+| `pcbnew.InteractiveRouter.DragFreeAngle` | G | Drag Free Angle |
+| `pcbnew.InteractiveRouter.RouteSelected` | Shift+X | Route Selected |
+| `pcbnew.InteractiveRouter.RouteSelectedFromEnd` | Shift+E | Route Selected From Other End |
+| `pcbnew.InteractiveRouter.SettingsDialog` | Ctrl+< | Interactive Router Settings... |
+| `pcbnew.InteractiveRouter.UndoLastSegment` | Backspace | Undo Last Segment |
+| `pcbnew.InteractiveSelection.GrabUnconnected` | Shift+O | Grab Nearest Unconnected Footprints |
+| `pcbnew.InteractiveSelection.SelectConnection` | U | Select/Expand Connection |
+| `pcbnew.InteractiveSelection.SelectUnconnected` | O | Select All Unconnected Footprints |
+| `pcbnew.InteractiveSelection.unrouteSegment` | Backspace | Unroute Segment |
+| `pcbnew.lengthTuner.AmplDecrease` | 4 | Decrease Amplitude |
+| `pcbnew.lengthTuner.AmplIncrease` | 3 | Increase Amplitude |
+| `pcbnew.LengthTuner.Settings` | Ctrl+L | Length Tuning Settings... |
+| `pcbnew.lengthTuner.SpacingDecrease` | 2 | Decrease Spacing |
+| `pcbnew.lengthTuner.SpacingIncrease` | 1 | Increase Spacing |
+| `pcbnew.LengthTuner.TuneDiffPair` | 8 | Tune Length of a Differential Pair |
+| `pcbnew.LengthTuner.TuneDiffPairSkew` | 9 | Tune Skew of a Differential Pair |
+| `pcbnew.LengthTuner.TuneSingleTrack` | 7 | Tune Length of a Single Track |
+| `pcbnew.ModuleEditor.newFootprint` | Ctrl+N | New Footprint |
+| `pcbnew.PadTool.explodePad` | Ctrl+E | Edit Pad as Graphic Shapes |
+| `pcbnew.PadTool.recombinePad` | Ctrl+E | Finish Pad Edit |
+| `pcbnew.PointEditor.addCorner` | F1 | Create Corner |
+| `pcbnew.PositionRelative.positionRelative` | Shift+P | Position Relative To... |
+| `pcbnew.TableEditor.editTable` | Ctrl+E | Edit Table... |
+| `pcbnew.ZoneFiller.zoneFillAll` | B | Fill All Zones |
+| `pcbnew.ZoneFiller.zoneUnfillAll` | Ctrl+B | Unfill All Zones |
+
+#### `common.*` missing, relevant to pcbnew (43)
+
+| Action | Hotkey | Label |
+|---|---|---|
+| `common.Control.cursorClick` | Enter | Click |
+| `common.Control.cursorDblClick` | End | Double-click |
+| `common.Control.cursorDown`/`Up`/`Left`/`Right`(`Fast`) | arrows, Ctrl+arrows | Cursor movement -- KiCad's keyboard-driven cursor, a different interaction model this app doesn't have (mouse-only cursor positioning) |
+| `common.Control.gridFast1`/`gridFast2`/`gridFastCycle` | Alt+1/2/4 | Two "fast grid" presets independent of the main grid list |
+| `common.Control.libraryTreeSearch` | Ctrl+L | Focus Library Tree Search Field (no library tree in this app) |
+| `common.Control.magneticSnapToggle` | Shift+S | Toggle Snapping Between Active and All Layers |
+| `common.Control.new`/`open`/`print`/`save`/`saveAs` | Ctrl+N/O/P/S/Shift+S | File operations -- this app has no file model (the backend persists every command immediately) |
+| `common.Control.panDown`/`Up`/`Left`/`Right` | Shift+arrows | Keyboard panning |
+| `common.Control.showDatasheet` | D | Show Datasheet |
+| `common.Control.toggleGridOverrides` | Ctrl+Shift+G | Grid Overrides |
+| `common.Control.updatePcbFromSchematic` | F8 | Update PCB from Schematic... (no schematic editing to update from) |
+| `common.Control.zoomTool` | Ctrl+F5 | Zoom to Selection Area (drag-to-zoom-box; see section 1) |
+| `common.Interactive.copy`/`cut`/`paste`/`pasteSpecial`/`copyAsText` | Ctrl+C/X/V/Shift+V/Shift+C | Clipboard -- no backend verb for any of these yet |
+| `common.Interactive.cycleArcEditMode` | Ctrl+Space | Cycle Arc Editing Mode |
+| `common.Interactive.duplicate` | **Ctrl+D** | **Duplicate -- explicitly named in this task's Edit tool item; see section 4** |
+| `common.Interactive.find`/`findAndReplace`/`findNext`/`findPrevious`/`findNextMarker` | Ctrl+F, ... | Find/Replace |
+| `common.Interactive.finish` | End | Finish (generic "end the current interactive action") |
+| `common.Interactive.measureTool` | Ctrl+Shift+M | Measure Tool |
+| `common.SuiteControl.openPreferences` | Ctrl+, | Preferences... (no Preferences dialog in this app) |

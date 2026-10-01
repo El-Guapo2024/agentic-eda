@@ -312,6 +312,30 @@ export function useActionRunner() {
     m.set("common.Interactive.search", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "activity" }));
     m.set("pcbnew.Control.showNetInspector", () => dispatch({ type: "SET_NET_INSPECTOR_OPEN", open: true }));
 
+    // common.Interactive.selectAll/unselectAll: every placed footprint
+    // (respecting the footprints selection-filter toggle, same as a box
+    // select already does -- tracks/vias/zones/shapes/text have no
+    // filter toggle of their own yet, per selectionFilter's own doc in
+    // state/store.tsx) plus every track/via/zone/shape/text id. Unselect
+    // All only clears the selection (SET_SELECTION, not CLEAR_SELECTION
+    // -- it shouldn't also cancel an in-progress tool/drawing the way
+    // Escape does).
+    m.set(
+      "common.Interactive.selectAll",
+      pcbOnly(() => {
+        if (!state.board) return;
+        const refs: string[] = [];
+        if (state.selectionFilter.footprints) for (const p of state.board.parts) if (p.placed) refs.push(p.ref);
+        for (const t of state.board.routing?.tracks ?? []) refs.push(t.id);
+        for (const v of state.board.routing?.vias ?? []) refs.push(v.id);
+        for (const z of state.board.routing?.zones ?? []) refs.push(z.id);
+        for (const s of state.board.drawings?.shapes ?? []) refs.push(s.id);
+        for (const t of state.board.drawings?.texts ?? []) refs.push(t.id);
+        dispatch({ type: "SET_SELECTION", refs });
+      })
+    );
+    m.set("common.Interactive.unselectAll", pcbOnly(() => dispatch({ type: "SET_SELECTION", refs: [] })));
+
     return m;
   }, [api, dispatch, state]);
 
