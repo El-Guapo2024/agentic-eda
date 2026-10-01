@@ -705,6 +705,40 @@ impl ConstraintModel {
         }
         symbol::builtin(lib_id)
     }
+    /// [`Self::symbol_of`], but `None` outright for an empty or synthetic
+    /// (`"eda:..."`) lib_id, without even trying `self.symbols`/`builtin` --
+    /// and `None` too when the symbol that *did* resolve doesn't actually
+    /// speak for `part`'s own pins. The common "does this instance have a
+    /// real symbol to place real geometry from" question
+    /// `eda_engine::geometry`'s real-symbol-aware
+    /// `node_size`/`build_ports`/`nc_pin_local_points`, the ERC port, and
+    /// the `.kicad_sch` writer all ask before falling back to the
+    /// synthetic box.
+    ///
+    /// `resolve_lib_id` matches a connector-shaped part to
+    /// `Connector_Generic:Conn_01x<N>` by pin *count* alone, whose pins are
+    /// numbered "1".."N" sequentially -- fine for a part whose own pins are
+    /// numbered the same way (`examples/nc_pins.yaml`'s J1), but a real-world
+    /// connector's own pad names rarely are
+    /// (`examples/ladder/l1_usb_mcu.yaml`'s J1, a USB-C receptacle, numbers
+    /// its pins `"A1".."B12"`/`"SH"`). Using that symbol's geometry anyway
+    /// would silently drop every pin `build_ports_from_real_symbol` can't
+    /// find by number -- not just mis-drawing the part, but crashing the
+    /// layout engine the first time it tries to wire one of those "missing"
+    /// pins (`"NC pin cannot be wired"`), since nothing downstream expects a
+    /// non-`Nc` pin to come back with no port. Requiring every one of
+    /// `part`'s own pins (`Nc`-kind ones too, so a part's full pin count is
+    /// always drawn) to resolve by number -- or none of them to, falling
+    /// back to the honest synthetic box exactly as if nothing had resolved
+    /// -- keeps that guarantee without each of this method's many call
+    /// sites having to re-derive it.
+    pub fn real_symbol_of(&self, lib_id: &str, part: &Part) -> Option<LibSymbol> {
+        if lib_id.is_empty() || symbol::is_synthetic_lib_id(lib_id) {
+            return None;
+        }
+        let sym = self.symbol_of(lib_id)?;
+        if part.pins.iter().all(|p| sym.pin_by_number(&p.number).is_some()) { Some(sym) } else { None }
+    }
     /// Simple glob match ('*' wildcard) over net names.
     pub fn nets_matching(&self, pattern: &str) -> Vec<&Net> {
         self.nets.iter().filter(|n| glob_match(pattern, &n.name)).collect()

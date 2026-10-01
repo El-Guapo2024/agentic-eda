@@ -37,7 +37,7 @@ pub fn render_schematic(design: &Design, model: &ConstraintModel) -> Result<Stri
     let mut boxes = Vec::with_capacity(sch.symbols.len());
     for sym in &sch.symbols {
         match model.part(&sym.id) {
-            Some(part) => boxes.push(SymbolBox::build(sym, part)),
+            Some(part) => boxes.push(SymbolBox::build(sym, part, model)),
             None => errors.push(CheckResult::fail(
                 "render.missing_part",
                 sym.id.clone(),
@@ -337,19 +337,21 @@ struct SymbolBox<'a> {
     height: i64,
     ports: Vec<Port>,
     pin_of_port: Vec<Option<usize>>, // port idx -> pin idx in part.pins
+    resolved: Option<eda_model::symbol::LibSymbol>,
 }
 
 impl<'a> SymbolBox<'a> {
-    fn build(sym: &'a SymbolInstance, part: &'a Part) -> Self {
-        let (width, height) = geometry::node_size(part);
-        let (ports, pin_port) = geometry::build_ports(part, width, height);
+    fn build(sym: &'a SymbolInstance, part: &'a Part, model: &ConstraintModel) -> Self {
+        let resolved = model.real_symbol_of(&sym.lib_id, part);
+        let (width, height) = geometry::node_size(part, resolved.as_ref());
+        let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref());
         let mut pin_of_port = vec![None; ports.len()];
         for (pin_idx, port_idx) in pin_port.iter().enumerate() {
             if let Some(pi) = port_idx {
                 pin_of_port[*pi] = Some(pin_idx);
             }
         }
-        Self { sym, part, width, height, ports, pin_of_port }
+        Self { sym, part, width, height, ports, pin_of_port, resolved }
     }
 
     /// Local-space (box top-left = 0,0) corners, before the symbol's own
@@ -413,7 +415,7 @@ impl<'a> SymbolBox<'a> {
         let _ = (is_passive, cy, h_mm);
         let sym_x = self.sym.at.x as f64 / 1000.0;
         let sym_y = self.sym.at.y as f64 / 1000.0;
-        let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height);
+        let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height, self.resolved.as_ref());
         let ref_y = geometry::resolve_text_y_obs(sym_x, sym_y, 0.0, base_ref_y, -1.0, &self.sym.id, 1.6, geometry::HAnchor::Start, wires, obstacles);
         let ref_box = geometry::text_bbox(sym_x, sym_y + ref_y, &self.sym.id, 1.6, geometry::HAnchor::Start);
         obstacles.push(ref_box);
@@ -480,7 +482,7 @@ impl<'a> SymbolBox<'a> {
         // ref/value off the box's top/bottom edge (as for a genuinely tall
         // IC box) leaves them floating several mm from the part a reader
         // actually sees. Anchor to `cy` instead for passives.
-        let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height);
+        let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height, self.resolved.as_ref());
         let sym_x = self.sym.at.x as f64 / 1000.0;
         let sym_y = self.sym.at.y as f64 / 1000.0;
         let ref_y = geometry::resolve_text_y_obs(sym_x, sym_y, 0.0, base_ref_y, -1.0, &self.sym.id, 1.6, geometry::HAnchor::Start, wires, obstacles);

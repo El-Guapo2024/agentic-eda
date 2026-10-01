@@ -119,7 +119,158 @@ pub const HEIGHT_STEP: i64 = 2_540; // 2.54mm per pair of pins beyond 4
 /// (never touched by this pass) only ever sees the resulting `(width,
 /// height)` as opaque `Node` dimensions — it has no idea *why* a box is this
 /// size, only that it is.
-pub fn node_size(part: &Part) -> (i64, i64) {
+/// The box edges (library frame: mm, +y **up**) a resolved real library
+/// symbol implies -- the real-geometry replacement for the synthetic
+/// system's own procedurally-sized box, consumed by both
+/// [`build_ports_from_real_symbol`] (as the reference corner each pin's
+/// `Port::offset` is measured from) and [`node_size`] (as the box to pack).
+///
+/// A side with at least one real pin takes its edge from *that pin's own
+/// electrical point* (`LibPin::at`), offset by this project's fixed
+/// [`eda_layout::graph::STUB_LEN`] -- **not** from the body graphics, and
+/// not from the pin's own `length_mm` back toward the body. This matters
+/// because `eda_layout::Node::stub_tip` (what a wire actually terminates
+/// at) always extends a `Port` exactly `STUB_LEN` past this box's own
+/// edge, by a fixed amount every other part of this workspace already
+/// assumes; a real pin's own `length_mm` is routinely something else
+/// entirely (`Device:C`'s own plates sit 3.3mm from its pins, not the
+/// 1.27mm `STUB_LEN` a synthetic part's stub always is). Deriving the edge
+/// from "pin point minus the fixed stub", instead of from the body or the
+/// pin's own real length, is what makes `stub_tip` land exactly back on
+/// `at` regardless of the real symbol's own geometry -- verified against
+/// `Device:C` (plates at +-0.508mm, pins at +-3.81mm/length 3.302mm): the
+/// naive graphics-plus-pins bbox this function used to return put the
+/// edge at the plates' own +-1.524mm, 1.27mm off the schematic grid and
+/// nowhere near either the plates or a stub-reachable point; this does
+/// neither.
+///
+/// A side with no real pin at all (rare -- every part this project places
+/// has at least one real electrical connection somewhere) falls back to
+/// the body graphics' own extent on that side, since there is no pin
+/// position to anchor a stub-reachable edge to.
+pub fn real_symbol_bbox(sym: &eda_model::symbol::LibSymbol) -> (f64, f64, f64, f64) {
+    use eda_model::symbol::SymbolGraphic;
+    let (mut gx0, mut gy0, mut gx1, mut gy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut feed = |x: f64, y: f64| {
+        gx0 = gx0.min(x);
+        gy0 = gy0.min(y);
+        gx1 = gx1.max(x);
+        gy1 = gy1.max(y);
+    };
+    for g in &sym.graphics {
+        match g {
+            SymbolGraphic::Rectangle { start, end, .. } => {
+                feed(start.x, start.y);
+                feed(end.x, end.y);
+            }
+            SymbolGraphic::Polyline { pts, .. } => {
+                for p in pts {
+                    feed(p.x, p.y);
+                }
+            }
+            SymbolGraphic::Circle { center, radius_mm, .. } => {
+                feed(center.x - radius_mm, center.y - radius_mm);
+                feed(center.x + radius_mm, center.y + radius_mm);
+            }
+            SymbolGraphic::Arc { start, mid, end, .. } => {
+                feed(start.x, start.y);
+                feed(mid.x, mid.y);
+                feed(end.x, end.y);
+            }
+            SymbolGraphic::Text { at, .. } => feed(at.x, at.y),
+        }
+    }
+    if !gx0.is_finite() {
+        // No graphics at all (power symbols, mostly): nothing to fall
+        // back to, but stay finite rather than propagate infinity into a
+        // side with no pins either (shouldn't happen in practice).
+        gx0 = 0.0;
+        gy0 = 0.0;
+        gx1 = 0.0;
+        gy1 = 0.0;
+    }
+
+    let stub_mm = STUB as f64 / 1000.0;
+    let (mut left, mut right, mut bottom, mut top): (Option<f64>, Option<f64>, Option<f64>, Option<f64>) = (None, None, None, None);
+    for pin in &sym.pins {
+        match side_from_pin_angle(pin.angle_deg) {
+            // Same-side pins share one perpendicular coordinate in every
+            // real symbol this project places (that is what "being on the
+            // same side" means visually); where it ever doesn't, picking
+            // any one of them is no more wrong than any other, so `min`/
+            // `max` here is just a deterministic choice, not a hedge.
+            Side::Left => left = Some(left.map_or(pin.at.x + stub_mm, |v: f64| v.max(pin.at.x + stub_mm))),
+            Side::Right => right = Some(right.map_or(pin.at.x - stub_mm, |v: f64| v.min(pin.at.x - stub_mm))),
+            Side::Bottom => bottom = Some(bottom.map_or(pin.at.y + stub_mm, |v: f64| v.max(pin.at.y + stub_mm))),
+            Side::Top => top = Some(top.map_or(pin.at.y - stub_mm, |v: f64| v.min(pin.at.y - stub_mm))),
+        }
+    }
+    let x0 = left.unwrap_or(gx0);
+    let x1 = right.unwrap_or(gx1);
+    let y0 = bottom.unwrap_or(gy0);
+    let y1 = top.unwrap_or(gy1);
+
+    // Snap outward to the schematic grid. A real library's own *pins* are
+    // always grid-aligned from the symbol's origin (true of every one of
+    // this project's own built-ins, Device:R/C/L/D/LED and the parametric
+    // connector, and of real KiCad libraries by long-standing convention)
+    // and `STUB_LEN` itself is exactly one grid cell, so a pin-derived
+    // edge is already grid-aligned; snapping only ever matters for a
+    // graphics-derived fallback edge, and is harmless (a no-op) otherwise.
+    let grid_mm = GRID as f64 / 1000.0;
+    let x0 = (x0 / grid_mm).floor() * grid_mm;
+    let y0 = (y0 / grid_mm).floor() * grid_mm;
+    let x1 = (x1 / grid_mm).ceil() * grid_mm;
+    let y1 = (y1 / grid_mm).ceil() * grid_mm;
+    (x0, y0, x1, y1)
+}
+
+/// Which side a real pin's own stub attaches to, from its KiCad
+/// `angle_deg` (0/90/180/270: the direction from the pin's outer point
+/// *toward* the symbol body, in the library's own +y-**up** frame).
+/// Negating the Y component reads the same direction in sheet space (+y
+/// **down**), and the surviving axis says which edge the pin's outer point
+/// sits beyond: pointing down (toward the body) means the outer point is
+/// above the body, i.e. a Top pin; pointing right means a Left pin; and so
+/// on. Verified against `Device:R` (pin 1 at library `(0, 3.81)`, angle
+/// 270 -- library-south, i.e. sheet-down, toward the body below it -- is
+/// exactly the Top pin the synthetic layout would also give a 2-pin
+/// vertical passive).
+fn side_from_pin_angle(angle_deg: f64) -> Side {
+    match ((angle_deg.rem_euclid(360.0) / 90.0).round() as i64).rem_euclid(4) {
+        0 => Side::Left,
+        1 => Side::Bottom,
+        2 => Side::Right,
+        _ => Side::Top,
+    }
+}
+
+/// Box size (width, height) for `part`: when `resolved` is a real library
+/// symbol, its own bounding box ([`real_symbol_bbox`]), rounded up to
+/// [`GRID`] purely for layout packing (wires still terminate at each pin's
+/// own exact, un-rounded point -- see [`build_ports`] -- so rounding this
+/// box can never pull a wire off its pin). Otherwise the synthetic,
+/// procedurally-sized box below.
+pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>) -> (i64, i64) {
+    if let Some(sym) = resolved {
+        let (x0, y0, x1, y1) = real_symbol_bbox(sym);
+        let width_um = ((x1 - x0).max(0.0) * 1000.0).round() as i64;
+        let height_um = ((y1 - y0).max(0.0) * 1000.0).round() as i64;
+        let width = ((width_um.max(1) + GRID - 1) / GRID) * GRID;
+        let height = ((height_um.max(1) + GRID - 1) / GRID) * GRID;
+        // NOT floored to the old synthetic minimum, deliberately: a real
+        // symbol's box edges on a side with a real pin are load-bearing
+        // for `Node::stub_tip` (its Bottom/Right ports measure from
+        // `top_left + (width or height)`, so inflating either would move
+        // a bottom/right pin's computed stub tip away from where
+        // `baked_real_point` actually draws that same pin, breaking
+        // connectivity exactly the way the original Y-axis bug this task
+        // already fixed once did). Ref/value text placement's own need
+        // for a less cramped box (`ref_slot_local`/`value_slot_local`) is
+        // handled there instead, without touching the box real geometry
+        // everything else relies on.
+        return (width, height);
+    }
     let pin_count = part.pins.len();
     let extra = pin_count.saturating_sub(4);
     let pairs = extra.div_ceil(2);
@@ -129,7 +280,7 @@ pub fn node_size(part: &Part) -> (i64, i64) {
     // on pin kind/name — see `build_ports`'s doc comment), so a throwaway
     // `BASE_WIDTH` first pass safely tells us which pins land on which side
     // before we know the final width.
-    let (ports, pin_port) = build_ports(part, BASE_WIDTH, height);
+    let (ports, pin_port) = build_ports(part, BASE_WIDTH, height, None);
     let mut north_names: Vec<&str> = Vec::new();
     let mut south_names: Vec<&str> = Vec::new();
     let mut west_names: Vec<&str> = Vec::new();
@@ -244,7 +395,10 @@ pub fn is_power_or_ground_net_name(name: &str) -> bool {
 /// unmatched (e.g. numbered passive leads with no directional name) falls
 /// back to an even West/East split, preserving the original layout for
 /// simple 2-pin passives.
-pub fn build_ports(part: &Part, width: i64, height: i64) -> (Vec<Port>, Vec<Option<usize>>) {
+pub fn build_ports(part: &Part, width: i64, height: i64, resolved: Option<&eda_model::symbol::LibSymbol>) -> (Vec<Port>, Vec<Option<usize>>) {
+    if let Some(sym) = resolved {
+        return build_ports_from_real_symbol(part, sym);
+    }
     let mut north = Vec::new();
     let mut south = Vec::new();
     let mut west_named = Vec::new();
@@ -325,6 +479,60 @@ pub fn build_ports(part: &Part, width: i64, height: i64) -> (Vec<Port>, Vec<Opti
     (ports, pin_port)
 }
 
+/// [`build_ports`]'s real-symbol path: one port per non-`Nc` pin, placed at
+/// its own real body-attachment point (`LibPin::at` moved `length_mm`
+/// toward the body along `angle_deg`) rather than evenly distributed by
+/// the synthetic heuristic -- a connector's pin 1 lands exactly where
+/// `Device:R`'s/`Connector_Generic`'s own library data puts it, not
+/// wherever an even split would. `part.pins` (our own intent order) is
+/// matched to the real symbol's pins by number (`pin_by_number`), not by
+/// list position, since a real library's own pin order need not match
+/// ours; a pin number the real symbol doesn't have gets no port at all
+/// (defensive -- real/intent data should always agree on pin numbers for
+/// the same `lib_id`).
+fn build_ports_from_real_symbol(part: &Part, sym: &eda_model::symbol::LibSymbol) -> (Vec<Port>, Vec<Option<usize>>) {
+    let (x0, _y0, _x1, y1) = real_symbol_bbox(sym);
+    struct Placed {
+        pin_i: usize,
+        side: Side,
+        offset: i64,
+    }
+    let mut placed: Vec<Placed> = Vec::new();
+    for (i, pin) in part.pins.iter().enumerate() {
+        if pin.kind == PinKind::Nc {
+            continue; // no port; positioned via `nc_pin_local_points` instead
+        }
+        let Some(real_pin) = sym.pin_by_number(&pin.number) else { continue };
+        let side = side_from_pin_angle(real_pin.angle_deg);
+        let theta = real_pin.angle_deg.to_radians();
+        let body_x = real_pin.at.x + real_pin.length_mm * theta.cos();
+        let body_y = real_pin.at.y + real_pin.length_mm * theta.sin();
+        // Top/Bottom offsets run left-to-right (library +x, unaffected by
+        // the sheet's y-flip): distance from the box's own left edge.
+        // Left/Right offsets run top-to-bottom in *sheet* space, which is
+        // bottom-to-top in the library's +y-up frame: distance from the
+        // box's library-frame top (`y1`, its largest y).
+        let offset_mm = match side {
+            Side::Top | Side::Bottom => body_x - x0,
+            Side::Left | Side::Right => y1 - body_y,
+        };
+        let offset = ((offset_mm * 1000.0).round() as i64).max(0);
+        placed.push(Placed { pin_i: i, side, offset });
+    }
+
+    let mut ports = Vec::new();
+    let mut pin_port = vec![None; part.pins.len()];
+    for want in [Side::Top, Side::Bottom, Side::Left, Side::Right] {
+        let mut group: Vec<&Placed> = placed.iter().filter(|p| p.side == want).collect();
+        group.sort_by_key(|p| p.offset);
+        for p in group {
+            ports.push(Port { side: p.side, offset: p.offset });
+            pin_port[p.pin_i] = Some(ports.len() - 1);
+        }
+    }
+    (ports, pin_port)
+}
+
 // ---------------------------------------------------------------- shared text-box estimation
 //
 // Used by both `eda-render` (to place ref/value/pin/net-label text with
@@ -345,11 +553,35 @@ pub fn build_ports(part: &Part, width: i64, height: i64) -> (Vec<Port>, Vec<Opti
 pub const REF_FONT_MM: f64 = 1.6;
 pub const VALUE_FONT_MM: f64 = 1.4;
 
+/// True when `part`'s real library pins are both on the box's Top/Bottom
+/// edges -- a vertically-drawn 2-pin device, which is how every passive this
+/// project resolves to a real symbol (`Device:R`/`C`/`L`/`D`/LED) actually
+/// draws. See [`ref_slot_local`]'s doc comment for why this matters.
+fn is_vertical_two_pin(resolved: Option<&eda_model::symbol::LibSymbol>) -> bool {
+    let Some(sym) = resolved else { return false };
+    sym.pins.len() == 2 && sym.pins.iter().all(|p| matches!(side_from_pin_angle(p.angle_deg), Side::Top | Side::Bottom))
+}
+
 /// Baseline of the refdes slot, in the symbol's local mm space (box
 /// top-left = 0,0). Left-aligned at the box's left edge.
-pub fn ref_slot_local(part: &Part, height_um: i64) -> (f64, f64) {
+///
+/// The two-pin-passive mid-height formula (`h/2 - 1`) assumes its pins sit
+/// to the sides (Left/Right) of that midpoint, clear of it -- true of the
+/// synthetic layout's own even West/East split for an unresolved 2-pin
+/// part, but not of a *real* vertical passive's pins, which real library
+/// data (and `side_from_pin_angle`) puts on Top/Bottom instead: there, the
+/// box is routinely too short (`Device:C`'s real height is 5.08mm) for any
+/// mid-height y to clear both the Top pin's text (near the box's own top
+/// edge) and the Bottom pin's (near its bottom edge) at once
+/// (`schematic_text_overlap` on `CIN`/`COUT`'s own ref vs. pin "1" text).
+/// Falling back to the IC/default placement (just above the box, `-0.3`)
+/// for this case clears both -- confirmed against `Device:C`'s own 5.08mm
+/// box, whose Top-pin text starts 0.92mm down, well clear of a `-0.3`-baseline
+/// ref label's own bottom edge at 0.02mm.
+pub fn ref_slot_local(part: &Part, height_um: i64, resolved: Option<&eda_model::symbol::LibSymbol>) -> (f64, f64) {
     let h = height_um as f64 / 1000.0;
-    let y = if is_two_pin_passive(part) { h / 2.0 - 1.0 } else { -0.3 };
+    let h_for_text = h.max(BASE_HEIGHT as f64 / 1000.0);
+    let y = if is_two_pin_passive(part) && !is_vertical_two_pin(resolved) { h_for_text / 2.0 - 1.0 } else { -0.3 };
     (0.0, y)
 }
 
@@ -1120,8 +1352,26 @@ pub fn net_label_extent(resolved: &ResolvedNetLabel, ink: TextBox) -> TextBox {
 /// electrical type and gets an explicit no-connect flag placed on it
 /// (`SchematicSection::no_connects`) — that flag is what tells KiCad's ERC
 /// the dangling pin is intentional, not the pin's type.
-pub fn nc_pin_local_points(part: &Part, width: i64, height: i64) -> Vec<(usize, Point)> {
-    let (ports, _) = build_ports(part, width, height);
+pub fn nc_pin_local_points(part: &Part, width: i64, height: i64, resolved: Option<&eda_model::symbol::LibSymbol>) -> Vec<(usize, Point)> {
+    if let Some(sym) = resolved {
+        // The real symbol's own point for this pin number, not a synthetic
+        // slot: the no-connect flag must coincide with wherever the real,
+        // drawn-verbatim graphics actually put the pin, or the flag and
+        // the pin read as two unrelated things.
+        let (x0, _y0, _x1, y1) = real_symbol_bbox(sym);
+        let mut out = Vec::new();
+        for (i, p) in part.pins.iter().enumerate() {
+            if p.kind != PinKind::Nc {
+                continue;
+            }
+            let Some(real_pin) = sym.pin_by_number(&p.number) else { continue };
+            let x = ((real_pin.at.x - x0) * 1000.0).round() as i64;
+            let y = ((y1 - real_pin.at.y) * 1000.0).round() as i64;
+            out.push((i, Point { x, y }));
+        }
+        return out;
+    }
+    let (ports, _) = build_ports(part, width, height, None);
     let south_max_x = ports.iter().filter(|p| p.side == Side::Bottom).map(|p| p.offset).max().unwrap_or(0);
     let mut x = south_max_x + GRID;
     let mut out = Vec::new();

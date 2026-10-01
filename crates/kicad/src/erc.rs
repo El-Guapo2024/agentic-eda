@@ -227,9 +227,9 @@ fn resolve_pins(design: &Design, model: &ConstraintModel) -> Vec<ResolvedPin> {
     let mut out = Vec::new();
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
-        let resolved_sym = if sym.lib_id.is_empty() || eda_model::is_synthetic_lib_id(&sym.lib_id) { None } else { model.symbol_of(&sym.lib_id) };
-        let (width, height) = eda_engine::geometry::node_size(part);
-        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height);
+        let resolved_sym = model.real_symbol_of(&sym.lib_id, part);
+        let (width, height) = eda_engine::geometry::node_size(part, resolved_sym.as_ref());
+        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved_sym.as_ref());
         let node = eda_layout::Node { id: 0, width, height, ports };
         for (pin_idx, pin) in part.pins.iter().enumerate() {
             // An `nc`-kind pin is authoritative and wins over whatever a

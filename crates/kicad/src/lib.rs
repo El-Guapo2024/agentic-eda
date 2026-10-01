@@ -321,44 +321,89 @@ fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide
     }
 }
 
-/// Which built-in glyph a symbol's body draws instead of the plain
-/// rectangle, chosen from its own resolved `lib_id` — a resistor and a
-/// generic/multi-pin IC or connector both keep the rectangle (a real
-/// `Device:R`'s own body *is* a plain rectangle; so is a real connector's),
-/// but a capacitor/diode/LED reads as a box next to nothing else in the
-/// library, so this project draws their real glyph instead.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum GlyphKind {
-    Rect,
-    Capacitor,
-    Diode,
-    Led,
+/// Feeds a real library symbol's own local point (library frame, mm, +y
+/// **up** -- [`eda_model::symbol::SPoint`]'s own convention) through
+/// [`baked_local`]: first shifted into the same sheet-frame,
+/// box-corner-relative local convention [`local_port_point`]/
+/// [`local_stub_tip`] already use for the synthetic path, then given the
+/// same rotation/mirror treatment, so a real pin/graphic composes correctly
+/// if a rotated/mirrored instance is ever emitted (`derive_schematic` never
+/// emits one today -- see this module's own doc comment).
+///
+/// `(x0, y1)` is the real symbol's own box corner in *library* frame --
+/// [`eda_engine::geometry::real_symbol_bbox`]'s own `(x0, _, _, y1)`, the
+/// same corner `node_size`/`build_ports` already measured this part's box
+/// and every pin's `Port::offset` from. This instance's own `sym.at` *is*
+/// that corner (not the library's `(0,0)` origin -- a real symbol's origin
+/// is almost never its own box's top-left), so a real point has to be
+/// shifted by it before it means anything relative to `sym.at`: `p.x - x0`
+/// along library +x (untouched by the sheet's y-flip), `y1 - p.y` along
+/// library +y (flipped, since library "up" is sheet "into the box" from the
+/// top) -- the exact shift [`eda_engine::geometry::build_ports_from_real_symbol`]'s
+/// own `body_x - x0` / `y1 - body_y` offsets already use, and
+/// [`eda_engine::geometry::nc_pin_local_points`]'s real-symbol branch
+/// already applies for a `nc`-kind pin. Skipping this shift (as an earlier
+/// version of this function did, treating `p` as already box-corner
+/// relative) draws a real pin exactly `(x0, y1)` away from wherever its own
+/// wire/power-symbol stub actually terminates -- confirmed empirically:
+/// `Device:C`'s box corner sits 2.54mm from its library origin, and
+/// `CIN`/`COUT`'s power-flagged pin landed 2.54mm/3.81mm off its own
+/// GND power symbol until this shift was added.
+fn baked_real_point(sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64, p: eda_model::symbol::SPoint) -> eda_model::symbol::SPoint {
+    let (x, y) = baked_local(sym, width_um, (p.x - x0) * 1000.0, (y1 - p.y) * 1000.0);
+    eda_model::symbol::SPoint::new(x, y)
 }
 
-fn glyph_kind_for_lib_id(lib_id: &str) -> GlyphKind {
-    match lib_id {
-        "Device:C" => GlyphKind::Capacitor,
-        "Device:D" => GlyphKind::Diode,
-        "Device:LED" => GlyphKind::Led,
-        _ => GlyphKind::Rect,
+/// A real pin's own `angle_deg`, composed with the instance's mirror the
+/// same way [`baked_real_point`] composes position (rotation, never
+/// non-zero today, is left for whoever adds rotated-instance support).
+/// Mirroring is a flip across a vertical axis, so it swaps East/West
+/// (0<->180) and leaves North/South (90/270) alone -- the standard
+/// `angle -> 180 - angle` reflection.
+fn baked_real_angle(sym: &SymbolInstance, angle_deg: f64) -> f64 {
+    if sym.mirrored {
+        (180.0 - angle_deg).rem_euclid(360.0)
+    } else {
+        angle_deg
     }
 }
 
-/// Embeds one part-backed symbol's `lib_symbol` definition. Geometry stays
-/// on this project's own synthetic box/port layout regardless of whether a
-/// real library symbol resolved for `lib_id` — `derive_schematic`'s wires
-/// terminate at those synthetic port positions, so drawing anything else
-/// here would strand every wire (see the module doc). What a resolved real
-/// symbol *does* change: each pin's electrical type (matched to the real
-/// symbol's own pin by number — the "map pins by number" this loader
-/// exists for) instead of the coarse `PinKind` guess, and, for a
-/// capacitor/diode/LED-shaped part, a real-looking glyph (see
-/// [`GlyphKind`]) drawn between the two pins' own stub tips instead of a
-/// bounding rectangle.
+/// [`write_symbol_graphic`]'s input, but with every point run through
+/// [`baked_real_point`]/[`baked_real_angle`] first -- i.e. the same
+/// graphic, placed the way *this* instance's own rotation/mirror would
+/// draw it, in the on-disk library-frame convention [`write_symbol_graphic`]
+/// itself expects. `unit`/`stroke_mm`/`filled`/`size_mm`/`text` carry no
+/// position and pass through untouched.
+fn baked_graphic(g: &eda_model::SymbolGraphic, sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64) -> eda_model::SymbolGraphic {
+    use eda_model::SymbolGraphic::*;
+    let p = |pt| baked_real_point(sym, width_um, x0, y1, pt);
+    match *g {
+        Rectangle { unit, start, end, stroke_mm, filled } => Rectangle { unit, start: p(start), end: p(end), stroke_mm, filled },
+        Polyline { unit, ref pts, stroke_mm, filled } => Polyline { unit, pts: pts.iter().map(|&pt| p(pt)).collect(), stroke_mm, filled },
+        Circle { unit, center, radius_mm, stroke_mm, filled } => Circle { unit, center: p(center), radius_mm, stroke_mm, filled },
+        Arc { unit, start, mid, end, stroke_mm, filled } => Arc { unit, start: p(start), mid: p(mid), end: p(end), stroke_mm, filled },
+        Text { unit, ref text, at, angle_deg, size_mm } => Text { unit, text: text.clone(), at: p(at), angle_deg: baked_real_angle(sym, angle_deg), size_mm },
+    }
+}
+
+/// Embeds one part-backed symbol's `lib_symbol` definition: when a real
+/// library symbol resolved for `lib_id`, its own graphics and pins, drawn
+/// verbatim (baked through this instance's own rotation/mirror -- see
+/// [`baked_graphic`]/[`baked_real_point`]) so an R/C/LED/connector/IC looks
+/// exactly as real KiCad draws it; otherwise the synthetic generic box this
+/// exporter has always drawn. Either way, `eda_engine::geometry`'s own
+/// `node_size`/`build_ports` already derived this part's box/port geometry
+/// from the *same* resolved symbol (see `write_schematic`'s own call),
+/// so a wire's stub tip and this function's own drawn pin position can
+/// never disagree about where a pin actually is.
 fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance, part: &Part, model: &ConstraintModel) {
-    let resolved = if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) };
-    let (width, height) = eda_engine::geometry::node_size(part);
-    let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height);
+    let resolved = model.real_symbol_of(lib_id, part);
+    let (width, height) = eda_engine::geometry::node_size(part, resolved.as_ref());
+    let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved.as_ref());
+    // This part's box corner in *library* frame -- see `baked_real_point`'s
+    // doc comment. Only meaningful when `resolved` is `Some`; the `None`
+    // branches below never read it.
+    let (x0, _, _, y1) = resolved.as_ref().map(|s| eda_engine::geometry::real_symbol_bbox(s)).unwrap_or((0.0, 0.0, 0.0, 0.0));
     let mut pin_of_port: Vec<Option<usize>> = vec![None; ports.len()];
     for (pin_idx, port_idx) in pin_port.iter().enumerate() {
         if let Some(pi) = port_idx {
@@ -383,23 +428,16 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance
 
     // ---- unit _0_1: the body ----
     writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_0_1"))).unwrap();
-    let glyph = glyph_kind_for_lib_id(lib_id);
-    // Every 2-pin stub-tip-to-stub-tip glyph is drawn in *this* symbol's own
-    // baked-local space, exactly like the box, so it lands correctly under
-    // rotation/mirroring too.
-    let two_pin_tips = (part.pins.len() == 2 && glyph != GlyphKind::Rect).then(|| {
-        let a = &ports[pin_of_port.iter().position(|p| *p == Some(0)).unwrap_or(0)];
-        let (alx, aly) = local_stub_tip(a, local_port_point(a, width, height).0, local_port_point(a, width, height).1);
-        let b_port_idx = (0..ports.len()).find(|&i| pin_of_port[i] == Some(1)).unwrap_or(0);
-        let b = &ports[b_port_idx];
-        let (blx, bly) = local_stub_tip(b, local_port_point(b, width, height).0, local_port_point(b, width, height).1);
-        (baked_local(sym, width as f64, alx, aly), baked_local(sym, width as f64, blx, bly))
-    });
-    match (glyph, two_pin_tips) {
-        (GlyphKind::Capacitor, Some((p1, p2))) => write_capacitor_glyph(out, p1, p2),
-        (GlyphKind::Diode, Some((p1, p2))) => write_diode_glyph(out, p1, p2, false),
-        (GlyphKind::Led, Some((p1, p2))) => write_diode_glyph(out, p1, p2, true),
-        _ => {
+    match &resolved {
+        Some(sym_data) => {
+            // Every unit (0 = "every unit") or specifically unit 1 -- this
+            // project only ever places a symbol's unit 1, so a graphic
+            // scoped to another unit is never this instance's own body.
+            for g in sym_data.graphics.iter().filter(|g| matches!(g.unit(), 0 | 1)) {
+                write_symbol_graphic(out, &baked_graphic(g, sym, width as f64, x0, y1));
+            }
+        }
+        None => {
             let corners = [(0.0, 0.0), (width as f64, 0.0), (width as f64, height as f64), (0.0, height as f64), (0.0, 0.0)];
             write!(out, "\t\t\t\t(polyline\n\t\t\t\t\t(pts").unwrap();
             for (lx, ly) in corners {
@@ -416,16 +454,39 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance
     for (port_idx, port) in ports.iter().enumerate() {
         let Some(pin_idx) = pin_of_port[port_idx] else { continue };
         let pin = &part.pins[pin_idx];
-        let (plx, ply) = local_port_point(port, width, height);
-        let (slx, sly) = local_stub_tip(port, plx, ply);
-        let (bx, by) = baked_local(sym, width as f64, slx, sly);
+        let real_pin = resolved.as_ref().and_then(|s| s.pin_by_number(&pin.number));
+        let (bx, by, angle, length_mm) = match real_pin {
+            // The real pin's own outer point/angle/length -- exactly
+            // where its own drawn line (just written above, as part of
+            // the body's graphics when it's a separate primitive, or
+            // implicit when the pin line itself *is* the graphic) and a
+            // wire's own stub tip (computed from the very same point by
+            // `build_ports`'s real-symbol path) both place it.
+            Some(rp) => {
+                let p = baked_real_point(sym, width as f64, x0, y1, rp.at);
+                (p.x, p.y, baked_real_angle(sym, rp.angle_deg), rp.length_mm)
+            }
+            // No matching real pin (shouldn't happen for a resolved
+            // symbol whose numbers agree with ours -- defensive only):
+            // fall back to the synthetic stub tip so the instance's own
+            // pin-uuid list still has a drawn pin for every part.pins
+            // entry.
+            None => {
+                let (plx, ply) = local_port_point(port, width, height);
+                let (slx, sly) = local_stub_tip(port, plx, ply);
+                let (bx, by) = baked_local(sym, width as f64, slx, sly);
+                (bx, by, 0.0, STUB_MM)
+            }
+        };
         let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
         let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
         writeln!(
             out,
-            "\t\t\t\t(pin {etype} line (at {} {} 0) (length {STUB_MM})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+            "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
             fmt_mm_f(bx),
             fmt_mm_f(by),
+            fmt_mm_f(angle),
+            fmt_mm_f(length_mm),
             sexpr_str(&name),
             sexpr_str(&pin.number),
         )
@@ -435,7 +496,7 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance
     // draw them here too, at the same points `derive_schematic` placed a
     // `no_connects` marker at, so the instance's own pin-uuid list (every
     // `part.pins`, unconditionally) always has a matching drawn pin.
-    for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width, height) {
+    for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width, height, resolved.as_ref()) {
         let pin = &part.pins[i];
         // `baked_local` takes um (like every other call site in this
         // function — `local_stub_tip`'s output, `width`/`height`
@@ -458,81 +519,6 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, sym: &SymbolInstance
     writeln!(out, "\t\t\t)").unwrap();
 
     writeln!(out, "\t\t)").unwrap();
-}
-
-fn write_capacitor_glyph(out: &mut String, p1: (f64, f64), p2: (f64, f64)) {
-    let (mx, my) = ((p1.0 + p2.0) / 2.0, (p1.1 + p2.1) / 2.0);
-    // Perpendicular unit vector to the pin-to-pin axis, for the two plates.
-    let (dx, dy) = (p2.0 - p1.0, p2.1 - p1.1);
-    let len = (dx * dx + dy * dy).sqrt().max(1e-6);
-    let (px, py) = (-dy / len, dx / len);
-    let plate_half = 1.5;
-    let gap = 0.5;
-    let (g1x, g1y) = (mx - dx / len * gap, my - dy / len * gap);
-    let (g2x, g2y) = (mx + dx / len * gap, my + dy / len * gap);
-    for (cx, cy) in [(g1x, g1y), (g2x, g2y)] {
-        writeln!(
-            out,
-            "\t\t\t\t(polyline\n\t\t\t\t\t(pts (xy {} {}) (xy {} {}))\n\t\t\t\t\t(stroke (width 0.508) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)",
-            fmt_mm_f(cx - px * plate_half),
-            fmt_mm_f(cy - py * plate_half),
-            fmt_mm_f(cx + px * plate_half),
-            fmt_mm_f(cy + py * plate_half),
-        )
-        .unwrap();
-    }
-}
-
-fn write_diode_glyph(out: &mut String, p1: (f64, f64), p2: (f64, f64), led: bool) {
-    let (mx, my) = ((p1.0 + p2.0) / 2.0, (p1.1 + p2.1) / 2.0);
-    let (dx, dy) = (p2.0 - p1.0, p2.1 - p1.1);
-    let len = (dx * dx + dy * dy).sqrt().max(1e-6);
-    let (ux, uy) = (dx / len, dy / len); // along the pin axis, p1 -> p2
-    let (px, py) = (-uy, ux); // perpendicular
-    let half = 1.27;
-    // Triangle (anode at p1 side) + bar (cathode at p2 side).
-    let tip1 = (mx - ux * half, my - uy * half);
-    let base_a = (mx + ux * half + px * half, my + uy * half + py * half);
-    let base_b = (mx + ux * half - px * half, my + uy * half - py * half);
-    writeln!(
-        out,
-        "\t\t\t\t(polyline\n\t\t\t\t\t(pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {}))\n\t\t\t\t\t(stroke (width 0.254) (type default))\n\t\t\t\t\t(fill (type outline))\n\t\t\t\t)",
-        fmt_mm_f(tip1.0),
-        fmt_mm_f(tip1.1),
-        fmt_mm_f(base_a.0),
-        fmt_mm_f(base_a.1),
-        fmt_mm_f(base_b.0),
-        fmt_mm_f(base_b.1),
-        fmt_mm_f(tip1.0),
-        fmt_mm_f(tip1.1),
-    )
-    .unwrap();
-    let bar_a = (mx + ux * half + px * half, my + uy * half + py * half);
-    let bar_b = (mx + ux * half - px * half, my + uy * half - py * half);
-    writeln!(
-        out,
-        "\t\t\t\t(polyline\n\t\t\t\t\t(pts (xy {} {}) (xy {} {}))\n\t\t\t\t\t(stroke (width 0.254) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)",
-        fmt_mm_f(bar_a.0),
-        fmt_mm_f(bar_a.1),
-        fmt_mm_f(bar_b.0),
-        fmt_mm_f(bar_b.1),
-    )
-    .unwrap();
-    if led {
-        for sign in [-1.0_f64, 1.0] {
-            let start = (bar_a.0 + px * 0.3 * sign * 0.0 + ux * 0.6 + px * (0.9 + 0.6 * (sign + 1.0) / 2.0), bar_a.1 + uy * 0.6);
-            let end = (start.0 + ux * 0.9 - px * 0.4, start.1 + uy * 0.9 - py * 0.4);
-            writeln!(
-                out,
-                "\t\t\t\t(polyline\n\t\t\t\t\t(pts (xy {} {}) (xy {} {}))\n\t\t\t\t\t(stroke (width 0.152) (type default))\n\t\t\t\t\t(fill (type none))\n\t\t\t\t)",
-                fmt_mm_f(start.0),
-                fmt_mm_f(start.1),
-                fmt_mm_f(end.0),
-                fmt_mm_f(end.1),
-            )
-            .unwrap();
-        }
-    }
 }
 
 /// A power symbol's `lib_symbol`: the resolved definition's real graphics
@@ -895,8 +881,8 @@ mod tests {
         let sch = design.schematic.as_ref().unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();
-        let (width, height) = eda_engine::geometry::node_size(part);
-        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height);
+        let (width, height) = eda_engine::geometry::node_size(part, None);
+        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, None);
         // VIN is pin "1" -> some port; compute expected world stub tip.
         let port_idx = pin_port[0].unwrap();
         let port = ports[port_idx];

@@ -119,8 +119,9 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     let mut node_of: BTreeMap<String, Node> = BTreeMap::new();
     let mut pin_port_of: BTreeMap<String, Vec<Option<usize>>> = BTreeMap::new();
     for part in &model.parts {
-        let (width, height) = geometry::node_size(part);
-        let (ports, pin_ports) = geometry::build_ports(part, width, height);
+        let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
+        let (width, height) = geometry::node_size(part, resolved.as_ref());
+        let (ports, pin_ports) = geometry::build_ports(part, width, height, resolved.as_ref());
         node_of.insert(part.reference.clone(), Node { id: 0, width, height, ports });
         pin_port_of.insert(part.reference.clone(), pin_ports);
     }
@@ -277,7 +278,8 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     for part in &model.parts {
         let Some(top_left) = positions.get(&part.reference).copied() else { continue };
         let node = &node_of[&part.reference];
-        for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height) {
+        let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
+        for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height, resolved.as_ref()) {
             let at = graph::Point { x: top_left.x + local.x, y: top_left.y + local.y };
             no_connects.push(NoConnect { at: Point { x: at.x, y: at.y }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
         }
@@ -1352,8 +1354,8 @@ mod tests {
         let sch = d.schematic.unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();
-        let (width, height) = geometry::node_size(part);
-        let (ports, pin_port) = geometry::build_ports(part, width, height);
+        let (width, height) = geometry::node_size(part, None);
+        let (ports, pin_port) = geometry::build_ports(part, width, height, None);
         // U1 pin "2" (GND) -> its port -> stub tip, must equal the power
         // symbol's own `at`.
         let port_idx = pin_port[1].unwrap();

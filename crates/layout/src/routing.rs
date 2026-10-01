@@ -91,6 +91,7 @@ fn endpoint_approach(
     grid: i64,
     slot_boxes: &[(usize, Point, i64, i64)],
     placed: &[Vec<Point>],
+    my_group: usize,
     escapes: &[Vec<(i64, i64)>],
     dummy_cols: &[i64],
 ) -> Vec<Point> {
@@ -138,29 +139,62 @@ fn endpoint_approach(
                 // horizontal track (`route_edges` bridges any x gap
                 // between a chain's two endpoint approaches there), so
                 // connectivity is unaffected.
-                let same_side_rank = node.ports.iter().take(port_idx).filter(|p| p.side == side).count();
-                let same_side_count = node.ports.iter().filter(|p| p.side == side).count();
-                if same_side_count <= 1 || !matches!(side, Side::Left | Side::Right) {
+                if !matches!(side, Side::Left | Side::Right) {
+                    // Top/Bottom: this port's own offset already varies
+                    // per-port (it lives in the box-hugging coordinate
+                    // itself, not a separate lane), so same-node siblings
+                    // never share this exit line the way Left/Right ones can
+                    // — see the Left/Right branch below for why that case
+                    // needs more than this.
                     vec![stub, Point { x: stub.x, y: track_y }]
                 } else {
-                    // Nudge the box-hugging leg out by this port's rank
-                    // among same-side ports, so two ports on one side
-                    // heading into different channels don't hug the
-                    // identical line (the LDO fixture's U1 VIN/VOUT case).
+                    // Left/Right: a stub's constant coordinate is the box
+                    // edge, the same for *every* port on that side (unlike
+                    // Top/Bottom, whose offset already lives in the varying
+                    // coordinate) — so if this node has more than one port on
+                    // `side`, two of them heading into different channels
+                    // would otherwise hug the identical line and collide
+                    // collinearly (this is exactly what the >=3-pin
+                    // power/ground threshold change exposed on the LDO
+                    // fixture: U1's two North power pins, VIN and VOUT, both
+                    // now get real wires into different channels). Rank 0
+                    // (no shift at all) is tried first — the common case,
+                    // every port alone on its side included — and is
+                    // genuinely free of charge whenever it doesn't collide
+                    // with anything, so this never changes behavior for a
+                    // node whose ports stay clear of other nodes' own wires.
                     //
-                    // Known defect, diagnosed but not fixed: when a box has
-                    // many ports on one side and their pin spacing equals
-                    // the grid, `pin - (rank + 1) * grid` maps every port to
-                    // (nearly) the same exit coordinate, so their runs along
-                    // the shared box-edge line nest inside one another and
-                    // overlap. A correct fix assigns interval-disjoint lanes
-                    // (sort the side's ports, greedy interval colouring)
-                    // rather than a rank-proportional offset. Deliberately
-                    // NOT box-clearance-searched: stepping outward for a
-                    // clear offset collapses even more ports onto one line.
-                    let lane = grid.max(1) * (same_side_rank as i64 + 1);
-                    let exit_x = if side == Side::Left { stub.x - lane } else { stub.x + lane };
-                    vec![stub, Point { x: exit_x, y: stub.y }, Point { x: exit_x, y: track_y }]
+                    // A same-node sibling's own rank keeps this port off
+                    // *that* port's line, but has no visibility into a
+                    // *different* node's own wire sharing this one (the same
+                    // gap `endpoint_approach`'s misaligned branch has — see
+                    // `first_clear`'s own doc comment): confirmed on
+                    // `examples/ldo.yaml`'s J1, whose lone-ranked VOUT port
+                    // (no sibling of its own to rank against) still ran its
+                    // unshifted exit line straight across VIN's own, already
+                    // placed, wire. Escalating outward from this port's own
+                    // rank, same as the misaligned branch's lane search,
+                    // until a lane clears every foreign wire too (falling
+                    // back to the nominal rank if none do) covers that case
+                    // too, at the same one-try cost for everyone it doesn't.
+                    let same_side_rank = node.ports.iter().take(port_idx).filter(|p| p.side == side).count() as i64;
+                    let foreign: Vec<&Vec<Point>> =
+                        placed.iter().enumerate().filter(|&(i, _)| g.edges.get(i).map(|e| e.group) != Some(my_group)).map(|(_, p)| p).collect();
+                    let make = |lane: i64| -> Vec<Point> {
+                        if lane == 0 {
+                            vec![stub, Point { x: stub.x, y: track_y }]
+                        } else {
+                            let exit_x = if side == Side::Left { stub.x - grid.max(1) * lane } else { stub.x + grid.max(1) * lane };
+                            vec![stub, Point { x: exit_x, y: stub.y }, Point { x: exit_x, y: track_y }]
+                        }
+                    };
+                    let is_clear = |cand: &[Point]| {
+                        !foreign.iter().any(|other| cand.windows(2).any(|w| other.windows(2).any(|ow| segments_overlap(w[0], w[1], ow[0], ow[1]))))
+                    };
+                    (same_side_rank..(same_side_rank + MAX_ESCAPE_LANES))
+                        .map(make)
+                        .find(|cand| is_clear(cand))
+                        .unwrap_or_else(|| make(same_side_rank))
                 }
             } else {
                 // Misaligned (Top-side port needing the channel below, or
@@ -171,34 +205,54 @@ fn endpoint_approach(
                 // `build_escape_lanes`, which assigns them across the whole
                 // board — see that function for why a per-edge/per-rank
                 // stagger computed here is not enough.
-                let (lane_idx, base) = escapes[node_id][port_idx];
-                // Per-port escape lane. The leg that hugs the box edge runs
-                // along the *constant* coordinate shared by every port on
-                // this side (`stub.y` = the box edge extended by STUB_LEN),
-                // so staggering only `base` (the perpendicular offset)
-                // leaves all of this side's escapes nested inside one
-                // another on that single line — the l4 U2 case where four
-                // nets' sidesteps all ran on x=885190. Give each port on the
-                // side its own lane, `grid` apart, stepped outward from the
-                // box in the stub's own direction: lane 0 stays on the
-                // original line, and lanes are ordered by the port's offset
-                // along the side so the port nearest the escape direction
-                // takes the innermost lane and no lane's horizontal leg
-                // crosses an inner port's vertical leg.
+                let (nominal_lane_idx, base) = escapes[node_id][port_idx];
                 let outward = if side == Side::Top { -1 } else { 1 };
-                let lane_y = stub.y + outward * lane_idx * grid.max(1);
-                // Same box/slot-aware search as the aligned case above: on
-                // a dense board a staggered `base` can walk straight into a
-                // neighbouring symbol before the horizontal leg to the
-                // track even starts.
-                let build = |x: i64| {
-                    if lane_idx == 0 {
-                        vec![stub, Point { x, y: stub.y }, Point { x, y: track_y }]
-                    } else {
-                        vec![stub, Point { x: stub.x, y: lane_y }, Point { x, y: lane_y }, Point { x, y: track_y }]
+                // Only wires from a *different* net are real obstacles here
+                // (see `first_clear`'s own doc comment): a sibling spoke of
+                // this same star is expected to share the hub's escape
+                // corridor. `placed` is indexed exactly like `g.edges` (both
+                // length `g.edges.len()`, built up chain by chain in
+                // `route_edges`), so each entry's own group is `g.edges[i].group`.
+                let foreign: Vec<&Vec<Point>> =
+                    placed.iter().enumerate().filter(|&(i, _)| g.edges.get(i).map(|e| e.group) != Some(my_group)).map(|(_, p)| p).collect();
+                // `build_escape_lanes`'s own `lane_idx` only keeps this
+                // port's box-hugging leg off *other escape-lane ports'* own
+                // lines (see that function) — it has no visibility into a
+                // wire placed by `try_direct_path` or the aligned branch
+                // above, so the nominal lane can still run collinear through
+                // one of those (confirmed on `examples/ldo.yaml`'s J1: VOUT's
+                // nominal lane overlapped VIN's own direct-path wire end to
+                // end, which no choice of `base` along that same line could
+                // ever clear). Escalating to the next lane out — a column
+                // `build_escape_lanes` reserved for a different port, whether
+                // or not that port ended up using it — sidesteps the whole
+                // line a foreign wire occupies instead of just creeping along
+                // it, so try the nominal lane first and only pay for extra
+                // lanes when it's genuinely blocked.
+                for lane_idx in nominal_lane_idx..MAX_ESCAPE_LANES {
+                    let lane_y = stub.y + outward * lane_idx * grid.max(1);
+                    // Same box/slot-aware search as the aligned case above: on
+                    // a dense board a staggered `base` can walk straight into a
+                    // neighbouring symbol before the horizontal leg to the
+                    // track even starts.
+                    let build = |x: i64| {
+                        if lane_idx == 0 {
+                            vec![stub, Point { x, y: stub.y }, Point { x, y: track_y }]
+                        } else {
+                            vec![stub, Point { x: stub.x, y: lane_y }, Point { x, y: lane_y }, Point { x, y: track_y }]
+                        }
+                    };
+                    if let Some(cand) = first_clear(node_id, base, -grid.max(1), build, slot_boxes, &foreign) {
+                        return cand;
                     }
-                };
-                first_clear(node_id, base, -grid.max(1), build, slot_boxes, placed)
+                }
+                // Every lane this port could plausibly use is blocked:
+                // nothing left to try that `maze::repair` wouldn't also have
+                // to fall back from. Keep the nominal, pre-escalation shape
+                // (lane 0) so the gate reports a concrete, deterministic wire
+                // rather than this function ever returning nothing.
+                let build0 = |x: i64| vec![stub, Point { x, y: stub.y }, Point { x, y: track_y }];
+                build0(base)
             }
         }
     }
@@ -228,15 +282,35 @@ const MIN_ORDERED_CHANNEL_HOPS: usize = 6;
 /// First escape offset, starting at `base` and stepping by `step`, whose
 /// path is clear of every obstacle in `boxes` except `own`'s own rectangle
 /// (a stub legitimately starts on — and, for a slot-inflated box, inside —
-/// its own symbol's obstacle). Falls back to `base` when nothing is clear.
+/// its own symbol's obstacle) *and* collinear-overlap-free against every
+/// already-routed, different-net wire in `foreign_placed`. `None` when no
+/// offset in the searched range clears both — the caller's cue to try a
+/// different lane (escape lines on one lane can all share the one obstacle
+/// no amount of stepping *along* that lane avoids; see its own call site).
+///
+/// Without the `foreign_placed` check, this search only ever avoided symbol
+/// boxes — never another net's own escape or channel run — so two different
+/// nets' long sidestep/trunk legs could (and, on a real multi-pin connector
+/// whose pins all stack on one side, did) end up collinear-overlapping each
+/// other even though neither ever cuts through a box: confirmed on
+/// `examples/ldo.yaml`'s J1, a real `Connector_Generic:Conn_01x04` header,
+/// where VOUT's sidestep ran right over VIN's own escape line, joining the
+/// two nets into one in real KiCad's eyes (`kicad-cli sch erc`'s
+/// `pin_to_pin` "Power output and Power output are connected"). `maze::repair`
+/// exists to catch exactly this after the fact, but its grid search can run
+/// out of budget on a small, tightly-packed board before finding a legal
+/// reroute (as it did here) — cheaper to never create the overlap than to
+/// rely on repair tearing it back out. `try_direct_path`'s own
+/// `collides_collinear` check against `placed` is the precedent this
+/// mirrors; `first_clear`'s own `_placed` parameter went unused until now.
 fn first_clear(
     own: usize,
     base: i64,
     step: i64,
     build: impl Fn(i64) -> Vec<Point>,
     boxes: &[(usize, Point, i64, i64)],
-    _placed: &[Vec<Point>],
-) -> Vec<Point> {
+    foreign_placed: &[&Vec<Point>],
+) -> Option<Vec<Point>> {
     for k in 0..ESCAPE_TRIES {
         let cand = build(base + k * step);
         let clear = cand.windows(2).all(|w| {
@@ -251,17 +325,17 @@ fn first_clear(
                 }
                 !seg_intersects_box(w[0], w[1], tl, bw, bh)
             })
-        });
+        }) && !foreign_placed.iter().any(|other| cand.windows(2).any(|w| other.windows(2).any(|ow| segments_overlap(w[0], w[1], ow[0], ow[1]))));
         // The nominal offset already carries the per-row/per-port stagger
         // that keeps two escapes off the same line; stepping outward for
         // box clearance would throw that away and re-introduce
         // `schematic_wire_overlap`, so a candidate that lands collinear on
         // an already-routed wire is rejected too.
         if clear {
-            return cand;
+            return Some(cand);
         }
     }
-    build(base)
+    None
 }
 
 /// Path between two ports on the *same* box (a star net whose hub and leaf
@@ -371,6 +445,22 @@ fn path_clear(pts: &[Point], boxes: &[(usize, Point, i64, i64)]) -> bool {
 /// Returns `None` when no such path (at most 3 segments — a straight line
 /// or one L bend needs at most 2) is obstacle-free, so the caller can fall
 /// back to the channel router.
+///
+/// `foreign_stubs` is every *other* port's own `(port_point, stub_tip)`
+/// line (every node's every port except this edge's own two endpoints) —
+/// a candidate brushing one is routing straight across a foreign pin's own
+/// connection point, which real KiCad reads as joining that pin onto this
+/// wire's net whether or not either net's model ever meant them to touch.
+/// Confirmed on `examples/ldo.yaml`'s J1 (`Connector_Generic:Conn_01x04`,
+/// three used pins 2.54mm apart on one side): the direct path from VIN to
+/// its own flag anchor ran straight past VOUT's own stub tip, sitting
+/// between them on the same escape line, joining the VIN and VOUT nets in
+/// `kicad-cli sch erc`'s eyes (`pin_to_pin`, two `power_out` pins
+/// "connected") even though neither wire ever crossed a symbol box or
+/// another wire. `maze::overlapping_edges`'s own `through_stub` check
+/// already detects exactly this shape of defect for `maze::repair` to fix
+/// after the fact; this avoids ever creating it here, in the common case
+/// repair would otherwise have to cover for.
 fn try_direct_path(
     a: Point,
     b: Point,
@@ -378,6 +468,7 @@ fn try_direct_path(
     endpoints: (usize, usize),
     endpoint_boxes: [(Point, i64, i64); 2],
     placed: &[Vec<Point>],
+    foreign_stubs: &[(Point, Point)],
     _grid: i64,
 ) -> Option<Vec<Point>> {
     // Two unrelated direct hops that both happen to run along the same
@@ -432,7 +523,9 @@ fn try_direct_path(
             let Some(&(_, tl, w, h)) = boxes.iter().find(|&&(bid, ..)| bid == id) else { return true };
             pts.windows(2).all(|s| s[0] == tip || s[1] == tip || !seg_intersects_box(s[0], s[1], tl, w, h))
         });
-        if own_clear && slot_clear && path_clear(&pts, &others) && !collides_collinear(&pts, placed) {
+        let foreign_pins_clear =
+            foreign_stubs.iter().all(|&(pp, tip)| pts.windows(2).all(|s| !crate::maze::seg_touches_seg(s[0], s[1], pp, tip)));
+        if own_clear && slot_clear && foreign_pins_clear && path_clear(&pts, &others) && !collides_collinear(&pts, placed) {
             return Some(pts);
         }
     }
@@ -758,7 +851,25 @@ pub fn route_edges(
                     (node_top_left[a_node], g.nodes[a_node].width, g.nodes[a_node].height),
                     (node_top_left[b_node], g.nodes[b_node].width, g.nodes[b_node].height),
                 ];
-                if let Some(direct) = try_direct_path(a_stub, b_stub, &boxes, (a_node, b_node), own_boxes, &result, grid) {
+                // Every other port's own stub line (see `try_direct_path`'s
+                // doc comment) — every node's every port except this edge's
+                // own two (node, port) endpoints, which the candidate
+                // legitimately starts/ends on.
+                let foreign_stubs: Vec<(Point, Point)> = g
+                    .nodes
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(id, node)| {
+                        let tl = node_top_left[id];
+                        (0..node.ports.len()).filter_map(move |pi| {
+                            if (id, pi) == (a_node, low_port) || (id, pi) == (b_node, high_port) {
+                                return None;
+                            }
+                            Some((node.port_point(tl, pi), node.stub_tip(tl, pi)))
+                        })
+                    })
+                    .collect();
+                if let Some(direct) = try_direct_path(a_stub, b_stub, &boxes, (a_node, b_node), own_boxes, &result, &foreign_stubs, grid) {
                     result[chain.edge_index] = direct;
                     continue;
                 }
@@ -786,8 +897,8 @@ pub fn route_edges(
             let a_port = if i == 0 { Some(low_port) } else { None };
             let b_port = if i + 1 == n - 1 { Some(high_port) } else { None };
 
-            let a_pts = endpoint_approach(g, ext, a_id, a_port, node_top_left, true, track_y, grid, &boxes, &result, &escapes, &dummy_cols);
-            let mut b_pts = endpoint_approach(g, ext, b_id, b_port, node_top_left, false, track_y, grid, &boxes, &result, &escapes, &dummy_cols);
+            let a_pts = endpoint_approach(g, ext, a_id, a_port, node_top_left, true, track_y, grid, &boxes, &result, group, &escapes, &dummy_cols);
+            let mut b_pts = endpoint_approach(g, ext, b_id, b_port, node_top_left, false, track_y, grid, &boxes, &result, group, &escapes, &dummy_cols);
             b_pts.reverse();
 
             for p in a_pts {

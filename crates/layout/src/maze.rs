@@ -279,7 +279,7 @@ fn astar(grid: &Grid, win: &Window, group: usize, start: (i64, i64), goal: (i64,
 }
 
 /// Axis-aligned segments touch or cross (closed segments).
-fn seg_touches_seg(a: Point, b: Point, c: Point, d: Point) -> bool {
+pub(crate) fn seg_touches_seg(a: Point, b: Point, c: Point, d: Point) -> bool {
     let (ax0, ax1) = (a.x.min(b.x), a.x.max(b.x));
     let (ay0, ay1) = (a.y.min(b.y), a.y.max(b.y));
     let (cx0, cx1) = (c.x.min(d.x), c.x.max(d.x));
