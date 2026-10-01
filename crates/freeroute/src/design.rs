@@ -1069,7 +1069,13 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
     for p in &plan.planes {
         let (net, layer) = (&plan.nets[p.net].name, &plan.layers[p.layer]);
         if !zones.iter().any(|z| &z.net == net && &z.layer == layer) {
-            zones.push(eda_model::ir::Zone { id: String::new(), net: net.clone(), layer: layer.clone(), outline: design.placement.as_ref().map(|pl| pl.outline.clone()).unwrap_or_default() });
+            zones.push(eda_model::ir::Zone {
+                id: String::new(),
+                net: net.clone(),
+                layer: layer.clone(),
+                outline: design.placement.as_ref().map(|pl| pl.outline.clone()).unwrap_or_default(),
+                ..Default::default()
+            });
         }
     }
     let mut rt = RoutingSection { tracks, vias, zones };

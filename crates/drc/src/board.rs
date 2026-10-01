@@ -94,6 +94,19 @@ pub struct DrcZone {
     pub net: Option<String>,
     pub layer: String,
     pub outline: Vec<Point>,
+    // ---- fill settings, carried alongside so `eda_drc::fill::fill_all_zones`
+    // can run from a `DrcBoard` alone (no separate `Design`/`ConstraintModel`
+    // pass needed, and no risk of it recursively calling `board::build`
+    // again) -- see that module's doc comment. Mirrors `eda_model::ir::Zone`'s
+    // own fields of the same name.
+    pub priority: u32,
+    pub clearance: Um,
+    pub min_thickness: Um,
+    pub thermal_gap: Um,
+    pub thermal_spoke_width: Um,
+    pub pad_connection: eda_model::ir::PadConnection,
+    pub island_removal_mode: eda_model::ir::IslandRemovalMode,
+    pub min_island_area: i64,
 }
 
 pub struct DrcFootprint {
@@ -279,7 +292,20 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 continue;
             }
             let net = if z.net.is_empty() { None } else { Some(z.net.clone()) };
-            zones.push(DrcZone { id: z.id.clone(), net, layer: z.layer.clone(), outline: z.outline.clone() });
+            zones.push(DrcZone {
+                id: z.id.clone(),
+                net,
+                layer: z.layer.clone(),
+                outline: z.outline.clone(),
+                priority: z.priority,
+                clearance: z.clearance,
+                min_thickness: z.min_thickness,
+                thermal_gap: z.thermal_gap,
+                thermal_spoke_width: z.thermal_spoke_width,
+                pad_connection: z.pad_connection,
+                island_removal_mode: z.island_removal_mode,
+                min_island_area: z.min_island_area,
+            });
         }
     }
 

@@ -1,0 +1,7 @@
+[package]
+name = "eda-clipper2"
+version = "0.1.0"
+edition = "2021"
+description = "A faithful Rust port of Clipper2's Clipper64 engine (clipper.engine/.offset/.rectclip), as used by KiCad's SHAPE_POLY_SET"
+
+[dependencies]

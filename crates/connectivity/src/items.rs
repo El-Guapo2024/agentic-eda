@@ -18,17 +18,21 @@
 //!   already carry an explicit `net: String` field, so unlike KiCad's
 //!   engine (which infers/propagates codes for items that might not have
 //!   one) there is nothing to propagate -- see the crate root docs.
-//! - **A zone is its raw outline, not a fill.** `CN_ZONE_LAYER` in KiCad
-//!   wraps one polygon of an already-computed `SHAPE_POLY_SET` fill and
-//!   builds an R-tree of its fill triangles for collision. We have no
-//!   fill yet, so a `Zone`'s `outline` field stands in for it directly:
-//!   an item connects to a zone when one of its anchors lies inside that
-//!   outline (`CN_VISITOR::checkZoneItemConnection`'s own first, fast
-//!   check, generalised to be the *only* check here). This is
-//!   optimistic wherever a real fill would have been narrower than the
-//!   outline (thermal reliefs, clearance around other-net pads, a fill
-//!   that failed to reach every corner) -- zone fill computation will
-//!   replace this with the same triangulated-fill collision KiCad uses.
+//! - **A zone is its real fill, one `CnItem` per disjoint fill fragment --
+//!   not a triangulated mesh.** `CN_ZONE_LAYER` in KiCad wraps one polygon
+//!   of an already-computed `SHAPE_POLY_SET` fill and builds an R-tree of
+//!   its fill *triangles* for collision; `eda_drc::fill::fill_all_zones`
+//!   (the `eda_zone_filler` port, run once per [`build_items`] call) gives
+//!   us the same per-fragment polygons, and an item connects to a zone when
+//!   one of its anchors lies inside one of them
+//!   (`CN_VISITOR::checkZoneItemConnection`'s own first, fast check,
+//!   generalised to be the *only* check here) -- no triangulation needed
+//!   since we're testing containment, not rendering. Before the zone-filling
+//!   port landed, a zone's raw `outline` stood in for its fill directly,
+//!   which over-reported connectivity everywhere a real fill would have
+//!   been narrower (thermal reliefs, clearance around other-net pads, a
+//!   fill that failed to reach every corner, islands removed entirely);
+//!   see `crates/zone-filler`'s task report for the closed gap.
 
 use std::collections::HashMap;
 
@@ -193,23 +197,53 @@ pub fn build_items(design: &Design, model: &ConstraintModel) -> Vec<CnItem> {
             items.push(CnItem { item: ItemRef::Via { via_id: v.id.clone() }, net: v.net.clone(), can_change_net: true, layer_lo: lo, layer_hi: hi, anchors: vec![v.at], shape: ItemShape::Via { center: v.at, radius }, bbox, connected: Vec::new() });
         }
 
-        for z in &rt.zones {
-            if z.outline.len() < 3 {
-                continue;
+        if !rt.zones.is_empty() {
+            // Real fills (`eda_drc::fill::fill_all_zones`, the same
+            // `eda_zone_filler` port `eda_kicad`'s export uses) in place of
+            // the zone's raw outline -- see the module doc comment on why
+            // the outline alone used to under-report dangling items. A
+            // zone's fill is a `ShapePolySet` of possibly several disjoint,
+            // already-`Fracture()`d (one contour, no separate holes list)
+            // polygons; each becomes its own `CnItem`, exactly how KiCad's
+            // own `CN_ZONE_LAYER` is one per disjoint fill polygon too.
+            let drc_board = eda_drc::board::build(design, model);
+            let fills = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
+
+            for z in &rt.zones {
+                let layer = layer_index(layers, &z.layer);
+                let fragments: Vec<Vec<Point>> = match fills.get(&z.id) {
+                    Some(fill) => fill.polys.iter().filter_map(|poly| poly.first()).map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect()).collect(),
+                    // No stable id to look fills up by (e.g. not yet run
+                    // through `assign_missing_ids`): fall back to the raw
+                    // outline rather than silently dropping the zone.
+                    None if !z.id.is_empty() => Vec::new(),
+                    None => {
+                        if z.outline.len() >= 3 {
+                            vec![z.outline.clone()]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                };
+
+                for outline in fragments {
+                    if outline.len() < 3 {
+                        continue;
+                    }
+                    let bbox = bbox_of(&outline);
+                    items.push(CnItem {
+                        item: ItemRef::ZoneOutline { zone_id: z.id.clone() },
+                        net: z.net.clone(),
+                        can_change_net: false,
+                        layer_lo: layer,
+                        layer_hi: layer,
+                        anchors: outline.clone(),
+                        shape: ItemShape::Zone { outline },
+                        bbox,
+                        connected: Vec::new(),
+                    });
+                }
             }
-            let layer = layer_index(layers, &z.layer);
-            let bbox = bbox_of(&z.outline);
-            items.push(CnItem {
-                item: ItemRef::ZoneOutline { zone_id: z.id.clone() },
-                net: z.net.clone(),
-                can_change_net: false,
-                layer_lo: layer,
-                layer_hi: layer,
-                anchors: z.outline.clone(),
-                shape: ItemShape::Zone { outline: z.outline.clone() },
-                bbox,
-                connected: Vec::new(),
-            });
         }
     }
 

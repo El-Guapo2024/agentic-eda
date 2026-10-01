@@ -1236,7 +1236,7 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_zone", net, "a zone outline needs at least three points")]);
         }
         let rt = self.routing_mut();
-        rt.zones.push(Zone { id: String::new(), net: net.into(), layer: layer.into(), outline: outline.to_vec() });
+        rt.zones.push(Zone { id: String::new(), net: net.into(), layer: layer.into(), outline: outline.to_vec(), ..Default::default() });
         rt.assign_missing_ids();
         Ok(())
     }

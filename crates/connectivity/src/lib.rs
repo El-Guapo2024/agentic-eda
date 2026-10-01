@@ -21,8 +21,10 @@
 //! Net propagation (`CN_CONNECTIVITY_ALGO::PropagateNets`, guessing a net
 //! code for an item from its neighbours) is also out of scope -- every
 //! item in our `Design` already carries its real net name, so there is
-//! nothing to propagate. Zone connectivity is an approximation until zone
-//! fill is implemented: see [`items`] for what that changes.
+//! nothing to propagate. Zone connectivity is checked against each zone's
+//! real, computed fill (`eda_zone_filler`, via `eda_drc::fill`), not its
+//! raw outline -- see [`items`] for the (small) remaining differences from
+//! KiCad's own triangulated-fill collision.
 
 pub mod algo;
 pub mod dangling;
@@ -63,9 +65,13 @@ pub fn analyze(design: &Design, model: &ConstraintModel) -> ConnectivityReport {
 /// (`unconnected_items`, `track_dangling`, `via_dangling`) as
 /// [`CheckResult`]s, one per violation -- exactly what
 /// `DRC_TEST_PROVIDER_CONNECTIVITY::Run` in
-/// `pcbnew/drc/drc_test_provider_connectivity.cpp` reports (minus the
-/// zone-fill-only checks: isolated copper islands and post-machined-layer
-/// checks need a computed zone fill, which this crate does not have yet).
+/// `pcbnew/drc/drc_test_provider_connectivity.cpp` reports against each
+/// zone's real fill (minus `DRCE_ISOLATED_COPPER`'s own violation report --
+/// `eda_zone_filler` already *removes* islands per each zone's
+/// `island_removal_mode` the same way KiCad's filler does, it just doesn't
+/// separately flag that it did so as a reportable violation here -- and
+/// post-machined-layer checks, which need backdrill/post-machining fields
+/// this workspace's model doesn't have).
 pub fn check(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     let report = analyze(design, model);
     let mut out = Vec::with_capacity(report.ratsnest.len() + report.dangling.len());

@@ -208,6 +208,51 @@ fn print_status(board: &Board, model: &ConstraintModel) -> Result<(), Vec<CheckR
     Ok(())
 }
 
+/// `eda board fill [--zone ID] [--layer L] [--json]`: compute every zone's
+/// real fill (`eda_drc::fill::fill_all_zones`, the `eda_zone_filler` port)
+/// and report it -- a human-readable per-zone summary by default (net,
+/// layer, area, fragment/island count), or the full fragment polygons
+/// (mm) with `--json`, the same shape `crates/cli/src/studio.rs`'s
+/// `/api/fill` endpoint returns for the UI to draw. Fills are always
+/// recomputed here, never read back from a stored "second master".
+fn print_fill(design: &eda_model::ir::Design, model: &ConstraintModel, want_zone: Option<&str>, want_layer: Option<&str>, as_json: bool) -> Result<(), Vec<CheckResult>> {
+    let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
+    let drc_board = eda_drc::board::build(design, model);
+    let results = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
+    let mm = |v: i64| v as f64 / 1000.0;
+
+    let mut matched = 0usize;
+    let mut json_zones = Vec::new();
+    for z in zones {
+        if want_zone.is_some_and(|id| id != z.id) || want_layer.is_some_and(|l| l != z.layer) {
+            continue;
+        }
+        matched += 1;
+        let fill = results.get(&z.id);
+        let fragments: Vec<&eda_shape_poly_set::Polygon> = fill.map(|f| f.polys.iter().collect()).unwrap_or_default();
+        let area_mm2 = fill.map(|f| f.area() / 1_000_000.0).unwrap_or(0.0);
+
+        if as_json {
+            let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(p.x), mm(p.y)]).collect()).collect();
+            json_zones.push(serde_json::json!({
+                "id": z.id, "net": z.net, "layer": z.layer,
+                "area_mm2": area_mm2, "islands": fragments.len(),
+                "fragments": frags_json,
+            }));
+        } else {
+            println!("zone {} net={} layer={} area={:.4}mm^2 islands={}", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, z.layer, area_mm2, fragments.len());
+        }
+    }
+
+    if matched == 0 {
+        return Err(fail("board_fill", want_zone.or(want_layer).unwrap_or("*"), "no zone matched --zone/--layer"));
+    }
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&json_zones).map_err(|e| fail("fill_encode", "fill", e.to_string()))?);
+    }
+    Ok(())
+}
+
 /// Apply one command and report what it cost, logged as `by` did it.
 /// A placement change leaves any routing stale, so it goes. A
 /// successful edit also pushes the *pre*-edit design onto the undo
@@ -862,6 +907,13 @@ pub fn run(
             }
             other => Err(fail("board_usage", other, "usage: eda board zone <add|delete> ...")),
         },
+        "fill" => {
+            let (_meta, design, model) = load(&dir)?;
+            let want_zone = flag(rest, "--zone");
+            let want_layer = flag(rest, "--layer");
+            let as_json = has(rest, "--json");
+            print_fill(&design, &model, want_zone.as_deref(), want_layer.as_deref(), as_json)
+        }
         "shape" => match rest.get(1).map(String::as_str).unwrap_or("") {
             "add" => {
                 let kind = flag(rest, "--kind").ok_or_else(|| fail("board_usage", "shape add", "needs --kind segment|arc|rect|circle|polygon"))?;
@@ -934,7 +986,7 @@ pub fn run(
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|shape|text|route|undo|redo|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|serve> [-C dir] [--strict]",
         )),
     }
 }

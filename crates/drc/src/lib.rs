@@ -35,14 +35,20 @@
 //! checks this port covers, then the placement-quality providers last.
 //!
 //! See the task report for the full fidelity/gap list; the short version:
-//! zone *fill* is not modelled (checks against a zone use its outline, as
-//! directed), there is no `.kicad_dru` custom-rule support, and a handful
-//! of KiCad features this workspace's own model has no fields for (net
-//! ties, diff pairs, creepage, blind/buried vias, per-item solder-mask
-//! overrides) are out of scope.
+//! there is no `.kicad_dru` custom-rule support, and a handful of KiCad
+//! features this workspace's own model has no fields for (net ties, diff
+//! pairs, creepage, blind/buried vias, per-item solder-mask overrides) are
+//! out of scope.
+//!
+//! [`fill::fill_all_zones`] runs the real `eda_zone_filler` port (zone
+//! outlines are no longer used as a stand-in for their fill -- that was
+//! this crate's biggest zone-related gap until the zone-filling port
+//! landed); `eda_connectivity` and `eda_kicad`'s `.kicad_pcb` export both
+//! call into it too, rather than each re-deriving fills on their own.
 
 pub mod board;
 pub mod constraints;
+pub mod fill;
 pub mod item;
 pub mod kimath;
 pub mod providers;

@@ -1,0 +1,14 @@
+[package]
+name = "eda-zone-filler"
+version = "0.1.0"
+edition = "2021"
+description = "A port of KiCad's ZONE_FILLER (pcbnew/zone_filler.cpp), adapted to this workspace's geometry model"
+
+[dependencies]
+eda-clipper2 = { path = "../clipper2" }
+eda-shape-poly-set = { path = "../shape-poly-set" }
+eda-model = { path = "../model" }
+
+[dev-dependencies]
+eda-drc = { path = "../drc" }
+eda-kicad = { path = "../kicad" }
