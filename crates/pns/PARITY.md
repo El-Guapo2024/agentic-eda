@@ -298,10 +298,15 @@ does), a deliberate, documented adaptation rather than a gap.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
-- `MERGE_OBTUSE`, `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes (`src/
-  optimizer.rs` only ports `MERGE_SEGMENTS`/`MERGE_COLINEAR`, the two every
-  plain interactive route and post-shove cleanup actually uses by
-  default). `RoutingSettings::smart_pads` exists as a field but, like
+- `SMART_PADS`, `FANOUT_CLEANUP` optimizer passes -- `MERGE_OBTUSE` is now
+  ported too (`src/optimizer.rs`'s `merge_obtuse`, run in upstream's own
+  `mergeFull -> mergeObtuse -> mergeColinear` order; see that module's
+  header comment for exactly how it differs from `MERGE_SEGMENTS`: it
+  extends two existing obtuse segments' own directions to their natural
+  meeting point rather than hunting for a fresh lower-cost bypass, which
+  can collapse a long obtuse "staircase" (common after a walkaround) in
+  one step). `SMART_PADS`/`FANOUT_CLEANUP` remain unported.
+  `RoutingSettings::smart_pads` exists as a field but, like
   `shove_vias`/`jump_over_obstacles`/`optimizer_effort`/
   `fix_all_segments`/`walkaround_hug_length_threshold`, is never read by
   any routing code in this crate -- struct-shape parity only, not
