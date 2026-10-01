@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, ErcReport, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
 
 export class ApiError extends Error {}
 
@@ -84,6 +84,13 @@ export async function fetchDrc(): Promise<DrcReport> {
   return r;
 }
 
+/** `eda_kicad::check_erc` (gap #4), run fresh server-side on every call -- same no-caching reasoning as `fetchDrc`. */
+export async function fetchErc(): Promise<ErcReport> {
+  const r = await getJson<ErcReport & { error?: string }>("/api/erc");
+  if (r.error) throw new ApiError(r.error);
+  return r;
+}
+
 /**
  * GET /api/board.glb once. Never throws for the "still building" or
  * "kicad-cli failed" cases -- those are ordinary, well-formed answers
@@ -130,13 +137,18 @@ export async function postRoute(): Promise<RouteReply> {
  * one piece of backend logic this task allowed beyond serving the app.
  * `ok: false` just means the stack is empty ("nothing to undo/redo"),
  * not a failure worth alarming over.
+ *
+ * `domain` scopes which tab's last edit this reverts/replays ("pcb" or
+ * "schematic") -- store.tsx's `api.undo`/`redo` always pass the current
+ * tab, so Ctrl+Z on the Schematic tab can no longer silently undo a PCB
+ * edit (GAPS.md #15; see `board::undo`'s own doc for the full mechanism).
  */
-export async function postUndo(): Promise<CmdReply> {
-  const r = await fetch("/api/undo", { method: "POST" });
+export async function postUndo(domain: "pcb" | "schematic"): Promise<CmdReply> {
+  const r = await fetch("/api/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
   return (await r.json()) as CmdReply;
 }
 
-export async function postRedo(): Promise<CmdReply> {
-  const r = await fetch("/api/redo", { method: "POST" });
+export async function postRedo(domain: "pcb" | "schematic"): Promise<CmdReply> {
+  const r = await fetch("/api/redo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
   return (await r.json()) as CmdReply;
 }

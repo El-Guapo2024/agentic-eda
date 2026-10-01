@@ -25,7 +25,7 @@ pub use pcb::{export_kicad_pcb, export_kicad_pro};
 
 mod sexpr;
 mod import;
-pub use import::{import_kicad_pcb, merge_project_net_classes, parse_project_net_classes, ImportNotes};
+pub use import::{import_kicad_pcb, merge_project_net_classes, mm_to_um, parse_project_net_classes, ImportNotes};
 
 mod footprint_lib;
 pub use footprint_lib::{default_footprint_library_root, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
@@ -39,7 +39,7 @@ mod erc;
 pub use erc::{check_erc, check_erc_excluding, Exclusions};
 
 mod sch_import;
-pub use sch_import::import_kicad_sch;
+pub use sch_import::{import_kicad_sch, pin_kind_from_electrical_type, reconcile, transform_local_point};
 
 const STUB_MM: f64 = 1.27;
 
@@ -931,7 +931,7 @@ mod tests {
         let design = Design {
             schema: 1,
             provenance: eda_model::ir::Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: None,
+            schematic: None, nets: None,
             placement: None,
             routing: None,
             drawings: None,

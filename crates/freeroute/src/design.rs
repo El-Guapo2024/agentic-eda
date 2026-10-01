@@ -1476,7 +1476,7 @@ mod tests {
         let design = Design {
             schema: 1,
             provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: None,
+            schematic: None, nets: None,
             placement: Some(placement),
             routing: None,
             drawings: None,

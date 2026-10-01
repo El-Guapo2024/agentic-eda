@@ -246,6 +246,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         }
         for (net, pins, poly) in &block.edges {
             wires.push(Wire {
+                id: String::new(),
                 net: net.clone(),
                 pins: pins.clone(),
                 pts: poly.iter().map(|p| Point { x: p.x + off.x, y: p.y + off.y }).collect(),
@@ -281,7 +282,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
         for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height, resolved.as_ref()) {
             let at = graph::Point { x: top_left.x + local.x, y: top_left.y + local.y };
-            no_connects.push(NoConnect { at: Point { x: at.x, y: at.y }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
+            no_connects.push(NoConnect { id: String::new(), at: Point { x: at.x, y: at.y }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
         }
     }
 
@@ -363,7 +364,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                     // jumper (see `MAX_MERGED_STUB_LEN_UM`): flag each pin
                     // independently, with no connecting wire at all.
                     for p in &points {
-                        labels.push(NetLabel { kind: LabelKind::Local, net: net.clone(), at: Point { x: p.x, y: p.y } });
+                        labels.push(NetLabel { id: String::new(), kind: LabelKind::Local, net: net.clone(), at: Point { x: p.x, y: p.y } });
                     }
                 } else {
                     // Adjacent same-net pins on one part: a single flag at
@@ -373,8 +374,9 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
                     // (`schematic_flag_adjacent`).
                     let mid_x = points.iter().map(|p| p.x).sum::<i64>() / points.len() as i64;
                     let mid_y = points.iter().map(|p| p.y).sum::<i64>() / points.len() as i64;
-                    labels.push(NetLabel { kind: LabelKind::Local, net: net.clone(), at: Point { x: mid_x, y: mid_y } });
+                    labels.push(NetLabel { id: String::new(), kind: LabelKind::Local, net: net.clone(), at: Point { x: mid_x, y: mid_y } });
                     wires.push(Wire {
+                        id: String::new(),
                         net: net.clone(),
                         pins: run.iter().map(|(pin_ref, _)| pin_ref.clone()).collect(),
                         pts: points.into_iter().map(|p| Point { x: p.x, y: p.y }).collect(),
@@ -482,6 +484,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             stage_hashes: Vec::new(),
         },
         schematic: Some(SchematicSection { symbols, wires, labels, power_symbols, no_connects, title_block: None, sheets: vec![] }),
+        nets: None,
         placement: None,
         routing: None,
         drawings: None,

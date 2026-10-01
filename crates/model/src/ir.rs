@@ -35,6 +35,22 @@ pub struct Design {
     /// Filled by loop 1 (E1). Artifact 1 when frozen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schematic: Option<SchematicSection>,
+    /// Schematic-derived net list: `None` for every design built by the
+    /// ordinary intent -> schematic -> placement -> routing pipeline (the
+    /// intent's own `ConstraintModel::nets` is already authoritative
+    /// there, and `crates/cli/src/board.rs::load` leaves it alone). Set,
+    /// and from then on authoritative, the first time a studio schematic
+    /// `Cmd` (`crates/ops::Cmd::domain` -- `Domain::Schematic`) lands on
+    /// this design: `board::reconcile_schematic` retraces `schematic`'s
+    /// own wires/labels/power symbols/no-connects (the same union-find
+    /// `eda_kicad::sch_import::reconcile` runs on an imported `.kicad_sch`)
+    /// and writes the result here, so a hand-drawn wire that merges two
+    /// nets, or a label that renames one, is reflected everywhere a net
+    /// matters -- the PCB ratsnest, ERC's pin-electrical checks -- without
+    /// ever touching the intent file itself. See GAPS.md #1's "one
+    /// netlist" rule and `crates/ops::Cmd`'s eeschema verbs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nets: Option<Vec<crate::Net>>,
     /// Filled by loop 2 (E2). Artifact 2 when frozen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<PlacementSection>,
@@ -60,6 +76,9 @@ impl Design {
     /// a no-op, and calling it on two structurally-identical designs gives
     /// the same ids both times.
     pub fn assign_missing_ids(&mut self) {
+        if let Some(sch) = &mut self.schematic {
+            sch.assign_missing_ids();
+        }
         if let Some(rt) = &mut self.routing {
             rt.assign_missing_ids();
         }
@@ -179,6 +198,13 @@ pub struct SymbolInstance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Wire {
+    /// Stable id (`wire_xxxxxxxxxxxx`), deterministic from `pts` — same
+    /// `next_item_id` scheme as `Track`/`Shape`/etc (see
+    /// `SchematicSection::assign_missing_ids`). Empty on a `design.json`
+    /// written before the studio editor could select/delete a wire by id;
+    /// backfilled the same way those other items are.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub net: String,
     /// Pins this wire lands on, as "REF.PIN" ("U1.3") — borrowed from
     /// Circuit JSON's first-class ports: gates check connectivity exactly
@@ -187,6 +213,13 @@ pub struct Wire {
     pub pins: Vec<String>,
     /// Polyline in sheet coordinates.
     pub pts: Vec<Point>,
+}
+
+impl Wire {
+    fn id_seed(&self) -> String {
+        let pts: Vec<String> = self.pts.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
+        pts.join(";")
+    }
 }
 
 /// Local-label shape: unused (locals carry no shape), but a global/
@@ -229,10 +262,19 @@ impl LabelKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetLabel {
+    /// Stable id (`lbl_xxxxxxxxxxxx`) — see `Wire::id`'s doc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub net: String,
     pub at: Point,
     #[serde(default, skip_serializing_if = "LabelKind::is_local")]
     pub kind: LabelKind,
+}
+
+impl NetLabel {
+    fn id_seed(&self) -> String {
+        format!("{}|{},{}", self.net, self.at.x, self.at.y)
+    }
 }
 
 /// A KiCad power symbol instance (`power:GND`, `power:VCC`, a custom
@@ -266,9 +308,18 @@ pub struct PowerSymbol {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NoConnect {
+    /// Stable id (`nc_xxxxxxxxxxxx`) — see `Wire::id`'s doc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub at: Point,
     /// The pin this flag marks, as "REF.PIN".
     pub pin: String,
+}
+
+impl NoConnect {
+    fn id_seed(&self) -> String {
+        format!("{},{}", self.at.x, self.at.y)
+    }
 }
 
 /// Title block. Every field optional/empty by default; the exporter falls
@@ -303,6 +354,54 @@ pub struct SheetInstance {
     pub file: String,
     pub at: Point,
     pub size: (Um, Um),
+}
+
+impl SchematicSection {
+    /// Assign a deterministic id to every wire/label/no-connect whose `id`
+    /// is still empty — same contract as `RoutingSection::assign_missing_ids`/
+    /// `DrawingsSection::assign_missing_ids` (stable per-kind processing
+    /// order, so a tie only ever breaks the same way twice).
+    pub fn assign_missing_ids(&mut self) {
+        let mut existing: std::collections::BTreeSet<String> = self
+            .wires
+            .iter()
+            .map(|w| &w.id)
+            .chain(self.labels.iter().map(|l| &l.id))
+            .chain(self.no_connects.iter().map(|nc| &nc.id))
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .collect();
+
+        let mut order: Vec<usize> = (0..self.wires.len()).collect();
+        order.sort_by(|&a, &b| self.wires[a].pts.first().cmp(&self.wires[b].pts.first()));
+        for i in order {
+            if self.wires[i].id.is_empty() {
+                let id = next_item_id("wire", &self.wires[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.wires[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.labels.len()).collect();
+        order.sort_by(|&a, &b| (&self.labels[a].net, self.labels[a].at).cmp(&(&self.labels[b].net, self.labels[b].at)));
+        for i in order {
+            if self.labels[i].id.is_empty() {
+                let id = next_item_id("lbl", &self.labels[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.labels[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.no_connects.len()).collect();
+        order.sort_by(|&a, &b| self.no_connects[a].at.cmp(&self.no_connects[b].at));
+        for i in order {
+            if self.no_connects[i].id.is_empty() {
+                let id = next_item_id("nc", &self.no_connects[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.no_connects[i].id = id;
+            }
+        }
+    }
 }
 
 // ---------- stage 2: placement ----------
@@ -801,13 +900,14 @@ mod tests {
                     SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                     SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
                 ],
-                wires: vec![Wire { net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }] }],
+                wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }] }],
                 labels: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
                 title_block: None,
                 sheets: vec![],
             }),
+            nets: None,
             placement: None,
             routing: None,
             drawings: None,

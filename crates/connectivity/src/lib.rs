@@ -123,7 +123,7 @@ pub(crate) mod tests_support {
         let design = Design {
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
-            schematic: None,
+            schematic: None, nets: None,
             placement: Some(PlacementSection {
                 outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
                 footprints: vec![

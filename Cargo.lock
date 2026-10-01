@@ -499,6 +499,7 @@ dependencies = [
  "eda-fab",
  "eda-gates",
  "eda-judge",
+ "eda-kicad",
  "eda-model",
  "eda-ops",
  "serde",

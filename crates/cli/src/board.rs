@@ -42,7 +42,7 @@
 
 use eda_model::ir::{Point, Shape, Text, TextJustify};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
-use eda_ops::{Board, Cmd, Dir, Region};
+use eda_ops::{Board, Cmd, Dir, Domain, Region};
 use std::path::{Path, PathBuf};
 
 /// What a board directory remembers between commands.
@@ -92,7 +92,92 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     .map_err(|e| fail("board_bad_intent", &meta.intent, format!("the intent does not parse: {e}")))?;
     crate::resolve_footprint_libraries(&mut model);
     crate::resolve_symbol_libraries(&mut model);
+    // Once a schematic `Cmd` has run on this board, its own derived net
+    // list (see `Design::nets`'s doc) is the one netlist -- it overrides
+    // whatever the intent file says, exactly the way a real KiCad project
+    // only ever trusts its *current* schematic, not the spec it started
+    // from. `None` (every board nothing has ever hand-edited, which is
+    // every board in this project's own test/parity corpus) leaves
+    // `model.nets` exactly as the intent declared it, unchanged from
+    // before this field existed.
+    if let Some(nets) = design.nets.clone() {
+        model.nets = nets;
+    }
     Ok((meta, design, model))
+}
+
+/// Recompute `design.schematic`'s own derived connectivity (`Wire::net`/
+/// `pins`, `PowerSymbol::pin`, `NoConnect::pin`) from its current drawn
+/// geometry, and the net list that implies -- the same union-find
+/// reconciliation `import_kicad_sch` runs on a real `.kicad_sch` file
+/// (`eda_kicad::reconcile`), run here instead on *this* design's own
+/// schematic every time a schematic-domain `Cmd` lands (see `step_quiet`,
+/// gated on `Cmd::domain`). A no-op if the design has no schematic at all.
+///
+/// Also folds a synthesized `Part` into `model` for any symbol instance it
+/// does not already know about -- `AddSymbol` placing a part with no
+/// intent counterpart, which must still "show up unplaced on the PCB"
+/// (the task's own words): pins come from a real resolved library symbol
+/// when `lib_id` names one, the same generic-box fallback `schematic_json`
+/// already renders with otherwise, same resolution order either way so
+/// the pins a wire can land on always match what the frontend drew.
+///
+/// Writes `design.nets = Some(nets)` -- see that field's own doc comment
+/// on why this never touches a board nothing has hand-edited yet (every
+/// board in this project's own test/parity corpus included: none of them
+/// has ever executed a schematic `Cmd`, so `design.nets` stays `None` for
+/// every one of them exactly as before this function existed, and
+/// `load`'s `model.nets` override above never fires).
+fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut ConstraintModel) {
+    let Some(sch) = design.schematic.as_mut() else { return };
+
+    let resolve = |lib_id: &str, model: &ConstraintModel| -> Option<eda_model::LibSymbol> {
+        if lib_id.is_empty() || eda_model::is_synthetic_lib_id(lib_id) {
+            None
+        } else {
+            model.symbol_of(lib_id)
+        }
+    };
+
+    for sym in sch.symbols.clone() {
+        if model.part(&sym.id).is_some() {
+            continue;
+        }
+        let pins = resolve(&sym.lib_id, model)
+            .map(|lib| {
+                lib.pins
+                    .iter()
+                    .map(|p| eda_model::Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind: eda_kicad::pin_kind_from_electrical_type(&p.electrical_type, &p.name) })
+                    .collect()
+            })
+            .unwrap_or_default();
+        model.parts.push(eda_model::Part {
+            reference: sym.id.clone(),
+            mpn: None,
+            lcsc: None,
+            value: (!sym.value.is_empty()).then(|| sym.value.clone()),
+            package: None,
+            footprint: (!sym.footprint.is_empty()).then(|| sym.footprint.clone()),
+            symbol: (!sym.lib_id.is_empty()).then(|| sym.lib_id.clone()),
+            datasheet: (!sym.datasheet.is_empty()).then(|| sym.datasheet.clone()),
+            pins,
+            body_um: None,
+            edge: None,
+        });
+    }
+
+    let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
+    for sym in &sch.symbols {
+        let lib = resolve(&sym.lib_id, model).unwrap_or_else(|| crate::studio::synthesize_generic_symbol(&format!("eda:{}", sym.id), model));
+        let angle_deg = sym.rot as f64 / 1000.0;
+        for p in &lib.pins {
+            let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored);
+            pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
+        }
+    }
+
+    let nets = eda_kicad::reconcile(&pin_world, &mut sch.wires, &sch.labels, &mut sch.power_symbols, &mut sch.no_connects);
+    design.nets = Some(nets);
 }
 
 pub(crate) fn save(dir: &Path, design: &eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
@@ -131,11 +216,12 @@ fn print_status(board: &Board, model: &ConstraintModel) -> Result<(), Vec<CheckR
 pub(crate) fn step(dir: &Path, cmd: Cmd, strict: bool, by: &str) -> Result<String, Vec<CheckResult>> {
     let line = cmd_line(&cmd);
     let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
+    let domain = cmd.domain();
     let r = step_quiet(dir, &cmd, strict);
     match &r {
         Ok(summary) => {
             if let Some(before) = before {
-                let _ = push_snapshot(&undo_dir(dir), &before);
+                let _ = push_snapshot(&undo_dir(dir), &before, domain);
                 clear_dir(&redo_dir(dir));
             }
             log_activity(dir, by, &line, true, summary)
@@ -149,7 +235,13 @@ pub(crate) fn step(dir: &Path, cmd: Cmd, strict: bool, by: &str) -> Result<Strin
 /// board's own directory. Small on purpose (see the task notes this was
 /// written from): no diffing, no branching redo tree, just two stacks of
 /// files named by a monotonic nanosecond timestamp so "latest" is a
-/// lexical (and numeric) max with no separate counter to maintain.
+/// lexical (and numeric) max with no separate counter to maintain. Each
+/// file's name also carries the `Domain` the command that produced it
+/// belonged to (`<timestamp>.<pcb|schematic>.json`) -- a purely additive
+/// tag on top of the same one-file-per-edit scheme, not a second stack:
+/// see `undo`/`redo`'s own doc for what it is used for and GAPS.md #15
+/// for the bug this exists to fix (Ctrl+Z on the Schematic tab silently
+/// undoing the last *PCB* edit).
 fn history_root(dir: &Path) -> PathBuf {
     dir.join(".history")
 }
@@ -160,15 +252,30 @@ fn redo_dir(dir: &Path) -> PathBuf {
     history_root(dir).join("redo")
 }
 
-fn push_snapshot(stack_dir: &Path, design: &eda_model::ir::Design) -> std::io::Result<()> {
+fn domain_tag(d: Domain) -> &'static str {
+    match d {
+        Domain::Pcb => "pcb",
+        Domain::Schematic => "schematic",
+    }
+}
+
+fn push_snapshot(stack_dir: &Path, design: &eda_model::ir::Design, domain: Domain) -> std::io::Result<()> {
     std::fs::create_dir_all(stack_dir)?;
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let s = serde_json::to_string(design).unwrap_or_default();
-    std::fs::write(stack_dir.join(format!("{t:020}.json")), s)
+    std::fs::write(stack_dir.join(format!("{t:020}.{}.json", domain_tag(domain))), s)
 }
 
-/// The most recent snapshot on the stack, removed from it.
-fn pop_snapshot(stack_dir: &Path) -> Option<eda_model::ir::Design> {
+/// The most recent snapshot on the stack, removed from it -- the most
+/// recent *overall* when `scope` is `None` (every CLI call site: `eda
+/// board undo`/`redo` have no notion of "tab" to scope by, so they keep
+/// exactly the single-timeline behavior this had before `Domain` existed),
+/// or the most recent whose own tag matches `scope` otherwise (every
+/// studio HTTP call site, scoped to whichever tab issued the request).
+/// Scoping never removes a *different*-domain entry sitting more recently
+/// on the stack -- it is left exactly where it is, for a later undo of
+/// *that* domain to find.
+fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<(Domain, eda_model::ir::Design)> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(stack_dir)
         .ok()?
         .filter_map(|e| e.ok())
@@ -176,46 +283,79 @@ fn pop_snapshot(stack_dir: &Path) -> Option<eda_model::ir::Design> {
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
         .collect();
     entries.sort();
-    let last = entries.pop()?;
-    let design = std::fs::read_to_string(&last).ok().and_then(|s| serde_json::from_str(&s).ok())?;
-    let _ = std::fs::remove_file(&last);
-    Some(design)
+    let matches = |p: &Path| -> Option<Domain> {
+        let name = p.file_stem()?.to_str()?; // "<timestamp>.<tag>"
+        let tag = name.rsplit('.').next()?;
+        let domain = if tag == "schematic" { Domain::Schematic } else { Domain::Pcb };
+        (scope.is_none() || scope == Some(domain)).then_some(domain)
+    };
+    let (idx, domain) = entries.iter().enumerate().rev().find_map(|(i, p)| matches(p).map(|d| (i, d)))?;
+    let path = entries.remove(idx);
+    let design = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok())?;
+    let _ = std::fs::remove_file(&path);
+    Some((domain, design))
 }
 
 fn clear_dir(stack_dir: &Path) {
     let _ = std::fs::remove_dir_all(stack_dir);
 }
 
-/// `eda board undo`: back to the state before the last edit. Routing is
-/// whatever that snapshot had -- if the edit being undone was itself a
-/// route, undo removes the routing along with it, same as any other
-/// change.
-pub(crate) fn undo(dir: &Path, by: &str) -> Result<String, Vec<CheckResult>> {
+/// Overlay `scope`'s own half of `snapshot` onto `current`, leaving
+/// everything else untouched -- `None` is a full restore (the original,
+/// single-timeline undo/redo behavior: `snapshot` replaces `current`
+/// outright), `Some(Schematic)` touches only `schematic`, `Some(Pcb)`
+/// touches everything *except* `schematic`. Symmetric: the exact same
+/// function reconstructs the pre-undo state in `redo`, by swapping which
+/// side is "current" and which is "the snapshot" -- see that pair's own
+/// doc for why this is the whole fix for GAPS.md #15 rather than two
+/// independent undo stacks.
+fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Design, scope: Option<Domain>) -> eda_model::ir::Design {
+    match scope {
+        None => snapshot,
+        Some(Domain::Schematic) => eda_model::ir::Design { schematic: snapshot.schematic, nets: snapshot.nets, ..current },
+        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, nets: current.nets, ..snapshot },
+    }
+}
+
+/// `eda board undo` (CLI, `scope: None`) or `POST /api/undo` (studio UI,
+/// `scope: Some(state.tab)`): back to the state before the last edit --
+/// the last edit *of any kind* for the CLI (unchanged from before
+/// `Domain` existed), or the last edit *in that tab's own editor* for the
+/// UI, so Ctrl+Z on the Schematic tab with nothing drawn there yet is
+/// correctly "nothing to undo" instead of reverting whatever was last
+/// done on the PCB tab (GAPS.md #15). A `Some(Pcb)` undo still reverts
+/// routing the same way an unscoped one always did -- if the edit being
+/// undone was itself a route, undo removes the routing along with it.
+pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String, Vec<CheckResult>> {
     let (_, current, _) = load(dir)?;
-    let Some(previous) = pop_snapshot(&undo_dir(dir)) else {
+    let Some((domain, previous)) = pop_snapshot(&undo_dir(dir), scope) else {
         let msg = "nothing to undo".to_string();
         log_activity(dir, by, "undo", false, &msg);
         return Err(fail("board_no_undo", "undo", msg));
     };
-    let _ = push_snapshot(&redo_dir(dir), &current);
-    save(dir, &previous)?;
+    let _ = push_snapshot(&redo_dir(dir), &current, domain);
+    let restored = restore_domain(current, previous, scope);
+    save(dir, &restored)?;
     let msg = "undo: reverted the last edit".to_string();
     log_activity(dir, by, "undo", true, &msg);
     Ok(msg)
 }
 
-/// `eda board redo`: re-apply the edit the last undo removed. Anything
-/// undone is invalidated the moment a *new* edit happens (see `step`),
-/// same as any other undo/redo stack.
-pub(crate) fn redo(dir: &Path, by: &str) -> Result<String, Vec<CheckResult>> {
+/// `eda board redo` / `POST /api/redo` -- see `undo`'s own doc; `scope`
+/// means the same thing here. Anything undone is invalidated the moment a
+/// new edit happens (`step` clears the whole redo stack, not just one
+/// domain's -- see its own doc comment), same as any other undo/redo
+/// stack.
+pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String, Vec<CheckResult>> {
     let (_, current, _) = load(dir)?;
-    let Some(next) = pop_snapshot(&redo_dir(dir)) else {
+    let Some((domain, next)) = pop_snapshot(&redo_dir(dir), scope) else {
         let msg = "nothing to redo".to_string();
         log_activity(dir, by, "redo", false, &msg);
         return Err(fail("board_no_redo", "redo", msg));
     };
-    let _ = push_snapshot(&undo_dir(dir), &current);
-    save(dir, &next)?;
+    let _ = push_snapshot(&undo_dir(dir), &current, domain);
+    let restored = restore_domain(current, next, scope);
+    save(dir, &restored)?;
     let msg = "redo: re-applied the undone edit".to_string();
     log_activity(dir, by, "redo", true, &msg);
     Ok(msg)
@@ -240,7 +380,7 @@ fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
 }
 
 fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckResult>> {
-    let (meta, design, model) = load(dir)?;
+    let (meta, design, mut model) = load(dir)?;
     let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
     let before = all_failures(&board, &model);
     let was = board.fork();
@@ -269,11 +409,23 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckRe
 
     let (done, placed, failures) = progress(&board, &model);
     let mut design = board.design().clone();
+    // `board` borrows `model` for its whole lifetime (pad/pin lookups,
+    // decoupling pairs); `reconcile_schematic` below needs `model` back
+    // mutably (a brand-new symbol can add a `Part` nothing else has heard
+    // of yet), so this drop makes that borrow's end explicit rather than
+    // relying on NLL to notice `board` is never read again.
+    drop(board);
     // Adding copper or graphics by hand must not clear the routing the way
     // a part edit does -- a part edit can move a footprint out from under
     // a track, a copper/drawing edit cannot invalidate anything by
     // construction. See `Cmd::clears_routing`.
     let stale = if cmd.clears_routing() { design.routing.take().is_some() } else { false };
+    // Schematic connectivity only needs retracing after a schematic edit
+    // -- see `reconcile_schematic`'s own doc on why this is the entire
+    // "one netlist" mechanism and why it never touches a PCB-only board.
+    if cmd.domain() == Domain::Schematic {
+        reconcile_schematic(&mut design, &mut model);
+    }
     save(dir, &design)?;
     Ok(format!(
         "{}: {placed}/{} placed ({:.0}%), {failures} failure(s){}{}",
@@ -360,6 +512,27 @@ fn cmd_line(c: &Cmd) -> String {
             *rotate_millideg as f64 / 1000.0,
             pivot.map_or("self".to_string(), |p| format!("{},{}", mm(p.x), mm(p.y)))
         ),
+
+        // No real `eda board` CLI subcommand parses these yet (the studio
+        // UI is their only caller so far) -- this text exists purely for
+        // activity.jsonl's own human-readable log line, same role `mm`/
+        // `pts` already play above for the PCB verbs, not a promise that
+        // typing it back in works.
+        Cmd::MoveSymbol { id, x, y } => format!("schematic move {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::DragSymbol { id, x, y, .. } => format!("schematic drag {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::RotateSymbol { id, quarter_turns } => format!("schematic rotate {id} --quarters {quarter_turns}"),
+        Cmd::MirrorSymbol { id } => format!("schematic mirror {id}"),
+        Cmd::DeleteSymbol { id } => format!("schematic delete-symbol {id}"),
+        Cmd::AddWire { pts: p } => format!("schematic wire --pts \"{}\"", pts(p)),
+        Cmd::DeleteWire { id } => format!("schematic delete-wire {id}"),
+        Cmd::AddNoConnect { at } => format!("schematic no-connect --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::DeleteNoConnect { id } => format!("schematic delete-no-connect {id}"),
+        Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
+        Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
+        Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
+        Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::Annotate { reset_existing } => format!("schematic annotate{}", if *reset_existing { " --reset" } else { "" }),
     }
 }
 
@@ -413,6 +586,17 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::MoveExact { .. } => "move-exact",
+
+        Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
+        Cmd::RotateSymbol { .. } => "schematic-rotate",
+        Cmd::MirrorSymbol { .. } => "schematic-mirror",
+        Cmd::DeleteSymbol { .. } => "schematic-delete-symbol",
+        Cmd::AddWire { .. } | Cmd::DeleteWire { .. } => "schematic-wire",
+        Cmd::AddNoConnect { .. } | Cmd::DeleteNoConnect { .. } => "schematic-no-connect",
+        Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
+        Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
+        Cmd::AddSymbol { .. } => "schematic-place",
+        Cmd::Annotate { .. } => "schematic-annotate",
     }
 }
 
@@ -736,8 +920,12 @@ pub fn run(
             other => Err(fail("board_usage", other, "usage: eda board text <add|edit|delete|move> ...")),
         },
         "route" => route_board(&dir, &actor()).map(|s| eprintln!("{s}")),
-        "undo" => undo(&dir, &actor()).map(|s| eprintln!("{s}")),
-        "redo" => redo(&dir, &actor()).map(|s| eprintln!("{s}")),
+        // CLI undo/redo has no "tab" to scope by -- `None` is the original,
+        // single-timeline behavior (the most recent edit of any kind),
+        // unchanged from before `Domain`-scoped undo existed for the
+        // studio UI's own `/api/undo`/`/api/redo` (see their own doc).
+        "undo" => undo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
+        "redo" => redo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
         "serve" => {
             let port = flag(rest, "--port").and_then(|p| p.parse().ok()).unwrap_or(8765);
             let ui = flag(rest, "--ui").map(PathBuf::from);
@@ -754,7 +942,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side};
+    use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side, Um};
     use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
     fn scratch(name: &str) -> PathBuf {
@@ -803,6 +991,7 @@ mod tests {
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None,
+            nets: None,
             placement: Some(PlacementSection {
                 outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
                 footprints: vec![
@@ -902,5 +1091,228 @@ mod tests {
         let (_, reloaded, _) = load(&dir).unwrap();
         assert_eq!(reloaded.routing.as_ref().unwrap().tracks[0].id, track_id, "re-saving and reloading must not move the id");
         assert_eq!(reloaded.routing.as_ref().unwrap().vias[0].id, via_id);
+    }
+
+    // ---------------------------------------------------------- eeschema
+
+    /// A single-pin `LibSymbol` whose one pin sits at local (0,0) -- so a
+    /// placed instance's pin lands at *exactly* the instance's own `at`,
+    /// with no rotation/pitch arithmetic for a test to get right
+    /// independently of `reconcile_schematic`'s own. Two references, R1
+    /// and R2, each starting on their own singleton net (so a later merge
+    /// is unambiguous), no placement/routing section.
+    fn setup_schematic(dir: &Path) {
+        let part = |r: &str| Part {
+            reference: r.into(),
+            mpn: None,
+            lcsc: None,
+            value: None,
+            package: None,
+            footprint: None,
+            symbol: Some("TEST:R".into()),
+            pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }],
+            body_um: None,
+            datasheet: None,
+            edge: None,
+        };
+        let lib = eda_model::LibSymbol {
+            lib_id: "TEST:R".into(),
+            graphics: vec![],
+            pins: vec![eda_model::LibPin { number: "1".into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, length_mm: 2.54, unit: 1 }],
+            power: false,
+            in_bom: true,
+            on_board: true,
+            datasheet: String::new(),
+            description: String::new(),
+            unit_count: 1,
+        };
+        let model = ConstraintModel {
+            parts: vec![part("R1"), part("R2")],
+            nets: vec![Net { name: "N1".into(), pins: vec!["R1.1".into()] }, Net { name: "N2".into(), pins: vec!["R2.1".into()] }],
+            symbols: vec![lib],
+            ..Default::default()
+        };
+        let intent_path = dir.join("intent.yaml");
+        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
+
+        let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(eda_model::ir::SchematicSection {
+                symbols: vec![sym("R1", 10_000, 10_000), sym("R2", 20_000, 10_000)],
+                wires: vec![],
+                labels: vec![],
+                power_symbols: vec![],
+                no_connects: vec![],
+                title_block: None,
+                sheets: vec![],
+            }),
+            nets: None,
+            // `Board` (crates/ops) always expects a placement section to
+            // exist, even an empty one -- the same intermediate state a
+            // real `eda board new` leaves a board in before anything is
+            // placed -- so a schematic-only `Cmd` through `step()` (which
+            // always builds a `Board`, PCB-only or not) does not panic in
+            // `Board::placement()`.
+            placement: Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] }),
+            routing: None,
+            drawings: None,
+        };
+        save(dir, &design).unwrap();
+        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    /// Same two symbols as `setup_schematic`, plus a placement section
+    /// that puts R1 on the PCB too -- for the undo/redo domain-scoping
+    /// test, which needs one real edit of each kind.
+    fn setup_both(dir: &Path) {
+        setup_schematic(dir);
+        let (_, mut design, _) = load(dir).unwrap();
+        design.placement = Some(PlacementSection {
+            outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
+            footprints: vec![FootprintInstance { id: "R1".into(), at: Point { x: 10_000, y: 10_000 }, rot: 0, side: Side::Top, label: Default::default() }],
+            modules: vec![],
+        });
+        save(dir, &design).unwrap();
+    }
+
+    fn net_of<'a>(nets: &'a [Net], pin: &str) -> Option<&'a Net> {
+        nets.iter().find(|n| n.pins.iter().any(|p| p == pin))
+    }
+
+    /// The hard rule this task was built around: "there must be one
+    /// netlist." Drawing a wire between two previously-unconnected pins
+    /// must merge them into the same net *in the model `check_erc`/the PCB
+    /// ratsnest read* -- not just in the schematic's own drawing -- and
+    /// deleting that wire must split them back apart. Exercises `AddWire`
+    /// and `DeleteWire` end to end: `step` -> `reconcile_schematic` (fired
+    /// because both are `Domain::Schematic`) -> `design.nets` -> `load`'s
+    /// override into `model.nets`.
+    #[test]
+    fn schematic_wire_connects_and_disconnects_pins_on_one_netlist() {
+        let dir = scratch("sch_wire_nets");
+        setup_schematic(&dir);
+
+        let (_, _, model) = load(&dir).unwrap();
+        assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "sanity: R1 and R2 start on separate nets");
+
+        step(&dir, Cmd::AddWire { pts: vec![Point { x: 10_000, y: 10_000 }, Point { x: 20_000, y: 10_000 }] }, false, "test").expect("R1.1 and R2.1 both sit exactly on this wire's endpoints");
+
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(design.nets.is_some(), "a schematic Cmd must persist the reconciled net list onto the design, not just compute it in-memory for this one request");
+        let merged = net_of(&model.nets, "R1.1").expect("R1.1 must still be on a net");
+        assert_eq!(merged.name, net_of(&model.nets, "R2.1").unwrap().name, "the wire must merge R1 and R2 onto the same net -- this is what 'the PCB ratsnest then follows' depends on");
+        assert!(merged.pins.contains(&"R1.1".to_string()) && merged.pins.contains(&"R2.1".to_string()));
+
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.wires.len(), 1);
+        let wire = &sch.wires[0];
+        assert!(!wire.id.is_empty(), "AddWire's id must be backfilled, same as every other addressable item");
+        assert_eq!(wire.net, merged.name, "the wire's own `net` field must be filled in by reconciliation, not left blank");
+        assert!(wire.pins.contains(&"R1.1".to_string()) && wire.pins.contains(&"R2.1".to_string()));
+
+        // Deleting the wire must split the net back apart -- the "delete
+        // splits" half of the same hard rule.
+        let wire_id = wire.id.clone();
+        step(&dir, Cmd::DeleteWire { id: wire_id }, false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(design.schematic.as_ref().unwrap().wires.is_empty());
+        assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "deleting the connecting wire must split R1 and R2 back onto separate nets");
+    }
+
+    /// The other half of the "one netlist" hard rule `schematic_wire_
+    /// connects_and_disconnects_pins_on_one_netlist` doesn't cover: two
+    /// same-named labels merge their nets with *no wire at all* between
+    /// them (`eda_kicad::sch_import::reconcile`'s own doc: "two same-
+    /// named local labels anywhere on the sheet are the same net"),
+    /// exactly how a real, spread-out schematic usually ties a rail
+    /// together. Deleting one label must not merely remove that one net
+    /// name -- once neither label exists, R1 and R2 have no shared
+    /// identity left at all and must split back onto two independent
+    /// (synthesized) nets, same as the wire-delete case.
+    #[test]
+    fn schematic_label_merges_nets_with_no_wire_between_them() {
+        let dir = scratch("sch_label_nets");
+        setup_schematic(&dir);
+
+        let (_, _, model) = load(&dir).unwrap();
+        assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "sanity: starts on separate nets");
+
+        // One label, exactly on each pin (no wire needed -- see reconcile's own doc).
+        step(&dir, Cmd::AddLabel { net: "SIG".into(), at: Point { x: 10_000, y: 10_000 }, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
+        step(&dir, Cmd::AddLabel { net: "SIG".into(), at: Point { x: 20_000, y: 10_000 }, kind: eda_model::ir::LabelKind::Local }, false, "test").unwrap();
+
+        let (_, design, model) = load(&dir).unwrap();
+        let merged = net_of(&model.nets, "R1.1").expect("R1.1 must still be on a net");
+        assert_eq!(merged.name, "SIG", "the merged net must take the label's own name, not a synthesized one");
+        assert_eq!(merged.name, net_of(&model.nets, "R2.1").unwrap().name, "two same-named labels must merge R1 and R2 onto one net with no wire drawn at all");
+
+        let sch = design.schematic.as_ref().unwrap();
+        assert_eq!(sch.labels.len(), 2);
+        assert!(sch.labels.iter().all(|l| !l.id.is_empty()), "AddLabel's id must be backfilled");
+
+        // Delete one label: the two pins no longer share any identity, so
+        // the net must split back apart (not just rename itself).
+        let first_label_id = sch.labels[0].id.clone();
+        step(&dir, Cmd::DeleteLabel { id: first_label_id }, false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().labels.len(), 1);
+        assert_ne!(net_of(&model.nets, "R1.1").unwrap().name, net_of(&model.nets, "R2.1").unwrap().name, "removing one of the two labels must split R1 and R2 back onto separate nets");
+    }
+
+    /// GAPS.md #15: "pressing Ctrl+Z while viewing the Schematic tab
+    /// silently undoes the last PCB edit instead of being a no-op." Proves
+    /// the fix -- `board::undo`/`redo`'s `Domain` scope -- the long way:
+    /// one real edit of each kind, then check every combination of which
+    /// scope's undo/redo touches which edit.
+    #[test]
+    fn undo_redo_are_scoped_to_the_tab_that_asked() {
+        let dir = scratch("domain_scoped_undo");
+        setup_both(&dir);
+
+        step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000, y: 10_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveSymbol { id: "R2".into(), x: 25_000, y: 10_000 }, false, "test").unwrap();
+
+        let pcb_at = |d: &eda_model::ir::Design| d.placement.as_ref().unwrap().footprints[0].at;
+        let sch_at = |d: &eda_model::ir::Design| d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R2").unwrap().at;
+
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 });
+        assert_eq!(sch_at(&design), Point { x: 25_000, y: 10_000 });
+
+        // The schematic edit is the most recent on the *shared* timeline --
+        // before this fix, an unscoped undo (what every call site used)
+        // would have reverted it correctly here, but there would be no way
+        // to *also* reach the PCB edit without first undoing the
+        // schematic one, and no way to undo "nothing more on this tab"
+        // without silently reverting the other tab instead. Scoped: a
+        // Schematic undo touches only the schematic symbol.
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 }, "a Schematic-tab undo must never touch the PCB tab's edit");
+        assert_eq!(sch_at(&design), Point { x: 20_000, y: 10_000 }, "a Schematic-tab undo must revert the schematic move");
+
+        // Nothing left to undo on the Schematic tab: a clean no-op/error,
+        // *not* a silent fallback to the PCB tab's edit -- the literal bug
+        // this gap describes.
+        let err = undo(&dir, "test", Some(Domain::Schematic)).unwrap_err();
+        assert_eq!(err[0].check, "board_no_undo");
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 }, "a failed Schematic undo must still never reach the PCB tab's edit");
+
+        // The PCB tab's own undo/redo still works, scoped the same way.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(pcb_at(&load(&dir).unwrap().1), Point { x: 10_000, y: 10_000 });
+        redo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(pcb_at(&load(&dir).unwrap().1), Point { x: 11_000, y: 10_000 });
+
+        // And the Schematic tab's own redo brings its move back, still
+        // without disturbing the PCB tab.
+        redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(sch_at(&design), Point { x: 25_000, y: 10_000 });
+        assert_eq!(pcb_at(&design), Point { x: 11_000, y: 10_000 });
     }
 }

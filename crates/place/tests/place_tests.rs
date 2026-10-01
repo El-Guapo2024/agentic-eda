@@ -20,7 +20,7 @@ fn design() -> Design {
     Design {
         schema: 1,
         provenance: Provenance { engine_version: "test".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-        schematic: None,
+        schematic: None, nets: None,
         placement: None,
         routing: None,
         drawings: None,

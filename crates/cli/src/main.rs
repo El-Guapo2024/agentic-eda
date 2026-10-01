@@ -995,7 +995,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
     let blank = || Design {
         schema: 1,
         provenance: eda_model::ir::Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: cx.ihash.clone(), seed: cx.args.seed, stage_hashes: vec![] },
-        schematic: None,
+        schematic: None, nets: None,
         placement: None,
         routing: None,
         drawings: None,
@@ -1163,7 +1163,7 @@ fn main() -> ExitCode {
                     seed: 0,
                     stage_hashes: vec![],
                 },
-                schematic: None,
+                schematic: None, nets: None,
                 placement: None,
                 routing: None,
                 drawings: None,

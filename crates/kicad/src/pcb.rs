@@ -641,7 +641,7 @@ mod tests {
         let design = Design {
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: None,
+            schematic: None, nets: None,
             placement: Some(placement),
             routing: Some(RoutingSection {
                 tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }] }],

@@ -73,7 +73,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     let mut no_connects: Vec<NoConnect> = Vec::new();
     for nc in sexpr::find_all(root, "no_connect") {
         if let Some(at) = sexpr::find(nc, "at").and_then(point_mm) {
-            no_connects.push(NoConnect { at: mm_point_to_um(at), pin: String::new() });
+            no_connects.push(NoConnect { id: String::new(), at: mm_point_to_um(at), pin: String::new() });
         }
     }
     let nc_points: std::collections::BTreeSet<Point> = no_connects.iter().map(|nc| nc.at).collect();
@@ -132,7 +132,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     let mut wires: Vec<Wire> = Vec::new();
     for w in sexpr::find_all(root, "wire") {
         if let Some(pts) = import_pts(w) {
-            wires.push(Wire { net: String::new(), pins: vec![], pts });
+            wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts });
         }
     }
 
@@ -147,7 +147,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
                 Some(true) => LabelKind::Global { shape },
                 Some(false) => LabelKind::Hierarchical { shape },
             };
-            labels.push(eda_model::ir::NetLabel { net, at: mm_point_to_um(at), kind });
+            labels.push(eda_model::ir::NetLabel { id: String::new(), net, at: mm_point_to_um(at), kind });
         }
     }
 
@@ -168,6 +168,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
         schematic: Some(sch),
+        nets: None,
         placement: None,
         routing: None,
         drawings: None,
@@ -237,7 +238,7 @@ fn label_shape_from_token(t: &str) -> LabelShape {
 /// `PinKind`), so a round trip of *our own* export recovers the exact same
 /// `PinKind` it started from, while a real KiCad file's richer pin typing
 /// (input/output/tri_state/open_collector/...) folds down to `Signal`.
-fn pin_kind_from_electrical_type(t: &str, name: &str) -> eda_model::PinKind {
+pub fn pin_kind_from_electrical_type(t: &str, name: &str) -> eda_model::PinKind {
     use eda_model::PinKind;
     match t {
         // `power_in` covers both a rail input and a ground pin in KiCad's
@@ -273,7 +274,7 @@ fn import_rot_millideg_sch(file_deg: f64) -> eda_model::ir::Millideg {
 /// -- everything `eda_kicad::lib::baked_local` does, run forward instead of
 /// pre-baked: negate y (library +y-up -> sheet +y-down, see
 /// `baked_local`'s own doc comment), mirror, then rotate.
-fn transform_local_point(local: SPoint, angle_deg: f64, mirrored: bool) -> SPoint {
+pub fn transform_local_point(local: SPoint, angle_deg: f64, mirrored: bool) -> SPoint {
     let ly = -local.y;
     let lx = if mirrored { -local.x } else { local.x };
     let theta = angle_deg.to_radians();
@@ -288,7 +289,7 @@ fn transform_local_point(local: SPoint, angle_deg: f64, mirrored: bool) -> SPoin
 /// rebuilt net list and, in the same pass, backfills every `Wire::net`/
 /// `Wire::pins`, `PowerSymbol::pin` and `NoConnect::pin` this reader could
 /// not know until connectivity was resolved.
-fn reconcile(pin_world: &BTreeMap<String, Point>, wires: &mut [Wire], labels: &[eda_model::ir::NetLabel], power_symbols: &mut [PowerSymbol], no_connects: &mut [NoConnect]) -> Vec<Net> {
+pub fn reconcile(pin_world: &BTreeMap<String, Point>, wires: &mut [Wire], labels: &[eda_model::ir::NetLabel], power_symbols: &mut [PowerSymbol], no_connects: &mut [NoConnect]) -> Vec<Net> {
     let mut point_id: BTreeMap<Point, usize> = BTreeMap::new();
     let mut parent: Vec<usize> = Vec::new();
     let id_of = |p: Point, point_id: &mut BTreeMap<Point, usize>, parent: &mut Vec<usize>| -> usize {

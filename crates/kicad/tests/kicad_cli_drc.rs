@@ -210,7 +210,7 @@ fn kicad_cli_drc_bottom_side_pads() {
     let design = Design {
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "bottom_side_pads".into(), seed: 0, stage_hashes: vec![] },
-        schematic: None,
+        schematic: None, nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints.clone(), modules: Vec::new() }),
         routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![] }),
         drawings: None,
@@ -284,7 +284,7 @@ fn kicad_cli_drc_shapes_and_text() {
     let design = Design {
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "shapes_text_drc".into(), seed: 0, stage_hashes: vec![] },
-        schematic: None,
+        schematic: None, nets: None,
         placement: Some(PlacementSection {
             outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }],
             footprints: vec![],
@@ -379,7 +379,7 @@ fn kicad_cli_drc_real_footprints() {
     let design = Design {
         schema: 1,
         provenance: Provenance { engine_version: "0".into(), intent_hash: "real_footprints".into(), seed: 0, stage_hashes: vec![] },
-        schematic: None,
+        schematic: None, nets: None,
         placement: Some(PlacementSection { outline, footprints, modules: Vec::new() }),
         routing: None,
         drawings: None,

@@ -514,6 +514,10 @@ fn handle(
             let v = drc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/erc") => {
+            let v = erc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -531,14 +535,16 @@ fn handle(
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
         ("POST", "/api/undo") => {
-            let reply = match board::undo(dir, "ui") {
+            let scope = request_domain(&body);
+            let reply = match board::undo(dir, "ui", scope) {
                 Ok(summary) => json!({ "ok": true, "message": summary }),
                 Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
         ("POST", "/api/redo") => {
-            let reply = match board::redo(dir, "ui") {
+            let scope = request_domain(&body);
+            let reply = match board::redo(dir, "ui", scope) {
                 Ok(summary) => json!({ "ok": true, "message": summary }),
                 Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
             };
@@ -565,6 +571,21 @@ fn handle(
         }
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
+    }
+}
+
+/// `POST /api/undo`/`/api/redo`'s own `{"domain": "pcb" | "schematic"}`
+/// body -- which tab asked, so `board::undo`/`redo` can scope to it
+/// (GAPS.md #15: Ctrl+Z on the Schematic tab must never revert the PCB
+/// tab's last edit, or vice versa). Absent, unparseable, or a genuinely
+/// empty body (the CLI never sends one; nothing else hits this route)
+/// falls back to `None` -- the original, unscoped "most recent edit of
+/// any kind" behavior -- rather than refusing the request.
+fn request_domain(body: &[u8]) -> Option<eda_ops::Domain> {
+    let req: Value = serde_json::from_slice(body).ok()?;
+    match req.get("domain").and_then(Value::as_str)? {
+        "schematic" => Some(eda_ops::Domain::Schematic),
+        _ => Some(eda_ops::Domain::Pcb),
     }
 }
 
@@ -802,7 +823,7 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             })
         })
         .collect();
-    let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect();
+    let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>() })).collect();
     let labels: Vec<Value> = sch
         .labels
         .iter()
@@ -812,7 +833,7 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 eda_model::ir::LabelKind::Global { shape } => ("global", Some(*shape)),
                 eda_model::ir::LabelKind::Hierarchical { shape } => ("hierarchical", Some(*shape)),
             };
-            json!({ "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str) })
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str) })
         })
         .collect();
     let power_symbols: Vec<Value> = sch
@@ -820,7 +841,7 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         .iter()
         .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin }))
         .collect();
-    let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
+    let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "id": nc.id, "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
     let title_block = sch.title_block.as_ref().map(|t| json!({ "title": t.title, "date": t.date, "rev": t.rev, "company": t.company, "comments": t.comments }));
 
     // Resolved library-symbol graphics for every distinct lib_id this sheet
@@ -879,7 +900,7 @@ fn label_shape_str(s: eda_model::ir::LabelShape) -> &'static str {
 /// N/S/E/W, in ascending pin-number order. `"eda:<id>"` names exactly one
 /// part (unlike a real lib_id, which can be shared), so this always has a
 /// `Part` to build from.
-fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::ConstraintModel) -> eda_model::LibSymbol {
+pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::ConstraintModel) -> eda_model::LibSymbol {
     let empty = || eda_model::LibSymbol { lib_id: lib_id.to_string(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), unit_count: 1 };
     let reference = lib_id.strip_prefix("eda:").unwrap_or(lib_id);
     let Some(part) = model.part(reference) else { return empty() };
@@ -971,6 +992,38 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// (`null` when absent) carrying the placement-quality providers' agent-fix
 /// metadata (see `eda_drc::FixHint`), which kicad-cli's own JSON has no
 /// concept of.
+/// GET /api/erc: `eda_kicad::check_erc` (the ERC engine, gap #4 in
+/// GAPS.md -- "built, zero UI exposure") run fresh on every call, same
+/// no-caching reasoning `drc_json`'s own doc gives. Flatter than
+/// `drc_json`'s `DrcViolation`/items shape: `check_erc` reports plain
+/// `CheckResult`s (check name, Fail/Warn, an optional "REF" or "REF.PIN"
+/// `location` string, a human `hint`) rather than DRC's richer
+/// positioned-item list, so there is no canvas-marker position to extract
+/// here the way DRC's `it.pos` gives one -- `ErcDialog.tsx`'s row click
+/// resolves `location` back to a symbol/pin to select instead. `Excluded`
+/// results are dropped (nothing in this app writes to `Exclusions` yet, so
+/// there is never one to show); `Pass` is never present in `check_erc`'s
+/// own output in the first place.
+fn erc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let found = eda_kicad::check_erc(&design, &model);
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    let violations: Vec<Value> = found
+        .iter()
+        .filter(|c| !matches!(c.status, CheckStatus::Pass | CheckStatus::Excluded))
+        .map(|c| {
+            *counts.entry(c.check.as_str()).or_default() += 1;
+            json!({
+                "check": c.check,
+                "severity": match c.status { CheckStatus::Fail => "error", _ => "warning" },
+                "location": c.location,
+                "hint": c.hint,
+            })
+        })
+        .collect();
+    Ok(json!({ "violations": violations, "counts": counts }))
+}
+
 fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let found = eda_drc::run(&design, &model);
