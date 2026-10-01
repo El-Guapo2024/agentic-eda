@@ -30,6 +30,7 @@ use eda_model::{CheckResult, ConstraintModel};
 pub mod drill;
 pub mod gerber;
 pub mod job;
+pub mod position;
 
 /// CSV escaping: quote when the field contains a comma, quote or newline,
 /// and double any embedded quote. A part described as `1uF, 16V` is not
