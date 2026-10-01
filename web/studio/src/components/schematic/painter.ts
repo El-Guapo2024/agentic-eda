@@ -3,20 +3,41 @@
 // layers: LAYER_WIRE/LAYER_JUNCTION/LAYER_DEVICE/LAYER_PIN/etc., see
 // layers.ts's layerColor(), which resolves a real KiCad key directly when
 // it isn't one of this app's PCB "bucket" names) drawn from GET
-// /api/schematic's structured data via layout.ts's ported geometry.
+// /api/schematic's structured data.
 //
-// v1, read-only: symbol boxes (generic IC rect, or a resistor/capacitor/
-// inductor/diode glyph for a recognized 2-pin passive -- same heuristic
-// eda-render uses), pin stubs + names, ref/value text, wire polylines,
-// same-net T-junction dots, and a simplified net-label tag (colored by
-// power/ground/plain, not the full ground-bar/power-flag/signal-tag glyph
-// set crates/render/src/lib.rs draws -- that's a lot of glyph-specific
-// path math for a first pass at a read-only view; this reads the net name
-// at its anchor point instead, still in the right KiCad layer color).
-import type { Schematic, SchematicWire } from "../../api/types";
+// Two symbol-body renderers coexist: `drawRealSymbol` (lib_symbols'
+// real graphics -- rectangle/polyline/circle/arc/text -- plus real pin
+// geometry: length, orientation, decoration shape, name/number
+// placement, all ported from sch_painter.cpp/sch_pin.cpp/pin_layout_
+// cache.cpp read this session) and `drawBoxSymbol` (the original v1
+// generic-box-plus-heuristic-glyph renderer, from layout.ts's ported
+// crates/engine geometry.rs box/port layout). `paintSchematic` picks
+// `drawRealSymbol` whenever `libSymbol.ts`'s `resolveLibSymbol` finds
+// real graphics for a symbol's `lib_id`, falling back to `drawBoxSymbol`
+// otherwise -- per the task's own instruction, `drawBoxSymbol` (and
+// layout.ts's box/port layout it depends on) is meant to be deleted
+// outright once every symbol in practice resolves to real graphics; it
+// is kept now only because that is not yet true for every board.
+//
+// Formulas and constants throughout are cited to the real KiCad source
+// files/line ranges they were read from this session (not guessed) --
+// see each constant's/function's own doc comment for the specific file.
+// A few things this app's `/api/schematic` contract does not (yet) carry
+// are called out explicitly as approximations where they come up: no
+// per-symbol `pin_names` offset (so every pin name renders "inside" the
+// body, using eeschema's own factory-default offset), no per-field
+// position for a power symbol's net-name text (placed like a normal
+// pin's name instead), no net-connectivity-derived "dangling" state (so
+// the dangling-pin indicator circle is not drawn), and no electrical-pin
+// -type annotation text (off by default in the real schematic editor
+// too, so this is not actually a gap).
+import type { LabelShape, LabelScope, LibFill, NoConnect, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicWire } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
+import { resolveLibSymbol, type ResolvedGraphic } from "./libSymbol";
+import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
+import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement } from "./labelShape";
 import { drawStrokeText } from "../text/strokeFont";
 
 /**
@@ -44,18 +65,44 @@ export interface SchematicPaintOptions {
 const REF_FONT = 1.6;
 const VALUE_FONT = 1.4;
 const PIN_FONT = 1.1;
+/** eeschema/default_values.h DEFAULT_JUNCTION_DIAM (36 mils) -- radius, um. A schematic can override this per-file (KiCad's own `(junction (diameter ...))`), which this app's backend doesn't expose yet, so this is the factory default only. */
+const JUNCTION_RADIUS_UM = 457.2;
+/** eeschema/default_values.h DEFAULT_NOCONNECT_SIZE (48 mils, the marker's full width) -- half-width, um, i.e. how far each arm of the top-level `no_connects[]` X reaches from center. Read directly from sch_painter.cpp: `d = max(m_size, 3*defaultPen)/2 = max(48,18)/2 = 24 mil`. */
+const NOCONNECT_HALF_UM = 609.6;
+/** A pin whose own `electrical_type` is `no_connect` draws a *smaller* X at its own tip -- eeschema's TARGET_PIN_RADIUS (15 mil), confirmed in sch_painter.cpp as this exact pin-level marker's half-size, distinct from the top-level no-connect marker's own (larger) size above. */
+const PIN_NC_HALF_UM = 381;
 const FIELD_FONT = 1.0; // footprint field: small, per the task's "footprint field in purple and small"
 
-/** Net names that read as power/ground rails -- crates/engine/src/geometry.rs `is_power_or_ground_net_name`, ported. */
-function isPowerOrGroundNetName(name: string): boolean {
-  const upper = name.toUpperCase();
-  const trimmed = upper.replace(/^\+/, "");
-  const rails = ["GND", "AGND", "DGND", "VSS", "VCC", "VDD", "VDDA", "VBAT", "VBUS", "VSYS", "3V3", "5V", "1V8", "12V"];
-  return rails.includes(trimmed) || trimmed.startsWith("GND") || trimmed.startsWith("AGND") || trimmed.startsWith("DGND") || trimmed.startsWith("VSS");
-}
+/**
+ * eeschema's `PinSymbolSize` (sch_render_settings.cpp: `DEFAULT_TEXT_SIZE
+ * * IU_PER_MILS / 2` = 25 mil = 0.635mm) -- the one size every pin-shape
+ * decoration (inversion bubble radius, clock-triangle leg, non-logic "X"
+ * half-size) is drawn at by default. sch_painter.cpp's `r`/`c` locals
+ * both resolve to this same constant whenever PinSymbolSize is set (which
+ * it always is, there being no project-level override this app exposes),
+ * so this app does not need the name/number-size-derived fallback branch
+ * real KiCad falls back to only when PinSymbolSize is explicitly zeroed.
+ */
+const PIN_DECOR_UM = 635;
+/** 2x PIN_DECOR_UM -- how far past the body-attachment point (R) an inverted/inverted-clock pin's bubble-to-tip line, or a low-input/low-clock/low-output wedge's leg, reaches. */
+const PIN_DECOR_D_UM = PIN_DECOR_UM * 2;
+/** sch_pin.cpp/pin_layout_cache.cpp: the gap between a pin's own line and its number/name text -- `2032 IU = 0.2032mm`, confirmed directly from source (not the same as DEFAULT_PIN_NAME_OFFSET, which is how far a pin's *name* sits past the body-attachment point into the body, not this text-to-line clearance). */
+const PIN_TEXT_CLEARANCE_UM = 203.2;
+/** eeschema/default_values.h DEFAULT_PIN_NAME_OFFSET (20 mil) -- how far a pin's name sits past its body-attachment point, into the body ("inside" placement). This app's `LibSymbol` carries no per-symbol `(pin_names (offset ...))` override (not part of the coordinator's described contract), so every symbol uses KiCad's own factory default rather than varying per real library symbol -- real symbols that explicitly set `offset 0` (name drawn *outside*, past the pin's free end, as GND/power symbols typically do, though their pin is hidden anyway so it goes unseen) are the one case this simplification visibly diverges from. */
+const PIN_NAME_OFFSET_UM = 508;
+/** eeschema's `GetEffectiveTextPenWidth`/`ClampTextPenSize` for pin number/name text: `min(DEFAULT_LINE_WIDTH_MILS pen, round(0.18*size))` -- at this app's PIN_FONT sizes the 0.18*size clamp never binds (it only matters for a much smaller font), so this app just uses the plain default pen directly, matching every other piece of schematic ink (DEFAULT_LINE_WIDTH_MILS, 6 mil = 152.4um). */
+const PIN_TEXT_PEN_UM = 152.4;
 
-function labelColor(net: string): string {
-  return isPowerOrGroundNetName(net) ? layerColor("LAYER_GLOBLABEL") : layerColor("LAYER_LOCLABEL");
+/** eeschema's `scope`-based label coloring (LAYER_LOCLABEL/LAYER_GLOBLABEL/LAYER_HIERLABEL) -- replaces an earlier heuristic (power/ground net-name sniffing) that only ever approximated "is this a global rail", now that the real scope is reported directly. */
+function labelLayerColor(scope: LabelScope): string {
+  switch (scope) {
+    case "local":
+      return layerColor("LAYER_LOCLABEL");
+    case "global":
+      return layerColor("LAYER_GLOBLABEL");
+    case "hierarchical":
+      return layerColor("LAYER_HIERLABEL");
+  }
 }
 
 function localPortPoint(port: ResolvedSymbol["ports"][number], width: number, height: number): [number, number] {
@@ -99,12 +146,19 @@ function junctionPoints(wires: SchematicWire[]): Array<[number, number]> {
   return [...counts.values()].filter((e) => e.n >= 3).map((e) => e.at);
 }
 
-function drawSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: ResolvedSymbol, selected: boolean) {
+// ------------------------------------------------------------- box fallback
+
+function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: ResolvedSymbol, selected: boolean) {
   const { symbol, width, height, ports, pinPort, passive } = r;
   ctx.save();
   ctx.translate(symbol.at[0], symbol.at[1]);
   if (symbol.rot !== 0) ctx.rotate((symbol.rot * Math.PI) / 180);
-  if (symbol.mirrored) ctx.scale(-1, 1);
+  // KiCad mirrors one axis at a time: "x" flips Y (vertical flip), "y"
+  // flips X (horizontal flip) -- see types.ts's SchematicSymbol.mirror
+  // doc comment. ctx.scale's own (x,y) factors are exactly that: (1,-1)
+  // for a vertical flip, (-1,1) for a horizontal one.
+  if (symbol.mirror === "x") ctx.scale(1, -1);
+  else if (symbol.mirror === "y") ctx.scale(-1, 1);
 
   const hair = 1 / view.scale;
   ctx.lineWidth = Math.max(300, hair);
@@ -188,7 +242,7 @@ function drawSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Resol
         ctx.save();
         ctx.strokeStyle = layerColor("LAYER_NOCONNECT");
         ctx.lineWidth = Math.max(150, hair);
-        const s = 300;
+        const s = PIN_NC_HALF_UM;
         ctx.beginPath();
         ctx.moveTo(sx - s, sy - s);
         ctx.lineTo(sx + s, sy + s);
@@ -200,25 +254,7 @@ function drawSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Resol
     }
   });
 
-  // Ref/value, above/below the box's left edge. Stroke text has no
-  // "bold" variant (there's no filled outline to embolden) -- KiCad's
-  // own way of making stroke text heavier is a thicker stroke, so the
-  // reference designator (the one field this app already drew bold)
-  // gets BOLD_THICKNESS_FACTOR instead of the default.
-  const refSizeUm = REF_FONT * 1000;
-  drawStrokeText(ctx, symbol.id, 0, -400, { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, color: layerColor("LAYER_REFERENCEPART") });
-  if (symbol.value || symbol.mpn) {
-    const sizeUm = VALUE_FONT * 1000;
-    drawStrokeText(ctx, symbol.value ?? symbol.mpn ?? "", 0, height + 1800, { sizeUm, color: layerColor("LAYER_VALUEPART") });
-  }
-  // Footprint field: small, LAYER_FIELDS purple -- a real field KiCad
-  // draws alongside ref/value (this app has no separate "hide field"
-  // flag per field, so it always shows when the symbol has a package).
-  if (symbol.package) {
-    const sizeUm = FIELD_FONT * 1000;
-    drawStrokeText(ctx, symbol.package, 0, height + 1800 + FIELD_FONT * 1150, { sizeUm, color: layerColor("LAYER_FIELDS") });
-  }
-
+  drawFieldsAbout(ctx, symbol, 0, height, 0);
   ctx.restore();
 }
 
@@ -288,6 +324,396 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
   }
 }
 
+/**
+ * Reference/value/footprint text, shared by both the box and real-symbol
+ * renderers. Real KiCad places each of these at its own per-instance
+ * field position (not reported by this app's `/api/schematic`), so both
+ * callers use the same "above/below the symbol's own bounding box, at
+ * localX" approximation instead -- consistent between the two renderers
+ * even though neither is pixel-exact against a real recorded field
+ * position.
+ */
+function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol, localX: number, bboxBottom: number, bboxTop: number) {
+  const refSizeUm = REF_FONT * 1000;
+  drawStrokeText(ctx, symbol.id, localX, bboxTop - 400, { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, color: layerColor("LAYER_REFERENCEPART") });
+  if (symbol.value || symbol.mpn) {
+    const sizeUm = VALUE_FONT * 1000;
+    drawStrokeText(ctx, symbol.value ?? symbol.mpn ?? "", localX, bboxBottom + 1800, { sizeUm, color: layerColor("LAYER_VALUEPART") });
+  }
+  // Footprint field: small, LAYER_FIELDS purple -- a real field KiCad
+  // draws alongside ref/value (this app has no separate "hide field"
+  // flag per field, so it always shows when the symbol has a package).
+  const pkg = symbol.footprint ?? symbol.package;
+  if (pkg) {
+    const sizeUm = FIELD_FONT * 1000;
+    drawStrokeText(ctx, pkg, localX, bboxBottom + 1800 + FIELD_FONT * 1150, { sizeUm, color: layerColor("LAYER_FIELDS") });
+  }
+}
+
+// ------------------------------------------------------------- real symbols
+
+/** eeschema's FILL_T -> how to paint it. `color`/the hatch modes fall back to `outline` (fill with the stroke's own color) -- see types.ts's LibFill doc comment. */
+function fillPaint(fill: LibFill): "none" | "outline" | "background" {
+  if (fill === "background") return "background";
+  if (fill === "none") return "none";
+  return "outline"; // "outline", "color", and every hatch mode
+}
+
+/** sch_shape.cpp's stroke-width resolution: an explicit positive width wins (clamped to a sane minimum); zero means "use the schematic's own default line thickness"; negative explicitly means "no stroke" (rare -- a hatch-only shape). */
+function effectiveStrokeWidthUm(strokeWidthUm: number): number | null {
+  if (strokeWidthUm > 0) return Math.max(strokeWidthUm, 21.2);
+  if (strokeWidthUm === 0) return 152.4; // DEFAULT_LINE_WIDTH_MILS, 6 mil
+  return null;
+}
+
+/** The circumcenter of 3 points -- CalcArcCenter, standard circumcenter algebra (not KiCad-specific; used because KiCad's own arcs are stored start/mid/end, like this app's PCB `Shape` arcs). Returns null for (near-)collinear points, which a real arc should never be. */
+function arcCenter(a: [number, number], b: [number, number], c: [number, number]): [number, number] | null {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+  if (Math.abs(d) < 1e-6) return null;
+  const a2 = a[0] * a[0] + a[1] * a[1];
+  const b2 = b[0] * b[0] + b[1] * b[1];
+  const c2 = c[0] * c[0] + c[1] * c[1];
+  const ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d;
+  const uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d;
+  return [ux, uy];
+}
+
+/** Normalizes an angle difference to (-180, 180] degrees, in radians -- sch_shape.cpp's `norm180`, used to build an arc's signed sweep from its three stored points. */
+function norm180(rad: number): number {
+  let d = rad % (2 * Math.PI);
+  if (d <= -Math.PI) d += 2 * Math.PI;
+  if (d > Math.PI) d -= 2 * Math.PI;
+  return d;
+}
+
+function applyFill(ctx: CanvasRenderingContext2D, mode: "none" | "outline" | "background", strokeColor: string) {
+  if (mode === "background") ctx.fillStyle = layerColor("LAYER_DEVICE_BACKGROUND");
+  else if (mode === "outline") ctx.fillStyle = strokeColor;
+}
+
+function drawRealGraphic(ctx: CanvasRenderingContext2D, g: ResolvedGraphic, strokeColor: string) {
+  if (g.kind === "text") {
+    drawStrokeText(ctx, g.content, g.at[0], g.at[1], { sizeUm: g.sizeUm, angleRad: -(g.angleDeg * Math.PI) / 180, justify: "center", color: strokeColor });
+    return;
+  }
+
+  const mode = fillPaint(g.fill);
+  const widthUm = effectiveStrokeWidthUm(g.strokeWidthUm);
+  applyFill(ctx, mode, strokeColor);
+
+  ctx.beginPath();
+  switch (g.kind) {
+    case "rectangle": {
+      const [x0, y0] = g.start;
+      const [x1, y1] = g.end;
+      ctx.rect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      break;
+    }
+    case "polyline":
+      g.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      break;
+    case "circle":
+      ctx.arc(g.center[0], g.center[1], g.radiusUm, 0, Math.PI * 2);
+      break;
+    case "arc": {
+      const center = arcCenter(g.start, g.mid, g.end);
+      if (!center) {
+        ctx.moveTo(g.start[0], g.start[1]);
+        ctx.lineTo(g.end[0], g.end[1]);
+        break;
+      }
+      const r = Math.hypot(g.start[0] - center[0], g.start[1] - center[1]);
+      const a0 = Math.atan2(g.start[1] - center[1], g.start[0] - center[0]);
+      const aMid = Math.atan2(g.mid[1] - center[1], g.mid[0] - center[0]);
+      const aEnd = Math.atan2(g.end[1] - center[1], g.end[0] - center[0]);
+      const sweep = norm180(aMid - a0) + norm180(aEnd - aMid);
+      ctx.arc(center[0], center[1], r, a0, a0 + sweep, sweep < 0);
+      break;
+    }
+  }
+  if (g.kind === "polyline") {
+    // A library polyline's fill is the implicitly-closed polygon; its
+    // stroke is the open path as given (sch_painter.cpp: fill closes,
+    // stroke does not) -- fill before closing the path for the stroke.
+    if (mode !== "none") ctx.fill();
+    if (widthUm !== null) {
+      ctx.lineWidth = widthUm;
+      ctx.stroke();
+    }
+    return;
+  }
+  if (g.kind === "rectangle" || g.kind === "circle" || g.kind === "arc") ctx.closePath();
+  if (mode !== "none" && g.kind !== "arc") ctx.fill();
+  if (widthUm !== null) {
+    ctx.lineWidth = widthUm;
+    ctx.stroke();
+  }
+}
+
+/** `dir`'s horizontal/vertical classification is exact (every real rotation here is axis-aligned -- see transform.ts's ResolvedPin doc comment), so this is a plain equality test, not a tolerance check. */
+function isHorizontalPin(dir: [number, number]): boolean {
+  return dir[1] === 0;
+}
+
+/** The pin-shape decoration geometry -- sch_painter.cpp's `draw(SCH_PIN)`, read directly (formulas for every GRAPHIC_PINSHAPE value, plus the `no_connect` electrical-type override). Operates entirely on `root`/`tip`/`dir`, all already resolved to world space. */
+function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
+  const { pin, tip: P, root: R, dir } = rp;
+  const [dx, dy] = dir;
+  const r = PIN_DECOR_UM;
+  const d = PIN_DECOR_D_UM;
+  const line = (a: [number, number], b: [number, number]) => {
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+  };
+  /** Two connected segments a->b->c -- sch_painter.cpp's own `triLine` helper, by the same name, used for every pin-shape decoration below. */
+  const triLine = (a: [number, number], b: [number, number], c: [number, number]) => {
+    line(a, b);
+    line(b, c);
+  };
+  const circle = (cx: number, cy: number, rad: number) => {
+    ctx.moveTo(cx + rad, cy);
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+  };
+  /** The INVERTED_CLOCK triangle alone (shared by "inverted_clock" and the "clock_low"/"edge_clock_high" compound shapes). */
+  const invertedClockTriangle = () => triLine([R[0] + dy * r, R[1] - dx * r], [R[0] - dx * r, R[1] - dy * r], [R[0] - dy * r, R[1] + dx * r]);
+  /** The INPUT_LOW wedge alone (shared by "input_low" and "clock_low"/"edge_clock_high"). */
+  const inputLowWedge = () => {
+    if (dy === 0) triLine([R[0] + dx * d, R[1]], [R[0] + dx * d, R[1] - d], R);
+    else triLine([R[0], R[1] + dy * d], [R[0] - d, R[1] + dy * d], R);
+  };
+
+  if (pin.electrical_type === "no_connect") {
+    const t = PIN_NC_HALF_UM;
+    line(R, P);
+    line([P[0] - t, P[1] - t], [P[0] + t, P[1] + t]);
+    line([P[0] + t, P[1] - t], [P[0] - t, P[1] + t]);
+    return;
+  }
+
+  switch (pin.shape) {
+    case "line":
+      line(R, P);
+      return;
+    case "inverted":
+      circle(R[0] + dx * r, R[1] + dy * r, r);
+      line([R[0] + dx * d, R[1] + dy * d], P);
+      return;
+    case "clock":
+      line(R, P);
+      if (dy === 0) triLine([R[0], R[1] + r], [R[0] - dx * r, R[1]], [R[0], R[1] - r]);
+      else triLine([R[0] + r, R[1]], [R[0], R[1] - dy * r], [R[0] - r, R[1]]);
+      return;
+    case "inverted_clock":
+      invertedClockTriangle();
+      circle(R[0] + dx * r, R[1] + dy * r, r);
+      line([R[0] + dx * d, R[1] + dy * d], P);
+      return;
+    case "input_low":
+      line(R, P);
+      inputLowWedge();
+      return;
+    case "clock_low":
+    case "edge_clock_high":
+      line(R, P);
+      invertedClockTriangle();
+      inputLowWedge();
+      return;
+    case "output_low":
+      line(R, P);
+      if (dy === 0) line([R[0], R[1] - d], [R[0] + dx * d, R[1]]);
+      else line([R[0] - d, R[1]], [R[0], R[1] + dy * d]);
+      return;
+    case "non_logic":
+      line(R, P);
+      line([R[0] - (dx + dy) * r, R[1] - (dy - dx) * r], [R[0] + (dx + dy) * r, R[1] + (dy - dx) * r]);
+      line([R[0] - (dx - dy) * r, R[1] - (dx + dy) * r], [R[0] + (dx - dy) * r, R[1] + (dx + dy) * r]);
+      return;
+  }
+}
+
+/**
+ * Pin name/number text -- pin_layout_cache.cpp's placement math, read
+ * directly. This app's contract has no per-symbol `pin_names` offset
+ * (see PIN_NAME_OFFSET_UM's doc comment), so every name renders at
+ * eeschema's own "inside" position rather than varying between inside
+ * and outside per real symbol; number placement always assumes
+ * `nameOutsideShown = false` for the same reason (both are a direct,
+ * documented consequence of the same missing field, not two separate
+ * approximations).
+ */
+function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
+  const { pin, tip: P, root: R, dir } = rp;
+  if (pin.electrical_type === "no_connect") return;
+  const horizontal = isHorizontalPin(dir);
+  const mid: [number, number] = [(P[0] + R[0]) / 2, (P[1] + R[1]) / 2];
+  const vertAngle = -Math.PI / 2; // KiCad's 90 deg (CCW-positive) -> Canvas rotate(-deg*pi/180)
+
+  if (pin.name) {
+    const sizeUm = PIN_FONT * 1000;
+    const color = layerColor("LAYER_PINNAM");
+    const anchor: [number, number] = [R[0] + dir[0] * PIN_NAME_OFFSET_UM, R[1] + dir[1] * PIN_NAME_OFFSET_UM];
+    // RIGHT (dir=(1,0)): H LEFT. LEFT (dir=(-1,0)): H RIGHT. UP
+    // (dir=(0,-1)): angle 90, H LEFT. DOWN (dir=(0,1)): angle 90, H RIGHT.
+    if (horizontal) {
+      const justify = dir[0] >= 0 ? "left" : "right";
+      drawStrokeText(ctx, pin.name, anchor[0], anchor[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify, color });
+    } else {
+      const justify = dir[1] < 0 ? "left" : "right";
+      drawStrokeText(ctx, pin.name, anchor[0], anchor[1], { sizeUm, angleRad: vertAngle, justify, color });
+    }
+  }
+
+  if (pin.number) {
+    const sizeUm = PIN_FONT * 0.85 * 1000;
+    const color = layerColor("LAYER_PINNUM");
+    const off = sizeUm / 2 + PIN_TEXT_CLEARANCE_UM + PIN_TEXT_PEN_UM;
+    if (horizontal) {
+      // s = -1 (above the line) -- nameOutsideShown is always false here.
+      drawStrokeText(ctx, pin.number, mid[0], P[1] - off + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "center", color });
+    } else {
+      drawStrokeText(ctx, pin.number, P[0] - off, mid[1], { sizeUm, angleRad: vertAngle, justify: "center", color });
+    }
+  }
+}
+
+function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: ResolvedPin[]) {
+  const hair = 1 / view.scale;
+  ctx.strokeStyle = layerColor("LAYER_PIN");
+  ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM, hair);
+  for (const rp of pins) {
+    if (rp.pin.hidden) continue;
+    ctx.beginPath();
+    drawPinDecoration(ctx, rp);
+    ctx.stroke();
+    drawPinText(ctx, rp);
+  }
+}
+
+function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean) {
+  const hair = 1 / view.scale;
+  const strokeColor = layerColor("LAYER_DEVICE");
+  ctx.strokeStyle = strokeColor;
+  for (const g of graphics) drawRealGraphic(ctx, g, strokeColor);
+
+  if (selected) {
+    ctx.save();
+    ctx.strokeStyle = layerColor("LAYER_SELECTION_SHADOWS");
+    ctx.lineWidth = Math.max(800, hair * 3);
+    ctx.strokeRect(bbox.minX - 400, bbox.minY - 400, bbox.maxX - bbox.minX + 800, bbox.maxY - bbox.minY + 800);
+    ctx.restore();
+  }
+
+  drawPins(ctx, view, pins);
+  drawFieldsAbout(ctx, instance, (bbox.minX + bbox.maxX) / 2, bbox.maxY, bbox.minY);
+}
+
+/**
+ * A power symbol's net-name text -- really KiCad's Value *field*, drawn
+ * at its own per-instance position in a real schematic; this app has no
+ * such position (see PowerSymbol's doc comment), so it's placed using
+ * the exact same "inside the body, past the pin's root" formula a normal
+ * pin's name would use, keyed off the symbol's own (almost always
+ * hidden, often zero-length) pin. A zero-length pin has no direction
+ * (`dir` is `(0,0)` -- see transform.ts's `resolvePin`), so that case
+ * falls back to a fixed offset to the right of the symbol's anchor, a
+ * reasonable default matching where GND/power text conventionally sits.
+ */
+function drawPowerSymbolText(ctx: CanvasRenderingContext2D, ps: PowerSymbol, resolvedPin: ResolvedPin | null, on: boolean) {
+  const sizeUm = VALUE_FONT * 1000;
+  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_VALUEPART");
+  if (resolvedPin && (resolvedPin.dir[0] !== 0 || resolvedPin.dir[1] !== 0)) {
+    const { root: R, dir } = resolvedPin;
+    const anchor: [number, number] = [R[0] + dir[0] * PIN_NAME_OFFSET_UM, R[1] + dir[1] * PIN_NAME_OFFSET_UM];
+    if (isHorizontalPin(dir)) {
+      drawStrokeText(ctx, ps.net, anchor[0], anchor[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: dir[0] >= 0 ? "left" : "right", color });
+    } else {
+      drawStrokeText(ctx, ps.net, anchor[0], anchor[1], { sizeUm, angleRad: -Math.PI / 2, justify: dir[1] < 0 ? "left" : "right", color });
+    }
+  } else {
+    drawStrokeText(ctx, ps.net, ps.at[0] + PIN_NAME_OFFSET_UM, ps.at[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "left", color });
+  }
+}
+
+function drawPowerSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, ps: PowerSymbol, graphics: ResolvedGraphic[] | null, resolvedPin: ResolvedPin | null, on: boolean) {
+  const strokeColor = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_DEVICE");
+  ctx.strokeStyle = strokeColor;
+  if (graphics) {
+    for (const g of graphics) drawRealGraphic(ctx, g, strokeColor);
+  } else {
+    // No real graphics resolved for this power symbol's lib_id -- same
+    // "net name only, no body" fallback the generic net-label dot used
+    // to be for every label (see drawLabel): still legible, not a blank
+    // gap on the sheet.
+    ctx.save();
+    ctx.fillStyle = strokeColor;
+    ctx.beginPath();
+    ctx.arc(ps.at[0], ps.at[1], Math.max(150, 1 / view.scale), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  if (resolvedPin && !resolvedPin.pin.hidden) {
+    ctx.strokeStyle = layerColor("LAYER_PIN");
+    ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM, 1 / view.scale);
+    ctx.beginPath();
+    drawPinDecoration(ctx, resolvedPin);
+    ctx.stroke();
+  }
+  drawPowerSymbolText(ctx, ps, resolvedPin, on);
+}
+
+// ------------------------------------------------------------- labels / no-connects
+
+function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: SchematicLabel, wires: SchematicWire[], on: boolean) {
+  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : labelLayerColor(l.scope);
+  const hair = 1 / view.scale;
+
+  if (l.scope === "local" || !l.shape) {
+    const spin = inferSpin(wires, l.at);
+    const { pos, justify } = localLabelTextPlacement(spin, l.at);
+    const sizeUm = LABEL_TEXT_SIZE_UM;
+    // V BOTTOM: stroke text has no native top/bottom baseline (see this
+    // file's CAP_HEIGHT comment) -- a local label's text sits just above
+    // its anchor, so the baseline itself (no cap-height push needed,
+    // unlike the box-renderer's generic top/bottom approximation) lands
+    // close enough.
+    drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, justify, color });
+    return;
+  }
+
+  const spin = inferSpin(wires, l.at);
+  const shape: LabelShape = l.shape;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(l.scope === "global" ? 159 : 159, hair);
+  ctx.beginPath();
+  const outline = l.scope === "global" ? globalLabelOutline(l.net, shape, spin, l.at) : hierLabelOutline(shape, spin, l.at);
+  outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.stroke();
+
+  const { pos, justify } = l.scope === "global" ? globalLabelTextPlacement(shape, spin, l.at) : hierLabelTextPlacement(l.net, spin, l.at);
+  const sizeUm = LABEL_TEXT_SIZE_UM;
+  if (spin === "up" || spin === "bottom") {
+    drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, angleRad: -Math.PI / 2, justify, color });
+  } else {
+    drawStrokeText(ctx, l.net, pos[0], pos[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify, color });
+  }
+}
+
+function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: NoConnect) {
+  const hair = 1 / view.scale;
+  ctx.save();
+  ctx.strokeStyle = layerColor("LAYER_NOCONNECT");
+  ctx.lineWidth = Math.max(152.4, hair);
+  const [x, y] = nc.at;
+  const s = NOCONNECT_HALF_UM;
+  ctx.beginPath();
+  ctx.moveTo(x - s, y - s);
+  ctx.lineTo(x + s, y + s);
+  ctx.moveTo(x + s, y - s);
+  ctx.lineTo(x - s, y + s);
+  ctx.stroke();
+  ctx.restore();
+}
+
 // Background is filled once in screen-space by the caller, before the
 // world transform is applied (see canvas/Canvas.tsx's PCB equivalent) --
 // not here, which would mean computing an inverse-transformed rect on
@@ -309,28 +735,40 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   ctx.fillStyle = layerColor("LAYER_JUNCTION");
   for (const [x, y] of junctionPoints(sch.wires)) {
     ctx.beginPath();
-    ctx.arc(x, y, Math.max(250, hair * 2), 0, Math.PI * 2);
+    ctx.arc(x, y, Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Net labels: a small tag at the anchor, colored by rail-vs-signal.
+  // No-connects.
+  for (const nc of sch.no_connects) drawNoConnect(ctx, view, nc);
+
+  // Labels.
   for (const l of sch.labels) {
-    const on = opts.netHighlight === l.net;
-    const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : labelColor(l.net);
-    const sizeUm = 1.3 * 1000;
-    drawStrokeText(ctx, l.net, l.at[0] + 300, l.at[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, italic: true, color });
-    ctx.save();
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(l.at[0], l.at[1], Math.max(150, hair), 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    drawLabel(ctx, view, l, sch.wires, opts.netHighlight === l.net);
+  }
+
+  // Power symbols (GND, +5V, PWR_FLAG, ...).
+  for (const ps of sch.power_symbols) {
+    const on = opts.netHighlight === ps.net;
+    const resolved = resolveLibSymbol({ id: ps.id, lib_id: ps.lib_id, at: ps.at, rot: ps.rot, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [ps.pin] }, sch.lib_symbols);
+    const m = symbolTransformMatrix(ps.rot, null);
+    const resolvedPin = resolved?.pins[0] ?? (sch.lib_symbols[ps.lib_id]?.pins.find((p) => p.unit === 0 || p.unit === 1) ? resolvePin(sch.lib_symbols[ps.lib_id]!.pins.find((p) => p.unit === 0 || p.unit === 1)!, m, ps.at) : null);
+    drawPowerSymbol(ctx, view, ps, resolved?.graphics ?? null, resolvedPin, on);
   }
 
   // Symbols (drawn last, like eda-render, so their fill sits on top of any wire stub reaching into the box).
   for (const s of sch.symbols) {
-    const r = resolveSymbol(s);
     const selected = opts.selection.has(s.id);
-    drawSymbol(ctx, view, r, selected);
+    const real = resolveLibSymbol(s, sch.lib_symbols);
+    if (real) {
+      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected);
+    } else {
+      const r = resolveSymbol(s);
+      drawBoxSymbol(ctx, view, r, selected);
+    }
   }
 }
+
+// Re-exported for SchematicView.tsx's bounds/hit-testing, which need the
+// same box-vs-real split this file's own paint loop uses.
+export { symbolBounds } from "./libSymbol";

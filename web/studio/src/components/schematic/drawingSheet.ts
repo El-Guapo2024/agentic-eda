@@ -58,6 +58,16 @@ export interface TitleBlockInfo {
   rev: string;
   fileName: string;
   sheetPath: string;
+  /**
+   * From GET /api/schematic's `title_block.company`, once that field is
+   * populated by the Eeschema-port merge -- real KiCad draws it above
+   * Size/Date/Rev, sharing the Title row's own width. Not drawn yet:
+   * left for whoever adds the real row-position numbers (this session
+   * had no source-verified geometry for it, unlike every other title-
+   * block position here -- see this file's header comment on where
+   * those came from).
+   */
+  company?: string;
 }
 
 function frameLine(ctx: CanvasRenderingContext2D, hair: number) {

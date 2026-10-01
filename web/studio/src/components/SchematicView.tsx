@@ -10,8 +10,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Schematic } from "../api/types";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { boundsOfPoints, fitTransform, zoomAbout } from "./canvas/view";
-import { paintSchematic } from "./schematic/painter";
-import { resolveSymbol, GRID } from "./schematic/layout";
+import { paintSchematic, symbolBounds } from "./schematic/painter";
+import { GRID } from "./schematic/layout";
 import { layerColor } from "./canvas/layers";
 import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, PAGE_WIDTH_UM, PAGE_HEIGHT_UM } from "./schematic/drawingSheet";
 import "../styles/canvas.css";
@@ -31,24 +31,24 @@ function schematicBounds(sch: Schematic): Array<[number, number]> {
     [PAGE_WIDTH_UM, PAGE_HEIGHT_UM],
   ];
   for (const s of sch.symbols) {
-    const r = resolveSymbol(s);
-    pts.push([s.at[0], s.at[1]], [s.at[0] + r.width, s.at[1] + r.height]);
+    const b = symbolBounds(s, sch.lib_symbols);
+    pts.push([b.minX, b.minY], [b.maxX, b.maxY]);
   }
   for (const w of sch.wires) pts.push(...w.pts);
   for (const l of sch.labels) pts.push(l.at);
+  for (const ps of sch.power_symbols) pts.push(ps.at);
   return pts;
 }
 
 function hitSymbol(sch: Schematic, xUm: number, yUm: number): string | null {
   for (let i = sch.symbols.length - 1; i >= 0; i--) {
     const s = sch.symbols[i]!;
-    const r = resolveSymbol(s);
-    // Local-space test; rotation is always a multiple of 90 degrees here (KiCad convention), so swapping width/height per quadrant is enough -- no need for a full inverse-rotation matrix.
-    const rot = ((s.rot % 360) + 360) % 360;
-    const [w, h] = rot === 90 || rot === 270 ? [r.height, r.width] : [r.width, r.height];
-    const lx = xUm - s.at[0];
-    const ly = yUm - s.at[1];
-    if (lx >= -200 && lx <= w + 200 && ly >= -200 && ly <= h + 200) return s.id;
+    // World-space bbox test -- symbolBounds already accounts for
+    // rotation/mirror (and, for a real lib_symbols-resolved symbol, the
+    // real graphics' own extent, not just a generic box), so there is no
+    // local-space un-rotation to do here.
+    const b = symbolBounds(s, sch.lib_symbols);
+    if (xUm >= b.minX - 200 && xUm <= b.maxX + 200 && yUm >= b.minY - 200 && yUm <= b.maxY + 200) return s.id;
   }
   return null;
 }
@@ -123,10 +123,16 @@ export function SchematicView() {
     drawPageAndFrame(ctx, state.schematicView);
     drawGridDots(ctx, state.schematicView, width, height, GRID);
     drawZoneReferences(ctx, state.schematicView);
+    // Title/date/rev come from the real GET /api/schematic title_block
+    // once a board has one; file name/sheet path have no such field (they
+    // come from the project/sheet-hierarchy machinery, not the title
+    // block's own content) and stay synthesized from the board name.
+    const tb = sch.title_block;
     drawTitleBlock(ctx, state.schematicView, {
-      title: state.board?.name || "untitled",
-      date: new Date().toISOString().slice(0, 10),
-      rev: "",
+      title: tb?.title || state.board?.name || "untitled",
+      date: tb?.date ?? new Date().toISOString().slice(0, 10),
+      rev: tb?.rev ?? "",
+      company: tb?.company,
       fileName: `${state.board?.name || "schematic"}.kicad_sch`,
       sheetPath: "/",
     });
