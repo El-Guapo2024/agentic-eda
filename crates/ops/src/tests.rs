@@ -1287,3 +1287,93 @@ fn footprint_editor_commands_are_their_own_undo_domain() {
     assert_eq!(Cmd::MoveTo { part: "U1".into(), x: 0, y: 0 }.domain(), Domain::Pcb);
     assert_eq!(Cmd::AddWire { pts: vec![] }.domain(), Domain::Schematic);
 }
+
+// ------------------------------------------------------------ multi-unit symbols (GAPS.md #21)
+
+fn add_unit(b: &mut Board<'_>, id: &str, unit: u32, x: Um) {
+    b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: "test:DUAL".into(), at: Point { x, y: 0 }, rot_millideg: 0, value: "DUAL".into(), footprint: String::new(), unit }).unwrap();
+}
+
+/// Placing a second unit of an *already-placed* reference (same `id`, a
+/// different `unit`) is the supported way to add it -- see `Cmd::AddSymbol`'s
+/// own doc -- and only an exact `(id, unit)` repeat is refused.
+#[test]
+fn add_symbol_places_additional_units_of_an_existing_reference() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    add_unit(&mut b, "U1", 1, 0);
+    add_unit(&mut b, "U1", 2, 50_000);
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.symbols.len(), 2);
+    assert!(sch.symbols.iter().all(|s| s.id == "U1"));
+    let units: std::collections::BTreeSet<u32> = sch.symbols.iter().map(|s| s.unit).collect();
+    assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
+
+    let e = b.apply(&Cmd::AddSymbol { id: "U1".into(), lib_id: "test:DUAL".into(), at: Point { x: 99_000, y: 0 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }).unwrap_err();
+    assert_eq!(e[0].check, "ops_duplicate_symbol");
+}
+
+/// Move/rotate/mirror/delete on a reference with more than one placed unit
+/// refuse as ambiguous without a `unit` to pick between them, same as a
+/// caller that predates multi-unit support would see on a reference that
+/// somehow already had two placements -- and succeed, touching only the
+/// named unit, once one is given.
+#[test]
+fn per_instance_verbs_require_a_unit_once_more_than_one_is_placed() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    add_unit(&mut b, "U1", 1, 0);
+    add_unit(&mut b, "U1", 2, 50_000);
+
+    let e = b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: 1_000, y: 1_000, unit: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_ambiguous_symbol");
+
+    b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: 1_000, y: 2_000, unit: Some(2) }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let unit1 = sch.symbols.iter().find(|s| s.unit == 1).unwrap();
+    let unit2 = sch.symbols.iter().find(|s| s.unit == 2).unwrap();
+    assert_eq!(unit1.at, Point { x: 0, y: 0 }, "unit 1 untouched by a move scoped to unit 2");
+    assert_eq!(unit2.at, Point { x: 1_000, y: 2_000 });
+
+    b.apply(&Cmd::RotateSymbol { id: "U1".into(), quarter_turns: 1, unit: Some(1) }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.symbols.iter().find(|s| s.unit == 1).unwrap().rot, 90_000);
+    assert_eq!(sch.symbols.iter().find(|s| s.unit == 2).unwrap().rot, 0, "unit 2 untouched by a rotate scoped to unit 1");
+
+    b.apply(&Cmd::DeleteSymbol { id: "U1".into(), unit: Some(1) }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.symbols.len(), 1, "only unit 1 removed");
+    assert_eq!(sch.symbols[0].unit, 2);
+}
+
+/// `unit: None` still means exactly what it always did when there is only
+/// one placed instance -- no behavior change for every single-unit part.
+#[test]
+fn per_instance_verbs_with_no_unit_still_work_for_a_single_unit_part() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    add_unit(&mut b, "U1", 1, 0);
+    b.apply(&Cmd::MoveSymbol { id: "U1".into(), x: 5_000, y: 6_000, unit: None }).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().symbols[0].at, Point { x: 5_000, y: 6_000 });
+}
+
+/// Reference/Value/Footprint/Datasheet are part-wide: editing or renaming
+/// touches every placed unit together, never just one of them.
+#[test]
+fn edit_and_rename_apply_to_every_unit_together() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    add_unit(&mut b, "U1", 1, 0);
+    add_unit(&mut b, "U1", 2, 50_000);
+
+    b.apply(&Cmd::EditSymbolFields { id: "U1".into(), value: Some("74HC00".into()), footprint: None, datasheet: None }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert!(sch.symbols.iter().all(|s| s.value == "74HC00"));
+
+    b.apply(&Cmd::RenameSymbol { id: "U1".into(), new_id: "U5".into() }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.symbols.len(), 2);
+    assert!(sch.symbols.iter().all(|s| s.id == "U5"));
+    let units: std::collections::BTreeSet<u32> = sch.symbols.iter().map(|s| s.unit).collect();
+    assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
+}

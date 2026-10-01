@@ -921,6 +921,23 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         .iter()
         .map(|s| {
             let part = model.part(&s.id);
+            // Multi-unit: this instance's own pin list is only the pins
+            // that belong to its unit (or a `unit == 0` common-to-every-
+            // unit pin) -- a sibling instance of the same reference, placed
+            // for a different unit, carries the rest. Falls open (every
+            // part.pins entry) when no real library symbol resolves one of
+            // them by number, same "can't tell, so don't filter" fallback
+            // `eda_engine::geometry`'s own unit-aware functions use.
+            let resolved = part.and_then(|p| model.real_symbol_of(&s.lib_id, p));
+            let pins: Vec<Value> = part
+                .map(|p| {
+                    p.pins
+                        .iter()
+                        .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
+                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind }))
+                        .collect()
+                })
+                .unwrap_or_default();
             json!({
                 "id": s.id,
                 "at": [s.at.x, s.at.y],
@@ -943,12 +960,18 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 // the synthetic "eda:<id>" for a part with no resolved real
                 // symbol) -- key into "lib_symbols" below for its graphics.
                 "lib_id": s.lib_id,
+                // Which unit (1-based) of a multi-unit symbol this placed
+                // instance is -- `libSymbol.ts`'s own `resolveLibSymbol`
+                // already filters `lib_symbols[lib_id]`'s graphics/pins by
+                // this field (`visibleFor`), so sending it is what actually
+                // turns that pre-existing renderer plumbing on.
+                "unit": s.unit,
                 "value": if s.value.is_empty() { part.and_then(|p| p.value.clone()) } else { Some(s.value.clone()) },
                 "footprint": if s.footprint.is_empty() { None } else { Some(s.footprint.clone()) },
                 "datasheet": if s.datasheet.is_empty() { None } else { Some(s.datasheet.clone()) },
                 "mpn": part.and_then(|p| p.mpn.clone()),
                 "package": part.and_then(|p| p.package.clone()),
-                "pins": part.map(|p| p.pins.iter().map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind })).collect::<Vec<_>>()).unwrap_or_default(),
+                "pins": pins,
             })
         })
         .collect();
@@ -1060,6 +1083,11 @@ fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
                 "lib_id": s.lib_id,
                 "description": s.description,
                 "reference_prefix": if s.reference_prefix.is_empty() { "U" } else { s.reference_prefix.as_str() },
+                // Multi-unit: how many units (`SymbolChooserDialog`'s own
+                // unit picker, once a part names one) this library symbol
+                // declares -- 1 for every single-unit symbol, unchanged
+                // from before this field existed.
+                "unit_count": s.unit_count,
             })
         })
         .collect();

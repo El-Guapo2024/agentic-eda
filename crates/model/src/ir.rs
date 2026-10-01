@@ -141,7 +141,13 @@ pub enum Stage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchematicSection {
-    /// Sorted by `id` (reference designator).
+    /// Sorted by `(id, unit)`. Several entries can share one `id`: a
+    /// multi-unit part (an op-amp's gates, a logic chip's one shared
+    /// power unit, ...) is one `ConstraintModel::Part`/one footprint, one
+    /// reference, placed as several `SymbolInstance`s -- one per used unit
+    /// -- that all carry that same `id` and differ only by `unit`. A
+    /// single-unit part (everything before multi-unit support existed, and
+    /// the overwhelming majority of parts even now) still has exactly one.
     pub symbols: Vec<SymbolInstance>,
     /// Sorted by (net, then first point).
     pub wires: Vec<Wire>,
@@ -237,8 +243,16 @@ pub struct SymbolInstance {
     /// (a generic box synthesized from the part's own pins).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub lib_id: String,
-    /// KiCad unit index (1-based); multi-unit placement is deferred, so
-    /// this is always 1 for anything this port places.
+    /// KiCad unit index (1-based) -- which unit of a multi-unit symbol this
+    /// placed instance draws (see `SchematicSection::symbols`'s own doc on
+    /// several instances sharing one `id`). Always 1 for a single-unit
+    /// part, which is every part this port places on its own
+    /// (`derive_schematic`'s own generator never splits a resolved
+    /// multi-unit symbol across several placed instances -- a documented
+    /// scope limit, not a bug: every unit it needs is still present as
+    /// `ConstraintModel::Part::pins`, just all drawn on one instance) --
+    /// real multi-unit placement is read from an imported `.kicad_sch`, or
+    /// built up one `Cmd::AddSymbol` at a time in the studio editor.
     #[serde(default = "d_unit_one", skip_serializing_if = "is_unit_one")]
     pub unit: u32,
     /// The instance's own `Value` field — carried here (not just read from

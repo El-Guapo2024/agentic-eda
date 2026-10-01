@@ -148,8 +148,19 @@ pub const HEIGHT_STEP: i64 = 2_540; // 2.54mm per pair of pins beyond 4
 /// has at least one real electrical connection somewhere) falls back to
 /// the body graphics' own extent on that side, since there is no pin
 /// position to anchor a stub-reachable edge to.
-pub fn real_symbol_bbox(sym: &eda_model::symbol::LibSymbol) -> (f64, f64, f64, f64) {
+///
+/// `unit` restricts this to one unit of a multi-unit symbol (KiCad's own
+/// "unit 0 = common to every unit" convention — see [`SymbolGraphic::unit`]/
+/// `LibPin::unit`'s own docs): only graphics/pins with `.unit() == 0` (drawn
+/// on every unit, e.g. a shared outline) or `.unit() == unit` contribute.
+/// Every symbol this project ever synthesizes or resolves to a single real
+/// unit passes `unit: 1` here and sees no behavior change at all (every one
+/// of its own pins/graphics already carries `unit: 1`, per `LibPin`'s own
+/// `#[serde(default = "d_unit_one")]`) -- this parameter only changes
+/// anything for a real multi-unit library symbol.
+pub fn real_symbol_bbox(sym: &eda_model::symbol::LibSymbol, unit: u32) -> (f64, f64, f64, f64) {
     use eda_model::symbol::SymbolGraphic;
+    let on_unit = |u: u32| u == 0 || u == unit;
     let (mut gx0, mut gy0, mut gx1, mut gy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     let mut feed = |x: f64, y: f64| {
         gx0 = gx0.min(x);
@@ -157,7 +168,7 @@ pub fn real_symbol_bbox(sym: &eda_model::symbol::LibSymbol) -> (f64, f64, f64, f
         gx1 = gx1.max(x);
         gy1 = gy1.max(y);
     };
-    for g in &sym.graphics {
+    for g in sym.graphics.iter().filter(|g| on_unit(g.unit())) {
         match g {
             SymbolGraphic::Rectangle { start, end, .. } => {
                 feed(start.x, start.y);
@@ -192,7 +203,7 @@ pub fn real_symbol_bbox(sym: &eda_model::symbol::LibSymbol) -> (f64, f64, f64, f
 
     let stub_mm = STUB as f64 / 1000.0;
     let (mut left, mut right, mut bottom, mut top): (Option<f64>, Option<f64>, Option<f64>, Option<f64>) = (None, None, None, None);
-    for pin in &sym.pins {
+    for pin in sym.pins.iter().filter(|p| on_unit(p.unit)) {
         match side_from_pin_angle(pin.angle_deg) {
             // Same-side pins share one perpendicular coordinate in every
             // real symbol this project places (that is what "being on the
@@ -251,9 +262,9 @@ fn side_from_pin_angle(angle_deg: f64) -> Side {
 /// own exact, un-rounded point -- see [`build_ports`] -- so rounding this
 /// box can never pull a wire off its pin). Otherwise the synthetic,
 /// procedurally-sized box below.
-pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>) -> (i64, i64) {
+pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>, unit: u32) -> (i64, i64) {
     if let Some(sym) = resolved {
-        let (x0, y0, x1, y1) = real_symbol_bbox(sym);
+        let (x0, y0, x1, y1) = real_symbol_bbox(sym, unit);
         let width_um = ((x1 - x0).max(0.0) * 1000.0).round() as i64;
         let height_um = ((y1 - y0).max(0.0) * 1000.0).round() as i64;
         let width = ((width_um.max(1) + GRID - 1) / GRID) * GRID;
@@ -280,7 +291,7 @@ pub fn node_size(part: &Part, resolved: Option<&eda_model::symbol::LibSymbol>) -
     // on pin kind/name — see `build_ports`'s doc comment), so a throwaway
     // `BASE_WIDTH` first pass safely tells us which pins land on which side
     // before we know the final width.
-    let (ports, pin_port) = build_ports(part, BASE_WIDTH, height, None);
+    let (ports, pin_port) = build_ports(part, BASE_WIDTH, height, None, 1);
     let mut north_names: Vec<&str> = Vec::new();
     let mut south_names: Vec<&str> = Vec::new();
     let mut west_names: Vec<&str> = Vec::new();
@@ -395,9 +406,9 @@ pub fn is_power_or_ground_net_name(name: &str) -> bool {
 /// unmatched (e.g. numbered passive leads with no directional name) falls
 /// back to an even West/East split, preserving the original layout for
 /// simple 2-pin passives.
-pub fn build_ports(part: &Part, width: i64, height: i64, resolved: Option<&eda_model::symbol::LibSymbol>) -> (Vec<Port>, Vec<Option<usize>>) {
+pub fn build_ports(part: &Part, width: i64, height: i64, resolved: Option<&eda_model::symbol::LibSymbol>, unit: u32) -> (Vec<Port>, Vec<Option<usize>>) {
     if let Some(sym) = resolved {
-        return build_ports_from_real_symbol(part, sym);
+        return build_ports_from_real_symbol(part, sym, unit);
     }
     let mut north = Vec::new();
     let mut south = Vec::new();
@@ -490,8 +501,8 @@ pub fn build_ports(part: &Part, width: i64, height: i64, resolved: Option<&eda_m
 /// ours; a pin number the real symbol doesn't have gets no port at all
 /// (defensive -- real/intent data should always agree on pin numbers for
 /// the same `lib_id`).
-fn build_ports_from_real_symbol(part: &Part, sym: &eda_model::symbol::LibSymbol) -> (Vec<Port>, Vec<Option<usize>>) {
-    let (x0, _y0, _x1, y1) = real_symbol_bbox(sym);
+fn build_ports_from_real_symbol(part: &Part, sym: &eda_model::symbol::LibSymbol, unit: u32) -> (Vec<Port>, Vec<Option<usize>>) {
+    let (x0, _y0, _x1, y1) = real_symbol_bbox(sym, unit);
     struct Placed {
         pin_i: usize,
         side: Side,
@@ -503,6 +514,13 @@ fn build_ports_from_real_symbol(part: &Part, sym: &eda_model::symbol::LibSymbol)
             continue; // no port; positioned via `nc_pin_local_points` instead
         }
         let Some(real_pin) = sym.pin_by_number(&pin.number) else { continue };
+        // A pin belonging to a *different* unit of this same multi-unit
+        // part isn't on this instance at all -- it's drawn (if anywhere)
+        // by whichever other placed `SymbolInstance` carries that unit
+        // number. `unit == 0` ("common to every unit") always counts.
+        if !(real_pin.unit == 0 || real_pin.unit == unit) {
+            continue;
+        }
         let side = side_from_pin_angle(real_pin.angle_deg);
         let theta = real_pin.angle_deg.to_radians();
         let body_x = real_pin.at.x + real_pin.length_mm * theta.cos();
@@ -1352,26 +1370,29 @@ pub fn net_label_extent(resolved: &ResolvedNetLabel, ink: TextBox) -> TextBox {
 /// electrical type and gets an explicit no-connect flag placed on it
 /// (`SchematicSection::no_connects`) — that flag is what tells KiCad's ERC
 /// the dangling pin is intentional, not the pin's type.
-pub fn nc_pin_local_points(part: &Part, width: i64, height: i64, resolved: Option<&eda_model::symbol::LibSymbol>) -> Vec<(usize, Point)> {
+pub fn nc_pin_local_points(part: &Part, width: i64, height: i64, resolved: Option<&eda_model::symbol::LibSymbol>, unit: u32) -> Vec<(usize, Point)> {
     if let Some(sym) = resolved {
         // The real symbol's own point for this pin number, not a synthetic
         // slot: the no-connect flag must coincide with wherever the real,
         // drawn-verbatim graphics actually put the pin, or the flag and
         // the pin read as two unrelated things.
-        let (x0, _y0, _x1, y1) = real_symbol_bbox(sym);
+        let (x0, _y0, _x1, y1) = real_symbol_bbox(sym, unit);
         let mut out = Vec::new();
         for (i, p) in part.pins.iter().enumerate() {
             if p.kind != PinKind::Nc {
                 continue;
             }
             let Some(real_pin) = sym.pin_by_number(&p.number) else { continue };
+            if !(real_pin.unit == 0 || real_pin.unit == unit) {
+                continue; // this nc pin lives on a different placed unit
+            }
             let x = ((real_pin.at.x - x0) * 1000.0).round() as i64;
             let y = ((y1 - real_pin.at.y) * 1000.0).round() as i64;
             out.push((i, Point { x, y }));
         }
         return out;
     }
-    let (ports, _) = build_ports(part, width, height, None);
+    let (ports, _) = build_ports(part, width, height, None, 1);
     let south_max_x = ports.iter().filter(|p| p.side == Side::Bottom).map(|p| p.offset).max().unwrap_or(0);
     let mut x = south_max_x + GRID;
     let mut out = Vec::new();

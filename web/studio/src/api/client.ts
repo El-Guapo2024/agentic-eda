@@ -69,7 +69,7 @@ export async function fetchSchematic(): Promise<Schematic> {
 export async function fetchSymbolLibrary(): Promise<SymbolLibrary> {
   const s = await getJson<SymbolLibrary & { error?: string }>("/api/symbol_library");
   if (s.error) throw new ApiError(s.error);
-  return { entries: s.entries ?? [], lib_symbols: s.lib_symbols ?? {} };
+  return { entries: (s.entries ?? []).map((e) => ({ ...e, unit_count: e.unit_count ?? 1 })), lib_symbols: s.lib_symbols ?? {} };
 }
 
 /**

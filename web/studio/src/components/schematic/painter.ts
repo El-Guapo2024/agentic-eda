@@ -41,6 +41,7 @@ import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLab
 import { drawStrokeText } from "../text/strokeFont";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
+import { unitLetter } from "../../kicad-port/unitLetter";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -142,7 +143,7 @@ function stubTip(port: ResolvedSymbol["ports"][number], lx: number, ly: number):
 
 // ------------------------------------------------------------- box fallback
 
-function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: ResolvedSymbol, selected: boolean) {
+function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: ResolvedSymbol, selected: boolean, unitSuffix: string) {
   const { symbol, width, height, ports, pinPort, passive } = r;
   ctx.save();
   ctx.translate(symbol.at[0], symbol.at[1]);
@@ -248,7 +249,7 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
     }
   });
 
-  drawFieldsAbout(ctx, symbol, 0, height, 0);
+  drawFieldsAbout(ctx, symbol, 0, height, 0, unitSuffix);
   ctx.restore();
 }
 
@@ -327,9 +328,9 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
  * even though neither is pixel-exact against a real recorded field
  * position.
  */
-function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol, localX: number, bboxBottom: number, bboxTop: number) {
+function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol, localX: number, bboxBottom: number, bboxTop: number, unitSuffix: string) {
   const refSizeUm = REF_FONT * 1000;
-  drawStrokeText(ctx, symbol.id, localX, bboxTop - 400, { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, color: layerColor("LAYER_REFERENCEPART") });
+  drawStrokeText(ctx, symbol.id + unitSuffix, localX, bboxTop - 400, { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
     const sizeUm = VALUE_FONT * 1000;
     drawStrokeText(ctx, symbol.value ?? symbol.mpn ?? "", localX, bboxBottom + 1800, { sizeUm, color: layerColor("LAYER_VALUEPART") });
@@ -583,7 +584,7 @@ function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: Reso
   }
 }
 
-function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean) {
+function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean, unitSuffix: string) {
   const hair = 1 / view.scale;
   const strokeColor = layerColor("LAYER_DEVICE");
   ctx.strokeStyle = strokeColor;
@@ -598,7 +599,7 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
   }
 
   drawPins(ctx, view, pins);
-  drawFieldsAbout(ctx, instance, (bbox.minX + bbox.maxX) / 2, bbox.maxY, bbox.minY);
+  drawFieldsAbout(ctx, instance, (bbox.minX + bbox.maxX) / 2, bbox.maxY, bbox.minY, unitSuffix);
 }
 
 /**
@@ -802,14 +803,23 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   }
 
   // Symbols (drawn last, like eda-render, so their fill sits on top of any wire stub reaching into the box).
+  // Multi-unit: a reference with more than one placed instance gets its
+  // KiCad-style unit-letter suffix drawn next to the reference ("U1" ->
+  // "U1A"/"U1B"/...), same as real eeschema -- `unitCounts` is only used
+  // to decide *whether* to suffix at all, so a single-unit part (every
+  // placed instance appears here exactly once) keeps the bare reference it
+  // always had.
+  const unitCounts = new Map<string, number>();
+  for (const s of sch.symbols) unitCounts.set(s.id, (unitCounts.get(s.id) ?? 0) + 1);
   for (const s of sch.symbols) {
     const selected = opts.selection.has(s.id);
+    const unitSuffix = (unitCounts.get(s.id) ?? 1) > 1 ? unitLetter(s.unit) : "";
     const real = resolveLibSymbol(s, sch.lib_symbols);
     if (real) {
-      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected);
+      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix);
     } else {
       const r = resolveSymbol(s);
-      drawBoxSymbol(ctx, view, r, selected);
+      drawBoxSymbol(ctx, view, r, selected, unitSuffix);
     }
   }
 

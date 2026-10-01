@@ -184,7 +184,15 @@ fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut Constrain
     for sym in &sch.symbols {
         let lib = resolve(&sym.lib_id, model).unwrap_or_else(|| crate::studio::synthesize_generic_symbol(&format!("eda:{}", sym.id), model));
         let angle_deg = sym.rot as f64 / 1000.0;
-        for p in &lib.pins {
+        // Multi-unit: this placed instance only seeds `pin_world` for the
+        // pins that are actually drawn on its own unit (plus any `unit ==
+        // 0` pin, common to every unit) -- a pin belonging to a *different*
+        // unit of the same reference is positioned when *that* unit's own
+        // `SymbolInstance` is visited, not here. Without this filter, two
+        // instances sharing one reference would both claim every pin
+        // number the whole part has, and whichever was iterated last would
+        // silently win for every pin the other unit actually owns.
+        for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
             let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
             pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
         }
@@ -597,12 +605,12 @@ fn cmd_line(c: &Cmd) -> String {
         // activity.jsonl's own human-readable log line, same role `mm`/
         // `pts` already play above for the PCB verbs, not a promise that
         // typing it back in works.
-        Cmd::MoveSymbol { id, x, y } => format!("schematic move {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::MoveSymbol { id, x, y, .. } => format!("schematic move {id} --to {},{}", mm(*x), mm(*y)),
         Cmd::DragSymbol { id, x, y, .. } => format!("schematic drag {id} --to {},{}", mm(*x), mm(*y)),
-        Cmd::RotateSymbol { id, quarter_turns } => format!("schematic rotate {id} --quarters {quarter_turns}"),
-        Cmd::MirrorSymbol { id } => format!("schematic mirror {id}"),
-        Cmd::MirrorSymbolVertical { id } => format!("schematic mirror-vertical {id}"),
-        Cmd::DeleteSymbol { id } => format!("schematic delete-symbol {id}"),
+        Cmd::RotateSymbol { id, quarter_turns, .. } => format!("schematic rotate {id} --quarters {quarter_turns}"),
+        Cmd::MirrorSymbol { id, .. } => format!("schematic mirror {id}"),
+        Cmd::MirrorSymbolVertical { id, .. } => format!("schematic mirror-vertical {id}"),
+        Cmd::DeleteSymbol { id, .. } => format!("schematic delete-symbol {id}"),
         Cmd::AddWire { pts: p } => format!("schematic wire --pts \"{}\"", pts(p)),
         Cmd::DeleteWire { id } => format!("schematic delete-wire {id}"),
         Cmd::AddNoConnect { at } => format!("schematic no-connect --at {},{}", mm(at.x), mm(at.y)),
@@ -1525,22 +1533,22 @@ mod tests {
         let dir = scratch("sch_mirror_exclusive");
         setup_schematic(&dir);
 
-        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into(), unit: None }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let r1 = |d: &eda_model::ir::Design| d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R1").unwrap().clone();
         assert!(r1(&design).mirrored && !r1(&design).mirror_y, "X alone sets mirrored");
 
-        step(&dir, Cmd::MirrorSymbolVertical { id: "R1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::MirrorSymbolVertical { id: "R1".into(), unit: None }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(!r1(&design).mirrored && r1(&design).mirror_y, "Y must clear the X flag it replaces, not add to it");
 
-        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into(), unit: None }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(r1(&design).mirrored && !r1(&design).mirror_y, "and X must clear Y back, symmetrically");
 
         // Each hotkey is still its own toggle: pressing the same one twice
         // returns to "no mirror", not a stuck state.
-        step(&dir, Cmd::MirrorSymbol { id: "R1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::MirrorSymbol { id: "R1".into(), unit: None }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         assert!(!r1(&design).mirrored && !r1(&design).mirror_y);
     }
@@ -1652,8 +1660,8 @@ mod tests {
     fn annotate_with_an_explicit_id_list_only_touches_those_symbols() {
         let dir = scratch("sch_annotate_selection");
         setup_schematic(&dir);
-        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new() }, false, "test").unwrap();
-        step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: 40_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new() }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: 40_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
 
         step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]) }, false, "test").unwrap();
 
@@ -1681,7 +1689,7 @@ mod tests {
         setup_both(&dir);
 
         step(&dir, Cmd::MoveTo { part: "R1".into(), x: 11_000, y: 10_000 }, false, "test").unwrap();
-        step(&dir, Cmd::MoveSymbol { id: "R2".into(), x: 25_000, y: 10_000 }, false, "test").unwrap();
+        step(&dir, Cmd::MoveSymbol { id: "R2".into(), x: 25_000, y: 10_000, unit: None }, false, "test").unwrap();
 
         let pcb_at = |d: &eda_model::ir::Design| d.placement.as_ref().unwrap().footprints[0].at;
         let sch_at = |d: &eda_model::ir::Design| d.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R2").unwrap().at;

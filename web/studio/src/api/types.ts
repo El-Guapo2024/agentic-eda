@@ -544,12 +544,17 @@ export type Cmd =
   // `rotate_millideg` already set: a write-side angle is always named
   // for its unit, since the read side (`SchematicSymbol.rot`, `Degrees`)
   // uses plain degrees instead.
-  | { op: "move_symbol"; id: string; x: Um; y: Um }
-  | { op: "drag_symbol"; id: string; x: Um; y: Um; attached_wire_endpoints: [number, number][] }
-  | { op: "rotate_symbol"; id: string; quarter_turns: number }
-  | { op: "mirror_symbol"; id: string }
-  | { op: "mirror_symbol_vertical"; id: string }
-  | { op: "delete_symbol"; id: string }
+  // `unit`: which placed instance of `id` to act on, when a multi-unit
+  // part has more than one on the sheet -- omit (undefined) when `id`
+  // names exactly one instance (every single-unit part, the overwhelming
+  // common case); the backend refuses as ambiguous if more than one
+  // instance shares `id` and no `unit` was sent.
+  | { op: "move_symbol"; id: string; x: Um; y: Um; unit?: number }
+  | { op: "drag_symbol"; id: string; x: Um; y: Um; attached_wire_endpoints: [number, number][]; unit?: number }
+  | { op: "rotate_symbol"; id: string; quarter_turns: number; unit?: number }
+  | { op: "mirror_symbol"; id: string; unit?: number }
+  | { op: "mirror_symbol_vertical"; id: string; unit?: number }
+  | { op: "delete_symbol"; id: string; unit?: number }
   | { op: "add_wire"; pts: PointXY[] }
   | { op: "delete_wire"; id: string }
   | { op: "add_no_connect"; at: PointXY }
@@ -560,7 +565,12 @@ export type Cmd =
   | { op: "delete_sch_text"; id: string }
   | { op: "add_power_symbol"; lib_id: string; at: PointXY; rot_millideg: number; net: string; pin: string }
   | { op: "delete_power_symbol"; id: string }
-  | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string }
+  // `unit`: which unit of a multi-unit symbol this placement is (omit for
+  // 1, a single-unit part). Only refused if `(id, unit)` already exists --
+  // placing `{ id: "U1", unit: 2 }` once "U1" unit 1 is already on the
+  // sheet is how another unit of an existing, already-annotated part gets
+  // added.
+  | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string; unit?: number }
   | { op: "edit_symbol_fields"; id: string; value?: string | null; footprint?: string | null; datasheet?: string | null }
   | { op: "rename_symbol"; id: string; new_id: string }
   | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[] }
@@ -963,6 +973,8 @@ export interface SymbolLibraryEntry {
   description: string;
   /** The library's own default `Reference` ("R", "C", "U", ...) -- "U" when unknown. Seeds `A`'s own next-free-number placement, same as a real reference designator always needs a letter prefix to start from. */
   reference_prefix: string;
+  /** How many units this symbol declares (1 for a single-unit part). >1 means `SymbolChooserDialog` offers a unit picker before placing. */
+  unit_count: number;
 }
 
 export interface SymbolLibrary {

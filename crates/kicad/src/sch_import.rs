@@ -23,7 +23,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use eda_model::ir::{Design, LabelKind, LabelShape, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
+use eda_model::ir::{Design, LabelKind, LabelShape, Millideg, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
 use eda_model::symbol::{LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
@@ -78,6 +78,29 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     }
     let nc_points: std::collections::BTreeSet<Point> = no_connects.iter().map(|nc| nc.at).collect();
 
+    // One raw, not-yet-grouped record per placed `(symbol ...)` item --
+    // multi-unit means several of these can share one `reference` (e.g. a
+    // quad op-amp's gates A/B/C/D, each its own placed instance at its own
+    // position, see `SymbolInstance::unit`'s own doc). Collected first, then
+    // grouped by reference below, because a reference's `Part` needs to see
+    // *every* one of its placed units before its own pin list (every pin
+    // the real library declares, not just whichever unit happened to be
+    // read first) and per-pin world position can be resolved.
+    struct RawInstance {
+        lib_id: String,
+        at_um: Point,
+        rot: Millideg,
+        angle_deg: f64,
+        mirrored: bool,
+        mirror_y: bool,
+        unit: u32,
+        reference: String,
+        value: String,
+        footprint: String,
+        datasheet: String,
+    }
+    let mut raw: Vec<RawInstance> = Vec::new();
+
     for item in sexpr::find_all(root, "symbol") {
         let Some(lib_id) = sexpr::find(item, "lib_id").and_then(|l| sexpr::txt(l, 1)) else { continue };
         let Some(resolved) = lib_table.get(lib_id) else {
@@ -99,7 +122,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         let mirror_tag = sexpr::find(item, "mirror").and_then(|m| sexpr::txt(m, 1));
         let mirrored = mirror_tag == Some("y");
         let mirror_y = mirror_tag == Some("x");
-        let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0) as u32;
+        let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
         let at_um = Point { x: crate::import::mm_to_um(x_mm), y: crate::import::mm_to_um(y_mm) };
         let rot = import_rot_millideg_sch(angle_deg);
 
@@ -116,28 +139,93 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
             continue;
         }
 
-        let mut pins: Vec<Pin> = Vec::with_capacity(resolved.pins.len());
-        for p in &resolved.pins {
-            let world = transform_local_point(p.at, angle_deg, mirrored, mirror_y);
-            let at_pin = Point { x: at_um.x + crate::import::mm_to_um(world.x), y: at_um.y + crate::import::mm_to_um(world.y) };
-            pin_world.insert(format!("{reference}.{}", p.number), at_pin);
-            let kind = if nc_points.contains(&at_pin) { eda_model::PinKind::Nc } else { pin_kind_from_electrical_type(&p.electrical_type, &p.name) };
-            pins.push(Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, reference, value, footprint, datasheet });
+    }
+
+    // Group by reference, preserving first-sighting order (file order) so
+    // `parts`/`symbols` come out in a deterministic, re-reading-stable
+    // sequence -- `assign_missing_ids`/the exporter's own `symbols.sort_by`
+    // re-sort later, but a stable starting order still matters for any
+    // same-hash tie-break along the way.
+    let mut order: Vec<String> = Vec::new();
+    let mut by_ref: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, r) in raw.iter().enumerate() {
+        by_ref.entry(r.reference.clone()).or_default().push(i);
+        if !order.contains(&r.reference) {
+            order.push(r.reference.clone());
+        }
+    }
+
+    for reference in order {
+        let idxs = &by_ref[&reference];
+        // Every instance of one reference is the same real part (one
+        // footprint, several placed units -- this task's own framing), so
+        // they all resolve the same `lib_id`/library symbol; the first
+        // instance found stands in for the whole group as the "primary"
+        // (used for the `Part`-level Value/Footprint/Datasheet denormalized
+        // copies below, same precedent `derive_schematic`'s single-instance
+        // case already set).
+        let primary = &raw[idxs[0]];
+        let lib_id = primary.lib_id.clone();
+        let resolved = lib_table.get(lib_id.as_str());
+
+        let mut pins: Vec<Pin> = Vec::new();
+        if let Some(resolved) = resolved {
+            pins.reserve(resolved.pins.len());
+            for p in &resolved.pins {
+                // The specific placed instance that actually carries this
+                // pin's unit (or any instance at all, for a `unit == 0`
+                // pin common to every unit) -- `None` means this pin's own
+                // unit was never placed anywhere on the sheet at all (ERC's
+                // `missing_unit`/`missing_power_pin` is what flags that;
+                // the pin still belongs to the physical part, so it still
+                // gets a `Pin` entry here, just with no resolvable world
+                // position to seed `pin_world` with).
+                let owner = idxs.iter().map(|&i| &raw[i]).find(|r| p.unit == 0 || p.unit == r.unit);
+                let kind = match owner {
+                    Some(owner) => {
+                        let world = transform_local_point(p.at, owner.angle_deg, owner.mirrored, owner.mirror_y);
+                        let at_pin = Point { x: owner.at_um.x + crate::import::mm_to_um(world.x), y: owner.at_um.y + crate::import::mm_to_um(world.y) };
+                        pin_world.insert(format!("{reference}.{}", p.number), at_pin);
+                        if nc_points.contains(&at_pin) {
+                            eda_model::PinKind::Nc
+                        } else {
+                            pin_kind_from_electrical_type(&p.electrical_type, &p.name)
+                        }
+                    }
+                    None => pin_kind_from_electrical_type(&p.electrical_type, &p.name),
+                };
+                pins.push(Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind });
+            }
         }
         parts.push(Part {
             reference: reference.clone(),
             mpn: None,
             lcsc: None,
-            value: (!value.is_empty()).then(|| value.clone()),
+            value: (!primary.value.is_empty()).then(|| primary.value.clone()),
             package: None,
-            footprint: (!footprint.is_empty()).then(|| footprint.clone()),
-            symbol: Some(lib_id.to_string()),
-            datasheet: (!datasheet.is_empty()).then_some(datasheet.clone()),
+            footprint: (!primary.footprint.is_empty()).then(|| primary.footprint.clone()),
+            symbol: Some(lib_id.clone()),
+            datasheet: (!primary.datasheet.is_empty()).then(|| primary.datasheet.clone()),
             pins,
             body_um: None,
             edge: None,
         });
-        symbols.push(SymbolInstance { id: reference, at: at_um, rot, mirrored, mirror_y, lib_id: lib_id.to_string(), unit, value, footprint, datasheet });
+        for &i in idxs {
+            let r = &raw[i];
+            symbols.push(SymbolInstance {
+                id: reference.clone(),
+                at: r.at_um,
+                rot: r.rot,
+                mirrored: r.mirrored,
+                mirror_y: r.mirror_y,
+                lib_id: r.lib_id.clone(),
+                unit: r.unit,
+                value: r.value.clone(),
+                footprint: r.footprint.clone(),
+                datasheet: r.datasheet.clone(),
+            });
+        }
     }
 
     let mut wires: Vec<Wire> = Vec::new();
@@ -692,5 +780,100 @@ mod tests {
     #[test]
     fn rejects_non_schematic_input() {
         assert!(import_kicad_sch("(kicad_pcb (version 1))").is_err());
+    }
+
+    /// GAPS.md #21: a multi-unit part -- one reference, two placed units,
+    /// each at its own position -- survives `export_kicad_sch` ->
+    /// `import_kicad_sch` as one `Part` with every one of the real
+    /// symbol's pins, and two `SymbolInstance`s that keep their own
+    /// `unit`/position apart (the exact bug `reconcile`'s own per-unit pin
+    /// filter, and this module's grouped-by-reference symbol loop, exist
+    /// to fix -- see both their own doc comments).
+    #[test]
+    fn multi_unit_symbol_round_trips_through_export_and_import() {
+        use eda_model::symbol::{LibPin, LibSymbol, SPoint};
+        let p = |number: &str, name: &str, etype: &str, x: f64, angle: f64, unit: u32| LibPin {
+            number: number.into(),
+            name: name.into(),
+            electrical_type: etype.into(),
+            shape: "line".into(),
+            at: SPoint::new(x, 1.27),
+            angle_deg: angle,
+            length_mm: 1.27,
+            unit,
+        };
+        let lib = LibSymbol {
+            lib_id: "test:DUAL".into(),
+            graphics: vec![],
+            pins: vec![
+                p("1", "A1", "input", -2.54, 0.0, 1),
+                p("2", "A2", "input", -2.54, 0.0, 1),
+                p("3", "Y1", "output", 2.54, 180.0, 1),
+                p("4", "A3", "input", -2.54, 0.0, 2),
+                p("5", "A4", "input", -2.54, 0.0, 2),
+                p("6", "Y2", "output", 2.54, 180.0, 2),
+            ],
+            power: false,
+            in_bom: true,
+            on_board: true,
+            datasheet: String::new(),
+            description: "Dual gate".into(),
+            reference_prefix: "U".into(),
+            unit_count: 2,
+        };
+        let u1 = part(
+            "U1",
+            vec![
+                pin("1", "A1", PinKind::Signal),
+                pin("2", "A2", PinKind::Signal),
+                pin("3", "Y1", PinKind::Signal),
+                pin("4", "A3", PinKind::Signal),
+                pin("5", "A4", PinKind::Signal),
+                pin("6", "Y2", PinKind::Signal),
+            ],
+        );
+        let model = ConstraintModel { parts: vec![u1], symbols: vec![lib], ..Default::default() };
+
+        let sym = |unit: u32, x: i64| SymbolInstance { id: "U1".into(), at: Point { x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new() };
+        let sch = SchematicSection {
+            symbols: vec![sym(1, 0), sym(2, 50_000)],
+            wires: vec![],
+            labels: vec![],
+            texts: vec![],
+            power_symbols: vec![],
+            no_connects: vec![],
+            erc_exclusions: vec![],
+            title_block: None,
+            sheets: vec![],
+            imported_from_kicad: false,
+        };
+        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None };
+
+        let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "multi_unit" }).unwrap();
+        assert!(text.contains("(unit 1)"), "{text}");
+        assert!(text.contains("(unit 2)"), "{text}");
+
+        let (back_design, back_model, notes) = import_kicad_sch(&text).expect("round trips");
+        assert_eq!(notes.unresolved_symbols, 0);
+        let back_sch = back_design.schematic.expect("schematic section");
+        assert_eq!(back_sch.symbols.len(), 2, "both placed units survive the round trip");
+        assert!(back_sch.symbols.iter().all(|s| s.id == "U1"));
+        let units: std::collections::BTreeSet<u32> = back_sch.symbols.iter().map(|s| s.unit).collect();
+        assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
+
+        // One Part, every one of the real symbol's 6 pins -- not split per
+        // unit, not duplicated (this task's own "one part, one footprint,
+        // several placed units" framing).
+        assert_eq!(back_model.parts.len(), 1);
+        assert_eq!(back_model.parts[0].pins.len(), 6);
+
+        // Unit 2's own pins must resolve at unit 2's own position, not
+        // unit 1's -- the exact bug a naive "position every pin at
+        // whichever instance's own id we see last" implementation would
+        // get wrong.
+        let unit1 = back_sch.symbols.iter().find(|s| s.unit == 1).unwrap();
+        let unit2 = back_sch.symbols.iter().find(|s| s.unit == 2).unwrap();
+        assert_eq!(unit1.at.x, 0);
+        assert_eq!(unit2.at.x, 50_000);
     }
 }

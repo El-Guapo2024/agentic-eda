@@ -149,6 +149,10 @@ impl Region {
     }
 }
 
+fn d_unit_one() -> u32 {
+    1
+}
+
 /// One step a caller can take against a board.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -377,21 +381,35 @@ pub enum Cmd {
     /// symbol out from under it is *exactly* what "breaks the connection"
     /// means here -- no separate bookkeeping, the next connectivity pass
     /// just finds nothing at that point any more.
-    MoveSymbol { id: String, x: Um, y: Um },
+    ///
+    /// `unit`: which placed instance of `id` to move, when a multi-unit
+    /// part has more than one on the sheet (`None` -- every existing
+    /// caller, since this field postdates multi-unit support -- resolves
+    /// to "the only instance" when `id` names exactly one, and is refused
+    /// as ambiguous otherwise; see `Board::find_symbol_unit`'s own doc).
+    /// Same convention on every other per-instance verb below
+    /// (`DragSymbol`/`RotateSymbol`/`MirrorSymbol`/`MirrorSymbolVertical`/
+    /// `DeleteSymbol`) -- `EditSymbolFields`/`RenameSymbol` deliberately do
+    /// *not* take one, since Reference/Value/Footprint/Datasheet are
+    /// part-wide, not per-unit (`ONE part, one footprint, several placed
+    /// units` -- every unit shares them).
+    MoveSymbol { id: String, x: Um, y: Um, #[serde(default)] unit: Option<u32> },
     /// `G`: move a symbol AND drag along the endpoint of every wire
     /// presently attached to one of its pins (KiCad's rubber-band) --
     /// `attached_wire_endpoints` names which (wire index, endpoint index)
     /// pairs the caller found glued to this symbol before the drag
     /// started, so this moves exactly those points by the same delta
-    /// rather than re-deriving attachment from the new position.
-    DragSymbol { id: String, x: Um, y: Um, attached_wire_endpoints: Vec<(usize, usize)> },
-    /// `R`: quarter turns, same convention as `Rotate`.
-    RotateSymbol { id: String, quarter_turns: u8 },
+    /// rather than re-deriving attachment from the new position. `unit`:
+    /// see `MoveSymbol`'s own doc.
+    DragSymbol { id: String, x: Um, y: Um, attached_wire_endpoints: Vec<(usize, usize)>, #[serde(default)] unit: Option<u32> },
+    /// `R`: quarter turns, same convention as `Rotate`. `unit`: see
+    /// `MoveSymbol`'s own doc.
+    RotateSymbol { id: String, quarter_turns: u8, #[serde(default)] unit: Option<u32> },
     /// `X` ("Mirror Horizontally", KiCad's `SYM_MIRROR_Y` / negate-X):
     /// toggles `SymbolInstance::mirrored` (confirmed against
     /// `transform_local_point`: `mirrored` negates X, matching this
-    /// hotkey exactly).
-    MirrorSymbol { id: String },
+    /// hotkey exactly). `unit`: see `MoveSymbol`'s own doc.
+    MirrorSymbol { id: String, #[serde(default)] unit: Option<u32> },
     /// `Y` ("Mirror Vertically", KiCad's `SYM_MIRROR_X`): toggles
     /// `SymbolInstance::mirror_y`, clearing `mirrored` if it was set --
     /// KiCad's own symbols never carry both mirror flags at once (there
@@ -399,15 +417,20 @@ pub enum Cmd {
     /// header comment on the frontend, ported from `sch_symbol.cpp::
     /// SetOrientation`), so toggling one axis on always means toggling
     /// the other off, same as a real `SetOrientation` call replaces the
-    /// whole orientation rather than adding a flag.
-    MirrorSymbolVertical { id: String },
-    /// `Del` on a symbol: removes the instance (and its synthesized
-    /// `Part`, if `reconcile_schematic` had added one for a symbol with no
-    /// intent counterpart) from the sheet. Matches real eeschema: wires
-    /// that landed on this symbol's pins are left exactly where they are,
-    /// now dangling -- ERC's existing dangling-wire checks are what
-    /// surfaces that, not a cascade delete.
-    DeleteSymbol { id: String },
+    /// whole orientation rather than adding a flag. `unit`: see
+    /// `MoveSymbol`'s own doc.
+    MirrorSymbolVertical { id: String, #[serde(default)] unit: Option<u32> },
+    /// `Del` on a symbol: removes one placed instance -- all of it when
+    /// `id` names a single-unit part (and its synthesized `Part`, if
+    /// `reconcile_schematic` had added one for a symbol with no intent
+    /// counterpart), or just that one unit of a multi-unit part, leaving
+    /// its siblings on the sheet (matches real eeschema: deleting unit B of
+    /// a quad gate does not remove units A/C/D). Matches real eeschema in
+    /// the single-unit case too: wires that landed on this symbol's pins
+    /// are left exactly where they are, now dangling -- ERC's existing
+    /// dangling-wire checks are what surfaces that, not a cascade delete.
+    /// `unit`: see `MoveSymbol`'s own doc.
+    DeleteSymbol { id: String, #[serde(default)] unit: Option<u32> },
 
     /// `W`: add a hand-drawn wire. `net`/`pins` are left for the next
     /// connectivity reconciliation to fill in (same as a freshly-imported
@@ -463,7 +486,21 @@ pub enum Cmd {
     /// synthesizes a `Part` for an `id` with no intent counterpart), so it
     /// shows up unplaced on the PCB tab exactly like any other part
     /// `eda board new` never heard of.
-    AddSymbol { id: String, lib_id: String, at: Point, rot_millideg: Millideg, value: String, footprint: String },
+    ///
+    /// `unit`: which unit of a multi-unit symbol this placement is (1 when
+    /// omitted -- every placed symbol before this field existed, and every
+    /// single-unit part, is unit 1). Refused if `(id, unit)` is already on
+    /// the sheet -- placing unit 2 of an *already-annotated* reference
+    /// (e.g. `id: "U1", unit: 2` once "U1" unit 1 already exists) is the
+    /// supported way to add another unit of an existing part; placing a
+    /// second not-yet-annotated unit under the same placeholder id (e.g.
+    /// two different `"U?"` parts each wanting more than one unit placed
+    /// before `Annotate` ever runs) is a known, narrower gap -- `Annotate`
+    /// still groups purely by placeholder text, not by a placement
+    /// session, so two distinct unannotated multi-unit parts sharing the
+    /// literal text `"U?"` would be mis-numbered as one; placing additional
+    /// units of an already-numbered reference is unaffected by this.
+    AddSymbol { id: String, lib_id: String, at: Point, rot_millideg: Millideg, value: String, footprint: String, #[serde(default = "d_unit_one")] unit: u32 },
 
     /// `E` (Properties -- Value/Footprint/Datasheet only; see below for
     /// `U`'s own reference rename) and `V`/`F` (`sch_edit_tool.cpp::
@@ -738,9 +775,9 @@ impl Cmd {
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
             | Cmd::RotateSymbol { id, .. }
-            | Cmd::MirrorSymbol { id }
-            | Cmd::MirrorSymbolVertical { id }
-            | Cmd::DeleteSymbol { id }
+            | Cmd::MirrorSymbol { id, .. }
+            | Cmd::MirrorSymbolVertical { id, .. }
+            | Cmd::DeleteSymbol { id, .. }
             | Cmd::AddSymbol { id, .. }
             | Cmd::EditSymbolFields { id, .. }
             | Cmd::RenameSymbol { id, .. } => vec![id],
@@ -1085,12 +1122,12 @@ impl<'a> Board<'a> {
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
 
-            Cmd::MoveSymbol { id, x, y } => self.move_symbol(id, *x, *y),
-            Cmd::DragSymbol { id, x, y, attached_wire_endpoints } => self.drag_symbol(id, *x, *y, attached_wire_endpoints),
-            Cmd::RotateSymbol { id, quarter_turns } => self.rotate_symbol(id, *quarter_turns),
-            Cmd::MirrorSymbol { id } => self.mirror_symbol(id),
-            Cmd::MirrorSymbolVertical { id } => self.mirror_symbol_vertical(id),
-            Cmd::DeleteSymbol { id } => self.delete_symbol(id),
+            Cmd::MoveSymbol { id, x, y, unit } => self.move_symbol(id, *x, *y, *unit),
+            Cmd::DragSymbol { id, x, y, attached_wire_endpoints, unit } => self.drag_symbol(id, *x, *y, attached_wire_endpoints, *unit),
+            Cmd::RotateSymbol { id, quarter_turns, unit } => self.rotate_symbol(id, *quarter_turns, *unit),
+            Cmd::MirrorSymbol { id, unit } => self.mirror_symbol(id, *unit),
+            Cmd::MirrorSymbolVertical { id, unit } => self.mirror_symbol_vertical(id, *unit),
+            Cmd::DeleteSymbol { id, unit } => self.delete_symbol(id, *unit),
             Cmd::AddWire { pts } => self.add_wire(pts.clone()),
             Cmd::DeleteWire { id } => self.delete_wire(id),
             Cmd::AddNoConnect { at } => self.add_no_connect(*at),
@@ -1103,7 +1140,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteSchText { id } => self.delete_sch_text(id),
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
-            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint),
+            Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::Annotate { reset_existing, order, ids } => self.annotate(*reset_existing, *order, ids.as_deref()),
@@ -2069,10 +2106,40 @@ impl<'a> Board<'a> {
         self.schematic()?.symbols.iter().find(|s| s.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", id, "no symbol instance with this reference")])
     }
 
-    fn move_symbol(&mut self, id: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
-        self.find_symbol(id)?;
-        let sch = self.schematic_mut()?;
-        sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above").at = Point { x, y };
+    /// Resolve `(id, unit)` to exactly one placed instance's index into
+    /// `schematic().symbols`, for the per-instance verbs below (move/drag/
+    /// rotate/mirror/delete -- see `Cmd::MoveSymbol`'s own doc on why those,
+    /// specifically, need a `unit` to disambiguate and
+    /// `EditSymbolFields`/`RenameSymbol` do not). `unit: None` means "the
+    /// only instance with this id" -- every caller that predates multi-unit
+    /// support, and every single-unit part today, so this is a no-op change
+    /// for them: there is exactly one match, and it's returned the same as
+    /// `find_symbol` always did. `unit: None` with *more than one* placed
+    /// instance (a multi-unit reference) is refused as ambiguous rather
+    /// than silently guessing one -- the caller must say which unit.
+    /// Returning an index (not a reference) sidesteps the borrow-checker
+    /// shape every call site would otherwise hit wanting to resolve this
+    /// immutably and then mutate `schematic_mut()` right after.
+    fn find_symbol_unit_index(&self, id: &str, unit: Option<u32>) -> Result<usize, Vec<CheckResult>> {
+        let sch = self.schematic()?;
+        if let Some(u) = unit {
+            return sch
+                .symbols
+                .iter()
+                .position(|s| s.id == id && s.unit == u)
+                .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", id, format!("no symbol instance with reference '{id}' unit {u}"))]);
+        }
+        let matches: Vec<usize> = sch.symbols.iter().enumerate().filter(|(_, s)| s.id == id).map(|(i, _)| i).collect();
+        match matches.len() {
+            0 => Err(vec![CheckResult::fail("ops_unknown_symbol", id, "no symbol instance with this reference")]),
+            1 => Ok(matches[0]),
+            n => Err(vec![CheckResult::fail("ops_ambiguous_symbol", id, format!("reference '{id}' has {n} placed units -- specify which one"))]),
+        }
+    }
+
+    fn move_symbol(&mut self, id: &str, x: Um, y: Um, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        let i = self.find_symbol_unit_index(id, unit)?;
+        self.schematic_mut()?.symbols[i].at = Point { x, y };
         Ok(())
     }
 
@@ -2081,8 +2148,9 @@ impl<'a> Board<'a> {
     /// (`(wire index, point index)` pairs into `wires`/`wires[i].pts`) --
     /// see `Cmd::DragSymbol`'s own doc for why resolving "attached" is the
     /// caller's job, not this method's.
-    fn drag_symbol(&mut self, id: &str, x: Um, y: Um, attached: &[(usize, usize)]) -> Result<(), Vec<CheckResult>> {
-        let before = self.find_symbol(id)?.at;
+    fn drag_symbol(&mut self, id: &str, x: Um, y: Um, attached: &[(usize, usize)], unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        let i = self.find_symbol_unit_index(id, unit)?;
+        let before = self.schematic()?.symbols[i].at;
         let (dx, dy) = (x - before.x, y - before.y);
         let sch = self.schematic_mut()?;
         for &(wi, pi) in attached {
@@ -2091,26 +2159,26 @@ impl<'a> Board<'a> {
                 p.y += dy;
             }
         }
-        sch.symbols.iter_mut().find(|s| s.id == id).expect("find_symbol just found it").at = Point { x, y };
+        sch.symbols[i].at = Point { x, y };
         Ok(())
     }
 
     /// `R`/Shift+`R`: quarter turns, same sign convention as `Rotate`
     /// (positive = CCW, matching `sch_edit_tool.cpp`'s own 'R' default).
-    fn rotate_symbol(&mut self, id: &str, quarter_turns: u8) -> Result<(), Vec<CheckResult>> {
-        self.find_symbol(id)?;
+    fn rotate_symbol(&mut self, id: &str, quarter_turns: u8, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        let i = self.find_symbol_unit_index(id, unit)?;
         let sch = self.schematic_mut()?;
-        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        let s = &mut sch.symbols[i];
         let add = (quarter_turns as i64 % 4) * 90_000;
         s.rot = (s.rot as i64 + add).rem_euclid(360_000) as Millideg;
         Ok(())
     }
 
     /// `X` ("Mirror Horizontally").
-    fn mirror_symbol(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
-        self.find_symbol(id)?;
+    fn mirror_symbol(&mut self, id: &str, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        let i = self.find_symbol_unit_index(id, unit)?;
         let sch = self.schematic_mut()?;
-        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        let s = &mut sch.symbols[i];
         s.mirrored = !s.mirrored;
         if s.mirrored {
             s.mirror_y = false; // see Cmd::MirrorSymbolVertical's doc -- never both at once
@@ -2119,10 +2187,10 @@ impl<'a> Board<'a> {
     }
 
     /// `Y` ("Mirror Vertically") -- see `Cmd::MirrorSymbolVertical`'s doc.
-    fn mirror_symbol_vertical(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
-        self.find_symbol(id)?;
+    fn mirror_symbol_vertical(&mut self, id: &str, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        let i = self.find_symbol_unit_index(id, unit)?;
         let sch = self.schematic_mut()?;
-        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
+        let s = &mut sch.symbols[i];
         s.mirror_y = !s.mirror_y;
         if s.mirror_y {
             s.mirrored = false;
@@ -2130,13 +2198,12 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn delete_symbol(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
-        let sch = self.schematic_mut()?;
-        let before = sch.symbols.len();
-        sch.symbols.retain(|s| s.id != id);
-        if sch.symbols.len() == before {
-            return Err(vec![CheckResult::fail("ops_unknown_symbol", id, "no symbol instance with this reference")]);
-        }
+    /// `Del` on a symbol: removes just the one placed `(id, unit)` instance
+    /// (see `Cmd::DeleteSymbol`'s own doc) -- a multi-unit reference's other
+    /// units are untouched.
+    fn delete_symbol(&mut self, id: &str, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        let i = self.find_symbol_unit_index(id, unit)?;
+        self.schematic_mut()?.symbols.remove(i);
         Ok(())
     }
 
@@ -2264,39 +2331,50 @@ impl<'a> Board<'a> {
 
     /// `A`: place a new symbol instance. The caller names `id` (a real
     /// reference like "R12", or a KiCad-style placeholder like "U?" for
-    /// `Annotate` to number later) -- this only refuses an exact
-    /// duplicate of an id already on the sheet.
+    /// `Annotate` to number later) -- this only refuses an exact duplicate
+    /// of `(id, unit)` already on the sheet, so placing unit 2 of an
+    /// already-placed multi-unit reference (same `id`, a different `unit`)
+    /// is exactly how another unit of an existing part gets added -- see
+    /// `Cmd::AddSymbol`'s own doc.
     #[allow(clippy::too_many_arguments)]
-    fn add_symbol(&mut self, id: &str, lib_id: &str, at: Point, rot: Millideg, value: &str, footprint: &str) -> Result<(), Vec<CheckResult>> {
+    fn add_symbol(&mut self, id: &str, lib_id: &str, at: Point, rot: Millideg, value: &str, footprint: &str, unit: u32) -> Result<(), Vec<CheckResult>> {
         if id.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_symbol", "symbol", "a symbol needs a reference designator")]);
         }
         let sch = self.schematic_mut_or_create();
-        if sch.symbols.iter().any(|s| s.id == id) {
-            return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, "a symbol with this reference is already on the sheet")]);
+        if sch.symbols.iter().any(|s| s.id == id && s.unit == unit) {
+            return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, format!("reference '{id}' already has unit {unit} on the sheet"))]);
         }
-        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit: 1, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
+        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
         Ok(())
     }
 
-    /// `E`/`V`/`F`: see `Cmd::EditSymbolFields`'s own doc.
+    /// `E`/`V`/`F`: see `Cmd::EditSymbolFields`'s own doc. Applies to
+    /// *every* placed unit sharing `id` at once -- Reference/Value/
+    /// Footprint/Datasheet are part-wide, not per-unit, so an edit here can
+    /// never itself introduce a `unit_value_mismatch`/`different_unit_
+    /// footprint` ERC finding the way a hand-edited `.kicad_sch` can.
     fn edit_symbol_fields(&mut self, id: &str, value: Option<&str>, footprint: Option<&str>, datasheet: Option<&str>) -> Result<(), Vec<CheckResult>> {
         self.find_symbol(id)?;
         let sch = self.schematic_mut()?;
-        let s = sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above");
-        if let Some(v) = value {
-            s.value = v.to_string();
-        }
-        if let Some(f) = footprint {
-            s.footprint = f.to_string();
-        }
-        if let Some(d) = datasheet {
-            s.datasheet = d.to_string();
+        for s in sch.symbols.iter_mut().filter(|s| s.id == id) {
+            if let Some(v) = value {
+                s.value = v.to_string();
+            }
+            if let Some(f) = footprint {
+                s.footprint = f.to_string();
+            }
+            if let Some(d) = datasheet {
+                s.datasheet = d.to_string();
+            }
         }
         Ok(())
     }
 
-    /// `U`: see `Cmd::RenameSymbol`'s own doc.
+    /// `U`: see `Cmd::RenameSymbol`'s own doc. Renames *every* placed unit
+    /// sharing `id` together, in one step -- a multi-unit reference's units
+    /// are the same physical part, so they always carry the same reference
+    /// text; renaming only one of them would desync it from its siblings.
     fn rename_symbol(&mut self, id: &str, new_id: &str) -> Result<(), Vec<CheckResult>> {
         if new_id.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a symbol needs a reference designator")]);
@@ -2328,7 +2406,9 @@ impl<'a> Board<'a> {
                 nc.pin = format!("{new_prefix}{rest}");
             }
         }
-        sch.symbols.iter_mut().find(|s| s.id == id).expect("checked above").id = new_id.to_string();
+        for s in sch.symbols.iter_mut().filter(|s| s.id == id) {
+            s.id = new_id.to_string();
+        }
         Ok(())
     }
 

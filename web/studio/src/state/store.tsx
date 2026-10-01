@@ -355,8 +355,8 @@ export interface StudioState {
   symbolProperties: { id: string; field: "reference" | "value" | "footprint" | "datasheet" | null } | null;
   /** `Ctrl+A`: AnnotateDialog's own open/closed flag (dialog_annotate.cpp's scope/order/reset options). */
   annotateDialogOpen: boolean;
-  /** `A`: the symbol SymbolChooserDialog confirmed, waiting for a canvas click to place it (`sch_place_symbol` tool) -- `referencePrefix` seeds `nextReference`'s own next-free-number placement (this app's own choice: a real id immediately, not a "U?" placeholder -- see `Cmd::AddSymbol`'s doc and PARITY-sch.md). */
-  armedSymbol: { libId: string; referencePrefix: string } | null;
+  /** `A`: the symbol SymbolChooserDialog confirmed, waiting for a canvas click to place it (`sch_place_symbol` tool) -- `referencePrefix` seeds `nextReference`'s own next-free-number placement (this app's own choice: a real id immediately, not a "U?" placeholder -- see `Cmd::AddSymbol`'s doc and PARITY-sch.md). `unit`: which unit of a multi-unit symbol to place (the chooser's own unit picker, shown when `SymbolLibraryEntry.unit_count > 1`; omitted/1 for a single-unit part). */
+  armedSymbol: { libId: string; referencePrefix: string; unit?: number } | null;
   /** `createNewLabel`'s own "last text used" (`m_lastTextOrientation`-style session memory, see `incrementLabelText`) -- seeds the next LabelDialog with an auto-incremented suggestion instead of starting blank every time, so placing a same-shaped bus of labels (DATA0, DATA1, DATA2...) doesn't mean re-typing the whole name each click. */
   lastLabelText: string;
   /** `P`'s own last-chosen rail (e.g. "power:GND") -- seeds PowerSymbolDialog so placing several of the same rail in a row (common -- a row of decoupling caps all going to GND) only needs one pick. */

@@ -36,6 +36,15 @@ const REGISTERED: &[&str] = &[
     "power_pin_not_driven",
     "unconnected_wire_endpoint",
     "wire_dangling",
+    // -- multi-unit symbols, GAPS.md #21 (erc.rs::check_multi_unit_symbols) --
+    "different_unit_footprint",
+    "different_unit_net",
+    "extra_units",
+    "missing_bidi_pin",
+    "missing_input_pin",
+    "missing_power_pin",
+    "missing_unit",
+    "unit_value_mismatch",
     // -- readability/style (erc_style.rs) -----------------------------
     "schematic_cluster_split",
     "schematic_column_overflow",

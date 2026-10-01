@@ -10,7 +10,11 @@
 //! `no_connect_dangling`, `lib_symbol_issues`, `lib_symbol_mismatch`,
 //! `footprint_link_issues`, `endpoint_off_grid`, `isolated_pin_label`,
 //! `duplicate_reference`), so a failure here reads the same as one from
-//! `kicad-cli sch erc --format json`.
+//! `kicad-cli sch erc --format json`. GAPS.md #21's multi-unit-symbol pass
+//! (`different_unit_net`, `unit_value_mismatch`, `different_unit_footprint`,
+//! `missing_unit`, `extra_units`, `missing_input_pin`, `missing_bidi_pin`,
+//! `missing_power_pin` -- see [`check_multi_unit_symbols`]) is the same kind
+//! of port, scoped the same way.
 //!
 //! Severities match KiCad's own shipped defaults (`ERC_SETTINGS::ERC_SETTINGS()`):
 //! `pin_not_connected`/`pin_not_driven`/`power_pin_not_driven`/
@@ -233,11 +237,26 @@ fn resolve_pins(design: &Design, model: &ConstraintModel) -> Vec<ResolvedPin> {
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
         let resolved_sym = model.real_symbol_of(&sym.lib_id, part);
-        let (width, height) = eda_engine::geometry::node_size(part, resolved_sym.as_ref());
-        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved_sym.as_ref());
+        let (width, height) = eda_engine::geometry::node_size(part, resolved_sym.as_ref(), sym.unit);
+        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved_sym.as_ref(), sym.unit);
         let node = eda_layout::Node { id: 0, width, height, ports };
         let angle_deg = sym.rot as f64 / 1000.0;
         for (pin_idx, pin) in part.pins.iter().enumerate() {
+            // Multi-unit: this placed instance only "owns" the pins that
+            // belong to its own unit (or a `unit == 0` pin, common to every
+            // unit -- see `LibPin::unit`'s own doc). A pin on a *different*
+            // unit of this same reference is resolved from whichever other
+            // `SymbolInstance` actually carries that unit, not this one --
+            // skipping it here (rather than resolving it against this
+            // instance's own position, which would be electrically wrong)
+            // is what lets `missing_unit`/`missing_power_pin` below see an
+            // honestly-absent pin when that other unit was never placed at
+            // all, instead of a phantom pin at this instance's position.
+            if let Some(real_pin) = resolved_sym.as_ref().and_then(|s| s.pin_by_number(&pin.number)) {
+                if !(real_pin.unit == 0 || real_pin.unit == sym.unit) {
+                    continue;
+                }
+            }
             // An `nc`-kind pin is authoritative and wins over whatever a
             // resolved real library says that pin number's ordinary
             // electrical type is: a generic connector's real pins are all
@@ -361,6 +380,7 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     check_isolated_pin_label(sch, model, &mut out);
     check_footprint_link_issues(sch, &mut out);
     check_duplicate_references(sch, &mut out);
+    check_multi_unit_symbols(sch, model, &mut out);
     out.extend(crate::erc_style::check_style(design, model));
     out
 }
@@ -943,20 +963,281 @@ fn check_footprint_link_issues(sch: &eda_model::ir::SchematicSection, out: &mut 
 /// checks it anyway (the task this module was ported for asks for it by
 /// name, and it is a real problem worth catching, imported-file or not),
 /// using KiCad's own settings-key name for consistency.
+///
+/// Keyed by `(id, unit)`, not `id` alone: several instances sharing one
+/// reference is exactly what a multi-unit part *is* (`SymbolInstance::unit`'s
+/// own doc) -- U1's unit 1 and unit 2 coexisting is correct, not a
+/// duplicate. Two placed instances of the *same* reference *and* the same
+/// unit is the real conflict this check exists to catch (`extra_units`,
+/// just below, catches the complementary case: a unit number the library
+/// doesn't even declare).
 fn check_duplicate_references(sch: &eda_model::ir::SchematicSection, out: &mut Vec<CheckResult>) {
-    let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
+    let mut seen: BTreeMap<(&str, u32), u32> = BTreeMap::new();
     for s in &sch.symbols {
-        *seen.entry(s.id.as_str()).or_default() += 1;
+        *seen.entry((s.id.as_str(), s.unit)).or_default() += 1;
     }
     let mut ok = true;
-    for (r, count) in seen {
+    for ((r, unit), count) in seen {
         if count > 1 {
-            out.push(CheckResult::fail("duplicate_reference", r, format!("reference '{r}' is used by {count} symbols")));
+            out.push(CheckResult::fail("duplicate_reference", r, format!("reference '{r}' unit {unit} is used by {count} symbols")));
             ok = false;
         }
     }
     if ok {
         out.push(CheckResult::pass("duplicate_reference"));
+    }
+}
+
+// ---------------------------------------------------------------- multi-unit symbols (GAPS.md #21)
+
+/// One reference's placed units, plus what its resolved library symbol (if
+/// any) says a full, correctly-placed set should look like -- everything
+/// [`check_multi_unit_symbols`]'s five checks need, computed once per
+/// reference rather than separately by each one.
+struct UnitGroup<'a> {
+    reference: &'a str,
+    /// Every placed instance of this reference, in file order.
+    instances: Vec<&'a eda_model::ir::SymbolInstance>,
+    /// `None` when no real multi-unit library symbol resolved (a synthetic
+    /// box, or a real symbol with exactly one unit) -- every check below is
+    /// a no-op for those, same as KiCad itself only ever runs this pass for
+    /// a symbol whose `LIB_SYMBOL::GetUnitCount() > 1`.
+    resolved: Option<eda_model::symbol::LibSymbol>,
+}
+
+/// The net name actually touching an absolute point, read straight off the
+/// drawn geometry (a wire endpoint or T-junction interior, a label anchor,
+/// or a power symbol) -- the same three sources `sch_import::reconcile`
+/// itself treats as "this point carries this net", just asked about one
+/// point instead of rebuilding the whole sheet's connectivity. `None` when
+/// nothing drawn actually reaches this point (an unwired duplicate pin, or
+/// one this port cannot resolve a position for at all).
+fn net_at_point(sch: &eda_model::ir::SchematicSection, at: Point) -> Option<String> {
+    if let Some(w) = sch.wires.iter().find(|w| w.pts.contains(&at) || point_on_segment_interior_any(w, at)) {
+        return Some(w.net.clone());
+    }
+    if let Some(l) = sch.labels.iter().find(|l| l.at == at) {
+        return Some(l.net.clone());
+    }
+    if let Some(p) = sch.power_symbols.iter().find(|p| p.at == at) {
+        return Some(p.net.clone());
+    }
+    None
+}
+
+fn multi_unit_groups<'a>(sch: &'a eda_model::ir::SchematicSection, model: &'a ConstraintModel) -> Vec<UnitGroup<'a>> {
+    let mut by_ref: BTreeMap<&str, Vec<&eda_model::ir::SymbolInstance>> = BTreeMap::new();
+    for s in &sch.symbols {
+        by_ref.entry(s.id.as_str()).or_default().push(s);
+    }
+    by_ref
+        .into_iter()
+        .filter_map(|(reference, instances)| {
+            let part = model.part(reference)?;
+            let resolved = model.real_symbol_of(&instances[0].lib_id, part);
+            // Only keep a reference whose unit count (from `self` when the
+            // real symbol resolved, or the highest unit any instance
+            // claims otherwise -- an imported file with a unit tag but an
+            // unresolved library still deserves `extra_units`/duplicate
+            // scrutiny) is actually greater than 1; a single-unit part has
+            // nothing for any of these five checks to say.
+            let unit_count = resolved.as_ref().map(|s| s.unit_count).unwrap_or(1).max(instances.iter().map(|s| s.unit).max().unwrap_or(1));
+            if unit_count <= 1 {
+                return None;
+            }
+            Some(UnitGroup { reference, instances, resolved })
+        })
+        .collect()
+}
+
+/// (j)-(n): KiCad's `erc.cpp` per-unit pass (`ERC_TESTER::TestMultiunitFootprints`
+/// plus the per-net unit-consistency pass `CONNECTION_GRAPH` runs alongside
+/// it), ported as five separate checks over each [`UnitGroup`]:
+///
+/// - `unit_value_mismatch` / `different_unit_footprint`: every placed unit
+///   of one reference must carry the same `Value`/`Footprint` -- they are
+///   the same physical part (`ONE part, one footprint, several placed
+///   units`, this task's own framing), so a hand-edited mismatch between
+///   two units is always a mistake, never an intentional difference.
+/// - `missing_unit` / `missing_power_pin` / `missing_input_pin` /
+///   `missing_bidi_pin`: a unit the library declares (1..=`unit_count`) with
+///   no placed instance anywhere on the sheet. KiCad differentiates the
+///   message (and this port's severity) by what that *absent* unit's own
+///   pins would have been: a missing unit that would have contributed a
+///   `power_in`/`power_out` pin is the most serious (a real net may now
+///   read as undriven, or a power rail as unsupplied, purely because the
+///   unit carrying its pin was never drawn) and is scored Fail; one with an
+///   `input`/`bidirectional` pin is Warn; a unit with only passive/output/
+///   no-connect pins (e.g. a spare, fully floating NAND gate) is reported
+///   as plain `missing_unit`, also Warn, matching KiCad's own default
+///   severities (`ERCE_LIB_SYMBOL_ISSUES`-family checks ship as Warning).
+/// - `extra_units`: a placed instance whose `unit` the resolved library
+///   does not declare at all (`unit > unit_count`, or `unit == 0`, which is
+///   never a placeable unit -- only a "common to every unit" graphics tag).
+fn check_multi_unit_symbols(sch: &eda_model::ir::SchematicSection, model: &ConstraintModel, out: &mut Vec<CheckResult>) {
+    let mut ok_value = true;
+    let mut ok_footprint = true;
+    let mut ok_missing_unit = true;
+    let mut ok_missing_power = true;
+    let mut ok_missing_input = true;
+    let mut ok_missing_bidi = true;
+    let mut ok_extra = true;
+    let mut ok_net = true;
+
+    for group in multi_unit_groups(sch, model) {
+        let UnitGroup { reference, instances, resolved } = group;
+        let unit_count = resolved.as_ref().map(|s| s.unit_count).unwrap_or(1);
+
+        // ---- unit_value_mismatch / different_unit_footprint ----
+        let values: BTreeSet<&str> = instances.iter().map(|s| s.value.as_str()).filter(|v| !v.is_empty()).collect();
+        if values.len() > 1 {
+            out.push(CheckResult::fail("unit_value_mismatch", reference, format!("reference '{reference}' has units with different Value fields: {}", values.iter().cloned().collect::<Vec<_>>().join(", "))));
+            ok_value = false;
+        }
+        let footprints: BTreeSet<&str> = instances.iter().map(|s| s.footprint.as_str()).filter(|f| !f.is_empty()).collect();
+        if footprints.len() > 1 {
+            out.push(CheckResult::fail(
+                "different_unit_footprint",
+                reference,
+                format!("reference '{reference}' has units with different Footprint fields: {}", footprints.iter().cloned().collect::<Vec<_>>().join(", ")),
+            ));
+            ok_footprint = false;
+        }
+
+        // ---- extra_units: a placed unit the library doesn't declare ----
+        for s in &instances {
+            if s.unit == 0 || s.unit > unit_count {
+                out.push(CheckResult::fail("extra_units", format!("{reference}:{}", s.unit), format!("reference '{reference}' places unit {} but its symbol only declares {unit_count} unit(s)", s.unit)));
+                ok_extra = false;
+            }
+        }
+
+        // ---- missing_unit / missing_power_pin / missing_input_pin / missing_bidi_pin ----
+        // KiCad's own `TestMissingUnits` (`erc.cpp`) reports at most one
+        // finding per check *per reference* -- one `missing_unit` listing
+        // every absent unit together, then (independently, each aggregated
+        // across *every* missing unit, not one finding each) at most one
+        // `missing_power_pin`/`missing_input_pin`/`missing_bidi_pin` when
+        // the union of the missing units' own pins contains that
+        // electrical type. A missing unit's pin set is taken with the same
+        // unit-0-is-common union `GetGraphicalPins` uses (confirmed against
+        // source): a unit that is otherwise absent can still "have" a
+        // power/input/bidi pin purely from the symbol's shared unit-0 body.
+        let placed_units: BTreeSet<u32> = instances.iter().map(|s| s.unit).collect();
+        if let Some(sym) = &resolved {
+            let missing_units: Vec<u32> = (1..=unit_count).filter(|u| !placed_units.contains(u)).collect();
+            if !missing_units.is_empty() {
+                let names: Vec<String> = missing_units.iter().map(|u| u.to_string()).collect();
+                out.push(CheckResult {
+                    check: "missing_unit".into(),
+                    status: CheckStatus::Warn,
+                    location: Some(reference.to_string()),
+                    hint: Some(format!("reference '{reference}' has unplaced units: {}", names.join(", "))),
+                    detail: None,
+                });
+                ok_missing_unit = false;
+
+                let missing_pins: Vec<&eda_model::symbol::LibPin> = sym.pins.iter().filter(|p| p.unit == 0 || missing_units.contains(&p.unit)).collect();
+                let has = |want: &str| missing_pins.iter().any(|p| p.electrical_type == want);
+                // Power is reported even when an input/bidi pin is *also*
+                // missing (KiCad fires all three independently, not an
+                // if/else-if chain) -- matching that means checking each
+                // condition on its own, not short-circuiting on the first.
+                // Each has its *own* ok-flag (not shared with `missing_unit`
+                // above): a reference with a missing unit but no missing
+                // power pin still deserves a clean `missing_power_pin` Pass,
+                // same as `check_driven_pins`'s own separate `ok_driven`/
+                // `ok_power` flags for two checks that can fail independently.
+                for (want, check, severity, ok_flag) in [
+                    ("power", "missing_power_pin", CheckStatus::Fail, &mut ok_missing_power),
+                    ("input", "missing_input_pin", CheckStatus::Warn, &mut ok_missing_input),
+                    ("bidirectional", "missing_bidi_pin", CheckStatus::Warn, &mut ok_missing_bidi),
+                ] {
+                    let present = if want == "power" { has("power_in") || has("power_out") } else { has(want) };
+                    if present {
+                        *ok_flag = false;
+                        out.push(CheckResult {
+                            check: check.into(),
+                            status: severity,
+                            location: Some(reference.to_string()),
+                            hint: Some(format!("reference '{reference}' has {want} pin(s) in unplaced unit(s) {}", names.join(", "))),
+                            detail: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        // ---- different_unit_net: a pin *number* declared on more than one
+        // unit (a shared/common pin, e.g. a gate-array's physically-tied
+        // power pins KiCad's own library repeats on every unit's own body
+        // rather than factoring onto a shared unit 0) is one physical pin,
+        // however many units' worth of paper it's drawn on -- it must land
+        // on the very same net everywhere. This is deliberately *not*
+        // checked through `model.nets`/`Part.pins`: both key purely by
+        // "REF.NUMBER" (see `ir::Wire::pins`'s own doc), so a duplicate-
+        // numbered pin already collapses onto one net entry there by
+        // construction, before this check would ever see a disagreement --
+        // the real question ("does unit 1's own drawn copy of this pin
+        // touch a different wire/net than unit 2's own drawn copy")
+        // only has an answer at the *geometry* level, so that's what this
+        // walks instead: each duplicate-numbered `LibPin` entry's own
+        // absolute position (via whichever instance actually carries its
+        // unit), cross-referenced against `net_at_point` directly.
+        if let Some(sym) = &resolved {
+            let mut by_number: BTreeMap<&str, Vec<&eda_model::symbol::LibPin>> = BTreeMap::new();
+            for p in &sym.pins {
+                by_number.entry(p.number.as_str()).or_default().push(p);
+            }
+            for (number, lib_pins) in by_number {
+                if lib_pins.len() < 2 {
+                    continue; // not repeated across units -- nothing to compare
+                }
+                let mut nets_here: BTreeSet<String> = BTreeSet::new();
+                for lp in lib_pins {
+                    let Some(inst) = instances.iter().find(|s| lp.unit == 0 || lp.unit == s.unit) else { continue };
+                    let angle_deg = inst.rot as f64 / 1000.0;
+                    let world = crate::sch_import::transform_local_point(lp.at, angle_deg, inst.mirrored, inst.mirror_y);
+                    let at = Point { x: inst.at.x + crate::import::mm_to_um(world.x), y: inst.at.y + crate::import::mm_to_um(world.y) };
+                    if let Some(net) = net_at_point(sch, at) {
+                        nets_here.insert(net);
+                    }
+                }
+                if nets_here.len() > 1 {
+                    out.push(CheckResult::fail(
+                        "different_unit_net",
+                        format!("{reference}.{number}"),
+                        format!("reference '{reference}' pin {number} is drawn on more than one unit and lands on different nets: {}", nets_here.iter().cloned().collect::<Vec<_>>().join(", ")),
+                    ));
+                    ok_net = false;
+                }
+            }
+        }
+    }
+
+    if ok_value {
+        out.push(CheckResult::pass("unit_value_mismatch"));
+    }
+    if ok_footprint {
+        out.push(CheckResult::pass("different_unit_footprint"));
+    }
+    if ok_missing_unit {
+        out.push(CheckResult::pass("missing_unit"));
+    }
+    if ok_missing_power {
+        out.push(CheckResult::pass("missing_power_pin"));
+    }
+    if ok_missing_input {
+        out.push(CheckResult::pass("missing_input_pin"));
+    }
+    if ok_missing_bidi {
+        out.push(CheckResult::pass("missing_bidi_pin"));
+    }
+    if ok_extra {
+        out.push(CheckResult::pass("extra_units"));
+    }
+    if ok_net {
+        out.push(CheckResult::pass("different_unit_net"));
     }
 }
 
@@ -1135,5 +1416,152 @@ mod tests {
         // An unrelated genuine failure elsewhere is untouched by an
         // exclusion that does not name it.
         assert_eq!(plain.iter().filter(|r| r.status == CheckStatus::Fail).count() - 1, excluded.iter().filter(|r| r.status == CheckStatus::Fail).count());
+    }
+
+    // ------------------------------------------------- multi-unit symbols (GAPS.md #21)
+
+    use eda_model::ir::{LabelKind, NetLabel, Provenance, SchematicSection, SymbolInstance};
+
+    /// A 2-unit symbol: unit 1 has two inputs + an output, unit 2 the same
+    /// shape -- no power pin on either, so `missing_power_pin` never fires
+    /// for it; a separate fixture below adds one for the cases that need it.
+    fn dual_gate_symbol() -> eda_model::symbol::LibSymbol {
+        use eda_model::symbol::{LibPin, SPoint};
+        let p = |number: &str, name: &str, etype: &str, unit: u32| LibPin { number: number.into(), name: name.into(), electrical_type: etype.into(), shape: "line".into(), at: SPoint::new(0.0, 0.0), angle_deg: 0.0, length_mm: 1.27, unit };
+        eda_model::symbol::LibSymbol {
+            lib_id: "test:DUAL".into(),
+            graphics: vec![],
+            pins: vec![p("1", "A1", "input", 1), p("2", "A2", "input", 1), p("3", "Y1", "output", 1), p("4", "A3", "input", 2), p("5", "A4", "input", 2), p("6", "Y2", "output", 2)],
+            power: false,
+            in_bom: true,
+            on_board: true,
+            datasheet: String::new(),
+            description: String::new(),
+            reference_prefix: "U".into(),
+            unit_count: 2,
+        }
+    }
+
+    /// `dual_gate_symbol`, plus one pin number ("7") declared on *both*
+    /// units -- a shared/common pin KiCad's own library convention repeats
+    /// on every unit's own body rather than factoring onto a shared unit 0
+    /// (see `check_multi_unit_symbols`'s own doc) -- the only shape
+    /// `different_unit_net` has anything to check.
+    fn dual_gate_symbol_with_shared_pin() -> eda_model::symbol::LibSymbol {
+        use eda_model::symbol::{LibPin, SPoint};
+        let mut sym = dual_gate_symbol();
+        for unit in [1, 2] {
+            sym.pins.push(LibPin { number: "7".into(), name: "PWR".into(), electrical_type: "power_in".into(), shape: "line".into(), at: SPoint::new(0.0, -5.0), angle_deg: 0.0, length_mm: 1.27, unit });
+        }
+        sym
+    }
+
+    fn dual_gate_part() -> Part {
+        part("U1", vec![pin("1", "A1", PinKind::Signal), pin("2", "A2", PinKind::Signal), pin("3", "Y1", PinKind::Signal), pin("4", "A3", PinKind::Signal), pin("5", "A4", PinKind::Signal), pin("6", "Y2", PinKind::Signal)])
+    }
+
+    fn sym_instance(id: &str, unit: u32, x: eda_model::ir::Um, value: &str, footprint: &str) -> SymbolInstance {
+        SymbolInstance { id: id.into(), at: Point { x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: value.into(), footprint: footprint.into(), datasheet: String::new() }
+    }
+
+    fn sch_design(symbols: Vec<SymbolInstance>, labels: Vec<NetLabel>) -> Design {
+        Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], imported_from_kicad: false }),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+        }
+    }
+
+    const MULTI_UNIT_CHECKS: &[&str] = &["unit_value_mismatch", "different_unit_footprint", "missing_unit", "missing_power_pin", "missing_input_pin", "missing_bidi_pin", "extra_units", "different_unit_net"];
+
+    #[test]
+    fn multi_unit_both_placed_consistently_passes_every_check() {
+        let model = ConstraintModel { parts: vec![dual_gate_part()], symbols: vec![dual_gate_symbol()], nets: vec![], ..Default::default() };
+        let design = sch_design(vec![sym_instance("U1", 1, 0, "DUAL", "Fp:A"), sym_instance("U1", 2, 10_000, "DUAL", "Fp:A")], vec![]);
+        let results = check_erc(&design, &model);
+        for check in MULTI_UNIT_CHECKS.iter().chain(["duplicate_reference"].iter()) {
+            assert!(results.iter().any(|r| r.check == *check && r.status == CheckStatus::Pass), "{check} should pass: {:#?}", results.iter().filter(|r| &r.check == check).collect::<Vec<_>>());
+        }
+    }
+
+    /// Unit 2 (two inputs, one output, no power pin) is never placed:
+    /// `missing_unit`/`missing_input_pin` fire; `missing_power_pin`/
+    /// `missing_bidi_pin` stay clean since nothing *missing* has that kind
+    /// of pin (KiCad fires each pin-kind check independently, not as a
+    /// single catch-all -- see `check_multi_unit_symbols`'s own doc).
+    #[test]
+    fn missing_unit_fires_missing_input_pin_but_not_power_or_bidi() {
+        let model = ConstraintModel { parts: vec![dual_gate_part()], symbols: vec![dual_gate_symbol()], nets: vec![], ..Default::default() };
+        let design = sch_design(vec![sym_instance("U1", 1, 0, "DUAL", "Fp:A")], vec![]);
+        let results = check_erc(&design, &model);
+        assert!(results.iter().any(|r| r.check == "missing_unit" && r.status == CheckStatus::Warn), "{results:#?}");
+        assert!(results.iter().any(|r| r.check == "missing_input_pin" && r.status == CheckStatus::Warn));
+        assert!(results.iter().any(|r| r.check == "missing_power_pin" && r.status == CheckStatus::Pass), "unit 2 has no power pin to be missing");
+        assert!(results.iter().any(|r| r.check == "missing_bidi_pin" && r.status == CheckStatus::Pass));
+    }
+
+    /// A missing unit with a power pin is scored `Fail` (KiCad's own
+    /// un-downgraded default for this one, unlike its input/bidi siblings).
+    #[test]
+    fn missing_unit_with_a_power_pin_is_an_error() {
+        let model = ConstraintModel { parts: vec![{ let mut p = dual_gate_part(); p.pins.push(pin("7", "PWR", PinKind::Power)); p }], symbols: vec![dual_gate_symbol_with_shared_pin()], nets: vec![], ..Default::default() };
+        let design = sch_design(vec![sym_instance("U1", 1, 0, "DUAL", "")], vec![]);
+        let results = check_erc(&design, &model);
+        assert!(results.iter().any(|r| r.check == "missing_power_pin" && r.status == CheckStatus::Fail), "{results:#?}");
+    }
+
+    #[test]
+    fn mismatched_value_or_footprint_across_units_fails() {
+        let model = ConstraintModel { parts: vec![dual_gate_part()], symbols: vec![dual_gate_symbol()], nets: vec![], ..Default::default() };
+        let design = sch_design(vec![sym_instance("U1", 1, 0, "DUAL", "Fp:A"), sym_instance("U1", 2, 10_000, "DIFFERENT", "Fp:B")], vec![]);
+        let results = check_erc(&design, &model);
+        assert!(results.iter().any(|r| r.check == "unit_value_mismatch" && r.status == CheckStatus::Fail), "{results:#?}");
+        assert!(results.iter().any(|r| r.check == "different_unit_footprint" && r.status == CheckStatus::Fail));
+    }
+
+    #[test]
+    fn a_unit_the_library_does_not_declare_is_extra_units() {
+        let model = ConstraintModel { parts: vec![dual_gate_part()], symbols: vec![dual_gate_symbol()], nets: vec![], ..Default::default() };
+        let design = sch_design(vec![sym_instance("U1", 1, 0, "DUAL", ""), sym_instance("U1", 3, 10_000, "DUAL", "")], vec![]);
+        let results = check_erc(&design, &model);
+        assert!(results.iter().any(|r| r.check == "extra_units" && r.status == CheckStatus::Fail), "{results:#?}");
+    }
+
+    /// `duplicate_reference` is keyed by `(id, unit)`: two distinct units
+    /// sharing one reference is exactly what a multi-unit part is, not a
+    /// duplicate -- only the *same* unit placed twice really is one.
+    #[test]
+    fn duplicate_reference_allows_distinct_units_but_catches_a_real_duplicate() {
+        let model = ConstraintModel { parts: vec![dual_gate_part()], symbols: vec![dual_gate_symbol()], nets: vec![], ..Default::default() };
+        let distinct_units = sch_design(vec![sym_instance("U1", 1, 0, "DUAL", ""), sym_instance("U1", 2, 10_000, "DUAL", "")], vec![]);
+        assert!(check_erc(&distinct_units, &model).iter().any(|r| r.check == "duplicate_reference" && r.status == CheckStatus::Pass), "two distinct units of one reference is not a duplicate");
+
+        let same_unit_twice = sch_design(vec![sym_instance("U1", 1, 0, "DUAL", ""), sym_instance("U1", 1, 10_000, "DUAL", "")], vec![]);
+        assert!(check_erc(&same_unit_twice, &model).iter().any(|r| r.check == "duplicate_reference" && r.status == CheckStatus::Fail), "the same reference AND unit placed twice is a real duplicate");
+    }
+
+    /// Pin "7" is declared on both units (`dual_gate_symbol_with_shared_pin`);
+    /// each unit's own drawn copy of it sits at a different absolute point
+    /// (different instance positions), labeled directly (no wire needed --
+    /// see `net_at_point`'s own doc). Same label text on both -> passes;
+    /// different text -> the one physical pin reads as two different nets.
+    #[test]
+    fn different_unit_net_fires_only_when_a_shared_pin_lands_on_different_nets() {
+        let model = ConstraintModel { parts: vec![{ let mut p = dual_gate_part(); p.pins.push(pin("7", "PWR", PinKind::Power)); p }], symbols: vec![dual_gate_symbol_with_shared_pin()], nets: vec![], ..Default::default() };
+        let symbols = vec![sym_instance("U1", 1, 0, "DUAL", ""), sym_instance("U1", 2, 10_000, "DUAL", "")];
+        // Pin 7's own local point (0, -5.0mm) at angle 0, no mirror: world y
+        // = +5mm (`transform_local_point` negates local Y, library-up ->
+        // sheet-down) relative to each instance's own `at`.
+        let consistent = sch_design(symbols.clone(), vec![NetLabel { id: String::new(), net: "VCC".into(), at: Point { x: 0, y: 5_000 }, kind: LabelKind::Local }, NetLabel { id: String::new(), net: "VCC".into(), at: Point { x: 10_000, y: 5_000 }, kind: LabelKind::Local }]);
+        assert!(check_erc(&consistent, &model).iter().any(|r| r.check == "different_unit_net" && r.status == CheckStatus::Pass), "same net on both units' copy of the shared pin must pass");
+
+        let conflicting = sch_design(symbols, vec![NetLabel { id: String::new(), net: "VCC".into(), at: Point { x: 0, y: 5_000 }, kind: LabelKind::Local }, NetLabel { id: String::new(), net: "GND".into(), at: Point { x: 10_000, y: 5_000 }, kind: LabelKind::Local }]);
+        let results = check_erc(&conflicting, &model);
+        assert!(results.iter().any(|r| r.check == "different_unit_net" && r.status == CheckStatus::Fail), "{results:#?}");
     }
 }

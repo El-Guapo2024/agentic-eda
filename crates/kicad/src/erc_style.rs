@@ -37,8 +37,8 @@ struct SymGeo<'a> {
 impl<'a> SymGeo<'a> {
     fn build(sym: &SymbolInstance, part: &'a Part, model: &ConstraintModel) -> Self {
         let resolved = model.real_symbol_of(&sym.lib_id, part);
-        let (width, height) = geometry::node_size(part, resolved.as_ref());
-        let (ports, pin_port): (Vec<Port>, _) = geometry::build_ports(part, width, height, resolved.as_ref());
+        let (width, height) = geometry::node_size(part, resolved.as_ref(), sym.unit);
+        let (ports, pin_port): (Vec<Port>, _) = geometry::build_ports(part, width, height, resolved.as_ref(), sym.unit);
         let node = LayoutNode { id: 0, width, height, ports };
         Self { part, top_left: to_lpoint(sym.at), width, height, node, pin_port }
     }
@@ -369,7 +369,7 @@ fn check_value_label_distance(sch: &SchematicSection, model: &ConstraintModel, o
     let mut placed: Vec<geometry::TextBox> = Vec::new();
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
-        let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref());
+        let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
         let x = sym.at.x as f64 / 1000.0;
         let y = sym.at.y as f64 / 1000.0;
         let w = width as f64 / 1000.0;
@@ -432,7 +432,7 @@ fn collect_symbol_boxes(sch: &SchematicSection, model: &ConstraintModel) -> Vec<
         .iter()
         .filter_map(|sym| {
             let part = model.part(&sym.id)?;
-            let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref());
+            let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
             Some(geometry::symbol_box_mm(sym.at.x as f64 / 1000.0, sym.at.y as f64 / 1000.0, width, height))
         })
         .collect()
@@ -461,7 +461,7 @@ fn collect_text_boxes_and_label_extents(sch: &SchematicSection, model: &Constrai
     let mut out = Vec::new();
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
-        let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref());
+        let (width, height) = geometry::node_size(part, model.real_symbol_of(&sym.lib_id, part).as_ref(), sym.unit);
         let x = sym.at.x as f64 / 1000.0;
         let y = sym.at.y as f64 / 1000.0;
         let _w = width as f64 / 1000.0;
@@ -505,8 +505,8 @@ fn collect_text_boxes_and_label_extents(sch: &SchematicSection, model: &Constrai
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
         let resolved = model.real_symbol_of(&sym.lib_id, part);
-        let (width, height) = geometry::node_size(part, resolved.as_ref());
-        let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref());
+        let (width, height) = geometry::node_size(part, resolved.as_ref(), sym.unit);
+        let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref(), sym.unit);
         let sym_x = sym.at.x as f64 / 1000.0;
         let sym_y = sym.at.y as f64 / 1000.0;
         for (pin_idx, port_idx) in pin_port.iter().enumerate() {

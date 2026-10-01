@@ -343,8 +343,8 @@ struct SymbolBox<'a> {
 impl<'a> SymbolBox<'a> {
     fn build(sym: &'a SymbolInstance, part: &'a Part, model: &ConstraintModel) -> Self {
         let resolved = model.real_symbol_of(&sym.lib_id, part);
-        let (width, height) = geometry::node_size(part, resolved.as_ref());
-        let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref());
+        let (width, height) = geometry::node_size(part, resolved.as_ref(), sym.unit);
+        let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref(), sym.unit);
         let mut pin_of_port = vec![None; ports.len()];
         for (pin_idx, port_idx) in pin_port.iter().enumerate() {
             if let Some(pi) = port_idx {
