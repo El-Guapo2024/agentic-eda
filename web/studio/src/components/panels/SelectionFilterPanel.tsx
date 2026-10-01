@@ -14,6 +14,7 @@ const ROWS: Array<{ key: keyof SelectionFilter; label: string }> = [
   { key: "zones", label: "Zones" },
   { key: "graphics", label: "Graphics" },
   { key: "text", label: "Text" },
+  { key: "dimensions", label: "Dimensions" },
 ];
 
 export function SelectionFilterPanel() {

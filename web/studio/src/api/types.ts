@@ -86,6 +86,24 @@ export type IslandRemovalMode = "Always" | "Never" | "Area";
 /** `ZONE_FILL_MODE`. */
 export type FillMode = "Polygons" | "HatchPattern";
 
+/** `crates/ops/src/lib.rs` `SizeSpec`/`ViaSizeSpec`, `#[serde(tag = "kind")]` -- `edit_tracks_and_vias`'s track-width/via-size fields: either resolve from the item's own net class (`BoardRules::width_of`/`via_diameter_of`/`via_drill_of`), or an explicit value. */
+export type SizeSpec = { kind: "net_class" } | { kind: "value"; um: Um };
+export type ViaSizeSpec = { kind: "net_class" } | { kind: "value"; diameter: Um; drill: Um };
+
+/**
+ * `crates/ops/src/lib.rs` `ArrayGeometry` (task item 6), `#[serde(tag =
+ * "kind")]` -- `create_array`'s geometry. Angles are millidegrees in the
+ * backend's own `rotate_point_about` convention: positive = clockwise in
+ * this app's Y-down board coordinates. `circular.clockwise` is the
+ * user-facing direction choice (matching KiCad's own dialog radio
+ * button, clockwise default) and needs no sign flip the way `move_exact`'s
+ * single signed rotation field does -- pass the typed angle magnitude as
+ * entered.
+ */
+export type ArrayGeometry =
+  | { kind: "grid"; nx: number; ny: number; dx: Um; dy: Um; offset_x?: Um; offset_y?: Um; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean }
+  | { kind: "circular"; center: PointXY; count: number; angle_millideg: number; angle_offset_millideg?: number; clockwise?: boolean; rotate_items?: boolean };
+
 /**
  * `crates/model/src/ir.rs` `Zone`'s `ZONE_SETTINGS` fill-engine fields
  * (dialog_copper_zones.cpp's panel) -- everything but id/net/layer/
@@ -114,19 +132,36 @@ export interface ZoneSettingsFields {
 }
 
 /**
+ * `crates/model/src/ir.rs` `Zone`'s rule-area (keepout) fields, task item
+ * 3 -- `ZONE::GetIsRuleArea()` plus its five `DoNotAllow*` flags. Shares a
+ * zone with `ZoneSettingsFields` the same way source's one dialog just
+ * swaps panels on `IsRuleArea()`; see `ZoneDialog.tsx`.
+ */
+export interface RuleAreaFields {
+  is_rule_area: boolean;
+  keepout_tracks: boolean;
+  keepout_vias: boolean;
+  keepout_pads: boolean;
+  keepout_copper_pour: boolean;
+  keepout_footprints: boolean;
+}
+
+/**
  * `crates/model/src/ir.rs` `Zone` -- id/net/layer/outline plus the full
- * `ZONE_SETTINGS` (`ZoneSettingsFields`), ported into the IR so
- * `crates/zone-filler` can read them; see `ZoneDialog.tsx`. Every
- * settings field has a KiCad-matching server-side default
- * (`Zone::default()`) once `add_zone` creates a zone, so these are never
- * actually absent from a real `/api/state` response -- not marked
- * optional, same convention this file uses for every other
+ * `ZONE_SETTINGS` (`ZoneSettingsFields`) and rule-area flags
+ * (`RuleAreaFields`), ported into the IR so `crates/zone-filler` can read
+ * them; see `ZoneDialog.tsx`. Every settings field has a KiCad-matching
+ * server-side default (`Zone::default()`) once `add_zone` creates a zone,
+ * so these are never actually absent from a real `/api/state` response --
+ * not marked optional, same convention this file uses for every other
  * always-present field.
  */
-export interface Zone extends ZoneSettingsFields {
+export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   id: string;
   net: string;
   layer: string;
+  /** Task item 4: true for a generated teardrop (`eda_model::ir::Zone::teardrop`), never a hand-drawn zone. */
+  teardrop: boolean;
   outline: [Um, Um][];
 }
 
@@ -144,6 +179,21 @@ export interface Routing {
   track_width_presets: Um[];
   /** `m_ViaSizeList` -- same idea, for the via-size cycle. */
   via_presets: ViaPreset[];
+  /** Task item 4: Board Setup > Teardrops. */
+  teardrop_settings: TeardropSettings;
+}
+
+/** `crates/model/src/ir.rs` `TeardropSettings` -- `pcbnew/teardrop/teardrop_parameters.h`'s `TEARDROP_PARAMETERS`/`TEARDROP_PARAMETERS_LIST`, collapsed into one shared settings block (round anchors only -- see `eda_connectivity::teardrop`'s own doc for the full scope). */
+export interface TeardropSettings {
+  enabled: boolean;
+  target_vias: boolean;
+  target_pth_pads: boolean;
+  target_smd_pads: boolean;
+  best_length_ratio: number;
+  best_width_ratio: number;
+  max_len_um: Um;
+  max_width_um: Um;
+  width_to_size_filter_ratio: number;
 }
 
 // ---------------------------------------------------------------- drawings
@@ -192,6 +242,118 @@ export interface BoardText {
 export interface Drawings {
   shapes: Shape[];
   texts: BoardText[];
+  /** Task item 5 -- `crates/model/src/ir.rs` `Group`. Lives here purely for the lowest construction-site ripple (see that struct's own doc); a group can reference any item kind, not just a drawing. */
+  groups: Group[];
+  /** Task item 7 -- see `Dimension`'s own doc. */
+  dimensions: Dimension[];
+  dimension_settings: DimensionSettings;
+}
+
+/** `crates/model/src/ir.rs` `Group` (task item 5) -- `PCB_GROUP`: a named set of member item ids (a part reference, or a track/via/zone/shape/text id), no geometry of its own. No nested groups in this model. */
+export interface Group {
+  id: string;
+  name: string;
+  member_ids: string[];
+}
+
+/** `crates/model/src/ir.rs` `DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/`ArrowDirection` (task item 7). */
+export type DimensionUnits = "mm" | "mil" | "inch" | "automatic";
+export type DimensionUnitsFormat = "no_suffix" | "bare_suffix" | "paren_suffix";
+export type DimensionTextPosition = "outside" | "inline";
+export type ArrowDirection = "inward" | "outward";
+
+/**
+ * `crates/cli/src/studio.rs` `dimension_json` -- `state()`'s own flat
+ * display shape for a `crates/model/src/ir.rs` `Dimension` (task item 7):
+ * `[x,y]`-pairs and a flat `kind` string plus only the fields that kind
+ * actually has (`height`/`horizontal`/`leader_length`, `null` otherwise),
+ * not the nested tagged shape `CmdDimension` below sends/receives. The
+ * geometry fields (`lines`/`text_at`/`computed_text_angle`/
+ * `measured_value_um`/`text`) are computed once, server-side
+ * (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
+ * renderer draws exactly these, never re-deriving crossbar/arrow/text
+ * placement itself.
+ */
+export interface Dimension {
+  id: string;
+  layer: string;
+  kind: "aligned" | "orthogonal" | "radial" | "leader" | "center";
+  height: Um | null;
+  horizontal: boolean | null;
+  leader_length: Um | null;
+  start: [Um, Um];
+  end: [Um, Um];
+  prefix: string;
+  suffix: string;
+  override_text: string | null;
+  units: DimensionUnits;
+  units_format: DimensionUnitsFormat;
+  /** Decimal places, 0-5. */
+  precision: number;
+  suppress_trailing_zeros: boolean;
+  text_position: DimensionTextPosition;
+  keep_text_aligned: boolean;
+  /** Millidegrees. Only meaningful when `keep_text_aligned` is false --
+   * otherwise `computed_text_angle` below is what actually applies. */
+  text_angle: number;
+  text_size_um: Um;
+  stroke_width: Um;
+  arrow_length: Um;
+  extension_offset: Um;
+  extension_height: Um;
+  arrow_direction: ArrowDirection;
+  /** Every line segment to draw: extension lines, crossbar/leader pieces
+   * (already split around inline text), arrow barbs/tails, a centre cross. */
+  lines: [[Um, Um], [Um, Um]][];
+  text_at: [Um, Um];
+  computed_text_angle: number;
+  measured_value_um: Um;
+  /** Fully formatted (prefix + value + units suffix + suffix, or the
+   * override text if set). Draw this verbatim -- do not reformat `measured_value_um` again. */
+  text: string;
+}
+
+/** `crates/model/src/ir.rs` `DimensionSettings` (task item 7) -- Board Setup > Dimension Properties' defaults, applied once at creation (see that struct's own doc on why never retroactively). */
+export interface DimensionSettings {
+  units: DimensionUnits;
+  units_format: DimensionUnitsFormat;
+  precision: number;
+  suppress_trailing_zeros: boolean;
+  text_position: DimensionTextPosition;
+  keep_text_aligned: boolean;
+  text_size_um: Um;
+  stroke_width: Um;
+  arrow_length: Um;
+  extension_offset: Um;
+  extension_height: Um;
+}
+
+/** `CmdDimensionKind` -- `crates/model/src/ir.rs` `DimensionKind`'s own `#[serde(tag = "kind")]` shape, as `add_dimension`/`edit_dimension` need it (unlike `Dimension.kind` above, a flat string). */
+export type CmdDimensionKind = { kind: "aligned"; height: Um } | { kind: "orthogonal"; height: Um; horizontal: boolean } | { kind: "radial"; leader_length: Um } | { kind: "leader" } | { kind: "center" };
+
+/** `crates/model/src/ir.rs` `Dimension`, IR field names (`PointXY` objects, a nested `kind`) -- for `add_dimension`/`edit_dimension`'s own Cmd payload. See `Dimension` above for the display shape a renderer actually reads. */
+export interface CmdDimension {
+  id?: string;
+  layer: string;
+  kind: CmdDimensionKind;
+  start: PointXY;
+  end: PointXY;
+  prefix: string;
+  suffix: string;
+  override_text?: string | null;
+  units: DimensionUnits;
+  units_format: DimensionUnitsFormat;
+  precision: number;
+  suppress_trailing_zeros: boolean;
+  text_position: DimensionTextPosition;
+  keep_text_aligned: boolean;
+  text_angle: number;
+  text_size_um: Um;
+  stroke_width: Um;
+  arrow_length: Um;
+  extension_offset: Um;
+  extension_height: Um;
+  arrow_direction: ArrowDirection;
 }
 
 // ------------------------------------------------------- Footprint Editor
@@ -478,7 +640,7 @@ export interface CmdVia {
  * a copy/paste or duplicate of a customized zone does not silently reset
  * it to KiCad's defaults.
  */
-export interface CmdZone extends Partial<ZoneSettingsFields> {
+export interface CmdZone extends Partial<ZoneSettingsFields>, Partial<RuleAreaFields> {
   id?: string;
   net: string;
   layer: string;
@@ -510,6 +672,50 @@ export type Cmd =
   | { op: "set_track_width_presets"; widths: Um[] }
   /** Same panel's via-size-cycle preset list. */
   | { op: "set_via_presets"; presets: ViaPreset[] }
+  /**
+   * `dialog_global_edit_tracks_and_vias.cpp`'s "Apply and Close": bulk-set
+   * width/via-size/layer on every named id in one atomic undo step. `ids`
+   * is already filtered (net/net-class/layer/width/"selected only" are
+   * this dialog's own client-side job -- see `GlobalEditTracksAndViasDialog.tsx`).
+   * `track_width`/`via_size` omitted (or `null`) leaves that property
+   * alone; this model has only one via "type" (no through/micro/blind/
+   * buried distinction, no padstack/annular-ring concept).
+   */
+  | { op: "edit_tracks_and_vias"; ids: string[]; track_width?: SizeSpec | null; via_size?: ViaSizeSpec | null; layer?: string | null }
+  /** Board Setup > Teardrops (task item 4): whole-struct replace. */
+  | { op: "set_teardrop_settings"; settings: TeardropSettings }
+  /** Regenerate the board's whole teardrop set from the current settings/tracks/vias/pads -- replaces, never appends to, this command's own previous output. */
+  | { op: "add_all_teardrops" }
+  /** Drop every generated teardrop zone; leaves `teardrop_settings.enabled` untouched. */
+  | { op: "remove_all_teardrops" }
+  /** Ctrl+G: create a new group from `ids` (2+ required). An id naming an existing group is flattened into the new one, not nested. */
+  | { op: "group"; ids: string[] }
+  /** Ctrl+Shift+G: dissolve every named group; an id not naming a group is silently skipped. */
+  | { op: "ungroup"; ids: string[] }
+  /** Add `ids` to an existing group, pulling each out of whatever group it was already in. */
+  | { op: "add_to_group"; group_id: string; ids: string[] }
+  /** Remove `ids` from whatever group each belongs to; a group left with fewer than 2 members dissolves. */
+  | { op: "remove_from_group"; ids: string[] }
+  /**
+   * Ctrl+T (task item 6): `pcbnew.Array.createArray`. `arrange: false`
+   * (the dialog's "Duplicate" default) creates `geometry`'s size minus
+   * one new copies of each resolved track/via/zone/shape/text (never a
+   * part or a group -- same scope `duplicate` already has); `arrange:
+   * true` ("Arrange selection") repositions the given `ids` into the
+   * array's own slots instead, creating nothing -- a placed part is
+   * allowed there, since that only ever moves something that already
+   * exists. See `ArrayGeometry`'s own doc for the angle-sign convention.
+   */
+  | { op: "create_array"; ids: string[]; geometry: ArrayGeometry; arrange?: boolean }
+  /** Task item 7: `pcbnew/pcb_dimension.{h,cpp}`. `id` on `dimension`, if sent, is ignored. */
+  | { op: "add_dimension"; dimension: CmdDimension }
+  | { op: "delete_dimension"; id: string }
+  /** Translate both feature points by `(dx, dy)` -- `PCB_DIMENSION_BASE::Move`. */
+  | { op: "move_dimension"; id: string; dx: Um; dy: Um }
+  /** Properties dialog's OK: replace every field at once. `id` on `dimension` is ignored. */
+  | { op: "edit_dimension"; id: string; dimension: CmdDimension }
+  /** Board Setup > Dimension Properties: applied to new dimensions from then on only. */
+  | { op: "set_dimension_settings"; settings: DimensionSettings }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**
@@ -518,7 +724,7 @@ export type Cmd =
    * one field of the panel, the whole thing commits together. Outline is
    * untouched (no point editor yet, see PARITY-pcb.md).
    */
-  | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields)
+  | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
   | { op: "set_zone_outline"; id: string; outline: PointXY[] }
   | { op: "add_shape"; shape: CmdShape }
@@ -530,6 +736,16 @@ export type Cmd =
   | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
   | { op: "delete_text"; id: string }
   | { op: "move_text"; id: string; x: Um; y: Um }
+  /**
+   * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
+   * scoped to this model's two free-standing board drawing kinds (no
+   * footprint reference/value fields, dimensions, tables or barcodes
+   * exist as editable board items here -- see PARITY-pcb.md). Every
+   * field omitted (or `null`) leaves that property alone; filtering
+   * (item type/layer/"selected only") is `GlobalEditTextAndGraphicsDialog.tsx`'s
+   * own client-side job.
+   */
+  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
   /** Cmd+D: copy existing tracks/vias/zones/shapes/texts named by id, in place, with fresh ids. Never footprints -- see crates/ops/src/lib.rs `Cmd::Duplicate`'s own doc comment. */
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
@@ -786,6 +1002,44 @@ export interface TuneLengthReply {
   achieved_length?: Um;
   pts?: [Um, Um][];
   colliding?: boolean;
+}
+
+/** `dialog_cleanup_tracks_and_vias_base.cpp`'s checkboxes -- see
+ * `POST /api/cleanup_tracks/{preview,apply}` and
+ * `components/CleanupTracksDialog.tsx`. Every field defaults `false`,
+ * matching the base dialog's own ctor (no checkbox starts checked). */
+export interface CleanupOptions {
+  delete_shorting: boolean;
+  delete_redundant_vias: boolean;
+  delete_dangling_vias: boolean;
+  merge_segments: boolean;
+  delete_dangling_tracks: boolean;
+  delete_tracks_in_pads: boolean;
+}
+
+/** `crates/connectivity/src/cleanup.rs`'s `CleanupKind`, wire names. */
+export type CleanupChangeKind = "redundant_via" | "zero_length_track" | "duplicate_track" | "shorting_track" | "shorting_via" | "track_in_pad" | "dangling_track" | "dangling_via" | "merged_tracks";
+
+export interface CleanupChange {
+  kind: CleanupChangeKind;
+  /** Human-readable label (`CleanupKind::label()`), e.g. "dangling track". */
+  label: string;
+  net: string;
+  remove_track_ids: string[];
+  remove_via_ids: string[];
+}
+
+/** `POST /api/cleanup_tracks/{preview,apply}` (task item 1): "Cleanup
+ * Tracks & Vias..." -- stateless, same shape as `TuneLengthReply`. `apply`
+ * recomputes against the live board rather than trusting the client's own
+ * cached preview. */
+export interface CleanupReply {
+  ok: boolean;
+  message?: string;
+  changes?: CleanupChange[];
+  tracks_removed?: number;
+  vias_removed?: number;
+  tracks_added?: number;
 }
 
 // ---------------------------------------------------------------- Ratsnest

@@ -5,9 +5,9 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um } from "../../api/types";
+import type { BoardState, Dimension, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
-import { hairlineUm } from "./view";
+import { boundsOfPoints, hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
 import { posture45 } from "./routing";
 import { snapPoint } from "./gridHelper";
@@ -276,6 +276,69 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
  * it). The other two real `ZONE_DISPLAY_MODE` values (fracture-borders,
  * triangulation) are developer debug views, not ported.
  */
+/** `ZONE::GetIsRuleArea()` keepouts (task item 3) never have fill data and
+ * are never copper -- KiCad draws one as a hatched outline labelled with
+ * which items it disallows, regardless of the current zone display mode
+ * (solid/outline), since there is no "fill" concept for one to toggle.
+ * This port's stand-in: a dashed outline in a dedicated color, a light
+ * diagonal hatch, and an abbreviated restriction label at the centroid. */
+const RULE_AREA_COLOR = "#ff8c00";
+/** World-space hatch spacing, µm (0.8 mm) -- a fixed physical pitch, same
+ * convention a real cross-hatch fill pattern uses, so it reads as a
+ * consistent density at any zoom rather than a fixed screen-pixel count. */
+const RULE_AREA_HATCH_PITCH_UM = 800;
+
+function ruleAreaLabel(z: Zone): string {
+  const parts: string[] = [];
+  if (z.keepout_tracks) parts.push("Tracks");
+  if (z.keepout_vias) parts.push("Vias");
+  if (z.keepout_pads) parts.push("Pads");
+  if (z.keepout_copper_pour) parts.push("Copper");
+  if (z.keepout_footprints) parts.push("Fp");
+  return parts.length > 0 ? `Keepout: ${parts.join("/")}` : "Rule Area";
+}
+
+function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean) {
+  const color = selected ? layerColor("selection") : RULE_AREA_COLOR;
+
+  ctx.save();
+  ctx.beginPath();
+  z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+  ctx.clip();
+  // Diagonal (45-degree) hatch across the outline's bounding box, clipped
+  // to the real outline above -- KiCad's own keepout rendering is a
+  // proper cross-hatch fill pattern; this is a lighter stand-in with the
+  // same intent (visually distinct from solid copper, at a glance).
+  const xs = z.outline.map((p) => p[0]);
+  const ys = z.outline.map((p) => p[1]);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const span = y1 - y0;
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.35;
+  ctx.lineWidth = hairlineUm(view, 1);
+  for (let d = x0 - span; d < x1; d += RULE_AREA_HATCH_PITCH_UM) {
+    ctx.beginPath();
+    ctx.moveTo(d, y0);
+    ctx.lineTo(d + span, y1);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.beginPath();
+  z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
+  ctx.setLineDash([hairlineUm(view, 6), hairlineUm(view, 4)]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  drawStrokeText(ctx, ruleAreaLabel(z), cx, cy, { sizeUm: Math.max(hairlineUm(view, 11), 300), justify: "center", color });
+}
+
 function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
   if (!board.routing) return;
   for (const z of board.routing.zones) {
@@ -285,6 +348,30 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     if (opts.layerVisible[z.layer] === false) continue;
     if (z.outline.length < 3) continue;
     const selected = opts.selection.has(z.id);
+    if (z.is_rule_area) {
+      drawRuleArea(ctx, view, z, selected);
+      continue;
+    }
+    if (z.teardrop) {
+      // A teardrop's own outline already *is* its final filled shape
+      // (task item 4's generator computes the exact pentagon, no
+      // knockout/thermal-relief pipeline applies) -- draw it solid
+      // unconditionally, regardless of `zoneDisplayMode`, same as its
+      // anchor pad/via is never shown as an "outline only" shape either.
+      withAlpha(ctx, layerAlpha(opts, z.layer), () => {
+        ctx.beginPath();
+        z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        ctx.closePath();
+        ctx.fillStyle = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
+        ctx.fill();
+        if (selected) {
+          ctx.strokeStyle = layerColor("selection");
+          ctx.lineWidth = hairlineUm(view, 2.5);
+          ctx.stroke();
+        }
+      });
+      continue;
+    }
     const copperColor = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
     const fill = opts.zoneFill?.zones.find((f) => f.id === z.id);
     withAlpha(ctx, layerAlpha(opts, z.layer), () => {
@@ -433,6 +520,48 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
       mirror: t.mirror,
       color,
     });
+  }
+}
+
+/**
+ * Task item 7: every `lines` segment (extension lines, crossbar/leader
+ * pieces, arrow barbs, a centre cross -- already fully computed server-
+ * side, `eda_connectivity::dimension::compute_dimension_geometry`) plus
+ * the formatted `text` at `text_at`/`computed_text_angle`. Unlike
+ * `drawTexts`' own `-angle` negation, `computed_text_angle` is already in
+ * this app's canvas-native clockwise-positive convention (the same one
+ * `rotate_point_about` documents backend-side), so it's used directly,
+ * with no sign flip.
+ */
+function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  const dimensions = board.drawings?.dimensions ?? [];
+  for (const d of dimensions as Dimension[]) {
+    if (opts.layerVisible[d.layer] === false) continue;
+    const selected = opts.selection.has(d.id);
+    const color = selected ? layerColor("selection") : layerColor(realLayerKey(d.layer));
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(d.stroke_width, hairlineUm(view, selected ? 2 : 1));
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const [[ax, ay], [bx, by]] of d.lines) {
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    if (d.text) {
+      const angleRad = (d.computed_text_angle / 1000) * (Math.PI / 180);
+      drawStrokeText(ctx, d.text, d.text_at[0], d.text_at[1], {
+        sizeUm: Math.max(d.text_size_um, hairlineUm(view, 8)),
+        thicknessUm: d.stroke_width,
+        justify: "center",
+        angleRad,
+        color,
+      });
+    }
   }
 }
 
@@ -743,6 +872,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
   drawShapes(ctx, view, board, opts);
   drawTexts(ctx, view, board, opts);
+  drawDimensions(ctx, view, board, opts);
   // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, board, opts);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
@@ -750,9 +880,86 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // draggable handles, shown only in the plain Select tool (same as
   // source only activating the point editor over the selection tool).
   if (opts.activeTool === "select") drawZoneHandles(ctx, view, board, opts);
+  // Task item 5: a selected group's own bounding box, same tier as the
+  // zone corner handles above (a selection-mode indicator, not board
+  // content).
+  if (opts.activeTool === "select") drawSelectedGroups(ctx, view, board, opts);
   // DRC markers last of all -- an overlay above every board layer and
   // the in-progress tool preview, matching real KiCad.
   if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected);
+}
+
+/** The geometry points of a free-standing graphic, for bounding purposes only (not a faithful outline -- an arc's `mid` stands in for its sweep, a circle's `end` for its radius -- see `drawShapeGeometry` for the real rendering). */
+function shapePointsOf(s: Shape): Array<[number, number]> {
+  switch (s.kind) {
+    case "segment":
+    case "rect":
+      return [s.start, s.end];
+    case "arc":
+      return [s.start, s.mid, s.end];
+    case "circle":
+      return [s.center, s.end];
+    case "polygon":
+      return s.pts;
+  }
+}
+
+/**
+ * Task item 5: a selected group draws as a dashed box around the union of
+ * its members' geometry -- this model's stand-in for `PCB_GROUP::
+ * ViewBBox()` (also just the union of its members' own boxes upstream).
+ * Member kinds this model doesn't have yet (schematic symbols/wires) are
+ * simply never found by the lookups below and contribute nothing, rather
+ * than erroring.
+ */
+function drawSelectedGroups(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  const groups = board.drawings?.groups ?? [];
+  for (const g of groups) {
+    if (!opts.selection.has(g.id)) continue;
+
+    const pts: Array<[number, number]> = [];
+    for (const id of g.member_ids) {
+      const part = board.parts.find((p) => p.ref === id);
+      if (part) {
+        if (part.courtyard) pts.push([part.courtyard[0], part.courtyard[1]], [part.courtyard[2], part.courtyard[3]]);
+        else if (part.at) pts.push(part.at);
+        continue;
+      }
+      const track = board.routing?.tracks.find((t) => t.id === id);
+      if (track) {
+        pts.push(...track.pts);
+        continue;
+      }
+      const via = board.routing?.vias.find((v) => v.id === id);
+      if (via) {
+        pts.push([via.x - via.d / 2, via.y - via.d / 2], [via.x + via.d / 2, via.y + via.d / 2]);
+        continue;
+      }
+      const zone = board.routing?.zones.find((z) => z.id === id);
+      if (zone) {
+        pts.push(...zone.outline);
+        continue;
+      }
+      const shape = board.drawings?.shapes.find((s) => s.id === id);
+      if (shape) {
+        pts.push(...shapePointsOf(shape));
+        continue;
+      }
+      const text = board.drawings?.texts.find((t) => t.id === id);
+      if (text) pts.push([text.x, text.y]);
+    }
+
+    const b = boundsOfPoints(pts);
+    if (!b) continue;
+    const pad = hairlineUm(view, 12);
+    ctx.save();
+    ctx.strokeStyle = layerColor("selection");
+    ctx.lineWidth = hairlineUm(view, 2);
+    ctx.setLineDash([hairlineUm(view, 8), hairlineUm(view, 5)]);
+    ctx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2);
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
 }
 
 /**

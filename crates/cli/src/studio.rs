@@ -20,6 +20,7 @@
 //! was fixed to run in the background instead.
 
 use crate::board;
+use crate::cleanup_api;
 use crate::fab_api;
 use crate::route_api;
 use crate::tune_api;
@@ -644,6 +645,8 @@ fn handle(
         // doc comment on why this one differs from route/drag/dp above).
         ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
         // Fabrication outputs (Plot / Generate Drill Files / Footprint
         // Position Files dialogs, plus the plain BOM): `crate::fab_api`
         // runs the same `eda_fab` writers `eda fab ...` does and writes
@@ -793,6 +796,14 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 "hatch_orientation_mdeg": z.hatch_orientation_mdeg, "hatch_smoothing_level": z.hatch_smoothing_level,
                 "hatch_smoothing_value": z.hatch_smoothing_value, "hatch_hole_min_area": z.hatch_hole_min_area,
                 "hatch_border_algorithm": z.hatch_border_algorithm,
+                // Rule area / keepout (task item 3) -- see `eda_model::ir::
+                // Zone::is_rule_area`'s own doc.
+                "is_rule_area": z.is_rule_area, "keepout_tracks": z.keepout_tracks,
+                "keepout_vias": z.keepout_vias, "keepout_pads": z.keepout_pads,
+                "keepout_copper_pour": z.keepout_copper_pour, "keepout_footprints": z.keepout_footprints,
+                // Task item 4: true for a generated teardrop, never a
+                // hand-drawn zone -- see `eda_model::ir::Zone::teardrop`.
+                "teardrop": z.teardrop,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable
@@ -803,6 +814,18 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             // entry, not repeated in these lists.
             "track_width_presets": r.track_width_presets,
             "via_presets": r.via_presets.iter().map(|p| json!({ "diameter": p.diameter, "drill": p.drill })).collect::<Vec<_>>(),
+            // Board Setup > Teardrops (task item 4).
+            "teardrop_settings": json!({
+                "enabled": r.teardrop_settings.enabled,
+                "target_vias": r.teardrop_settings.target_vias,
+                "target_pth_pads": r.teardrop_settings.target_pth_pads,
+                "target_smd_pads": r.teardrop_settings.target_smd_pads,
+                "best_length_ratio": r.teardrop_settings.best_length_ratio,
+                "best_width_ratio": r.teardrop_settings.best_width_ratio,
+                "max_len_um": r.teardrop_settings.max_len_um,
+                "max_width_um": r.teardrop_settings.max_width_um,
+                "width_to_size_filter_ratio": r.teardrop_settings.width_to_size_filter_ratio,
+            }),
         })
     });
     let drawings = design.drawings.as_ref().map(|d| {
@@ -818,6 +841,11 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 },
                 "mirror": t.mirror,
             })).collect::<Vec<_>>(),
+            // Task item 5 -- see `eda_model::ir::Group`'s own doc.
+            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).collect::<Vec<_>>(),
+            // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
+            "dimensions": d.dimensions.iter().map(dimension_json).collect::<Vec<_>>(),
+            "dimension_settings": dimension_settings_json(&d.dimension_settings),
         })
     });
     Ok(json!({
@@ -889,6 +917,114 @@ fn shape_json(s: &Shape) -> Value {
             json!({ "id": id, "kind": "polygon", "layer": layer, "stroke_width": stroke_width, "filled": filled, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>() })
         }
     }
+}
+
+/// Task item 7. `kind`/`units`/`units_format`/`text_position`/
+/// `arrow_direction` as lowercase strings, matching every other enum this
+/// API already exposes (`justify` above). `height`/`horizontal`/
+/// `leader_length` are present only for the kind that actually has them
+/// (`null` otherwise) -- `eda_model::ir::DimensionKind`'s own fields.
+/// `lines`/`text_at`/`computed_text_angle`/`measured_value_um`/`text` are
+/// the one and only place this geometry is computed
+/// (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
+/// renderer never re-derives it.
+fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
+    use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+
+    let (kind, height, horizontal, leader_length) = match d.kind {
+        DimensionKind::Aligned { height } => ("aligned", Some(height), None, None),
+        DimensionKind::Orthogonal { height, horizontal } => ("orthogonal", Some(height), Some(horizontal), None),
+        DimensionKind::Radial { leader_length } => ("radial", None, None, Some(leader_length)),
+        DimensionKind::Leader => ("leader", None, None, None),
+        DimensionKind::Center => ("center", None, None, None),
+    };
+    let units = match d.units {
+        DimensionUnits::Mm => "mm",
+        DimensionUnits::Mil => "mil",
+        DimensionUnits::Inch => "inch",
+        DimensionUnits::Automatic => "automatic",
+    };
+    let units_format = match d.units_format {
+        DimensionUnitsFormat::NoSuffix => "no_suffix",
+        DimensionUnitsFormat::BareSuffix => "bare_suffix",
+        DimensionUnitsFormat::ParenSuffix => "paren_suffix",
+    };
+    let text_position = match d.text_position {
+        DimensionTextPosition::Outside => "outside",
+        DimensionTextPosition::Inline => "inline",
+    };
+    let arrow_direction = match d.arrow_direction {
+        ArrowDirection::Inward => "inward",
+        ArrowDirection::Outward => "outward",
+    };
+
+    let geom = eda_connectivity::dimension::compute_dimension_geometry(d);
+
+    json!({
+        "id": d.id,
+        "layer": d.layer,
+        "kind": kind,
+        "height": height,
+        "horizontal": horizontal,
+        "leader_length": leader_length,
+        "start": [d.start.x, d.start.y],
+        "end": [d.end.x, d.end.y],
+        "prefix": d.prefix,
+        "suffix": d.suffix,
+        "override_text": d.override_text,
+        "units": units,
+        "units_format": units_format,
+        "precision": d.precision,
+        "suppress_trailing_zeros": d.suppress_trailing_zeros,
+        "text_position": text_position,
+        "keep_text_aligned": d.keep_text_aligned,
+        "text_angle": d.text_angle,
+        "text_size_um": d.text_size_um,
+        "stroke_width": d.stroke_width,
+        "arrow_length": d.arrow_length,
+        "extension_offset": d.extension_offset,
+        "extension_height": d.extension_height,
+        "arrow_direction": arrow_direction,
+        "lines": geom.lines.iter().map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])).collect::<Vec<_>>(),
+        "text_at": [geom.text_at.x, geom.text_at.y],
+        "computed_text_angle": geom.text_angle,
+        "measured_value_um": geom.measured_value_um,
+        "text": geom.text,
+    })
+}
+
+fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
+    use eda_model::ir::{DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+
+    let units = match s.units {
+        DimensionUnits::Mm => "mm",
+        DimensionUnits::Mil => "mil",
+        DimensionUnits::Inch => "inch",
+        DimensionUnits::Automatic => "automatic",
+    };
+    let units_format = match s.units_format {
+        DimensionUnitsFormat::NoSuffix => "no_suffix",
+        DimensionUnitsFormat::BareSuffix => "bare_suffix",
+        DimensionUnitsFormat::ParenSuffix => "paren_suffix",
+    };
+    let text_position = match s.text_position {
+        DimensionTextPosition::Outside => "outside",
+        DimensionTextPosition::Inline => "inline",
+    };
+
+    json!({
+        "units": units,
+        "units_format": units_format,
+        "precision": s.precision,
+        "suppress_trailing_zeros": s.suppress_trailing_zeros,
+        "text_position": text_position,
+        "keep_text_aligned": s.keep_text_aligned,
+        "text_size_um": s.text_size_um,
+        "stroke_width": s.stroke_width,
+        "arrow_length": s.arrow_length,
+        "extension_offset": s.extension_offset,
+        "extension_height": s.extension_height,
+    })
 }
 
 /// The design's schematic drawn, or, for a board started from an intent

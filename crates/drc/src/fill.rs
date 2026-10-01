@@ -23,7 +23,7 @@ use eda_model::ir::{Point, Zone};
 use eda_model::BoardRules;
 use eda_shape_poly_set::ShapePolySet;
 use eda_zone_filler::shape::Shape as FillShape;
-use eda_zone_filler::{fill_zone, FillInput, FillPad, FillTrack, FillVia, FillZoneRef, DEFAULT_MAX_ERROR};
+use eda_zone_filler::{fill_zone, FillInput, FillKeepout, FillPad, FillTrack, FillVia, FillZoneRef, DEFAULT_MAX_ERROR};
 use std::collections::HashMap;
 
 #[inline]
@@ -112,7 +112,12 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
             .map(|o| FillZoneRef { net: o.net.clone(), layer: o.layer.clone(), outline: o.outline.iter().map(|&p| pt(p)).collect(), priority: o.priority })
             .collect();
 
-        let input = FillInput { pads: pads.clone(), tracks: tracks.clone(), vias: vias.clone(), other_zones, board_outline: board_outline.clone() };
+        // Copper-pour keepouts on this zone's own layer (task item 3) --
+        // the filler's own unconditional knockout, see `FillKeepout`'s doc.
+        let keepouts: Vec<FillKeepout> =
+            board.keepouts.iter().filter(|k| k.no_copper_pour && k.layer == z.layer).map(|k| FillKeepout { layer: k.layer.clone(), outline: k.outline.iter().map(|&p| pt(p)).collect() }).collect();
+
+        let input = FillInput { pads: pads.clone(), tracks: tracks.clone(), vias: vias.clone(), other_zones, board_outline: board_outline.clone(), keepouts };
         let clearance_fn = |a: Option<&str>, b: Option<&str>| crate::constraints::clearance(rules, a, b);
         let fill = fill_zone(&zone, &zone.layer, &input, clearance_fn, DEFAULT_MAX_ERROR);
         out.zones.insert(z.id.clone(), ZoneFill { fill });

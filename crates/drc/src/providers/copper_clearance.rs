@@ -420,7 +420,7 @@ mod tests {
     use eda_model::ir::{Point, Side};
 
     fn empty_board(tracks: Vec<DrcTrackSeg>, pads: Vec<DrcPad>) -> DrcBoard {
-        DrcBoard { layers: vec!["F.Cu".into()], outline: vec![], pads, tracks, vias: vec![], zones: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![] }
+        DrcBoard { layers: vec!["F.Cu".into()], outline: vec![], pads, tracks, vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![] }
     }
 
     fn seg(id: &str, net: Option<&str>, a: (i64, i64), b: (i64, i64)) -> DrcTrackSeg {

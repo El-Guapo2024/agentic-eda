@@ -329,7 +329,8 @@ reaches every one of those IR fields instead of just net/layer.
 | Add flow: outline first, then settings (vs. source's settings-first-then-draw) | unchanged, documented simplification from an earlier session | `ZoneDialog.tsx`'s own header comment; the dialog itself is now the full settings panel, not just net/layer |
 | Add flow backend shape: `add_zone` (net/layer/outline, unchanged 3-field `Cmd`) + an immediate `edit_zone` only if any setting differs from `Zone::default()` | deliberate 2-Cmd design, not 1 atomic Cmd | keeps `Cmd::AddZone`'s wire shape stable for every existing caller (the CLI, this crate's own tests) -- `state/store.tsx`'s `addZone`, `crates/ops/src/lib.rs`'s `Cmd::EditZone`/`edit_zone` |
 | Zone outline editing: drag a corner, double-click an edge to add one, right-click a corner to delete it | ported, scoped down from source -- see section 11 | `pcbnew/tools/pcb_point_editor.cpp` -- `kicad-port/zonePointEditor.ts` (corner/edge hit-testing, 9 unit tests), `Cmd::SetZoneOutline`, `Canvas.tsx`'s onPointerDown/Move/Up + onDoubleClick + onContextMenu, `painter.ts:drawZoneHandles` |
-| Zone Cutout / Similar Zone / Rule Areas (keepouts) | missing, unchanged | `pcbnew.InteractiveDrawing.zoneCutout`/`similarZone`/`ruleArea` -- no keepout-zone concept in this model |
+| Rule Areas (keepouts) | ported -- see section 14 | `pcbnew.InteractiveDrawing.ruleArea` |
+| Zone Cutout / Similar Zone | missing, unchanged | `pcbnew.InteractiveDrawing.zoneCutout`/`similarZone` |
 
 Rust: `crates/ops/src/lib.rs`'s `Cmd::EditZone`/`edit_zone` (full
 `ZONE_SETTINGS` replace, outline untouched; validates clearance >= 0, min
@@ -401,3 +402,305 @@ JSON exposure, no new endpoint) and `routing.track_width_presets`/
 | Right-click context menu built from the selection (GAPS.md #30) | partial: Copy/Cut/Duplicate/Move Exactly/Align/Distribute added to the existing static list, and a real per-kind Delete (`common.Interactive.delete`) replaces a footprint-only `ripSelection()` call that silently did nothing for a track/via/zone/shape/text right-click before this session | `Canvas.tsx:onContextMenu` -- still not source's fully dynamic per-item-type tool menu (GAPS.md #30's larger ask), but a meaningfully less-static list than before |
 | Zone outline editing: drag a corner, double-click an edge to add one, right-click a corner to delete it | ported | `pcbnew/tools/pcb_point_editor.cpp` -- `kicad-port/zonePointEditor.ts`, `Cmd::SetZoneOutline` (`crates/ops`, 1 new test), `Canvas.tsx`, `painter.ts:drawZoneHandles`. Scope, matching this app's existing point-editor-less baseline rather than a full port: a single selected zone only (no multi-select point editing, no graphic-shape point editor either -- see section 10's Shape Properties row); no 45/90-degree edge-angle constraint while dragging a corner (source's Ctrl-held behavior); no "equal length" guide overlay; corner drag snaps to the plain grid only, same as every other zone/route/shape placement click in this app (`gridHelper.ts:snapPoint`, not the anchor-aware `snapWithAnchors` the Move tool uses) |
 | Array tool, grouping, dimensioning | missing, unchanged | GAPS.md #26/#27/#28 -- out of scope this session |
+
+## 12. Cleanup Tracks & Vias
+
+Port of `pcbnew/tracks_cleaner.cpp` (`TRACKS_CLEANER`) and its dialog
+(`dialogs/dialog_cleanup_tracks_and_vias{,_base}.cpp`),
+`pcbnew.GlobalEdit.cleanupTracksAndVias`.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Delete redundant vias: same position+layer span, or a via sharing a position with a through-hole pad spanning the whole copper stack | identical in effect | `TRACKS_CLEANER::cleanup`'s `aDeleteDuplicateVias` branch |
+| Delete zero-length tracks | identical for a straight 2-point track (see below for the granularity note) | `cleanup`'s `aDeleteNullSegments` branch (`PCB_TRACK::IsNull`) |
+| Delete exact-duplicate tracks (same endpoints either direction, width, layer) | identical, and -- matching source -- runs regardless of every other checkbox | `cleanup`'s `aDeleteDuplicateSegments` branch |
+| Delete tracks connecting different nets (short circuit) | identical in effect, via the real connectivity graph (`eda_connectivity::build_graph`) | `removeShortingTrackSegments` |
+| Delete tracks fully inside pads | both endpoints inside the pad's shape (`PlacedPad::signed_distance`) rather than source's exact polygon boolean-subtract -- equivalent for every pad shape this model has | `deleteTracksInPads` |
+| Delete tracks unconnected at one end / vias connected on only one layer | identical -- reuses the existing `dangling_tracks_and_vias` port (`connectivity/src/dangling.rs`, the same function DRC's `track_dangling`/`via_dangling` already use), iterated to a fixed point same as source's own `do`/`while` loop | `deleteDanglingTracks`, `TestTrackEndpointDangling` |
+| Merge co-linear tracks | ported for the common case: two straight 2-point tracks sharing an endpoint, collinear, with nothing else touching the shared joint | `cleanup`'s merge pass, `testMergeCollinearSegments`/`mergeCollinearSegments` |
+| Call order (redundant/null/duplicate, then merge if asked, then shorting, then in-pad, then dangling, then a final merge pass if dangling actually deleted anything) | identical | `TRACKS_CLEANER::CleanupBoard` |
+| Dialog: six checkboxes, all unchecked by default (no `SetValue(true)` in the read snapshot), "Build Changes" (dry run, lists what would change) then "Update PCB" (commits), any checkbox edit resets back to "Build Changes" | identical | `DIALOG_CLEANUP_TRACKS_AND_VIAS` -- `CleanupTracksDialog.tsx` |
+| Net/net-class/layer/"selected items only" filters; "Refill zones before and after cleanup" | not ported -- this app's cleanup always scans the whole board and never touches zone fills itself (the existing Fill All Zones action covers that separately) | `m_netFilterOpt`/`m_netclassFilterOpt`/`m_layerFilterOpt`/`m_selectedItemsFilter`/`m_cbRefillZones` |
+| Cleanup Graphics... (a related but separate dialog, invalid-shape/duplicate-graphic cleanup) | missing, unchanged | `pcbnew.GlobalEdit.cleanupGraphics` -- a different dialog/engine, out of scope this item |
+
+**Model-shape adaptation, noted once here rather than per row above:**
+KiCad's `PCB_TRACK` is always a single two-point segment; this model's
+`Track` is a polyline of 2+ points (`crates/kicad`'s im/exporter already
+treats a multi-point `Track` as N-1 consecutive `(segment ...)`s, so this
+isn't a new approximation). Zero-length/duplicate detection operates at
+whole-`Track` granularity; the merge pass only ever considers straight
+2-point tracks as candidates (same scope `tune_api.rs`'s length tuner
+already has), so an already-merged multi-point `Track` is left alone
+rather than re-walked segment by segment. The merge pass's node check
+also doesn't model source's one narrow exception for a true 3-way
+junction where two of three meeting tracks happen to be collinear --
+this port simply declines to merge there (a missed merge, never a wrong
+one). See `crates/connectivity/src/cleanup.rs`'s own header comment for
+the full list.
+
+Rust: `crates/connectivity/src/cleanup.rs` (`compute_cleanup`, 13 unit
+tests) -- pure logic, no new `Cmd`: both apply and preview reuse the
+existing `Cmd::CommitRoute` (remove track/via ids, add the merged
+tracks) as one atomic undo step, same pattern `tune_api.rs` already
+established. `crates/cli/src/cleanup_api.rs`'s stateless `POST
+/api/cleanup_tracks/{preview,apply}` (same shape as `/api/tune_length`).
+UI: `CleanupTracksDialog.tsx`, wired to the existing
+`pcbnew.GlobalEdit.cleanupTracksAndVias` action (already present in
+`menus.json`'s Edit menu from the original extraction, just unregistered
+until now).
+
+## 13. Global edits: Track/Via and Text/Graphics properties
+
+Port of `pcbnew/dialogs/dialog_global_edit_tracks_and_vias{,_base}.cpp`
+(`pcbnew.GlobalEdit.editTracksAndVias`) and `dialog_global_edit_text_
+and_graphics{,_base}.cpp` (`pcbnew.GlobalEdit.editTextAndGraphics`).
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Edit Track & Via Properties: scope (Tracks/Vias checkboxes, both unchecked by default, matching the base dialog's own ctor) | identical | `DIALOG_GLOBAL_EDIT_TRACKS_AND_VIAS_BASE`'s ctor |
+| "Set to specified values" (width/via diameter+drill/layer) vs "Set to net class / custom rule values" | identical in effect for width/via-size -- resolves each item's *own* net's class (`BoardRules::width_of`/`via_diameter_of`/`via_drill_of`, falling back to the board default), same per-item resolution `SetTrackSegmentWidth` uses | `processItem`'s `m_setToSpecifiedValues` branch |
+| Filter by net, "selected items only" | ported | `visitItem`'s `m_netFilterOpt`/`m_selectedItemsFilter` |
+| Filter by layer | ported for tracks; does not apply to vias (this model's `Via` has no single `GetLayer()` -- it spans `from_layer`/`to_layer`) | `visitItem`'s `m_layerFilterOpt` |
+| Filter by net class, by exact track width/via size; through/micro/blind/buried via type distinction; annular-ring (`UNCONNECTED_LAYER_MODE`) and IPC4761 protection-feature presets | not ported -- no net-class-membership-of-an-item/padstack/via-type concept in this model | `m_netclassFilterOpt`, `m_filterByTrackWidth`/`m_filterByViaSize`, `m_throughVias`/`m_microVias`/`m_blindVias`/`m_buriedVias`, `m_annularRingsCtrl`/`m_protectionFeatures` |
+| Edit Text & Graphics Properties: scope (board graphics/board text checkboxes), filter by layer + "selected items only" | ported, restricted to this model's two free-standing board drawing kinds (`Shape`/`Text`) | `DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS_BASE`'s ctor, `visitItem` |
+| Set layer / line width (shapes) / text size + thickness (texts), "specified values" only | ported | `processItem`'s `m_setToSpecifiedValues` branch |
+| Footprint reference/value/other-field scope, dimension items, tables, barcodes, bold/italic/font/auto-thickness/keep-upright, "center text on footprint", "Set to layer (and dimension) default values" | not ported -- a footprint's reference/value are the read-only intent-derived `Part` (section 10), and this model has no dimension/table/barcode item, no font/style concept on `Text`, and no per-layer-class default-style arrays (`BOARD_DESIGN_SETTINGS::m_LineThickness`/`m_TextSize`/...) to reset to | `processItem`'s `text`/`barcode`/`field`/`parentFP` branches, `onActionButtonChange`'s `else` arm |
+| One atomic undo step for the whole bulk edit | identical | `SaveCopyInUndoList`/`BOARD_COMMIT::Push()` once per dialog "Apply" -- `Cmd::EditTracksAndVias`/`Cmd::EditTextAndGraphics` are each a single `Cmd`, single `board::step` call |
+
+Rust: `crates/ops/src/lib.rs`'s `Cmd::EditTracksAndVias` (+ `SizeSpec`/
+`ViaSizeSpec`) and `Cmd::EditTextAndGraphics`, 7 new tests in
+`crates/ops/src/tests.rs`. No new HTTP endpoint -- both reach the backend
+through the existing `POST /api/cmd`, since each is a single `Cmd` rather
+than a preview/apply pair. Net/layer/selection filtering is computed
+client-side (this crate has no selection/UI-filter concept of its own,
+same split section 12's cleanup dialog uses) in
+`GlobalEditTracksAndViasDialog.tsx`/`GlobalEditTextAndGraphicsDialog.tsx`.
+
+## 14. Rule areas (keepout zones)
+
+Port of `pcbnew/zone.cpp`'s `ZONE::GetIsRuleArea()`/`GetDoNotAllow*()`
+flags (task item 3) and `pcbnew/drc/drc_test_provider_disallow.cpp`'s
+keepout half. A rule area shares `Zone`'s own IR struct, outline-drawing
+tool and properties dialog with a copper-pour zone -- same single-dialog-
+two-panels shape source itself uses -- rather than being a separate type.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| IR: `is_rule_area` + 5 `keepout_*` flags (tracks/vias/pads/copper pours/footprints) on `Zone`, additive | identical | `eda_model::ir::Zone` -- `ZONE::GetIsRuleArea`/`GetDoNotAllow{Tracks,Vias,Pads,ZoneFills,Footprints}` |
+| A zone/rule area may have no net at all (KiCad's net code 0) | identical | `add_zone`/`edit_zone` no longer require `known_net` for an empty string -- previously impossible to create, needed for every real-world keepout |
+| Drawing: outline-drawn with the same tool as a copper-pour zone | ported, one hotkey/menu difference from source rather than a separate tool -- `pcbnew.InteractiveDrawing.ruleArea` (Ctrl+Shift+K) arms the identical outline tool as `.zone`; `state.nextZoneIsRuleArea` is the one bit telling `ZoneDialog.tsx` to pre-check "Rule area" for *this* entry's outline, same end result (draw outline, dialog opens, Rule Area already ticked) with no second drawing-tool code path to maintain | `tools/drawing_tool.cpp`'s zone/keepout entry points, which upstream also funnel through one outline-drawing loop |
+| Properties dialog: "Rule area" checkbox swaps the panel between fill settings and the 5 keepout checkboxes | identical in effect | `dialog_copper_zones.cpp`'s `IsRuleArea()` branch -- `ZoneDialog.tsx` |
+| Zone filler honors a copper-pour keepout: every other zone's fill excludes it, any net, any priority | identical in effect | `ZONE_FILLER::fillCopperZone`'s keepout knockout -- `crates/zone-filler`'s new `FillInput::keepouts`/`FillKeepout`, 2 new tests. Previously an explicit, named gap in that crate's own doc comment ("Not ported: ... keepout zones") |
+| DRC: track/via/pad/footprint landing inside a matching keepout is reported (`items_not_allowed`) | ported for the explicit-keepout-zone path; a track/via/pad is layer-matched exactly, a footprint ignores the keepout's own layer (a component exclusion zone's layer is cosmetic -- see below) | `drc_test_provider_disallow.cpp`'s `DISALLOW_CONSTRAINT`/`antiTrackKeepouts` paths -- new `crates/drc/src/providers/disallow.rs`, 8 tests |
+| DRC: copper-pour-in-keepout cross-check (belt-and-suspenders over the filler's own exclusion) | ported, with the same epsilon-deflate trick source's own `query_areas` uses -- otherwise the filler's own zero-gap cut would always register as "touching" and false-positive | `drc_test_provider_disallow.cpp`'s `query_areas` cached-intersection test |
+| Multi-layer rule areas (one outline, several layers); custom `(disallow ...)` DRC rules on non-keepout items; `DRCE_TEXT_ON_EDGECUTS` (a different, unrelated half of the same KiCad source file) | not ported -- this model's `Zone` is single-layer only (an existing, documented limitation predating this item), has no custom-rule language (GAPS.md #10), and text-on-Edge.Cuts is a separate check | `ZONE::GetLayerSet()`, `panel_setup_rules.cpp`, `drc_test_provider_disallow.cpp`'s `checkTextOnEdgeCuts` |
+| `.kicad_pcb` export of a rule area | not ported -- `crates/kicad`'s exporter was out of this item's explicit scope; a rule area round-tripped through export today would still be written as (and read back as) a zone, net/fill fields included, which is not what a real `.kicad_pcb`'s `(zone (keepout ...))` block looks like | `crates/kicad/src/pcb.rs`'s zone writer -- flagged here for a follow-up, not silently dropped |
+| Canvas rendering: a rule area draws as a dashed outline with a diagonal hatch and a restriction label ("Keepout: Tracks/Vias"), never a solid fill (it never has one) | ported, a simplified stand-in for source's real cross-hatch keepout rendering | `pcb_painter.cpp`'s zone paint, keepout branch -- `painter.ts`'s new `drawRuleArea` |
+
+Rust: `crates/model/src/ir.rs` (`Zone`'s 6 new fields), `crates/ops/src/lib.rs`
+(`Cmd::EditZone` carries them; `add_zone`/`edit_zone` allow an empty net),
+2 new `crates/ops/src/tests.rs` tests. `crates/zone-filler/src/lib.rs`
+(`FillKeepout`, the knockout pass), 2 new tests. `crates/drc`: `DrcKeepout`
+(`board.rs`, kept entirely separate from `DrcZone`/`board.zones` so every
+*other* existing provider -- `copper_clearance` in particular -- keeps
+treating `board.zones` as "real copper only", unaffected by rule areas
+coming into existence as a concept); `ErrorType::ItemsNotAllowed`
+(`item.rs`, appended, matching KiCad's own `items_not_allowed` settings
+key); the new `providers/disallow.rs` (8 tests); one new line in `lib.rs`'s
+`run()` registering it. Frontend: `RuleAreaFields`/`Zone`/`CmdZone` in
+`api/types.ts`, `ZoneDialog.tsx`'s rule-area panel, `clipboard.ts`'s
+`zoneToCmd` (copy/paste/duplicate fidelity), `painter.ts`'s `drawRuleArea`,
+`useActionRunner.ts`'s `ruleArea` action, `state.nextZoneIsRuleArea`
+(`store.tsx`).
+
+## 15. Teardrops
+
+Port of `pcbnew/teardrop/*` (task item 4): the teardrop polygon
+generator, Board Setup > Teardrops' settings, and "Add All Teardrops" /
+"Remove All Teardrops". A teardrop is a `Zone` with `teardrop: true`
+(the task brief's own instruction -- "KiCad stores teardrops as special
+zones, so store them the same way in the IR, regenerated on demand"),
+computed fresh from the board's current tracks/vias/pads and replaced
+wholesale on every "Add All Teardrops", never hand-edited.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| IR: `Zone::teardrop` marker; `RoutingSection::teardrop_settings` (`TeardropSettings`), additive | identical | `eda_model::ir::{Zone, TeardropSettings}` |
+| Generated pentagon shape: 2 points on the track, 2 on the anchor's own circle, 1 behind the anchor's centre | ported via a closed-form exact-tangent-on-circle construction instead of source's general convex-hull-over-clipped-polygon algorithm -- see `eda_connectivity::teardrop`'s own doc for why (round anchors only, as a result) | `teardrop_utils.cpp`'s `computeAnchorPoints`/`findAnchorPointsOnTrack`/`computeTeardropPolygon` |
+| Settings: best length/width ratio, max length/width, width-to-size filter ratio, per-target-kind (vias/PTH pads/SMD pads) enable | ported, collapsed from upstream's 3 separate `TEARDROP_PARAMETERS` (round/rect/track) into one shared block (this port never builds a rect-anchor or track-to-track teardrop at all, so there is nothing for the other two to tune separately) | `TEARDROP_PARAMETERS`/`TEARDROP_PARAMETERS_LIST` -- `BoardSetupDialog.tsx`'s new Teardrops page |
+| "Add All Teardrops" / "Remove All Teardrops" | ported as whole-board regenerate/clear (`Cmd::AddAllTeardrops`/`RemoveAllTeardrops`); idempotent (a second "Add All" replaces, never duplicates, the generated set, since a teardrop's content-derived id is stable across an identical regeneration) | `TEARDROP_MANAGER::UpdateTeardrops`/`RemoveTeardrops`'s whole-board entry points (`GLOBAL_EDIT_TOOL`'s "Add/Remove Teardrops" actions) |
+| Rendering: a teardrop always draws as solid copper, independent of `zoneDisplayMode` (it has no separate "fill" to toggle -- the outline already is the final shape) | ported | `pcb_painter.cpp`'s zone paint -- `painter.ts`'s new teardrop branch in `drawZones` |
+| Curved (Bezier) edges (`m_CurvedEdges`) | not ported -- always the straight-edge shape, which is also upstream's own factory default | `computeCurvedForRoundShape`/`computeCurvedForRectShape` |
+| Rectangular/round-rect/custom pad anchors (`TARGET_RECT`, non-round SMD pads) | not ported -- only a via or a *circular* pad (`PadShape::Circle`) is a usable anchor; this port behaves as if `m_UseRoundShapesOnly` were always on | `computeCurvedForRectShape`, `computeAnchorPoints`'s non-round branch |
+| Track-to-track teardrops (`TARGET_TRACK`/`TD_TRACKEND`, two different-width tracks joined end to end) | not ported -- `m_TargetTrack2Track` defaults off upstream too | `AddTeardropsOnTracks`, `teardrop_types.h`'s `TD_TRACKEND` |
+| Borrowing length from a second track segment when the first is too short (`m_AllowUseTwoTracks`) | not ported -- a track shorter than the requested teardrop length is simply skipped | `findAnchorPointsOnTrack`'s two-segment extension |
+| Excluding a pad already covered by a same-net zone fill (`m_TdOnPadsInZones`) | not ported | `areItemsInSameZone` |
+| Incremental updates (only regenerating teardrops near a just-edited item, `RemoveTeardrops`/`UpdateTeardrops`'s `dirtyPadsAndVias`/`dirtyTracks` lists) | not ported -- "Add All Teardrops" always recomputes the whole board from scratch, same "nothing cached, nothing stale" philosophy this app's zone fills already use | `TEARDROP_MANAGER`'s dirty-item tracking |
+| `.kicad_pcb` export/import of a teardrop zone | not ported, same documented gap as section 14's rule areas | `crates/kicad/src/pcb.rs` |
+
+Rust: `crates/model/src/ir.rs` (`Zone::teardrop`, `TeardropSettings`, on
+`RoutingSection` -- a genuinely large mechanical ripple fixing every
+`RoutingSection` literal across the workspace, since that struct has no
+`Default` impl; zero behavior change to any of them). New
+`crates/connectivity/src/teardrop.rs` (`generate_teardrops`, 7 unit
+tests, including a shoelace point-in-polygon check that the anchor's own
+centre really lands inside the generated pentagon). `crates/ops/src/lib.rs`:
+`Cmd::SetTeardropSettings`/`AddAllTeardrops`/`RemoveAllTeardrops`
+(new `eda-connectivity` dependency), 4 new tests. Frontend:
+`TeardropSettings` in `api/types.ts`, `BoardSetupDialog.tsx`'s new
+Teardrops page (settings + both buttons), `painter.ts`'s teardrop
+render branch, `pcbnew.GlobalEdit.editTeardrops` wired to open Board
+Setup landed on that page (`state.boardSetupInitialPage`).
+
+## 16. Groups
+
+Port of `common/tool/group_tool.cpp` and the entered-group half of
+`pcbnew/tools/pcb_selection_tool.cpp` (task item 5): group/ungroup
+(Ctrl+G / Ctrl+Shift+G), selecting a group as a single unit, and
+entering/leaving one. A group is its own IR type (`Group`: id, name,
+`member_ids`), not a special item flag on something else -- matching
+`PCB_GROUP` being a real, separate item type upstream too.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| IR: `Group { id, name, member_ids }`, additive, stored on `DrawingsSection` | identical in shape; stored on `DrawingsSection` purely for the lowest construction-site ripple (see `Group`'s own doc) -- a member id can name a part, track, via, zone, shape or text, not just a drawing | `pcbnew/pcb_group.h`'s `PCB_GROUP` |
+| Ctrl+G: group the current selection (2+ items) | identical in effect | `group_tool.cpp`'s `Group()`, `ACTIONS::group.Enable(selectionCount >= 2)` |
+| Ctrl+Shift+G: ungroup, releasing members in place | identical in effect | `group_tool.cpp`'s `Ungroup()` |
+| Grouping a selection that includes an existing group flattens that group's members into the new one instead of nesting | ported as the model's defined behavior, not a compatibility shim -- this IR has no group-of-groups concept at all (`EDA_GROUP` allows nesting upstream; out of scope here) | `eda_model::ir::Group`'s own doc, `eda_ops`'s `group_items` |
+| An item belongs to at most one group; joining a new group (or `AddToGroup`) silently leaves whatever group it was already in; a group left with fewer than 2 members is dissolved | identical in effect | `GROUP_TOOL::Group`/`AddToGroup`/`RemoveFromGroup`'s own `if (group->GetItems().size() < 2) group->RemoveAll()` rule |
+| `AddToGroup`/`RemoveFromGroup` as `Cmd`s | ported in the ops layer (both tested) but not reachable from the UI -- no context-menu entry or hotkey calls them; only `Group`/`Ungroup` (hotkeys) and whole-group selection/dissolution are wired today | `ACTIONS::addToGroup`/`removeFromGroup` -- normally a context-menu-only pair upstream too, just not ported here |
+| Selecting any member selects the whole group instead (unless you're inside it) | ported as one substitution choke point in the `SET_SELECTION` reducer case (`withGroupSubstitution`, `state/store.tsx`) rather than touching every selection call site in `Canvas.tsx` | `PCB_SELECTION_TOOL::SelectPoint`'s own promote-to-top-level-group step |
+| Entering a group (double-click a single selected group) lets you select/edit its members directly | ported: `Canvas.tsx`'s `onDoubleClick` checks the clicked/selected id against `board.drawings.groups` (by own id or membership) and dispatches `SET_ENTERED_GROUP` instead of opening properties, mirroring source's `m_selection.GetSize() == 1 && Type() == PCB_GROUP_T -> EnterGroup()` ordering exactly | `pcb_selection_tool.cpp`'s `Main()` dblclick handler, `EnterGroup()` |
+| Leaving a group: Escape | ported as a new tier in the existing `ESCAPE` reducer case, slotted exactly where source puts it -- selection-non-empty still wins first, then entered-group-exit, then idle net-highlight-clear last | `pcb_selection_tool.cpp`'s `IsCancel()` handler, `ExitGroup()`'s `aSelectGroup` default (re-selects the group) |
+| Leaving a group: click/click-elsewhere outside its bounding box; explicit "Leave Group" context-menu action | not ported -- `common.Interactive.groupLeave` exists and is correctly wired in `useActionRunner.ts` (dispatches the same re-select-the-group behavior Escape now also triggers) but nothing in the UI calls it yet, since there's no group entry in the right-click menu; Escape is the only exit path today | `pcb_selection_tool.cpp`'s bounding-box auto-exit check, `PCB_ACTIONS::groupLeave` |
+| Visual: dashed bounding-box outline around a selected group | ported, a simplified stand-in for source's real selection-halo rendering | `painter.ts`'s `drawSelectedGroups` (`boundsOfPoints` over every member's own points) |
+| Visual: "entered group" dimming/overlay of everything outside it; a named group's own label | not ported -- entering a group changes selection/selectability semantics only, with no distinct rendering of the entered state yet | `pcb_selection_tool.cpp`'s `m_enteredGroupOverlay`, `pcb_painter.cpp`'s group name paint |
+| Group-aware move/rotate/flip/delete (acting on every member as a unit when the group itself is "selected") | not ported -- today's whole-group "selection" is a set of individual member ids under the hood (via substitution at read time), and the existing per-kind edit `Cmd`s have no group-aware bulk path; moving/rotating/deleting "a group" in this app means doing so to each member id already present in `state.selection`, not a single group-level operation | `GROUP_TOOL`'s interaction with `EDIT_TOOL`/`PCB_ACTIONS::move` et al. acting on `PCB_GROUP` as one item |
+| Nested groups (a group containing another group) | not ported, by design -- see the flattening row above | `EDA_GROUP`'s recursive member list |
+| `.kicad_pcb` export/import of a `(group ...)` block | not ported, same documented gap as sections 14-15 | `crates/kicad/src/pcb.rs` |
+
+## 17. Create Array
+
+Port of `pcbnew/tools/array_tool.cpp` (`ARRAY_TOOL::CreateArray`,
+`pcbnew.Array.createArray`, Ctrl+T) and `include`/`common/array_options.cpp`'s
+`ARRAY_GRID_OPTIONS`/`ARRAY_CIRCULAR_OPTIONS` geometry (task item 6).
+`ARRAY_OPTIONS` is a dialog-session object in source too -- never written
+to the board file -- so this ships as a `Cmd` payload (`ArrayGeometry`),
+not a new IR field.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Grid geometry: Nx/Ny, X/Y spacing, X/Y offset (an oblique/skewed grid), centred-on-original vs corner-anchored, stagger (brick/honeycomb pattern) every Nth row or column | identical | `ARRAY_GRID_OPTIONS::GetTransform`/`gtItemPosRelativeToItem0`/`getGridCoords` |
+| Circular geometry: centre, point count, angle between points (typed directly, plus a "divide evenly" checkbox that pre-fills 360/count -- a dialog-only convenience, same as source's own `calculateCircularArrayProperties`), angle offset, clockwise/counterclockwise, "rotate items" (spin each item in place as well as moving it along the circle) | identical in effect | `ARRAY_CIRCULAR_OPTIONS::GetTransform` |
+| "Duplicate" (default): create `size - 1` new copies of each resolved track/via/zone/shape/text; the *original* item is also transformed, into the array's own last slot -- not left at slot 0 -- so a centred array's slots are evenly occupied | identical in effect | `ARRAY_TOOL::CreateArray`'s reverse `ptN` loop, `TransformItem` |
+| "Arrange selection": reposition the given items into the array's own slots instead of creating anything; a placed part is a valid target here (only `Cmd::MoveExact`-style `set_pose`, nothing created) | identical in effect, including that an id naming nothing arrayable is skipped *without* consuming a slot (source's own inner `selectionIndex` cursor advancing independently of the outer `arrayIndex`) | `ARRAY_TOOL::CreateArray`'s `ShouldArrangeSelection()` branch |
+| A track/via/zone/shape only ever *translates* in a circular array, never spins in place, even with "rotate items" on; a `Part` or `Text` does spin (the two kinds with a simple scalar position+orientation this model can rotate without a generic per-point shape-rotation capability) | ported with this one explicit narrowing -- see `ArrayGeometry::Circular::rotate_items`'s own doc | `TransformItem`'s unconditional `aItem.Rotate(aItem.GetPosition(), transform.m_rotation)` -- source rotates every kind the same way, since every `BOARD_ITEM` has a generic `Rotate()` |
+| A multi-point item (a track or a zone) is translated rigidly by reading just its first point as the position `GetTransform` expects, same as a via/text's single point -- its own shape is never otherwise altered | ported, a model-shape adaptation rather than a behavior gap (same "one position, whole item moves together" result `PCB_TRACK`/`ZONE`'s real `GetPosition()`-based move already has) | `BOARD_ITEM::Move` |
+| Validation: a grid needs 1+ rows/columns and a nonzero spacing wherever there's more than one of them; a circular array needs 1+ points and a nonzero angle wherever there's more than one | identical | `DIALOG_CREATE_ARRAY::TransferDataFromWindow`'s own zero-delta checks |
+| Arraying a footprint (placed part), in either mode other than a plain "Arrange selection" reposition | not ported -- `FootprintInstance::id` *is* its schematic symbol's id (see that struct's own doc); there is no "conjure a new placed copy" operation this model's ops layer has, the same reason `Cmd::Duplicate` already excludes footprints. Source has no such restriction (a `PCB_FOOTPRINT` duplicates like anything else) | `ARRAY_TOOL::CreateArray`'s `PCB_FOOTPRINT_T` branch |
+| Grouping all of one array "block" together automatically (`PCB_GROUP_T`/`PCB_GENERATOR_T` deep-duplication, so an arrayed sub-assembly stays one unit) | not ported -- a group id in `ids` is skipped the same way an unknown id is (no group-aware duplicate/move yet, PARITY-pcb.md section 16) | `ARRAY_TOOL::CreateArray`'s `PCB_GROUP_T`/`PCB_GENERATOR_T` branches |
+| Footprint reannotation ("Unique references" -- assign fresh R/C/U numbers to the new copies) | not ported, and not a scope gap so much as a structural mismatch -- see the footprint row above; a PCB-side "rename this reference" has nothing to write without a matching schematic symbol to rename too | `BOARD_REANNOTATE_TOOL::ReannotateDuplicates`, `m_radioBtnKeepRefs`/`m_radioBtnUniqueRefs` |
+| Footprint-editor pad numbering: "Renumber pads" checkbox (grid) / always-on (circular), the `ARRAY_AXIS` numeric/hex/alphabetic-minus-IOSQXZ/full-alphabetic numbering schemes, `ARRAY_PAD_NUMBER_PROVIDER`'s skip-already-used-numbers logic, 2D (primary+secondary axis) numbering | not ported -- source's own `enableArrayNumbering = m_isFootprintEditor` means this entire half of the dialog never shows in the board editor either; this app's footprint editor (`LibraryFootprint`'s pads) has no multi-pad array/selection tooling of its own yet to extend with it (it does already have a simpler, non-array `Cmd::RenumberPads` -- reading-order renumber, no scheme/skip logic -- for the existing "Renumber Pads" tool, a different KiCad feature) | `DIALOG_CREATE_ARRAY`'s numbering panels, `array_pad_number_provider.cpp`, `include/array_axis.h` |
+| Interactive "select centre point/item" buttons for the circular centre | not ported -- the dialog's centre fields are plain numeric inputs, pre-filled with the selection's own average reference point, same numeric-entry convention every other dialog in this app uses (no canvas-picker mode) | `DIALOG_CREATE_ARRAY::OnSelectCenterButton`, `PCB_PICKER_TOOL` |
+| A live canvas preview of the array before committing | not ported -- same "fill the form, Create, see the result" shape every dialog in this app other than section 12's cleanup preview already has | n/a -- source has no such preview either; this row exists only to note it was considered |
+
+Rust: `crates/ops/src/lib.rs`'s `ArrayGeometry` (`Grid`/`Circular`, a `Cmd`
+payload type, not IR) and `Cmd::CreateArray`, `create_array`/
+`arrange_into_array`/`duplicate_into_array`, 10 new tests. No IR/model
+changes. Frontend: `ArrayGeometry` in `api/types.ts`,
+`CreateArrayDialog.tsx`, `pcbnew.Array.createArray` wired in
+`useActionRunner.ts` (gated on a non-empty selection, matching source's
+own `if (selection.Empty()) return 0;`) and a "Create Array... (Ctrl+T)"
+context-menu entry in `Canvas.tsx`.
+
+## 18. Dimensions
+
+Port of `pcbnew/pcb_dimension.{h,cpp}`'s five dimension types (task item
+7): Aligned, Orthogonal, Radial, Leader, Center. Collapsed into one
+`Dimension` struct with a `DimensionKind` tag instead of five item
+types, matching this model's existing `Shape`/`ArrayGeometry` enums'
+own shape. Geometry (crossbar/extension lines/arrows/leader/centre-
+cross, text position+angle, the formatted display string) is computed
+fresh from `start`/`end` plus the style/format fields on every read
+(`eda_connectivity::dimension::compute_dimension_geometry`), the same
+"recompute, never cache" relationship source's own `Update()` has to
+its stored geometry -- a renderer draws exactly what that function
+returns and never re-derives any of it.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Aligned: crossbar parallel to the two feature points, offset by a signed `height`; extension lines from each feature point past the crossbar by `extension_height`; inward/outward arrows; text outside (offset perpendicular) or inline (splitting the crossbar); `keep_text_aligned` rotates text to the crossbar's own angle, flipped upright when it would otherwise read upside down | identical in effect | `PCB_DIM_ALIGNED::updateGeometry`/`updateText` |
+| Orthogonal: crossbar locked horizontal or vertical; only that axis of the two feature points is measured; a second, independent extension line compensates for the second feature point not lying on the (axis-locked) crossbar | identical in effect | `PCB_DIM_ORTHOGONAL::updateGeometry`/`updateText` |
+| Radial: a small fixed-size (`arrow_length`) `+` mark at the centre; measures the centre-to-point distance (the radius); a leader runs outward from the point by `leader_length` to a knee, then on to the text | identical in effect | `PCB_DIM_RADIAL::updateGeometry`/`GetKnee` |
+| Leader: a line from the arrow tip to a knee, then on to the text, clipped where it reaches the text (see the knockout row below) | ported; no `R=`/diameter-symbol auto-prefix convention (plain `prefix`/`suffix` strings cover it manually) | `PCB_DIM_LEADER::updateGeometry` |
+| Centre: a `+` mark at `start`, sized and oriented by `end - start` (one arm along that vector, the other rotated 90°); never shows text in practice | identical in effect | `PCB_DIM_CENTER::updateGeometry` |
+| Value text: measured distance, prefix/suffix, a flat 0-5 decimal-place precision, trailing-zero suppression, units (mm/mil/inch/automatic) with no/bare/parenthesized suffix, or a manual override string | ported, with `DIM_PRECISION`'s four unit-dependent "V_VVV" levels (fewer decimals for mm than inch at the "same" nominal precision) collapsed to the flat count -- one precision concept instead of two | `PCB_DIMENSION_BASE::GetValueText`/`updateText` |
+| Crossbar/leader-line "knockout": a gap cut around text sitting on the line (inline text; a leader's text line stops at the text's edge either way) | ported, approximated -- this model has no real font-metrics engine anywhere, so the gap is sized from the same `0.6 * font_size`-per-character estimate `eda_engine::geometry::CHAR_WIDTH_FACTOR` already uses for every other text-overlap check in this project, not source's own exact rendered glyph bounding box | `CollectKnockedOutSegments` |
+| A leader's optional text border (rectangle or circle drawn around the text) | not ported | `PCB_DIM_LEADER::m_textBorder`, `DIM_TEXT_BORDER` |
+| `DIM_TEXT_POSITION::MANUAL` (freely dragging the text off its computed position) | not ported -- no point-editor-style manual sub-element dragging, same restriction this model's zone outlines already have | `DIM_TEXT_POSITION` |
+| Board Setup > Dimension Properties: units/format/precision/suppress-zeroes/text-position/keep-aligned/text-size/line-thickness/arrow-length/extension-offset defaults, applied once at creation, never retroactively | identical in effect | `panel_setup_dimensions.cpp`, `BOARD_DESIGN_SETTINGS::m_Dimension*` |
+| Move (drag or Move Exactly's underlying Cmd) translates both feature points | identical | `PCB_DIMENSION_BASE::Move` |
+| Rotate/Flip (as a generic `BOARD_ITEM`, e.g. if ever added to a future Create Array/rotate-selection path) | not ported -- no `Cmd::RotateDimension`/flip; `crates/connectivity::dimension::rotate_dimension` exists and is tested but has no caller yet, same "built, not yet wired to a UI action" gap teardrops' settings page didn't have but groups' `AddToGroup`/`RemoveFromGroup` do (section 16) | `PCB_DIMENSION_BASE::Rotate`/`Flip`/`Mirror` |
+| Interactive placement: Aligned/Orthogonal's third "set height" click with a live crossbar preview; Radial/Leader/Center's own click sequences | simplified to one plain two-click (start, end) placement for every kind, with `height`/`leader_length`/orientation filled from Board Setup defaults and the just-created dimension's own Properties dialog opening immediately for fine-tuning -- a deliberate scope reduction (no live multi-step canvas preview for this item), not a missing capability: every field the live click sequence would have set is still reachable, just numerically instead of by dragging | `tools/drawing_tool.cpp::DrawDimension` |
+| Interactive centre-point/-item picker buttons for Radial's own dialog-free flow | not ported -- plain numeric X/Y fields instead, same convention every other dialog in this app already uses | n/a (this port has no equivalent interactive picker tool) |
+| Selecting a dimension (click, box-select, the Selection Filter's own toggle) | ported -- `components/canvas/selectionCandidates.ts` gained a `"dimension"` kind, hit-tested against the closest of its own `lines` segments (a disconnected set, not one polyline) or its text anchor | `pcb_selection_tool.cpp`'s generic item iteration, extended to this new kind |
+| `.kicad_pcb` export/import of a dimension | not ported, same documented gap as sections 14-17's own new item kinds | `crates/kicad/src/pcb.rs` |
+
+Rust: `crates/model/src/ir.rs`'s `Dimension`/`DimensionKind`/
+`DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/
+`ArrowDirection`/`DimensionSettings` (on `DrawingsSection`, additive, no
+ripple -- that struct already derives `Default` and every existing
+literal already spreads it, same low-ripple reasoning `Group`'s own doc
+gives). `crates/connectivity/src/dimension.rs` (`compute_dimension_
+geometry` plus `translate_dimension`/`rotate_dimension`), 13 unit tests
+covering every kind's own geometry, override text, unit-suffix
+formatting, and the translate/rotate helpers. `crates/ops/src/lib.rs`:
+`Cmd::AddDimension`/`DeleteDimension`/`MoveDimension`/`EditDimension`/
+`SetDimensionSettings`, 8 new tests. `crates/cli/src/studio.rs`'s
+`dimension_json`/`dimension_settings_json` are the one and only place
+the computed geometry/formatted text are serialized -- every consumer
+(the frontend) reads them, never recomputes.
+
+Frontend: `Dimension`/`DimensionSettings`/`CmdDimension`/
+`CmdDimensionKind` in `api/types.ts` (the same flat-display-vs-nested-
+Cmd-payload split `Shape`/`CmdShape` already have, see either type's own
+doc); `kicad-port/dimensionConvert.ts` (`toCmdDimension`/
+`cmdDimensionKindOf`/`defaultDimensionPayload`, unit-tested); `state/
+store.tsx`'s `nextDimensionKind`/`dimensionEditId` + the new `"dimension"`
+`DrawState`/`ToolId` variant; `Canvas.tsx`'s two-click placement (`onPointerDown`),
+drag-move (`DRAGGABLE_KINDS`/`commitMove`'s new `"dimension"` case),
+Delete-key support, and a "Switch Dimension Arrows" context-menu entry
+(a context-menu-only action in source too); `components/canvas/
+selectionCandidates.ts`'s new `"dimension"` `SelectableKind` (hit-test,
+box-select, the Selection Filter's own `dimensions` toggle in
+`panels/SelectionFilterPanel.tsx`); `painter.ts`'s `drawDimensions`
+(the in-progress two-click rubber-band reuses the existing generic
+`drawState.pts` preview, no new code needed there);
+`DimensionPropertiesDialog.tsx` (opens automatically right after
+creation, and via "E"/double-click through `properties.ts`'s
+`openPropertiesFor`, same dispatcher every other item kind already
+shares); `BoardSetupDialog.tsx`'s new "Dimension Properties" page;
+`useActionRunner.ts` wires all five `pcbnew.InteractiveDrawing.
+*Dimension*`/`leader` toolbar actions (discoverable through the
+existing, already-extracted "Dimension objects" toolbar dropdown --
+`src/kicad/toolbars.json` already listed all five, so registering
+handlers was the only step needed, no new toolbar UI) plus
+`changeDimensionArrows`.
+
+Rust: `crates/model/src/ir.rs`'s `Group` struct and `DrawingsSection::groups`
+(chosen over `Design` or `RoutingSection` purely on construction-site count,
+documented in `Group`'s own doc comment; `DrawingsSection::assign_missing_ids`
+extended to id groups too, `"grp_"`-prefixed, content-derived from the
+sorted member-id set). `crates/ops/src/lib.rs`: `Cmd::Group`/`Ungroup`/
+`AddToGroup`/`RemoveFromGroup`, `group_items`/`ungroup_items`/`add_to_group`/
+`remove_from_group`/`prune_empty_groups`, 6 new tests in
+`crates/ops/src/tests.rs`. Frontend: `Group` in `api/types.ts`, `Group[]` on
+`Drawings`, `state.enteredGroupId` + `SET_ENTERED_GROUP` + the `ESCAPE`
+reducer's new tier + `withGroupSubstitution` (`state/store.tsx`),
+`groupSelection`/`ungroupSelection`/`groupById` API methods (same
+before/after-diff undo pattern as `duplicateSelection`), hardcoded Ctrl+G/
+Ctrl+Shift+G bindings in `useGlobalHotkeys.ts` (the extraction's own
+hotkeys for these two are null, same gap already noted there for Escape),
+`common.Interactive.group/ungroup/groupEnter/groupLeave` in
+`useActionRunner.ts`, `Canvas.tsx`'s `onDoubleClick` group-enter check,
+`painter.ts`'s `drawSelectedGroups`.

@@ -109,6 +109,22 @@ pub struct DrcZone {
     pub min_island_area: i64,
 }
 
+/// A rule area / keepout (`ZONE::GetIsRuleArea`, task item 3) -- kept
+/// entirely separate from [`DrcZone`] (never pushed into `DrcBoard::zones`)
+/// so every existing provider that already iterates `board.zones` assuming
+/// "this is real copper" keeps working unchanged; a keepout has no fill
+/// settings and is not copper.
+pub struct DrcKeepout {
+    pub id: String,
+    pub layer: String,
+    pub outline: Vec<Point>,
+    pub no_tracks: bool,
+    pub no_vias: bool,
+    pub no_pads: bool,
+    pub no_copper_pour: bool,
+    pub no_footprints: bool,
+}
+
 pub struct DrcFootprint {
     pub id: String,
     pub side: Side,
@@ -123,6 +139,7 @@ pub struct DrcBoard {
     pub tracks: Vec<DrcTrackSeg>,
     pub vias: Vec<DrcVia>,
     pub zones: Vec<DrcZone>,
+    pub keepouts: Vec<DrcKeepout>,
     pub footprints: Vec<DrcFootprint>,
     pub shapes: Vec<IrShape>,
     pub texts: Vec<Text>,
@@ -276,6 +293,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     let mut tracks = Vec::new();
     let mut vias = Vec::new();
     let mut zones = Vec::new();
+    let mut keepouts = Vec::new();
     if let Some(rt) = &design.routing {
         for t in &rt.tracks {
             let net = if t.net.is_empty() { None } else { Some(t.net.clone()) };
@@ -289,6 +307,23 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         }
         for z in &rt.zones {
             if z.outline.len() < 3 {
+                continue;
+            }
+            // A rule area is not copper -- it never becomes a `DrcZone`
+            // (every provider that already iterates `board.zones` assumes
+            // "this is a real copper pour"), only a `DrcKeepout`. See
+            // task item 3 / `DrcKeepout`'s own doc.
+            if z.is_rule_area {
+                keepouts.push(DrcKeepout {
+                    id: z.id.clone(),
+                    layer: z.layer.clone(),
+                    outline: z.outline.clone(),
+                    no_tracks: z.keepout_tracks,
+                    no_vias: z.keepout_vias,
+                    no_pads: z.keepout_pads,
+                    no_copper_pour: z.keepout_copper_pour,
+                    no_footprints: z.keepout_footprints,
+                });
                 continue;
             }
             let net = if z.net.is_empty() { None } else { Some(z.net.clone()) };
@@ -335,7 +370,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         }
     }
 
-    DrcBoard { layers, outline, pads, tracks, vias, zones, footprints, shapes, texts, silk_items }
+    DrcBoard { layers, outline, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items }
 }
 
 impl DrcVia {

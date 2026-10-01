@@ -464,7 +464,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "R1".into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: Point { x: 6000, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] }),
-            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] }),
+            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         (design, model)
@@ -488,6 +488,7 @@ mod tests {
                 zones: vec![],
                 track_width_presets: vec![],
                 via_presets: vec![],
+                teardrop_settings: Default::default(),
             }),
             drawings: None,
         };

@@ -829,6 +829,101 @@ pub struct RoutingSection {
     /// `track_width_presets`, for the via-size cycling hotkey.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_presets: Vec<ViaPreset>,
+    /// Task item 4: `TEARDROP_PARAMETERS` -- Board Setup > Teardrops.
+    /// Lives here (not `BoardRules`) for the same reason `track_width_presets`
+    /// does: the studio needs to *write* it through a `Cmd`, and `BoardRules`
+    /// is the read-only intent-derived model. Additive: absent in an older
+    /// `design.json` reads as KiCad's own real factory defaults (disabled).
+    #[serde(default)]
+    pub teardrop_settings: TeardropSettings,
+}
+
+/// `TEARDROP_PARAMETERS` + the subset of `TEARDROP_PARAMETERS_LIST` this
+/// port models (`pcbnew/teardrop/teardrop_parameters.h`). KiCad keeps three
+/// separate `TEARDROP_PARAMETERS` (round/rect/track targets) plus a
+/// `TEARDROP_PARAMETERS_LIST`'s own per-target-kind enable flags; this port
+/// collapses that into one settings block (round shapes only -- see
+/// `eda_connectivity::teardrop`'s own doc for why) with one set of size
+/// ratios shared by every target kind, since this model has no per-target-
+/// kind size tuning need yet. `m_CurvedEdges`, `m_AllowUseTwoTracks` and
+/// `m_TdOnPadsInZones` are not modeled at all (no curved/Bezier edges, no
+/// multi-segment-track extension, no in-zone pad filter -- see that
+/// module's doc for the full scope).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TeardropSettings {
+    /// `TEARDROP_PARAMETERS::m_Enabled` -- collapsed from upstream's three
+    /// per-target-kind (round/rect/track) enables into one, since this
+    /// port shares one `TEARDROP_PARAMETERS` block across every kind (see
+    /// this struct's own doc).
+    #[serde(default)]
+    pub enabled: bool,
+    /// `TEARDROP_PARAMETERS_LIST::m_TargetVias`.
+    #[serde(default = "default_td_target")]
+    pub target_vias: bool,
+    /// `TEARDROP_PARAMETERS_LIST::m_TargetPTHPads`.
+    #[serde(default = "default_td_target")]
+    pub target_pth_pads: bool,
+    /// `TEARDROP_PARAMETERS_LIST::m_TargetSMDPads`. In practice this only
+    /// ever matches a *round* SMD pad -- see `eda_connectivity::teardrop`'s
+    /// doc on why non-round shapes aren't ported.
+    #[serde(default = "default_td_target")]
+    pub target_smd_pads: bool,
+    /// `TEARDROP_PARAMETERS::m_BestLengthRatio`.
+    #[serde(default = "default_td_length_ratio")]
+    pub best_length_ratio: f64,
+    /// `TEARDROP_PARAMETERS::m_BestWidthRatio`.
+    #[serde(default = "default_td_width_ratio")]
+    pub best_width_ratio: f64,
+    /// `m_TdMaxLen`, µm. <= 0 disables the constraint.
+    #[serde(default = "default_td_max_len")]
+    pub max_len_um: Um,
+    /// `m_TdMaxWidth`, µm. <= 0 disables the constraint.
+    #[serde(default = "default_td_max_width")]
+    pub max_width_um: Um,
+    /// `m_WidthtoSizeFilterRatio`: a track narrower than
+    /// `anchor_diameter * this` gets a teardrop; 1.0 = always, 0.0 = never.
+    #[serde(default = "default_td_width_to_size_ratio")]
+    pub width_to_size_filter_ratio: f64,
+}
+
+fn default_td_target() -> bool {
+    true // TEARDROP_PARAMETERS_LIST() ctor: every target kind on by default
+}
+fn default_td_length_ratio() -> f64 {
+    0.5
+}
+fn default_td_width_ratio() -> f64 {
+    1.0
+}
+fn default_td_max_len() -> Um {
+    1000 // TEARDROP_PARAMETERS() ctor: pcbIUScale.mmToIU(1.0)
+}
+fn default_td_max_width() -> Um {
+    2000 // ctor: pcbIUScale.mmToIU(2.0)
+}
+fn default_td_width_to_size_ratio() -> f64 {
+    0.9
+}
+
+impl Default for TeardropSettings {
+    /// `TEARDROP_PARAMETERS()`/`TEARDROP_PARAMETERS_LIST()`'s own ctor
+    /// defaults: every target kind enabled, but globally disabled until
+    /// the user turns Teardrops on (`m_Enabled` starts `false` upstream
+    /// too).
+    fn default() -> Self {
+        TeardropSettings {
+            enabled: false,
+            target_vias: default_td_target(),
+            target_pth_pads: default_td_target(),
+            target_smd_pads: default_td_target(),
+            best_length_ratio: default_td_length_ratio(),
+            best_width_ratio: default_td_width_ratio(),
+            max_len_um: default_td_max_len(),
+            max_width_um: default_td_max_width(),
+            width_to_size_filter_ratio: default_td_width_to_size_ratio(),
+        }
+    }
 }
 
 /// One entry of `RoutingSection::via_presets`.
@@ -1017,6 +1112,51 @@ pub struct Zone {
     /// `m_HatchBorderAlgorithm`.
     #[serde(default = "default_hatch_border_algorithm")]
     pub hatch_border_algorithm: i32,
+
+    // ---- rule area / keepout (`ZONE::GetIsRuleArea`, task item 3). A
+    // zone's `net`/outline/layer are shared with a copper-pour zone (same
+    // dialog, same "draw a filled zone" tool -- see `tools/drawing_tool.cpp`
+    // and `dialog_copper_zones.cpp`'s own single dialog that swaps panels on
+    // `IsRuleArea()`); only these six fields distinguish a rule area, and
+    // every `ZONE_SETTINGS` fill field above is simply unused for one
+    // (matching source, which still stores them unread rather than making
+    // them a separate type). Additive: absent in an older `design.json`
+    // reads as "an ordinary copper-pour zone", exactly as before this field
+    // existed.
+    /// `ZONE::GetIsRuleArea()`.
+    #[serde(default)]
+    pub is_rule_area: bool,
+    /// `GetDoNotAllowTracks()`.
+    #[serde(default)]
+    pub keepout_tracks: bool,
+    /// `GetDoNotAllowVias()`.
+    #[serde(default)]
+    pub keepout_vias: bool,
+    /// `GetDoNotAllowPads()`.
+    #[serde(default)]
+    pub keepout_pads: bool,
+    /// `GetDoNotAllowZoneFills()` -- disallow copper pours (zone fills)
+    /// under this area, not "fill this zone with copper" (that is
+    /// `fill_mode`/`FillMode`, meaningless for a rule area anyway).
+    #[serde(default)]
+    pub keepout_copper_pour: bool,
+    /// `GetDoNotAllowFootprints()`.
+    #[serde(default)]
+    pub keepout_footprints: bool,
+
+    /// Task item 4: true for a teardrop this app generated
+    /// (`eda_connectivity::teardrop::generate_teardrops`), false for an
+    /// ordinary user-drawn zone. KiCad stores a teardrop as a real `ZONE`
+    /// too (`TEARDROP_MANAGER::createTeardrop`) -- this is the one bit this
+    /// port needs beyond that to find and replace its own generated set on
+    /// demand (`Cmd::AddAllTeardrops`/`RemoveAllTeardrops`) without
+    /// disturbing a zone the user drew by hand. A teardrop's `outline` is
+    /// its own final shape already (an exact-tangent pentagon against its
+    /// round anchor) -- it is rendered and exported as solid copper
+    /// directly, never run through the knockout/thermal-relief fill
+    /// pipeline the way a drawn zone's settings fields describe.
+    #[serde(default)]
+    pub teardrop: bool,
 }
 
 impl Zone {
@@ -1052,6 +1192,13 @@ impl Default for Zone {
             hatch_smoothing_value: default_hatch_smoothing_value(),
             hatch_hole_min_area: default_hatch_hole_min_area(),
             hatch_border_algorithm: default_hatch_border_algorithm(),
+            is_rule_area: false,
+            keepout_tracks: false,
+            keepout_vias: false,
+            keepout_pads: false,
+            keepout_copper_pour: false,
+            keepout_footprints: false,
+            teardrop: false,
         }
     }
 }
@@ -1306,6 +1453,231 @@ impl Text {
     }
 }
 
+/// Task item 5: `common/tool/group_tool.cpp` / `pcbnew/pcb_group.cpp`'s
+/// `PCB_GROUP` -- a named set of member item ids, no geometry of its own
+/// (its on-screen box is always derived from its members). Lives on
+/// `DrawingsSection` rather than a new top-level `Design` field purely
+/// for the lowest construction-site ripple (`DrawingsSection` already
+/// derives `Default` and every existing literal already spreads it); a
+/// group can reference a footprint/track/via/zone/shape/text id, not
+/// just a drawing, so this is a storage-convenience choice, not a claim
+/// that a group *is* a drawing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Group {
+    /// Stable id (`grp_xxxxxxxxxxxx`). Deterministic from the member id
+    /// set (sorted, so member order never matters) -- see `Track`/`Zone`'s
+    /// own docs for why every id here is content-derived, never random.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    /// `PCB_GROUP::GetName()`. Empty = unnamed (KiCad's own default).
+    #[serde(default)]
+    pub name: String,
+    /// Ids of every direct member -- a part reference, or a track/via/
+    /// zone/shape/text id. Never another group's id: this model has no
+    /// nested-group concept (`eda_group.h`'s `EDA_GROUP` allows a group of
+    /// groups upstream; out of scope here, see `eda_ops::group_items`'s
+    /// own doc).
+    pub member_ids: Vec<String>,
+}
+
+impl Group {
+    fn id_seed(&self) -> String {
+        let mut members = self.member_ids.clone();
+        members.sort();
+        members.join(",")
+    }
+}
+
+/// Task item 7: `pcbnew/pcb_dimension.h`'s `PCB_DIMENSION_BASE` hierarchy
+/// (`PCB_DIM_ALIGNED`/`PCB_DIM_ORTHOGONAL`/`PCB_DIM_RADIAL`/`PCB_DIM_LEADER`/
+/// `PCB_DIM_CENTER`), collapsed into one struct with a kind-specific tag
+/// instead of five item types, matching this model's existing `Shape`
+/// enum's own shape (one struct per real KiCad class would ripple the
+/// same way `Shape` avoids). `start`/`end` are the two "feature points"
+/// every kind has (source's own term) -- what they mean depends on
+/// `kind`, documented on each variant.
+///
+/// The measured value and the dimension's own displayed text are never
+/// stored: both are recomputed fresh from `start`/`end` plus these
+/// formatting fields, the same way source's own `Update()`/`GetValueText()`
+/// do (`override_text`, when set, replaces the computed number but still
+/// goes through prefix/suffix/units-suffix formatting same as source's
+/// `m_overrideTextEnabled`). `crates/connectivity::dimension` computes
+/// the geometry (crossbar/extension lines/arrows/leader/text position)
+/// and formatted text fresh from this struct on every read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dimension {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub layer: String,
+    pub kind: DimensionKind,
+    /// The first feature point. An `Aligned`/`Orthogonal` dimension's own
+    /// first measured point; a `Radial`/`Center`'s circle/arc centre; a
+    /// `Leader`'s arrow tip.
+    pub start: Point,
+    /// The second feature point. An `Aligned`/`Orthogonal`'s second
+    /// measured point; a `Radial`'s point on the circle/arc (defines the
+    /// radius); a `Leader`'s knee (where the line bends toward the text);
+    /// a `Center`'s own arm endpoint (defines the cross's size and angle).
+    pub end: Point,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub suffix: String,
+    /// `PCB_DIMENSION_BASE::m_overrideTextEnabled`/`m_valueString`
+    /// collapsed into one option, rather than a bool plus a string that's
+    /// only meaningful when the bool is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_text: Option<String>,
+    pub units: DimensionUnits,
+    pub units_format: DimensionUnitsFormat,
+    /// Decimal places, 0-5. A flat count -- source's own `DIM_PRECISION`
+    /// also has four unit-dependent "V_VVV"-style levels (fewer decimals
+    /// for mm than inch at the "same" precision); not ported, since a
+    /// fixed decimal count covers the overwhelming majority of real
+    /// dimensioned drawings and keeps one precision concept instead of two.
+    pub precision: u8,
+    pub suppress_trailing_zeros: bool,
+    pub text_position: DimensionTextPosition,
+    pub keep_text_aligned: bool,
+    /// Only meaningful when `keep_text_aligned` is false -- otherwise the
+    /// geometry pass overwrites this every time, same as source recomputing
+    /// `GetTextAngle()` from the crossbar/knee angle on every `Update()`.
+    #[serde(default)]
+    pub text_angle: Millideg,
+    pub text_size_um: Um,
+    pub stroke_width: Um,
+    pub arrow_length: Um,
+    pub extension_offset: Um,
+    pub extension_height: Um,
+    pub arrow_direction: ArrowDirection,
+}
+
+impl Dimension {
+    fn id_seed(&self) -> String {
+        format!("{:?}|{},{}|{},{}", self.kind, self.start.x, self.start.y, self.end.x, self.end.y)
+    }
+}
+
+/// `PCB_DIMENSION_BASE`'s five concrete subclasses, as a tag instead of
+/// five item types -- see [`Dimension`]'s own doc.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DimensionKind {
+    /// `PCB_DIM_ALIGNED`: a crossbar parallel to `end - start`, offset
+    /// perpendicular by `height` (signed -- which side of the feature
+    /// line the crossbar falls on).
+    Aligned { height: Um },
+    /// `PCB_DIM_ORTHOGONAL`: like `Aligned`, but the crossbar is locked
+    /// horizontal or vertical and only that axis of `end - start` is
+    /// measured, with a second, independent extension line compensating
+    /// for `end` not actually lying on the (axis-locked) crossbar.
+    Orthogonal { height: Um, horizontal: bool },
+    /// `PCB_DIM_RADIAL`: `start` is the circle/arc centre (also where a
+    /// small fixed-size `+` mark is drawn, `PCB_DIM_RADIAL::updateGeometry`'s
+    /// own `centerArm` cross), `end` a point on it; a leader runs outward
+    /// from `end` by `leader_length` to a knee, then on to the text.
+    Radial { leader_length: Um },
+    /// `PCB_DIM_LEADER`: a line from `start` (arrow tip) to `end` (knee),
+    /// then on to the text. No text-border styling (rect/circle around
+    /// the text) -- see PARITY-pcb.md section 18.
+    Leader,
+    /// `PCB_DIM_CENTER`: a `+` mark at `start`, sized and oriented by
+    /// `end - start` (one arm along that vector, the other rotated 90°).
+    /// Never shows text in practice (nothing stops it, same as source).
+    Center,
+}
+
+/// `DIM_UNITS_MODE` (`AUTOMATIC` follows the app's own display unit,
+/// `state.units` on the frontend -- same split `EDA_UNITS`/`DIM_UNITS_MODE`
+/// have in source, where a dimension can pin its own units independent of
+/// the frame's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionUnits {
+    Mm,
+    Mil,
+    Inch,
+    Automatic,
+}
+
+/// `DIM_UNITS_FORMAT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionUnitsFormat {
+    NoSuffix,
+    BareSuffix,
+    ParenSuffix,
+}
+
+/// `DIM_TEXT_POSITION`. `MANUAL` is not ported -- no point-editor-style
+/// manual text drag for a sub-element, same restriction this model's
+/// zones/shapes already have on their own control points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionTextPosition {
+    Outside,
+    Inline,
+}
+
+/// `DIM_ARROW_DIRECTION`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowDirection {
+    Inward,
+    Outward,
+}
+
+/// `BOARD_DESIGN_SETTINGS`'s `m_Dimension*` fields -- see [`Dimension`]'s
+/// own doc on why these are only applied once, at creation.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DimensionSettings {
+    pub units: DimensionUnits,
+    pub units_format: DimensionUnitsFormat,
+    pub precision: u8,
+    pub suppress_trailing_zeros: bool,
+    pub text_position: DimensionTextPosition,
+    pub keep_text_aligned: bool,
+    pub text_size_um: Um,
+    pub stroke_width: Um,
+    pub arrow_length: Um,
+    pub extension_offset: Um,
+    /// `PCB_DIM_ALIGNED`'s own constructor default (`m_arrowLength *
+    /// sin(27.5deg)`) rather than a `BOARD_DESIGN_SETTINGS` field -- source
+    /// has no separate board-wide setting for this either.
+    pub extension_height: Um,
+}
+
+impl Default for DimensionSettings {
+    /// `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS()`'s own real
+    /// defaults (`board_design_settings.cpp`): precision X_XXXX (4
+    /// decimals here, this struct's flat scale), units automatic, no unit
+    /// suffix, suppress trailing zeroes, text outside, kept aligned,
+    /// 50 mil arrow length, 0.5 mm extension offset. `text_size_um`/
+    /// `stroke_width` fall back to this model's own general text/line
+    /// defaults (source pulls these from the generic per-layer text/line
+    /// style, not a dimension-specific constant).
+    fn default() -> Self {
+        let arrow_length = 1270; // 50 mil
+        DimensionSettings {
+            units: DimensionUnits::Automatic,
+            units_format: DimensionUnitsFormat::NoSuffix,
+            precision: 4,
+            suppress_trailing_zeros: true,
+            text_position: DimensionTextPosition::Outside,
+            keep_text_aligned: true,
+            text_size_um: 1000,
+            stroke_width: 200,
+            arrow_length,
+            extension_offset: 500, // 0.5mm
+            extension_height: (arrow_length as f64 * 27.5f64.to_radians().sin()).round() as Um,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DrawingsSection {
@@ -1313,15 +1685,26 @@ pub struct DrawingsSection {
     pub shapes: Vec<Shape>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<Text>,
+    /// Task item 5. See [`Group`]'s own doc for why it lives here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
+    /// Task item 7. See [`Dimension`]'s own doc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dimensions: Vec<Dimension>,
+    /// `BOARD_DESIGN_SETTINGS`'s dimension-related fields -- the defaults
+    /// a freshly drawn [`Dimension`] is styled from (`StyleFromSettings`),
+    /// then carries its own copies of afterward (this struct is never
+    /// re-applied automatically, matching source).
+    #[serde(default)]
+    pub dimension_settings: DimensionSettings,
 }
 
 impl DrawingsSection {
-    /// Assign a deterministic id to every shape/text whose `id` is still
-    /// empty. See [`RoutingSection::assign_missing_ids`] -- same contract,
-    /// same reason for a stable per-kind processing order.
+    /// Assign a deterministic id to every shape/text/group/dimension
+    /// whose `id` is still empty. See [`RoutingSection::assign_missing_ids`]
+    /// -- same contract, same reason for a stable per-kind processing order.
     pub fn assign_missing_ids(&mut self) {
-        let mut existing: std::collections::BTreeSet<String> =
-            self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
 
         let mut order: Vec<usize> = (0..self.shapes.len()).collect();
         order.sort_by(|&a, &b| (self.shapes[a].layer(), self.shapes[a].points().first().copied()).cmp(&(self.shapes[b].layer(), self.shapes[b].points().first().copied())));
@@ -1340,6 +1723,26 @@ impl DrawingsSection {
                 let id = next_item_id("txt", &self.texts[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.texts[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.groups.len()).collect();
+        order.sort_by(|&a, &b| self.groups[a].id_seed().cmp(&self.groups[b].id_seed()));
+        for i in order {
+            if self.groups[i].id.is_empty() {
+                let id = next_item_id("grp", &self.groups[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.groups[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.dimensions.len()).collect();
+        order.sort_by(|&a, &b| (self.dimensions[a].start, self.dimensions[a].end).cmp(&(self.dimensions[b].start, self.dimensions[b].end)));
+        for i in order {
+            if self.dimensions[i].id.is_empty() {
+                let id = next_item_id("dim", &self.dimensions[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.dimensions[i].id = id;
             }
         }
     }
@@ -2039,7 +2442,7 @@ mod tests {
     /// save -> load round trip is stable.
     #[test]
     fn id_assignment_is_deterministic_and_stable_on_resave() {
-        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
 
         let mut a = build();
         a.assign_missing_ids();
@@ -2059,8 +2462,8 @@ mod tests {
     /// same tracks must not change which id lands on which track.
     #[test]
     fn ids_do_not_depend_on_array_order() {
-        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
-        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
+        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt1.assign_missing_ids();
         rt2.assign_missing_ids();
         let gnd1 = rt1.tracks.iter().find(|t| t.net == "GND").unwrap();
@@ -2072,7 +2475,7 @@ mod tests {
     /// verbatim) must still get two distinct ids.
     #[test]
     fn duplicate_content_gets_distinct_ids() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         assert_ne!(rt.tracks[0].id, rt.tracks[1].id);
     }
@@ -2082,7 +2485,7 @@ mod tests {
     /// assigned -- callers (the web UI, `DeleteTrack`) hold onto it.
     #[test]
     fn changing_width_after_assignment_does_not_move_the_id() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() };
         rt.assign_missing_ids();
         let id = rt.tracks[0].id.clone();
         rt.tracks[0].width = 500; // what `SetTrackWidth` does
@@ -2094,6 +2497,7 @@ mod tests {
         let mut dr = DrawingsSection {
             shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } }],
             texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            ..Default::default()
         };
         dr.assign_missing_ids();
         assert!(!dr.shapes[0].id().is_empty());

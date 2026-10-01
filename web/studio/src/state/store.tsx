@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, LabelScope, Part, Ratsnest, RouteMode, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -61,6 +61,10 @@ export type ToolId =
    * at commit time instead of a plain wire. */
   | "bus"
   | "measure"
+  /** Task item 7: two clicks (start, end) for whichever of the five
+   * dimension kinds `state.nextDimensionKind` names -- see `DrawState`'s
+   * own `"dimension"` kind. */
+  | "dimension"
   // ---------------------------------------------------- eeschema placement
   // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp TwoClickPlace/
   // SingleClickPlace) -- SchematicView.tsx's own doc has the full
@@ -100,6 +104,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   wire: "Wire: click to start/add a point (snaps to a pin when close), double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   bus: "Bus: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   measure: "Measure: click a start point, click again for the end point. Click anywhere to start a new measurement, Esc to clear",
+  dimension: "Dimension: click the first feature point, then the second",
   sch_label_local: "Label: click where to place it",
   sch_label_global: "Global Label: click where to place it",
   sch_label_hier: "Hierarchical Label: click where to place it",
@@ -194,6 +199,11 @@ export type DrawState =
     }
   | { kind: "zone"; pts: [Um, Um][] }
   | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }
+  /** Task item 7: two clicks (start, end) for any of the five dimension
+   * kinds -- which one is read from `state.nextDimensionKind` when the
+   * second click commits it (same one-shot-flag convention as zones' own
+   * `nextZoneIsRuleArea`), not stored per-draw here. */
+  | { kind: "dimension"; pts: [Um, Um][] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
   | { kind: "wire"; pts: [Um, Um][] }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
@@ -210,8 +220,8 @@ export interface ViewTransform {
 /** A part being dragged, previewed locally before `move_to` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
 export interface MovePreview {
   refs: string[];
-  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text: their own move_* by id; symbol: schematic move_symbol; symbol_drag: schematic drag_symbol, see state.dragAttach). Defaults to "part" (every pre-existing caller moves parts). */
-  kind?: "part" | "via" | "shape" | "text" | "symbol" | "symbol_drag";
+  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text/dimension: their own move_* by id; symbol: schematic move_symbol; symbol_drag: schematic drag_symbol, see state.dragAttach). Defaults to "part" (every pre-existing caller moves parts). */
+  kind?: "part" | "via" | "shape" | "text" | "dimension" | "symbol" | "symbol_drag";
   dxUm: number;
   dyUm: number;
   /**
@@ -320,6 +330,15 @@ export function selectionBoundsCenter(
   return any ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : null;
 }
 
+export const DEFAULT_RULE_AREA_SETTINGS: RuleAreaFields = {
+  is_rule_area: false,
+  keepout_tracks: false,
+  keepout_vias: false,
+  keepout_pads: false,
+  keepout_copper_pour: false,
+  keepout_footprints: false,
+};
+
 export const DEFAULT_ZONE_SETTINGS: ZoneSettingsFields = {
   clearance: 500,
   min_thickness: 250,
@@ -354,6 +373,11 @@ export interface StudioState {
   glbError: string | null;
 
   selection: Set<string>;
+  /** `common.Interactive.groupEnter`/`groupLeave` (task item 5): the one
+   * group, if any, currently "entered" -- while inside it, clicking one of
+   * its own members selects that member alone instead of the whole group
+   * (see `withGroupSubstitution` in this file). `null` outside any group. */
+  enteredGroupId: string | null;
   /** Refs to flash/outline because a problem in the panel references them. */
   hot: Set<string>;
   netHighlight: string | null;
@@ -366,6 +390,17 @@ export interface StudioState {
   zonePending: [Um, Um][] | null;
   /** A selected zone's id ("E", or double-click) -- opens ZoneDialog in edit mode (`edit_zone`) instead of add mode. Independent of `zonePending` (one or the other is ever set, never both). */
   zoneEditId: string | null;
+  /** Task item 7: which of the five dimension kinds the next two-click
+   * placement creates -- set by each of the five toolbar actions
+   * (`pcbnew.InteractiveDrawing.alignedDimension` etc.) before arming
+   * `activeTool: "dimension"`, same one-shot-flag convention as zones'
+   * own `nextZoneIsRuleArea`. */
+  nextDimensionKind: CmdDimensionKind["kind"];
+  /** A dimension's id, just created (the draw tool opens this
+   * immediately so height/leader-length/format fields can be set, since
+   * there's no separate "pending outline" stage the way zones have) or
+   * selected ("E", double-click) -- opens DimensionPropertiesDialog. */
+  dimensionEditId: string | null;
   /**
    * `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` (B/Ctrl+B,
    * zone_filler_tool.cpp): the last GET /api/fill this session asked
@@ -390,6 +425,13 @@ export interface StudioState {
   zoneDisplayMode: "filled" | "outline";
   /** Board Setup... (dialog_board_setup.cpp) -- net classes/track-via sizing/rules/etc, see BoardSetupDialog.tsx. */
   boardSetupDialogOpen: boolean;
+  /** Which `BoardSetupDialog.tsx` page to land on next time it opens --
+   * `pcbnew.GlobalEdit.editTeardrops` (task item 4) sets this to
+   * `"teardrops"` before opening, so it lands straight on that page
+   * instead of making the user click there themselves; `null` leaves
+   * whatever page was last selected alone. Consumed once by the dialog's
+   * own open effect, then reset. */
+  boardSetupInitialPage: string | null;
   /** File > Fabrication Outputs > Gerbers... (dialog_plot.cpp), see PlotDialog.tsx. */
   plotDialogOpen: boolean;
   /** File > Fabrication Outputs > Drill Files... (dialog_gendrill.cpp), see GenerateDrillDialog.tsx. */
@@ -553,6 +595,25 @@ export interface StudioState {
   /** `7` (pcbnew.LengthTuner.TuneSingleTrack) -- components/LengthTuningDialog.tsx. */
   lengthTuningDialogOpen: boolean;
   /**
+   * `pcbnew.InteractiveDrawing.ruleArea` vs `.zone` (task item 3): both
+   * arm the same outline-drawing tool (`activeTool === "zone"`); this is
+   * the one bit that tells `ZoneDialog.tsx` which hotkey/menu entry armed
+   * it, so a fresh outline's dialog opens with "Rule area" pre-checked
+   * when it was the dedicated rule-area entry. Irrelevant once
+   * `state.zonePending` is set (the dialog reads it exactly once, when a
+   * new outline first arrives) and reset whenever either tool is
+   * (re-)armed.
+   */
+  nextZoneIsRuleArea: boolean;
+  /** `pcbnew.GlobalEdit.cleanupTracksAndVias` -- components/CleanupTracksDialog.tsx. */
+  cleanupTracksDialogOpen: boolean;
+  /** `pcbnew.GlobalEdit.editTracksAndVias` -- components/GlobalEditTracksAndViasDialog.tsx. */
+  editTracksAndViasDialogOpen: boolean;
+  /** `pcbnew.GlobalEdit.editTextAndGraphics` -- components/GlobalEditTextAndGraphicsDialog.tsx. */
+  editTextAndGraphicsDialogOpen: boolean;
+  /** `pcbnew.Array.createArray` (Ctrl+T, task item 6) -- components/CreateArrayDialog.tsx. */
+  createArrayDialogOpen: boolean;
+  /**
    * `eda_pns::RoutingSettings`, the subset this app's router actually
    * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
    * most of upstream's own `DIALOG_PNS_SETTINGS` fields -- shove vias,
@@ -580,6 +641,7 @@ const initialState: StudioState = {
   glbStatus: "idle",
   glbError: null,
   selection: new Set(),
+  enteredGroupId: null,
   hot: new Set(),
   netHighlight: null,
   armed: null,
@@ -588,9 +650,12 @@ const initialState: StudioState = {
   drawState: null,
   zonePending: null,
   zoneEditId: null,
+  nextDimensionKind: "aligned",
+  dimensionEditId: null,
   zoneFill: null,
   zoneDisplayMode: "filled",
   boardSetupDialogOpen: false,
+  boardSetupInitialPage: null,
   plotDialogOpen: false,
   generateDrillDialogOpen: false,
   footprintPositionDialogOpen: false,
@@ -651,6 +716,11 @@ const initialState: StudioState = {
   moveExactDialogOpen: false,
   routerSettingsDialogOpen: false,
   lengthTuningDialogOpen: false,
+  nextZoneIsRuleArea: false,
+  cleanupTracksDialogOpen: false,
+  editTracksAndViasDialogOpen: false,
+  editTextAndGraphicsDialogOpen: false,
+  createArrayDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
   routerSettings: { mode: "walkaround", removeLoops: true },
 };
@@ -665,6 +735,7 @@ export type Action =
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
   | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
   | { type: "SET_SELECTION"; refs: string[] }
+  | { type: "SET_ENTERED_GROUP"; id: string | null }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -716,10 +787,13 @@ export type Action =
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
   | { type: "SET_ZONE_EDIT_ID"; id: string | null }
+  | { type: "SET_NEXT_DIMENSION_KIND"; kind: CmdDimensionKind["kind"] }
+  | { type: "SET_DIMENSION_EDIT_ID"; id: string | null }
   | { type: "FILL_OK"; fill: FillReport }
   | { type: "CLEAR_ZONE_FILL" }
   | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" }
   | { type: "SET_BOARD_SETUP_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_BOARD_SETUP_INITIAL_PAGE"; page: string | null }
   | { type: "SET_PLOT_DIALOG_OPEN"; open: boolean }
   | { type: "SET_GENERATE_DRILL_DIALOG_OPEN"; open: boolean }
   | { type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN"; open: boolean }
@@ -739,7 +813,31 @@ export type Action =
   | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
-  | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean };
+  | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
+  | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_CREATE_ARRAY_DIALOG_OPEN"; open: boolean };
+
+/**
+ * `pcb_selection_tool.cpp`'s "clicking a group member selects the group"
+ * rule (task item 5): any ref that is a member of a group becomes that
+ * group's own id instead, *unless* `enteredGroupId` names that same group
+ * (`common.Interactive.groupEnter` -- see `StudioState.enteredGroupId`'s
+ * own doc), in which case the ref passes through unchanged so individual
+ * members can be picked while "inside" the group. A ref naming a group
+ * directly, or not in any group, also passes through unchanged.
+ */
+function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
+  if (!groups || groups.length === 0) return refs;
+  const byMember = new Map<string, string>();
+  for (const g of groups) for (const m of g.member_ids) byMember.set(m, g.id);
+  return refs.map((id) => {
+    const groupId = byMember.get(id);
+    return groupId && groupId !== enteredGroupId ? groupId : id;
+  });
+}
 
 function reducer(state: StudioState, action: Action): StudioState {
   switch (action.type) {
@@ -773,7 +871,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
     case "SET_SELECTION":
-      return { ...state, selection: new Set(action.refs), armed: null };
+      return { ...state, selection: new Set(withGroupSubstitution(action.refs, state.board?.drawings?.groups, state.enteredGroupId)), armed: null };
+    case "SET_ENTERED_GROUP":
+      return { ...state, enteredGroupId: action.id };
     case "TOGGLE_SELECTION": {
       const next = new Set(state.selection);
       if (next.has(action.ref)) next.delete(action.ref);
@@ -795,6 +895,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         drawState: null,
         zonePending: null,
         zoneEditId: null,
+        dimensionEditId: null,
         textDialog: null,
         itemPropertiesId: null,
         schLabelPending: null,
@@ -823,6 +924,7 @@ function reducer(state: StudioState, action: Action): StudioState {
           drawState: null,
           zonePending: null,
           zoneEditId: null,
+          dimensionEditId: null,
           textDialog: null,
           schLabelPending: null,
           schPowerPending: null,
@@ -834,7 +936,16 @@ function reducer(state: StudioState, action: Action): StudioState {
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
       }
-      // Idle, nothing selected: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
+      // Task item 5: nothing selected but still inside a group -- source's
+      // own next `else if` tier, `ExitGroup()` (re-selecting the group
+      // itself, `ExitGroup(true)`'s default -- matches
+      // `common.Interactive.groupLeave`'s own `SET_SELECTION` in
+      // useActionRunner.ts).
+      if (state.enteredGroupId != null) {
+        const leftId = state.enteredGroupId;
+        return { ...state, enteredGroupId: null, selection: new Set([leftId]) };
+      }
+      // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
       return { ...state, netHighlight: null };
     }
     case "SET_HOT":
@@ -935,6 +1046,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, zonePending: action.outline };
     case "SET_ZONE_EDIT_ID":
       return { ...state, zoneEditId: action.id };
+    case "SET_NEXT_DIMENSION_KIND":
+      return { ...state, nextDimensionKind: action.kind };
+    case "SET_DIMENSION_EDIT_ID":
+      return { ...state, dimensionEditId: action.id };
     case "FILL_OK":
       return { ...state, zoneFill: action.fill };
     case "CLEAR_ZONE_FILL":
@@ -946,6 +1061,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, zoneDisplayMode: action.mode };
     case "SET_BOARD_SETUP_DIALOG_OPEN":
       return { ...state, boardSetupDialogOpen: action.open };
+    case "SET_BOARD_SETUP_INITIAL_PAGE":
+      return { ...state, boardSetupInitialPage: action.page };
     case "SET_PLOT_DIALOG_OPEN":
       return { ...state, plotDialogOpen: action.open };
     case "SET_GENERATE_DRILL_DIALOG_OPEN":
@@ -986,6 +1103,16 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, routerSettings: action.settings };
     case "SET_LENGTH_TUNING_DIALOG_OPEN":
       return { ...state, lengthTuningDialogOpen: action.open };
+    case "SET_NEXT_ZONE_IS_RULE_AREA":
+      return { ...state, nextZoneIsRuleArea: action.value };
+    case "SET_CLEANUP_TRACKS_DIALOG_OPEN":
+      return { ...state, cleanupTracksDialogOpen: action.open };
+    case "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN":
+      return { ...state, editTracksAndViasDialogOpen: action.open };
+    case "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN":
+      return { ...state, editTextAndGraphicsDialogOpen: action.open };
+    case "SET_CREATE_ARRAY_DIALOG_OPEN":
+      return { ...state, createArrayDialogOpen: action.open };
     default:
       return state;
   }
@@ -1015,6 +1142,16 @@ export interface StudioApi {
   zoneById: (id: string) => Zone | undefined;
   shapeById: (id: string) => Shape | undefined;
   textById: (id: string) => BoardText | undefined;
+  /** Task item 5. */
+  groupById: (id: string) => Group | undefined;
+  /** Task item 7. */
+  dimensionById: (id: string) => Dimension | undefined;
+  /** `add_dimension`, returning the new dimension's own assigned id (or
+   * `null` on failure) -- the draw tool needs it immediately, to open
+   * DimensionPropertiesDialog on the thing it just created, the same
+   * before/after-diff pattern `duplicateSelection`/`groupSelection`
+   * already use for exactly this reason. */
+  addDimension: (dimension: CmdDimension) => Promise<string | null>;
   symbolById: (id: string) => SchematicSymbol | undefined;
   wireById: (id: string) => SchematicWire | undefined;
   schTextById: (id: string) => SchematicText | undefined;
@@ -1036,6 +1173,10 @@ export interface StudioApi {
    * handing straight off to doMoveSelection in source.
    */
   duplicateSelection: () => Promise<void>;
+  /** Ctrl+G: group the current selection (2+ items), then select the new group as a unit. */
+  groupSelection: () => Promise<void>;
+  /** Ctrl+Shift+G: dissolve every group named in the current selection, then select their former members. */
+  ungroupSelection: () => Promise<void>;
   /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
   copySelection: () => void;
   /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
@@ -1053,7 +1194,7 @@ export interface StudioApi {
    * `Cmd::AddZone` with inline settings, so every existing caller of that
    * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
    */
-  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields) => Promise<void>;
+  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields & RuleAreaFields) => Promise<void>;
   /** B ("Fill All Zones"): GET /api/fill now, and keep it live-updated (state.zoneFill) until `unfillZones`. */
   fillZones: () => Promise<void>;
   /** Ctrl+B ("Unfill All Zones"): back to outline-only, same as a zone that was never filled. */
@@ -1210,6 +1351,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     trackById: (id) => stateRef.current.board?.routing?.tracks.find((t) => t.id === id),
     viaById: (id) => stateRef.current.board?.routing?.vias.find((v) => v.id === id),
     zoneById: (id) => stateRef.current.board?.routing?.zones.find((z) => z.id === id),
+    groupById: (id) => stateRef.current.board?.drawings?.groups.find((g) => g.id === id),
+    dimensionById: (id) => stateRef.current.board?.drawings?.dimensions.find((d) => d.id === id),
+    addDimension: async (dimension) => {
+      const board = stateRef.current.board;
+      if (!board) return null;
+      const before = allItemIds(board);
+      const ok = await runCmd({ op: "add_dimension", dimension });
+      if (!ok) return null;
+      const after = stateRef.current.board;
+      if (!after) return null;
+      return [...allItemIds(after)].find((id) => !before.has(id)) ?? null;
+    },
     shapeById: (id) => stateRef.current.board?.drawings?.shapes.find((s) => s.id === id),
     textById: (id) => stateRef.current.board?.drawings?.texts.find((t) => t.id === id),
     symbolById: (id) => stateRef.current.schematic?.symbols.find((s) => s.id === id),
@@ -1339,6 +1492,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         } else if (kind === "text") {
           const t = api.textById(ref);
           if (t) await runCmd({ op: "move_text", id: ref, x: t.x + dxUm, y: t.y + dyUm });
+        } else if (kind === "dimension") {
+          await runCmd({ op: "move_dimension", id: ref, dx: dxUm, dy: dyUm });
         } else if (kind === "symbol") {
           const s = api.symbolById(ref);
           if (s) await runCmd({ op: "move_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm });
@@ -1431,6 +1586,33 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
     },
+    // `common.Interactive.group`/`ungroup` (task item 5). `state.selection`
+    // already holds whatever `withGroupSubstitution` resolved a click to
+    // (a group's own id for any of its members), so a multi-select here is
+    // already "the right set of things to act on" with no extra lookup.
+    groupSelection: async () => {
+      const board = stateRef.current.board;
+      if (!board) return;
+      const ids = [...stateRef.current.selection];
+      if (ids.length < 2) return;
+      const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
+      const ok = await runCmd({ op: "group", ids });
+      if (!ok) return;
+      const after = stateRef.current.board;
+      const newGroupId = (after?.drawings?.groups ?? []).map((g) => g.id).find((id) => !before.has(id));
+      if (newGroupId) dispatch({ type: "SET_SELECTION", refs: [newGroupId] });
+    },
+    ungroupSelection: async () => {
+      const groupIds = [...stateRef.current.selection].filter((id) => api.groupById(id));
+      if (groupIds.length === 0) return;
+      // Capture members before they're released, so the resulting
+      // selection is "whatever was inside" -- source's own Ungroup
+      // selects the released members, not nothing.
+      const members = groupIds.flatMap((id) => api.groupById(id)?.member_ids ?? []);
+      const ok = await runCmd({ op: "ungroup", ids: groupIds });
+      if (!ok) return;
+      dispatch({ type: "SET_SELECTION", refs: members });
+    },
     addZone: async (net, layer, outline, settings) => {
       const board = stateRef.current.board;
       if (!board) return;
@@ -1443,7 +1625,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!newId) return;
       // Default-valued settings need no follow-up at all -- `add_zone`
       // already landed on exactly that.
-      const unchanged = (Object.keys(DEFAULT_ZONE_SETTINGS) as (keyof ZoneSettingsFields)[]).every((k) => settings[k] === DEFAULT_ZONE_SETTINGS[k]);
+      const defaults = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
+      const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
       if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
     },
     copySelection: () => {

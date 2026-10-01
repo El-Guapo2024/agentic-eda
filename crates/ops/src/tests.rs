@@ -1,5 +1,5 @@
 use super::*;
-use eda_model::ir::{PlacementSection, Provenance};
+use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
 use eda_model::{Net, Part, Pin, PinKind, PlacementRule};
 
 fn part(r: &str, pkg: &str) -> Part {
@@ -499,6 +499,74 @@ fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
     assert_eq!(e[0].check, "ops_bad_via");
 }
 
+// ------------------------------------------- global edit: tracks & vias
+
+#[test]
+fn edit_tracks_and_vias_sets_explicit_width_diameter_drill_and_layer() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    let track_id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+    let via_id = b.design().routing.as_ref().unwrap().vias[0].id.clone();
+
+    b.apply(&Cmd::EditTracksAndVias {
+        ids: vec![track_id.clone(), via_id.clone()],
+        track_width: Some(SizeSpec::Value { um: 350 }),
+        via_size: Some(ViaSizeSpec::Value { diameter: 900, drill: 450 }),
+        layer: Some("B.Cu".into()),
+    })
+    .unwrap();
+
+    let t = &b.design().routing.as_ref().unwrap().tracks[0];
+    assert_eq!(t.width, 350);
+    assert_eq!(t.layer, "B.Cu", "a track's layer is editable; a via's layer span is not touched by this command");
+    assert_eq!(t.id, track_id, "style/layer edits must not move the id");
+    let v = &b.design().routing.as_ref().unwrap().vias[0];
+    assert_eq!((v.diameter, v.drill), (900, 450));
+    assert_eq!((v.from_layer.as_str(), v.to_layer.as_str()), ("F.Cu", "B.Cu"));
+}
+
+#[test]
+fn edit_tracks_and_vias_net_class_resolves_each_items_own_net() {
+    let mut m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[("FAST", &["U1"]), ("SLOW", &["U2"])], vec![]);
+    m.board.net_classes = vec![eda_model::NetClass { name: "fast".into(), nets: vec!["FAST".into()], track_width: Some(500), clearance: None, via_diameter: Some(1000), via_drill: Some(500), microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }];
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "FAST".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "SLOW".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 2000 }, Point { x: 1000, y: 2000 }] }).unwrap();
+    let ids: Vec<String> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
+
+    b.apply(&Cmd::EditTracksAndVias { ids, track_width: Some(SizeSpec::NetClass), via_size: None, layer: None }).unwrap();
+
+    let widths: std::collections::BTreeMap<String, Um> = b.design().routing.as_ref().unwrap().tracks.iter().map(|t| (t.net.clone(), t.width)).collect();
+    assert_eq!(widths["FAST"], 500, "FAST is in the fast net class, which overrides track width");
+    assert_eq!(widths["SLOW"], m.board.track_width, "SLOW has no class, so it falls back to the board default");
+}
+
+#[test]
+fn edit_tracks_and_vias_refuses_empty_ids_and_bad_explicit_values() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::EditTracksAndVias { ids: vec![], track_width: Some(SizeSpec::NetClass), via_size: None, layer: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_global_edit");
+
+    let e = b.apply(&Cmd::EditTracksAndVias { ids: vec!["whatever".into()], track_width: Some(SizeSpec::Value { um: 0 }), via_size: None, layer: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_track");
+
+    let e = b.apply(&Cmd::EditTracksAndVias { ids: vec!["whatever".into()], track_width: None, via_size: Some(ViaSizeSpec::Value { diameter: 300, drill: 300 }), layer: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_via");
+}
+
+#[test]
+fn edit_tracks_and_vias_tolerates_unknown_ids_among_known_ones() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+    b.apply(&Cmd::EditTracksAndVias { ids: vec![id, "nope".into()], track_width: Some(SizeSpec::Value { um: 500 }), via_size: None, layer: None }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks[0].width, 500);
+}
+
 // --------------------------------------------------------------- zones
 
 #[test]
@@ -514,6 +582,46 @@ fn add_zone_then_delete_it() {
     assert!(!id.is_empty());
     b.apply(&Cmd::DeleteZone { id }).unwrap();
     assert!(b.design().routing.as_ref().unwrap().zones.is_empty());
+}
+
+#[test]
+fn add_zone_allows_an_empty_net_for_a_rule_area() {
+    // A keepout normally has no net at all (KiCad's net code 0) -- this
+    // must not be refused the way a real but-unknown net name still is.
+    let m = net_model();
+    let mut b = board(&m);
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 0 }, Point { x: 5_000, y: 5_000 }];
+    b.apply(&Cmd::AddZone { net: "".into(), layer: "F.Cu".into(), outline }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().zones[0].net, "");
+
+    let e = b.apply(&Cmd::AddZone { net: "NOPE".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 0 }, Point { x: 1, y: 1 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_net", "a real but unknown net name must still be refused");
+}
+
+#[test]
+fn edit_zone_keepout_flags_round_trip_and_empty_net_is_allowed() {
+    let m = net_model();
+    let mut b = board(&m);
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 0 }, Point { x: 5_000, y: 5_000 }];
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+
+    b.apply(&edit_zone_cmd(id.clone(), "", |z| {
+        z.is_rule_area = true;
+        z.keepout_tracks = true;
+        z.keepout_vias = true;
+        z.keepout_pads = false;
+        z.keepout_copper_pour = true;
+        z.keepout_footprints = false;
+    }))
+    .unwrap();
+
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!(z.id, id, "id must not move");
+    assert_eq!(z.net, "", "a rule area may drop to no net");
+    assert!(z.is_rule_area);
+    assert!(z.keepout_tracks && z.keepout_vias && z.keepout_copper_pour);
+    assert!(!z.keepout_pads && !z.keepout_footprints);
 }
 
 fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cmd {
@@ -542,6 +650,12 @@ fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cm
         hatch_smoothing_value: z.hatch_smoothing_value,
         hatch_hole_min_area: z.hatch_hole_min_area,
         hatch_border_algorithm: z.hatch_border_algorithm,
+        is_rule_area: z.is_rule_area,
+        keepout_tracks: z.keepout_tracks,
+        keepout_vias: z.keepout_vias,
+        keepout_pads: z.keepout_pads,
+        keepout_copper_pour: z.keepout_copper_pour,
+        keepout_footprints: z.keepout_footprints,
     }
 }
 
@@ -620,6 +734,77 @@ fn set_zone_outline_replaces_the_outline_only() {
     let e = b.apply(&Cmd::SetZoneOutline { id: id.clone(), outline: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 1 }] }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
     assert_eq!(b.apply(&Cmd::SetZoneOutline { id: "zone_nope".into(), outline: new_outline }).unwrap_err()[0].check, "ops_unknown_zone");
+}
+
+// ----------------------------------------------------------- teardrops
+
+fn via_and_track_board() -> (ConstraintModel, Point, Point) {
+    let m = net_model();
+    let via_at = Point { x: 40_000, y: 40_000 };
+    let far = Point { x: via_at.x + 5000, y: via_at.y };
+    (m, via_at, far)
+}
+
+#[test]
+fn add_all_teardrops_is_a_no_op_when_disabled() {
+    let (m, via_at, far) = via_and_track_board();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![via_at, far] }).unwrap();
+
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    assert!(b.design().routing.as_ref().unwrap().zones.is_empty(), "teardrop_settings.enabled defaults false");
+}
+
+#[test]
+fn add_all_teardrops_generates_once_and_is_idempotent() {
+    let (m, via_at, far) = via_and_track_board();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![via_at, far] }).unwrap();
+    b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { enabled: true, ..Default::default() } }).unwrap();
+
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    let zones = b.design().routing.as_ref().unwrap().zones.clone();
+    assert_eq!(zones.len(), 1, "{zones:?}");
+    assert!(zones[0].teardrop);
+    let first_id = zones[0].id.clone();
+
+    // Running it again must replace, not duplicate, the generated set.
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    let zones2 = b.design().routing.as_ref().unwrap().zones.clone();
+    assert_eq!(zones2.len(), 1, "a second run must not accumulate teardrops: {zones2:?}");
+    assert_eq!(zones2[0].id, first_id, "regenerating an identical shape must land on the same deterministic id");
+}
+
+#[test]
+fn add_all_teardrops_never_touches_a_user_drawn_zone() {
+    let (m, via_at, far) = via_and_track_board();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: via_at.x, y: via_at.y, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![via_at, far] }).unwrap();
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    let user_zone_id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { enabled: true, ..Default::default() } }).unwrap();
+
+    b.apply(&Cmd::AddAllTeardrops).unwrap();
+    let zones = b.design().routing.as_ref().unwrap().zones.clone();
+    assert_eq!(zones.len(), 2, "{zones:?}");
+    assert!(zones.iter().any(|z| z.id == user_zone_id && !z.teardrop), "the hand-drawn zone must survive untouched");
+
+    b.apply(&Cmd::RemoveAllTeardrops).unwrap();
+    let zones = b.design().routing.as_ref().unwrap().zones.clone();
+    assert_eq!(zones.len(), 1, "{zones:?}");
+    assert_eq!(zones[0].id, user_zone_id, "only the generated teardrop should be gone");
+}
+
+#[test]
+fn set_teardrop_settings_rejects_a_ratio_outside_zero_to_one() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::SetTeardropSettings { settings: TeardropSettings { best_width_ratio: 1.5, ..Default::default() } }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_teardrop_settings");
+    assert_eq!(b.design().routing.as_ref().map(|r| r.teardrop_settings), None, "a refused settings change must not touch the board at all (routing section not even created)");
 }
 
 // -------------------------------------------------------------- shapes
@@ -702,6 +887,146 @@ fn add_edit_move_delete_text() {
     assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
 }
 
+// ------------------------------------- global edit: text & graphics
+
+#[test]
+fn edit_text_and_graphics_touches_only_the_fields_given() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } } }).unwrap();
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REF".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    let shape_id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
+    let text_id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
+
+    // Only a line-width change for the shape -- its layer must be untouched.
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![], layer: None, line_width: Some(250), text_size: None, text_thickness: None }).unwrap();
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.shapes[0].layer(), "F.SilkS");
+    assert_eq!(dr.shapes[0].id(), shape_id, "a style edit must not move the id");
+    match &dr.shapes[0] {
+        Shape::Segment { stroke_width, .. } => assert_eq!(*stroke_width, 250),
+        other => panic!("expected a Segment, got {other:?}"),
+    }
+
+    // Layer + text size/thickness for the text, same command touching both kinds at once.
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![text_id.clone()], layer: Some("F.Fab".into()), line_width: None, text_size: Some(1200), text_thickness: Some(200) })
+        .unwrap();
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.shapes[0].layer(), "F.Fab", "the shared `layer` field must still reach the shape on a mixed call");
+    let t = dr.texts.iter().find(|t| t.id == text_id).unwrap();
+    assert_eq!(t.layer, "F.Fab");
+    assert_eq!(t.size_um, 1200);
+    assert_eq!(t.stroke_width, 200);
+    assert_eq!(t.content, "REF", "content is not one of this command's fields");
+}
+
+#[test]
+fn edit_text_and_graphics_refuses_empty_input_and_bad_values() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec![], layer: None, line_width: None, text_size: None, text_thickness: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_global_edit");
+
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], layer: None, line_width: Some(0), text_size: None, text_thickness: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_shape");
+
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec!["x".into()], layer: None, line_width: None, text_size: Some(-5), text_thickness: None }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_text");
+}
+
+// -------------------------------------------------------------- groups
+
+#[test]
+fn group_needs_at_least_two_items() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::Group { ids: vec!["U1".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_group");
+}
+
+#[test]
+fn group_then_ungroup_round_trips() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert!(!groups[0].id.is_empty());
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "U1".to_string()]);
+
+    b.apply(&Cmd::Ungroup { ids: vec![groups[0].id.clone()] }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().groups.is_empty());
+}
+
+#[test]
+fn grouping_an_existing_group_flattens_instead_of_nesting() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    let inner_id = b.design().drawings.as_ref().unwrap().groups[0].id.clone();
+
+    b.apply(&Cmd::Group { ids: vec![inner_id.clone(), "C2".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "the inner group must be flattened away, not nested: {groups:?}");
+    assert_ne!(groups[0].id, inner_id, "a flattened-and-rebuilt group gets a fresh id");
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()]);
+}
+
+#[test]
+fn an_item_can_only_belong_to_one_group_at_a_time() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    let first_group_id = b.design().drawings.as_ref().unwrap().groups[0].id.clone();
+
+    // Pulling C1 into a brand new group with C2 must remove it from the
+    // first group -- which then has only 1 member left and dissolves.
+    b.apply(&Cmd::Group { ids: vec!["C1".into(), "C2".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "the now-single-member first group must dissolve: {groups:?}");
+    assert_ne!(groups[0].id, first_group_id);
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "C2".to_string()]);
+}
+
+#[test]
+fn add_to_group_and_remove_from_group_round_trip() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    let group_id = b.design().drawings.as_ref().unwrap().groups[0].id.clone();
+
+    b.apply(&Cmd::AddToGroup { group_id: group_id.clone(), ids: vec!["C2".into()] }).unwrap();
+    let mut members = b.design().drawings.as_ref().unwrap().groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()]);
+
+    let e = b.apply(&Cmd::AddToGroup { group_id: "grp_nope".into(), ids: vec!["U1".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_group");
+
+    // Removing two of the three members leaves only one -- the group must dissolve.
+    b.apply(&Cmd::RemoveFromGroup { ids: vec!["C1".into(), "C2".into()] }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().groups.is_empty(), "{:?}", b.design().drawings.as_ref().unwrap().groups);
+}
+
+#[test]
+fn removing_from_a_group_that_stays_above_two_members_keeps_it_alive() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into(), "C2".into()] }).unwrap();
+    b.apply(&Cmd::RemoveFromGroup { ids: vec!["C1".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C2".to_string(), "U1".to_string()], "C1 should be gone, the other two still grouped");
+}
+
 // ---------------------------------------------------- clears_routing
 
 #[test]
@@ -724,6 +1049,8 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::MoveText { id: "x".into(), x: 0, y: 0 },
         Cmd::Duplicate { ids: vec!["x".into()] },
         Cmd::PasteItems { tracks: vec![], vias: vec![], zones: vec![], shapes: vec![], texts: vec![] },
+        Cmd::EditTracksAndVias { ids: vec!["x".into()], track_width: None, via_size: None, layer: None },
+        Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], layer: None, line_width: None, text_size: None, text_thickness: None },
     ];
     for c in &copper_and_drawing_cmds {
         assert!(!c.clears_routing(), "{c:?} must not clear routing -- only part edits do");
@@ -741,6 +1068,7 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::Rip { part: "U1".into() },
         Cmd::Flip { part: "U1".into() },
         Cmd::MoveExact { parts: vec!["U1".into()], dx: 0, dy: 0, rotate_millideg: 0, pivot: None },
+        Cmd::CreateArray { ids: vec!["U1".into()], geometry: ArrayGeometry::Grid { nx: 2, ny: 1, dx: 1000, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true }, arrange: true },
     ];
     for c in &part_edit_cmds {
         assert!(c.clears_routing(), "{c:?} must clear routing -- it can move a part out from under a track");
@@ -1376,4 +1704,341 @@ fn edit_and_rename_apply_to_every_unit_together() {
     assert!(sch.symbols.iter().all(|s| s.id == "U5"));
     let units: std::collections::BTreeSet<u32> = sch.symbols.iter().map(|s| s.unit).collect();
     assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
+}
+
+// ------------------------------------------------------------ create array (task item 6)
+
+fn add_via_at(b: &mut Board<'_>, x: Um, y: Um) -> String {
+    b.apply(&Cmd::AddVia { net: "GND".into(), x, y, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    b.design().routing.as_ref().unwrap().vias.iter().find(|v| v.at == Point { x, y }).unwrap().id.clone()
+}
+
+fn grid2x2(dx: Um, dy: Um, centred: bool) -> ArrayGeometry {
+    ArrayGeometry::Grid { nx: 2, ny: 2, dx, dy, offset_x: 0, offset_y: 0, centred, stagger: 0, stagger_rows: true, horizontal_then_vertical: true }
+}
+
+#[test]
+fn create_array_rejects_no_ids() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::CreateArray { ids: vec![], geometry: grid2x2(1000, 1000, false), arrange: false }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_array");
+}
+
+#[test]
+fn create_array_grid_rejects_zero_spacing_with_more_than_one_column_or_row() {
+    let m = net_model();
+    let mut b = board(&m);
+    let id = add_via_at(&mut b, 0, 0);
+    let e = b.apply(&Cmd::CreateArray { ids: vec![id.clone()], geometry: grid2x2(0, 1000, false), arrange: false }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_array");
+    let e = b.apply(&Cmd::CreateArray { ids: vec![id], geometry: grid2x2(1000, 0, false), arrange: false }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_array");
+}
+
+#[test]
+fn create_array_circular_rejects_zero_angle_with_more_than_one_point() {
+    let m = net_model();
+    let mut b = board(&m);
+    let id = add_via_at(&mut b, 1000, 0);
+    let e = b
+        .apply(&Cmd::CreateArray {
+            ids: vec![id],
+            geometry: ArrayGeometry::Circular { center: Point { x: 0, y: 0 }, count: 4, angle_millideg: 0, angle_offset_millideg: 0, clockwise: true, rotate_items: false },
+            arrange: false,
+        })
+        .unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_array");
+}
+
+/// A plain, uncentred 2x2 grid of 1mm pitch starting from one via at the
+/// origin must cover exactly that grid's four corners -- three new vias
+/// plus the original, which source's own reverse loop moves to the
+/// array's last slot rather than leaving at slot 0 (see `duplicate_into_
+/// array`'s own doc; with `centred: false` slot 0 is a no-op offset, so
+/// this is also the one case where "original stays put" and "original
+/// moves to the last slot" would look identical if `last` happened to
+/// land back on (0, 0) -- it does not here, so this still exercises it).
+#[test]
+fn create_array_duplicate_grid_covers_all_four_corners_and_relocates_the_original() {
+    let m = net_model();
+    let mut b = board(&m);
+    let id = add_via_at(&mut b, 0, 0);
+    b.apply(&Cmd::CreateArray { ids: vec![id.clone()], geometry: grid2x2(1000, 1000, false), arrange: false }).unwrap();
+
+    let vias = &b.design().routing.as_ref().unwrap().vias;
+    assert_eq!(vias.len(), 4, "three new vias plus the original");
+    let positions: std::collections::BTreeSet<(Um, Um)> = vias.iter().map(|v| (v.at.x, v.at.y)).collect();
+    assert_eq!(positions, std::collections::BTreeSet::from([(0, 0), (1000, 0), (0, 1000), (1000, 1000)]));
+
+    // The original id now names whichever corner slot 3 (the last) is --
+    // (1000, 1000) for this geometry -- not wherever it started.
+    let original = vias.iter().find(|v| v.id == id).unwrap();
+    assert_eq!(original.at, Point { x: 1000, y: 1000 });
+}
+
+/// `centred: true` spreads the same 2x2 grid evenly around the original
+/// point instead of anchoring its corner there.
+#[test]
+fn create_array_duplicate_grid_centred_spreads_around_the_original_point() {
+    let m = net_model();
+    let mut b = board(&m);
+    let id = add_via_at(&mut b, 0, 0);
+    b.apply(&Cmd::CreateArray { ids: vec![id], geometry: grid2x2(1000, 1000, true), arrange: false }).unwrap();
+
+    let vias = &b.design().routing.as_ref().unwrap().vias;
+    let positions: std::collections::BTreeSet<(Um, Um)> = vias.iter().map(|v| (v.at.x, v.at.y)).collect();
+    assert_eq!(positions, std::collections::BTreeSet::from([(-500, -500), (500, -500), (-500, 500), (500, 500)]));
+}
+
+/// A placed part and a group in the same `ids` list are silently skipped
+/// in duplicate mode -- same "skip, don't refuse" precedent `Cmd::
+/// Duplicate` already set for a footprint id -- while the one real via
+/// in the list still arrays normally.
+#[test]
+fn create_array_duplicate_skips_footprints_and_groups() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceEdge { part: "U1".into(), edge: Dir::West, fraction: 0.5 }).unwrap();
+    let part_pos_before = b.pose_of("U1").unwrap().at;
+    let via_id = add_via_at(&mut b, 0, 0);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 20_000, y: 20_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    let other_via_id = b.design().routing.as_ref().unwrap().vias.iter().find(|v| v.at == Point { x: 20_000, y: 20_000 }).unwrap().id.clone();
+    b.apply(&Cmd::Group { ids: vec![via_id.clone(), other_via_id.clone()] }).unwrap();
+    let group_id = b.design().drawings.as_ref().unwrap().groups[0].id.clone();
+
+    let geometry = ArrayGeometry::Grid { nx: 2, ny: 1, dx: 1000, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true };
+    b.apply(&Cmd::CreateArray { ids: vec!["U1".into(), group_id.clone(), via_id.clone()], geometry, arrange: false }).unwrap();
+
+    assert_eq!(b.pose_of("U1").unwrap().at, part_pos_before, "a footprint cannot be duplicated this way");
+    assert_eq!(b.design().drawings.as_ref().unwrap().groups.len(), 1, "the group itself is untouched");
+    // nx=2, ny=1 grid of the one real via: one new copy plus the relocated original.
+    let vias = &b.design().routing.as_ref().unwrap().vias;
+    assert_eq!(vias.len(), 3, "other_via_id untouched, plus the arrayed via's own two slots");
+}
+
+#[test]
+fn create_array_rejects_ids_that_name_nothing_arrayable() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceEdge { part: "U1".into(), edge: Dir::West, fraction: 0.5 }).unwrap();
+    let e = b.apply(&Cmd::CreateArray { ids: vec!["U1".into()], geometry: grid2x2(1000, 1000, false), arrange: false }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_array");
+}
+
+/// A circular array with `rotate_items` spins a `Text` in place (it has a
+/// scalar `angle` field to add to) but only ever translates a `Shape`
+/// along the circle -- this model has no generic per-point shape rotation
+/// yet, see `ArrayGeometry::Circular::rotate_items`'s own doc.
+#[test]
+fn create_array_circular_rotates_text_but_only_translates_shapes() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "1".into(), at: Point { x: 1000, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false } }).unwrap();
+    let text_id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
+    b.apply(&Cmd::AddShape { shape: Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 1000, y: 0 }, end: Point { x: 1100, y: 0 } } }).unwrap();
+    let shape_id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
+
+    let geometry = ArrayGeometry::Circular { center: Point { x: 0, y: 0 }, count: 4, angle_millideg: 90_000, angle_offset_millideg: 0, clockwise: true, rotate_items: true };
+    b.apply(&Cmd::CreateArray { ids: vec![text_id, shape_id], geometry, arrange: false }).unwrap();
+
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.texts.len(), 4);
+    // One of the four must be a 90 degree step (the n=1 copy) landing at
+    // (0, 1000) -- clockwise-positive in this app's Y-down board
+    // coordinates, same convention `rotate_point_about` documents.
+    let rotated = dr.texts.iter().find(|t| t.angle == 90_000).expect("one copy must be rotated 90 degrees in place");
+    assert_eq!(rotated.at, Point { x: 0, y: 1000 });
+
+    assert_eq!(dr.shapes.len(), 4);
+    // Every copy keeps the same start-to-end vector (100, 0) -- translated
+    // along the circle, never spun to face outward.
+    for s in &dr.shapes {
+        let pts = s.points();
+        assert_eq!((pts[1].x - pts[0].x, pts[1].y - pts[0].y), (100, 0), "a shape must only translate in a circular array, never rotate in place");
+    }
+}
+
+/// `arrange: true` repositions the given ids into the array's own slots
+/// and creates nothing -- `ARRAY_TOOL::CreateArray`'s `ShouldArrangeSelection()` branch.
+#[test]
+fn create_array_arrange_repositions_existing_items_without_creating_new_ones() {
+    let m = net_model();
+    let mut b = board(&m);
+    let v1 = add_via_at(&mut b, 0, 0);
+    let v2 = add_via_at(&mut b, 9_999, 9_999);
+
+    let geometry = ArrayGeometry::Grid { nx: 2, ny: 1, dx: 5_000, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true };
+    b.apply(&Cmd::CreateArray { ids: vec![v1.clone(), v2.clone()], geometry, arrange: true }).unwrap();
+
+    let vias = &b.design().routing.as_ref().unwrap().vias;
+    assert_eq!(vias.len(), 2, "arrange must never create a new item");
+    assert_eq!(vias.iter().find(|v| v.id == v1).unwrap().at, Point { x: 0, y: 0 }, "slot 0's offset is (0,0) when not centred");
+    assert_eq!(vias.iter().find(|v| v.id == v2).unwrap().at, Point { x: 9_999 + 5_000, y: 9_999 });
+}
+
+/// `arrange: true` can move a placed part (the one kind `Cmd::Duplicate`-
+/// style array creation can never touch) using the same `set_pose`
+/// `Cmd::MoveExact` already does. Also proves the slot counter only
+/// advances on a real match: with the bug this guards against, the
+/// unknown ids interleaved here would misalign C1 onto slot 3 of a
+/// 2-slot array and the loop would `break` before ever reaching it.
+#[test]
+fn create_array_arrange_can_move_a_placed_part_and_unknown_ids_do_not_consume_a_slot() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceEdge { part: "U1".into(), edge: Dir::West, fraction: 0.5 }).unwrap();
+    b.apply(&Cmd::Place { part: "C1".into(), anchor: "U1".into(), side: Dir::East }).unwrap();
+    let (u1_before, c1_before) = (b.pose_of("U1").unwrap().at, b.pose_of("C1").unwrap().at);
+
+    let geometry = ArrayGeometry::Grid { nx: 2, ny: 1, dx: 5_000, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true };
+    b.apply(&Cmd::CreateArray { ids: vec!["ignored1".into(), "U1".into(), "ignored2".into(), "C1".into()], geometry, arrange: true })
+        .unwrap();
+
+    assert_eq!(b.pose_of("U1").unwrap().at, u1_before, "U1 is slot 0 -- a no-op offset when not centred");
+    assert_eq!(b.pose_of("C1").unwrap().at, Point { x: c1_before.x + 5_000, y: c1_before.y }, "C1 is slot 1, not slot 3 -- the two unknown ids must not have consumed a slot each");
+}
+
+// ------------------------------------------------------------ dimensions (task item 7)
+
+fn aligned_dim(start: Point, end: Point) -> Dimension {
+    Dimension {
+        id: String::new(),
+        layer: "Dwgs.User".into(),
+        kind: DimensionKind::Aligned { height: 1000 },
+        start,
+        end,
+        prefix: String::new(),
+        suffix: String::new(),
+        override_text: None,
+        units: DimensionUnits::Mm,
+        units_format: DimensionUnitsFormat::NoSuffix,
+        precision: 2,
+        suppress_trailing_zeros: true,
+        text_position: DimensionTextPosition::Outside,
+        keep_text_aligned: true,
+        text_angle: 0,
+        text_size_um: 1000,
+        stroke_width: 150,
+        arrow_length: 1000,
+        extension_offset: 200,
+        extension_height: 500,
+        arrow_direction: ArrowDirection::Outward,
+    }
+}
+
+#[test]
+fn add_dimension_needs_a_layer_and_two_distinct_points() {
+    let m = net_model();
+    let mut b = board(&m);
+
+    let mut no_layer = aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 });
+    no_layer.layer = String::new();
+    let e = b.apply(&Cmd::AddDimension { dimension: no_layer }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_dimension");
+
+    let same_point = aligned_dim(Point { x: 500, y: 500 }, Point { x: 500, y: 500 });
+    let e = b.apply(&Cmd::AddDimension { dimension: same_point }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_dimension");
+
+    assert!(b.design().drawings.as_ref().map(|d| d.dimensions.is_empty()).unwrap_or(true));
+}
+
+#[test]
+fn add_dimension_assigns_an_id_ignoring_any_the_caller_sent() {
+    let m = net_model();
+    let mut b = board(&m);
+    let mut dim = aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 });
+    dim.id = "caller-supplied".into();
+    b.apply(&Cmd::AddDimension { dimension: dim }).unwrap();
+
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.dimensions.len(), 1);
+    assert!(!dr.dimensions[0].id.is_empty());
+    assert_ne!(dr.dimensions[0].id, "caller-supplied");
+    assert!(dr.dimensions[0].id.starts_with("dim_"));
+}
+
+#[test]
+fn delete_dimension_removes_by_id_and_refuses_an_unknown_one() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
+
+    b.apply(&Cmd::DeleteDimension { id: id.clone() }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().dimensions.is_empty());
+
+    let e = b.apply(&Cmd::DeleteDimension { id }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_dimension");
+}
+
+#[test]
+fn move_dimension_translates_both_feature_points_but_not_the_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
+
+    b.apply(&Cmd::MoveDimension { id: id.clone(), dx: 500, dy: -200 }).unwrap();
+
+    let dim = &b.design().drawings.as_ref().unwrap().dimensions[0];
+    assert_eq!(dim.id, id);
+    assert_eq!(dim.start, Point { x: 500, y: -200 });
+    assert_eq!(dim.end, Point { x: 1500, y: -200 });
+}
+
+#[test]
+fn edit_dimension_replaces_every_field_but_keeps_the_original_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
+
+    let mut edited = aligned_dim(Point { x: 0, y: 0 }, Point { x: 2000, y: 0 });
+    edited.id = "ignored-too".into();
+    edited.kind = DimensionKind::Orthogonal { height: 500, horizontal: true };
+    edited.prefix = "L=".into();
+    b.apply(&Cmd::EditDimension { id: id.clone(), dimension: edited }).unwrap();
+
+    let dim = &b.design().drawings.as_ref().unwrap().dimensions[0];
+    assert_eq!(dim.id, id, "editing must never move the id");
+    assert_eq!(dim.end, Point { x: 2000, y: 0 });
+    assert_eq!(dim.prefix, "L=");
+    assert!(matches!(dim.kind, DimensionKind::Orthogonal { horizontal: true, .. }));
+}
+
+#[test]
+fn edit_dimension_on_an_unknown_id_is_refused() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::EditDimension { id: "nope".into(), dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_dimension");
+}
+
+#[test]
+fn set_dimension_settings_replaces_the_whole_struct() {
+    let m = net_model();
+    let mut b = board(&m);
+    let settings = DimensionSettings { precision: 1, arrow_length: 2000, ..Default::default() };
+    b.apply(&Cmd::SetDimensionSettings { settings }).unwrap();
+
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.dimension_settings.precision, 1);
+    assert_eq!(dr.dimension_settings.arrow_length, 2000);
+}
+
+#[test]
+fn dimension_commands_never_clear_routing() {
+    let id = "x".to_string();
+    let cmds = [
+        Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) },
+        Cmd::DeleteDimension { id: id.clone() },
+        Cmd::MoveDimension { id: id.clone(), dx: 0, dy: 0 },
+        Cmd::EditDimension { id, dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) },
+        Cmd::SetDimensionSettings { settings: DimensionSettings::default() },
+    ];
+    for c in &cmds {
+        assert!(!c.clears_routing(), "{c:?} must not clear routing -- it never moves a part");
+    }
 }

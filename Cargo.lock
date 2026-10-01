@@ -699,6 +699,7 @@ dependencies = [
 name = "eda-ops"
 version = "0.1.0"
 dependencies = [
+ "eda-connectivity",
  "eda-gates",
  "eda-model",
  "serde",

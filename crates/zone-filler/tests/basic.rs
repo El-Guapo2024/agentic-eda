@@ -6,7 +6,7 @@ use eda_clipper2::Point64;
 use eda_model::ir::{IslandRemovalMode, PadConnection, Point, Zone};
 use eda_zone_filler::shape::Shape;
 use eda_zone_filler::spokes::poly_set_contains as poly_set_contains_pt;
-use eda_zone_filler::{fill_zone, FillInput, FillPad, FillZoneRef};
+use eda_zone_filler::{fill_zone, FillInput, FillKeepout, FillPad, FillZoneRef};
 
 const MAX_ERROR: i64 = 5;
 
@@ -137,4 +137,27 @@ fn different_net_zone_gets_a_clearance_gap_not_an_exact_cut() {
     assert!(!poly_set_contains_pt(&fill, Point64::new(500, 500)));
     // the clearance gap means even just outside the other zone's outline is cleared
     assert!(!poly_set_contains_pt(&fill, Point64::new(395, 500)), "clearance gap around the different-net zone should be cleared too");
+}
+
+#[test]
+fn a_copper_pour_keepout_cuts_a_hole_regardless_of_net_or_priority() {
+    // Task item 3: a rule area with "no copper pours" must exclude copper
+    // from every zone that overlaps it, same net or not, any priority --
+    // unlike `other_zones`, which only knocks out a *lower*-priority zone
+    // and only charges a clearance gap for a different net.
+    let zone = Zone { priority: 99, ..test_zone("GND", rect_outline(0, 0, 1000, 1000)) };
+    let input = FillInput { keepouts: vec![FillKeepout { layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)) }], ..Default::default() };
+
+    let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
+    assert!(!poly_set_contains_pt(&fill, Point64::new(500, 500)), "the keepout's own area must be excluded from the fill");
+    assert!(poly_set_contains_pt(&fill, Point64::new(50, 50)), "the rest of the zone should still be filled");
+}
+
+#[test]
+fn a_keepout_on_a_different_layer_does_not_affect_this_fill() {
+    let zone = test_zone("GND", rect_outline(0, 0, 1000, 1000));
+    let input = FillInput { keepouts: vec![FillKeepout { layer: "B.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)) }], ..Default::default() };
+
+    let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
+    assert!(poly_set_contains_pt(&fill, Point64::new(500, 500)), "a B.Cu keepout must not touch an F.Cu fill");
 }

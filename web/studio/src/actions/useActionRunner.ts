@@ -15,6 +15,8 @@
 
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
+import { toCmdDimension } from "../kicad-port/dimensionConvert";
+import type { CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { finishInteractiveRoute, cancelInteractiveRoute } from "../components/canvas/routing";
@@ -161,6 +163,7 @@ export function useActionRunner() {
           else if (api.zoneById(id)) api.cmd({ op: "delete_zone", id });
           else if (api.shapeById(id)) api.cmd({ op: "delete_shape", id });
           else if (api.textById(id)) api.cmd({ op: "delete_text", id });
+          else if (api.dimensionById(id)) api.cmd({ op: "delete_dimension", id });
           else if (api.partByRef(id)?.placed) api.cmd({ op: "rip", part: id });
         }
       }
@@ -299,13 +302,79 @@ export function useActionRunner() {
         dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
       })
     );
+    // `tracks_cleaner.cpp` (task item 1): "Cleanup Tracks & Vias..." --
+    // see components/CleanupTracksDialog.tsx. No selection gate (unlike
+    // LengthTuner above) -- source's own dialog opens unconditionally and
+    // scans the whole board.
+    m.set("pcbnew.GlobalEdit.cleanupTracksAndVias", pcbOnly(() => dispatch({ type: "SET_CLEANUP_TRACKS_DIALOG_OPEN", open: true })));
+    // `dialog_global_edit_tracks_and_vias.cpp` / `dialog_global_edit_text_
+    // and_graphics.cpp` (task item 2) -- see GlobalEditTracksAndViasDialog.tsx
+    // / GlobalEditTextAndGraphicsDialog.tsx for scope.
+    m.set("pcbnew.GlobalEdit.editTracksAndVias", pcbOnly(() => dispatch({ type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN", open: true })));
+    m.set("pcbnew.GlobalEdit.editTextAndGraphics", pcbOnly(() => dispatch({ type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN", open: true })));
+    // Ctrl+T (task item 6): `ARRAY_TOOL::CreateArray`'s own
+    // `if (selection.Empty()) return 0;` guard -- see CreateArrayDialog.tsx.
+    m.set(
+      "pcbnew.Array.createArray",
+      pcbOnly(() => {
+        if (state.selection.size === 0) return;
+        dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: true });
+      })
+    );
     m.set(
       "pcbnew.InteractiveDrawing.via",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))
     );
+    // Rule Areas (task item 3): the same outline-drawing path as "Draw
+    // Filled Zones" below -- a rule area and a copper-pour zone share one
+    // outline tool and one properties dialog in source too
+    // (dialog_copper_zones.cpp's single `IsRuleArea()`-branching panel).
+    // `state.nextZoneIsRuleArea` is the one bit telling ZoneDialog.tsx
+    // which of the two armed it, so a fresh outline's dialog opens with
+    // "Rule area" pre-checked only for this entry.
+    m.set(
+      "pcbnew.InteractiveDrawing.ruleArea",
+      pcbOnly(() => {
+        dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: true });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" });
+      })
+    );
     m.set(
       "pcbnew.InteractiveDrawing.zone",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" }))
+      pcbOnly(() => {
+        dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" });
+      })
+    );
+    // Task item 7: `pcbnew/tools/drawing_tool.cpp`'s `DrawDimension`,
+    // scoped to a plain two-click (start, end) placement for every kind
+    // -- see DimensionPropertiesDialog.tsx and PARITY-pcb.md section 18
+    // for why height/leader-length/orientation are dialog-set afterward
+    // rather than a third interactive "set height" click the way source
+    // has for Aligned/Orthogonal.
+    const armDimension = (kind: CmdDimensionKind["kind"]) => {
+      dispatch({ type: "SET_NEXT_DIMENSION_KIND", kind });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "dimension" ? "select" : "dimension" });
+    };
+    m.set("pcbnew.InteractiveDrawing.alignedDimension", pcbOnly(() => armDimension("aligned")));
+    m.set("pcbnew.InteractiveDrawing.orthogonalDimension", pcbOnly(() => armDimension("orthogonal")));
+    m.set("pcbnew.InteractiveDrawing.radialDimension", pcbOnly(() => armDimension("radial")));
+    m.set("pcbnew.InteractiveDrawing.leader", pcbOnly(() => armDimension("leader")));
+    m.set("pcbnew.InteractiveDrawing.centerDimension", pcbOnly(() => armDimension("center")));
+    // `GLOBAL_EDIT_TOOL`'s "Switch Dimension Arrows": flips inward/outward
+    // on every selected dimension at once, same single-field-toggle shape
+    // as `common.Interactive.cut`'s own per-ref loop above.
+    m.set(
+      "pcbnew.InteractiveDrawing.changeDimensionArrows",
+      pcbOnly(() => {
+        for (const id of state.selection) {
+          const dim = api.dimensionById(id);
+          if (!dim) continue;
+          const cmdDim = toCmdDimension(dim);
+          cmdDim.arrow_direction = cmdDim.arrow_direction === "inward" ? "outward" : "inward";
+          api.cmd({ op: "edit_dimension", id, dimension: cmdDim });
+        }
+      })
     );
     m.set(
       "pcbnew.InteractiveDrawing.line",
@@ -343,6 +412,30 @@ export function useActionRunner() {
     m.set("common.Interactive.duplicate", pcbOnly(() => api.duplicateSelection()));
     m.set("common.Interactive.copy", pcbOnly(() => api.copySelection()));
     m.set("common.Interactive.paste", pcbOnly(() => api.pasteClipboard()));
+    // Task item 5: common/tool/group_tool.cpp (Ctrl+G/Ctrl+Shift+G -- see
+    // useGlobalHotkeys.ts's own special-cased binding for why those two
+    // hotkeys are hardcoded there instead of read from actions.json).
+    m.set("common.Interactive.group", pcbOnly(() => api.groupSelection()));
+    m.set("common.Interactive.ungroup", pcbOnly(() => api.ungroupSelection()));
+    // `EnterGroup`: only fires for a single selected group, matching
+    // source's own `selection.GetSize() == 1 && selection[0]->Type() ==
+    // PCB_GROUP_T` guard. `LeaveGroup`: re-selects the group itself,
+    // matching `ExitGroup(true /* Select the group */)`.
+    m.set(
+      "common.Interactive.groupEnter",
+      pcbOnly(() => {
+        const refs = [...state.selection];
+        if (refs.length === 1 && api.groupById(refs[0]!)) dispatch({ type: "SET_ENTERED_GROUP", id: refs[0]! });
+      })
+    );
+    m.set(
+      "common.Interactive.groupLeave",
+      pcbOnly(() => {
+        const leftId = state.enteredGroupId;
+        dispatch({ type: "SET_ENTERED_GROUP", id: null });
+        if (leftId) dispatch({ type: "SET_SELECTION", refs: [leftId] });
+      })
+    );
     m.set(
       "pcbnew.InteractiveEdit.moveExact",
       pcbOnly(() => {
@@ -689,6 +782,15 @@ export function useActionRunner() {
 
     // dialog_board_setup.cpp -- see BoardSetupDialog.tsx.
     m.set("pcbnew.EditorControl.boardSetup", pcbOnly(() => dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: true })));
+    // Task item 4: opens the same Board Setup dialog, landing on its new
+    // Teardrops page directly instead of making the user click there.
+    m.set(
+      "pcbnew.GlobalEdit.editTeardrops",
+      pcbOnly(() => {
+        dispatch({ type: "SET_BOARD_SETUP_INITIAL_PAGE", page: "teardrops" });
+        dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: true });
+      })
+    );
 
     // File > Fabrication Outputs -- dialog_plot.cpp / dialog_gendrill.cpp /
     // dialog_gen_footprint_position.cpp, see PlotDialog.tsx/

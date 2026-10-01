@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -114,6 +114,144 @@ pub enum Region {
     SouthWest,
     South,
     SouthEast,
+}
+
+/// `Cmd::EditTracksAndVias`'s track-width field: either leave every
+/// matched track at its own net class's width (`BoardRules::width_of`,
+/// falling back to the board default), or set them all to one explicit
+/// value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SizeSpec {
+    NetClass,
+    Value { um: Um },
+}
+
+/// Same idea as [`SizeSpec`], for a via's diameter+drill pair (which
+/// always travel together -- there is no meaningful "set the diameter but
+/// leave the drill" on its own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViaSizeSpec {
+    NetClass,
+    Value { diameter: Um, drill: Um },
+}
+
+/// `Cmd::CreateArray`'s geometry (task item 6) -- `ARRAY_GRID_OPTIONS`/
+/// `ARRAY_CIRCULAR_OPTIONS` (`include/array_options.h`). A dialog-session
+/// object in source too (`ARRAY_OPTIONS` is never written to the board
+/// file), so this lives here as a `Cmd` payload, not on the IR.
+///
+/// Angles are millidegrees in this crate's own `rotate_point_about`
+/// convention (positive = clockwise in this app's Y-down board
+/// coordinates -- see that function's doc). `Circular::clockwise` picks
+/// the sign applied to the computed angle before rotating, the same
+/// final step source's own `GetTransform` takes (`if (m_clockwise) angle
+/// = -angle;`) -- a caller-facing "Clockwise/Counterclockwise" direction
+/// choice never needs its own sign flip the way `Cmd::MoveExact`'s single
+/// signed field does (see `MoveExactDialog.tsx`'s header comment).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ArrayGeometry {
+    Grid {
+        nx: i64,
+        ny: i64,
+        dx: Um,
+        dy: Um,
+        #[serde(default)]
+        offset_x: Um,
+        #[serde(default)]
+        offset_y: Um,
+        #[serde(default)]
+        centred: bool,
+        /// `ARRAY_GRID_OPTIONS::m_stagger` -- a brick/honeycomb offset
+        /// every `stagger`-th row (or column, see `stagger_rows`). 0 or 1
+        /// disables it (source: `std::abs(m_stagger) > 1`).
+        #[serde(default)]
+        stagger: i64,
+        #[serde(default = "d_true")]
+        stagger_rows: bool,
+        /// `ARRAY_GRID_OPTIONS::m_horizontalThenVertical` -- fills a row
+        /// before moving to the next (vs. a column before the next
+        /// column). Only visible when `offset_x`/`offset_y` skews the
+        /// grid; with a plain rectangular grid every point is covered
+        /// either way.
+        #[serde(default = "d_true")]
+        horizontal_then_vertical: bool,
+    },
+    Circular {
+        center: Point,
+        count: i64,
+        /// Angle between consecutive points.
+        angle_millideg: i64,
+        #[serde(default)]
+        angle_offset_millideg: i64,
+        #[serde(default = "d_true")]
+        clockwise: bool,
+        /// `ARRAY_CIRCULAR_OPTIONS::m_rotateItems` -- spin each item about
+        /// its own (already-translated) anchor by the same angle, instead
+        /// of only moving it along the circle. Ported for `Part`/`Text`
+        /// only (the two kinds with a simple scalar orientation field);
+        /// a track/via/zone/shape only ever translates along the circle
+        /// in this port -- see `create_array`'s own doc.
+        #[serde(default)]
+        rotate_items: bool,
+    },
+}
+
+fn d_true() -> bool {
+    true
+}
+
+impl ArrayGeometry {
+    fn size(&self) -> i64 {
+        match self {
+            ArrayGeometry::Grid { nx, ny, .. } => nx * ny,
+            ArrayGeometry::Circular { count, .. } => *count,
+        }
+    }
+
+    /// The transform for the `n`-th array point (0 is the original),
+    /// given the item's own current position -- `ARRAY_OPTIONS::
+    /// GetTransform`. Returns a translation and an in-place rotation
+    /// (always `0` for a grid, source's own `ANGLE_0`).
+    fn transform(&self, n: i64, pos: Point) -> (Point, i64) {
+        match *self {
+            ArrayGeometry::Grid { nx, ny, dx, dy, offset_x, offset_y, centred, stagger, stagger_rows, horizontal_then_vertical } => {
+                let axis_size = (if horizontal_then_vertical { nx } else { ny }).max(1);
+                let (mut cx, mut cy) = (n % axis_size, n / axis_size);
+                if !horizontal_then_vertical {
+                    std::mem::swap(&mut cx, &mut cy);
+                }
+                let mut x = cx * dx + cy * offset_x;
+                let mut y = cy * dy + cx * offset_y;
+                if stagger.unsigned_abs() > 1 {
+                    let s = stagger.abs();
+                    let idx = if stagger_rows { cy.rem_euclid(s) } else { cx.rem_euclid(s) };
+                    let (sdx, sdy) = if stagger_rows { (dx, offset_y) } else { (offset_x, dy) };
+                    let frac = idx as f64 * stagger.signum() as f64 / s as f64;
+                    x += (sdx as f64 * frac).round() as Um;
+                    y += (sdy as f64 * frac).round() as Um;
+                }
+                if centred {
+                    let extent_x = (nx - 1) * dx + (ny - 1) * offset_x;
+                    let extent_y = (ny - 1) * dy + (nx - 1) * offset_y;
+                    x -= extent_x / 2;
+                    y -= extent_y / 2;
+                }
+                (Point { x: pos.x + x, y: pos.y + y }, 0)
+            }
+            ArrayGeometry::Circular { center, angle_millideg, angle_offset_millideg, clockwise, .. } => {
+                let total = angle_millideg * n + angle_offset_millideg;
+                let signed = if clockwise { total } else { -total };
+                (rotate_point_about(pos, center, signed), signed)
+            }
+        }
+    }
+
+    fn rotates_items(&self) -> bool {
+        matches!(self, ArrayGeometry::Circular { rotate_items: true, .. })
+    }
 }
 
 impl Region {
@@ -241,6 +379,33 @@ pub enum Cmd {
     /// Same idea as `SetTrackWidthPresets`, for `m_ViaSizeList`.
     SetViaPresets { presets: Vec<ViaPreset> },
 
+    /// `dialog_global_edit_tracks_and_vias.cpp`'s "Apply and Close": bulk-
+    /// set width (tracks/arcs) and/or diameter+drill (vias) and/or layer
+    /// (tracks only) on every named id, as one atomic undo step. `ids` is
+    /// already filtered by the caller (net/net-class/layer/width/
+    /// "selected only" are UI concepts this crate has no model of, same
+    /// split every other global-edit-style dialog here uses -- see
+    /// `CleanupOptions`/`cleanup.rs`). `track_width`/`via_size` are `None`
+    /// to leave that property alone (source's `INDETERMINATE_ACTION`);
+    /// `Some(SizeSpec::NetClass)` resolves each item's *own* net's class
+    /// at apply time (`BoardRules::width_of`/`via_diameter_of`/
+    /// `via_drill_of`), so a mixed-net-class selection lands each item on
+    /// its own class's value from one command, matching
+    /// `SetTrackSegmentWidth`'s per-item resolution rather than a single
+    /// shared value. This model has only one via "type" (no through/
+    /// micro/blind/buried distinction, no padstack/annular-ring/IPC4761
+    /// protection-feature concept), so those parts of the real dialog
+    /// have no field here at all.
+    EditTracksAndVias {
+        ids: Vec<String>,
+        #[serde(default)]
+        track_width: Option<SizeSpec>,
+        #[serde(default)]
+        via_size: Option<ViaSizeSpec>,
+        #[serde(default)]
+        layer: Option<String>,
+    },
+
     /// Add a copper pour.
     AddZone { net: String, layer: String, outline: Vec<Point> },
     /// Remove a zone by id.
@@ -276,7 +441,118 @@ pub enum Cmd {
         hatch_smoothing_value: f64,
         hatch_hole_min_area: f64,
         hatch_border_algorithm: i32,
+        /// Task item 3: `ZONE::GetIsRuleArea()` plus its five `DoNotAllow*`
+        /// keepout flags -- see `eda_model::ir::Zone`'s own doc. Carried on
+        /// this same `Cmd` (not a separate one) because real KiCad edits
+        /// them through the identical "zone properties" dialog, just
+        /// showing a different panel.
+        #[serde(default)]
+        is_rule_area: bool,
+        #[serde(default)]
+        keepout_tracks: bool,
+        #[serde(default)]
+        keepout_vias: bool,
+        #[serde(default)]
+        keepout_pads: bool,
+        #[serde(default)]
+        keepout_copper_pour: bool,
+        #[serde(default)]
+        keepout_footprints: bool,
     },
+
+    /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
+    /// replace, same "no per-field Cmd" spirit `SetTrackWidthPresets`/
+    /// `SetViaPresets` already use.
+    SetTeardropSettings { settings: TeardropSettings },
+    /// "Add Teardrops" (the dialog's own apply button, not a per-item
+    /// tool): regenerate the board's whole teardrop set from the current
+    /// settings, tracks, vias and pads -- `eda_connectivity::teardrop::
+    /// generate_teardrops`. Replaces (not appends to) whatever this
+    /// command's own previous run left behind, so running it twice in a
+    /// row is idempotent; a user-drawn zone is never touched (only zones
+    /// with `Zone::teardrop == true` are replaced).
+    AddAllTeardrops,
+    /// "Remove All Teardrops": drop every zone with `Zone::teardrop ==
+    /// true`. Does not disable the feature (`TeardropSettings::enabled`
+    /// is untouched) -- same split upstream's own dialog buttons have.
+    RemoveAllTeardrops,
+
+    // ------------------------------------------------------------ groups
+    //
+    // Task item 5: `common/tool/group_tool.cpp` -- see `eda_model::ir::
+    // Group`'s own doc for the storage choice and the no-nested-groups
+    // scope.
+    /// Ctrl+G: create a new group from `ids` (parts, tracks, vias, zones,
+    /// shapes, texts). Refused with fewer than 2 ids -- a one-item "group"
+    /// is meaningless, matching source's own `ACTIONS::group.Enable(
+    /// selectionCount >= 2)`. Any named id that is itself an existing
+    /// group is flattened into the new one (its own members are pulled in
+    /// and it is deleted) rather than nested, since this model has no
+    /// group-of-groups concept.
+    Group { ids: Vec<String> },
+    /// Ctrl+Shift+G: dissolve every named group, releasing its members
+    /// (which stay on the board, exactly where they are, just no longer
+    /// grouped). An id that does not name a group is silently skipped,
+    /// not refused -- the dialog's own context menu only ever sends real
+    /// group ids, but a stale id from a since-changed board should not
+    /// abort the rest of the batch.
+    Ungroup { ids: Vec<String> },
+    /// `ACTIONS::addToGroup`: add `ids` to an existing group, pulling each
+    /// one out of whatever other group it already belonged to first (an
+    /// item is only ever in one group at a time, matching the no-nested-
+    /// groups scope).
+    AddToGroup { group_id: String, ids: Vec<String> },
+    /// `ACTIONS::removeFromGroup`: remove `ids` from whatever group each
+    /// currently belongs to (a no-op for one that isn't in any group). A
+    /// group left with fewer than 2 members is dissolved entirely --
+    /// `GROUP_TOOL::RemoveFromGroup`'s own `if (group->GetItems().size() <
+    /// 2) group->RemoveAll()` rule, ported exactly.
+    RemoveFromGroup { ids: Vec<String> },
+
+    // ------------------------------------------------------------ arrays
+    //
+    // Task item 6: `pcbnew.Array.createArray` (Ctrl+T) --
+    // `pcbnew/tools/array_tool.cpp`'s `ARRAY_TOOL::CreateArray`.
+    /// `arrange: false` (the dialog's default, "Keep selection, Duplicate"):
+    /// create `geometry.size() - 1` new copies of each resolved id (a
+    /// track, via, zone, shape or text -- same scope `Cmd::Duplicate`
+    /// already has, and for the same reason: a footprint can't be
+    /// conjured up without a matching schematic symbol, and this model
+    /// has no group-of-a-group-of-copies concept). `arrange: true`
+    /// ("Arrange selection") instead repositions the given ids -- which
+    /// may include placed parts, since that only ever moves something
+    /// that already exists -- into the array's slots in the order given,
+    /// creating nothing; a group id is skipped either way (no
+    /// "move every member together" concept yet, see PARITY-pcb.md
+    /// section 16's own list of group gaps).
+    ///
+    /// Footprint reannotation (`ShouldReannotateFootprints`) and
+    /// footprint-editor pad numbering (`ShouldNumberItems`,
+    /// `ARRAY_PAD_NUMBER_PROVIDER`) are not ported -- see
+    /// `create_array`'s own doc.
+    CreateArray { ids: Vec<String>, geometry: ArrayGeometry, #[serde(default)] arrange: bool },
+
+    // ------------------------------------------------------- dimensions
+    //
+    // Task item 7: `pcbnew/pcb_dimension.{h,cpp}` -- see `eda_model::ir::
+    // Dimension`'s own doc for the storage shape and
+    // `eda_connectivity::dimension` for the geometry/text this crate
+    // never duplicates. `id` on `dimension`, if the caller sent one, is
+    // ignored, same as every other "whole struct" add/edit Cmd.
+    AddDimension { dimension: Dimension },
+    DeleteDimension { id: String },
+    /// Translate both feature points by `(dx, dy)` -- what dragging a
+    /// dimension does (`PCB_DIMENSION_BASE::Move`).
+    MoveDimension { id: String, dx: Um, dy: Um },
+    /// Properties dialog's OK: replace every field at once (kind,
+    /// feature points included) -- same "whole panel commits together"
+    /// shape `EditZone`/`EditPad` already have. `id` on `dimension` is
+    /// ignored the same way.
+    EditDimension { id: String, dimension: Dimension },
+    /// Board Setup > Dimension Properties: whole-struct replace, applied
+    /// to new dimensions from then on -- never retroactively, matching
+    /// source's own `StyleFromSettings` being called once, at creation.
+    SetDimensionSettings { settings: DimensionSettings },
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -303,6 +579,35 @@ pub enum Cmd {
     DeleteText { id: String },
     /// Move a text to a new position, keeping its id and styling.
     MoveText { id: String, x: Um, y: Um },
+    /// `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
+    /// scoped to this model's two free-standing board drawing kinds
+    /// (`Shape`/`Text` -- no footprint reference/value fields, dimensions,
+    /// tables or barcodes exist as editable board items here, see
+    /// PARITY-pcb.md section 2). Every field `None` leaves that property
+    /// alone (source's `INDETERMINATE_ACTION`); `shape_ids`/`text_ids` are
+    /// already filtered by the caller, same "no UI-filter concept in this
+    /// crate" split `EditTracksAndVias` uses. This model has no "layer
+    /// default values" to reset to (no `BOARD_DESIGN_SETTINGS::
+    /// m_LineThickness`/`m_TextSize` per-layer-class arrays), so unlike
+    /// source there is only the one "specified values" mode.
+    EditTextAndGraphics {
+        #[serde(default)]
+        shape_ids: Vec<String>,
+        #[serde(default)]
+        text_ids: Vec<String>,
+        #[serde(default)]
+        layer: Option<String>,
+        /// Shapes' `stroke_width`.
+        #[serde(default)]
+        line_width: Option<Um>,
+        /// Texts' `size_um` (applied to both the width and height this
+        /// model draws text at -- see `Text::size_um`'s own doc).
+        #[serde(default)]
+        text_size: Option<Um>,
+        /// Texts' `stroke_width`.
+        #[serde(default)]
+        text_thickness: Option<Um>,
+    },
 
     /// Copy existing tracks/vias/zones/shapes/texts named by id, in
     /// place (same position, fresh ids) -- the studio's Cmd+D. Footprints
@@ -788,6 +1093,16 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
+            Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::EditTextAndGraphics { shape_ids, text_ids, .. } => shape_ids.iter().chain(text_ids.iter()).map(String::as_str).collect(),
+            Cmd::SetTeardropSettings { .. } => vec!["teardrop_settings"],
+            Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
+            Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
+            Cmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
+            Cmd::CreateArray { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::AddDimension { .. } => vec!["dimension"],
+            Cmd::DeleteDimension { id } | Cmd::MoveDimension { id, .. } | Cmd::EditDimension { id, .. } => vec![id.as_str()],
+            Cmd::SetDimensionSettings { .. } => vec!["dimension_settings"],
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -849,6 +1164,11 @@ impl Cmd {
                 | Cmd::Rip { .. }
                 | Cmd::Flip { .. }
                 | Cmd::MoveExact { .. }
+                // `arrange: true` can reposition a placed part; `false`
+                // never touches one (see `Cmd::CreateArray`'s own doc) but
+                // this classification is per-variant, not per-call, so it
+                // errs the same safe direction `MoveExact` already does.
+                | Cmd::CreateArray { .. }
         )
     }
 }
@@ -896,6 +1216,15 @@ impl Outcome {
     pub fn level(&self) -> bool {
         self.after == self.before
     }
+}
+
+/// A group with fewer than 2 members is meaningless and dissolves --
+/// `GROUP_TOOL::RemoveFromGroup`'s own rule (`task item 5`), applied
+/// uniformly everywhere a group's membership can shrink: explicit
+/// `RemoveFromGroup`, and a member getting pulled into a different group
+/// via `Group`/`AddToGroup`.
+fn prune_empty_groups(dr: &mut DrawingsSection) {
+    dr.groups.retain(|g| g.member_ids.len() >= 2);
 }
 
 impl<'a> Board<'a> {
@@ -1077,6 +1406,20 @@ impl<'a> Board<'a> {
             Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),
             Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
             Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
+            Cmd::EditTracksAndVias { ids, track_width, via_size, layer } => self.edit_tracks_and_vias(ids, track_width.as_ref(), via_size.as_ref(), layer.as_deref()),
+            Cmd::SetTeardropSettings { settings } => self.set_teardrop_settings(*settings),
+            Cmd::AddAllTeardrops => self.add_all_teardrops(),
+            Cmd::RemoveAllTeardrops => self.remove_all_teardrops(),
+            Cmd::Group { ids } => self.group_items(ids),
+            Cmd::Ungroup { ids } => self.ungroup_items(ids),
+            Cmd::AddToGroup { group_id, ids } => self.add_to_group(group_id, ids),
+            Cmd::RemoveFromGroup { ids } => self.remove_from_group(ids),
+            Cmd::CreateArray { ids, geometry, arrange } => self.create_array(ids, geometry, *arrange),
+            Cmd::AddDimension { dimension } => self.add_dimension(dimension.clone()),
+            Cmd::DeleteDimension { id } => self.delete_dimension(id),
+            Cmd::MoveDimension { id, dx, dy } => self.move_dimension(id, *dx, *dy),
+            Cmd::EditDimension { id, dimension } => self.edit_dimension(id, dimension.clone()),
+            Cmd::SetDimensionSettings { settings } => self.set_dimension_settings(*settings),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
@@ -1101,6 +1444,12 @@ impl<'a> Board<'a> {
                 hatch_smoothing_value,
                 hatch_hole_min_area,
                 hatch_border_algorithm,
+                is_rule_area,
+                keepout_tracks,
+                keepout_vias,
+                keepout_pads,
+                keepout_copper_pour,
+                keepout_footprints,
             } => self.edit_zone(
                 id,
                 net,
@@ -1121,6 +1470,12 @@ impl<'a> Board<'a> {
                 *hatch_smoothing_value,
                 *hatch_hole_min_area,
                 *hatch_border_algorithm,
+                *is_rule_area,
+                *keepout_tracks,
+                *keepout_vias,
+                *keepout_pads,
+                *keepout_copper_pour,
+                *keepout_footprints,
             ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
@@ -1134,6 +1489,9 @@ impl<'a> Board<'a> {
             }
             Cmd::DeleteText { id } => self.delete_text(id),
             Cmd::MoveText { id, x, y } => self.move_text(id, *x, *y),
+            Cmd::EditTextAndGraphics { shape_ids, text_ids, layer, line_width, text_size, text_thickness } => {
+                self.edit_text_and_graphics(shape_ids, text_ids, layer.as_deref(), *line_width, *text_size, *text_thickness)
+            }
 
             Cmd::Duplicate { ids } => self.duplicate_items(ids),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
@@ -1614,7 +1972,7 @@ impl<'a> Board<'a> {
     /// must never clear an existing routing section -- see
     /// `Cmd::clears_routing`.
     fn routing_mut(&mut self) -> &mut RoutingSection {
-        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] })
+        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() })
     }
 
     /// The board's drawings section, creating an empty one on first use.
@@ -1748,8 +2106,128 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// `Cmd::EditTracksAndVias` -- see that variant's own doc. Unknown ids
+    /// among `ids` are tolerated (silently match nothing), same convention
+    /// `CommitRoute`'s own doc already established for a caller-computed
+    /// id list; refused only when `ids` itself is empty (nothing named at
+    /// all, almost certainly a caller bug) or an explicit `Value` is out
+    /// of range.
+    fn edit_tracks_and_vias(&mut self, ids: &[String], track_width: Option<&SizeSpec>, via_size: Option<&ViaSizeSpec>, layer: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_global_edit", "edit_tracks_and_vias", "no items given")]);
+        }
+        if let Some(l) = layer {
+            self.known_layer(l)?;
+        }
+        if let Some(SizeSpec::Value { um }) = track_width {
+            if *um <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_track", "edit_tracks_and_vias", "track width must be positive")]);
+            }
+        }
+        if let Some(ViaSizeSpec::Value { diameter, drill }) = via_size {
+            if *drill <= 0 || *diameter <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_via", "edit_tracks_and_vias", "via drill and diameter must be positive")]);
+            }
+            if *drill >= *diameter {
+                return Err(vec![CheckResult::fail("ops_bad_via", "edit_tracks_and_vias", "drill must be smaller than diameter")]);
+            }
+        }
+
+        let id_set: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+        let model = self.model;
+        if let Some(rt) = self.design.routing.as_mut() {
+            for t in rt.tracks.iter_mut().filter(|t| id_set.contains(t.id.as_str())) {
+                if let Some(spec) = track_width {
+                    t.width = match spec {
+                        SizeSpec::NetClass => model.board.width_of(&t.net),
+                        SizeSpec::Value { um } => *um,
+                    };
+                }
+                if let Some(l) = layer {
+                    t.layer = l.to_string();
+                }
+            }
+            for v in rt.vias.iter_mut().filter(|v| id_set.contains(v.id.as_str())) {
+                if let Some(spec) = via_size {
+                    match spec {
+                        ViaSizeSpec::NetClass => {
+                            v.diameter = model.board.via_diameter_of(&v.net);
+                            v.drill = model.board.via_drill_of(&v.net);
+                        }
+                        ViaSizeSpec::Value { diameter, drill } => {
+                            v.diameter = *diameter;
+                            v.drill = *drill;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `Cmd::EditTextAndGraphics` -- see that variant's own doc. Same
+    /// unknown-id/empty-input tolerance as `edit_tracks_and_vias`.
+    fn edit_text_and_graphics(&mut self, shape_ids: &[String], text_ids: &[String], layer: Option<&str>, line_width: Option<Um>, text_size: Option<Um>, text_thickness: Option<Um>) -> Result<(), Vec<CheckResult>> {
+        if shape_ids.is_empty() && text_ids.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_global_edit", "edit_text_and_graphics", "no items given")]);
+        }
+        // Not `known_layer` -- that validates against the board's *copper*
+        // layer list only, and silkscreen/fab/edge layers (where a shape
+        // or text normally lives) are deliberately not on it. Same "just
+        // non-empty" convention `edit_shape`/`edit_text` already use.
+        if matches!(layer, Some(l) if l.is_empty()) {
+            return Err(vec![CheckResult::fail("ops_bad_shape", "edit_text_and_graphics", "a layer, if given, cannot be empty")]);
+        }
+        if let Some(w) = line_width {
+            if w <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_shape", "edit_text_and_graphics", "line width must be positive")]);
+            }
+        }
+        if let Some(s) = text_size {
+            if s <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_text", "edit_text_and_graphics", "text size must be positive")]);
+            }
+        }
+        if let Some(t) = text_thickness {
+            if t <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_text", "edit_text_and_graphics", "text thickness must be positive")]);
+            }
+        }
+
+        let shape_set: BTreeSet<&str> = shape_ids.iter().map(String::as_str).collect();
+        let text_set: BTreeSet<&str> = text_ids.iter().map(String::as_str).collect();
+        if let Some(dr) = self.design.drawings.as_mut() {
+            for s in dr.shapes.iter_mut().filter(|s| shape_set.contains(s.id())) {
+                if let Some(l) = layer {
+                    s.set_layer(l.to_string());
+                }
+                if let Some(w) = line_width {
+                    s.set_stroke_width(w);
+                }
+            }
+            for t in dr.texts.iter_mut().filter(|t| text_set.contains(t.id.as_str())) {
+                if let Some(l) = layer {
+                    t.layer = l.to_string();
+                }
+                if let Some(s) = text_size {
+                    t.size_um = s;
+                }
+                if let Some(th) = text_thickness {
+                    t.stroke_width = th;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn add_zone(&mut self, net: &str, layer: &str, outline: &[Point]) -> Result<(), Vec<CheckResult>> {
-        self.known_net(net)?;
+        // "" is a real, valid choice here -- KiCad's own net code 0 ("No
+        // net"), the common case for a rule area/keepout (task item 3) and
+        // allowed for an ordinary zone too (matches `known_net`'s sibling
+        // checks, which only ever validate a *non-empty* name).
+        if !net.is_empty() {
+            self.known_net(net)?;
+        }
         self.known_layer(layer)?;
         if outline.len() < 3 {
             return Err(vec![CheckResult::fail("ops_bad_zone", net, "a zone outline needs at least three points")]);
@@ -1808,8 +2286,18 @@ impl<'a> Board<'a> {
         hatch_smoothing_value: f64,
         hatch_hole_min_area: f64,
         hatch_border_algorithm: i32,
+        is_rule_area: bool,
+        keepout_tracks: bool,
+        keepout_vias: bool,
+        keepout_pads: bool,
+        keepout_copper_pour: bool,
+        keepout_footprints: bool,
     ) -> Result<(), Vec<CheckResult>> {
-        self.known_net(net)?;
+        // "" (no net) is normal for a rule area, and allowed for an
+        // ordinary zone too -- see `add_zone`'s matching comment.
+        if !net.is_empty() {
+            self.known_net(net)?;
+        }
         self.known_layer(layer)?;
         if clearance < 0 {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "clearance cannot be negative")]);
@@ -1845,6 +2333,459 @@ impl<'a> Board<'a> {
         z.hatch_smoothing_value = hatch_smoothing_value;
         z.hatch_hole_min_area = hatch_hole_min_area;
         z.hatch_border_algorithm = hatch_border_algorithm;
+        z.is_rule_area = is_rule_area;
+        z.keepout_tracks = keepout_tracks;
+        z.keepout_vias = keepout_vias;
+        z.keepout_pads = keepout_pads;
+        z.keepout_copper_pour = keepout_copper_pour;
+        z.keepout_footprints = keepout_footprints;
+        Ok(())
+    }
+
+    // ------------------------------------------------------- teardrops
+
+    /// `Cmd::SetTeardropSettings`. Ratios are fractions of a KiCad
+    /// `0.0..=1.0` slider (`m_BestLengthRatio`/`m_BestWidthRatio`/
+    /// `m_WidthtoSizeFilterRatio`); a value outside that range has no
+    /// sensible meaning (a >100% width ratio would ask for a teardrop
+    /// wider than its own anchor) and is refused rather than silently
+    /// clamped.
+    fn set_teardrop_settings(&mut self, settings: TeardropSettings) -> Result<(), Vec<CheckResult>> {
+        let in_unit_range = |v: f64| (0.0..=1.0).contains(&v);
+        if !in_unit_range(settings.best_length_ratio) || !in_unit_range(settings.best_width_ratio) || !in_unit_range(settings.width_to_size_filter_ratio) {
+            return Err(vec![CheckResult::fail("ops_bad_teardrop_settings", "teardrop_settings", "length/width/filter ratios must be between 0.0 and 1.0")]);
+        }
+        self.routing_mut().teardrop_settings = settings;
+        Ok(())
+    }
+
+    /// `Cmd::AddAllTeardrops`: regenerate the board's whole teardrop set.
+    /// A no-op (not a refusal) when teardrops aren't enabled or nothing
+    /// qualifies -- same as KiCad's own "Update Teardrops" finding nothing
+    /// to do.
+    fn add_all_teardrops(&mut self) -> Result<(), Vec<CheckResult>> {
+        let settings = self.design.routing.as_ref().map(|r| r.teardrop_settings).unwrap_or_default();
+        let fresh = eda_connectivity::generate_teardrops(&self.design, self.model, &settings);
+        let rt = self.routing_mut();
+        rt.zones.retain(|z| !z.teardrop);
+        rt.zones.extend(fresh);
+        rt.assign_missing_ids();
+        self.sort_routing();
+        Ok(())
+    }
+
+    /// `Cmd::RemoveAllTeardrops`.
+    fn remove_all_teardrops(&mut self) -> Result<(), Vec<CheckResult>> {
+        if let Some(rt) = self.design.routing.as_mut() {
+            rt.zones.retain(|z| !z.teardrop);
+        }
+        Ok(())
+    }
+
+    // ----------------------------------------------------------- groups
+
+    /// `Cmd::Group`: create a new group, flattening in any selected
+    /// existing group's own members (see `Cmd::Group`'s own doc on why --
+    /// no nested groups). An item pulled in that belonged to some other,
+    /// untouched group leaves that group (one group per item at a time).
+    fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        if ids.len() < 2 {
+            return Err(vec![CheckResult::fail("ops_bad_group", "group", "a group needs at least two items")]);
+        }
+        let dr = self.drawings_mut();
+        let mut members: Vec<String> = Vec::new();
+        let mut flattened: Vec<String> = Vec::new();
+        for id in ids {
+            if let Some(g) = dr.groups.iter().find(|g| &g.id == id) {
+                members.extend(g.member_ids.iter().cloned());
+                flattened.push(id.clone());
+            } else {
+                members.push(id.clone());
+            }
+        }
+        dr.groups.retain(|g| !flattened.contains(&g.id));
+
+        let mut seen = BTreeSet::new();
+        members.retain(|m| seen.insert(m.clone()));
+
+        for g in dr.groups.iter_mut() {
+            g.member_ids.retain(|m| !members.contains(m));
+        }
+        prune_empty_groups(dr);
+
+        dr.groups.push(Group { id: String::new(), name: String::new(), member_ids: members });
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    /// `Cmd::Ungroup`: dissolve every named group. An id not naming a
+    /// group is silently skipped -- see `Cmd::Ungroup`'s own doc.
+    fn ungroup_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        if let Some(dr) = self.design.drawings.as_mut() {
+            dr.groups.retain(|g| !ids.iter().any(|id| id == &g.id));
+        }
+        Ok(())
+    }
+
+    /// `Cmd::AddToGroup`.
+    fn add_to_group(&mut self, group_id: &str, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        let dr = self.drawings_mut();
+        if !dr.groups.iter().any(|g| g.id == group_id) {
+            return Err(vec![CheckResult::fail("ops_unknown_group", group_id, "no group with this id")]);
+        }
+        for g in dr.groups.iter_mut().filter(|g| g.id != group_id) {
+            g.member_ids.retain(|m| !ids.contains(m));
+        }
+        prune_empty_groups(dr);
+        // `group_id`'s own group is never itself a candidate for pruning
+        // above (its membership only grows here), so it is always still
+        // present to find and extend.
+        let g = dr.groups.iter_mut().find(|g| g.id == group_id).expect("group_id was checked present and is never pruned by this function");
+        for id in ids {
+            if !g.member_ids.contains(id) {
+                g.member_ids.push(id.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// `Cmd::RemoveFromGroup`.
+    fn remove_from_group(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        if let Some(dr) = self.design.drawings.as_mut() {
+            for g in dr.groups.iter_mut() {
+                g.member_ids.retain(|m| !ids.contains(m));
+            }
+            prune_empty_groups(dr);
+        }
+        Ok(())
+    }
+
+    // --------------------------------------------------------- arrays
+
+    /// `Cmd::CreateArray`. Validates the geometry the same way source's
+    /// own dialog does (`TransferDataFromWindow`'s zero-delta checks)
+    /// before touching anything, then hands off to whichever of the two
+    /// modes `arrange` names.
+    ///
+    /// Not ported: footprint reannotation (`ShouldReannotateFootprints`,
+    /// `BOARD_REANNOTATE_TOOL`) -- a placed part's id *is* its schematic
+    /// symbol's id (`FootprintInstance`'s own doc), so there is no
+    /// "assign a fresh unique reference" operation this model's ops layer
+    /// could perform without breaking that link, unlike upstream where a
+    /// footprint's reference is just another editable field. Footprint-
+    /// editor pad numbering (`ShouldNumberItems`, `ARRAY_PAD_NUMBER_
+    /// PROVIDER`, the `ARRAY_AXIS` numeric/hex/alphabetic schemes) is
+    /// also not ported -- that half of source's own dialog only ever
+    /// activates in the footprint editor (`enableArrayNumbering =
+    /// m_isFootprintEditor`), and this app's footprint editor has no
+    /// multi-pad array/selection tooling of its own to hang it on yet.
+    /// See PARITY-pcb.md section 17 for the full scope list.
+    fn create_array(&mut self, ids: &[String], geometry: &ArrayGeometry, arrange: bool) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_array", "array", "no ids given")]);
+        }
+        match *geometry {
+            ArrayGeometry::Grid { nx, ny, dx, dy, .. } => {
+                if nx < 1 || ny < 1 {
+                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "a grid array needs at least one row and one column")]);
+                }
+                if nx > 1 && dx == 0 {
+                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "horizontal spacing of zero with more than one column")]);
+                }
+                if ny > 1 && dy == 0 {
+                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "vertical spacing of zero with more than one row")]);
+                }
+            }
+            ArrayGeometry::Circular { count, angle_millideg, .. } => {
+                if count < 1 {
+                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "a circular array needs at least one point")]);
+                }
+                if count > 1 && angle_millideg == 0 {
+                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "angular delta of zero with more than one point")]);
+                }
+            }
+        }
+        let array_size = geometry.size();
+        if arrange {
+            self.arrange_into_array(ids, geometry, array_size)
+        } else {
+            self.duplicate_into_array(ids, geometry, array_size)
+        }
+    }
+
+    /// `ARRAY_TOOL::CreateArray`'s `ShouldArrangeSelection()` branch:
+    /// reposition the given ids, in order, into the array's own slots. An
+    /// id that names nothing arrayable (unknown, or a group -- no group-
+    /// aware move yet, PARITY-pcb.md section 16) is skipped *for free*:
+    /// it does not consume a slot, the same way source's own inner
+    /// `selectionIndex` cursor advances past a non-`BOARD_ITEM`/deduped-
+    /// footprint-child without advancing the outer `arrayIndex`. `ids`
+    /// may resolve to more or fewer real items than `array_size` --
+    /// extras past the last slot are left untouched, same as source's
+    /// own loop simply running out of slots. A part moves via the same
+    /// `set_pose` `Cmd::MoveExact` already uses.
+    fn arrange_into_array(&mut self, ids: &[String], geometry: &ArrayGeometry, array_size: i64) -> Result<(), Vec<CheckResult>> {
+        let mut n: i64 = 0;
+        let mut touched = false;
+        for id in ids {
+            if n >= array_size {
+                break;
+            }
+            if let Some(fp) = self.pose_of(id).cloned() {
+                let (new_pos, rot) = geometry.transform(n, fp.at);
+                let new_rot = if geometry.rotates_items() { (fp.rot as i64 + rot).rem_euclid(360_000) as u32 } else { fp.rot };
+                self.set_pose(id, new_pos, new_rot)?;
+                n += 1;
+                touched = true;
+                continue;
+            }
+            let mut matched = false;
+            if let Some(rt) = self.design.routing.as_mut() {
+                if let Some(t) = rt.tracks.iter_mut().find(|t| &t.id == id) {
+                    if let Some(first) = t.pts.first().copied() {
+                        let (dx, dy) = array_offset(geometry, n, first);
+                        for p in t.pts.iter_mut() {
+                            p.x += dx;
+                            p.y += dy;
+                        }
+                    }
+                    matched = true;
+                } else if let Some(v) = rt.vias.iter_mut().find(|v| &v.id == id) {
+                    v.at = geometry.transform(n, v.at).0;
+                    matched = true;
+                } else if let Some(z) = rt.zones.iter_mut().find(|z| &z.id == id) {
+                    if let Some(first) = z.outline.first().copied() {
+                        let (dx, dy) = array_offset(geometry, n, first);
+                        for p in z.outline.iter_mut() {
+                            p.x += dx;
+                            p.y += dy;
+                        }
+                    }
+                    matched = true;
+                }
+            }
+            if !matched {
+                if let Some(dr) = self.design.drawings.as_mut() {
+                    if let Some(s) = dr.shapes.iter_mut().find(|s| s.id() == id) {
+                        if let Some(first) = s.points().first().copied() {
+                            let (dx, dy) = array_offset(geometry, n, first);
+                            s.translate(dx, dy);
+                        }
+                        matched = true;
+                    } else if let Some(t) = dr.texts.iter_mut().find(|t| &t.id == id) {
+                        let (new_pos, rot) = geometry.transform(n, t.at);
+                        t.at = new_pos;
+                        if geometry.rotates_items() {
+                            t.angle = (t.angle as i64 + rot).rem_euclid(360_000) as u32;
+                        }
+                        matched = true;
+                    }
+                }
+            }
+            // An unknown id, or a group's own id, is skipped without
+            // advancing `n` -- it never reaches here having consumed a
+            // slot the way a stale id would if it fell through to a
+            // refusal instead.
+            if matched {
+                n += 1;
+                touched = true;
+            }
+        }
+        if !touched {
+            return Err(vec![CheckResult::fail(
+                "ops_unknown_array",
+                "array",
+                "none of the given ids name a placed part, track, via, zone, shape or text",
+            )]);
+        }
+        Ok(())
+    }
+
+    /// `ARRAY_TOOL::CreateArray`'s default (`ShouldArrangeSelection() ==
+    /// false`) branch: `array_size - 1` new copies of each resolved
+    /// track/via/zone/shape/text (never a part or a group -- same scope
+    /// `duplicate_items` already has, and for the same reason), plus the
+    /// original itself moved to the array's own last slot -- source's own
+    /// reverse loop transforms the original by index `arraySize - 1`
+    /// rather than leaving it untouched at slot 0, which matters once
+    /// `centred` is on (every slot, including the one the original ends
+    /// up at, shares the same centring offset).
+    fn duplicate_into_array(&mut self, ids: &[String], geometry: &ArrayGeometry, array_size: i64) -> Result<(), Vec<CheckResult>> {
+        let mut tracks = Vec::new();
+        let mut vias = Vec::new();
+        let mut zones = Vec::new();
+        if let Some(rt) = self.design.routing.as_ref() {
+            tracks.extend(rt.tracks.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
+            vias.extend(rt.vias.iter().filter(|v| ids.iter().any(|id| id == &v.id)).cloned());
+            zones.extend(rt.zones.iter().filter(|z| ids.iter().any(|id| id == &z.id)).cloned());
+        }
+        let mut shapes = Vec::new();
+        let mut texts = Vec::new();
+        if let Some(dr) = self.design.drawings.as_ref() {
+            shapes.extend(dr.shapes.iter().filter(|s| ids.iter().any(|id| id == s.id())).cloned());
+            texts.extend(dr.texts.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
+        }
+        if tracks.is_empty() && vias.is_empty() && zones.is_empty() && shapes.is_empty() && texts.is_empty() {
+            return Err(vec![CheckResult::fail(
+                "ops_unknown_array",
+                "array",
+                "none of the given ids name a track, via, zone, shape or text (footprints and groups cannot be arrayed this way)",
+            )]);
+        }
+
+        let mut new_tracks = Vec::new();
+        for t in &tracks {
+            let first = t.pts.first().copied().unwrap_or_default();
+            for n in 0..array_size - 1 {
+                let (dx, dy) = array_offset(geometry, n, first);
+                let mut c = t.clone();
+                for p in c.pts.iter_mut() {
+                    p.x += dx;
+                    p.y += dy;
+                }
+                new_tracks.push(c);
+            }
+        }
+        let mut new_vias = Vec::new();
+        for v in &vias {
+            for n in 0..array_size - 1 {
+                let mut c = v.clone();
+                c.at = geometry.transform(n, v.at).0;
+                new_vias.push(c);
+            }
+        }
+        let mut new_zones = Vec::new();
+        for z in &zones {
+            let first = z.outline.first().copied().unwrap_or_default();
+            for n in 0..array_size - 1 {
+                let (dx, dy) = array_offset(geometry, n, first);
+                let mut c = z.clone();
+                for p in c.outline.iter_mut() {
+                    p.x += dx;
+                    p.y += dy;
+                }
+                new_zones.push(c);
+            }
+        }
+        let mut new_shapes = Vec::new();
+        for s in &shapes {
+            let first = s.points().first().copied().unwrap_or_default();
+            for n in 0..array_size - 1 {
+                let (dx, dy) = array_offset(geometry, n, first);
+                let mut c = s.clone();
+                c.translate(dx, dy);
+                new_shapes.push(c);
+            }
+        }
+        let mut new_texts = Vec::new();
+        for t in &texts {
+            for n in 0..array_size - 1 {
+                let (new_pos, rot) = geometry.transform(n, t.at);
+                let mut c = t.clone();
+                c.at = new_pos;
+                if geometry.rotates_items() {
+                    c.angle = (c.angle as i64 + rot).rem_euclid(360_000) as u32;
+                }
+                new_texts.push(c);
+            }
+        }
+
+        let last = array_size - 1;
+        if let Some(rt) = self.design.routing.as_mut() {
+            for t in rt.tracks.iter_mut().filter(|t| ids.iter().any(|id| id == &t.id)) {
+                if let Some(first) = t.pts.first().copied() {
+                    let (dx, dy) = array_offset(geometry, last, first);
+                    for p in t.pts.iter_mut() {
+                        p.x += dx;
+                        p.y += dy;
+                    }
+                }
+            }
+            for v in rt.vias.iter_mut().filter(|v| ids.iter().any(|id| id == &v.id)) {
+                v.at = geometry.transform(last, v.at).0;
+            }
+            for z in rt.zones.iter_mut().filter(|z| ids.iter().any(|id| id == &z.id)) {
+                if let Some(first) = z.outline.first().copied() {
+                    let (dx, dy) = array_offset(geometry, last, first);
+                    for p in z.outline.iter_mut() {
+                        p.x += dx;
+                        p.y += dy;
+                    }
+                }
+            }
+        }
+        if let Some(dr) = self.design.drawings.as_mut() {
+            for s in dr.shapes.iter_mut().filter(|s| ids.iter().any(|id| id == s.id())) {
+                if let Some(first) = s.points().first().copied() {
+                    let (dx, dy) = array_offset(geometry, last, first);
+                    s.translate(dx, dy);
+                }
+            }
+            for t in dr.texts.iter_mut().filter(|t| ids.iter().any(|id| id == &t.id)) {
+                let (new_pos, rot) = geometry.transform(last, t.at);
+                t.at = new_pos;
+                if geometry.rotates_items() {
+                    t.angle = (t.angle as i64 + rot).rem_euclid(360_000) as u32;
+                }
+            }
+        }
+
+        self.insert_copies(new_tracks, new_vias, new_zones, new_shapes, new_texts)
+    }
+
+    // ----------------------------------------------------- dimensions
+
+    fn add_dimension(&mut self, mut dimension: Dimension) -> Result<(), Vec<CheckResult>> {
+        if dimension.layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_dimension", "dimension", "a dimension needs a layer")]);
+        }
+        if dimension.start == dimension.end {
+            return Err(vec![CheckResult::fail("ops_bad_dimension", "dimension", "a dimension needs two distinct feature points")]);
+        }
+        dimension.id = String::new();
+        let dr = self.drawings_mut();
+        dr.dimensions.push(dimension);
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    fn delete_dimension(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.drawings_mut();
+        let before = dr.dimensions.len();
+        dr.dimensions.retain(|d| d.id != id);
+        if dr.dimensions.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_dimension", id, "no dimension with this id")]);
+        }
+        Ok(())
+    }
+
+    fn find_dimension_mut<'b>(dr: &'b mut DrawingsSection, id: &str) -> Result<&'b mut Dimension, Vec<CheckResult>> {
+        dr.dimensions.iter_mut().find(|d| d.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_dimension", id, "no dimension with this id")])
+    }
+
+    fn move_dimension(&mut self, id: &str, dx: Um, dy: Um) -> Result<(), Vec<CheckResult>> {
+        let dr = self.drawings_mut();
+        let dim = Self::find_dimension_mut(dr, id)?;
+        eda_connectivity::dimension::translate_dimension(dim, dx, dy);
+        Ok(())
+    }
+
+    fn edit_dimension(&mut self, id: &str, mut dimension: Dimension) -> Result<(), Vec<CheckResult>> {
+        if dimension.layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_dimension", id, "a dimension needs a layer")]);
+        }
+        if dimension.start == dimension.end {
+            return Err(vec![CheckResult::fail("ops_bad_dimension", id, "a dimension needs two distinct feature points")]);
+        }
+        let dr = self.drawings_mut();
+        let slot = Self::find_dimension_mut(dr, id)?;
+        dimension.id = slot.id.clone();
+        *slot = dimension;
+        Ok(())
+    }
+
+    fn set_dimension_settings(&mut self, settings: DimensionSettings) -> Result<(), Vec<CheckResult>> {
+        self.drawings_mut().dimension_settings = settings;
         Ok(())
     }
 
@@ -2858,6 +3799,18 @@ fn rotate_point_about(pt: Point, pivot: Point, angle_millideg: i64) -> Point {
     let dx = (pt.x - pivot.x) as f64;
     let dy = (pt.y - pivot.y) as f64;
     Point { x: pivot.x + (dx * cos - dy * sin).round() as Um, y: pivot.y + (dx * sin + dy * cos).round() as Um }
+}
+
+/// `geometry.transform(n, reference).0 - reference`, as a `(dx, dy)` to
+/// add to *every* point of a multi-point item (a track's `pts`, a zone's
+/// `outline`, or a `Shape` via its own `translate`) so the whole item
+/// moves rigidly using just one of its own points as the position
+/// `ArrayGeometry::transform` expects -- see `Cmd::CreateArray`'s own doc
+/// on why that's a pure translation, never a per-point rotation, for
+/// every kind but `Part`/`Text`.
+fn array_offset(geometry: &ArrayGeometry, n: i64, reference: Point) -> (Um, Um) {
+    let new_pos = geometry.transform(n, reference).0;
+    (new_pos.x - reference.x, new_pos.y - reference.y)
 }
 
 /// How far a `Place` will slide along the anchor before giving up.
