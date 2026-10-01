@@ -15,6 +15,46 @@ use crate::item::{format_um, DrcRefItem, DrcViolation, ErrorType};
 use crate::kimath::Shape;
 use crate::pcbexpr::Facts;
 use eda_model::{BoardRules, PadKind};
+use std::collections::HashMap;
+
+/// Every footprint whose courtyard contains each pad/track/via's own
+/// representative point, precomputed once per board -- `Facts::
+/// inside_courtyards`'s only data source (`A.insideCourtyard('NAME')`, task
+/// item 4; see that field's doc comment). Built once and looked up per item
+/// rather than recomputed per *pair*: `check()` resolves clearance for
+/// O(items^2) pairs on a real board, and this containment test is itself
+/// O(footprints), so computing it inline per pair would be
+/// O(items^2 * footprints) -- the same reasoning `CompiledClearanceRules`
+/// documents for compiling a rule's condition once instead of per pair.
+pub(crate) struct CourtyardMembership {
+    pads: HashMap<String, Vec<String>>,
+    tracks: HashMap<String, Vec<String>>,
+    vias: HashMap<String, Vec<String>>,
+}
+
+const NO_COURTYARDS: &[String] = &[];
+
+impl CourtyardMembership {
+    pub(crate) fn new(board: &DrcBoard) -> Self {
+        let containing = |x: i64, y: i64| -> Vec<String> {
+            board.footprints.iter().filter(|f| x > f.courtyard.0 && x < f.courtyard.2 && y > f.courtyard.1 && y < f.courtyard.3).map(|f| f.id.clone()).collect()
+        };
+        CourtyardMembership {
+            pads: board.pads.iter().map(|p| (p.id.clone(), containing(p.center.x, p.center.y))).collect(),
+            tracks: board.tracks.iter().map(|t| (t.id.clone(), containing((t.a.x + t.b.x) / 2, (t.a.y + t.b.y) / 2))).collect(),
+            vias: board.vias.iter().map(|v| (v.id.clone(), containing(v.at.x, v.at.y))).collect(),
+        }
+    }
+    fn pad(&self, id: &str) -> &[String] {
+        self.pads.get(id).map(Vec::as_slice).unwrap_or(NO_COURTYARDS)
+    }
+    fn track(&self, id: &str) -> &[String] {
+        self.tracks.get(id).map(Vec::as_slice).unwrap_or(NO_COURTYARDS)
+    }
+    fn via(&self, id: &str) -> &[String] {
+        self.vias.get(id).map(Vec::as_slice).unwrap_or(NO_COURTYARDS)
+    }
+}
 
 /// This item's resolved net-class name, for a `.kicad_dru` condition's
 /// `A.NetClass`/`B.NetClass`/`hasNetclass()` (task item 4) -- `"Default"`
@@ -24,8 +64,8 @@ pub(crate) fn net_class_name<'a>(rules: &'a BoardRules, net: Option<&str>) -> &'
     net.and_then(|n| rules.class_of(n)).map(|c| c.name.as_str()).unwrap_or("Default")
 }
 
-fn facts_of_pad<'a>(rules: &'a BoardRules, p: &'a DrcPad) -> Facts<'a> {
-    Facts { item_type: "Pad", net_class: net_class_name(rules, p.net.as_deref()), net_name: p.net.as_deref().unwrap_or(""), reference: &p.footprint_ref }
+fn facts_of_pad<'a>(rules: &'a BoardRules, p: &'a DrcPad, courtyards: &'a CourtyardMembership) -> Facts<'a> {
+    Facts { item_type: "Pad", net_class: net_class_name(rules, p.net.as_deref()), net_name: p.net.as_deref().unwrap_or(""), reference: &p.footprint_ref, inside_courtyards: courtyards.pad(&p.id) }
 }
 /// Also used by `providers::track_width` to build the `A`-only `Facts` a
 /// `.kicad_dru` `track_width` rule's condition is evaluated against (task
@@ -33,14 +73,17 @@ fn facts_of_pad<'a>(rules: &'a BoardRules, p: &'a DrcPad) -> Facts<'a> {
 /// track/arc built the same way a clearance-family rule's condition sees it
 /// is exactly what KiCad's own one-item `TRACK_WIDTH_CONSTRAINT` evaluation
 /// needs.
-pub(crate) fn facts_of_track<'a>(rules: &'a BoardRules, t: &'a DrcTrackSeg) -> Facts<'a> {
-    Facts { item_type: "Track", net_class: net_class_name(rules, t.net.as_deref()), net_name: t.net.as_deref().unwrap_or(""), reference: "" }
+pub(crate) fn facts_of_track<'a>(rules: &'a BoardRules, t: &'a DrcTrackSeg, courtyards: &'a CourtyardMembership) -> Facts<'a> {
+    Facts { item_type: "Track", net_class: net_class_name(rules, t.net.as_deref()), net_name: t.net.as_deref().unwrap_or(""), reference: "", inside_courtyards: courtyards.track(&t.id) }
 }
-fn facts_of_via<'a>(rules: &'a BoardRules, v: &'a DrcVia) -> Facts<'a> {
-    Facts { item_type: "Via", net_class: net_class_name(rules, v.net.as_deref()), net_name: v.net.as_deref().unwrap_or(""), reference: "" }
+fn facts_of_via<'a>(rules: &'a BoardRules, v: &'a DrcVia, courtyards: &'a CourtyardMembership) -> Facts<'a> {
+    Facts { item_type: "Via", net_class: net_class_name(rules, v.net.as_deref()), net_name: v.net.as_deref().unwrap_or(""), reference: "", inside_courtyards: courtyards.via(&v.id) }
 }
 fn facts_of_zone<'a>(rules: &'a BoardRules, z: &'a DrcZone) -> Facts<'a> {
-    Facts { item_type: "Zone", net_class: net_class_name(rules, z.net.as_deref()), net_name: z.net.as_deref().unwrap_or(""), reference: "" }
+    // Not resolved against any footprint's courtyard -- a zone's own
+    // outline is in no way a point, and `insideCourtyard` scoped to a zone
+    // is not a pattern that's shown up in any sampled `.kicad_dru` file.
+    Facts { item_type: "Zone", net_class: net_class_name(rules, z.net.as_deref()), net_name: z.net.as_deref().unwrap_or(""), reference: "", inside_courtyards: NO_COURTYARDS }
 }
 
 /// A non-plated hole has no copper at all (it is a mechanical hole only),
@@ -177,6 +220,8 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     // `constraints::CompiledClearanceRules`'s doc comment for why this
     // matters (a real board resolves clearance for thousands of pairs).
     let compiled_rules = constraints::CompiledClearanceRules::new(rules);
+    // Also compiled once per board, same reasoning -- see its own doc comment.
+    let courtyards = CourtyardMembership::new(board);
 
     for layer in &board.layers {
         let pads: Vec<&DrcPad> = board.pads.iter().filter(|p| p.layers.iter().any(|l| l == layer)).collect();
@@ -213,7 +258,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 // test it falls through to -- only run when the resolved
                 // clearance is actually positive; a rule that sets it to
                 // exactly 0 between two nets disables both, not just one.
-                let pair_clearance = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a), &facts_of_track(rules, b), &compiled_rules);
+                let pair_clearance = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a, &courtyards), &facts_of_track(rules, b, &courtyards), &compiled_rules);
                 if pair_clearance > 0 {
                     let (sa, sb) = (crate::kimath::Seg::new(a.a, a.b), crate::kimath::Seg::new(b.a, b.b));
                     if let Some(pt) = sa.intersect(&sb) {
@@ -221,7 +266,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                         continue;
                     }
                 }
-                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a), &facts_of_track(rules, b), &a.shape(), &b.shape(), track_ref(a), track_ref(b), &compiled_rules, &mut out);
+                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a, &courtyards), &facts_of_track(rules, b, &courtyards), &a.shape(), &b.shape(), track_ref(a), track_ref(b), &compiled_rules, &mut out);
             }
         }
 
@@ -242,7 +287,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                     continue;
                 }
                 if flashed(p) {
-                    clearance_or_short(rules, t.net.as_deref(), p.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_pad(rules, p), &t.shape(), &p.copper, track_ref(t), pad_ref(p), &compiled_rules, &mut out);
+                    clearance_or_short(rules, t.net.as_deref(), p.net.as_deref(), layer, &facts_of_track(rules, t, &courtyards), &facts_of_pad(rules, p, &courtyards), &t.shape(), &p.copper, track_ref(t), pad_ref(p), &compiled_rules, &mut out);
                 }
                 hole_clearance(rules, None, &t.shape(), &track_ref(t), p.hole.as_ref(), &p.copper, &pad_ref(p), &mut out);
             }
@@ -251,7 +296,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if t.net.is_some() && t.net.as_deref() == v.net.as_deref() {
                     continue;
                 }
-                clearance_or_short(rules, t.net.as_deref(), v.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_via(rules, v), &t.shape(), &v.shape(), track_ref(t), via_ref(v), &compiled_rules, &mut out);
+                clearance_or_short(rules, t.net.as_deref(), v.net.as_deref(), layer, &facts_of_track(rules, t, &courtyards), &facts_of_via(rules, v, &courtyards), &t.shape(), &v.shape(), track_ref(t), via_ref(v), &compiled_rules, &mut out);
                 hole_clearance(rules, None, &t.shape(), &track_ref(t), Some(&v.hole()), &v.shape(), &via_ref(v), &mut out);
             }
         }
@@ -268,7 +313,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 }
                 let same_net = a.net == b.net; // netcode equality, not "both assigned" -- see the track loop above
                 if flashed(a) && flashed(b) && !same_net {
-                    clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_pad(rules, a), &facts_of_pad(rules, b), &a.copper, &b.copper, pad_ref(a), pad_ref(b), &compiled_rules, &mut out);
+                    clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_pad(rules, a, &courtyards), &facts_of_pad(rules, b, &courtyards), &a.copper, &b.copper, pad_ref(a), pad_ref(b), &compiled_rules, &mut out);
                 }
                 // Hole clearance is a *foreign-copper* check (see this
                 // module's doc comment on `flashed`): same-net pads (two
@@ -288,7 +333,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 let a = pads[i];
                 let same_net = a.net.as_deref() == v.net.as_deref();
                 if flashed(a) && !same_net {
-                    clearance_or_short(rules, a.net.as_deref(), v.net.as_deref(), layer, &facts_of_pad(rules, a), &facts_of_via(rules, v), &a.copper, &v.shape(), pad_ref(a), via_ref(v), &compiled_rules, &mut out);
+                    clearance_or_short(rules, a.net.as_deref(), v.net.as_deref(), layer, &facts_of_pad(rules, a, &courtyards), &facts_of_via(rules, v, &courtyards), &a.copper, &v.shape(), pad_ref(a), via_ref(v), &compiled_rules, &mut out);
                 }
                 if !same_net {
                     hole_clearance(rules, a.hole.as_ref(), &a.copper, &pad_ref(a), Some(&v.hole()), &v.shape(), &via_ref(v), &mut out);
@@ -301,7 +346,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if a.net == b.net {
                     continue;
                 }
-                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_via(rules, a), &facts_of_via(rules, b), &a.shape(), &b.shape(), via_ref(a), via_ref(b), &compiled_rules, &mut out);
+                clearance_or_short(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_via(rules, a, &courtyards), &facts_of_via(rules, b, &courtyards), &a.shape(), &b.shape(), via_ref(a), via_ref(b), &compiled_rules, &mut out);
                 hole_clearance(rules, Some(&a.hole()), &a.shape(), &via_ref(a), Some(&b.hole()), &b.shape(), &via_ref(b), &mut out);
             }
         }
@@ -312,7 +357,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if p.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance_with_custom_rules(rules, p.net.as_deref(), z.net.as_deref(), layer, &facts_of_pad(rules, p), &facts_of_zone(rules, z), &compiled_rules);
+                let c = constraints::clearance_with_custom_rules(rules, p.net.as_deref(), z.net.as_deref(), layer, &facts_of_pad(rules, p, &courtyards), &facts_of_zone(rules, z), &compiled_rules);
                 if flashed(p) && c > 0 {
                     if let Some((actual, _)) = collides_zone(&p.copper, z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![pad_ref(p), zone_ref(z)]));
@@ -324,7 +369,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if t.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance_with_custom_rules(rules, t.net.as_deref(), z.net.as_deref(), layer, &facts_of_track(rules, t), &facts_of_zone(rules, z), &compiled_rules);
+                let c = constraints::clearance_with_custom_rules(rules, t.net.as_deref(), z.net.as_deref(), layer, &facts_of_track(rules, t, &courtyards), &facts_of_zone(rules, z), &compiled_rules);
                 if c > 0 {
                     if let Some((actual, _)) = collides_zone(&t.shape(), z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![track_ref(t), zone_ref(z)]));
@@ -335,7 +380,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 if v.net == z.net {
                     continue;
                 }
-                let c = constraints::clearance_with_custom_rules(rules, v.net.as_deref(), z.net.as_deref(), layer, &facts_of_via(rules, v), &facts_of_zone(rules, z), &compiled_rules);
+                let c = constraints::clearance_with_custom_rules(rules, v.net.as_deref(), z.net.as_deref(), layer, &facts_of_via(rules, v, &courtyards), &facts_of_zone(rules, z), &compiled_rules);
                 if c > 0 {
                     if let Some((actual, _)) = collides_zone(&v.shape(), z, &fills, c) {
                         out.push(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![via_ref(v), zone_ref(z)]));
@@ -496,5 +541,59 @@ mod tests {
         let hit = v.iter().find(|v| v.error_type == ErrorType::HoleClearance.key()).unwrap_or_else(|| panic!("expected a hole_clearance violation: {v:#?}"));
         assert_eq!(hit.items[0].id, "P1", "items[0] must be the copper-bearing side; got {hit:#?}");
         assert_eq!(hit.items[1].id, "P2", "items[1] must be the hole-bearing side; got {hit:#?}");
+    }
+
+    fn smd_pad(id: &str, footprint_ref: &str, net: Option<&str>, center: (i64, i64), half: i64) -> DrcPad {
+        let c = Point { x: center.0, y: center.1 };
+        DrcPad {
+            id: id.into(),
+            footprint_ref: footprint_ref.into(),
+            number: "1".into(),
+            net: net.map(String::from),
+            center: c,
+            side: Side::Top,
+            kind: PadKind::Smd,
+            layers: vec!["F.Cu".into()],
+            copper: Shape::Rect { x0: c.x - half, y0: c.y - half, x1: c.x + half, y1: c.y + half },
+            hole: None,
+            drill_round: None,
+            drill_slot: None,
+        }
+    }
+
+    /// End-to-end regression for GAPS.md #3's `issue11814` tail (the
+    /// "TightWSON" rule): a pad-to-track pair 0.17mm apart, both inside a
+    /// tight footprint's courtyard, must clear a `(min 0.15mm)`
+    /// `A.insideCourtyard('U4')` rule even though the board's own default
+    /// (unconditional) `(min 0.2mm)` `PadToTrack`-style rule would otherwise
+    /// flag it -- the courtyard-scoped rule is declared *after* the default
+    /// one, so KiCad's (and this port's) last-match-wins precedence must
+    /// pick it. Before `CourtyardMembership`/`insideCourtyard` existed, this
+    /// condition could never match (an always-`Unknown` function), so the
+    /// stricter default rule always won instead.
+    #[test]
+    fn inside_courtyard_rule_loosens_clearance_for_items_inside_it() {
+        let pad = smd_pad("U4.1", "U4", Some("GND"), (0, 0), 600); // 1.2mm square pad, centred at the origin, right edge at x=600
+        let track = seg("t1", Some("+5V"), (870, -2000), (870, 2000)); // width 200 (seg()'s default) -> left edge at x=770, a 170um gap from the pad
+        let mut board = empty_board(vec![track], vec![pad]);
+        board.footprints.push(crate::board::DrcFootprint { id: "U4".into(), side: Side::Top, courtyard: (-2000, -2000, 2000, 2000) });
+
+        let default_rule = BoardRules { clearance: 200, ..BoardRules::default() };
+        let v_default = check(&board, &default_rule);
+        assert!(v_default.iter().any(|v| v.error_type == "clearance"), "sanity: the 0.2mm default rule alone must flag a 0.17mm gap: {v_default:#?}");
+
+        let mut tight = default_rule;
+        tight.custom_rules = vec![eda_model::CustomRule {
+            name: "TightWSON".into(),
+            constraint_type: "clearance".into(),
+            min: Some(150),
+            max: None,
+            opt: None,
+            layer: None,
+            severity: None,
+            condition: Some("A.insideCourtyard('U4')".into()),
+        }];
+        let v_tight = check(&board, &tight);
+        assert!(!v_tight.iter().any(|v| v.error_type == "clearance"), "the courtyard-scoped 0.15mm rule must win over the 0.2mm default for a pair inside U4's courtyard: {v_tight:#?}");
     }
 }
