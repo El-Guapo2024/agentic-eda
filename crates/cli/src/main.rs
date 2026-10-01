@@ -18,6 +18,7 @@
 
 mod board;
 mod import_kicad;
+mod route_api;
 mod studio;
 
 use eda::prelude::*;

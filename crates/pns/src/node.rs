@@ -392,6 +392,30 @@ impl Node {
         }
         best.map(|(id, p, _)| (id, p))
     }
+
+    /// Nearest item whose own *shape* (not just its anchor points) comes
+    /// within `max_dist` of `pos` -- for hit-testing a drag-start click
+    /// anywhere along a track, not just at its ends. [`Self::nearest_anchor`]
+    /// is the right tool for "did this land on a connection point"
+    /// (route start/end snapping); this one is "what's physically under
+    /// the cursor," the same distinction `pcb_selection_tool.cpp` draws
+    /// between a point hit-test and anchor snapping.
+    pub fn item_at(&self, pos: Point, layers: LayerRange, max_dist: Um) -> Option<ItemId> {
+        let probe = Shape::Circle { c: pos, r: 0 };
+        let bbox = probe.bbox(max_dist);
+        let mut best: Option<(ItemId, Um)> = None;
+        for id in self.index.query(bbox) {
+            let Some(item) = self.items.get(&id) else { continue };
+            if !item.layers().overlaps(&layers) {
+                continue;
+            }
+            let (actual, _) = probe.clearance_to(&item.shape(item.layers().start()));
+            if actual <= max_dist && best.as_ref().map(|(_, d)| actual < *d).unwrap_or(true) {
+                best = Some((id, actual));
+            }
+        }
+        best.map(|(id, _)| id)
+    }
 }
 
 #[cfg(test)]
@@ -478,5 +502,16 @@ mod tests {
         child.remove(id);
         assert!(n.contains(id), "removing from a branch must not affect the parent");
         assert!(!child.contains(id));
+    }
+
+    #[test]
+    fn item_at_finds_a_track_by_its_middle_not_just_its_ends() {
+        let mut n = Node::new();
+        let id = n.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: p(10_000, 0), width: 200, source_track: None, locked: false }));
+        // Dead centre of a long track: `nearest_anchor` (endpoints only)
+        // would miss this entirely.
+        assert_eq!(n.item_at(p(5000, 50), LayerRange::single(0), 200), Some(id));
+        assert!(n.nearest_anchor(p(5000, 50), LayerRange::single(0), 200, None).is_none(), "sanity: nearest_anchor really doesn't see the middle");
+        assert!(n.item_at(p(5000, 5000), LayerRange::single(0), 200).is_none());
     }
 }

@@ -646,6 +646,51 @@ fn paste_items_with_nothing_in_it_is_a_harmless_no_op() {
     assert!(b.design().drawings.is_none());
 }
 
+// ------------------------------------------------------- commit route
+
+#[test]
+fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2500, y: -2000 }, Point { x: 2500, y: 2000 }] }).unwrap();
+    let old_id = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+
+    b.apply(&Cmd::CommitRoute {
+        remove_track_ids: vec![old_id.clone()],
+        remove_via_ids: vec![],
+        tracks: vec![
+            Track { id: "ignored".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }] },
+            Track { id: "ignored2".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2500, y: -2000 }, Point { x: 2200, y: 0 }, Point { x: 2500, y: 2000 }] },
+        ],
+        vias: vec![],
+    })
+    .unwrap();
+
+    let tracks = &b.design().routing.as_ref().unwrap().tracks;
+    assert_eq!(tracks.len(), 2, "the old track is gone, both new ones are present");
+    assert!(tracks.iter().all(|t| t.id != old_id), "the removed id must not reappear");
+    assert!(tracks.iter().all(|t| t.id != "ignored" && t.id != "ignored2"), "incoming ids are always reassigned, same as PasteItems");
+    assert!(tracks.iter().any(|t| t.pts[0] == Point { x: 0, y: 0 }));
+    assert!(tracks.iter().any(|t| t.pts.len() == 3), "the shoved track's new detour shape must survive");
+}
+
+#[test]
+fn commit_route_tolerates_an_already_gone_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }], vias: vec![] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
+}
+
+#[test]
+fn commit_route_rejects_an_unknown_net() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }], vias: vec![] }).unwrap_err();
+    assert!(!e.is_empty());
+    assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
+}
+
 // ------------------------------------------------------- move exact
 
 #[test]

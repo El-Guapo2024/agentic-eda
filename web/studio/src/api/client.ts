@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, ErcReport, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DragPreview, DrcReport, ErcReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, Um } from "./types";
 
 export class ApiError extends Error {}
 
@@ -151,4 +151,66 @@ export async function postUndo(domain: "pcb" | "schematic"): Promise<CmdReply> {
 export async function postRedo(domain: "pcb" | "schematic"): Promise<CmdReply> {
   const r = await fetch("/api/redo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
   return (await r.json()) as CmdReply;
+}
+
+// ------------------------------------------------------- interactive router
+//
+// Gap #7's push-and-shove router (crates/pns), driven through
+// crates/cli/src/route_api.rs. See api/types.ts's own doc comment on the
+// session these calls share -- `routeStart` opens it, `routeFinish`/
+// `routeCancel` close it, everything between just reads/advances it.
+
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return (await r.json()) as T;
+}
+
+export function routeStart(x: Um, y: Um, layer: string, width: Um, mode: RouteMode): Promise<RoutePreview> {
+  return postJson("/api/route/start", { x, y, layer, width, mode });
+}
+
+/** `flipPosture`/`width` fold in the `/` and `W` hotkeys -- see
+ * `Router::flip_posture`'s own doc comment on why they ride along with the
+ * next cursor move instead of being their own round trip. */
+export function routeMove(x: Um, y: Um, flipPosture?: boolean, width?: Um): Promise<RoutePreview> {
+  return postJson("/api/route/move", { x, y, flip_posture: flipPosture, width });
+}
+
+export function routeFix(x: Um, y: Um): Promise<RouteFixReply> {
+  return postJson("/api/route/fix", { x, y });
+}
+
+export function routeUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
+  return postJson("/api/route/undo_segment", {});
+}
+
+export function routeToggleVia(enabled: boolean, diameter?: Um, drill?: Um, toLayer?: string): Promise<{ ok: boolean }> {
+  return postJson("/api/route/via", { enabled, diameter, drill, to_layer: toLayer });
+}
+
+export function routeFinish(x: Um, y: Um): Promise<CmdReply> {
+  return postJson("/api/route/finish", { x, y });
+}
+
+export function routeCancel(): Promise<{ ok: boolean }> {
+  return postJson("/api/route/cancel", {});
+}
+
+// `D`: drag an existing track segment/corner or via, keeping its
+// connections (gap #7 stage 5). Not yet wired into Canvas.tsx's move tool
+// (see docs/parity/GAPS.md #7's own tracking note) -- these three calls
+// are the full backend surface a future drag-tool integration needs;
+// `routeCancel` above already ends a drag session too (it's the same
+// backend session as a route, see `RoutePreview`'s own doc comment).
+
+export function routeDragStart(x: Um, y: Um, layer: string): Promise<DragPreview> {
+  return postJson("/api/route/drag_start", { x, y, layer });
+}
+
+export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
+  return postJson("/api/route/drag_move", { x, y });
+}
+
+export function routeDragFinish(x: Um, y: Um): Promise<CmdReply> {
+  return postJson("/api/route/drag_finish", { x, y });
 }

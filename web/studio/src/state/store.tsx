@@ -59,7 +59,31 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
  * is just the CURRENT segment's points since the last via/start.
  */
 export type DrawState =
-  | { kind: "route"; net: string; layer: string; width: Um; pts: [Um, Um][] }
+  | {
+      kind: "route";
+      net: string;
+      layer: string;
+      width: Um;
+      /** The live head preview the backend's `eda_pns::Router` resolved
+       * (walkaround/shove/mark-obstacles already applied) -- draw this
+       * directly, same convention `drawInProgress` already used for the
+       * old client-only posture45 rubber-band. */
+      pts: [Um, Um][];
+      /** Whether `pts` (or `via`) currently collides -- only meaningful in
+       * `mark_obstacles` mode, where a violation is shown, not resolved. */
+      colliding?: boolean;
+      /** Already-fixed runs from earlier in this session (before a via/
+       * layer switch put the head on a different layer). */
+      runs?: { layer: string; pts: [Um, Um][] }[];
+      via?: { x: Um; y: Um; diameter: Um; drill: Um } | null;
+      snappedEnd?: [Um, Um] | null;
+      /** `shove` mode only: other tracks the live head would push aside. */
+      displaced?: { layer: string; pts: [Um, Um][] }[];
+      /** Armed by the `V` hotkey: the next fix drops a via here and
+       * continues on `pendingViaLayer`. */
+      placingVia?: boolean;
+      pendingViaLayer?: string;
+    }
   | { kind: "zone"; pts: [Um, Um][] }
   | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */

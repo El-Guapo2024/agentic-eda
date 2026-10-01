@@ -578,6 +578,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::Annotate { reset_existing } => format!("schematic annotate{}", if *reset_existing { " --reset" } else { "" }),
+        Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids } => {
+            format!("route: +{} track(s) +{} via(s), -{} track(s) -{} via(s)", tracks.len(), vias.len(), remove_track_ids.len(), remove_via_ids.len())
+        }
     }
 }
 
@@ -630,6 +633,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddShape { .. } | Cmd::DeleteShape { .. } | Cmd::MoveShape { .. } => "shape",
         Cmd::AddText { .. } | Cmd::EditText { .. } | Cmd::DeleteText { .. } | Cmd::MoveText { .. } => "text",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
+        Cmd::CommitRoute { .. } => "route",
         Cmd::MoveExact { .. } => "move-exact",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",

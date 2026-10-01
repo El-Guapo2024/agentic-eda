@@ -261,6 +261,27 @@ pub enum Cmd {
         texts: Vec<Text>,
     },
 
+    /// Finish an interactive router session (`crates/pns`'s `Router::
+    /// finish`, gap #7): remove whatever existing tracks/vias the session's
+    /// push-and-shove displaced, then add the session's final geometry
+    /// (its own new runs plus every displaced item's updated shape) --
+    /// all as one undo step, the same way `PasteItems` is one step for a
+    /// pure add. Unknown ids in `remove_track_ids`/`remove_via_ids` are
+    /// tolerated (not an error): the router names ids from its own
+    /// internal bookkeeping of what it touched, not from user input, and a
+    /// route that didn't actually displace anything legitimately sends
+    /// none.
+    CommitRoute {
+        #[serde(default)]
+        remove_track_ids: Vec<String>,
+        #[serde(default)]
+        remove_via_ids: Vec<String>,
+        #[serde(default)]
+        tracks: Vec<Track>,
+        #[serde(default)]
+        vias: Vec<Via>,
+    },
+
     /// Move/rotate one or more placed parts by an exact cartesian offset
     /// and angle -- pcbnew's "Move Exactly..." (Shift+M) dialog.
     /// `rotate_millideg` adds to each part's own orientation regardless
@@ -430,6 +451,7 @@ impl Cmd {
             Cmd::AddText { text } => vec![text.content.as_str()],
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } => vec!["paste"],
+            Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
 
             Cmd::MoveSymbol { id, .. } | Cmd::DragSymbol { id, .. } | Cmd::RotateSymbol { id, .. } | Cmd::MirrorSymbol { id } | Cmd::DeleteSymbol { id } | Cmd::AddSymbol { id, .. } => vec![id],
@@ -703,6 +725,7 @@ impl<'a> Board<'a> {
 
             Cmd::Duplicate { ids } => self.duplicate_items(ids),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
+            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
 
             Cmd::MoveSymbol { id, x, y } => self.move_symbol(id, *x, *y),
@@ -1411,6 +1434,49 @@ impl<'a> Board<'a> {
             dr.shapes.append(&mut shapes);
             dr.texts.append(&mut texts);
             dr.assign_missing_ids();
+        }
+        Ok(())
+    }
+
+    /// `Cmd::CommitRoute`: see that variant's own doc comment. Validates
+    /// each incoming track/via the same way `add_track`/`add_via` would
+    /// (unlike `insert_copies`, whose items are always copies of something
+    /// already on the board and so already known-good) -- this router's
+    /// output is new geometry, not a copy, so the same guard applies.
+    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>) -> Result<(), Vec<CheckResult>> {
+        for t in &tracks {
+            self.known_net(&t.net)?;
+            self.known_layer(&t.layer)?;
+            if t.width <= 0 || t.pts.len() < 2 {
+                return Err(vec![CheckResult::fail("ops_bad_track", &t.net, "a committed route track needs a positive width and at least two points")]);
+            }
+        }
+        for v in &vias {
+            self.known_net(&v.net)?;
+            self.known_layer(&v.from_layer)?;
+            self.known_layer(&v.to_layer)?;
+            if v.drill <= 0 || v.diameter <= 0 || v.drill >= v.diameter {
+                return Err(vec![CheckResult::fail("ops_bad_via", &v.net, "a committed route via needs a drill smaller than its diameter, both positive")]);
+            }
+        }
+        if !remove_track_ids.is_empty() || !remove_via_ids.is_empty() {
+            if let Some(rt) = self.design.routing.as_mut() {
+                rt.tracks.retain(|t| !remove_track_ids.iter().any(|id| id == &t.id));
+                rt.vias.retain(|v| !remove_via_ids.iter().any(|id| id == &v.id));
+            }
+        }
+        for t in &mut tracks {
+            t.id.clear();
+        }
+        for v in &mut vias {
+            v.id.clear();
+        }
+        if !tracks.is_empty() || !vias.is_empty() {
+            let rt = self.routing_mut();
+            rt.tracks.append(&mut tracks);
+            rt.vias.append(&mut vias);
+            rt.assign_missing_ids();
+            self.sort_routing();
         }
         Ok(())
     }

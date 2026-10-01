@@ -502,6 +502,7 @@ dependencies = [
  "eda-kicad",
  "eda-model",
  "eda-ops",
+ "eda-pns",
  "eda-shape-poly-set",
  "eda-zone-filler",
  "serde",

@@ -109,27 +109,105 @@ perpendicular to the pusher's own heading in that degenerate case.
 
 ## Stage 4 -- API + frontend
 
-`pns_router.{h,cpp}` -> `src/router.rs`; `router_tool.cpp`'s interaction
-state machine -> `web/studio/src/kicad-port/routeTool.ts` +
-`Canvas.tsx`/`routing.ts` wiring; HTTP endpoints in `crates/cli/src/
-studio.rs`. Commit granularity is **per finished line**, not KiCad's
-per-segment `AddItem`/`RemoveItem`/`UpdateItem`: this project's own
-`Track` IR already holds a whole polyline, so a finished route becomes one
-`Track` (or two, split at a placed via, plus the `Via`) instead of one
-`Cmd` per segment -- a deliberate adaptation to this project's own data
-model (see the task's "our JSON is the only source of truth" rule), not a
-fidelity gap. A newly added `Cmd::CommitRoute` (`crates/ops/src/lib.rs`)
-removes whatever existing tracks/vias a shove displaced and adds the
-session's final geometry in one undo step, generalizing the existing
-`PasteItems` (pure-add) the same way KiCad's own `NODE::Commit` generalizes
-a pure add into "remove the overridden set, add the branch's own items."
+`pns_router.{h,cpp}` -> `src/router.rs`. `Router` owns the committed
+`Node` and, while a route is in progress, a `LinePlacer` session -- no
+persistent working/preview `Node` the way upstream keeps one, since
+neither `LinePlacer` nor `shove` need one between calls (see those
+modules' own doc comments). Commit granularity is **per finished line**,
+not KiCad's per-segment `AddItem`/`RemoveItem`/`UpdateItem`: this
+project's own `Track` IR already holds a whole polyline, so a finished
+route becomes one `Track` (or two, split at a placed via, plus the `Via`)
+instead of one `Cmd` per segment -- a deliberate adaptation to this
+project's own data model (see the task's "our JSON is the only source of
+truth" rule), not a fidelity gap. A newly added `Cmd::CommitRoute`
+(`crates/ops/src/lib.rs`) removes whatever existing tracks/vias a shove
+displaced and adds the session's final geometry in one undo step,
+generalizing the existing `PasteItems` (pure-add) the same way KiCad's own
+`NODE::Commit` generalizes a pure add into "remove the overridden set, add
+the branch's own items."
+
+HTTP endpoints: `crates/cli/src/route_api.rs`, wired into `crates/cli/src/
+studio.rs`'s existing single-threaded dispatch. One `Mutex<Option<Router>>`
+(`route_api::RouteCell`) holds the in-progress session across the whole
+gesture -- `start`/`drag_start` build a fresh `Router` from the board as it
+stands (same as every other endpoint re-reading `design.json`);
+`move`/`fix`/`undo_segment`/`via`/`drag_move` just borrow it back out and
+forward into its methods (no re-flattening the board per request, which is
+the one thing "keep per-request work small" is actually worried about);
+`finish`/`drag_finish`/`cancel` take the session back out, ending it
+either way. Preview state never touches `design.json` -- only `finish`/
+`drag_finish` do, through `Cmd::CommitRoute`.
+
+Frontend: `web/studio/src/kicad-port/routeTool.ts` (pure, dependency-free
+glue -- `DrawState` patch construction, the request-ordering guard and
+move throttle every async call needs) + `api/client.ts`'s `route*`
+functions + `components/canvas/routing.ts` (the async start/fix/finish/
+cancel flows, replacing the old client-only `commitRoute`/
+`dropViaAndSwitchLayer`) + `Canvas.tsx`/`useActionRunner.ts` wiring:
+
+| Gesture | Wired as |
+|---|---|
+| X (start/toggle tool) | `pcbnew.InteractiveRouter.SingleTrack` (pre-existing) |
+| click (start) | `Canvas.tsx` pointerdown -> `startInteractiveRoute` |
+| click (fix) | `Canvas.tsx` pointerdown -> `fixInteractiveRoute` |
+| mouse move (preview) | `Canvas.tsx` pointermove, throttled 50ms + request-guarded -> `routeMove` |
+| Enter / double-click / F | `finishDraw`/`pcbnew.InteractiveRouter.AttemptFinish` -> `finishInteractiveRoute` |
+| Esc | `common.Interactive.cancel` -> `cancelInteractiveRoute` |
+| Backspace | `pcbnew.InteractiveRouter.UndoLastSegment` -> `routeUndoSegment` |
+| V (via + layer switch) | `pcbnew.Control.layerToggle` -> `routeToggleVia` (arms the *next* fix, doesn't commit immediately) |
+| `/` (posture) | `Canvas.tsx` keydown (no separate upstream `TOOL_ACTION` for this one -- see that handler's own comment) -> `routeMove(..., flipPosture: true)` |
+| W / Shift+W (width) | `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec` -> a small fixed preset ladder (this project has no per-board "preferred widths" list the way real pcbnew's dialog does) |
+
+Verified end to end: `cargo test`/`clippy` on the Rust side (including
+`tests/real_board.rs`), and `npm run typecheck && npm run test:unit &&
+npm run build` on the TS side -- but **not visually**: the task's own
+instructions note the in-app browser's tools don't work in this
+environment, so the click-through was never watched happen in a live
+browser. Treat the frontend wiring as "compiles, typechecks, and the pure
+logic it's built from is unit-tested," not as "confirmed to look/feel
+right."
 
 ## Stage 5 -- DRAGGER
 
-`pns_dragger.{h,cpp}` -> `src/dragger.rs`. Segment and via drag only (no
-component/multi-item drag, matching decision #4). Reuses `shove`/
-`walkaround` exactly as KiCad's own `DRAGGER` does, rather than
-reimplementing displacement.
+`pns_dragger.{h,cpp}` -> `src/dragger.rs`. Reuses `shove`/`walkaround`
+exactly as KiCad's own `DRAGGER` does, rather than reimplementing
+displacement; `Router` gained `drag_start`/`drag_preview`/`drag_cancel`/
+`drag_finish` (mutually exclusive with a route session) and
+`crates/cli/src/route_api.rs`/`studio.rs` gained the matching `POST
+/api/route/drag_{start,move,finish}` endpoints (sharing `RouteCell` with
+the route session, since a `Router` is only ever doing one or the other).
+
+Scoped down further than `shove`/`walkaround` already are (see
+`dragger.rs`'s own doc comment for the full reasoning):
+- **Corner drag only** -- grabbing a segment always drags its *nearer*
+  endpoint (`Node::item_at`'s shape hit-test finds the segment, then the
+  closer of its two assembled-line neighbours is what follows the
+  cursor). KiCad's segment-sideways-slide (`DM_SEGMENT`, grabbing a
+  segment's middle to slide the whole run sideways) isn't implemented.
+- **Free-angle corner relocation**, not KiCad's default 45-degree-
+  constrained `dragCorner45`.
+- `Mode::Walkaround` while dragging behaves like `Mode::MarkObstacles`
+  (reports collisions, doesn't resolve them) -- only `Mode::Shove` keeps a
+  drag obstacle-free.
+
+A real bug surfaced and fixed while wiring the via-drag commit path: a via
+displaced by a drag's own shove was being removed from the board but never
+re-added at its new position (its diameter/drill were only ever carried as
+`0, 0` placeholders meant to be re-resolved by `Router::drag_finish`, which
+wasn't actually doing that resolution) -- `Router::drag_finish` now looks
+up the real via before building its `Cmd::CommitRoute` entry; see
+`router.rs`'s `shove_mode_drag_displaces_a_via_and_the_commit_carries_its_real_size`
+test, which fails without the fix.
+
+**Not done**: the frontend. `D` (`pcbnew.InteractiveRouter.Drag45Degree`
+upstream) isn't wired into Canvas.tsx's move/drag tool -- `api/client.ts`
+has the three `routeDrag*` functions ready to call, but hooking them into
+the existing pointer-down/move/up move system (which today only
+understands translating a part/via/shape/text by a uniform `(dx, dy)`,
+not an arbitrary reshape) needs its own preview state and rendering path,
+the same scope of work the route tool's own frontend wiring was. This is
+the single largest remaining piece of gap #7 -- see the final report's
+ranked "what's left" list.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

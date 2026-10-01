@@ -16,7 +16,9 @@
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
-import { commitRoute, dropViaAndSwitchLayer } from "../components/canvas/routing";
+import { finishInteractiveRoute, cancelInteractiveRoute } from "../components/canvas/routing";
+import { routeMove, routeToggleVia, routeUndoSegment } from "../api/client";
+import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
@@ -25,6 +27,9 @@ import { GRID_OPTIONS_UM } from "../components/Toolbar";
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
 }
+
+/** `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec`'s ("W"/"Shift+W") preset ladder -- see those two action registrations below for why this is a fixed list rather than a per-board setting. */
+const WIDTH_PRESETS_UM = [100, 150, 200, 250, 300, 400, 500, 600, 800, 1000];
 
 /** common/tool/common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the exact per-step factor for zoomIn/zoomOut (F1/F2) and zoomInCenter/zoomOutCenter alike (doZoomInOut/doZoomInOutCenter share it). Source then snaps the result to the nearest entry in a separate zoom% preset list before applying it -- not ported (that preset list lives in per-app window settings this project has no equivalent of yet), so this applies the 1.3 factor directly. */
 const ZOOM_STEP_FACTOR = 1.3;
@@ -130,16 +135,56 @@ export function useActionRunner() {
     // two applies to the current state.drawState, so useGlobalHotkeys'
     // first-enabled-candidate search always lands on the right one.
     if (state.drawState?.kind === "route") {
+      const draw = state.drawState;
+      const cursor = state.cursorUm ?? { x: draw.pts[draw.pts.length - 1]?.[0] ?? 0, y: draw.pts[draw.pts.length - 1]?.[1] ?? 0 };
+      // Re-request the preview at the last known cursor after a backend
+      // state change (via armed, a segment undone, width changed) that
+      // doesn't itself move the cursor -- same reasoning as Canvas.tsx's
+      // own `/` handler.
+      const refreshPreview = () => {
+        routeMove(cursor.x, cursor.y).then((preview) => {
+          if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
+        });
+      };
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
+        pcbOnly(() => void finishInteractiveRoute(cursor.x, cursor.y, dispatch, api))
+      );
+      // V: arm "drop a via here, continue on the other layer" for the next
+      // fix (see Router::toggle_via's own doc comment) -- not an immediate
+      // commit the way this app's old client-only router made it.
+      m.set(
+        "pcbnew.Control.layerToggle",
         pcbOnly(() => {
-          const draw = state.drawState;
-          if (draw?.kind === "route") {
-            commitRoute(draw, api.cmd);
-            dispatch({ type: "SET_DRAW_STATE", draw: null });
-          }
+          if (!state.board) return;
+          const toLayer = state.board.layers.find((l) => l !== draw.layer) ?? draw.layer;
+          const rules = state.board.board_rules;
+          routeToggleVia(!draw.placingVia, rules?.via_diameter ?? 600, rules?.via_drill ?? 300, toLayer).then(() => {
+            dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, placingVia: !draw.placingVia, pendingViaLayer: toLayer } });
+            refreshPreview();
+          });
         })
       );
+      m.set(
+        "pcbnew.InteractiveRouter.UndoLastSegment",
+        pcbOnly(() => {
+          routeUndoSegment().then(() => refreshPreview());
+        })
+      );
+      // W / Shift+W: cycle the live track width through a small fixed
+      // preset list -- this app has no per-board "preferred track widths"
+      // setting the way real pcbnew's dialog does, so the preset is just a
+      // reasonable fixed ladder (see WIDTH_PRESETS_UM below).
+      const cycleWidth = (dir: 1 | -1) => {
+        const i = WIDTH_PRESETS_UM.findIndex((w) => w >= draw.width);
+        const next = WIDTH_PRESETS_UM[Math.min(WIDTH_PRESETS_UM.length - 1, Math.max(0, (i < 0 ? WIDTH_PRESETS_UM.length - 1 : i) + dir))]!;
+        dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, width: next } });
+        routeMove(cursor.x, cursor.y, undefined, next).then((preview) => {
+          if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...draw, width: next }, preview) });
+        });
+      };
+      m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleWidth(1)));
+      m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleWidth(-1)));
     } else {
       m.set(
         "pcbnew.InteractiveEdit.flip",
@@ -148,14 +193,6 @@ export function useActionRunner() {
         })
       );
     }
-    m.set(
-      "pcbnew.Control.layerToggle",
-      pcbOnly(() => {
-        const draw = state.drawState;
-        if (draw?.kind !== "route" || !state.board) return;
-        dropViaAndSwitchLayer(draw, state.board, api.cmd).then((next) => dispatch({ type: "SET_DRAW_STATE", draw: next }));
-      })
-    );
     m.set(
       "pcbnew.InteractiveRouter.SingleTrack",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "route" ? "select" : "route" }))
@@ -375,7 +412,15 @@ export function useActionRunner() {
     // itself first *without* touching the selection; only once nothing
     // is running does Escape clear the selection, and only once that's
     // also empty does it clear the net highlight).
-    m.set("common.Interactive.cancel", () => dispatch({ type: "ESCAPE" }));
+    m.set("common.Interactive.cancel", () => {
+      // Tell the backend's router session to end too (fire-and-forget --
+      // see cancelInteractiveRoute's own doc comment) before the ordinary
+      // ESCAPE reducer case clears `drawState` locally; otherwise the
+      // session would linger server-side until the next `start` silently
+      // replaces it.
+      if (state.drawState?.kind === "route") cancelInteractiveRoute(dispatch);
+      dispatch({ type: "ESCAPE" });
+    });
 
     m.set(
       "pcbnew.InteractiveEdit.properties",

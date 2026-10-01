@@ -22,7 +22,9 @@ import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./
 import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
 import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
-import { findRouteAnchor, posture45, commitRoute } from "./routing";
+import { findRouteAnchor, posture45, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
+import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
+import { routeMove } from "../../api/client";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
 import { pickDefaultZoomController, type ZoomController } from "../../kicad-port/zoomController";
@@ -150,6 +152,13 @@ export function Canvas() {
    * ONLY if the drag never actually moved anything.
    */
   const pendingClickRef = useRef<{ id: string; modifiers: ClickModifiers } | null>(null);
+  /** Interactive router (gap #7): a mouse-move preview is a real HTTP round
+   * trip now (the backend resolves walkaround/shove), so it needs the same
+   * "don't flood the server, and never let a slow reply clobber a newer
+   * one" treatment every other debounced network call gets. See
+   * kicad-port/routeTool.ts's own doc comments on each. */
+  const routeMoveThrottleRef = useRef(createMoveThrottle(50));
+  const routeMoveGuardRef = useRef(createRequestGuard());
 
   const board = state.board;
 
@@ -377,13 +386,13 @@ export function Canvas() {
     }
   };
 
-  /** Route/zone/shape tools all share "click adds a point, Enter/double-click finishes" -- this commits whatever's accumulated in state.drawState, per its kind. Shared with the F ("Attempt Finish") hotkey for the route case specifically (useActionRunner.ts) via routing.ts's commitRoute, so the two can never disagree about what finishing a route means. */
+  /** Route/zone/shape tools all share "click adds a point, Enter/double-click finishes" -- this commits whatever's accumulated in state.drawState, per its kind. Shared with the F ("Attempt Finish") hotkey for the route case specifically (useActionRunner.ts) via routing.ts's finishInteractiveRoute, so the two can never disagree about what finishing a route means. */
   const finishDraw = useCallback(() => {
     const draw = state.drawState;
     if (!draw) return;
     if (draw.kind === "route") {
-      commitRoute(draw, api.cmd);
-      dispatch({ type: "SET_DRAW_STATE", draw: null });
+      const [x, y] = draw.pts[draw.pts.length - 1] ?? [draw.pts[0]?.[0] ?? 0, draw.pts[0]?.[1] ?? 0];
+      void finishInteractiveRoute(x, y, dispatch, api);
     } else if (draw.kind === "zone") {
       if (draw.pts.length >= 3) {
         dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
@@ -423,19 +432,17 @@ export function Canvas() {
       if (state.activeTool === "route") {
         const draw = state.drawState;
         if (!draw || draw.kind !== "route") {
-          const anchor = findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM);
-          if (!anchor) {
-            dispatch({ type: "TOAST", message: "Start a route from a pad, via, or track end.", kind: "error" });
-            return;
-          }
-          const layer = anchor.layer ?? state.activeLayer ?? board.layers[0] ?? "F.Cu";
-          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "route", net: anchor.net, layer, width: board.board_rules?.track_width ?? 250, pts: [anchor.at] } });
+          // X-start: `startInteractiveRoute` itself refuses (with a toast)
+          // if there's nothing routable under the cursor -- no local
+          // pre-check needed, the backend is the single source of truth
+          // for "is this a valid start point" (pad/via/track-end -> a
+          // real net), same as `isStartingPointRoutable` upstream.
+          const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
+          const width = board.board_rules?.track_width ?? 250;
+          void startInteractiveRoute(sx, sy, layer, width, dispatch);
           return;
         }
-        const last = draw.pts[draw.pts.length - 1]!;
-        const constrained = posture45(last, [sx, sy]);
-        const [fx, fy] = snapPoint(constrained[0], constrained[1], board.snap ?? state.gridUm);
-        dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, pts: [...draw.pts, [fx, fy]] } });
+        void fixInteractiveRoute(sx, sy, draw, dispatch, api);
         return;
       }
 
@@ -596,6 +603,24 @@ export function Canvas() {
     if (longPressRef.current) {
       const [sx, sy] = longPressRef.current.startScreen;
       if (Math.hypot(e.clientX - sx, e.clientY - sy) > LONG_PRESS_MOVE_TOLERANCE_PX) clearLongPress();
+    }
+
+    // Interactive router (gap #7) live preview: every move asks the
+    // backend to re-resolve the head toward the cursor (walkaround/shove/
+    // mark-obstacles, same as real pcbnew's router_tool.cpp mouse-move
+    // handler) -- throttled and guarded against an out-of-order reply the
+    // same way the rest of this app's async calls are (see
+    // kicad-port/routeTool.ts).
+    if (board && state.activeTool === "route" && state.drawState?.kind === "route") {
+      const draw = state.drawState;
+      if (routeMoveThrottleRef.current.shouldSend(performance.now())) {
+        const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+        const token = routeMoveGuardRef.current.next();
+        routeMove(sx, sy).then((preview) => {
+          if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
+          dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
+        });
+      }
     }
 
     if (moveMode && state.selection.size > 0) {
@@ -763,6 +788,23 @@ export function Canvas() {
     if (e.key === "Enter" && state.drawState) {
       e.preventDefault();
       finishDraw();
+    }
+    // `/` flips posture while routing (router_tool.cpp's own hotkey for
+    // this -- real pcbnew binds it with no separate registered
+    // TOOL_ACTION the way most hotkeys get one, so it's handled directly
+    // here rather than through useActionRunner.ts's dotted-action
+    // registry, same as this app's own Enter-to-finish convention just
+    // above). Re-requests the preview at the last known cursor position so
+    // the flip is visible immediately rather than waiting for the next
+    // mouse pixel to move.
+    if (e.key === "/" && state.drawState?.kind === "route" && state.cursorUm) {
+      e.preventDefault();
+      const draw = state.drawState;
+      const token = routeMoveGuardRef.current.next();
+      routeMove(state.cursorUm.x, state.cursorUm.y, true).then((preview) => {
+        if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
+        dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview(draw, preview) });
+      });
     }
   };
 
