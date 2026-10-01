@@ -596,6 +596,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddToGroup { group_id, ids } => format!("group add-to {group_id} {}", ids.join(" ")),
         Cmd::RemoveFromGroup { ids } => format!("group remove-from {}", ids.join(" ")),
         Cmd::CreateArray { ids, arrange, .. } => format!("array{} {}", if *arrange { " --arrange" } else { "" }, ids.join(" ")),
+        Cmd::AddDimension { .. } => "dimension add".to_string(),
+        Cmd::DeleteDimension { id } => format!("dimension delete {id}"),
+        Cmd::MoveDimension { id, dx, dy } => format!("dimension move {id} --by {},{}", mm(*dx), mm(*dy)),
+        Cmd::EditDimension { id, .. } => format!("dimension edit {id}"),
+        Cmd::SetDimensionSettings { .. } => "board-setup dimensions".to_string(),
 
         Cmd::Duplicate { ids } => format!("duplicate {}", ids.join(" ")),
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
@@ -742,6 +747,11 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddToGroup { .. } => "group-add-to",
         Cmd::RemoveFromGroup { .. } => "group-remove-from",
         Cmd::CreateArray { .. } => "create-array",
+        Cmd::AddDimension { .. } => "dimension-add",
+        Cmd::DeleteDimension { .. } => "dimension-delete",
+        Cmd::MoveDimension { .. } => "dimension-move",
+        Cmd::EditDimension { .. } => "dimension-edit",
+        Cmd::SetDimensionSettings { .. } => "dimension-settings",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::MoveExact { .. } => "move-exact",

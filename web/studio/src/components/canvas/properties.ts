@@ -12,6 +12,10 @@ export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch
   // same as "Add Zone" -- not the plain read-only-ish ItemPropertiesDialog
   // every other item here still uses.
   else if (api.zoneById(id)) dispatch({ type: "SET_ZONE_EDIT_ID", id });
+  // Task item 7: same reasoning as the zone branch above -- a dimension's
+  // field list (kind-specific geometry plus a dozen formatting fields)
+  // gets its own dedicated dialog, not the plain ItemPropertiesDialog.
+  else if (api.dimensionById(id)) dispatch({ type: "SET_DIMENSION_EDIT_ID", id });
   else if (api.trackById(id) || api.viaById(id) || api.shapeById(id)) dispatch({ type: "SET_ITEM_PROPERTIES_ID", id });
   else if (api.partByRef(id)) dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
 }

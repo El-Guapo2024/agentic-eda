@@ -95,5 +95,6 @@ export function allItemIds(board: BoardState): Set<string> {
   for (const z of board.routing?.zones ?? []) ids.add(z.id);
   for (const s of board.drawings?.shapes ?? []) ids.add(s.id);
   for (const t of board.drawings?.texts ?? []) ids.add(t.id);
+  for (const d of board.drawings?.dimensions ?? []) ids.add(d.id);
   return ids;
 }

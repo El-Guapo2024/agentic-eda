@@ -613,6 +613,80 @@ changes. Frontend: `ArrayGeometry` in `api/types.ts`,
 own `if (selection.Empty()) return 0;`) and a "Create Array... (Ctrl+T)"
 context-menu entry in `Canvas.tsx`.
 
+## 18. Dimensions
+
+Port of `pcbnew/pcb_dimension.{h,cpp}`'s five dimension types (task item
+7): Aligned, Orthogonal, Radial, Leader, Center. Collapsed into one
+`Dimension` struct with a `DimensionKind` tag instead of five item
+types, matching this model's existing `Shape`/`ArrayGeometry` enums'
+own shape. Geometry (crossbar/extension lines/arrows/leader/centre-
+cross, text position+angle, the formatted display string) is computed
+fresh from `start`/`end` plus the style/format fields on every read
+(`eda_connectivity::dimension::compute_dimension_geometry`), the same
+"recompute, never cache" relationship source's own `Update()` has to
+its stored geometry -- a renderer draws exactly what that function
+returns and never re-derives any of it.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Aligned: crossbar parallel to the two feature points, offset by a signed `height`; extension lines from each feature point past the crossbar by `extension_height`; inward/outward arrows; text outside (offset perpendicular) or inline (splitting the crossbar); `keep_text_aligned` rotates text to the crossbar's own angle, flipped upright when it would otherwise read upside down | identical in effect | `PCB_DIM_ALIGNED::updateGeometry`/`updateText` |
+| Orthogonal: crossbar locked horizontal or vertical; only that axis of the two feature points is measured; a second, independent extension line compensates for the second feature point not lying on the (axis-locked) crossbar | identical in effect | `PCB_DIM_ORTHOGONAL::updateGeometry`/`updateText` |
+| Radial: a small fixed-size (`arrow_length`) `+` mark at the centre; measures the centre-to-point distance (the radius); a leader runs outward from the point by `leader_length` to a knee, then on to the text | identical in effect | `PCB_DIM_RADIAL::updateGeometry`/`GetKnee` |
+| Leader: a line from the arrow tip to a knee, then on to the text, clipped where it reaches the text (see the knockout row below) | ported; no `R=`/diameter-symbol auto-prefix convention (plain `prefix`/`suffix` strings cover it manually) | `PCB_DIM_LEADER::updateGeometry` |
+| Centre: a `+` mark at `start`, sized and oriented by `end - start` (one arm along that vector, the other rotated 90°); never shows text in practice | identical in effect | `PCB_DIM_CENTER::updateGeometry` |
+| Value text: measured distance, prefix/suffix, a flat 0-5 decimal-place precision, trailing-zero suppression, units (mm/mil/inch/automatic) with no/bare/parenthesized suffix, or a manual override string | ported, with `DIM_PRECISION`'s four unit-dependent "V_VVV" levels (fewer decimals for mm than inch at the "same" nominal precision) collapsed to the flat count -- one precision concept instead of two | `PCB_DIMENSION_BASE::GetValueText`/`updateText` |
+| Crossbar/leader-line "knockout": a gap cut around text sitting on the line (inline text; a leader's text line stops at the text's edge either way) | ported, approximated -- this model has no real font-metrics engine anywhere, so the gap is sized from the same `0.6 * font_size`-per-character estimate `eda_engine::geometry::CHAR_WIDTH_FACTOR` already uses for every other text-overlap check in this project, not source's own exact rendered glyph bounding box | `CollectKnockedOutSegments` |
+| A leader's optional text border (rectangle or circle drawn around the text) | not ported | `PCB_DIM_LEADER::m_textBorder`, `DIM_TEXT_BORDER` |
+| `DIM_TEXT_POSITION::MANUAL` (freely dragging the text off its computed position) | not ported -- no point-editor-style manual sub-element dragging, same restriction this model's zone outlines already have | `DIM_TEXT_POSITION` |
+| Board Setup > Dimension Properties: units/format/precision/suppress-zeroes/text-position/keep-aligned/text-size/line-thickness/arrow-length/extension-offset defaults, applied once at creation, never retroactively | identical in effect | `panel_setup_dimensions.cpp`, `BOARD_DESIGN_SETTINGS::m_Dimension*` |
+| Move (drag or Move Exactly's underlying Cmd) translates both feature points | identical | `PCB_DIMENSION_BASE::Move` |
+| Rotate/Flip (as a generic `BOARD_ITEM`, e.g. if ever added to a future Create Array/rotate-selection path) | not ported -- no `Cmd::RotateDimension`/flip; `crates/connectivity::dimension::rotate_dimension` exists and is tested but has no caller yet, same "built, not yet wired to a UI action" gap teardrops' settings page didn't have but groups' `AddToGroup`/`RemoveFromGroup` do (section 16) | `PCB_DIMENSION_BASE::Rotate`/`Flip`/`Mirror` |
+| Interactive placement: Aligned/Orthogonal's third "set height" click with a live crossbar preview; Radial/Leader/Center's own click sequences | simplified to one plain two-click (start, end) placement for every kind, with `height`/`leader_length`/orientation filled from Board Setup defaults and the just-created dimension's own Properties dialog opening immediately for fine-tuning -- a deliberate scope reduction (no live multi-step canvas preview for this item), not a missing capability: every field the live click sequence would have set is still reachable, just numerically instead of by dragging | `tools/drawing_tool.cpp::DrawDimension` |
+| Interactive centre-point/-item picker buttons for Radial's own dialog-free flow | not ported -- plain numeric X/Y fields instead, same convention every other dialog in this app already uses | n/a (this port has no equivalent interactive picker tool) |
+| Selecting a dimension (click, box-select, the Selection Filter's own toggle) | ported -- `components/canvas/selectionCandidates.ts` gained a `"dimension"` kind, hit-tested against the closest of its own `lines` segments (a disconnected set, not one polyline) or its text anchor | `pcb_selection_tool.cpp`'s generic item iteration, extended to this new kind |
+| `.kicad_pcb` export/import of a dimension | not ported, same documented gap as sections 14-17's own new item kinds | `crates/kicad/src/pcb.rs` |
+
+Rust: `crates/model/src/ir.rs`'s `Dimension`/`DimensionKind`/
+`DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/
+`ArrowDirection`/`DimensionSettings` (on `DrawingsSection`, additive, no
+ripple -- that struct already derives `Default` and every existing
+literal already spreads it, same low-ripple reasoning `Group`'s own doc
+gives). `crates/connectivity/src/dimension.rs` (`compute_dimension_
+geometry` plus `translate_dimension`/`rotate_dimension`), 13 unit tests
+covering every kind's own geometry, override text, unit-suffix
+formatting, and the translate/rotate helpers. `crates/ops/src/lib.rs`:
+`Cmd::AddDimension`/`DeleteDimension`/`MoveDimension`/`EditDimension`/
+`SetDimensionSettings`, 8 new tests. `crates/cli/src/studio.rs`'s
+`dimension_json`/`dimension_settings_json` are the one and only place
+the computed geometry/formatted text are serialized -- every consumer
+(the frontend) reads them, never recomputes.
+
+Frontend: `Dimension`/`DimensionSettings`/`CmdDimension`/
+`CmdDimensionKind` in `api/types.ts` (the same flat-display-vs-nested-
+Cmd-payload split `Shape`/`CmdShape` already have, see either type's own
+doc); `kicad-port/dimensionConvert.ts` (`toCmdDimension`/
+`cmdDimensionKindOf`/`defaultDimensionPayload`, unit-tested); `state/
+store.tsx`'s `nextDimensionKind`/`dimensionEditId` + the new `"dimension"`
+`DrawState`/`ToolId` variant; `Canvas.tsx`'s two-click placement (`onPointerDown`),
+drag-move (`DRAGGABLE_KINDS`/`commitMove`'s new `"dimension"` case),
+Delete-key support, and a "Switch Dimension Arrows" context-menu entry
+(a context-menu-only action in source too); `components/canvas/
+selectionCandidates.ts`'s new `"dimension"` `SelectableKind` (hit-test,
+box-select, the Selection Filter's own `dimensions` toggle in
+`panels/SelectionFilterPanel.tsx`); `painter.ts`'s `drawDimensions`
+(the in-progress two-click rubber-band reuses the existing generic
+`drawState.pts` preview, no new code needed there);
+`DimensionPropertiesDialog.tsx` (opens automatically right after
+creation, and via "E"/double-click through `properties.ts`'s
+`openPropertiesFor`, same dispatcher every other item kind already
+shares); `BoardSetupDialog.tsx`'s new "Dimension Properties" page;
+`useActionRunner.ts` wires all five `pcbnew.InteractiveDrawing.
+*Dimension*`/`leader` toolbar actions (discoverable through the
+existing, already-extracted "Dimension objects" toolbar dropdown --
+`src/kicad/toolbars.json` already listed all five, so registering
+handlers was the only step needed, no new toolbar UI) plus
+`changeDimensionArrows`.
+
 Rust: `crates/model/src/ir.rs`'s `Group` struct and `DrawingsSection::groups`
 (chosen over `Design` or `RoutingSection` purely on construction-site count,
 documented in `Group`'s own doc comment; `DrawingsSection::assign_missing_ids`

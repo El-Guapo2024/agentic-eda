@@ -1,5 +1,5 @@
 use super::*;
-use eda_model::ir::{PlacementSection, Provenance};
+use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
 use eda_model::{Net, Part, Pin, PinKind, PlacementRule};
 
 fn part(r: &str, pkg: &str) -> Part {
@@ -1897,4 +1897,148 @@ fn create_array_arrange_can_move_a_placed_part_and_unknown_ids_do_not_consume_a_
 
     assert_eq!(b.pose_of("U1").unwrap().at, u1_before, "U1 is slot 0 -- a no-op offset when not centred");
     assert_eq!(b.pose_of("C1").unwrap().at, Point { x: c1_before.x + 5_000, y: c1_before.y }, "C1 is slot 1, not slot 3 -- the two unknown ids must not have consumed a slot each");
+}
+
+// ------------------------------------------------------------ dimensions (task item 7)
+
+fn aligned_dim(start: Point, end: Point) -> Dimension {
+    Dimension {
+        id: String::new(),
+        layer: "Dwgs.User".into(),
+        kind: DimensionKind::Aligned { height: 1000 },
+        start,
+        end,
+        prefix: String::new(),
+        suffix: String::new(),
+        override_text: None,
+        units: DimensionUnits::Mm,
+        units_format: DimensionUnitsFormat::NoSuffix,
+        precision: 2,
+        suppress_trailing_zeros: true,
+        text_position: DimensionTextPosition::Outside,
+        keep_text_aligned: true,
+        text_angle: 0,
+        text_size_um: 1000,
+        stroke_width: 150,
+        arrow_length: 1000,
+        extension_offset: 200,
+        extension_height: 500,
+        arrow_direction: ArrowDirection::Outward,
+    }
+}
+
+#[test]
+fn add_dimension_needs_a_layer_and_two_distinct_points() {
+    let m = net_model();
+    let mut b = board(&m);
+
+    let mut no_layer = aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 });
+    no_layer.layer = String::new();
+    let e = b.apply(&Cmd::AddDimension { dimension: no_layer }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_dimension");
+
+    let same_point = aligned_dim(Point { x: 500, y: 500 }, Point { x: 500, y: 500 });
+    let e = b.apply(&Cmd::AddDimension { dimension: same_point }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_dimension");
+
+    assert!(b.design().drawings.as_ref().map(|d| d.dimensions.is_empty()).unwrap_or(true));
+}
+
+#[test]
+fn add_dimension_assigns_an_id_ignoring_any_the_caller_sent() {
+    let m = net_model();
+    let mut b = board(&m);
+    let mut dim = aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 });
+    dim.id = "caller-supplied".into();
+    b.apply(&Cmd::AddDimension { dimension: dim }).unwrap();
+
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.dimensions.len(), 1);
+    assert!(!dr.dimensions[0].id.is_empty());
+    assert_ne!(dr.dimensions[0].id, "caller-supplied");
+    assert!(dr.dimensions[0].id.starts_with("dim_"));
+}
+
+#[test]
+fn delete_dimension_removes_by_id_and_refuses_an_unknown_one() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
+
+    b.apply(&Cmd::DeleteDimension { id: id.clone() }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().dimensions.is_empty());
+
+    let e = b.apply(&Cmd::DeleteDimension { id }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_dimension");
+}
+
+#[test]
+fn move_dimension_translates_both_feature_points_but_not_the_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
+
+    b.apply(&Cmd::MoveDimension { id: id.clone(), dx: 500, dy: -200 }).unwrap();
+
+    let dim = &b.design().drawings.as_ref().unwrap().dimensions[0];
+    assert_eq!(dim.id, id);
+    assert_eq!(dim.start, Point { x: 500, y: -200 });
+    assert_eq!(dim.end, Point { x: 1500, y: -200 });
+}
+
+#[test]
+fn edit_dimension_replaces_every_field_but_keeps_the_original_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().dimensions[0].id.clone();
+
+    let mut edited = aligned_dim(Point { x: 0, y: 0 }, Point { x: 2000, y: 0 });
+    edited.id = "ignored-too".into();
+    edited.kind = DimensionKind::Orthogonal { height: 500, horizontal: true };
+    edited.prefix = "L=".into();
+    b.apply(&Cmd::EditDimension { id: id.clone(), dimension: edited }).unwrap();
+
+    let dim = &b.design().drawings.as_ref().unwrap().dimensions[0];
+    assert_eq!(dim.id, id, "editing must never move the id");
+    assert_eq!(dim.end, Point { x: 2000, y: 0 });
+    assert_eq!(dim.prefix, "L=");
+    assert!(matches!(dim.kind, DimensionKind::Orthogonal { horizontal: true, .. }));
+}
+
+#[test]
+fn edit_dimension_on_an_unknown_id_is_refused() {
+    let m = net_model();
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::EditDimension { id: "nope".into(), dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_dimension");
+}
+
+#[test]
+fn set_dimension_settings_replaces_the_whole_struct() {
+    let m = net_model();
+    let mut b = board(&m);
+    let settings = DimensionSettings { precision: 1, arrow_length: 2000, ..Default::default() };
+    b.apply(&Cmd::SetDimensionSettings { settings }).unwrap();
+
+    let dr = b.design().drawings.as_ref().unwrap();
+    assert_eq!(dr.dimension_settings.precision, 1);
+    assert_eq!(dr.dimension_settings.arrow_length, 2000);
+}
+
+#[test]
+fn dimension_commands_never_clear_routing() {
+    let id = "x".to_string();
+    let cmds = [
+        Cmd::AddDimension { dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) },
+        Cmd::DeleteDimension { id: id.clone() },
+        Cmd::MoveDimension { id: id.clone(), dx: 0, dy: 0 },
+        Cmd::EditDimension { id, dimension: aligned_dim(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }) },
+        Cmd::SetDimensionSettings { settings: DimensionSettings::default() },
+    ];
+    for c in &cmds {
+        assert!(!c.clears_routing(), "{c:?} must not clear routing -- it never moves a part");
+    }
 }

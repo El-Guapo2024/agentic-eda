@@ -843,6 +843,9 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             })).collect::<Vec<_>>(),
             // Task item 5 -- see `eda_model::ir::Group`'s own doc.
             "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).collect::<Vec<_>>(),
+            // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
+            "dimensions": d.dimensions.iter().map(dimension_json).collect::<Vec<_>>(),
+            "dimension_settings": dimension_settings_json(&d.dimension_settings),
         })
     });
     Ok(json!({
@@ -914,6 +917,114 @@ fn shape_json(s: &Shape) -> Value {
             json!({ "id": id, "kind": "polygon", "layer": layer, "stroke_width": stroke_width, "filled": filled, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>() })
         }
     }
+}
+
+/// Task item 7. `kind`/`units`/`units_format`/`text_position`/
+/// `arrow_direction` as lowercase strings, matching every other enum this
+/// API already exposes (`justify` above). `height`/`horizontal`/
+/// `leader_length` are present only for the kind that actually has them
+/// (`null` otherwise) -- `eda_model::ir::DimensionKind`'s own fields.
+/// `lines`/`text_at`/`computed_text_angle`/`measured_value_um`/`text` are
+/// the one and only place this geometry is computed
+/// (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
+/// renderer never re-derives it.
+fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
+    use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+
+    let (kind, height, horizontal, leader_length) = match d.kind {
+        DimensionKind::Aligned { height } => ("aligned", Some(height), None, None),
+        DimensionKind::Orthogonal { height, horizontal } => ("orthogonal", Some(height), Some(horizontal), None),
+        DimensionKind::Radial { leader_length } => ("radial", None, None, Some(leader_length)),
+        DimensionKind::Leader => ("leader", None, None, None),
+        DimensionKind::Center => ("center", None, None, None),
+    };
+    let units = match d.units {
+        DimensionUnits::Mm => "mm",
+        DimensionUnits::Mil => "mil",
+        DimensionUnits::Inch => "inch",
+        DimensionUnits::Automatic => "automatic",
+    };
+    let units_format = match d.units_format {
+        DimensionUnitsFormat::NoSuffix => "no_suffix",
+        DimensionUnitsFormat::BareSuffix => "bare_suffix",
+        DimensionUnitsFormat::ParenSuffix => "paren_suffix",
+    };
+    let text_position = match d.text_position {
+        DimensionTextPosition::Outside => "outside",
+        DimensionTextPosition::Inline => "inline",
+    };
+    let arrow_direction = match d.arrow_direction {
+        ArrowDirection::Inward => "inward",
+        ArrowDirection::Outward => "outward",
+    };
+
+    let geom = eda_connectivity::dimension::compute_dimension_geometry(d);
+
+    json!({
+        "id": d.id,
+        "layer": d.layer,
+        "kind": kind,
+        "height": height,
+        "horizontal": horizontal,
+        "leader_length": leader_length,
+        "start": [d.start.x, d.start.y],
+        "end": [d.end.x, d.end.y],
+        "prefix": d.prefix,
+        "suffix": d.suffix,
+        "override_text": d.override_text,
+        "units": units,
+        "units_format": units_format,
+        "precision": d.precision,
+        "suppress_trailing_zeros": d.suppress_trailing_zeros,
+        "text_position": text_position,
+        "keep_text_aligned": d.keep_text_aligned,
+        "text_angle": d.text_angle,
+        "text_size_um": d.text_size_um,
+        "stroke_width": d.stroke_width,
+        "arrow_length": d.arrow_length,
+        "extension_offset": d.extension_offset,
+        "extension_height": d.extension_height,
+        "arrow_direction": arrow_direction,
+        "lines": geom.lines.iter().map(|(a, b)| json!([[a.x, a.y], [b.x, b.y]])).collect::<Vec<_>>(),
+        "text_at": [geom.text_at.x, geom.text_at.y],
+        "computed_text_angle": geom.text_angle,
+        "measured_value_um": geom.measured_value_um,
+        "text": geom.text,
+    })
+}
+
+fn dimension_settings_json(s: &eda_model::ir::DimensionSettings) -> Value {
+    use eda_model::ir::{DimensionTextPosition, DimensionUnits, DimensionUnitsFormat};
+
+    let units = match s.units {
+        DimensionUnits::Mm => "mm",
+        DimensionUnits::Mil => "mil",
+        DimensionUnits::Inch => "inch",
+        DimensionUnits::Automatic => "automatic",
+    };
+    let units_format = match s.units_format {
+        DimensionUnitsFormat::NoSuffix => "no_suffix",
+        DimensionUnitsFormat::BareSuffix => "bare_suffix",
+        DimensionUnitsFormat::ParenSuffix => "paren_suffix",
+    };
+    let text_position = match s.text_position {
+        DimensionTextPosition::Outside => "outside",
+        DimensionTextPosition::Inline => "inline",
+    };
+
+    json!({
+        "units": units,
+        "units_format": units_format,
+        "precision": s.precision,
+        "suppress_trailing_zeros": s.suppress_trailing_zeros,
+        "text_position": text_position,
+        "keep_text_aligned": s.keep_text_aligned,
+        "text_size_um": s.text_size_um,
+        "stroke_width": s.stroke_width,
+        "arrow_length": s.arrow_length,
+        "extension_offset": s.extension_offset,
+        "extension_height": s.extension_height,
+    })
 }
 
 /// The design's schematic drawn, or, for a board started from an intent

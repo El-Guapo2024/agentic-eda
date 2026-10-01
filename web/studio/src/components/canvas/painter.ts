@@ -5,7 +5,7 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
+import type { BoardState, Dimension, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { boundsOfPoints, hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
@@ -524,6 +524,48 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
 }
 
 /**
+ * Task item 7: every `lines` segment (extension lines, crossbar/leader
+ * pieces, arrow barbs, a centre cross -- already fully computed server-
+ * side, `eda_connectivity::dimension::compute_dimension_geometry`) plus
+ * the formatted `text` at `text_at`/`computed_text_angle`. Unlike
+ * `drawTexts`' own `-angle` negation, `computed_text_angle` is already in
+ * this app's canvas-native clockwise-positive convention (the same one
+ * `rotate_point_about` documents backend-side), so it's used directly,
+ * with no sign flip.
+ */
+function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  const dimensions = board.drawings?.dimensions ?? [];
+  for (const d of dimensions as Dimension[]) {
+    if (opts.layerVisible[d.layer] === false) continue;
+    const selected = opts.selection.has(d.id);
+    const color = selected ? layerColor("selection") : layerColor(realLayerKey(d.layer));
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(d.stroke_width, hairlineUm(view, selected ? 2 : 1));
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (const [[ax, ay], [bx, by]] of d.lines) {
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    if (d.text) {
+      const angleRad = (d.computed_text_angle / 1000) * (Math.PI / 180);
+      drawStrokeText(ctx, d.text, d.text_at[0], d.text_at[1], {
+        sizeUm: Math.max(d.text_size_um, hairlineUm(view, 8)),
+        thicknessUm: d.stroke_width,
+        justify: "center",
+        angleRad,
+        color,
+      });
+    }
+  }
+}
+
+/**
  * KiCad's own ratsnest (GET /api/ratsnest, crates/connectivity -- real
  * connectivity clustering + Delaunay/Kruskal MST, not this app's earlier
  * client-side per-net MST-over-pad-centers approximation). A net that's
@@ -830,6 +872,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
   drawShapes(ctx, view, board, opts);
   drawTexts(ctx, view, board, opts);
+  drawDimensions(ctx, view, board, opts);
   // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, board, opts);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);

@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -61,6 +61,10 @@ export type ToolId =
    * at commit time instead of a plain wire. */
   | "bus"
   | "measure"
+  /** Task item 7: two clicks (start, end) for whichever of the five
+   * dimension kinds `state.nextDimensionKind` names -- see `DrawState`'s
+   * own `"dimension"` kind. */
+  | "dimension"
   // ---------------------------------------------------- eeschema placement
   // `L`/Ctrl+`L`/`H`/`P`/`T`/`Q` (sch_drawing_tools.cpp TwoClickPlace/
   // SingleClickPlace) -- SchematicView.tsx's own doc has the full
@@ -100,6 +104,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   wire: "Wire: click to start/add a point (snaps to a pin when close), double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   bus: "Bus: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   measure: "Measure: click a start point, click again for the end point. Click anywhere to start a new measurement, Esc to clear",
+  dimension: "Dimension: click the first feature point, then the second",
   sch_label_local: "Label: click where to place it",
   sch_label_global: "Global Label: click where to place it",
   sch_label_hier: "Hierarchical Label: click where to place it",
@@ -194,6 +199,11 @@ export type DrawState =
     }
   | { kind: "zone"; pts: [Um, Um][] }
   | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }
+  /** Task item 7: two clicks (start, end) for any of the five dimension
+   * kinds -- which one is read from `state.nextDimensionKind` when the
+   * second click commits it (same one-shot-flag convention as zones' own
+   * `nextZoneIsRuleArea`), not stored per-draw here. */
+  | { kind: "dimension"; pts: [Um, Um][] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
   | { kind: "wire"; pts: [Um, Um][] }
   /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
@@ -210,8 +220,8 @@ export interface ViewTransform {
 /** A part being dragged, previewed locally before `move_to` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
 export interface MovePreview {
   refs: string[];
-  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text: their own move_* by id; symbol: schematic move_symbol; symbol_drag: schematic drag_symbol, see state.dragAttach). Defaults to "part" (every pre-existing caller moves parts). */
-  kind?: "part" | "via" | "shape" | "text" | "symbol" | "symbol_drag";
+  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text/dimension: their own move_* by id; symbol: schematic move_symbol; symbol_drag: schematic drag_symbol, see state.dragAttach). Defaults to "part" (every pre-existing caller moves parts). */
+  kind?: "part" | "via" | "shape" | "text" | "dimension" | "symbol" | "symbol_drag";
   dxUm: number;
   dyUm: number;
   /**
@@ -380,6 +390,17 @@ export interface StudioState {
   zonePending: [Um, Um][] | null;
   /** A selected zone's id ("E", or double-click) -- opens ZoneDialog in edit mode (`edit_zone`) instead of add mode. Independent of `zonePending` (one or the other is ever set, never both). */
   zoneEditId: string | null;
+  /** Task item 7: which of the five dimension kinds the next two-click
+   * placement creates -- set by each of the five toolbar actions
+   * (`pcbnew.InteractiveDrawing.alignedDimension` etc.) before arming
+   * `activeTool: "dimension"`, same one-shot-flag convention as zones'
+   * own `nextZoneIsRuleArea`. */
+  nextDimensionKind: CmdDimensionKind["kind"];
+  /** A dimension's id, just created (the draw tool opens this
+   * immediately so height/leader-length/format fields can be set, since
+   * there's no separate "pending outline" stage the way zones have) or
+   * selected ("E", double-click) -- opens DimensionPropertiesDialog. */
+  dimensionEditId: string | null;
   /**
    * `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` (B/Ctrl+B,
    * zone_filler_tool.cpp): the last GET /api/fill this session asked
@@ -629,6 +650,8 @@ const initialState: StudioState = {
   drawState: null,
   zonePending: null,
   zoneEditId: null,
+  nextDimensionKind: "aligned",
+  dimensionEditId: null,
   zoneFill: null,
   zoneDisplayMode: "filled",
   boardSetupDialogOpen: false,
@@ -764,6 +787,8 @@ export type Action =
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
   | { type: "SET_ZONE_EDIT_ID"; id: string | null }
+  | { type: "SET_NEXT_DIMENSION_KIND"; kind: CmdDimensionKind["kind"] }
+  | { type: "SET_DIMENSION_EDIT_ID"; id: string | null }
   | { type: "FILL_OK"; fill: FillReport }
   | { type: "CLEAR_ZONE_FILL" }
   | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" }
@@ -870,6 +895,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         drawState: null,
         zonePending: null,
         zoneEditId: null,
+        dimensionEditId: null,
         textDialog: null,
         itemPropertiesId: null,
         schLabelPending: null,
@@ -898,6 +924,7 @@ function reducer(state: StudioState, action: Action): StudioState {
           drawState: null,
           zonePending: null,
           zoneEditId: null,
+          dimensionEditId: null,
           textDialog: null,
           schLabelPending: null,
           schPowerPending: null,
@@ -1019,6 +1046,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, zonePending: action.outline };
     case "SET_ZONE_EDIT_ID":
       return { ...state, zoneEditId: action.id };
+    case "SET_NEXT_DIMENSION_KIND":
+      return { ...state, nextDimensionKind: action.kind };
+    case "SET_DIMENSION_EDIT_ID":
+      return { ...state, dimensionEditId: action.id };
     case "FILL_OK":
       return { ...state, zoneFill: action.fill };
     case "CLEAR_ZONE_FILL":
@@ -1113,6 +1144,14 @@ export interface StudioApi {
   textById: (id: string) => BoardText | undefined;
   /** Task item 5. */
   groupById: (id: string) => Group | undefined;
+  /** Task item 7. */
+  dimensionById: (id: string) => Dimension | undefined;
+  /** `add_dimension`, returning the new dimension's own assigned id (or
+   * `null` on failure) -- the draw tool needs it immediately, to open
+   * DimensionPropertiesDialog on the thing it just created, the same
+   * before/after-diff pattern `duplicateSelection`/`groupSelection`
+   * already use for exactly this reason. */
+  addDimension: (dimension: CmdDimension) => Promise<string | null>;
   symbolById: (id: string) => SchematicSymbol | undefined;
   wireById: (id: string) => SchematicWire | undefined;
   schTextById: (id: string) => SchematicText | undefined;
@@ -1313,6 +1352,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     viaById: (id) => stateRef.current.board?.routing?.vias.find((v) => v.id === id),
     zoneById: (id) => stateRef.current.board?.routing?.zones.find((z) => z.id === id),
     groupById: (id) => stateRef.current.board?.drawings?.groups.find((g) => g.id === id),
+    dimensionById: (id) => stateRef.current.board?.drawings?.dimensions.find((d) => d.id === id),
+    addDimension: async (dimension) => {
+      const board = stateRef.current.board;
+      if (!board) return null;
+      const before = allItemIds(board);
+      const ok = await runCmd({ op: "add_dimension", dimension });
+      if (!ok) return null;
+      const after = stateRef.current.board;
+      if (!after) return null;
+      return [...allItemIds(after)].find((id) => !before.has(id)) ?? null;
+    },
     shapeById: (id) => stateRef.current.board?.drawings?.shapes.find((s) => s.id === id),
     textById: (id) => stateRef.current.board?.drawings?.texts.find((t) => t.id === id),
     symbolById: (id) => stateRef.current.schematic?.symbols.find((s) => s.id === id),
@@ -1442,6 +1492,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         } else if (kind === "text") {
           const t = api.textById(ref);
           if (t) await runCmd({ op: "move_text", id: ref, x: t.x + dxUm, y: t.y + dyUm });
+        } else if (kind === "dimension") {
+          await runCmd({ op: "move_dimension", id: ref, dx: dxUm, dy: dyUm });
         } else if (kind === "symbol") {
           const s = api.symbolById(ref);
           if (s) await runCmd({ op: "move_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm });

@@ -28,6 +28,7 @@ import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
 import { GlobalEditTracksAndViasDialog } from "./components/GlobalEditTracksAndViasDialog";
 import { GlobalEditTextAndGraphicsDialog } from "./components/GlobalEditTextAndGraphicsDialog";
 import { CreateArrayDialog } from "./components/CreateArrayDialog";
+import { DimensionPropertiesDialog } from "./components/DimensionPropertiesDialog";
 import { BoardSetupDialog } from "./components/BoardSetupDialog";
 import { LabelDialog } from "./components/LabelDialog";
 import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
@@ -177,6 +178,7 @@ function StudioFrame() {
       <GlobalEditTracksAndViasDialog />
       <GlobalEditTextAndGraphicsDialog />
       <CreateArrayDialog />
+      <DimensionPropertiesDialog />
       <BoardSetupDialog />
       <LabelDialog />
       <PowerSymbolDialog />

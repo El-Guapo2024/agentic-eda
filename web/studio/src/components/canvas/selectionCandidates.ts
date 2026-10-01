@@ -12,11 +12,11 @@
 // track right under the cursor, but its much larger area loses the
 // size-ratio pass -- see pcb_selection_tool.cpp's own comment: "If the
 // user clicked on a small item within a much larger one...").
-import type { BoardState, Part } from "../../api/types";
-import { distToPolyline, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
+import type { BoardState, Dimension, Part } from "../../api/types";
+import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
 
-export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text";
+export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension";
 
 export interface SelectionCandidate extends GuessCandidate {
   kind: SelectableKind;
@@ -27,10 +27,11 @@ export interface SelectionCandidate extends GuessCandidate {
  * pcbnew's real Selection Filter panel categories, narrowed to the kinds
  * this app actually has as distinct selectable items (no separate "pads"
  * item -- a pad is only ever reached through its parent footprint here --
- * and no locked/keepouts/dimensions/points/otherItems, which this app's
- * model has no equivalent of). `footprints`/`tracks`/`vias` predate this
- * session; `zones`/`graphics`/`text` are new so every selectable kind has
- * a real, working toggle (panels/SelectionFilterPanel.tsx).
+ * and no locked/keepouts/points/otherItems, which this app's model has no
+ * equivalent of). `footprints`/`tracks`/`vias` predate this session;
+ * `zones`/`graphics`/`text` and `dimensions` (task item 7) are new so
+ * every selectable kind has a real, working toggle
+ * (panels/SelectionFilterPanel.tsx).
  */
 export interface SelectionFilter {
   footprints: boolean;
@@ -39,9 +40,10 @@ export interface SelectionFilter {
   zones: boolean;
   graphics: boolean;
   text: boolean;
+  dimensions: boolean;
 }
 
-export const DEFAULT_SELECTION_FILTER: SelectionFilter = { footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true };
+export const DEFAULT_SELECTION_FILTER: SelectionFilter = { footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true };
 
 function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
   switch (kind) {
@@ -57,6 +59,8 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
       return filter.graphics;
     case "text":
       return filter.text;
+    case "dimension":
+      return filter.dimensions;
   }
 }
 
@@ -151,8 +155,34 @@ export function collectSelectionCandidates(
     const d = inside ? 0 : Math.hypot(xUm - t.x, yUm - t.y) - (x1 - x0) / 2;
     consider("text", t.id, d, Math.max((x1 - x0) * (y1 - y0), 1), t.layer);
   }
+  // Task item 7: `lines` is a set of disconnected segments (extension
+  // lines, crossbar/leader pieces, arrow barbs), not one polyline -- the
+  // hit distance is the closest approach to any one of them.
+  for (const dim of board.drawings?.dimensions ?? []) {
+    const { d, box } = dimensionHit(dim, xUm, yUm);
+    consider("dimension", dim.id, d, Math.max((box[2] - box[0]) * (box[3] - box[1]), 1), dim.layer);
+  }
 
   return out;
+}
+
+/** Closest approach to any of a dimension's own line segments (or its
+ * text anchor, treated as a point) and its overall bounding box -- shared
+ * by the point hit-test above and `collectBoxSelection` below. */
+function dimensionHit(dim: Dimension, xUm: number, yUm: number): { d: number; box: Box } {
+  let d = Math.hypot(xUm - dim.text_at[0], yUm - dim.text_at[1]);
+  let x0 = dim.text_at[0],
+    y0 = dim.text_at[1],
+    x1 = dim.text_at[0],
+    y1 = dim.text_at[1];
+  for (const [a, b] of dim.lines) {
+    d = Math.min(d, distToSegment(xUm, yUm, a[0], a[1], b[0], b[1]));
+    x0 = Math.min(x0, a[0], b[0]);
+    y0 = Math.min(y0, a[1], b[1]);
+    x1 = Math.max(x1, a[0], b[0]);
+    y1 = Math.max(y1, a[1], b[1]);
+  }
+  return { d, box: [x0, y0, x1, y1] };
 }
 
 /**
@@ -228,6 +258,9 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   for (const t of board.drawings?.texts ?? []) {
     const { x0, y0, x1, y1 } = textBoundingBox(t);
     consider("text", t.id, [x0, y0, x1, y1], t.layer);
+  }
+  for (const dim of board.drawings?.dimensions ?? []) {
+    consider("dimension", dim.id, dimensionHit(dim, dim.text_at[0], dim.text_at[1]).box, dim.layer);
   }
 
   return out;

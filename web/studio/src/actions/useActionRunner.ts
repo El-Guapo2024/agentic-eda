@@ -15,6 +15,8 @@
 
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
+import { toCmdDimension } from "../kicad-port/dimensionConvert";
+import type { CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { finishInteractiveRoute, cancelInteractiveRoute } from "../components/canvas/routing";
@@ -161,6 +163,7 @@ export function useActionRunner() {
           else if (api.zoneById(id)) api.cmd({ op: "delete_zone", id });
           else if (api.shapeById(id)) api.cmd({ op: "delete_shape", id });
           else if (api.textById(id)) api.cmd({ op: "delete_text", id });
+          else if (api.dimensionById(id)) api.cmd({ op: "delete_dimension", id });
           else if (api.partByRef(id)?.placed) api.cmd({ op: "rip", part: id });
         }
       }
@@ -341,6 +344,36 @@ export function useActionRunner() {
       pcbOnly(() => {
         dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" });
+      })
+    );
+    // Task item 7: `pcbnew/tools/drawing_tool.cpp`'s `DrawDimension`,
+    // scoped to a plain two-click (start, end) placement for every kind
+    // -- see DimensionPropertiesDialog.tsx and PARITY-pcb.md section 18
+    // for why height/leader-length/orientation are dialog-set afterward
+    // rather than a third interactive "set height" click the way source
+    // has for Aligned/Orthogonal.
+    const armDimension = (kind: CmdDimensionKind["kind"]) => {
+      dispatch({ type: "SET_NEXT_DIMENSION_KIND", kind });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "dimension" ? "select" : "dimension" });
+    };
+    m.set("pcbnew.InteractiveDrawing.alignedDimension", pcbOnly(() => armDimension("aligned")));
+    m.set("pcbnew.InteractiveDrawing.orthogonalDimension", pcbOnly(() => armDimension("orthogonal")));
+    m.set("pcbnew.InteractiveDrawing.radialDimension", pcbOnly(() => armDimension("radial")));
+    m.set("pcbnew.InteractiveDrawing.leader", pcbOnly(() => armDimension("leader")));
+    m.set("pcbnew.InteractiveDrawing.centerDimension", pcbOnly(() => armDimension("center")));
+    // `GLOBAL_EDIT_TOOL`'s "Switch Dimension Arrows": flips inward/outward
+    // on every selected dimension at once, same single-field-toggle shape
+    // as `common.Interactive.cut`'s own per-ref loop above.
+    m.set(
+      "pcbnew.InteractiveDrawing.changeDimensionArrows",
+      pcbOnly(() => {
+        for (const id of state.selection) {
+          const dim = api.dimensionById(id);
+          if (!dim) continue;
+          const cmdDim = toCmdDimension(dim);
+          cmdDim.arrow_direction = cmdDim.arrow_direction === "inward" ? "outward" : "inward";
+          api.cmd({ op: "edit_dimension", id, dimension: cmdDim });
+        }
       })
     );
     m.set(

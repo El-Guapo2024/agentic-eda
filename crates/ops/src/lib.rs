@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, LabelKind, LabelSide, LibraryFootprint, LibraryPad, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -531,6 +531,28 @@ pub enum Cmd {
     /// `ARRAY_PAD_NUMBER_PROVIDER`) are not ported -- see
     /// `create_array`'s own doc.
     CreateArray { ids: Vec<String>, geometry: ArrayGeometry, #[serde(default)] arrange: bool },
+
+    // ------------------------------------------------------- dimensions
+    //
+    // Task item 7: `pcbnew/pcb_dimension.{h,cpp}` -- see `eda_model::ir::
+    // Dimension`'s own doc for the storage shape and
+    // `eda_connectivity::dimension` for the geometry/text this crate
+    // never duplicates. `id` on `dimension`, if the caller sent one, is
+    // ignored, same as every other "whole struct" add/edit Cmd.
+    AddDimension { dimension: Dimension },
+    DeleteDimension { id: String },
+    /// Translate both feature points by `(dx, dy)` -- what dragging a
+    /// dimension does (`PCB_DIMENSION_BASE::Move`).
+    MoveDimension { id: String, dx: Um, dy: Um },
+    /// Properties dialog's OK: replace every field at once (kind,
+    /// feature points included) -- same "whole panel commits together"
+    /// shape `EditZone`/`EditPad` already have. `id` on `dimension` is
+    /// ignored the same way.
+    EditDimension { id: String, dimension: Dimension },
+    /// Board Setup > Dimension Properties: whole-struct replace, applied
+    /// to new dimensions from then on -- never retroactively, matching
+    /// source's own `StyleFromSettings` being called once, at creation.
+    SetDimensionSettings { settings: DimensionSettings },
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -1078,6 +1100,9 @@ impl Cmd {
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
             Cmd::CreateArray { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::AddDimension { .. } => vec!["dimension"],
+            Cmd::DeleteDimension { id } | Cmd::MoveDimension { id, .. } | Cmd::EditDimension { id, .. } => vec![id.as_str()],
+            Cmd::SetDimensionSettings { .. } => vec!["dimension_settings"],
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -1390,6 +1415,11 @@ impl<'a> Board<'a> {
             Cmd::AddToGroup { group_id, ids } => self.add_to_group(group_id, ids),
             Cmd::RemoveFromGroup { ids } => self.remove_from_group(ids),
             Cmd::CreateArray { ids, geometry, arrange } => self.create_array(ids, geometry, *arrange),
+            Cmd::AddDimension { dimension } => self.add_dimension(dimension.clone()),
+            Cmd::DeleteDimension { id } => self.delete_dimension(id),
+            Cmd::MoveDimension { id, dx, dy } => self.move_dimension(id, *dx, *dy),
+            Cmd::EditDimension { id, dimension } => self.edit_dimension(id, dimension.clone()),
+            Cmd::SetDimensionSettings { settings } => self.set_dimension_settings(*settings),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
@@ -2701,6 +2731,62 @@ impl<'a> Board<'a> {
         }
 
         self.insert_copies(new_tracks, new_vias, new_zones, new_shapes, new_texts)
+    }
+
+    // ----------------------------------------------------- dimensions
+
+    fn add_dimension(&mut self, mut dimension: Dimension) -> Result<(), Vec<CheckResult>> {
+        if dimension.layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_dimension", "dimension", "a dimension needs a layer")]);
+        }
+        if dimension.start == dimension.end {
+            return Err(vec![CheckResult::fail("ops_bad_dimension", "dimension", "a dimension needs two distinct feature points")]);
+        }
+        dimension.id = String::new();
+        let dr = self.drawings_mut();
+        dr.dimensions.push(dimension);
+        dr.assign_missing_ids();
+        Ok(())
+    }
+
+    fn delete_dimension(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let dr = self.drawings_mut();
+        let before = dr.dimensions.len();
+        dr.dimensions.retain(|d| d.id != id);
+        if dr.dimensions.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_dimension", id, "no dimension with this id")]);
+        }
+        Ok(())
+    }
+
+    fn find_dimension_mut<'b>(dr: &'b mut DrawingsSection, id: &str) -> Result<&'b mut Dimension, Vec<CheckResult>> {
+        dr.dimensions.iter_mut().find(|d| d.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_dimension", id, "no dimension with this id")])
+    }
+
+    fn move_dimension(&mut self, id: &str, dx: Um, dy: Um) -> Result<(), Vec<CheckResult>> {
+        let dr = self.drawings_mut();
+        let dim = Self::find_dimension_mut(dr, id)?;
+        eda_connectivity::dimension::translate_dimension(dim, dx, dy);
+        Ok(())
+    }
+
+    fn edit_dimension(&mut self, id: &str, mut dimension: Dimension) -> Result<(), Vec<CheckResult>> {
+        if dimension.layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_dimension", id, "a dimension needs a layer")]);
+        }
+        if dimension.start == dimension.end {
+            return Err(vec![CheckResult::fail("ops_bad_dimension", id, "a dimension needs two distinct feature points")]);
+        }
+        let dr = self.drawings_mut();
+        let slot = Self::find_dimension_mut(dr, id)?;
+        dimension.id = slot.id.clone();
+        *slot = dimension;
+        Ok(())
+    }
+
+    fn set_dimension_settings(&mut self, settings: DimensionSettings) -> Result<(), Vec<CheckResult>> {
+        self.drawings_mut().dimension_settings = settings;
+        Ok(())
     }
 
     // -------------------------------------------------------- drawings

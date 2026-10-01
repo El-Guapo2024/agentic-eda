@@ -22,17 +22,34 @@
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
-import type { TeardropSettings, Um } from "../api/types";
+import type { DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Um } from "../api/types";
 
-type Page = "classes" | "tracks_vias" | "teardrops" | "rules" | "text_graphics" | "stackup";
+type Page = "classes" | "tracks_vias" | "teardrops" | "dimensions" | "rules" | "text_graphics" | "stackup";
 const PAGES: { id: Page; label: string }[] = [
   { id: "classes", label: "Net Classes" },
   { id: "tracks_vias", label: "Track Widths & Vias" },
   { id: "teardrops", label: "Teardrops" },
+  { id: "dimensions", label: "Dimension Properties" },
   { id: "rules", label: "Design Rules" },
   { id: "text_graphics", label: "Text & Graphics" },
   { id: "stackup", label: "Layer Stackup" },
 ];
+
+// `BOARD_DESIGN_SETTINGS`'s own real defaults (task item 7) -- see
+// `eda_model::ir::DimensionSettings`'s own `impl Default` doc.
+const DEFAULT_DIMENSION_SETTINGS: DimensionSettings = {
+  units: "automatic",
+  units_format: "no_suffix",
+  precision: 4,
+  suppress_trailing_zeros: true,
+  text_position: "outside",
+  keep_text_aligned: true,
+  text_size_um: 1000,
+  stroke_width: 200,
+  arrow_length: 1270,
+  extension_offset: 500,
+  extension_height: 586,
+};
 
 const DEFAULT_TEARDROP_SETTINGS: TeardropSettings = {
   enabled: false,
@@ -55,12 +72,16 @@ export function BoardSetupDialog() {
   const units = state.units;
   const rules = state.board?.board_rules;
   const routing = state.board?.routing;
+  const drawings = state.board?.drawings;
 
   const [widths, setWidths] = useState<number[]>([]);
   const [vias, setVias] = useState<{ diameter: number; drill: number }[]>([]);
   const [td, setTd] = useState<TeardropSettings>(DEFAULT_TEARDROP_SETTINGS);
   const [tdBusy, setTdBusy] = useState(false);
   const [tdMessage, setTdMessage] = useState<string | null>(null);
+  const [dimSettings, setDimSettings] = useState<DimensionSettings>(DEFAULT_DIMENSION_SETTINGS);
+  const [dimBusy, setDimBusy] = useState(false);
+  const [dimMessage, setDimMessage] = useState<string | null>(null);
 
   // (Re)seed the editable lists from the board every time the dialog
   // opens -- not on every render, so mid-edit keystrokes survive the
@@ -71,6 +92,8 @@ export function BoardSetupDialog() {
     setVias(routing?.via_presets ?? []);
     setTd(routing?.teardrop_settings ?? DEFAULT_TEARDROP_SETTINGS);
     setTdMessage(null);
+    setDimSettings(drawings?.dimension_settings ?? DEFAULT_DIMENSION_SETTINGS);
+    setDimMessage(null);
     if (state.boardSetupInitialPage) {
       setPage(state.boardSetupInitialPage as Page);
       dispatch({ type: "SET_BOARD_SETUP_INITIAL_PAGE", page: null });
@@ -119,6 +142,22 @@ export function BoardSetupDialog() {
       setTdMessage(ok ? "All teardrops removed." : "Could not remove teardrops.");
     } finally {
       setTdBusy(false);
+    }
+  };
+
+  const setDimField = <K extends keyof DimensionSettings>(key: K, value: DimensionSettings[K]) => setDimSettings((s) => ({ ...s, [key]: value }));
+
+  // `BOARD_DESIGN_SETTINGS::m_Dimension*` (task item 7): applied to new
+  // dimensions from this point on only, never retroactively -- see
+  // `DimensionSettings`'s own doc.
+  const applyDimensionSettings = async () => {
+    setDimBusy(true);
+    setDimMessage(null);
+    try {
+      const ok = await api.cmd({ op: "set_dimension_settings", settings: dimSettings });
+      setDimMessage(ok ? "Saved. Applies to new dimensions from now on." : "Could not save.");
+    } finally {
+      setDimBusy(false);
     }
   };
 
@@ -322,6 +361,73 @@ export function BoardSetupDialog() {
                 </button>
               </div>
               {tdMessage && <p style={{ fontSize: 11, marginTop: 8 }}>{tdMessage}</p>}
+            </>
+          )}
+
+          {page === "dimensions" && (
+            <>
+              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
+                `panel_setup_dimensions.cpp` (task item 7): defaults a newly drawn dimension starts from (`StyleFromSettings`). Changing these never touches a dimension already on the board -- edit it directly (its own Properties dialog) instead.
+              </p>
+              <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
+                <span>Units</span>
+                <select value={dimSettings.units} onChange={(e) => setDimField("units", e.target.value as DimensionUnits)}>
+                  <option value="automatic">Automatic</option>
+                  <option value="mm">Millimeters</option>
+                  <option value="mil">Mils</option>
+                  <option value="inch">Inches</option>
+                </select>
+                <span>Units format</span>
+                <select value={dimSettings.units_format} onChange={(e) => setDimField("units_format", e.target.value as DimensionUnitsFormat)}>
+                  <option value="no_suffix">1234.0</option>
+                  <option value="bare_suffix">1234.0 mm</option>
+                  <option value="paren_suffix">1234.0 (mm)</option>
+                </select>
+                <span>Precision (decimal places)</span>
+                <input type="number" min={0} max={5} step={1} value={dimSettings.precision} onChange={(e) => setDimField("precision", Math.max(0, Math.min(5, Math.round(Number(e.target.value)))))} style={{ width: 90 }} />
+                <span>Text position</span>
+                <select value={dimSettings.text_position} onChange={(e) => setDimField("text_position", e.target.value as DimensionTextPosition)}>
+                  <option value="outside">Outside</option>
+                  <option value="inline">Inline</option>
+                </select>
+              </div>
+              <label className="filter-row" style={{ display: "block", marginTop: 6 }}>
+                <input type="checkbox" checked={dimSettings.suppress_trailing_zeros} onChange={(e) => setDimField("suppress_trailing_zeros", e.target.checked)} /> Suppress trailing zeros
+              </label>
+              <label className="filter-row" style={{ display: "block" }}>
+                <input type="checkbox" checked={dimSettings.keep_text_aligned} onChange={(e) => setDimField("keep_text_aligned", e.target.checked)} /> Keep text aligned with dimension
+              </label>
+
+              <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Style</p>
+              <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
+                <span>Text size</span>
+                <span>
+                  <input type="number" step="any" value={umTo(dimSettings.text_size_um, units)} onChange={(e) => setDimField("text_size_um", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
+                </span>
+                <span>Line thickness</span>
+                <span>
+                  <input type="number" step="any" value={umTo(dimSettings.stroke_width, units)} onChange={(e) => setDimField("stroke_width", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
+                </span>
+                <span>Arrow length</span>
+                <span>
+                  <input type="number" step="any" value={umTo(dimSettings.arrow_length, units)} onChange={(e) => setDimField("arrow_length", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
+                </span>
+                <span>Extension line offset</span>
+                <span>
+                  <input type="number" step="any" value={umTo(dimSettings.extension_offset, units)} onChange={(e) => setDimField("extension_offset", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
+                </span>
+                <span>Extension past crossbar</span>
+                <span>
+                  <input type="number" step="any" value={umTo(dimSettings.extension_height, units)} onChange={(e) => setDimField("extension_height", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
+                </span>
+              </div>
+
+              <div style={{ marginTop: 14 }}>
+                <button className="primary" disabled={dimBusy} onClick={applyDimensionSettings}>
+                  Apply Settings
+                </button>
+              </div>
+              {dimMessage && <p style={{ fontSize: 11, marginTop: 8 }}>{dimMessage}</p>}
             </>
           )}
 

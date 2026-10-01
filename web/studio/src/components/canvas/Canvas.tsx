@@ -38,10 +38,11 @@ import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, 
 import { openPropertiesFor } from "./properties";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner, removeCorner } from "../../kicad-port/zonePointEditor";
+import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import "../../styles/canvas.css";
 
 /** A candidate's own kind determines which Cmd a drag of it would commit through -- tracks/zones have no move_* Cmd (api/types.ts), so they're selectable but never draggable, same as before this session. */
-const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "via", "shape", "text"]);
+const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "via", "shape", "text", "dimension"]);
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
@@ -95,7 +96,7 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, "segment" | "arc" | "rect" | "circ
 
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
-  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
+  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text" | "dimension"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
   | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] };
@@ -375,6 +376,10 @@ export function Canvas() {
           return `${api.shapeById(c.id)?.kind ?? "Shape"} [${c.layer ?? ""}]`;
         case "text":
           return `Text "${api.textById(c.id)?.content ?? ""}"`;
+        case "dimension": {
+          const kind = api.dimensionById(c.id)?.kind ?? "dimension";
+          return `${kind[0]!.toUpperCase()}${kind.slice(1)} Dimension`;
+        }
       }
     },
     [api]
@@ -510,6 +515,32 @@ export function Canvas() {
         const draw = state.drawState;
         const pts: [number, number][] = draw?.kind === "zone" ? [...draw.pts, [sx, sy]] : [[sx, sy]];
         dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts } });
+        return;
+      }
+
+      // Task item 7: two clicks (start, end) for whichever of the five
+      // kinds `state.nextDimensionKind` names -- see DimensionPropertiesDialog.tsx
+      // and PARITY-pcb.md section 18 for why this is a plain two-click
+      // commit (defaults filled from Board Setup's DimensionSettings,
+      // edited right after) rather than source's own third "set height"
+      // click with a live preview.
+      if (state.activeTool === "dimension") {
+        const draw = state.drawState;
+        if (draw?.kind === "dimension" && draw.pts.length === 1) {
+          const start = draw.pts[0]!;
+          const end: [number, number] = [sx, sy];
+          dispatch({ type: "SET_DRAW_STATE", draw: null });
+          dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+          const settings = board.drawings?.dimension_settings;
+          if (settings) {
+            const payload = defaultDimensionPayload(state.nextDimensionKind, start, end, state.activeLayer ?? "Dwgs.User", settings);
+            void api.addDimension(payload).then((id) => {
+              if (id) dispatch({ type: "SET_DIMENSION_EDIT_ID", id });
+            });
+          }
+        } else {
+          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "dimension", pts: [[sx, sy]] } });
+        }
         return;
       }
 
@@ -678,7 +709,7 @@ export function Canvas() {
       }
       if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0) {
         const soleRef = refs.length === 1 ? refs[0] : undefined;
-        dragRef.current = { kind: "move", refs, moveKind: hit.kind as "part" | "via" | "shape" | "text", startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, soleRef), moved: false };
+        dragRef.current = { kind: "move", refs, moveKind: hit.kind as "part" | "via" | "shape" | "text" | "dimension", startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, soleRef), moved: false };
       }
       return;
     }
@@ -920,6 +951,12 @@ export function Canvas() {
         { label: "Distribute Vertically (Even Gaps)", onSelect: () => api.distributeSelection("y", "gaps") },
         { label: "Distribute Vertically (By Centers)", onSelect: () => api.distributeSelection("y", "centers") }
       );
+    }
+    // Task item 7: `GLOBAL_EDIT_TOOL`'s "Switch Dimension Arrows" is a
+    // context-menu-only action in source too (no menus.json/toolbars.json
+    // entry in this extraction either).
+    if (refs.some((r) => api.dimensionById(r))) {
+      entries.push({ label: "Switch Dimension Arrows", onSelect: () => run("pcbnew.InteractiveDrawing.changeDimensionArrows") });
     }
     if (refs.length === 1) {
       const part = api.partByRef(refs[0]!);

@@ -30,6 +30,7 @@ pub mod algo;
 pub mod cleanup;
 pub mod dangling;
 pub mod delaunay;
+pub mod dimension;
 pub mod geom;
 pub mod grid;
 pub mod items;

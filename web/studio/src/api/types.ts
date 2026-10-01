@@ -244,6 +244,9 @@ export interface Drawings {
   texts: BoardText[];
   /** Task item 5 -- `crates/model/src/ir.rs` `Group`. Lives here purely for the lowest construction-site ripple (see that struct's own doc); a group can reference any item kind, not just a drawing. */
   groups: Group[];
+  /** Task item 7 -- see `Dimension`'s own doc. */
+  dimensions: Dimension[];
+  dimension_settings: DimensionSettings;
 }
 
 /** `crates/model/src/ir.rs` `Group` (task item 5) -- `PCB_GROUP`: a named set of member item ids (a part reference, or a track/via/zone/shape/text id), no geometry of its own. No nested groups in this model. */
@@ -251,6 +254,106 @@ export interface Group {
   id: string;
   name: string;
   member_ids: string[];
+}
+
+/** `crates/model/src/ir.rs` `DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/`ArrowDirection` (task item 7). */
+export type DimensionUnits = "mm" | "mil" | "inch" | "automatic";
+export type DimensionUnitsFormat = "no_suffix" | "bare_suffix" | "paren_suffix";
+export type DimensionTextPosition = "outside" | "inline";
+export type ArrowDirection = "inward" | "outward";
+
+/**
+ * `crates/cli/src/studio.rs` `dimension_json` -- `state()`'s own flat
+ * display shape for a `crates/model/src/ir.rs` `Dimension` (task item 7):
+ * `[x,y]`-pairs and a flat `kind` string plus only the fields that kind
+ * actually has (`height`/`horizontal`/`leader_length`, `null` otherwise),
+ * not the nested tagged shape `CmdDimension` below sends/receives. The
+ * geometry fields (`lines`/`text_at`/`computed_text_angle`/
+ * `measured_value_um`/`text`) are computed once, server-side
+ * (`eda_connectivity::dimension::compute_dimension_geometry`) -- a
+ * renderer draws exactly these, never re-deriving crossbar/arrow/text
+ * placement itself.
+ */
+export interface Dimension {
+  id: string;
+  layer: string;
+  kind: "aligned" | "orthogonal" | "radial" | "leader" | "center";
+  height: Um | null;
+  horizontal: boolean | null;
+  leader_length: Um | null;
+  start: [Um, Um];
+  end: [Um, Um];
+  prefix: string;
+  suffix: string;
+  override_text: string | null;
+  units: DimensionUnits;
+  units_format: DimensionUnitsFormat;
+  /** Decimal places, 0-5. */
+  precision: number;
+  suppress_trailing_zeros: boolean;
+  text_position: DimensionTextPosition;
+  keep_text_aligned: boolean;
+  /** Millidegrees. Only meaningful when `keep_text_aligned` is false --
+   * otherwise `computed_text_angle` below is what actually applies. */
+  text_angle: number;
+  text_size_um: Um;
+  stroke_width: Um;
+  arrow_length: Um;
+  extension_offset: Um;
+  extension_height: Um;
+  arrow_direction: ArrowDirection;
+  /** Every line segment to draw: extension lines, crossbar/leader pieces
+   * (already split around inline text), arrow barbs/tails, a centre cross. */
+  lines: [[Um, Um], [Um, Um]][];
+  text_at: [Um, Um];
+  computed_text_angle: number;
+  measured_value_um: Um;
+  /** Fully formatted (prefix + value + units suffix + suffix, or the
+   * override text if set). Draw this verbatim -- do not reformat `measured_value_um` again. */
+  text: string;
+}
+
+/** `crates/model/src/ir.rs` `DimensionSettings` (task item 7) -- Board Setup > Dimension Properties' defaults, applied once at creation (see that struct's own doc on why never retroactively). */
+export interface DimensionSettings {
+  units: DimensionUnits;
+  units_format: DimensionUnitsFormat;
+  precision: number;
+  suppress_trailing_zeros: boolean;
+  text_position: DimensionTextPosition;
+  keep_text_aligned: boolean;
+  text_size_um: Um;
+  stroke_width: Um;
+  arrow_length: Um;
+  extension_offset: Um;
+  extension_height: Um;
+}
+
+/** `CmdDimensionKind` -- `crates/model/src/ir.rs` `DimensionKind`'s own `#[serde(tag = "kind")]` shape, as `add_dimension`/`edit_dimension` need it (unlike `Dimension.kind` above, a flat string). */
+export type CmdDimensionKind = { kind: "aligned"; height: Um } | { kind: "orthogonal"; height: Um; horizontal: boolean } | { kind: "radial"; leader_length: Um } | { kind: "leader" } | { kind: "center" };
+
+/** `crates/model/src/ir.rs` `Dimension`, IR field names (`PointXY` objects, a nested `kind`) -- for `add_dimension`/`edit_dimension`'s own Cmd payload. See `Dimension` above for the display shape a renderer actually reads. */
+export interface CmdDimension {
+  id?: string;
+  layer: string;
+  kind: CmdDimensionKind;
+  start: PointXY;
+  end: PointXY;
+  prefix: string;
+  suffix: string;
+  override_text?: string | null;
+  units: DimensionUnits;
+  units_format: DimensionUnitsFormat;
+  precision: number;
+  suppress_trailing_zeros: boolean;
+  text_position: DimensionTextPosition;
+  keep_text_aligned: boolean;
+  text_angle: number;
+  text_size_um: Um;
+  stroke_width: Um;
+  arrow_length: Um;
+  extension_offset: Um;
+  extension_height: Um;
+  arrow_direction: ArrowDirection;
 }
 
 // ------------------------------------------------------- Footprint Editor
@@ -604,6 +707,15 @@ export type Cmd =
    * exists. See `ArrayGeometry`'s own doc for the angle-sign convention.
    */
   | { op: "create_array"; ids: string[]; geometry: ArrayGeometry; arrange?: boolean }
+  /** Task item 7: `pcbnew/pcb_dimension.{h,cpp}`. `id` on `dimension`, if sent, is ignored. */
+  | { op: "add_dimension"; dimension: CmdDimension }
+  | { op: "delete_dimension"; id: string }
+  /** Translate both feature points by `(dx, dy)` -- `PCB_DIMENSION_BASE::Move`. */
+  | { op: "move_dimension"; id: string; dx: Um; dy: Um }
+  /** Properties dialog's OK: replace every field at once. `id` on `dimension` is ignored. */
+  | { op: "edit_dimension"; id: string; dimension: CmdDimension }
+  /** Board Setup > Dimension Properties: applied to new dimensions from then on only. */
+  | { op: "set_dimension_settings"; settings: DimensionSettings }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**

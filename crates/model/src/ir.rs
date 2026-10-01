@@ -1489,6 +1489,195 @@ impl Group {
     }
 }
 
+/// Task item 7: `pcbnew/pcb_dimension.h`'s `PCB_DIMENSION_BASE` hierarchy
+/// (`PCB_DIM_ALIGNED`/`PCB_DIM_ORTHOGONAL`/`PCB_DIM_RADIAL`/`PCB_DIM_LEADER`/
+/// `PCB_DIM_CENTER`), collapsed into one struct with a kind-specific tag
+/// instead of five item types, matching this model's existing `Shape`
+/// enum's own shape (one struct per real KiCad class would ripple the
+/// same way `Shape` avoids). `start`/`end` are the two "feature points"
+/// every kind has (source's own term) -- what they mean depends on
+/// `kind`, documented on each variant.
+///
+/// The measured value and the dimension's own displayed text are never
+/// stored: both are recomputed fresh from `start`/`end` plus these
+/// formatting fields, the same way source's own `Update()`/`GetValueText()`
+/// do (`override_text`, when set, replaces the computed number but still
+/// goes through prefix/suffix/units-suffix formatting same as source's
+/// `m_overrideTextEnabled`). `crates/connectivity::dimension` computes
+/// the geometry (crossbar/extension lines/arrows/leader/text position)
+/// and formatted text fresh from this struct on every read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dimension {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub layer: String,
+    pub kind: DimensionKind,
+    /// The first feature point. An `Aligned`/`Orthogonal` dimension's own
+    /// first measured point; a `Radial`/`Center`'s circle/arc centre; a
+    /// `Leader`'s arrow tip.
+    pub start: Point,
+    /// The second feature point. An `Aligned`/`Orthogonal`'s second
+    /// measured point; a `Radial`'s point on the circle/arc (defines the
+    /// radius); a `Leader`'s knee (where the line bends toward the text);
+    /// a `Center`'s own arm endpoint (defines the cross's size and angle).
+    pub end: Point,
+    #[serde(default)]
+    pub prefix: String,
+    #[serde(default)]
+    pub suffix: String,
+    /// `PCB_DIMENSION_BASE::m_overrideTextEnabled`/`m_valueString`
+    /// collapsed into one option, rather than a bool plus a string that's
+    /// only meaningful when the bool is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_text: Option<String>,
+    pub units: DimensionUnits,
+    pub units_format: DimensionUnitsFormat,
+    /// Decimal places, 0-5. A flat count -- source's own `DIM_PRECISION`
+    /// also has four unit-dependent "V_VVV"-style levels (fewer decimals
+    /// for mm than inch at the "same" precision); not ported, since a
+    /// fixed decimal count covers the overwhelming majority of real
+    /// dimensioned drawings and keeps one precision concept instead of two.
+    pub precision: u8,
+    pub suppress_trailing_zeros: bool,
+    pub text_position: DimensionTextPosition,
+    pub keep_text_aligned: bool,
+    /// Only meaningful when `keep_text_aligned` is false -- otherwise the
+    /// geometry pass overwrites this every time, same as source recomputing
+    /// `GetTextAngle()` from the crossbar/knee angle on every `Update()`.
+    #[serde(default)]
+    pub text_angle: Millideg,
+    pub text_size_um: Um,
+    pub stroke_width: Um,
+    pub arrow_length: Um,
+    pub extension_offset: Um,
+    pub extension_height: Um,
+    pub arrow_direction: ArrowDirection,
+}
+
+impl Dimension {
+    fn id_seed(&self) -> String {
+        format!("{:?}|{},{}|{},{}", self.kind, self.start.x, self.start.y, self.end.x, self.end.y)
+    }
+}
+
+/// `PCB_DIMENSION_BASE`'s five concrete subclasses, as a tag instead of
+/// five item types -- see [`Dimension`]'s own doc.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DimensionKind {
+    /// `PCB_DIM_ALIGNED`: a crossbar parallel to `end - start`, offset
+    /// perpendicular by `height` (signed -- which side of the feature
+    /// line the crossbar falls on).
+    Aligned { height: Um },
+    /// `PCB_DIM_ORTHOGONAL`: like `Aligned`, but the crossbar is locked
+    /// horizontal or vertical and only that axis of `end - start` is
+    /// measured, with a second, independent extension line compensating
+    /// for `end` not actually lying on the (axis-locked) crossbar.
+    Orthogonal { height: Um, horizontal: bool },
+    /// `PCB_DIM_RADIAL`: `start` is the circle/arc centre (also where a
+    /// small fixed-size `+` mark is drawn, `PCB_DIM_RADIAL::updateGeometry`'s
+    /// own `centerArm` cross), `end` a point on it; a leader runs outward
+    /// from `end` by `leader_length` to a knee, then on to the text.
+    Radial { leader_length: Um },
+    /// `PCB_DIM_LEADER`: a line from `start` (arrow tip) to `end` (knee),
+    /// then on to the text. No text-border styling (rect/circle around
+    /// the text) -- see PARITY-pcb.md section 18.
+    Leader,
+    /// `PCB_DIM_CENTER`: a `+` mark at `start`, sized and oriented by
+    /// `end - start` (one arm along that vector, the other rotated 90°).
+    /// Never shows text in practice (nothing stops it, same as source).
+    Center,
+}
+
+/// `DIM_UNITS_MODE` (`AUTOMATIC` follows the app's own display unit,
+/// `state.units` on the frontend -- same split `EDA_UNITS`/`DIM_UNITS_MODE`
+/// have in source, where a dimension can pin its own units independent of
+/// the frame's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionUnits {
+    Mm,
+    Mil,
+    Inch,
+    Automatic,
+}
+
+/// `DIM_UNITS_FORMAT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionUnitsFormat {
+    NoSuffix,
+    BareSuffix,
+    ParenSuffix,
+}
+
+/// `DIM_TEXT_POSITION`. `MANUAL` is not ported -- no point-editor-style
+/// manual text drag for a sub-element, same restriction this model's
+/// zones/shapes already have on their own control points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DimensionTextPosition {
+    Outside,
+    Inline,
+}
+
+/// `DIM_ARROW_DIRECTION`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArrowDirection {
+    Inward,
+    Outward,
+}
+
+/// `BOARD_DESIGN_SETTINGS`'s `m_Dimension*` fields -- see [`Dimension`]'s
+/// own doc on why these are only applied once, at creation.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DimensionSettings {
+    pub units: DimensionUnits,
+    pub units_format: DimensionUnitsFormat,
+    pub precision: u8,
+    pub suppress_trailing_zeros: bool,
+    pub text_position: DimensionTextPosition,
+    pub keep_text_aligned: bool,
+    pub text_size_um: Um,
+    pub stroke_width: Um,
+    pub arrow_length: Um,
+    pub extension_offset: Um,
+    /// `PCB_DIM_ALIGNED`'s own constructor default (`m_arrowLength *
+    /// sin(27.5deg)`) rather than a `BOARD_DESIGN_SETTINGS` field -- source
+    /// has no separate board-wide setting for this either.
+    pub extension_height: Um,
+}
+
+impl Default for DimensionSettings {
+    /// `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS()`'s own real
+    /// defaults (`board_design_settings.cpp`): precision X_XXXX (4
+    /// decimals here, this struct's flat scale), units automatic, no unit
+    /// suffix, suppress trailing zeroes, text outside, kept aligned,
+    /// 50 mil arrow length, 0.5 mm extension offset. `text_size_um`/
+    /// `stroke_width` fall back to this model's own general text/line
+    /// defaults (source pulls these from the generic per-layer text/line
+    /// style, not a dimension-specific constant).
+    fn default() -> Self {
+        let arrow_length = 1270; // 50 mil
+        DimensionSettings {
+            units: DimensionUnits::Automatic,
+            units_format: DimensionUnitsFormat::NoSuffix,
+            precision: 4,
+            suppress_trailing_zeros: true,
+            text_position: DimensionTextPosition::Outside,
+            keep_text_aligned: true,
+            text_size_um: 1000,
+            stroke_width: 200,
+            arrow_length,
+            extension_offset: 500, // 0.5mm
+            extension_height: (arrow_length as f64 * 27.5f64.to_radians().sin()).round() as Um,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DrawingsSection {
@@ -1499,14 +1688,23 @@ pub struct DrawingsSection {
     /// Task item 5. See [`Group`]'s own doc for why it lives here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<Group>,
+    /// Task item 7. See [`Dimension`]'s own doc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dimensions: Vec<Dimension>,
+    /// `BOARD_DESIGN_SETTINGS`'s dimension-related fields -- the defaults
+    /// a freshly drawn [`Dimension`] is styled from (`StyleFromSettings`),
+    /// then carries its own copies of afterward (this struct is never
+    /// re-applied automatically, matching source).
+    #[serde(default)]
+    pub dimension_settings: DimensionSettings,
 }
 
 impl DrawingsSection {
-    /// Assign a deterministic id to every shape/text/group whose `id` is
-    /// still empty. See [`RoutingSection::assign_missing_ids`] -- same
-    /// contract, same reason for a stable per-kind processing order.
+    /// Assign a deterministic id to every shape/text/group/dimension
+    /// whose `id` is still empty. See [`RoutingSection::assign_missing_ids`]
+    /// -- same contract, same reason for a stable per-kind processing order.
     pub fn assign_missing_ids(&mut self) {
-        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
 
         let mut order: Vec<usize> = (0..self.shapes.len()).collect();
         order.sort_by(|&a, &b| (self.shapes[a].layer(), self.shapes[a].points().first().copied()).cmp(&(self.shapes[b].layer(), self.shapes[b].points().first().copied())));
@@ -1535,6 +1733,16 @@ impl DrawingsSection {
                 let id = next_item_id("grp", &self.groups[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.groups[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.dimensions.len()).collect();
+        order.sort_by(|&a, &b| (self.dimensions[a].start, self.dimensions[a].end).cmp(&(self.dimensions[b].start, self.dimensions[b].end)));
+        for i in order {
+            if self.dimensions[i].id.is_empty() {
+                let id = next_item_id("dim", &self.dimensions[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.dimensions[i].id = id;
             }
         }
     }
