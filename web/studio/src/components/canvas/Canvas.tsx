@@ -21,7 +21,7 @@ import type { ToolId } from "../../state/store";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
 import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
-import { snapPoint } from "./gridHelper";
+import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
 import { findRouteAnchor, posture45, commitRoute } from "./routing";
 import { itemHitsAt } from "./itemHitTest";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
@@ -82,7 +82,7 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, "segment" | "arc" | "rect" | "circ
 
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
-  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text"; startWorld: [number, number]; moved: boolean }
+  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; additive: boolean };
 
 /** Every part whose courtyard contains the point, topmost (last drawn) first. */
@@ -291,6 +291,19 @@ export function Canvas() {
     [state.view]
   );
 
+  /** tool_event.h/edit_tool_move_fct.cpp's real move-tool modifiers (see kicad-port/gridSnap.ts's header comment): Ctrl (Cmd on macOS) disables grid round-off, Shift disables anchor snapping. */
+  const gridSnapModifiers = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): GridSnapModifiers => ({
+    ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+    shiftKey: e.shiftKey,
+  });
+
+  /** pcb_grid_helper.cpp BestSnapAnchor, applied to a single reference point -- see gridHelper.ts:snapWithAnchors. Falls back to plain grid snap when there's no board yet (shouldn't happen once a drag is possible, but keeps this total). */
+  const snapRef = (wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, excludeOwnerId?: string): [number, number] => {
+    if (!board) return snapPoint(wx, wy, state.gridUm);
+    const { x, y } = snapWithAnchors(wx, wy, board.snap ?? state.gridUm, state.view.scale, board, gridSnapModifiers(e), excludeOwnerId);
+    return [x, y];
+  };
+
   /** pcb_selection_tool.cpp: where several items overlap, Alt-click (and, here, a press-and-hold) shows a picker instead of always taking the topmost. */
   const disambiguate = useCallback(
     (candidates: Part[], screenX: number, screenY: number) => {
@@ -472,7 +485,7 @@ export function Canvas() {
         dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
         refs = [hit.ref];
       }
-      dragRef.current = { kind: "move", refs, moveKind: "part", startWorld: [wx, wy], moved: false };
+      dragRef.current = { kind: "move", refs, moveKind: "part", startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, hit.ref), moved: false };
       return;
     }
 
@@ -487,7 +500,7 @@ export function Canvas() {
         else dispatch({ type: "SET_SELECTION", refs: [itemHit.id] });
         // Tracks/zones have no move_* Cmd (see api/types.ts) -- selectable, not draggable.
         if (itemHit.kind === "via" || itemHit.kind === "shape" || itemHit.kind === "text") {
-          dragRef.current = { kind: "move", refs: [itemHit.id], moveKind: itemHit.kind, startWorld: [wx, wy], moved: false };
+          dragRef.current = { kind: "move", refs: [itemHit.id], moveKind: itemHit.kind, startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, itemHit.id), moved: false };
         }
         return;
       }
@@ -510,10 +523,21 @@ export function Canvas() {
 
     if (moveMode && state.selection.size > 0) {
       const origin = state.moveOriginUm ?? { x: wx, y: wy };
-      const [dx, dy] = snapPoint(wx - origin.x, wy - origin.y, board?.snap ?? state.gridUm);
       const first = [...state.selection][0]!;
       const kind = api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part";
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: dx, dyUm: dy } });
+      // pcb_grid_helper.cpp BestSnapAnchor applied to both ends: the
+      // delta is "where the (snapped) cursor is now" minus "where the
+      // (snapped) cursor started" -- not a plain grid-rounded delta --
+      // so a drag that starts and ends at the same anchor is exactly
+      // zero movement, and dragging onto a *different* nearby anchor
+      // (another part's pad, say) lands precisely on it. Only excludes
+      // the dragged item's own anchors for a single-item move; a
+      // multi-select drag doesn't exclude any member (a reasonable,
+      // documented simplification -- see PARITY-pcb.md).
+      const soleRef = state.selection.size === 1 ? first : undefined;
+      const [ox, oy] = snapRef(origin.x, origin.y, e, soleRef);
+      const [sx, sy] = snapRef(wx, wy, e, soleRef);
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: sx - ox, dyUm: sy - oy } });
       return;
     }
 
@@ -524,7 +548,9 @@ export function Canvas() {
       if (Math.hypot(e.clientX - drag.startScreen[0], e.clientY - drag.startScreen[1]) > PAN_CLICK_TOLERANCE_PX) drag.moved = true;
       dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + (e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
     } else if (drag.kind === "move") {
-      const [dx, dy] = snapPoint(wx - drag.startWorld[0], wy - drag.startWorld[1], board?.snap ?? state.gridUm);
+      const [sx, sy] = snapRef(wx, wy, e, drag.refs.length === 1 ? drag.refs[0] : undefined);
+      const dx = sx - drag.snapOrigin[0];
+      const dy = sy - drag.snapOrigin[1];
       if (dx !== 0 || dy !== 0) drag.moved = true;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: drag.moveKind, dxUm: dx, dyUm: dy } : null });
     } else if (drag.kind === "box") {
