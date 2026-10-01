@@ -1,38 +1,48 @@
 // The 3D PCB viewer tab -- a KiCad-style "3D Viewer" for the board this
 // studio is editing. Self-contained: owns its own Three.js
-// renderer/scene/camera/OrbitControls and render loop, reading board
-// data straight from the store. See App.tsx's `state.tab === "3d"`
-// slot in canvas-col, which mounts this component full-bleed the same
-// way Canvas/SchematicView are mounted there.
+// renderer/scene/camera(s)/render loop, reading board data straight from
+// the store. See App.tsx's `state.tab === "3d"` slot in canvas-col, which
+// mounts this component full-bleed the same way Canvas/SchematicView are
+// mounted there.
 //
-// Viewer3DToolbar (the 8 view-preset buttons) is mounted *separately* by
-// App.tsx, in the main-toolbar-row (replacing the normal <Toolbar
-// id="main"/> for this tab -- the 3D tab has no real icon-toolbar
+// Viewer3DToolbar (the view-preset/visibility buttons) is mounted
+// *separately* by App.tsx, in the main-toolbar-row (replacing the normal
+// <Toolbar id="main"/> for this tab -- the 3D tab has no real icon-toolbar
 // action set of its own). The two talk over a small imperative handle
 // (`Viewer3DApi`) rather than a shared prop/context: this component
-// creates the handle once its camera/controls exist and hands it up via
+// creates the handle once its camera exists and hands it up via
 // `onReady`, App.tsx holds it in state, and passes it down to
 // Viewer3DToolbar as `api`.
 //
-// Geometry building lives in scene.ts (pure, no React/DOM); this file
-// is orchestration only: container/resize lifecycle (same pattern as
-// components/canvas/Canvas.tsx), the Three.js object lifecycle, the
-// render loop, and the view-preset handle.
+// Geometry building lives in scene.ts (pure, no React/DOM); the camera
+// itself is kicad-port/camera3d.ts's TrackballCamera, a faithful port of
+// KiCad's own CAMERA/TRACK_BALL (see that file's header comment for the
+// full derivation) -- this file is orchestration only: container/resize
+// lifecycle (same pattern as components/canvas/Canvas.tsx), the Three.js
+// object lifecycle, translating DOM pointer/wheel events into
+// TrackballCamera calls (mirroring HIDPI_GL_3D_CANVAS::OnMouseMoveCamera/
+// OnMouseWheelCamera's own structure), the render loop, and the
+// view-preset handle.
 import { useCallback, useEffect, useRef } from "react";
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { fetchBoardGlb } from "../../api/client";
 import { useStudioDispatch, useStudioState } from "../../state/store";
-import { buildBoardGroup, buildBackgroundTexture, disposeObject3D, presetCameraPose, boardOutlineBounds, type ViewPreset, type OutlineBounds } from "./scene";
+import { TrackballCamera, FOV_DEG, KEY_ZOOM_FACTOR, ROTATION_STEP_DEG, type ViewPreset as FacePreset } from "../../kicad-port/camera3d";
+import { resolve3DAction, ROTATE_SIGN, type Action3D } from "../../kicad-port/actions3d";
+import { isMac } from "../../platform";
+import { buildBoardGroup, buildBackgroundTexture, disposeObject3D, boardOutlineBounds } from "./scene";
 
-const CAMERA_FOV_DEG = 50;
-/** "Orthographic" toggle: this app has no separate OrthographicCamera wired up (Viewer3DApi/applyPreset math is all perspective-FOV-based) -- narrowing the FOV this far while presetCameraPose pulls the camera back to compensate is a well-known way to approximate an orthographic look with a plain PerspectiveCamera, not a real projection swap. */
-const ORTHO_FOV_DEG = 4;
+const ROTATION_STEP_RAD = (ROTATION_STEP_DEG * Math.PI) / 180;
+
 /** glTF's own unit is meters; every other builder in this file (scene.ts) works in millimetres, so the loaded GLB scene is scaled up to match rather than rescaling everything else down to meters. */
 const GLB_METERS_TO_MM = 1000;
 /** How often to re-poll GET /api/board.glb while the backend reports `{"status":"pending"}`. The export itself can take minutes (see studio.rs's build_glb), so this is deliberately slower than the app's main 700ms state poll (store.tsx) -- there is no reason to hammer the endpoint every tick for something this slow. */
 const GLB_POLL_MS = 1500;
+/** Placeholder board span (mm) the camera is seeded with before any real board data has arrived -- promptly corrected by the board-data effect below (setBoardGeometry) the moment `board.outline` is known, the same bootstrap sequence the old Box3-based fit used (`lastFitBoundsRef` starting at null). */
+const PLACEHOLDER_BOARD_SPAN_MM = 100;
+/** boardOutlineBounds's fallback span/lookAt when a board has no usable outline at all -- an arbitrary but reasonable finite box, same role as scene.ts's old EMPTY_BOX_HALF_EXTENT_MM. */
+const EMPTY_BOARD_SPAN_MM = 20;
 
 /** Small, unobtrusive corner badge while the background kicad-cli export runs -- the procedural scene stays fully interactive underneath it the whole time (see this file's fetch effect), so this is a status note, not a loading overlay that blocks the view. */
 const GLB_STATUS_BADGE_STYLE: React.CSSProperties = {
@@ -51,18 +61,80 @@ const GLB_STATUS_BADGE_STYLE: React.CSSProperties = {
 interface ThreeContext {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
-  controls: OrbitControls;
+  /** Both kept in sync with `camera3d` every frame (position/quaternion/projection params); the render loop picks whichever `camera3d.projection` says is active. Two real THREE.Camera objects rather than one camera with a hand-patched projection matrix, so every other Three.js API (raycasting, frustum culling) keeps working normally regardless of projection mode. */
+  perspCamera: THREE.PerspectiveCamera;
+  orthoCamera: THREE.OrthographicCamera;
+  /** The ported KiCad camera (kicad-port/camera3d.ts) -- owns all actual position/rotation/zoom/projection state; the two THREE cameras above are just read out of it every frame. */
+  camera3d: TrackballCamera;
   boardGroup: THREE.Group;
   /** GET /api/board.glb's real KiCad-rendered board, loaded into its own group so it can be shown/hidden independently of the procedural boardGroup rather than swapped in and out of the scene (cheaper, and keeps whichever one is hidden ready to reappear instantly). Empty until a GLB successfully loads. */
   glbGroup: THREE.Group;
 }
 
+export type ViewPreset = FacePreset | "reset";
+
 /** The imperative handle Viewer3D hands up via `onReady`, for Viewer3DToolbar (or anything else) to drive the camera without owning it. */
 export interface Viewer3DApi {
-  /** Moves the camera to one of the 8 KiCad-style view presets, framing the whole board. */
+  /** Moves the camera to one of KiCad's 6 face-view presets, or (`"reset"`) back to its home pose -- KiCad's own Home/"zoom to fit" is observably identical to the Top preset (see camera3d.ts's `reset()` doc comment), ported as the same call here. */
   setView(preset: ViewPreset): void;
+  /** Every other camera action the KiCad 3D toolbar exposes (zoom in/out, rotate X/Y/Z CW/CCW, flip, move L/R/U/D) -- the same Action3D union the keyboard handler below dispatches, so the toolbar and the keyboard can never drift apart on what a given action actually does. "pivot" is accepted but is a no-op from the toolbar (it needs a live pointer position this handle doesn't carry -- KiCad's own Space hotkey and middle-click share this same limitation-free path only because they both originate from a real mouse event). */
+  dispatchAction(action: Exclude<Action3D, { kind: "viewPreset" } | { kind: "reset" }>): void;
 }
+
+/**
+ * Runs one kicad-port/actions3d.ts Action3D against `camera3d` -- shared
+ * by the keyboard handler (mount effect below) and Viewer3DApi.dispatchAction
+ * (Viewer3DToolbar's rotate/zoom/move/flip buttons) so there is exactly
+ * one place that knows e.g. which sign CW/CCW maps to per axis.
+ */
+function runAction3D(camera3d: TrackballCamera, action: Action3D, pivot: () => void): void {
+  switch (action.kind) {
+    case "viewPreset":
+      camera3d.applyViewPreset(action.preset);
+      break;
+    case "reset":
+      camera3d.reset();
+      break;
+    case "flip":
+      camera3d.flip();
+      break;
+    case "pivot":
+      pivot();
+      break;
+    case "zoomIn":
+      camera3d.zoomBy(KEY_ZOOM_FACTOR);
+      break;
+    case "zoomOut":
+      camera3d.zoomBy(1 / KEY_ZOOM_FACTOR);
+      break;
+    case "zoomRedraw":
+      // eda_3d_canvas.cpp's ZoomRedraw just calls Request_refresh() --
+      // this app's render loop already repaints every frame
+      // unconditionally, so there is nothing to invalidate. A real
+      // no-op, same convention as the 2D port's own zoomRedraw
+      // (PARITY-pcb.md).
+      break;
+    case "rotate": {
+      const sign = ROTATE_SIGN[action.axis][action.dir];
+      const angle = sign * ROTATION_STEP_RAD;
+      if (action.axis === "x") camera3d.rotateX(angle);
+      else if (action.axis === "y") camera3d.rotateY(angle);
+      else camera3d.rotateZ(angle);
+      break;
+    }
+    case "pan":
+      camera3d.panArrow(action.direction);
+      break;
+  }
+}
+
+/** Converts a kicad-port Vec3/Quat into the THREE.Vector3/THREE.Quaternion a camera actually needs -- the one place camera3d.ts's deliberately dependency-free output touches three.js (see camera3d.ts's header comment for why that module itself never imports three). */
+function applyPoseToCamera(cam: THREE.Camera, pose: ReturnType<TrackballCamera["getRenderPose"]>): void {
+  cam.position.set(pose.position.x, pose.position.y, pose.position.z);
+  cam.quaternion.set(pose.quaternion.x, pose.quaternion.y, pose.quaternion.z, pose.quaternion.w);
+}
+
+type DragButton = "left" | "middle" | "right" | null;
 
 export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => void }) {
   const state = useStudioState();
@@ -71,9 +143,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
 
   const containerRef = useRef<HTMLDivElement>(null);
   const threeRef = useRef<ThreeContext | null>(null);
-  const lastFitBoundsRef = useRef<OutlineBounds | null>(null);
-  const lastPresetRef = useRef<ViewPreset>("iso");
-  /** Whether glbGroup currently holds a successfully loaded board (as opposed to being empty -- fetch not finished yet, or failed). Read by the visibility-sync effect and by applyPreset (to frame whichever group is actually showing) without needing it in React state. */
+  const lastFitBoundsRef = useRef<{ minX: number; minZ: number; maxX: number; maxZ: number } | null>(null);
+  /** GET /api/board.glb's own loaded-state -- see syncActiveGroupRef below. */
   const glbLoadedRef = useRef(false);
   // `onReady` kept in a ref and read only inside effects, not listed as
   // an effect dependency, so an unstable inline callback from a caller
@@ -84,42 +155,34 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     onReadyRef.current = onReady;
   }, [onReady]);
   // Same ref-not-dependency reasoning for the view-option toggles: read
-  // fresh inside applyPreset (stable, empty deps) rather than closed over.
+  // fresh inside effects (stable, empty deps) rather than closed over.
   const viewer3dRef = useRef(state.viewer3d);
   useEffect(() => {
     viewer3dRef.current = state.viewer3d;
   }, [state.viewer3d]);
+  /** Same reasoning again, for the mount effect's pivot-hotkey hit test below (empty deps -- `board` itself would otherwise be captured stale from whatever it was on first mount, almost always `null`). */
+  const boardRef = useRef(board);
+  useEffect(() => {
+    boardRef.current = board;
+  }, [board]);
+  /** Tracks the previous `flipped` value so the flip effect below (keyed on that boolean) can tell "the user just toggled it" apart from "this effect also runs once on mount" -- `camera3d.flip()` is additive (KiCad's own flipView action, see camera3d.ts), not an absolute set, so it must fire exactly once per real toggle, never on mount. */
+  const prevFlippedRef = useRef(state.viewer3d.flipped);
 
   /**
-   * Moves the camera to `preset`, framing whatever is currently in the
-   * board group. Shared by the initial/on-change auto-fit below and by
-   * every Viewer3DToolbar button -- "Reset" and "Iso" both just call
-   * this with their own preset name (see scene.ts's PRESET_DIRECTIONS
-   * comment for why they're identical).
-   *
-   * Reads `threeRef.current` fresh on every call rather than closing
-   * over anything from render scope, so it stays referentially stable
-   * (empty dep array) while always acting on the live camera/controls/
-   * board group.
+   * Moves the camera to `preset` using the ported KiCad camera engine
+   * (kicad-port/camera3d.ts) -- shared by the initial/on-change auto-fit
+   * below and by every Viewer3DToolbar button. Reads `threeRef.current`
+   * fresh on every call rather than closing over anything from render
+   * scope, so it stays referentially stable (empty dep array).
    */
   const applyPreset = useCallback((preset: ViewPreset) => {
     const three = threeRef.current;
     if (!three) return;
-    lastPresetRef.current = preset;
-    three.camera.fov = viewer3dRef.current.orthographic ? ORTHO_FOV_DEG : CAMERA_FOV_DEG;
-    // Frame whichever group is actually visible -- an empty/hidden
-    // boardGroup while the GLB is showing would fit an empty box (no-op)
-    // instead of the board actually on screen.
-    const activeGroup = viewer3dRef.current.kicadModels && glbLoadedRef.current ? three.glbGroup : three.boardGroup;
-    const box = new THREE.Box3().setFromObject(activeGroup);
-    const { position, target } = presetCameraPose(box, preset, three.camera.fov, three.camera.aspect);
-    three.camera.position.copy(position);
-    three.controls.target.copy(target);
-    three.camera.updateProjectionMatrix();
-    three.controls.update();
+    if (preset === "reset") three.camera3d.reset();
+    else three.camera3d.applyViewPreset(preset);
   }, []);
 
-  // Mount: create the renderer/scene/camera/controls/lights once and
+  // Mount: create the renderer/scene/cameras/camera3d engine once and
   // start the render loop. Mirrors Canvas.tsx's container-tracks-its-
   // own-box ResizeObserver pattern, just driving a WebGL canvas instead
   // of a 2D one -- and since the render loop already repaints every
@@ -132,30 +195,64 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     const scene = new THREE.Scene();
     scene.background = buildBackgroundTexture();
 
-    const camera = new THREE.PerspectiveCamera(CAMERA_FOV_DEG, 1, 0.1, 10000);
-    camera.position.set(80, 80, 80);
+    const camera3d = new TrackballCamera(PLACEHOLDER_BOARD_SPAN_MM * 1.25, { x: 0, y: 0, z: 0 });
+    // Initial fov/near/far are placeholders -- the render loop below
+    // overwrites them from camera3d.getProjectionParams() every frame, so
+    // these only matter for the very first paint before that loop runs.
+    const perspCamera = new THREE.PerspectiveCamera(FOV_DEG, 1, 0.1, 1000);
+    const orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.domElement.tabIndex = 0; // forward-compatible with keyboard hotkeys (not wired up in this pass)
+    renderer.domElement.style.touchAction = "none"; // this component drives drag/pan itself; don't let the browser also scroll/zoom the page on touch
+    renderer.domElement.style.outline = "none";
     const rect = container.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       renderer.setSize(rect.width, rect.height);
-      camera.aspect = rect.width / rect.height;
-      camera.updateProjectionMatrix();
+      perspCamera.aspect = rect.width / rect.height;
+      perspCamera.updateProjectionMatrix();
+      camera3d.setWindowSize(rect.width, rect.height);
     }
     container.appendChild(renderer.domElement);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    keyLight.position.set(1, 2, 1.5);
-    scene.add(keyLight);
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
-    fillLight.position.set(-1.5, -0.6, -1);
-    scene.add(fillLight);
+    // render_3d_opengl.cpp's init_lights(): exactly 3 fixed-function GL
+    // lights, always all enabled together -- "top" and "bottom" fixed
+    // directional lights at a shallow 5.4-degree elevation (so they
+    // mostly skim the board, giving its copper/silk a visible highlight
+    // rather than flooding it from directly overhead), and "front", a
+    // positional headlight that moves with the camera every frame (see
+    // the render loop below). Source's own light colors are all neutral
+    // grey/white (ambient 0.084, diffuse/specular 0.7 for top & bottom,
+    // 0.3/0.5 for the headlight) with NO separate scene-wide ambient term
+    // (`GL_LIGHT_MODEL_AMBIENT=(0,0,0)`) -- all ambient comes from the 3
+    // lights' own small ambient terms, folded here into one AmbientLight
+    // at roughly their combined strength (0.084*3 ~= 0.25) since
+    // Three.js's MeshStandardMaterial has no per-light ambient slot.
+    //
+    // Direction vectors are given in KiCad's own axis convention
+    // (SphericalToCartesian(pi*0.03, pi*0.25), 3d_math.h/render_3d_opengl.
+    // cpp:457-474) and converted through this file's camera basis change
+    // (kicad-port/camera3d.ts's header comment: KiCad-local/world (x,y,z)
+    // -> this app's world (x, z, -y)) rather than re-deriving the angle
+    // in this app's own axes.
+    scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+    const TOP_LIGHT_DIR = new THREE.Vector3(0.0665, 0.9956, -0.0665); // KiCad (0.0665, 0.0665, 0.9956)
+    const topLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    topLight.position.copy(TOP_LIGHT_DIR).multiplyScalar(1000);
+    scene.add(topLight);
+    const bottomLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    bottomLight.position.copy(TOP_LIGHT_DIR).multiplyScalar(-1000); // source: same x/y, z negated -- a full negation is the same thing once converted to this app's axes
+    scene.add(bottomLight);
+    // Headlight ("front"): positional, re-aimed at the camera's own
+    // position every frame below. `decay=0` (no inverse-square falloff)
+    // deliberately: a physically-decaying point light would make this
+    // swing from imperceptible to blinding across this viewer's actual
+    // zoom range (a few mm to hundreds of mm from the board), which
+    // source's own fixed-function GL point light never did either (GL's
+    // legacy attenuation was left at its default 1/0/0 = no falloff).
+    const headlight = new THREE.PointLight(0xffffff, 0.45, 0, 0);
+    scene.add(headlight);
 
     const boardGroup = new THREE.Group();
     scene.add(boardGroup);
@@ -164,22 +261,187 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     glbGroup.visible = false;
     scene.add(glbGroup);
 
-    threeRef.current = { renderer, scene, camera, controls, boardGroup, glbGroup };
-    onReadyRef.current?.({ setView: applyPreset });
+    threeRef.current = { renderer, scene, perspCamera, orthoCamera, camera3d, boardGroup, glbGroup };
+
+    // ---------------------------------------------------------- input
+    // Ports HIDPI_GL_3D_CANVAS::OnMouseMoveCamera/OnMouseWheelCamera
+    // (common/gal/hidpi_gl_3D_canvas.cpp): left-drag rotates (trackball),
+    // middle/right-drag pans (KiCad's own `drag_middle`/`drag_right`
+    // default PAN), wheel zooms (or pans with a modifier held -- see
+    // TrackballCamera.handleWheel's own header comment for exactly which
+    // modifier does what, ported condition-for-condition against source).
+    let dragButton: DragButton = null;
+    /** Whether the live drag actually moved the camera -- distinguishes a middle-click from a middle-drag, below (EDA_3D_CANVAS::OnMiddleUp's own `if (m_mouse_is_moving) ... else move_pivot_based_on_cur_mouse_position()`). */
+    let draggedThisPress = false;
+    /** The pointer's last known canvas-pixel position, for the Space/pivot hotkey and the middle-click pivot below -- KiCad's own pivot action (EDA_3D_ACTIONS::pivotCenter / OnMiddleUp -> move_pivot_based_on_cur_mouse_position) uses "wherever the mouse last was", not a position the triggering event itself carries. */
+    let lastPointerPx: { x: number; y: number } | null = null;
+    const el = renderer.domElement;
+    const raycaster = new THREE.Raycaster();
+    const boardPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // world Y=0: the board's own mid-thickness plane (scene.ts's convention)
+
+    /**
+     * eda_3d_canvas.cpp move_pivot_based_on_cur_mouse_position's hit test,
+     * simplified from "intersect the board's real 3D bounding box" to
+     * "intersect the board's flat mid-thickness plane within its outline's
+     * 2D bounds" -- this app's board model has no single 3D collision mesh
+     * to test against, and a flat board is thin enough that the
+     * difference is not visually meaningful. No-op (matches source's own
+     * `if (Intersect(...))` guard) when the ray misses the plane entirely
+     * (looking edge-on) or lands outside the board.
+     */
+    const pivotAtPointer = (px: { x: number; y: number }) => {
+      const three = threeRef.current;
+      if (!three || three.renderer.domElement.clientWidth <= 0) return;
+      const ndc = new THREE.Vector2((px.x / el.clientWidth) * 2 - 1, -(px.y / el.clientHeight) * 2 + 1);
+      const activeCam = camera3d.projection === "perspective" ? three.perspCamera : three.orthoCamera;
+      raycaster.setFromCamera(ndc, activeCam);
+      const hit = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(boardPlane, hit)) return;
+      const currentBoard = boardRef.current;
+      const bounds = currentBoard ? boardOutlineBounds(currentBoard) : null;
+      if (bounds && (hit.x < bounds.minX || hit.x > bounds.maxX || hit.z < bounds.minZ || hit.z > bounds.maxZ)) return;
+      camera3d.pivotAt({ x: hit.x, y: 0, z: hit.z });
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      el.focus();
+      camera3d.setCurMousePosition(e.offsetX, e.offsetY);
+      lastPointerPx = { x: e.offsetX, y: e.offsetY };
+      draggedThisPress = false;
+      if (e.button === 0) dragButton = "left";
+      else if (e.button === 1) dragButton = "middle";
+      else if (e.button === 2) dragButton = "right";
+      else return;
+      el.setPointerCapture(e.pointerId);
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (dragButton === "left") {
+        camera3d.drag(e.offsetX, e.offsetY);
+        draggedThisPress = true;
+      } else if (dragButton === "middle" || dragButton === "right") {
+        camera3d.pan(e.offsetX, e.offsetY);
+        draggedThisPress = true;
+      }
+      camera3d.setCurMousePosition(e.offsetX, e.offsetY);
+      lastPointerPx = { x: e.offsetX, y: e.offsetY };
+    };
+    const onPointerUp = (e: PointerEvent) => {
+      if (dragButton === "middle" && !draggedThisPress && lastPointerPx) pivotAtPointer(lastPointerPx);
+      dragButton = null;
+      if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    };
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      // Cmd is accepted alongside Ctrl for the pan-horizontal modifier:
+      // source's own default (view_controls.cpp's WXK_CONTROL) means the
+      // *physical* Control key on every platform including macOS, but
+      // physical-Ctrl+scroll is also macOS's system "zoom the screen"
+      // accessibility gesture -- accepting Cmd too avoids that clash on a
+      // trackpad without changing the Windows/Linux behavior at all.
+      camera3d.handleWheel({ deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlKey: e.ctrlKey || e.metaKey, altKey: e.altKey });
+    };
+    // KiCad shows a real right-click context menu (view presets, rotate
+    // submenu, flip, move submenu -- eda_3d_controller.cpp's Init()) when
+    // a right-click wasn't a drag; this app has no such menu yet, so the
+    // browser's own is suppressed unconditionally rather than popping up
+    // and fighting with right-drag-to-pan. See PARITY-3d.md.
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
+
+    const macPlatform = isMac();
+    /**
+     * kicad-port/actions3d.ts's resolve3DAction, dispatched here (not in
+     * useGlobalHotkeys.ts/actions.json -- see actions3d.ts's own header
+     * comment for why the 3D tab's hotkeys are kept fully separate from
+     * this app's shared hotkey system). Attached to the canvas itself
+     * (focused on pointerdown and once right after mount, below) rather
+     * than `window`, so these keys only ever fire while the 3D view
+     * actually has focus; `stopPropagation()` on every key this resolves
+     * to something keeps it from *also* reaching that shared window-level
+     * listener and maybe firing an unrelated same-key 2D action.
+     */
+    const onKeyDown = (e: KeyboardEvent) => {
+      // eda_3d_actions.cpp's showTHT ('T') / showSMD ('S') -- visibility
+      // view-OPTIONS, not camera actions, so these go straight to the
+      // store (Viewer3DOptions) rather than through Action3D/camera3d.
+      // (showVirtual/showNotInPosFile/showDNP -- 'V'/'P'/'D' in source --
+      // have no equivalent in this app's data model at all: no "virtual
+      // footprint", pick-and-place, or DNP concept exists here, so those
+      // 3 hotkeys are not bound; see PARITY-3d.md.)
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "t" || e.key === "T" || e.key === "s" || e.key === "S")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === "t" || e.key === "T") dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { showTHT: !viewer3dRef.current.showTHT } });
+        else dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { showSMD: !viewer3dRef.current.showSMD } });
+        return;
+      }
+
+      const action = resolve3DAction(e, macPlatform);
+      if (!action) return;
+      e.preventDefault();
+      e.stopPropagation();
+      runAction3D(camera3d, action, () => {
+        if (lastPointerPx) pivotAtPointer(lastPointerPx);
+      });
+    };
+
+    onReadyRef.current?.({
+      setView: applyPreset,
+      dispatchAction: (action) =>
+        runAction3D(camera3d, action, () => {
+          if (lastPointerPx) pivotAtPointer(lastPointerPx);
+        }),
+    });
+
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("contextmenu", onContextMenu);
+    el.addEventListener("keydown", onKeyDown);
+    // Auto-focus once on mount, so hotkeys work the moment the 3D tab
+    // becomes visible without requiring a click first (matching a native
+    // desktop app's own active-pane focus behavior).
+    el.focus();
 
     const ro = new ResizeObserver((entries) => {
       const box = entries[0]?.contentRect;
       if (!box || box.width <= 0 || box.height <= 0) return;
       renderer.setSize(box.width, box.height);
-      camera.aspect = box.width / box.height;
-      camera.updateProjectionMatrix();
+      perspCamera.aspect = box.width / box.height;
+      perspCamera.updateProjectionMatrix();
+      camera3d.setWindowSize(box.width, box.height);
     });
     ro.observe(container);
 
     let raf = 0;
     const animate = () => {
-      controls.update();
-      renderer.render(scene, camera);
+      const pose = camera3d.getRenderPose();
+      const proj = camera3d.getProjectionParams();
+      // render_3d_opengl.cpp's init_lights() "front" headlight moves with
+      // the camera every Redraw() -- same here, once per frame rather
+      // than wiring it through every single camera-mutating method.
+      headlight.position.set(pose.position.x, pose.position.y, pose.position.z);
+      let active: THREE.Camera;
+      if (proj.kind === "perspective") {
+        perspCamera.fov = proj.fovDeg;
+        perspCamera.near = proj.near;
+        perspCamera.far = proj.far;
+        perspCamera.updateProjectionMatrix();
+        applyPoseToCamera(perspCamera, pose);
+        active = perspCamera;
+      } else {
+        orthoCamera.left = proj.left;
+        orthoCamera.right = proj.right;
+        orthoCamera.top = proj.top;
+        orthoCamera.bottom = proj.bottom;
+        orthoCamera.near = proj.near;
+        orthoCamera.far = proj.far;
+        orthoCamera.updateProjectionMatrix();
+        applyPoseToCamera(orthoCamera, pose);
+        active = orthoCamera;
+      }
+      renderer.render(scene, active);
       raf = requestAnimationFrame(animate);
     };
     raf = requestAnimationFrame(animate);
@@ -188,7 +450,13 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       onReadyRef.current?.(null);
       cancelAnimationFrame(raf);
       ro.disconnect();
-      controls.dispose();
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("contextmenu", onContextMenu);
+      el.removeEventListener("keydown", onKeyDown);
       disposeObject3D(boardGroup);
       scene.remove(boardGroup);
       disposeObject3D(glbGroup);
@@ -198,33 +466,44 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       if (renderer.domElement.parentNode === container) container.removeChild(renderer.domElement);
       threeRef.current = null;
     };
-    // applyPreset is stable (useCallback with an empty dep array, see
-    // below) and onReady is read from a ref, not closed over -- this
-    // effect intentionally runs once per mount only.
+    // applyPreset is stable (useCallback with an empty dep array) and
+    // onReady is read from a ref, not closed over -- this effect
+    // intentionally runs once per mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Rebuild the board group whenever the board data or a show/hide
-  // option changes, and re-fit the camera whenever the outline bounds
-  // change meaningfully (or the first time a usable outline appears at
-  // all) -- including on first mount, since `lastFitBoundsRef` starts at
-  // null. Toggling a show/hide option alone never changes `board.outline`
-  // (boardOutlineBounds only looks at that), so it rebuilds geometry
-  // without moving the camera -- the same way KiCad's own show/hide
-  // toggles don't reset your view.
-  const { showComponents, showSilkscreen, showSolderMask } = state.viewer3d;
+  // option changes, and re-home the camera's distance/lookAt (see
+  // camera3d.ts's setBoardGeometry) from the board OUTLINE every time --
+  // cheap, and keeps the camera's idea of "the board" anchored to this
+  // app's actual source of truth (design.json's own outline) rather than
+  // to whichever Three.js group happens to be visible (the old Box3-based
+  // fit fit whatever was on screen, procedural or GLB, which could differ
+  // slightly between the two). Only actually *moves* the live camera
+  // (reset()) when the outline bounds changed meaningfully (or the first
+  // time a usable outline appears at all) -- including on first mount,
+  // since `lastFitBoundsRef` starts at null. Toggling a show/hide option
+  // alone never changes `board.outline` (boardOutlineBounds only looks at
+  // that), so it rebuilds geometry without moving the camera -- the same
+  // way KiCad's own show/hide toggles don't reset your view.
+  const { showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes } = state.viewer3d;
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
 
     disposeObject3D(three.boardGroup);
     three.scene.remove(three.boardGroup);
-    const nextGroup = board ? buildBoardGroup(board, { showComponents, showSilkscreen, showSolderMask }) : new THREE.Group();
-    nextGroup.rotation.x = viewer3dRef.current.flipped ? Math.PI : 0;
+    const nextGroup = board
+      ? buildBoardGroup(board, { showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes })
+      : new THREE.Group();
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
 
     const bounds = board ? boardOutlineBounds(board) : null;
+    const spanMm = bounds ? Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 1e-3) : EMPTY_BOARD_SPAN_MM;
+    const lookAt = bounds ? { x: (bounds.minX + bounds.maxX) / 2, y: 0, z: (bounds.minZ + bounds.maxZ) / 2 } : { x: 0, y: 0, z: 0 };
+    three.camera3d.setBoardGeometry(spanMm, lookAt);
+
     const prev = lastFitBoundsRef.current;
     const EPS_MM = 0.05;
     const boundsChanged =
@@ -233,35 +512,30 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         bounds !== null &&
         (Math.abs(prev.minX - bounds.minX) > EPS_MM || Math.abs(prev.minZ - bounds.minZ) > EPS_MM || Math.abs(prev.maxX - bounds.maxX) > EPS_MM || Math.abs(prev.maxZ - bounds.maxZ) > EPS_MM));
     lastFitBoundsRef.current = bounds;
-    if (boundsChanged) applyPreset("reset");
-  }, [board, showComponents, showSilkscreen, showSolderMask, applyPreset]);
+    if (boundsChanged) three.camera3d.reset();
+  }, [board, showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes]);
 
-  // Flip/orthographic are camera-or-orientation-only -- no geometry
-  // rebuild needed, just re-pose what's already there. Flip spins the
-  // *board group itself* 180 degrees about the in-plane X axis (like
-  // turning a page over a horizontal hinge: left/right stays put, top
-  // and front/back swap), so the bottom side reads right-way-up rather
-  // than mirrored -- not a new camera preset; the re-fit afterward is
-  // needed because rotating the group changes its world bounding box,
-  // which would otherwise leave the framing from before the flip stale.
+  // Flip/orthographic are camera-only now (KiCad's own flipView/
+  // toggleOrtho actions move the camera, not the board -- eda_3d_actions.
+  // cpp, camera.cpp's ToggleProjection/ViewCommand_T1(FLIP); the old
+  // "rotate the board group 180 degrees" approximation this file used
+  // before camera3d.ts existed is gone). `flipped` is a plain on/off
+  // toggle in this app's store, but KiCad's flip is *additive* (pressing
+  // F again un-flips only because it happens to add another 180 degrees)
+  // -- `prevFlippedRef` makes sure `camera3d.flip()` fires exactly once
+  // per real toggle, not once on every mount too.
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
-    const rot = state.viewer3d.flipped ? Math.PI : 0;
-    three.boardGroup.rotation.x = rot;
-    three.glbGroup.rotation.x = rot;
-    applyPreset(lastPresetRef.current);
-    // Deliberately only on the flipped flag -- see the orthographic
-    // effect below for why lastPresetRef/applyPreset aren't dependencies.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (state.viewer3d.flipped !== prevFlippedRef.current) {
+      three.camera3d.flip();
+      prevFlippedRef.current = state.viewer3d.flipped;
+    }
   }, [state.viewer3d.flipped]);
   useEffect(() => {
-    if (!threeRef.current) return;
-    applyPreset(lastPresetRef.current);
-    // Deliberately only on the orthographic flag: re-applying
-    // lastPresetRef's own preset must not itself become a dependency (it's
-    // a ref, and applyPreset already reads viewer3dRef fresh).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const three = threeRef.current;
+    if (!three) return;
+    three.camera3d.setProjection(state.viewer3d.orthographic ? "ortho" : "perspective");
   }, [state.viewer3d.orthographic]);
 
   // Exactly one of boardGroup/glbGroup is visible at a time: the GLB
@@ -341,7 +615,6 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
               three.glbGroup.add(gltf.scene);
               glbLoadedRef.current = true;
               syncActiveGroupRef.current();
-              applyPreset(lastPresetRef.current);
               dispatch({ type: "SET_GLB_STATUS", status: "loaded" });
             },
             (e) => fail(e instanceof ErrorEvent ? e.message : String(e))
@@ -360,7 +633,6 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
 
   useEffect(() => {
     syncActiveGroupRef.current();
-    applyPreset(lastPresetRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.viewer3d.kicadModels]);
 

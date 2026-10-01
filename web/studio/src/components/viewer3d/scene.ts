@@ -1,8 +1,11 @@
 // Pure Three.js geometry builders for the KiCad-style 3D PCB viewer.
 // No React, no DOM access beyond THREE's own APIs -- Viewer3D.tsx owns
-// the renderer/scene/camera/controls lifecycle and just calls into here
-// to (re)build the "board group" whenever `state.board` changes, and to
-// compute a camera pose for each of the 8 toolbar view presets.
+// the renderer/scene/camera lifecycle and just calls into here to
+// (re)build the "board group" whenever `state.board` changes, and to get
+// the board outline's own bounds (boardOutlineBounds, below) to re-home
+// the camera (kicad-port/camera3d.ts -- NOT this file; the actual camera
+// state/math is a faithful port of KiCad's own CAMERA/TRACK_BALL classes,
+// dependency-free on purpose, see that file's header comment).
 //
 // -------------------------------------------------------------- units
 //
@@ -77,8 +80,10 @@ const COPPER_MM = 0.035;
  * otherwise share the exact same top/bottom Y-planes. Purely a rendering
  * nicety, not a stack-up dimension. */
 const JOINT_COPPER_MM = COPPER_MM + 0.002;
-/** Solder mask tint thickness -- thin translucent layer over the copper, a real-ish value. */
-const MASK_MM = 0.015;
+/** Solder mask tint thickness -- board_adapter.cpp's DEFAULT_TECH_LAYER_THICKNESS (`pcbIUScale.mmToIU(0.025)`), the same constant KiCad uses for both solder mask and silkscreen "technical layer" thickness. */
+const MASK_MM = 0.025;
+/** DEFAULT_COPPER_THICKNESS is 0.035mm already (COPPER_MM above matches); SOLDERPASTE_LAYER_THICKNESS is its own, thicker constant (`pcbIUScale.mmToIU(0.04)`) -- see addSolderPaste. */
+const SOLDERPASTE_MM = 0.04;
 /** Cosmetic-only gap between the mask surface and the silkscreen line loop, so the line never exactly coincides with the mask plane (z-fighting). Not a real stack-up dimension. */
 const SILK_GAP_MM = 0.01;
 /**
@@ -160,6 +165,29 @@ const SMD_FINISH_GREY = 0xc8c8c8;
 const IC_BODY_GREY = 0x3a3a3a;
 
 /**
+ * render_3d_opengl.cpp's own per-layer materials (setupMaterials/
+ * setLayerMaterial, ogl_utils.cpp:OglSetMaterial) set a real per-layer
+ * GL_SHININESS intended to vary by layer (copper ~13-51, soldermask
+ * ~109-512, silkscreen/paste/board body all ~13) -- but OglSetMaterial's
+ * own clamp (`shininess = 128 * min(m_Shininess, 1.0)`) is fed a value
+ * that was *already* pre-multiplied by 128 at every one of those call
+ * sites, so the `min(..., 1.0)` branch is unreachable and EVERY board
+ * layer material actually renders with flat GL_SHININESS=128 (a tight,
+ * glossy highlight) regardless of its intended value -- a real,
+ * independently-confirmed quirk in KiCad's own code, not a port
+ * approximation. This app's board-layer materials (copper/plated/zone
+ * fill/mask/paste/board body -- NOT the placeholder part-body boxes,
+ * which stand in for a real per-part 3D model file with its own
+ * unrelated material, outside this code path entirely) use this single
+ * roughness constant to match that *actual rendered* look rather than
+ * the varied-but-never-reached intent. Blinn-Phong shininess 128 maps to
+ * a PBR roughness of roughly sqrt(2/(128+2)) =~ 0.124 (standard
+ * Beckmann-ish conversion); rounded up slightly for a small safety
+ * margin in Three.js's own (different) BRDF.
+ */
+const BOARD_LAYER_ROUGHNESS = 0.15;
+
+/**
  * KiCad theme colors are `#RRGGBBAA`; THREE.Color only understands RGB.
  * The theme itself already encodes translucency this way -- mask
  * entries are ~0xd4 alpha, everything else ~0xff -- so this alpha *is*
@@ -188,17 +216,22 @@ function hexToColor(hex: string): THREE.Color {
  * layerY/maskCenterY) is what reads as "copper under mask" here.
  */
 function copperMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_COPPER_TOP")), metalness: 0.75, roughness: 0.35 });
+  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_COPPER_TOP")), metalness: 0.75, roughness: BOARD_LAYER_ROUGHNESS });
 }
 
-/** Via barrels and through-hole pad rings: plated copper (ENIG/HASL gold), shinier than a flat trace. */
+/** Via barrels and through-hole pad rings: plated copper (ENIG/HASL gold). Slightly higher metalness than a flat trace (plating reads a little more mirror-like) -- roughness itself is the same flat BOARD_LAYER_ROUGHNESS as every other board-layer material (see that constant's own comment). */
 function platedMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_COPPER_TOP")), metalness: 0.9, roughness: 0.22 });
+  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_COPPER_TOP")), metalness: 0.9, roughness: BOARD_LAYER_ROUGHNESS });
 }
 
 /** SMD pad lands: silver-grey HASL/tin finish, distinct from a via/TH pad's gold plating -- see the reference renders this task was matched against. */
 function smdPadMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: SMD_FINISH_GREY, metalness: 0.6, roughness: 0.4 });
+  return new THREE.MeshStandardMaterial({ color: SMD_FINISH_GREY, metalness: 0.6, roughness: BOARD_LAYER_ROUGHNESS });
+}
+
+/** render_3d_opengl.cpp's own solder-paste material (setLayerMaterial, F_Paste/B_Paste): a dull grey solder-cream look -- metalness kept moderate (it's a cream of tiny metal particles, not a solid plated surface) rather than as shiny as plated copper. New in this port (phase 3) -- this app previously drew no solder-paste geometry at all. */
+function pasteMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_SOLDERPASTE")), metalness: 0.4, roughness: BOARD_LAYER_ROUGHNESS });
 }
 
 function maskMaterial(side: Side): THREE.MeshStandardMaterial {
@@ -214,7 +247,7 @@ function maskMaterial(side: Side): THREE.MeshStandardMaterial {
     // the outline's winding.
     side: THREE.DoubleSide,
     depthWrite: false,
-    roughness: 0.8,
+    roughness: BOARD_LAYER_ROUGHNESS,
     metalness: 0.1,
   });
 }
@@ -225,7 +258,7 @@ function silkMaterial(side: Side): THREE.LineBasicMaterial {
 
 /** The board substrate -- colors.json's LAYER_3D_BOARD (from builtin_color_themes.h), a near-black dark brown that reads almost black on the slab's vertical edge under normal lighting, matching KiCad's own 3D render. */
 function boardMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_BOARD")), roughness: 0.85, metalness: 0.05, side: THREE.DoubleSide });
+  return new THREE.MeshStandardMaterial({ color: hexToColor(layerColor("LAYER_3D_BOARD")), roughness: BOARD_LAYER_ROUGHNESS, metalness: 0.05, side: THREE.DoubleSide });
 }
 
 /**
@@ -340,7 +373,7 @@ function buildMask(shape: THREE.Shape, side: Side): THREE.Mesh {
 // Copper: pads, tracks, vias
 // ---------------------------------------------------------------------
 
-function addPad(group: THREE.Group, xMm: number, zMm: number, wMm: number, hMm: number, round: boolean, y: number, material: THREE.Material): void {
+function addPad(group: THREE.Group, xMm: number, zMm: number, wMm: number, hMm: number, round: boolean, y: number, material: THREE.Material, thicknessMm: number = COPPER_MM): void {
   const w = Math.max(wMm, 0.001);
   const h = Math.max(hMm, 0.001);
   let mesh: THREE.Mesh;
@@ -349,15 +382,30 @@ function addPad(group: THREE.Group, xMm: number, zMm: number, wMm: number, hMm: 
     // for a circular pad (w === h) and a reasonable stand-in for an
     // oval one (PadShape::Oval also reports `round: true`; the data
     // model gives no separate "capsule" shape).
-    const geometry = new THREE.CylinderGeometry(1, 1, COPPER_MM, 24);
+    const geometry = new THREE.CylinderGeometry(1, 1, thicknessMm, 24);
     mesh = new THREE.Mesh(geometry, material);
     mesh.scale.set(w / 2, 1, h / 2);
   } else {
-    const geometry = new THREE.BoxGeometry(w, COPPER_MM, h);
+    const geometry = new THREE.BoxGeometry(w, thicknessMm, h);
     mesh = new THREE.Mesh(geometry, material);
   }
   mesh.position.set(xMm, y, zMm);
   group.add(mesh);
+}
+
+/**
+ * Solder paste (`SOLDERPASTE_MM` thick, board_adapter.cpp's
+ * SOLDERPASTE_LAYER_THICKNESS): rendered on every SMD pad (`!pad.th`),
+ * same footprint as the pad itself -- real KiCad derives a paste-stencil
+ * aperture from the pad's own paste-margin setting (usually a touch
+ * smaller than the pad), but this data model has no such margin, so the
+ * pad's own outline stands in, per this file's established "use what the
+ * model actually has" convention (see e.g. PART_HEIGHT_MM's own comment).
+ * Sits just outside the copper surface, same side as the pad -- paste
+ * covers exposed copper, not anything under the solder mask.
+ */
+function pasteCenterY(side: Side): number {
+  return surfaceY(side) + outwardSign(side) * (COPPER_MM + SOLDERPASTE_MM / 2);
 }
 
 function addVia(group: THREE.Group, xMm: number, zMm: number, diameterMm: number, material: THREE.Material): void {
@@ -425,7 +473,7 @@ function zoneMaterial(): THREE.MeshStandardMaterial {
     side: THREE.DoubleSide,
     depthWrite: false,
     metalness: 0.3,
-    roughness: 0.6,
+    roughness: BOARD_LAYER_ROUGHNESS,
   });
 }
 
@@ -747,19 +795,53 @@ function buildRefDesignatorMesh(part: Part): THREE.Mesh | null {
 // ---------------------------------------------------------------------
 
 export interface BuildBoardOptions {
-  /** KiCad's 3D viewer can hide its rendered component models independently of the board/copper/silk -- there are no real models here yet (see PART_HEIGHT_MM), so this hides the placeholder boxes instead. Independent of showSilkscreen: a part's reference designator is silkscreen ink, not a 3D model, same as real KiCad. Default true. */
+  /** KiCad's 3D viewer can hide its rendered component models independently of the board/copper/silk -- there are no real models here yet (see PART_HEIGHT_MM), so this hides the placeholder boxes instead. Independent of showSilkscreen: a part's reference designator is silkscreen ink, not a 3D model, same as real KiCad. Default true. Further filtered per part by showTHT/showSMD below. */
   showComponents?: boolean;
+  /** render.show_footprints_normal's rough equivalent: a part counts as "TH" if any of its pads has `th: true`. Default true. */
+  showTHT?: boolean;
+  /** The SMD counterpart: a part with no through-hole pads at all. Default true. */
+  showSMD?: boolean;
   /** Default true. */
   showSilkscreen?: boolean;
   /** Default true. */
   showSolderMask?: boolean;
+  /** render.show_solderpaste. Default true. */
+  showSolderPaste?: boolean;
+  /** render.show_board_body -- the dielectric slab itself. Default true. */
+  showBoardBody?: boolean;
+  /** render.opengl_show_model_bbox, default false (matches source). */
+  showBoundingBoxes?: boolean;
+}
+
+/** A part counts as through-hole if it places at least one `th` pad -- matches real KiCad's own per-footprint "attribute" (Through hole / SMD / Virtual), which this data model doesn't carry directly, so it's inferred from pad data instead. */
+function partIsThroughHole(part: Part): boolean {
+  return (part.pads ?? []).some((p) => p.th);
+}
+
+/** A translucent yellow wireframe box, matching KiCad's own debug bounding-box color closely enough for a toggle most users leave off (render.opengl_show_model_bbox default false, see BuildBoardOptions). */
+const BOUNDING_BOX_MATERIAL = new THREE.LineBasicMaterial({ color: 0xffff00 });
+
+function addBoundingBox(group: THREE.Group, courtyardMm: readonly [number, number, number, number], side: Side): void {
+  const [minX, minY, maxX, maxY] = courtyardMm;
+  const width = Math.max(maxX - minX, 0.01);
+  const depth = Math.max(maxY - minY, 0.01);
+  const geometry = new THREE.BoxGeometry(width, PART_HEIGHT_MM, depth);
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), BOUNDING_BOX_MATERIAL);
+  edges.position.set((minX + maxX) / 2, partBodyCenterY(side), (minY + maxY) / 2);
+  edges.name = "part-bbox";
+  group.add(edges);
 }
 
 /** Builds the whole board as a single Group. Safe to call with a board that has no outline and/or no placed parts -- renders whatever subset of the geometry makes sense, never throws. */
 export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {}): THREE.Group {
   const showComponents = opts.showComponents ?? true;
+  const showTHT = opts.showTHT ?? true;
+  const showSMD = opts.showSMD ?? true;
   const showSilkscreen = opts.showSilkscreen ?? true;
   const showSolderMask = opts.showSolderMask ?? true;
+  const showSolderPaste = opts.showSolderPaste ?? true;
+  const showBoardBody = opts.showBoardBody ?? true;
+  const showBoundingBoxes = opts.showBoundingBoxes ?? false;
 
   const group = new THREE.Group();
   group.name = "viewer3d-board";
@@ -767,8 +849,10 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   const outlineMm: Array<[number, number]> = (board.outline ?? []).map(([x, y]) => [mm(x), mm(y)]);
   const shape = buildOutlineShape(outlineMm);
   if (shape) {
-    const slab = buildSlab(shape);
-    if (slab) group.add(slab);
+    if (showBoardBody) {
+      const slab = buildSlab(shape);
+      if (slab) group.add(slab);
+    }
     if (showSolderMask) {
       group.add(buildMask(shape, "top"));
       group.add(buildMask(shape, "bottom"));
@@ -808,6 +892,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   const botCuY = layerY("B.Cu", layerOrder);
   const platedMat = platedMaterial(); // via barrels above already built their own; this one's for through-hole pad rings
   const smdMat = smdPadMaterial();
+  const pasteMat = pasteMaterial();
   const silkLineMat = { top: silkMaterial("top"), bottom: silkMaterial("bottom") };
   const silkFillMat = { top: silkFillMaterial("top"), bottom: silkFillMaterial("bottom") };
   const icMat = icBodyMaterial();
@@ -816,9 +901,21 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   for (const part of board.parts) {
     const side = part.side;
     if (!part.placed || !side) continue;
+    // render.show_footprints_normal/virtual's rough equivalent -- gates
+    // the part's pads, body AND reference text together (real KiCad's
+    // per-footprint TH/SMD attribute hides the whole footprint, not just
+    // its 3D model).
+    const partVisible = partIsThroughHole(part) ? showTHT : showSMD;
+    if (!partVisible) continue;
 
     for (const pad of part.pads ?? []) {
-      addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, side === "top" ? topCuY : botCuY, pad.th ? platedMat : smdMat);
+      const y = side === "top" ? topCuY : botCuY;
+      addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, y, pad.th ? platedMat : smdMat);
+      // Solder paste only applies to exposed SMD pads (a through-hole pad
+      // is soldered from the opposite side through the barrel, not pasted).
+      if (showSolderPaste && !pad.th) {
+        addPad(group, mm(pad.x), mm(pad.y), mm(pad.w), mm(pad.h), pad.round, pasteCenterY(side), pasteMat, SOLDERPASTE_MM);
+      }
     }
 
     // Independent toggles, matching real KiCad: "show silkscreen" and
@@ -833,6 +930,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       if (courtyard) {
         const courtyardMm: [number, number, number, number] = [mm(courtyard[0]), mm(courtyard[1]), mm(courtyard[2]), mm(courtyard[3])];
         addPartBody(group, courtyardMm, side, isPassivePart(part) ? passiveMat : icMat);
+        if (showBoundingBoxes) addBoundingBox(group, courtyardMm, side);
       }
     }
   }
@@ -894,73 +992,6 @@ export function disposeObject3D(root: THREE.Object3D): void {
       }
     }
   });
-}
-
-// ---------------------------------------------------------------------
-// Camera view presets
-// ---------------------------------------------------------------------
-
-export type ViewPreset = "top" | "bottom" | "front" | "back" | "left" | "right" | "iso" | "reset";
-
-// Exact KiCad 3D-viewer view-preset semantics, per the task spec: each
-// snaps the camera to look straight along that axis at the board.
-// Front/Back/Left/Right are this file's own (necessarily arbitrary --
-// nothing in the board data names a "front" edge) but internally
-// consistent choice: +Z/-Z/-X/+X respectively, in this file's own
-// world-axis convention (see the header comment). Iso and Reset use the
-// same classic 3/4 isometric-ish direction -- Reset is just the name
-// used for the initial/on-demand re-fit (also what gets called on first
-// mount), Iso the toolbar button; their effect is identical, same as
-// KiCad's own two actions.
-const PRESET_DIRECTIONS: Record<ViewPreset, THREE.Vector3> = {
-  top: new THREE.Vector3(0, 1, 0),
-  bottom: new THREE.Vector3(0, -1, 0),
-  front: new THREE.Vector3(0, 0, 1),
-  back: new THREE.Vector3(0, 0, -1),
-  left: new THREE.Vector3(-1, 0, 0),
-  right: new THREE.Vector3(1, 0, 0),
-  iso: new THREE.Vector3(1, 1, 1).normalize(),
-  reset: new THREE.Vector3(1, 1, 1).normalize(),
-};
-
-/** Used only when there is nothing yet to frame (empty board group) so the camera still gets a sane, finite pose instead of NaN/Infinity. */
-const EMPTY_BOX_HALF_EXTENT_MM = 10;
-
-/**
- * Camera position + look-at target for `preset`, framing `box` (the
- * whole board group's world-space bounds) from a distance that keeps
- * box's circumscribing sphere fully inside the camera's frustum on
- * *both* axes (accounts for `aspect`, so a narrow/tall viewport doesn't
- * clip a wide board or vice versa), for any of the 8 preset directions
- * -- including the diagonal Iso/Reset view, which a purely
- * per-axis-projected fit would under-size for.
- *
- * Never mutates `box`. Pure and independent of any live Three.js scene
- * state, so it's trivially callable both for the initial auto-fit and
- * for every toolbar button.
- */
-export function presetCameraPose(box: THREE.Box3, preset: ViewPreset, fovDeg: number, aspect: number): { position: THREE.Vector3; target: THREE.Vector3 } {
-  const safeBox = box.isEmpty()
-    ? new THREE.Box3(
-        new THREE.Vector3(-EMPTY_BOX_HALF_EXTENT_MM, -EMPTY_BOX_HALF_EXTENT_MM, -EMPTY_BOX_HALF_EXTENT_MM),
-        new THREE.Vector3(EMPTY_BOX_HALF_EXTENT_MM, EMPTY_BOX_HALF_EXTENT_MM, EMPTY_BOX_HALF_EXTENT_MM)
-      )
-    : box;
-
-  const center = safeBox.getCenter(new THREE.Vector3());
-  const size = safeBox.getSize(new THREE.Vector3());
-  // Half the box's diagonal: the radius of a sphere that contains the
-  // whole box from *any* viewing angle, not just the 6 axis-aligned ones
-  // -- needed for Iso/Reset, which view it diagonally.
-  const radius = Math.max(size.length() / 2, 1);
-
-  const vFov = (fovDeg * Math.PI) / 180;
-  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * Math.max(aspect, 1e-6));
-  const margin = 1.25; // headroom so the board doesn't touch the viewport edges
-  const distance = Math.max(radius / Math.sin(vFov / 2), radius / Math.sin(hFov / 2)) * margin;
-
-  const position = center.clone().addScaledVector(PRESET_DIRECTIONS[preset], distance);
-  return { position, target: center };
 }
 
 // ---------------------------------------------------------------------

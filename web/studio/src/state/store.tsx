@@ -93,14 +93,31 @@ export interface MovePreview {
   flipped?: boolean;
 }
 
-/** The 3D viewer's own view-option toggles -- KiCad's 3D viewer has all of these (View menu / its own toolbar): hide silkscreen, hide solder mask, hide the rendered component models, flip to view the board from the other side, and an orthographic/perspective projection switch. */
+/**
+ * The 3D viewer's own view-option toggles -- a local-UI-state mirror of
+ * KiCad's Preferences > 3D Viewer > Appearance per-layer visibility
+ * bitset (BOARD_ADAPTER::GetVisibleLayers/SetVisibleLayers; see
+ * PARITY-3d.md for the full list and which of its ~27 flags this app
+ * does/doesn't have a data model for).
+ */
 export interface Viewer3DOptions {
+  /** Master "show any part body" switch -- real KiCad has no single flag like this (show_footprints_normal/virtual/insert/etc are independent); kept as this app's own pre-existing umbrella on top of the new showTHT/showSMD split below, both of which must also be true for a given part's body to actually show. */
   showComponents: boolean;
+  /** render.show_footprints_normal's rough equivalent -- a part counts as "TH" here if it has at least one through-hole pad (`pad.th`). */
+  showTHT: boolean;
+  /** The SMD counterpart: a part with no through-hole pads at all. */
+  showSMD: boolean;
   showSilkscreen: boolean;
   showSolderMask: boolean;
-  /** True = viewing the board flipped (as if turned over a horizontal hinge) so the bottom side reads right-way-up. A camera/board-orientation toggle, not a geometry edit. */
+  /** render.show_solderpaste -- new in this port (phase 3); see scene.ts's addSolderPaste. */
+  showSolderPaste: boolean;
+  /** render.show_board_body -- the dielectric slab itself (and, following it, both solder-mask layers, which have nothing to tint without it). Independent of showSilkscreen/showComponents, same as source. */
+  showBoardBody: boolean;
+  /** render.opengl_show_model_bbox, default false in source too -- a wireframe box per placed part, sized to its courtyard footprint and body height. */
+  showBoundingBoxes: boolean;
+  /** True = viewing the board flipped (as if turned over a horizontal hinge) so the bottom side reads right-way-up. A camera action (TrackballCamera.flip(), see kicad-port/camera3d.ts), not a geometry edit -- this flag is read only to know how many times to call it (see Viewer3D.tsx's prevFlippedRef). */
   flipped: boolean;
-  /** True = an orthographic-looking projection (this app has no separate OrthographicCamera wiring -- Viewer3D approximates it by narrowing FOV and pulling the camera back, a well-known trick, not a real projection-matrix swap). */
+  /** True = a real orthographic projection (kicad-port/camera3d.ts's TrackballCamera, a faithful CAMERA::ToggleProjection port -- see that file). */
   orthographic: boolean;
   /** True = show GET /api/board.glb's real KiCad-rendered board (real 3D models, kicad-cli's own colors/materials) in place of this app's own procedural scene. Viewer3D falls back to the procedural scene regardless of this flag when the GLB hasn't loaded (still fetching, or the board/kicad-cli export failed) -- there's nothing to show otherwise. Defaults on; the user can still turn it off to see the lighter procedural scene. */
   kicadModels: boolean;
@@ -117,8 +134,13 @@ export type GlbStatus = "idle" | "pending" | "loaded" | "failed";
 
 export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   showComponents: true,
+  showTHT: true,
+  showSMD: true,
   showSilkscreen: true,
   showSolderMask: true,
+  showSolderPaste: true,
+  showBoardBody: true,
+  showBoundingBoxes: false,
   flipped: false,
   orthographic: false,
   kicadModels: true,
