@@ -28,8 +28,12 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { fetchBoardGlb } from "../../api/client";
 import { useStudioDispatch, useStudioState } from "../../state/store";
-import { TrackballCamera, FOV_DEG, type ViewPreset as FacePreset } from "../../kicad-port/camera3d";
+import { TrackballCamera, FOV_DEG, KEY_ZOOM_FACTOR, ROTATION_STEP_DEG, type ViewPreset as FacePreset } from "../../kicad-port/camera3d";
+import { resolve3DAction, ROTATE_SIGN, type Action3D } from "../../kicad-port/actions3d";
+import { isMac } from "../../platform";
 import { buildBoardGroup, buildBackgroundTexture, disposeObject3D, boardOutlineBounds } from "./scene";
+
+const ROTATION_STEP_RAD = (ROTATION_STEP_DEG * Math.PI) / 180;
 
 /** glTF's own unit is meters; every other builder in this file (scene.ts) works in millimetres, so the loaded GLB scene is scaled up to match rather than rescaling everything else down to meters. */
 const GLB_METERS_TO_MM = 1000;
@@ -73,6 +77,55 @@ export type ViewPreset = FacePreset | "reset";
 export interface Viewer3DApi {
   /** Moves the camera to one of KiCad's 6 face-view presets, or (`"reset"`) back to its home pose -- KiCad's own Home/"zoom to fit" is observably identical to the Top preset (see camera3d.ts's `reset()` doc comment), ported as the same call here. */
   setView(preset: ViewPreset): void;
+  /** Every other camera action the KiCad 3D toolbar exposes (zoom in/out, rotate X/Y/Z CW/CCW, flip, move L/R/U/D) -- the same Action3D union the keyboard handler below dispatches, so the toolbar and the keyboard can never drift apart on what a given action actually does. "pivot" is accepted but is a no-op from the toolbar (it needs a live pointer position this handle doesn't carry -- KiCad's own Space hotkey and middle-click share this same limitation-free path only because they both originate from a real mouse event). */
+  dispatchAction(action: Exclude<Action3D, { kind: "viewPreset" } | { kind: "reset" }>): void;
+}
+
+/**
+ * Runs one kicad-port/actions3d.ts Action3D against `camera3d` -- shared
+ * by the keyboard handler (mount effect below) and Viewer3DApi.dispatchAction
+ * (Viewer3DToolbar's rotate/zoom/move/flip buttons) so there is exactly
+ * one place that knows e.g. which sign CW/CCW maps to per axis.
+ */
+function runAction3D(camera3d: TrackballCamera, action: Action3D, pivot: () => void): void {
+  switch (action.kind) {
+    case "viewPreset":
+      camera3d.applyViewPreset(action.preset);
+      break;
+    case "reset":
+      camera3d.reset();
+      break;
+    case "flip":
+      camera3d.flip();
+      break;
+    case "pivot":
+      pivot();
+      break;
+    case "zoomIn":
+      camera3d.zoomBy(KEY_ZOOM_FACTOR);
+      break;
+    case "zoomOut":
+      camera3d.zoomBy(1 / KEY_ZOOM_FACTOR);
+      break;
+    case "zoomRedraw":
+      // eda_3d_canvas.cpp's ZoomRedraw just calls Request_refresh() --
+      // this app's render loop already repaints every frame
+      // unconditionally, so there is nothing to invalidate. A real
+      // no-op, same convention as the 2D port's own zoomRedraw
+      // (PARITY-pcb.md).
+      break;
+    case "rotate": {
+      const sign = ROTATE_SIGN[action.axis][action.dir];
+      const angle = sign * ROTATION_STEP_RAD;
+      if (action.axis === "x") camera3d.rotateX(angle);
+      else if (action.axis === "y") camera3d.rotateY(angle);
+      else camera3d.rotateZ(angle);
+      break;
+    }
+    case "pan":
+      camera3d.panArrow(action.direction);
+      break;
+  }
 }
 
 /** Converts a kicad-port Vec3/Quat into the THREE.Vector3/THREE.Quaternion a camera actually needs -- the one place camera3d.ts's deliberately dependency-free output touches three.js (see camera3d.ts's header comment for why that module itself never imports three). */
@@ -107,6 +160,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   useEffect(() => {
     viewer3dRef.current = state.viewer3d;
   }, [state.viewer3d]);
+  /** Same reasoning again, for the mount effect's pivot-hotkey hit test below (empty deps -- `board` itself would otherwise be captured stale from whatever it was on first mount, almost always `null`). */
+  const boardRef = useRef(board);
+  useEffect(() => {
+    boardRef.current = board;
+  }, [board]);
   /** Tracks the previous `flipped` value so the flip effect below (keyed on that boolean) can tell "the user just toggled it" apart from "this effect also runs once on mount" -- `camera3d.flip()` is additive (KiCad's own flipView action, see camera3d.ts), not an absolute set, so it must fire exactly once per real toggle, never on mount. */
   const prevFlippedRef = useRef(state.viewer3d.flipped);
 
@@ -174,7 +232,6 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     scene.add(glbGroup);
 
     threeRef.current = { renderer, scene, perspCamera, orthoCamera, camera3d, boardGroup, glbGroup };
-    onReadyRef.current?.({ setView: applyPreset });
 
     // ---------------------------------------------------------- input
     // Ports HIDPI_GL_3D_CANVAS::OnMouseMoveCamera/OnMouseWheelCamera
@@ -184,11 +241,43 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     // TrackballCamera.handleWheel's own header comment for exactly which
     // modifier does what, ported condition-for-condition against source).
     let dragButton: DragButton = null;
+    /** Whether the live drag actually moved the camera -- distinguishes a middle-click from a middle-drag, below (EDA_3D_CANVAS::OnMiddleUp's own `if (m_mouse_is_moving) ... else move_pivot_based_on_cur_mouse_position()`). */
+    let draggedThisPress = false;
+    /** The pointer's last known canvas-pixel position, for the Space/pivot hotkey and the middle-click pivot below -- KiCad's own pivot action (EDA_3D_ACTIONS::pivotCenter / OnMiddleUp -> move_pivot_based_on_cur_mouse_position) uses "wherever the mouse last was", not a position the triggering event itself carries. */
+    let lastPointerPx: { x: number; y: number } | null = null;
     const el = renderer.domElement;
+    const raycaster = new THREE.Raycaster();
+    const boardPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // world Y=0: the board's own mid-thickness plane (scene.ts's convention)
+
+    /**
+     * eda_3d_canvas.cpp move_pivot_based_on_cur_mouse_position's hit test,
+     * simplified from "intersect the board's real 3D bounding box" to
+     * "intersect the board's flat mid-thickness plane within its outline's
+     * 2D bounds" -- this app's board model has no single 3D collision mesh
+     * to test against, and a flat board is thin enough that the
+     * difference is not visually meaningful. No-op (matches source's own
+     * `if (Intersect(...))` guard) when the ray misses the plane entirely
+     * (looking edge-on) or lands outside the board.
+     */
+    const pivotAtPointer = (px: { x: number; y: number }) => {
+      const three = threeRef.current;
+      if (!three || three.renderer.domElement.clientWidth <= 0) return;
+      const ndc = new THREE.Vector2((px.x / el.clientWidth) * 2 - 1, -(px.y / el.clientHeight) * 2 + 1);
+      const activeCam = camera3d.projection === "perspective" ? three.perspCamera : three.orthoCamera;
+      raycaster.setFromCamera(ndc, activeCam);
+      const hit = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(boardPlane, hit)) return;
+      const currentBoard = boardRef.current;
+      const bounds = currentBoard ? boardOutlineBounds(currentBoard) : null;
+      if (bounds && (hit.x < bounds.minX || hit.x > bounds.maxX || hit.z < bounds.minZ || hit.z > bounds.maxZ)) return;
+      camera3d.pivotAt({ x: hit.x, y: 0, z: hit.z });
+    };
 
     const onPointerDown = (e: PointerEvent) => {
       el.focus();
       camera3d.setCurMousePosition(e.offsetX, e.offsetY);
+      lastPointerPx = { x: e.offsetX, y: e.offsetY };
+      draggedThisPress = false;
       if (e.button === 0) dragButton = "left";
       else if (e.button === 1) dragButton = "middle";
       else if (e.button === 2) dragButton = "right";
@@ -196,11 +285,18 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       el.setPointerCapture(e.pointerId);
     };
     const onPointerMove = (e: PointerEvent) => {
-      if (dragButton === "left") camera3d.drag(e.offsetX, e.offsetY);
-      else if (dragButton === "middle" || dragButton === "right") camera3d.pan(e.offsetX, e.offsetY);
+      if (dragButton === "left") {
+        camera3d.drag(e.offsetX, e.offsetY);
+        draggedThisPress = true;
+      } else if (dragButton === "middle" || dragButton === "right") {
+        camera3d.pan(e.offsetX, e.offsetY);
+        draggedThisPress = true;
+      }
       camera3d.setCurMousePosition(e.offsetX, e.offsetY);
+      lastPointerPx = { x: e.offsetX, y: e.offsetY };
     };
     const onPointerUp = (e: PointerEvent) => {
+      if (dragButton === "middle" && !draggedThisPress && lastPointerPx) pivotAtPointer(lastPointerPx);
       dragButton = null;
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
     };
@@ -221,12 +317,47 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     // and fighting with right-drag-to-pan. See PARITY-3d.md.
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
 
+    const macPlatform = isMac();
+    /**
+     * kicad-port/actions3d.ts's resolve3DAction, dispatched here (not in
+     * useGlobalHotkeys.ts/actions.json -- see actions3d.ts's own header
+     * comment for why the 3D tab's hotkeys are kept fully separate from
+     * this app's shared hotkey system). Attached to the canvas itself
+     * (focused on pointerdown and once right after mount, below) rather
+     * than `window`, so these keys only ever fire while the 3D view
+     * actually has focus; `stopPropagation()` on every key this resolves
+     * to something keeps it from *also* reaching that shared window-level
+     * listener and maybe firing an unrelated same-key 2D action.
+     */
+    const onKeyDown = (e: KeyboardEvent) => {
+      const action = resolve3DAction(e, macPlatform);
+      if (!action) return;
+      e.preventDefault();
+      e.stopPropagation();
+      runAction3D(camera3d, action, () => {
+        if (lastPointerPx) pivotAtPointer(lastPointerPx);
+      });
+    };
+
+    onReadyRef.current?.({
+      setView: applyPreset,
+      dispatchAction: (action) =>
+        runAction3D(camera3d, action, () => {
+          if (lastPointerPx) pivotAtPointer(lastPointerPx);
+        }),
+    });
+
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
     el.addEventListener("pointercancel", onPointerUp);
     el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("contextmenu", onContextMenu);
+    el.addEventListener("keydown", onKeyDown);
+    // Auto-focus once on mount, so hotkeys work the moment the 3D tab
+    // becomes visible without requiring a click first (matching a native
+    // desktop app's own active-pane focus behavior).
+    el.focus();
 
     const ro = new ResizeObserver((entries) => {
       const box = entries[0]?.contentRect;
@@ -276,6 +407,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       el.removeEventListener("pointercancel", onPointerUp);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("contextmenu", onContextMenu);
+      el.removeEventListener("keydown", onKeyDown);
       disposeObject3D(boardGroup);
       scene.remove(boardGroup);
       disposeObject3D(glbGroup);
