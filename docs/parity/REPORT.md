@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-01T14:24:41.738308+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-01T18:00:21.888318+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -23,9 +23,9 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 | `drc_boards_evaluated` | 51 | 56 |
 | `drc_precision` | 7.8% | 7.8% |
 | `drc_recall` | 19.2% | 19.2% |
-| `erc_boards_evaluated` | 52 | 52 |
-| `erc_precision` | 75.1% | 75.1% |
-| `erc_recall` | 47.8% | 47.8% |
+| `erc_boards_evaluated` | 50 | 50 |
+| `erc_precision` | 74.6% | 74.6% |
+| `erc_recall` | 38.3% | 38.3% |
 | `roundtrip_own_footprint_pose_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_own_segment_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_own_via_survival_rate` | 100.0% | 100.0% |
@@ -95,30 +95,29 @@ _Excluded from the above: 1170 occurrences of this project's own placement-quali
 
 ## 2. ERC -- `check_erc` vs `kicad-cli sch erc`
 
-Boards evaluated: 52 (of 52 attempted).
+Boards evaluated: 50 (of 50 attempted).
 
-**Overall precision: 75.1%, recall: 47.8%.**
+**Overall precision: 74.6%, recall: 38.3%.**
 
-_Reading this number_: the two largest remaining gaps are both understood, not mysterious. `lib_symbol_mismatch`'s 562 missing are concentrated in this project's own freshly-derived (not yet exported) example boards: `check_lib_symbol_issues` compares a schematic's embedded symbol cache against the real library, but for a design that hasn't been through `export_kicad_sch` yet, the "cached" copy *is* the same in-memory lookup as the "real" one, so no structural difference can ever be found there -- only once a file is actually written does this project's own box-corner re-baking of a real symbol's graphics diverge from the library's native coordinates the way `kicad-cli` sees it. Catching that would mean predicting the exporter's own output from inside ERC (or changing what the exporter writes), both out of scope for this port; the QA corpus's own real mismatches (5, version-skew on `Jumper`/`Device:R`) are matched correctly. `label_dangling`'s 75 extra are concentrated in two `work/` boards (full place-and-route pipeline output, not this task's own freshly-generated examples) whose labels don't coincide with this project's current exporter's own pin placement -- consistent with those two fixtures predating a later exporter change, not a logic bug in the check itself (the *schematic-only* generation path for the same kind of board has zero such mismatches). `pin_not_connected`/`pin_not_driven`/`power_pin_not_driven`'s smaller residual gaps trace to a real architectural difference: KiCad groups pins into per-sheet graphical subgraphs first and only secondarily merges by net name, while this project's net model (`ConstraintModel::nets`) merges by name from the start -- a full subgraph port is out of scope here. `undefined_netclass`/`unresolved_variable` need IR concepts (netclasses, text-variable resolution) this project doesn't have yet.
+_Reading this number_: boards evaluated dropped from 52 to 50 this round -- not a corpus regression, a corpus *correction*. The previous 52 included `work/mcu30`/`work/l1-order`, two full place-and-route pipeline outputs that only ever existed as local, gitignored scratch state (`work/` is explicitly "local state, not source") on whatever machine first measured them; they cannot exist in a fresh checkout (this worktree included) and so can never be reproduced again -- a committed floor resting on them was never reproducible to begin with. The 50 boards here (17 of this project's own `examples/`, 33 of KiCad's own QA corpus) are exactly what any fresh checkout, including CI, can always measure, which is why `erc_boards_evaluated`/`erc_precision`/`erc_recall`'s floors move down to match in this update, with this paragraph as the record of why: a lower number from a complete, reproducible corpus, not a quieter number from a shrinking one. The `work/`-only `label_dangling` gap the previous version of this paragraph described is simply absent from the table below now (0 both sides) as a direct consequence. Despite the smaller corpus, several checks' *matched* counts actually rose this round, measured against this exact same 50-board set one commit earlier (before hierarchical sheets/buses landed) -- `pin_not_connected` 103->110, `pin_not_driven` 30->33, `power_pin_not_driven` 25->29 -- directly attributable to GAPS.md #6's hierarchical-sheet flattening actually descending into child sheets now (`import_kicad_sch_tree`) instead of leaving them opaque, so a board with real sheets gets its true, full connectivity checked instead of just its root sheet's own. Of this round's other two new GAPS.md areas: multi-unit-symbol checks have no QA/example board with a real multi-unit part to exercise them, and none of the 50 boards here draws an actual bus wire or has a hierarchical sheet pin/label pairing that disagrees -- GAPS.md #20/#21's checks (`different_unit_net`, `bus_to_net_conflict`, `net_not_bus_member`, `bus_to_bus_conflict`, ...) are therefore validated by this project's own unit/integration tests (`crates/kicad/src/bus.rs`, `hierarchy.rs`, and `erc.rs`'s own test modules), not by this parity corpus, which has nothing wrong for them to catch. The two largest *remaining* gaps are both understood, not mysterious. `lib_symbol_mismatch`'s 562 missing are concentrated in this project's own freshly-derived (not yet exported) example boards: `check_lib_symbol_issues` compares a schematic's embedded symbol cache against the real library, but for a design that hasn't been through `export_kicad_sch` yet, the "cached" copy *is* the same in-memory lookup as the "real" one, so no structural difference can ever be found there -- only once a file is actually written does this project's own box-corner re-baking of a real symbol's graphics diverge from the library's native coordinates the way `kicad-cli` sees it. Catching that would mean predicting the exporter's own output from inside ERC (or changing what the exporter writes), both out of scope for this port; the QA corpus's own real mismatches (5, version-skew on `Jumper`/`Device:R`) are matched correctly. `pin_not_connected`/`pin_not_driven`/`power_pin_not_driven`'s smaller residual gaps trace to a real architectural difference: KiCad groups pins into per-sheet graphical subgraphs first and only secondarily merges by net name, while this project's net model (`ConstraintModel::nets`) merges by name from the start -- a full subgraph port is out of scope here. `undefined_netclass`/`unresolved_variable` need IR concepts (netclasses, text-variable resolution) this project doesn't have yet.
 
 | type | kicad | ours | matched | missing | extra |
 |---|---:|---:|---:|---:|---:|
 | `endpoint_off_grid` | 2 | 2 | 2 | 0 | 0 |
 | `footprint_link_issues` | 3 | 3 | 3 | 0 | 0 |
 | `isolated_pin_label` | 1 | 1 | 1 | 0 | 0 |
-| `label_dangling` | 17 | 92 | 17 | 0 | 75 |
-| `lib_symbol_issues` | 228 | 228 | 228 | 0 | 0 |
-| `lib_symbol_mismatch` | 567 | 76 | 5 | 562 | 71 |
-| `pin_not_connected` | 242 | 248 | 216 | 26 | 32 |
-| `pin_not_driven` | 39 | 33 | 30 | 9 | 3 |
+| `lib_symbol_issues` | 181 | 181 | 181 | 0 | 0 |
+| `lib_symbol_mismatch` | 567 | 78 | 5 | 562 | 73 |
+| `pin_not_connected` | 121 | 141 | 110 | 11 | 31 |
+| `pin_not_driven` | 39 | 37 | 33 | 6 | 4 |
 | `pin_to_pin` | 9 | 8 | 7 | 2 | 1 |
-| `power_pin_not_driven` | 60 | 57 | 50 | 10 | 7 |
-| `unconnected_wire_endpoint` | 38 | 33 | 27 | 11 | 6 |
+| `power_pin_not_driven` | 34 | 36 | 29 | 5 | 7 |
+| `unconnected_wire_endpoint` | 0 | 10 | 0 | 0 | 10 |
 | `undefined_netclass` | 8 | 0 | 0 | 8 | 0 |
 | `unresolved_variable` | 1 | 0 | 0 | 1 | 0 |
-| `wire_dangling` | 16 | 2 | 2 | 14 | 0 |
+| `wire_dangling` | 2 | 0 | 0 | 2 | 0 |
 
-_Excluded from the above: 1227 occurrences of this project's own schematic readability/style checks (`schematic_*`, from `erc_style.rs`), which have no KiCad counterpart by design and would only add noise to precision/recall._
+_Excluded from the above: 1250 occurrences of this project's own schematic readability/style checks (`schematic_*`, from `erc_style.rs`), which have no KiCad counterpart by design and would only add noise to precision/recall._
 
 
 ## 3. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
