@@ -5,7 +5,7 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, DrcViolation, Part, Pad, RatsnestEdge, Shape } from "../../api/types";
+import type { BoardState, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
@@ -15,6 +15,7 @@ import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
+import { formatLength, type LengthUnit } from "../../state/units";
 
 /**
  * pcb_painter.cpp GetColor's net-highlight branch (see kicad-port/
@@ -63,6 +64,16 @@ export interface PaintOptions {
   sketchVias: boolean;
   /** GET /api/drc's violations (crates/drc, see DrcDialog.tsx) -- null until the dialog has been opened at least once this session (nothing drawn until then); kept showing after it's closed, like real KiCad's markers persisting until the next DRC run. */
   drcViolations: DrcViolation[] | null;
+  /** B/Ctrl+B's last GET /api/fill (zone_filler_tool.cpp) -- null (or a zone simply missing from it) means "no fill computed yet", which always paints as an outline regardless of `zoneDisplayMode`. See state.zoneFill's own doc. */
+  zoneFill: FillReport | null;
+  /** ZONE_DISPLAY_MODE: how a zone WITH fill data paints. A zone with no fill data yet ignores this and always shows its outline. */
+  zoneDisplayMode: "filled" | "outline";
+  /** pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), for the via tool's ghost -- null until the hotkey's first press, same board-default fallback `Canvas.tsx`'s own via-placement click uses. */
+  currentViaPreset: { diameter: number; drill: number } | null;
+  /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
+  units: LengthUnit;
+  /** pcb_point_editor.cpp's zone corner-drag preview (Canvas.tsx's own local state, only set while a drag is live) -- lets drawZoneHandles show the corner actually moving, not the last-committed outline, while the drag is in progress. */
+  zoneCornerPreview: { zoneId: string; outline: [Um, Um][] } | null;
   /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
   drcSelected: number | null;
 }
@@ -256,11 +267,14 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
 }
 
 /**
- * Zones as outlines only -- fill isn't computed anywhere in this model
- * (no polygon-clipping/thermal-relief engine exists), so drawing a solid
- * copper-colored fill would show area that isn't actually guaranteed
- * copper. KiCad has the same "outline display mode" for exactly this
- * situation (a zone whose fill is stale/not yet run).
+ * Zones: outline (KiCad's `ZONE_DISPLAY_MODE::SHOW_ZONE_OUTLINE`, and the
+ * state every zone starts in before it's ever been filled) or solid
+ * copper (`SHOW_FILLED`, the default once B has computed one) --
+ * `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` and `pcbnew.Control.
+ * zoneDisplayEnable`/`Disable` (see `useActionRunner.ts`) are this app's
+ * own entry points for the two axes (has-fill-data × which-way-to-paint-
+ * it). The other two real `ZONE_DISPLAY_MODE` values (fracture-borders,
+ * triangulation) are developer debug views, not ported.
  */
 function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
   if (!board.routing) return;
@@ -271,11 +285,40 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     if (opts.layerVisible[z.layer] === false) continue;
     if (z.outline.length < 3) continue;
     const selected = opts.selection.has(z.id);
+    const copperColor = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
+    const fill = opts.zoneFill?.zones.find((f) => f.id === z.id);
     withAlpha(ctx, layerAlpha(opts, z.layer), () => {
+      if (opts.zoneDisplayMode === "filled" && fill && fill.fragments.length > 0) {
+        // `fragments` are already "Fracture"d (pcb_painter.cpp paints the
+        // real ZONE_FILLER output the same way): each is one closed ring,
+        // holes slit into the outer boundary -- a plain nonzero-winding
+        // fill per fragment is exactly right, no separate even-odd pass.
+        ctx.fillStyle = copperColor;
+        for (const frag of fill.fragments) {
+          if (frag.length < 3) continue;
+          ctx.beginPath();
+          frag.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+          ctx.closePath();
+          ctx.fill();
+        }
+        if (selected) {
+          // Source's selection shadow is a separate highlight layer this
+          // app doesn't model; stroking the zone's own (unfractured)
+          // outline on top reads the same "this one's selected" cue
+          // outline mode already uses, without recoloring the copper.
+          ctx.beginPath();
+          z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+          ctx.closePath();
+          ctx.strokeStyle = layerColor("selection");
+          ctx.lineWidth = hairlineUm(view, 2.5);
+          ctx.stroke();
+        }
+        return;
+      }
       ctx.beginPath();
       z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.closePath();
-      ctx.strokeStyle = selected ? layerColor("selection") : withNetHighlight(layerColor(key), z.net, opts.netHighlight);
+      ctx.strokeStyle = selected ? layerColor("selection") : copperColor;
       ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
       ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
       ctx.stroke();
@@ -538,22 +581,43 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, opts
 
   const cursor = opts.cursorUm;
   const pts = draw.pts.slice();
+  // A finished measurement (2 points already fixed) is a static ruler --
+  // it stops following the cursor, unlike every other click-to-add-points
+  // tool here, which always rubber-bands toward wherever the *next* point
+  // would land.
+  const frozen = draw.kind === "measure" && pts.length >= 2;
   let rubberEnd: [number, number] | null = null;
-  if (cursor) {
+  if (cursor && !frozen) {
     const last = pts[pts.length - 1]!;
     const usePosture = draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect");
     const raw: [number, number] = usePosture ? posture45(last, [cursor.x, cursor.y]) : [cursor.x, cursor.y];
     rubberEnd = snapPoint(raw[0], raw[1], opts.gridUm);
   }
-  if (rubberEnd) pts.push(rubberEnd);
-  strokeDashedPolyline(ctx, view, pts, layerColor("selection"), hairlineUm(view, 1.5), draw.kind === "zone" && pts.length >= 2);
+  const color = layerColor("selection");
+  const shown: [number, number][] = rubberEnd ? [...pts, rubberEnd] : pts;
+  strokeDashedPolyline(ctx, view, shown, color, hairlineUm(view, 1.5), draw.kind === "zone" && shown.length >= 2);
+
+  // pcb_viewer_tools.cpp's measure tool: the straight-line distance (and
+  // dx/dy) between the ruler's two ends, labeled at the midpoint, in the
+  // status bar's own unit. Live while still dragging the end (rubberEnd),
+  // fixed once the measurement is complete.
+  if (draw.kind === "measure") {
+    const end = frozen ? pts[1]! : rubberEnd;
+    if (end) {
+      const [x0, y0] = pts[0]!;
+      const [x1, y1] = end;
+      const dist = Math.hypot(x1 - x0, y1 - y0);
+      const label = `${formatLength(dist, opts.units)}  (dx ${formatLength(Math.abs(x1 - x0), opts.units)}, dy ${formatLength(Math.abs(y1 - y0), opts.units)})`;
+      drawStrokeText(ctx, label, (x0 + x1) / 2, (y0 + y1) / 2 - hairlineUm(view, 8), { sizeUm: hairlineUm(view, 12), justify: "center", color, thicknessUm: hairlineUm(view, 1.4) });
+    }
+  }
 }
 
 /** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */
 function drawViaGhost(ctx: CanvasRenderingContext2D, board: BoardState, opts: PaintOptions) {
   if (!opts.cursorUm) return;
   const [x, y] = snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
-  const d = board.board_rules?.via_diameter ?? 600;
+  const d = opts.currentViaPreset?.diameter ?? board.board_rules?.via_diameter ?? 600;
   ctx.save();
   ctx.globalAlpha = 0.6;
   ctx.fillStyle = layerColor("via");
@@ -641,7 +705,41 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // In-progress route/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, opts);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
+  // pcb_point_editor.cpp: a single selected zone's outline corners are
+  // draggable handles, shown only in the plain Select tool (same as
+  // source only activating the point editor over the selection tool).
+  if (opts.activeTool === "select") drawZoneHandles(ctx, view, board, opts);
   // DRC markers last of all -- an overlay above every board layer and
   // the in-progress tool preview, matching real KiCad.
   if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected);
+}
+
+/**
+ * pcb_point_editor.cpp's corner handles for a single selected zone --
+ * small squares at each outline vertex, filled solid (selection color) so
+ * they read as grabbable. Shows the live drag preview's outline while one
+ * of this zone's own corners is being dragged (`opts.zoneCornerPreview`),
+ * the committed outline otherwise. Only ever one zone's handles at a time
+ * (this app's point editor doesn't support editing several zones'
+ * outlines in the same gesture, same as source's own one-item-at-a-time
+ * point editor).
+ */
+function drawZoneHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  if (opts.selection.size !== 1) return;
+  const id = [...opts.selection][0]!;
+  const zone = board.routing?.zones.find((z) => z.id === id);
+  if (!zone) return;
+  const outline = opts.zoneCornerPreview?.zoneId === id ? opts.zoneCornerPreview.outline : zone.outline;
+  const r = hairlineUm(view, 4);
+  ctx.save();
+  ctx.fillStyle = layerColor("selection");
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.lineWidth = hairlineUm(view, 1);
+  for (const [x, y] of outline) {
+    ctx.beginPath();
+    ctx.rect(x - r, y - r, r * 2, r * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }

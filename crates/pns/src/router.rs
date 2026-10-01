@@ -358,7 +358,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![FootprintInstance { id: "R1".into(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: Point { x: 6000, y: 0 }, rot: 0, side: Side::Top, label: LabelSide::Above }], modules: vec![] }),
-            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![] }),
+            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] }),
             drawings: None,
         };
         (design, model)
@@ -379,6 +379,8 @@ mod tests {
                 tracks: vec![eda_model::ir::Track { id: "trkA".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }],
                 vias: vec![eda_model::ir::Via { id: "viaA".into(), net: "GND".into(), at: Point { x: 5000, y: 0 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
                 zones: vec![],
+                track_width_presets: vec![],
+                via_presets: vec![],
             }),
             drawings: None,
         };

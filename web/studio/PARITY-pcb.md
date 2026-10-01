@@ -134,7 +134,7 @@ Wiring: `components/canvas/selectionCandidates.ts`, `netAtCursor.ts`,
 
 | Behavior | Status | KiCad file:function |
 |---|---|---|
-| Rotate/flip a footprint (standalone, not mid-move) | identical (predates this session) | `edit_tool.cpp:Rotate`/`Flip`, `updateModificationPoint` |
+| Rotate/flip a footprint (standalone, not mid-move) | identical for 1 item (predates this session); **this session**: 2+ items now share ONE pivot -- `updateModificationPoint`'s real rule (the selection's union-bounding-box center), not each part spinning/mirroring about its own anchor the way an earlier session's docs here incorrectly called "identical" | `edit_tool.cpp:Rotate`/`Flip`, `updateModificationPoint` -- `state/store.tsx`'s `rotateSelection` (now one atomic `Cmd::MoveExact` for the whole group, same single-`BOARD_COMMIT::Push()` undo granularity as source) and `flipSelection` (mirrors each part's X about the shared center via `move_to`, then `flip`'s existing side-toggle -- **documented gap**: this is N separate Cmds, not source's one atomic commit, so undoing a group flip takes 2N Ctrl+Z's, not 1) |
 | Rotate (R/Shift+R) / Flip (F) *during* an active Move | identical for the common case: a dragged footprint spins in place | `edit_tool.cpp`'s own `m_dragging` branch of `Rotate`/`Flip`: the live item is mutated directly mid-drag rather than committing a separate op, and a further rotate during the same drag reuses the *first* rotate's reference point (`updateModificationPoint`'s `m_dragging && HasReferencePoint()` guard). This app can't mutate an uncommitted backend item, so it accumulates the transform on the client-side preview instead (`MovePreview.rotateQuarterTurns`/`flipped`, applied in `painter.ts`'s preview render) and commits move+rotate+flip together as sequential Cmds on drop -- for a **single** selected part this is mathematically identical to source (rotating/flipping about a part's own anchor doesn't move it, so composing the translation and the spin in either order lands on the same pose). **Documented simplification:** a **multi-part** selection rotates/flips each part individually about its own anchor instead of the whole group swinging around one shared pivot the way source's `ROTATE_AROUND_SEL_CENTER`-style group rotation would. **Documented gap:** if R/F is pressed before the mouse has moved even once during a *click-drag* (not the M-armed path, which has no such window), there's no preview yet to attach the rotation to and the keypress is dropped -- `useActionRunner.ts`'s `tryTransformDuringMove` can only see `state.movePreview`/`state.activeTool`, not `Canvas.tsx`'s own pending-drag ref |
 | Move: connected track ends follow the dragged footprint | **does not happen in source either** -- task premise corrected after reading `edit_tool_move_fct.cpp:doMoveSelection` directly: a plain (non-router) Move only ever does `item->Move(movement)` on the selection itself; it never touches a connected-but-unselected track. What source *does* do instead is redraw a live/dynamic ratsnest during the drag (`PCB_ACTIONS::updateLocalRatsnest`) | ported: `kicad-port/localRatsnest.ts:offsetRatsnestForPreview` shifts ratsnest edges touching a moving part's pads by the live preview delta, so the airwire updates every frame instead of only after the move commits and `/api/ratsnest` is re-polled |
 | Router-driven drag (D, "Drag 45 Degree Mode") -- the *actual* mechanism that keeps a part's tracks attached while moving it | **partial: not implemented, and genuinely needs PNS** | `pcbnew.InteractiveRouter.Drag45Degree`/`DragFreeAngle` push-and-shove the attached tracks' far ends live as the part moves, via the full interactive router (`ROUTER_TOOL`, `PNS::DRAG` and friends) -- collision-aware, multi-segment, not a geometry one-liner. This app has no router UI loop (`routing.ts`'s header comment: "a single-segment-per-click router, not pcbnew's own"), so this stays unported; listed under `pcbnew.InteractiveRouter.Drag45Degree` in the hotkey audit below rather than silently missing |
@@ -290,3 +290,105 @@ user-visible impact; this table is for lookup, not priority order.
 | `common.Interactive.finish` | End | Finish (generic "end the current interactive action") |
 | `common.Interactive.measureTool` | Ctrl+Shift+M | Measure Tool |
 | `common.SuiteControl.openPreferences` | Ctrl+, | Preferences... (no Preferences dialog in this app) |
+
+## 8. Zones
+
+Port of `pcbnew/zone_filler_tool.cpp` (fill/unfill, display mode) and
+`pcbnew/dialogs/panel_zone_properties.cpp` (the settings panel). The fill
+*engine* itself (`crates/zone-filler`) and the IR's `ZONE_SETTINGS` fields
+(`crates/model/src/ir.rs` `Zone`) were already ported in an earlier
+session (see this file's intro and `docs/parity/GAPS.md` #5) -- this
+session is the UI on top of that: drawing the real computed fill, the
+fill/unfill and display-mode actions, and a settings dialog that actually
+reaches every one of those IR fields instead of just net/layer.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| B = Fill All Zones (GET /api/fill, the real ported `ZONE_FILLER`) | identical in effect | `zone_filler_tool.cpp:ZoneFillAll`/`FillAllZones` -- `useActionRunner.ts`'s `pcbnew.ZoneFiller.zoneFillAll`, `state/store.tsx`'s `zoneFill`/`fillZones`. No per-zone fill cache to mutate (this app's `/api/fill` always recomputes from scratch, cheaply) -- "fill" is "go fetch it", kept live-updated on every board-version change while any fill is showing (no "stale fill" hatch state to show, unlike source, since there's nothing cached to go stale) |
+| Ctrl+B = Unfill All Zones | identical in effect | `zone_filler_tool.cpp:ZoneUnfillAll` -- `unfillZones` just discards `state.zoneFill`, same end state as source's `zone->UnFill()` |
+| Per-zone Fill/Unfill (`pcbnew.ZoneFiller.zoneFill`/`zoneUnfill`, selection-scoped) | missing | only the *All* variants are wired -- this app's `/api/fill` already computes every zone each call, so a selection-scoped fetch would save nothing server-side; the real gap is no fine-grained *display* control (next row) |
+| `ZONE_DISPLAY_MODE`: solid fill vs. outline-only, independent of whether fill data exists | 2 of 4 modes ported | `pcb_control.cpp:ZoneDisplayMode` (`PCB_ACTIONS::zoneDisplayEnable`/`Disable`/`Toggle`) -- `state.zoneDisplayMode`, `painter.ts:drawZones`. Source's other two (`zoneDisplayOutlines` = fracture-borders, `zoneDisplayTesselation` = triangulation) are developer debug views of the filler's internal geometry, not ported. A zone with no fill data at all (never filled, or just Ctrl+B'd) always shows its outline regardless of this mode, matching source (nothing to fill with) |
+| Filled-zone rendering: each fragment (island) as its own closed, already-`Fracture`d ring | identical | `pcb_painter.cpp`'s zone-fill paint (polygon fill, no separate even-odd holes pass needed) -- `crates/cli/src/studio.rs:fill_json`'s own doc on why fragments are pre-fractured |
+| Selected zone, filled mode | simplified | source's selection-shadow layer isn't modeled; this app strokes the zone's own (unfractured) outline in the selection color on top of the solid fill instead -- same visual intent, different mechanism |
+| Zone Properties dialog: net, layer, clearance, min width, priority | identical | `panel_zone_properties.cpp`'s `TransferZoneSettingsToWindow`/`AcceptOptions` -- `ZoneDialog.tsx` |
+| Pad connection (Solid/Thermal/PTH-only-thermal/None), thermal gap + spoke width | identical, including source's own "never disabled by the connection choice" rule for the gap/spoke fields | same file -- `m_PadInZoneOpt`, `m_antipadClearance`/`m_spokeWidth` (explicitly never `Enable(false)`-d, per that file's own comment, since a per-pad override can still need them) |
+| Island removal (always/never/below area limit) + area threshold | identical | same file -- `m_cbRemoveIslands`/`m_islandThreshold`, shown only in "Area" mode |
+| Fill type (solid/hatched) + hatch width/gap/orientation/smoothing level/smoothing value | identical, shown only when Hatched | same file -- `m_cbHatched`'s `onHatched` enable/disable group |
+| Zone name, Locked, corner smoothing (chamfer/fillet) + radius, outline border display style (hatched/full/invisible), per-layer hatch-offset overrides, teardrops | not ported -- no IR field | this model's `Zone` has no `name`/`locked`/corner-smoothing/border-display-style/per-layer-override/teardrop concept at all (single-layer outline + the fill-engine fields only) -- same "nothing to show, not a bug" convention as every other dialog here for a field with no backing data |
+| Net picker limited to nets actually present on a pad | identical in spirit, simpler widget | source's `NET_SELECTOR` (searchable combo over the whole board netlist); this app's `<select>` over `state.board.parts[].pads[].net` (unchanged from before this session) |
+| Multi-copper-layer zones (one outline, several layers) | not ported -- single-layer `Zone.layer: string` | `ZONE::GetLayerSet()`; this model's zones are one layer each, unchanged scope from before this session |
+| Add flow: outline first, then settings (vs. source's settings-first-then-draw) | unchanged, documented simplification from an earlier session | `ZoneDialog.tsx`'s own header comment; the dialog itself is now the full settings panel, not just net/layer |
+| Add flow backend shape: `add_zone` (net/layer/outline, unchanged 3-field `Cmd`) + an immediate `edit_zone` only if any setting differs from `Zone::default()` | deliberate 2-Cmd design, not 1 atomic Cmd | keeps `Cmd::AddZone`'s wire shape stable for every existing caller (the CLI, this crate's own tests) -- `state/store.tsx`'s `addZone`, `crates/ops/src/lib.rs`'s `Cmd::EditZone`/`edit_zone` |
+| Zone outline editing: drag a corner, double-click an edge to add one, right-click a corner to delete it | ported, scoped down from source -- see section 11 | `pcbnew/tools/pcb_point_editor.cpp` -- `kicad-port/zonePointEditor.ts` (corner/edge hit-testing, 9 unit tests), `Cmd::SetZoneOutline`, `Canvas.tsx`'s onPointerDown/Move/Up + onDoubleClick + onContextMenu, `painter.ts:drawZoneHandles` |
+| Zone Cutout / Similar Zone / Rule Areas (keepouts) | missing, unchanged | `pcbnew.InteractiveDrawing.zoneCutout`/`similarZone`/`ruleArea` -- no keepout-zone concept in this model |
+
+Rust: `crates/ops/src/lib.rs`'s `Cmd::EditZone`/`edit_zone` (full
+`ZONE_SETTINGS` replace, outline untouched; validates clearance >= 0, min
+width > 0, thermal spoke >= min width, and -- matching source's own
+`AcceptOptions` -- hatch thickness/gap >= min width in hatch mode), 5 new
+tests in `crates/ops/src/tests.rs`. `crates/cli/src/studio.rs`'s
+`fill_json`'s endpoint was already there; `state()`'s `zones` JSON and
+`routing` JSON both gained the new fields (full settings; track/via preset
+lists, see section 9).
+
+## 9. Board Setup
+
+Port of `pcbnew/dialogs/dialog_board_setup.cpp`, which is really a tree of
+~15 `panel_setup_*.cpp` pages. `BoardSetupDialog.tsx` only builds the pages
+this app's constraint model (`crates/model/src/lib.rs` `BoardRules`) has
+real data for; a page with no IR backing at all is left out.
+
+A hard split runs through every page: `BoardRules` (net classes, hole/
+clearance/text defaults, stackup) lives on the *intent*-derived
+`ConstraintModel`, loaded read-only (`crates/cli/src/board.rs::load`) --
+there is no `Cmd` that can change it without a second edit/undo path into
+the intent file, which this session did not build (GAPS.md #10 sizes that
+"L", same size the custom-rule-language page would be). Only the new
+`RoutingSection.track_width_presets`/`via_presets` live on the editable
+`design.json` IR, so only that one page is genuinely editable -- every
+other page is a read-only mirror.
+
+| Page | Status | KiCad file |
+|---|---|---|
+| Net Classes: name, net-pattern list, track width, clearance, via size/drill, priority | read-only (no edit command -- see this section's intro) | `panel_setup_rules.cpp`'s net-class grid (the pattern-assignment side of it; `dialog_copper_zones.cpp`'s own net-class picker is the same gap) |
+| Track Widths & Vias: the W/Shift+W and via-size-cycle preset lists, add/remove entries | editable | `panel_setup_tracks_and_vias.cpp` -- `Cmd::SetTrackWidthPresets`/`SetViaPresets` (whole-list replace, no per-entry Cmd, same spirit `paste_items` already uses for several items in one commit) |
+| Design Rules: the custom per-net/per-item constraint expression language | not ported -- no IR concept at all | `panel_setup_rules.cpp`'s actual subject (a small expression language over `DRC_ENGINE::EvalRules`) -- shown instead: the board-wide numeric defaults `eda_drc` does check (clearance, track width, annular ring, hole-to-hole, hole clearance, silk clearance), read-only |
+| Text & Graphics Defaults: refdes font size, minimum silk text height/thickness | read-only | `panel_setup_text_and_graphics.cpp` |
+| Layer Stackup: name/material/thickness per layer | read-only, and usually empty (most intents never set one) | `panel_setup_layers.cpp` -- `crates/model/src/lib.rs` `Stackup`/`StackupLayer` already existed on `ConstraintModel`, just never exposed in `/api/state` before this session |
+| Constraints / Teardrops / Tuning Patterns / Mask & Paste / Formatting / Zones defaults / Severities | not ported -- no IR concept | no model field for any of these; left out entirely rather than faked |
+
+W/Shift+W (`pcbnew.EditorControl.trackWidthInc`/`Dec`) and the via-size
+cycle (`viaSizeInc`/`Dec`) now read this page's lists -- `useActionRunner.ts`:
+cycling updates `state.currentTrackWidthUm`/`currentViaPreset` (read by
+Canvas.tsx's route/via tools for the *next* item) and, matching source's
+own dual-purpose behavior, also applies the new size to every selected
+track/via in the same keypress via `set_track_width`/`edit_via`.
+
+Rust: `crates/cli/src/studio.rs`'s `state()` gained `board_rules.
+net_classes`/`stackup`/the hole-clearance-and-text-default fields (plain
+JSON exposure, no new endpoint) and `routing.track_width_presets`/
+`via_presets`.
+
+## 10. Property dialogs (GAPS.md #11)
+
+| Dialog | Status | KiCad file |
+|---|---|---|
+| Footprint Properties: refdes text placement (above/below/left/right) | editable (new) | `pcb_properties_panel.cpp`'s sibling -- `Cmd::SetLabelSide`, a dropdown in `FootprintPropertiesDialog.tsx` |
+| Footprint Properties: Reference/Value/Footprint/MPN | still read-only | these live on the *intent*-derived model (`crates/model/src/lib.rs` `Part`, the BOM), not the editable `design.json` IR -- same model-split reasoning as Board Setup's Net Classes page (section 9) |
+| Track/Via Properties: via diameter + drill | editable (new) | `dialog_track_via_properties.cpp` -- `Cmd::EditVia`, `ItemPropertiesDialog.tsx`'s via branch. Net, position, and layer span stay read-only, matching source's own dialog (re-netting/re-spanning an existing via isn't a field edit there either) |
+| Shape Properties: layer, line width, filled | editable (new) | `pcb_shape`'s own properties -- `Cmd::EditShape`, `ItemPropertiesDialog.tsx`'s shape branch. Geometry itself has no dialog field in source either (only draggable corners, no point editor for shapes in this app) |
+| Zone Properties | see section 8 -- its own full dialog, not `ItemPropertiesDialog.tsx` | `panel_zone_properties.cpp` |
+| Text Properties | already editable (predates this session) | `edit_text`, `TextDialog.tsx` |
+
+## 11. Smaller tools
+
+| Tool | Status | KiCad file:function |
+|---|---|---|
+| Multi-selection Rotate/Flip around a shared pivot | now ported for the plain (not mid-drag) case -- see section 4 | `edit_tool.cpp:Rotate`/`Flip`, `updateModificationPoint` |
+| Cut (Cmd+X) | ported: copy then delete, same as the honorable-mention note in this file's old hotkey audit said it trivially is | `common.Interactive.cut` -- `useActionRunner.ts` calls `copySelection()` then the same `common.Interactive.delete` handler Del uses |
+| Measure tool (Ctrl+Shift+M) | ported as a client-side-only ruler -- never committed to the backend, same as KiCad's own (a measurement isn't a board item) | `common.Interactive.measureTool`, `pcb_viewer_tools.cpp` -- `state.drawState`'s new `"measure"` kind (1 point = still dragging the end, rubber-banded; 2 = a fixed ruler that stays on screen until Esc or a fresh click), `painter.ts:drawInProgress`'s distance+dx+dy label in the status bar's own unit. **Not ported**: source's temporary on-canvas unit/angle readout in a dedicated corner HUD -- this app labels the ruler itself instead |
+| Align Left/Right/Top/Bottom/Center H/Center V | ported, placed footprints only | `align_distribute_tool.cpp`'s `AlignLeft`/... -- pure math in `kicad-port/alignDistribute.ts` (12 unit tests), `state/store.tsx:alignSelection`. **Not ported**: source's "prefer a locked item, else the item under the cursor" override when picking the alignment target (this app has no locked-item concept; always uses the extreme item, source's own fallback once neither override applies) and the mirrored-view Left/Right swap (this app's view never mirrors) |
+| Distribute Horizontally/Vertically, by even gaps or by center spacing | ported, placed footprints only, 3+ items (source's own floor) | `align_distribute_tool.cpp:DistributeItems`/`doDistributeGaps`/`doDistributeCenters`, `libs/kimath/src/geometry/distribute.cpp`'s exact gap-math, ported verbatim including the "end-cap items never move" rule -- `kicad-port/alignDistribute.ts`, `state/store.tsx:distributeSelection` |
+| Right-click context menu built from the selection (GAPS.md #30) | partial: Copy/Cut/Duplicate/Move Exactly/Align/Distribute added to the existing static list, and a real per-kind Delete (`common.Interactive.delete`) replaces a footprint-only `ripSelection()` call that silently did nothing for a track/via/zone/shape/text right-click before this session | `Canvas.tsx:onContextMenu` -- still not source's fully dynamic per-item-type tool menu (GAPS.md #30's larger ask), but a meaningfully less-static list than before |
+| Zone outline editing: drag a corner, double-click an edge to add one, right-click a corner to delete it | ported | `pcbnew/tools/pcb_point_editor.cpp` -- `kicad-port/zonePointEditor.ts`, `Cmd::SetZoneOutline` (`crates/ops`, 1 new test), `Canvas.tsx`, `painter.ts:drawZoneHandles`. Scope, matching this app's existing point-editor-less baseline rather than a full port: a single selected zone only (no multi-select point editing, no graphic-shape point editor either -- see section 10's Shape Properties row); no 45/90-degree edge-angle constraint while dragging a corner (source's Ctrl-held behavior); no "equal length" guide overlay; corner drag snaps to the plain grid only, same as every other zone/route/shape placement click in this app (`gridHelper.ts:snapPoint`, not the anchor-aware `snapWithAnchors` the Move tool uses) |
+| Array tool, grouping, dimensioning | missing, unchanged | GAPS.md #26/#27/#28 -- out of scope this session |

@@ -1078,7 +1078,13 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
             });
         }
     }
-    let mut rt = RoutingSection { tracks, vias, zones };
+    // Track-width/via-size presets (Board Setup's own lists, GAPS.md's
+    // Board Setup dialog item) are a studio/UI setting, not something
+    // routing produces -- carried forward unchanged, same as the zones
+    // above.
+    let track_width_presets = design.routing.as_ref().map(|r| r.track_width_presets.clone()).unwrap_or_default();
+    let via_presets = design.routing.as_ref().map(|r| r.via_presets.clone()).unwrap_or_default();
+    let mut rt = RoutingSection { tracks, vias, zones, track_width_presets, via_presets };
     // Assigned here, at the router's own output, so every track/via/zone
     // is addressable the moment a route finishes -- deterministically:
     // the same design routed twice gets the same ids both times.

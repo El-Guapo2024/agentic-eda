@@ -222,3 +222,21 @@
   border-color: var(--chrome-accent);
   color: white;
 }
+/* BoardSetupDialog's read-only tables (net classes, stackup). */
+.setup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.setup-table th,
+.setup-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--chrome-border);
+  color: var(--chrome-text);
+}
+.setup-table th {
+  color: var(--chrome-text-dim);
+  font-weight: 600;
+}

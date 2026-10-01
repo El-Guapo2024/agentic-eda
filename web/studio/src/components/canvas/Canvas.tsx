@@ -32,6 +32,8 @@ import { isMac } from "../../platform";
 import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
 import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
 import { openPropertiesFor } from "./properties";
+import { useActionRunner } from "../../actions/useActionRunner";
+import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner, removeCorner } from "../../kicad-port/zonePointEditor";
 import "../../styles/canvas.css";
 
 /** A candidate's own kind determines which Cmd a drag of it would commit through -- tracks/zones have no move_* Cmd (api/types.ts), so they're selectable but never draggable, same as before this session. */
@@ -90,7 +92,14 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, "segment" | "arc" | "rect" | "circ
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
   | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
-  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] };
+  | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
+  /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
+  | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] };
+
+/** A click/double-click/right-click within this many board µm of a zone corner counts as landing on it -- same generous, zoom-aware tolerance `ANCHOR_SNAP_UM`-adjacent code elsewhere in this file already uses. */
+function zoneCornerToleranceUm(viewScale: number): number {
+  return Math.max(300, 10 / viewScale);
+}
 
 /** Every part whose courtyard contains the point, topmost (last drawn) first. */
 function partsAt(parts: Part[], xUm: number, yUm: number): Part[] {
@@ -112,10 +121,19 @@ export function Canvas() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
+  // Only for onContextMenu's Delete/Cut entries below, so they resolve a
+  // mixed-kind selection (track/via/zone/shape/text/part) the same
+  // correct, per-kind way the Del hotkey's common.Interactive.delete
+  // already does -- a plain api.ripSelection() call only ever handles
+  // footprints, which used to make a right-click Delete on anything else
+  // silently do nothing.
+  const { run } = useActionRunner();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
+  /** pcb_point_editor.cpp's live corner-drag preview -- local, like `marquee` above, since only this component's own render loop needs it. */
+  const [zoneCornerPreview, setZoneCornerPreview] = useState<{ zoneId: string; outline: [number, number][] } | null>(null);
   const moveMode = state.activeTool === "move";
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
@@ -256,6 +274,11 @@ export function Canvas() {
       ratsnestEdges: state.ratsnest?.edges ?? null,
       drcViolations: state.drc?.violations ?? null,
       drcSelected: state.drcSelected,
+      zoneFill: state.zoneFill,
+      zoneDisplayMode: state.zoneDisplayMode,
+      currentViaPreset: state.currentViaPreset,
+      units: state.units,
+      zoneCornerPreview,
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
       activeLayer: state.activeLayer,
@@ -307,7 +330,7 @@ export function Canvas() {
       ctx.stroke();
     }
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, marquee, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, marquee, zoneCornerPreview, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -425,7 +448,9 @@ export function Canvas() {
           return;
         }
         const rules = board.board_rules;
-        api.cmd({ op: "add_via", net: anchor.net, x: sx, y: sy, drill: rules?.via_drill ?? 300, diameter: rules?.via_diameter ?? 600, from_layer: "F.Cu", to_layer: "B.Cu" });
+        // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
+        const viaPreset = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600, drill: rules?.via_drill ?? 300 };
+        api.cmd({ op: "add_via", net: anchor.net, x: sx, y: sy, drill: viaPreset.drill, diameter: viaPreset.diameter, from_layer: "F.Cu", to_layer: "B.Cu" });
         return;
       }
 
@@ -438,7 +463,8 @@ export function Canvas() {
           // for "is this a valid start point" (pad/via/track-end -> a
           // real net), same as `isStartingPointRoutable` upstream.
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
-          const width = board.board_rules?.track_width ?? 250;
+          // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
+          const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
           void startInteractiveRoute(sx, sy, layer, width, dispatch);
           return;
         }
@@ -450,6 +476,21 @@ export function Canvas() {
         const draw = state.drawState;
         const pts: [number, number][] = draw?.kind === "zone" ? [...draw.pts, [sx, sy]] : [[sx, sy]];
         dispatch({ type: "SET_DRAW_STATE", draw: { kind: "zone", pts } });
+        return;
+      }
+
+      if (state.activeTool === "measure") {
+        // pcb_viewer_tools.cpp's ruler: a 1-point measurement is still
+        // being dragged (rubber-banded to the cursor in painter.ts) -- a
+        // second click fixes the end point and the ruler stays on screen.
+        // Any click after that (2 points already fixed) starts a fresh
+        // measurement from scratch, same as clicking the first point.
+        const draw = state.drawState;
+        if (draw?.kind === "measure" && draw.pts.length === 1) {
+          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "measure", pts: [...draw.pts, [sx, sy]] } });
+        } else {
+          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "measure", pts: [[sx, sy]] } });
+        }
         return;
       }
 
@@ -479,6 +520,26 @@ export function Canvas() {
         dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "add", at: [sx, sy] } });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
         return;
+      }
+    }
+
+    // pcb_point_editor.cpp: with exactly one zone selected and the plain
+    // Select tool active, its outline corners are draggable handles --
+    // checked before the ordinary click/select/box-select logic below so
+    // grabbing one never instead starts a move or a box-select. Uses the
+    // unsnapped click point for hit-testing (a handle's board-space size
+    // is what the operator sees and aims for) but snaps the drag itself,
+    // same as every other click-to-place interaction here.
+    if (board && e.button === 0 && !e.altKey && state.activeTool === "select" && state.selection.size === 1) {
+      const soleId = [...state.selection][0]!;
+      const zone = api.zoneById(soleId);
+      if (zone) {
+        const idx = findNearestCorner(zone.outline, wx, wy, zoneCornerToleranceUm(state.view.scale));
+        if (idx != null) {
+          dragRef.current = { kind: "zoneCorner", zoneId: zone.id, cornerIndex: idx, baseOutline: zone.outline };
+          setZoneCornerPreview({ zoneId: zone.id, outline: zone.outline });
+          return;
+        }
       }
     }
 
@@ -660,6 +721,9 @@ export function Canvas() {
       if (dx !== 0 || dy !== 0) drag.moved = true;
       const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
       dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: drag.moveKind, dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped } : null });
+    } else if (drag.kind === "zoneCorner") {
+      const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
+      setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });
     } else if (drag.kind === "box") {
       const rect = containerRef.current!.getBoundingClientRect();
       const x0 = drag.startScreen[0] - rect.left,
@@ -715,6 +779,13 @@ export function Canvas() {
       }
       pendingClickRef.current = null;
       setMarquee(null);
+    } else if (drag.kind === "zoneCorner") {
+      const orig = drag.baseOutline[drag.cornerIndex]!;
+      const final = zoneCornerPreview?.outline[drag.cornerIndex];
+      if (final && (final[0] !== orig[0] || final[1] !== orig[1])) {
+        api.cmd({ op: "set_zone_outline", id: drag.zoneId, outline: (zoneCornerPreview?.outline ?? drag.baseOutline).map(([x, y]) => ({ x, y })) });
+      }
+      setZoneCornerPreview(null);
     }
   };
 
@@ -758,12 +829,55 @@ export function Canvas() {
       { label: placedRefs.length > 1 ? `Rotate ${placedRefs.length} Items (R)` : "Rotate Clockwise (Shift+R)", onSelect: () => api.rotateSelection(3), disabled: placedRefs.length === 0 },
       { label: "Rotate Counterclockwise (R)", onSelect: () => api.rotateSelection(1), disabled: placedRefs.length === 0 },
       { label: "Flip Side (F)", onSelect: () => api.flipSelection(), disabled: placedRefs.length === 0 },
-      { label: "Delete (Del)", onSelect: () => api.ripSelection(), disabled: refs.length === 0 },
+      { label: "Move Exactly... (Shift+M)", onSelect: () => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true }), disabled: placedRefs.length === 0 },
+      { label: "Copy (Cmd+C)", onSelect: () => api.copySelection(), disabled: refs.length === 0 },
+      { label: "Cut (Cmd+X)", onSelect: () => run("common.Interactive.cut"), disabled: refs.length === 0 },
+      { label: "Duplicate (Cmd+D)", onSelect: () => api.duplicateSelection(), disabled: refs.length === 0 },
+      { label: "Delete (Del)", onSelect: () => run("common.Interactive.delete"), disabled: refs.length === 0 },
     ];
+    // align_distribute_tool.cpp's own menu-visibility floors: MoreThan(1)
+    // for align, MoreThan(2) for distribute -- see kicad-port/
+    // alignDistribute.ts's doc for why this is placed-footprints-only.
+    if (placedRefs.length > 1) {
+      entries.push(
+        { label: "Align Left", onSelect: () => api.alignSelection("left") },
+        { label: "Align Right", onSelect: () => api.alignSelection("right") },
+        { label: "Align Top", onSelect: () => api.alignSelection("top") },
+        { label: "Align Bottom", onSelect: () => api.alignSelection("bottom") },
+        { label: "Align Center Horizontally", onSelect: () => api.alignSelection("centerX") },
+        { label: "Align Center Vertically", onSelect: () => api.alignSelection("centerY") }
+      );
+    }
+    if (placedRefs.length > 2) {
+      entries.push(
+        { label: "Distribute Horizontally (Even Gaps)", onSelect: () => api.distributeSelection("x", "gaps") },
+        { label: "Distribute Horizontally (By Centers)", onSelect: () => api.distributeSelection("x", "centers") },
+        { label: "Distribute Vertically (Even Gaps)", onSelect: () => api.distributeSelection("y", "gaps") },
+        { label: "Distribute Vertically (By Centers)", onSelect: () => api.distributeSelection("y", "centers") }
+      );
+    }
     if (refs.length === 1) {
       const part = api.partByRef(refs[0]!);
       const net = part?.pads?.[0]?.net ?? null;
       entries.push({ label: state.netHighlight ? "Clear Net Highlight" : "Highlight Net (`)", onSelect: () => dispatch({ type: "SET_NET_HIGHLIGHT", net: state.netHighlight ? null : net }), disabled: !net });
+
+      // pcb_point_editor.cpp: right-clicking a corner of the single
+      // selected zone offers to delete just that corner, same floor
+      // `Cmd::SetZoneOutline` itself enforces (a zone always keeps 3+ points).
+      const zone = api.zoneById(refs[0]!);
+      if (zone) {
+        const idx = findNearestCorner(zone.outline, wx, wy, zoneCornerToleranceUm(state.view.scale));
+        if (idx != null) {
+          const next = removeCorner(zone.outline, idx);
+          entries.push({
+            label: "Delete Corner",
+            onSelect: () => {
+              if (next) api.cmd({ op: "set_zone_outline", id: zone.id, outline: next.map(([x, y]) => ({ x, y })) });
+            },
+            disabled: !next,
+          });
+        }
+      }
     }
     if (!hit && refs.length === 0 && board.outline) {
       const bounds = boundsOfPoints(board.outline);
@@ -822,6 +936,25 @@ export function Canvas() {
       return;
     }
     if (!board) return;
+    // pcb_point_editor.cpp: double-clicking a single selected zone's edge
+    // (not one of its corners -- grabbing a corner is onPointerDown's own
+    // drag-start check, above) adds a new corner there.
+    if (state.activeTool === "select" && state.selection.size === 1) {
+      const zone = api.zoneById([...state.selection][0]!);
+      if (zone) {
+        const [wx, wy] = worldAt(e);
+        const toleranceUm = zoneCornerToleranceUm(state.view.scale);
+        if (findNearestCorner(zone.outline, wx, wy, toleranceUm) == null) {
+          const insertAt = findNearestEdgeInsertionIndex(zone.outline, wx, wy, toleranceUm);
+          if (insertAt != null) {
+            const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+            const next = insertCorner(zone.outline, insertAt, sx, sy);
+            api.cmd({ op: "set_zone_outline", id: zone.id, outline: next.map(([x, y]) => ({ x, y })) });
+            return;
+          }
+        }
+      }
+    }
     let refs = [...state.selection];
     if (refs.length === 0) {
       const [wx, wy] = worldAt(e);

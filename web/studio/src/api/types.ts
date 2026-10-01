@@ -70,17 +70,71 @@ export interface Via {
   to: string;
 }
 
-export interface Zone {
+/** `crates/model/src/ir.rs` `PadConnection` ("ZONE_CONNECTION") -- exact Rust variant names on the wire (no `rename_all`, see api/types.ts's own convention note below). */
+export type PadConnection = "None" | "Thermal" | "Full" | "ThtThermal";
+/** `ISLAND_REMOVAL_MODE`. */
+export type IslandRemovalMode = "Always" | "Never" | "Area";
+/** `ZONE_FILL_MODE`. */
+export type FillMode = "Polygons" | "HatchPattern";
+
+/**
+ * `crates/model/src/ir.rs` `Zone`'s `ZONE_SETTINGS` fill-engine fields
+ * (dialog_copper_zones.cpp's panel) -- everything but id/net/layer/
+ * outline, factored out so `Zone` (always populated) and `Cmd`'s
+ * `edit_zone`/the dialog's own form state (`ZoneDialog.tsx`) share one
+ * field list instead of three copies drifting apart.
+ */
+export interface ZoneSettingsFields {
+  clearance: Um;
+  min_thickness: Um;
+  thermal_gap: Um;
+  thermal_spoke_width: Um;
+  pad_connection: PadConnection;
+  priority: number;
+  island_removal_mode: IslandRemovalMode;
+  /** um^2. */
+  min_island_area: number;
+  fill_mode: FillMode;
+  hatch_thickness: Um;
+  hatch_gap: Um;
+  hatch_orientation_mdeg: number;
+  hatch_smoothing_level: number;
+  hatch_smoothing_value: number;
+  hatch_hole_min_area: number;
+  hatch_border_algorithm: number;
+}
+
+/**
+ * `crates/model/src/ir.rs` `Zone` -- id/net/layer/outline plus the full
+ * `ZONE_SETTINGS` (`ZoneSettingsFields`), ported into the IR so
+ * `crates/zone-filler` can read them; see `ZoneDialog.tsx`. Every
+ * settings field has a KiCad-matching server-side default
+ * (`Zone::default()`) once `add_zone` creates a zone, so these are never
+ * actually absent from a real `/api/state` response -- not marked
+ * optional, same convention this file uses for every other
+ * always-present field.
+ */
+export interface Zone extends ZoneSettingsFields {
   id: string;
   net: string;
   layer: string;
   outline: [Um, Um][];
 }
 
+/** `RoutingSection::via_presets`' entry shape -- `BOARD_DESIGN_SETTINGS::m_ViaSizeList`. */
+export interface ViaPreset {
+  diameter: Um;
+  drill: Um;
+}
+
 export interface Routing {
   tracks: Track[];
   vias: Via[];
   zones: Zone[];
+  /** `BOARD_DESIGN_SETTINGS::m_TrackWidthList` -- Board Setup's editable extra-widths list for the W/Shift+W cycle, beyond `board_rules.track_width`. */
+  track_width_presets: Um[];
+  /** `m_ViaSizeList` -- same idea, for the via-size cycle. */
+  via_presets: ViaPreset[];
 }
 
 // ---------------------------------------------------------------- drawings
@@ -174,17 +228,60 @@ export interface BoardState {
   job: string;
   /**
    * Board-wide track/via defaults, for the auxiliary toolbar's
-   * display-only track-width/via-size indicators. Optional: only
-   * present once the backend serving this board has picked up the
-   * `board_rules` field (crates/cli/src/studio.rs) -- older `eda`
-   * binaries won't send it.
+   * display-only track-width/via-size indicators, and (this session) the
+   * Board Setup dialog. Optional: only present once the backend serving
+   * this board has picked up the `board_rules` field (crates/cli/src/
+   * studio.rs) -- older `eda` binaries won't send it.
    */
   board_rules?: {
     track_width: Um;
     via_drill: Um;
     via_diameter: Um;
     clearance: Um;
+    /**
+     * `crates/model/src/lib.rs` `NetClass` -- read-only here: net classes
+     * live on the *intent*-derived `ConstraintModel`, not the editable
+     * `design.json` IR this app's `Cmd`s mutate, so there is no command
+     * to change them yet (GAPS.md #10; see BoardSetupDialog.tsx's Net
+     * Classes panel, which shows this list but cannot edit it).
+     */
+    net_classes: NetClass[];
+    hole_to_hole_min_um: Um;
+    hole_clearance_um: Um;
+    silk_clearance_um: Um;
+    annular_width_min_um: Um;
+    min_silk_text_height_um: Um;
+    min_silk_text_thickness_um: Um;
+    refdes_font_um: Um | null;
+    stackup: Stackup | null;
   };
+}
+
+/** `crates/model/src/lib.rs` `NetClass` -- read-only, see `BoardState.board_rules.net_classes`'s doc. */
+export interface NetClass {
+  name: string;
+  /** Globs over net names, e.g. `["GND", "VBAT*"]` -- first class whose pattern matches a net owns it. */
+  nets: string[];
+  track_width?: Um;
+  clearance?: Um;
+  via_diameter?: Um;
+  via_drill?: Um;
+  microvia_diameter?: Um;
+  microvia_drill?: Um;
+  diff_pair_width?: Um;
+  diff_pair_gap?: Um;
+  diff_pair_via_gap?: Um;
+  priority: number;
+}
+
+/** `crates/model/src/lib.rs` `Stackup`/`StackupLayer` -- read-only, same reasoning as `NetClass`. */
+export interface Stackup {
+  layers: StackupLayer[];
+}
+export interface StackupLayer {
+  name: string;
+  material: string | null;
+  thickness_mm: number | null;
 }
 
 // ---------------------------------------------------------------- Cmd
@@ -251,7 +348,16 @@ export interface CmdVia {
   from_layer: string;
   to_layer: string;
 }
-export interface CmdZone {
+/**
+ * Every `ZONE_SETTINGS` field is optional here (`Zone::default()` fills
+ * in whichever the caller skips, server-side via serde) -- `add_zone`'s
+ * call sites that only ever cared about net/layer/outline (ZoneDialog's
+ * "Add Zone" before this session's settings panel, the CLI) keep working
+ * unchanged; `clipboard.ts`'s `zoneToCmd` sends every field explicitly so
+ * a copy/paste or duplicate of a customized zone does not silently reset
+ * it to KiCad's defaults.
+ */
+export interface CmdZone extends Partial<ZoneSettingsFields> {
   id?: string;
   net: string;
   layer: string;
@@ -269,17 +375,36 @@ export type Cmd =
   | { op: "swap"; a: string; b: string }
   | { op: "rip"; part: string }
   | { op: "flip"; part: string }
+  /** Footprint Properties' "Text Placement" field (the refdes label's side) -- does not move anything, so (unlike Flip/Rotate/MoveTo) it does not clear routing. */
+  | ({ op: "set_label_side"; part: string } & { side: LabelSide })
   | { op: "add_track"; net: string; layer: string; width: Um; pts: PointXY[] }
   | { op: "delete_track"; id: string }
   | { op: "set_track_width"; id: string; width: Um }
   | { op: "add_via"; net: string; x: Um; y: Um; drill: Um; diameter: Um; from_layer: string; to_layer: string }
   | { op: "delete_via"; id: string }
   | { op: "move_via"; id: string; x: Um; y: Um }
+  /** Track/Via Properties' editable via fields -- net, position and layer span are unchanged (KiCad does not let you re-net/re-span an existing via from this dialog either). */
+  | { op: "edit_via"; id: string; diameter: Um; drill: Um }
+  /** Board Setup > Track Widths & Vias: replace the W/Shift+W preset list wholesale (no per-entry add/remove Cmd -- same spirit as `paste_items`). The board's own default (`board_rules.track_width`) is not part of this list. */
+  | { op: "set_track_width_presets"; widths: Um[] }
+  /** Same panel's via-size-cycle preset list. */
+  | { op: "set_via_presets"; presets: ViaPreset[] }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
+  /**
+   * `dialog_copper_zones.cpp`'s "OK": replace a zone's net/layer and every
+   * `ZONE_SETTINGS` field at once -- KiCad has no concept of editing just
+   * one field of the panel, the whole thing commits together. Outline is
+   * untouched (no point editor yet, see PARITY-pcb.md).
+   */
+  | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields)
+  /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
+  | { op: "set_zone_outline"; id: string; outline: PointXY[] }
   | { op: "add_shape"; shape: CmdShape }
   | { op: "delete_shape"; id: string }
   | { op: "move_shape"; id: string; dx: Um; dy: Um }
+  /** Shape Properties' editable fields (layer, line width, filled) -- geometry has no dialog field to edit in source either, only by dragging its own points (no point editor for shapes yet). */
+  | { op: "edit_shape"; id: string; layer: string; stroke_width: Um; filled: boolean }
   | { op: "add_text"; text: CmdText }
   | { op: "edit_text"; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
   | { op: "delete_text"; id: string }
@@ -430,6 +555,29 @@ export interface RatsnestEdge {
 
 export interface Ratsnest {
   edges: RatsnestEdge[];
+}
+
+// ---------------------------------------------------------------- fill
+//
+// GET /api/fill. Source of truth: crates/cli/src/studio.rs `fill_json()`,
+// `crates/zone-filler` via `eda_drc::fill::fill_all_zones` -- the real
+// KiCad zone-fill algorithm (clearance/thermal-relief/min-width/island
+// knockouts), computed fresh on every call (no caching, same reasoning as
+// /api/drc). `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` (B/Ctrl+B,
+// zone_filler_tool.cpp) are this app's own fetch/clear of this report --
+// see state/store.tsx's `zoneFill`.
+
+/** One zone's computed fill -- possibly several disjoint fragments (islands). Each fragment is a single closed ring, already "Fracture"d (slit at any hole), never a separate outer+holes pair. */
+export interface FillZone {
+  id: string;
+  net: string;
+  layer: string;
+  area_um2: number;
+  fragments: [Um, Um][][];
+}
+
+export interface FillReport {
+  zones: FillZone[];
 }
 
 // ---------------------------------------------------------------- board.glb

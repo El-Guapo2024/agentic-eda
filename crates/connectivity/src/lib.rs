@@ -138,7 +138,7 @@ pub(crate) mod tests_support {
                 ],
                 modules: vec![],
             }),
-            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![] }),
+            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] }),
             drawings: None,
         };
         (design, model)

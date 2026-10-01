@@ -8,6 +8,10 @@ import type { Action, StudioApi } from "../../state/store";
 
 export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch<Action>): void {
   if (api.textById(id)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id } });
-  else if (api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id)) dispatch({ type: "SET_ITEM_PROPERTIES_ID", id });
+  // A zone gets the full dialog_copper_zones.cpp port (ZoneDialog.tsx),
+  // same as "Add Zone" -- not the plain read-only-ish ItemPropertiesDialog
+  // every other item here still uses.
+  else if (api.zoneById(id)) dispatch({ type: "SET_ZONE_EDIT_ID", id });
+  else if (api.trackById(id) || api.viaById(id) || api.shapeById(id)) dispatch({ type: "SET_ITEM_PROPERTIES_ID", id });
   else if (api.partByRef(id)) dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
 }

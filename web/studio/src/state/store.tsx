@@ -7,12 +7,13 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, Cmd, DrcReport, ErcReport, Part, Ratsnest, Schematic, SchematicSymbol, SchematicWire, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
-import { fetchDrc, fetchErc, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
+import type { BoardState, Cmd, DrcReport, ErcReport, FillReport, Part, Ratsnest, Schematic, SchematicSymbol, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields, BoardText } from "../api/types";
+import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
+import { alignAxis, alignDeltas, getDeltasForDistributeByGaps, getDeltasForDistributeByPoints, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 /**
@@ -33,7 +34,7 @@ export type EditorTab = "pcb" | "schematic" | "3d";
  * deeper (a whole TOOL_MANAGER with push/pop tool states); this is only
  * as much of that idea as this app's two real modes need.
  */
-export type ToolId = "select" | "move" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "wire";
+export type ToolId = "select" | "move" | "route" | "via" | "zone" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "wire" | "measure";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
@@ -47,6 +48,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
   text: "Click to place text",
   wire: "Wire: click to start/add a point (snaps to a pin when close), double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
+  measure: "Measure: click a start point, click again for the end point. Click anywhere to start a new measurement, Esc to clear",
 };
 
 /**
@@ -87,7 +89,9 @@ export type DrawState =
   | { kind: "zone"; pts: [Um, Um][] }
   | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }
   /** `W` (Schematic tab): sch_line_wire_bus_tool.cpp's in-progress wire polyline -- see SchematicView.tsx's own doc for what this session ported vs. left out (free-angle only, no 90/45 posture, no auto-junction placement needed since that's a rendering-only concept here). */
-  | { kind: "wire"; pts: [Um, Um][] };
+  | { kind: "wire"; pts: [Um, Um][] }
+  /** `Ctrl+Shift+M` (common.Interactive.measureTool, pcb_viewer_tools.cpp): a client-side-only ruler, never committed to the backend. 1 point = still dragging the end (rubber-banded to the cursor); 2 = a finished measurement that stays on screen (not cleared) until Esc or a fresh click starts the next one. */
+  | { kind: "measure"; pts: [Um, Um][] };
 
 export interface ViewTransform {
   /** Screen pixels per board µm. */
@@ -170,6 +174,65 @@ export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   kicadModels: true,
 };
 
+/**
+ * `ZONE_SETTINGS::ZONE_SETTINGS()`'s hardcoded defaults (`pcbnew/
+ * zone_settings.cpp`), exactly mirroring `crates/model/src/ir.rs` `Zone`'s
+ * own `impl Default` (same field values, same source comments there) --
+ * what a brand-new zone gets from `add_zone` before `ZoneDialog.tsx`'s own
+ * settings panel (or `api.addZone`'s unchanged-settings check) touches
+ * anything.
+ */
+/**
+ * `PCB_SELECTION::GetCenter()`'s real meaning: the center of the union
+ * bounding box of every selected item, not an average of their individual
+ * centers. Shared by `MoveExactDialog.tsx` (its own "selection center"
+ * pivot option) and this file's `rotateSelection`/`flipSelection` (the
+ * same shared-pivot rule `edit_tool.cpp`'s `updateModificationPoint` uses
+ * for a plain multi-item R/Shift+R/F, not just the Move Exactly dialog).
+ * Placed footprints only -- see `alignDistribute.ts`'s identical scope
+ * note for why this app's Rotate/Flip/Align/Distribute family stops at
+ * footprints rather than every selectable kind.
+ */
+export function selectionBoundsCenter(
+  parts: ReadonlyArray<{ ref: string; placed: boolean; courtyard?: readonly [number, number, number, number] | null }>,
+  refs: readonly string[]
+): { x: number; y: number } | null {
+  let x0 = Infinity,
+    y0 = Infinity,
+    x1 = -Infinity,
+    y1 = -Infinity;
+  let any = false;
+  for (const ref of refs) {
+    const p = parts.find((q) => q.ref === ref);
+    if (!p?.placed || !p.courtyard) continue;
+    any = true;
+    x0 = Math.min(x0, p.courtyard[0]);
+    y0 = Math.min(y0, p.courtyard[1]);
+    x1 = Math.max(x1, p.courtyard[2]);
+    y1 = Math.max(y1, p.courtyard[3]);
+  }
+  return any ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : null;
+}
+
+export const DEFAULT_ZONE_SETTINGS: ZoneSettingsFields = {
+  clearance: 500,
+  min_thickness: 250,
+  thermal_gap: 500,
+  thermal_spoke_width: 500,
+  pad_connection: "Thermal",
+  priority: 0,
+  island_removal_mode: "Always",
+  min_island_area: 10_000_000,
+  fill_mode: "Polygons",
+  hatch_thickness: 1000,
+  hatch_gap: 1500,
+  hatch_orientation_mdeg: 0,
+  hatch_smoothing_level: 0,
+  hatch_smoothing_value: 0.1,
+  hatch_hole_min_area: 0.15,
+  hatch_border_algorithm: 1,
+};
+
 export interface StudioState {
   board: BoardState | null;
   boardError: string | null;
@@ -191,8 +254,46 @@ export interface StudioState {
   movePreview: MovePreview | null;
   activeTool: ToolId;
   drawState: DrawState | null;
-  /** A just-drawn zone outline waiting for its net/layer to be confirmed in ZoneDialog before `add_zone` commits it. */
+  /** A just-drawn zone outline waiting for its settings to be confirmed in ZoneDialog before `add_zone` commits it. */
   zonePending: [Um, Um][] | null;
+  /** A selected zone's id ("E", or double-click) -- opens ZoneDialog in edit mode (`edit_zone`) instead of add mode. Independent of `zonePending` (one or the other is ever set, never both). */
+  zoneEditId: string | null;
+  /**
+   * `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` (B/Ctrl+B,
+   * zone_filler_tool.cpp): the last GET /api/fill this session asked
+   * for, or null if zones have never been filled (or were just
+   * unfilled) -- the "outline only, nothing computed" state every zone
+   * starts in, same as a freshly drawn KiCad zone. Kept fresh by the
+   * same version-change poll `ratsnest`/`drc` already use, gated on
+   * this being non-null (see StudioProvider's poll loop) -- unlike real
+   * KiCad, there is no "stale fill" hatch state to show, since
+   * `/api/fill` is cheap to recompute and never cached either side.
+   */
+  zoneFill: FillReport | null;
+  /**
+   * `pcbnew.Control.zoneDisplayEnable`/`zoneDisplayDisable`/
+   * `zoneDisplayToggle` (`ZONE_DISPLAY_MODE`): how a zone that DOES have
+   * fill data (`zoneFill` above) paints -- solid copper, or just its
+   * outline. A zone with no fill data yet always shows its outline
+   * regardless of this mode, same as source (nothing to fill with).
+   * KiCad's other two modes (fracture-borders/triangulation) are
+   * developer debug views, not ported -- see PARITY-pcb.md.
+   */
+  zoneDisplayMode: "filled" | "outline";
+  /** Board Setup... (dialog_board_setup.cpp) -- net classes/track-via sizing/rules/etc, see BoardSetupDialog.tsx. */
+  boardSetupDialogOpen: boolean;
+  /**
+   * `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec` (W/Shift+W):
+   * the board's own default (`board_rules.track_width`) plus
+   * `routing.track_width_presets`' index the cycle is currently on, as
+   * an actual width rather than an index so it survives the preset list
+   * changing underneath it -- null until the first W/Shift+W press
+   * (every route/new-track client falls back to `board_rules.track_width`
+   * until then, same value this would resolve to anyway).
+   */
+  currentTrackWidthUm: Um | null;
+  /** Same idea as `currentTrackWidthUm`, for `pcbnew.EditorControl.viaSizeInc`/`viaSizeDec` cycling `board_rules.via_diameter`/`via_drill` plus `routing.via_presets`. */
+  currentViaPreset: ViaPreset | null;
   /** The text tool/E-to-edit dialog: "add" (fresh, at a clicked point) or "edit" (an existing text's id). */
   textDialog: { mode: "add"; at: [Um, Um] } | { mode: "edit"; id: string } | null;
 
@@ -321,6 +422,12 @@ const initialState: StudioState = {
   activeTool: "select",
   drawState: null,
   zonePending: null,
+  zoneEditId: null,
+  zoneFill: null,
+  zoneDisplayMode: "filled",
+  boardSetupDialogOpen: false,
+  currentTrackWidthUm: null,
+  currentViaPreset: null,
   textDialog: null,
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
@@ -424,6 +531,13 @@ export type Action =
   | { type: "SET_ERC_SELECTED"; index: number | null }
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
+  | { type: "SET_ZONE_EDIT_ID"; id: string | null }
+  | { type: "FILL_OK"; fill: FillReport }
+  | { type: "CLEAR_ZONE_FILL" }
+  | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" }
+  | { type: "SET_BOARD_SETUP_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_CURRENT_TRACK_WIDTH"; widthUm: Um }
+  | { type: "SET_CURRENT_VIA_PRESET"; preset: ViaPreset }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
   | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
   | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean };
@@ -471,7 +585,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       // reset, and anywhere else that needs to drop whatever the route/
       // zone/drawing/text tools were in the middle of, not just a
       // footprint selection/move.
-      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null, itemPropertiesId: null };
+      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, zoneEditId: null, textDialog: null, itemPropertiesId: null };
     case "ESCAPE": {
       // pcb_selection_tool.cpp's IsCancel() handler, tiered exactly like
       // source: an in-progress tool (move/draw/armed-place) owns Escape
@@ -484,7 +598,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       // the move and leaves the pre-move selection exactly as it was.
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.movePreview != null;
       if (inProgress) {
-        return { ...state, armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null };
+        return { ...state, armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, zoneEditId: null, textDialog: null };
       }
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
@@ -586,6 +700,23 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drawState: action.draw };
     case "SET_ZONE_PENDING":
       return { ...state, zonePending: action.outline };
+    case "SET_ZONE_EDIT_ID":
+      return { ...state, zoneEditId: action.id };
+    case "FILL_OK":
+      return { ...state, zoneFill: action.fill };
+    case "CLEAR_ZONE_FILL":
+      // zone_filler_tool.cpp ZoneUnfillAll: discards the computed fill;
+      // the canvas falls back to outline-only (painter.ts), same as a
+      // zone that has never been filled at all.
+      return { ...state, zoneFill: null };
+    case "SET_ZONE_DISPLAY_MODE":
+      return { ...state, zoneDisplayMode: action.mode };
+    case "SET_BOARD_SETUP_DIALOG_OPEN":
+      return { ...state, boardSetupDialogOpen: action.open };
+    case "SET_CURRENT_TRACK_WIDTH":
+      return { ...state, currentTrackWidthUm: action.widthUm };
+    case "SET_CURRENT_VIA_PRESET":
+      return { ...state, currentViaPreset: action.preset };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.dialog };
     case "SET_CLIPBOARD":
@@ -603,6 +734,10 @@ export interface StudioApi {
   rotateSelection: (quarterTurns: number) => Promise<void>;
   ripSelection: () => Promise<void>;
   flipSelection: () => Promise<void>;
+  /** pcbnew.AlignAndDistribute.align* (no default hotkey in source either -- reached from the right-click menu, Canvas.tsx's onContextMenu). Placed footprints only -- see kicad-port/alignDistribute.ts's own scope note. A no-op under 2 placed parts, same floor source's menu-visibility condition enforces. */
+  alignSelection: (edge: AlignEdge) => Promise<void>;
+  /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
+  distributeSelection: (axis: "x" | "y", mode: "gaps" | "centers") => Promise<void>;
   /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
   commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
@@ -639,6 +774,22 @@ export interface StudioApi {
   pasteClipboard: () => Promise<void>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
+  /**
+   * ZoneDialog's "Add Zone": `add_zone` (net/layer/outline only, same as
+   * `Cmd::AddZone`'s own shape -- see that type's doc on why it stays
+   * that way) then, if the dialog's settings aren't every one of
+   * `Zone::default()`'s own values, an immediate follow-up `edit_zone` on
+   * the fresh zone's id (found the same before/after-id-diff way
+   * `duplicateSelection`/`pasteClipboard` already do, since the reply has
+   * no structured "here's what I made" field). Two Cmds, not one atomic
+   * `Cmd::AddZone` with inline settings, so every existing caller of that
+   * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
+   */
+  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields) => Promise<void>;
+  /** B ("Fill All Zones"): GET /api/fill now, and keep it live-updated (state.zoneFill) until `unfillZones`. */
+  fillZones: () => Promise<void>;
+  /** Ctrl+B ("Unfill All Zones"): back to outline-only, same as a zone that was never filled. */
+  unfillZones: () => void;
 }
 
 const StudioStateContext = createContext<StudioState | null>(null);
@@ -696,6 +847,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshFill = useCallback(async () => {
+    try {
+      const fill = await fetchFill();
+      dispatch({ type: "FILL_OK", fill });
+    } catch {
+      // same reasoning as refreshDrc -- keep the last good report.
+    }
+  }, []);
+
   // Poll /api/version (cheap) and only refetch the full /api/state when it
   // changes -- mirrors the old studio.html poll loop so CLI edits and
   // other browser tabs show up here within ~1s without hammering the
@@ -711,6 +871,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     let lastRatsnestFetch: string | null = null;
     let lastDrcFetch: string | null = null;
     let lastErcFetch: string | null = null;
+    let lastFillFetch: string | null = null;
     const tick = async () => {
       try {
         const v = await fetchVersion();
@@ -743,6 +904,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           lastErcFetch = v;
           await refreshErc();
         }
+        // Gated on "has been filled at least once this session" (not a
+        // dialog -- there isn't one, B/Ctrl+B just toggle a canvas
+        // rendering mode) -- same reasoning as DRC/ERC above: computing
+        // fills nobody is looking at would be pure waste, but once shown
+        // they should track the board live, same as KiCad's own
+        // auto-refill-on-edit behavior (ZONE_FILLER_TOOL::ZoneFillDirty).
+        if (stateRef.current.zoneFill != null && lastFillFetch !== v) {
+          lastFillFetch = v;
+          await refreshFill();
+        }
       } catch {
         // backend restarting or unreachable; try again next tick
       }
@@ -753,7 +924,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       stopped = true;
       clearInterval(id);
     };
-  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc, refreshErc]);
+  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc, refreshErc, refreshFill]);
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {
@@ -786,21 +957,93 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       await runCmd({ op: "delete_symbol", id });
     },
     cmd: (c) => runCmd(c),
+    // edit_tool.cpp's real Rotate: a single selected item spins about its
+    // own anchor (dx=dy=0, no pivot -- Cmd::MoveExact's own pivot:None
+    // branch lands on exactly the same pose Cmd::Rotate's simpler
+    // part+quarter_turns shape would); 2+ items share ONE pivot --
+    // updateModificationPoint's `aSelection.GetCenter()`, the selection's
+    // union-bounding-box center -- and commit as ONE MoveExact, matching
+    // source's own single BOARD_COMMIT::Push() for the whole group
+    // (previously: one independent Cmd::Rotate per part, each spinning in
+    // place about its own anchor -- see PARITY-pcb.md's "Edit tool"
+    // section for why that was a documented simplification, not the real
+    // behavior).
     rotateSelection: async (quarterTurns) => {
-      for (const ref of stateRef.current.selection) {
-        const p = api.partByRef(ref);
-        if (p?.placed) await runCmd({ op: "rotate", part: ref, quarter_turns: ((quarterTurns % 4) + 4) % 4 });
-      }
+      const refs = [...stateRef.current.selection].filter((r) => api.partByRef(r)?.placed);
+      if (refs.length === 0) return;
+      const rotateMillideg = (((quarterTurns % 4) + 4) % 4) * 90_000;
+      const pivot = refs.length > 1 ? selectionBoundsCenter(stateRef.current.board?.parts ?? [], refs) : null;
+      await runCmd({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
     },
     ripSelection: async () => {
       const refs = [...stateRef.current.selection];
       dispatch({ type: "CLEAR_SELECTION" });
       for (const ref of refs) await runCmd({ op: "rip", part: ref });
     },
+    // edit_tool.cpp's real Flip: a single item flips about its own anchor
+    // (no position change, only `side` toggles -- Cmd::Flip's existing
+    // shape already does exactly this); 2+ items share the selection's
+    // bounding-box center as the mirror line's X, same `updateModification
+    // Point`/`GetCenter()` rule Rotate uses above. Cmd::Flip has no pivot
+    // concept of its own (it only ever toggles `side`), so a group flip is
+    // composed client-side as "move to the mirrored X, then flip" per
+    // part, the same two-Cmd composition `commitMove` already uses for a
+    // single dragged-and-flipped part.
     flipSelection: async () => {
-      for (const ref of stateRef.current.selection) {
-        const p = api.partByRef(ref);
-        if (p?.placed) await runCmd({ op: "flip", part: ref });
+      const refs = [...stateRef.current.selection].filter((r) => api.partByRef(r)?.placed);
+      if (refs.length === 0) return;
+      const center = refs.length > 1 ? selectionBoundsCenter(stateRef.current.board?.parts ?? [], refs) : null;
+      for (const ref of refs) {
+        if (center) {
+          const p = api.partByRef(ref)!;
+          const [x, y] = p.at!;
+          await runCmd({ op: "move_to", part: ref, x: 2 * center.x - x, y });
+        }
+        await runCmd({ op: "flip", part: ref });
+      }
+    },
+    alignSelection: async (edge) => {
+      const refs = [...stateRef.current.selection].filter((r) => {
+        const p = api.partByRef(r);
+        return p?.placed && p.courtyard && p.at;
+      });
+      if (refs.length < 2) return;
+      const boxes: Box[] = refs.map((r) => api.partByRef(r)!.courtyard!);
+      const deltas = alignDeltas(boxes, edge);
+      const axis = alignAxis(edge);
+      for (let i = 0; i < refs.length; i++) {
+        const d = deltas[i]!;
+        if (d === 0) continue;
+        const p = api.partByRef(refs[i]!)!;
+        const [x, y] = p.at!;
+        await runCmd({ op: "move_to", part: refs[i]!, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
+      }
+    },
+    distributeSelection: async (axis, mode) => {
+      const refs = [...stateRef.current.selection].filter((r) => {
+        const p = api.partByRef(r);
+        return p?.placed && p.courtyard && p.at;
+      });
+      if (refs.length < 3) return;
+      // align_distribute_tool.cpp's doDistributeGaps/doDistributeCenters:
+      // sort by start (gaps) or by center (centers) along the chosen axis
+      // before computing deltas -- the end caps of THIS sort never move.
+      const key = (box: Box): number => {
+        const lo = axis === "x" ? box[0] : box[1];
+        const hi = axis === "x" ? box[2] : box[3];
+        return mode === "gaps" ? lo : (lo + hi) / 2;
+      };
+      const sorted = refs.map((r) => ({ r, box: api.partByRef(r)!.courtyard! })).sort((a, b) => key(a.box) - key(b.box));
+      const deltas =
+        mode === "gaps"
+          ? getDeltasForDistributeByGaps(sorted.map(({ box }) => (axis === "x" ? [box[0], box[2]] : [box[1], box[3]]) as [number, number]))
+          : getDeltasForDistributeByPoints(sorted.map(({ box }) => key(box)));
+      for (let i = 0; i < sorted.length; i++) {
+        const d = deltas[i]!;
+        if (d === 0) continue;
+        const p = api.partByRef(sorted[i]!.r)!;
+        const [x, y] = p.at!;
+        await runCmd({ op: "move_to", part: sorted[i]!.r, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
       }
     },
     commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped) => {
@@ -888,6 +1131,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
     },
+    addZone: async (net, layer, outline, settings) => {
+      const board = stateRef.current.board;
+      if (!board) return;
+      const before = allItemIds(board);
+      const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) });
+      if (!ok) return;
+      const after = stateRef.current.board;
+      if (!after) return;
+      const newId = [...allItemIds(after)].find((id) => !before.has(id));
+      if (!newId) return;
+      // Default-valued settings need no follow-up at all -- `add_zone`
+      // already landed on exactly that.
+      const unchanged = (Object.keys(DEFAULT_ZONE_SETTINGS) as (keyof ZoneSettingsFields)[]).every((k) => settings[k] === DEFAULT_ZONE_SETTINGS[k]);
+      if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
+    },
     copySelection: () => {
       const board = stateRef.current.board;
       if (!board) return;
@@ -912,6 +1170,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
     },
+    fillZones: refreshFill,
+    unfillZones: () => dispatch({ type: "CLEAR_ZONE_FILL" }),
   };
 
   return (
