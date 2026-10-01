@@ -26,6 +26,9 @@ import { SchTextDialog } from "./components/SchTextDialog";
 import { SymbolChooserDialog } from "./components/SymbolChooserDialog";
 import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
+import { PlotDialog } from "./components/PlotDialog";
+import { GenerateDrillDialog } from "./components/GenerateDrillDialog";
+import { FootprintPositionDialog } from "./components/FootprintPositionDialog";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
@@ -154,6 +157,9 @@ function StudioFrame() {
       <SymbolChooserDialog />
       <SymbolPropertiesDialog />
       <AnnotateDialog />
+      <PlotDialog />
+      <GenerateDrillDialog />
+      <FootprintPositionDialog />
     </div>
   );
 }

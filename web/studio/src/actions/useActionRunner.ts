@@ -620,6 +620,16 @@ export function useActionRunner() {
     // dialog_board_setup.cpp -- see BoardSetupDialog.tsx.
     m.set("pcbnew.EditorControl.boardSetup", pcbOnly(() => dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: true })));
 
+    // File > Fabrication Outputs -- dialog_plot.cpp / dialog_gendrill.cpp /
+    // dialog_gen_footprint_position.cpp, see PlotDialog.tsx/
+    // GenerateDrillDialog.tsx/FootprintPositionDialog.tsx. `common.Control.plot`
+    // is pcbnew's plain "Plot..." menu item, which opens the same dialog
+    // generateGerbers does in real KiCad.
+    m.set("pcbnew.EditorControl.generateGerbers", pcbOnly(() => dispatch({ type: "SET_PLOT_DIALOG_OPEN", open: true })));
+    m.set("common.Control.plot", pcbOnly(() => dispatch({ type: "SET_PLOT_DIALOG_OPEN", open: true })));
+    m.set("pcbnew.EditorControl.generateDrillFiles", pcbOnly(() => dispatch({ type: "SET_GENERATE_DRILL_DIALOG_OPEN", open: true })));
+    m.set("pcbnew.EditorControl.generatePosFile", pcbOnly(() => dispatch({ type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN", open: true })));
+
     const cycleGrid = (dir: 1 | -1) => {
       const i = GRID_OPTIONS_UM.indexOf(state.gridUm);
       const next = GRID_OPTIONS_UM[Math.max(0, Math.min(GRID_OPTIONS_UM.length - 1, (i === -1 ? 0 : i) + dir))]!;

@@ -17,6 +17,8 @@
 //! ```
 
 mod board;
+mod fab_api;
+mod fab_cmd;
 mod import_kicad;
 mod route_api;
 mod studio;
@@ -1145,6 +1147,17 @@ fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     if argv.first().map(String::as_str) == Some("import-kicad") {
         return match import_kicad::run(&argv[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(fails) => {
+                for f in &fails {
+                    eprintln!("FAIL {} @ {}: {}", f.check, f.location.as_deref().unwrap_or("-"), f.hint.as_deref().unwrap_or(""));
+                }
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if argv.first().map(String::as_str) == Some("fab") {
+        return match fab_cmd::run(&argv[1..]) {
             Ok(()) => ExitCode::SUCCESS,
             Err(fails) => {
                 for f in &fails {
