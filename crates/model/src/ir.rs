@@ -478,6 +478,29 @@ pub struct RoutingSection {
     pub vias: Vec<Via>,
     #[serde(default)]
     pub zones: Vec<Zone>,
+    /// `BOARD_DESIGN_SETTINGS::m_TrackWidthList` -- extra track widths the
+    /// W/Shift+W cycling hotkeys offer, beyond the board's own default
+    /// (`BoardRules::track_width`, which a consumer should always treat as
+    /// the implicit first entry, same as KiCad's own "use netclass width"
+    /// list head). Lives here (the editable `Design` IR), not on the
+    /// immutable `ConstraintModel`, so the studio's Board Setup dialog can
+    /// actually write it through a `Cmd`. Additive: absent in an older
+    /// `design.json` reads as "no custom widths saved yet", same as a
+    /// freshly created KiCad board.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub track_width_presets: Vec<Um>,
+    /// `BOARD_DESIGN_SETTINGS::m_ViaSizeList` -- same idea as
+    /// `track_width_presets`, for the via-size cycling hotkey.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_presets: Vec<ViaPreset>,
+}
+
+/// One entry of `RoutingSection::via_presets`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViaPreset {
+    pub diameter: Um,
+    pub drill: Um,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -831,6 +854,27 @@ impl Shape {
             Shape::Segment { layer, .. } | Shape::Arc { layer, .. } | Shape::Rect { layer, .. } | Shape::Circle { layer, .. } | Shape::Polygon { layer, .. } => layer,
         }
     }
+    /// `PCB_SHAPE::SetLayer` -- part of `dialog_pcb_shape_properties`'s own
+    /// editable field set (GAPS.md #11), via `eda_ops::Cmd::EditShape`.
+    pub fn set_layer(&mut self, new_layer: String) {
+        match self {
+            Shape::Segment { layer, .. } | Shape::Arc { layer, .. } | Shape::Rect { layer, .. } | Shape::Circle { layer, .. } | Shape::Polygon { layer, .. } => *layer = new_layer,
+        }
+    }
+    /// `PCB_SHAPE::SetWidth` (`STROKE_PARAMS`'s width -- see `set_layer`'s doc).
+    pub fn set_stroke_width(&mut self, width: Um) {
+        match self {
+            Shape::Segment { stroke_width, .. } | Shape::Arc { stroke_width, .. } | Shape::Rect { stroke_width, .. } | Shape::Circle { stroke_width, .. } | Shape::Polygon { stroke_width, .. } => {
+                *stroke_width = width
+            }
+        }
+    }
+    /// `PCB_SHAPE::SetFilled` (see `set_layer`'s doc).
+    pub fn set_filled(&mut self, filled_value: bool) {
+        match self {
+            Shape::Segment { filled, .. } | Shape::Arc { filled, .. } | Shape::Rect { filled, .. } | Shape::Circle { filled, .. } | Shape::Polygon { filled, .. } => *filled = filled_value,
+        }
+    }
     /// Every point the geometry is made of, in a stable order -- used both
     /// to seed the id hash and, in `eda-ops`, to validate the shape has
     /// enough of them (a polygon needs 3+).
@@ -1134,7 +1178,7 @@ mod tests {
     /// save -> load round trip is stable.
     #[test]
     fn id_assignment_is_deterministic_and_stable_on_resave() {
-        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![] };
+        let build = || RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![via("GND", 500, 500)], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
 
         let mut a = build();
         a.assign_missing_ids();
@@ -1154,8 +1198,8 @@ mod tests {
     /// same tracks must not change which id lands on which track.
     #[test]
     fn ids_do_not_depend_on_array_order() {
-        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![] };
-        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![] };
+        let mut rt1 = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("VCC", "F.Cu", &[(0, 0), (0, 1000)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
+        let mut rt2 = RoutingSection { tracks: vec![rt1.tracks[1].clone(), rt1.tracks[0].clone()], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
         rt1.assign_missing_ids();
         rt2.assign_missing_ids();
         let gnd1 = rt1.tracks.iter().find(|t| t.net == "GND").unwrap();
@@ -1167,7 +1211,7 @@ mod tests {
     /// verbatim) must still get two distinct ids.
     #[test]
     fn duplicate_content_gets_distinct_ids() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![] };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)]), track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
         rt.assign_missing_ids();
         assert_ne!(rt.tracks[0].id, rt.tracks[1].id);
     }
@@ -1177,7 +1221,7 @@ mod tests {
     /// assigned -- callers (the web UI, `DeleteTrack`) hold onto it.
     #[test]
     fn changing_width_after_assignment_does_not_move_the_id() {
-        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![] };
+        let mut rt = RoutingSection { tracks: vec![track("GND", "F.Cu", &[(0, 0), (1000, 0)])], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] };
         rt.assign_missing_ids();
         let id = rt.tracks[0].id.clone();
         rt.tracks[0].width = 500; // what `SetTrackWidth` does

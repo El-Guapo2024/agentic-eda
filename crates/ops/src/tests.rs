@@ -350,6 +350,30 @@ fn flipping_an_unplaced_part_is_refused() {
     assert_eq!(e[0].check, "ops_not_placed");
 }
 
+#[test]
+fn set_label_side_changes_the_refdes_label_side_only() {
+    let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceRegion { part: "U1".into(), region: Region::Centre }).unwrap();
+    assert_eq!(b.pose_of("U1").unwrap().label, LabelSide::Above, "LabelSide::default() is Above");
+
+    let before = b.pose_of("U1").unwrap().clone();
+    b.apply(&Cmd::SetLabelSide { part: "U1".into(), side: LabelSide::Left }).unwrap();
+    let after = b.pose_of("U1").unwrap();
+    assert_eq!(after.label, LabelSide::Left);
+    assert_eq!(after.at, before.at, "label side must not move the part");
+    assert_eq!(after.rot, before.rot);
+    assert_eq!(after.side, before.side);
+}
+
+#[test]
+fn set_label_side_on_an_unplaced_part_is_refused() {
+    let m = model(vec![part("U1", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    let e = b.apply(&Cmd::SetLabelSide { part: "U1".into(), side: LabelSide::Below }).unwrap_err();
+    assert_eq!(e[0].check, "ops_not_placed");
+}
+
 // ------------------------------------------------------------- tracks
 
 fn net_model() -> ConstraintModel {
@@ -431,6 +455,49 @@ fn move_via_changes_position_but_not_id() {
     assert_eq!(b.apply(&Cmd::MoveVia { id, x: 0, y: 0 }).unwrap_err()[0].check, "ops_unknown_via");
 }
 
+#[test]
+fn edit_via_changes_diameter_and_drill_but_not_net_or_position() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 5000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().vias[0].id.clone();
+
+    b.apply(&Cmd::EditVia { id: id.clone(), diameter: 800, drill: 400 }).unwrap();
+    let v = &b.design().routing.as_ref().unwrap().vias[0];
+    assert_eq!(v.id, id);
+    assert_eq!((v.diameter, v.drill), (800, 400));
+    assert_eq!(v.net, "GND");
+    assert_eq!(v.at, Point { x: 5000, y: 5000 });
+
+    let e = b.apply(&Cmd::EditVia { id: id.clone(), diameter: 400, drill: 400 }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_via", "drill not smaller than diameter must be refused, same as AddVia");
+    // The refused edit must not have applied halfway.
+    assert_eq!(b.design().routing.as_ref().unwrap().vias[0].diameter, 800);
+
+    assert_eq!(b.apply(&Cmd::EditVia { id: "via_nope".into(), diameter: 600, drill: 300 }).unwrap_err()[0].check, "ops_unknown_via");
+}
+
+#[test]
+fn track_width_and_via_presets_round_trip_and_reject_bad_entries() {
+    let m = net_model();
+    let mut b = board(&m);
+    assert!(b.design().routing.is_none(), "an empty board starts with no routing section at all");
+
+    b.apply(&Cmd::SetTrackWidthPresets { widths: vec![150, 250, 400] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![150, 250, 400]);
+
+    b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: 600, drill: 300 }, ViaPreset { diameter: 800, drill: 400 }] }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().via_presets.len(), 2);
+
+    let e = b.apply(&Cmd::SetTrackWidthPresets { widths: vec![200, 0] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_track");
+    // A refused replace must leave the previous list in place.
+    assert_eq!(b.design().routing.as_ref().unwrap().track_width_presets, vec![150, 250, 400]);
+
+    let e = b.apply(&Cmd::SetViaPresets { presets: vec![ViaPreset { diameter: 300, drill: 300 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_via");
+}
+
 // --------------------------------------------------------------- zones
 
 #[test]
@@ -446,6 +513,92 @@ fn add_zone_then_delete_it() {
     assert!(!id.is_empty());
     b.apply(&Cmd::DeleteZone { id }).unwrap();
     assert!(b.design().routing.as_ref().unwrap().zones.is_empty());
+}
+
+fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cmd {
+    // `panel_zone_properties.cpp`'s real defaults (`ZONE_SETTINGS::
+    // ZONE_SETTINGS()`), the same ones `Zone::default()` carries -- tests
+    // only override the one or two fields they're checking.
+    let mut z = Zone { id, net: net.into(), layer: "F.Cu".into(), outline: vec![], ..Default::default() };
+    overrides(&mut z);
+    Cmd::EditZone {
+        id: z.id,
+        net: z.net,
+        layer: z.layer,
+        clearance: z.clearance,
+        min_thickness: z.min_thickness,
+        thermal_gap: z.thermal_gap,
+        thermal_spoke_width: z.thermal_spoke_width,
+        pad_connection: z.pad_connection,
+        priority: z.priority,
+        island_removal_mode: z.island_removal_mode,
+        min_island_area: z.min_island_area,
+        fill_mode: z.fill_mode,
+        hatch_thickness: z.hatch_thickness,
+        hatch_gap: z.hatch_gap,
+        hatch_orientation_mdeg: z.hatch_orientation_mdeg,
+        hatch_smoothing_level: z.hatch_smoothing_level,
+        hatch_smoothing_value: z.hatch_smoothing_value,
+        hatch_hole_min_area: z.hatch_hole_min_area,
+        hatch_border_algorithm: z.hatch_border_algorithm,
+    }
+}
+
+#[test]
+fn edit_zone_replaces_every_setting_but_leaves_the_outline_alone() {
+    let m = net_model();
+    let mut b = board(&m);
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }];
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: outline.clone() }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| {
+        z.priority = 3;
+        z.clearance = 300;
+        z.pad_connection = PadConnection::Full;
+        z.fill_mode = FillMode::HatchPattern;
+        z.hatch_thickness = 1000;
+        z.hatch_gap = 1500;
+    }))
+    .unwrap();
+
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!(z.id, id, "id is stable across an edit");
+    assert_eq!(z.outline, outline, "EditZone never touches the outline");
+    assert_eq!(z.priority, 3);
+    assert_eq!(z.clearance, 300);
+    assert_eq!(z.pad_connection, PadConnection::Full);
+    assert_eq!(z.fill_mode, FillMode::HatchPattern);
+}
+
+#[test]
+fn edit_zone_rejects_a_thermal_spoke_narrower_than_the_minimum_width() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+
+    let e = b
+        .apply(&edit_zone_cmd(id, "GND", |z| {
+            z.min_thickness = 500;
+            z.thermal_spoke_width = 100;
+        }))
+        .unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_zone");
+}
+
+#[test]
+fn edit_zone_rejects_an_unknown_net_or_id() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+
+    let e = b.apply(&edit_zone_cmd(id.clone(), "NOPE", |_| {})).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_net");
+
+    let e = b.apply(&edit_zone_cmd("zone_nope".into(), "GND", |_| {})).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_zone");
 }
 
 // -------------------------------------------------------------- shapes
@@ -476,6 +629,29 @@ fn add_shape_rejects_a_short_polygon() {
     let shape = Shape::Polygon { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] };
     let e = b.apply(&Cmd::AddShape { shape }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_shape");
+}
+
+#[test]
+fn edit_shape_changes_layer_width_and_filled_but_not_geometry() {
+    let m = net_model();
+    let mut b = board(&m);
+    let shape = Shape::Rect { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 1000 } };
+    b.apply(&Cmd::AddShape { shape }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
+
+    b.apply(&Cmd::EditShape { id: id.clone(), layer: "F.Fab".into(), stroke_width: 300, filled: true }).unwrap();
+    let s = &b.design().drawings.as_ref().unwrap().shapes[0];
+    assert_eq!(s.layer(), "F.Fab");
+    assert_eq!(s.points(), vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 1000 }], "EditShape never touches geometry");
+    let Shape::Rect { stroke_width, filled, .. } = s else { panic!("still a rect") };
+    assert_eq!((*stroke_width, *filled), (300, true));
+
+    let e = b.apply(&Cmd::EditShape { id: id.clone(), layer: "".into(), stroke_width: 300, filled: true }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_shape");
+    let e = b.apply(&Cmd::EditShape { id, layer: "F.Fab".into(), stroke_width: 0, filled: true }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_shape");
+
+    assert_eq!(b.apply(&Cmd::EditShape { id: "shape_nope".into(), layer: "F.Fab".into(), stroke_width: 100, filled: false }).unwrap_err()[0].check, "ops_unknown_shape");
 }
 
 // --------------------------------------------------------------- text

@@ -2,13 +2,25 @@
 // real dialog (pcb_properties_panel.cpp's sibling) has several tabs
 // (General/Fields/3D Models/...) and lets you edit most of what it
 // shows -- this session read pcb_properties_panel.cpp for the docked
-// panel, not the modal dialog's exact layout, so this is a single-page,
-// read-only view of the same fields the docked Properties panel already
-// has real data for. Rotate/Delete work through the same commands the
-// panel's own buttons use; everything else has no command to write
-// through yet, so it's display-only rather than a disabled input.
+// panel, not the modal dialog's exact layout, so this is a single-page
+// view of the same fields the docked Properties panel already has real
+// data for. Reference/Value/Footprint/MPN live on the *intent*-derived
+// model (crates/model/src/lib.rs `Part`), not the editable `design.json`
+// IR this app's `Cmd`s mutate, so they stay read-only (same reasoning
+// BoardSetupDialog's Net Classes panel documents for the same model
+// split) -- editable here: the refdes "Text Placement" side (new this
+// session, `set_label_side`), plus Rotate/Flip/Move Exactly/Delete
+// through the same commands the docked panel's own buttons use.
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatXY } from "../state/units";
+import type { LabelSide } from "../api/types";
+
+const LABEL_SIDE_OPTIONS: { value: LabelSide; label: string }[] = [
+  { value: "above", label: "Above" },
+  { value: "below", label: "Below" },
+  { value: "left", label: "Left" },
+  { value: "right", label: "Right" },
+];
 
 export function FootprintPropertiesDialog() {
   const state = useStudioState();
@@ -52,6 +64,16 @@ export function FootprintPropertiesDialog() {
                 <span>{`${p.rot ?? 0}°`}</span>
                 <span>Side</span>
                 <span>{p.side === "bottom" ? "Bottom" : "Top"}</span>
+                <span>Text placement</span>
+                <span>
+                  <select value={p.label ?? "above"} onChange={(e) => api.cmd({ op: "set_label_side", part: p.ref, side: e.target.value as LabelSide })}>
+                    {LABEL_SIDE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </span>
               </>
             )}
             <span>Pads</span>
@@ -59,10 +81,14 @@ export function FootprintPropertiesDialog() {
             <span>Nets</span>
             <span>{nets.join(", ") || "–"}</span>
           </div>
-          <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>Read-only: no backend command edits these fields directly yet (beyond Rotate/Delete, available from the canvas and its right-click menu).</p>
+          <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>
+            Reference/Value/Footprint/MPN have no edit command yet (they come from the BOM, not the board) -- Position/Orientation/Side/Text placement do.
+          </p>
         </div>
         <div className="dialog-footer">
+          <button onClick={() => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true })}>Move Exactly...</button>
           <button onClick={() => api.rotateSelection(1)}>Rotate</button>
+          <button onClick={() => api.flipSelection()}>Flip</button>
           <button onClick={() => api.ripSelection()}>Delete</button>
           <button className="primary" onClick={close}>
             Close

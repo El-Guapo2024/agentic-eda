@@ -319,7 +319,7 @@ fn check_board(cli: &Path, board_name: &str) -> Vec<ParityRow> {
             ..Zone::default()
         })
         .collect();
-    design.routing.get_or_insert_with(|| eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![] }).zones = ir_zones;
+    design.routing.get_or_insert_with(|| eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] }).zones = ir_zones;
     design.routing.as_mut().unwrap().assign_missing_ids();
 
     let drc_board = eda_drc::board::build(&design, &model);

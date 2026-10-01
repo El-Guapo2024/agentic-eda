@@ -119,7 +119,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         schematic: None,
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
-        routing: if tracks.is_empty() && vias.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones: vec![] }) },
+        routing: if tracks.is_empty() && vias.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![] }) },
         drawings: if shapes.is_empty() && texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts }) },
     };
     // Every track/via this parse just built, and every shape/text, has no

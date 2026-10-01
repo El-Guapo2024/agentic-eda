@@ -470,6 +470,70 @@ export function useActionRunner() {
     m.set("pcbnew.Control.layerAlphaInc", pcbOnly(() => stepActiveLayerAlpha(ALPHA_STEP)));
     m.set("pcbnew.Control.layerAlphaDec", pcbOnly(() => stepActiveLayerAlpha(-ALPHA_STEP)));
 
+    // zone_filler_tool.cpp ZoneFillAll/ZoneUnfillAll (B/Ctrl+B): this
+    // app's /api/fill is always computed fresh (no per-zone fill cache to
+    // mutate), so "fill" is just "go fetch it", and "unfill" is just
+    // "stop showing what we fetched" -- see state.zoneFill's own doc.
+    m.set("pcbnew.ZoneFiller.zoneFillAll", pcbOnly(() => api.fillZones()));
+    m.set("pcbnew.ZoneFiller.zoneUnfillAll", pcbOnly(() => api.unfillZones()));
+    // pcb_control.cpp ZoneDisplayMode: independent of whether a zone HAS
+    // fill data at all (above) -- how one that does paints. Source's
+    // other two modes (fracture-borders/triangulation) are developer
+    // debug views, not ported -- see painter.ts's drawZones doc.
+    m.set("pcbnew.Control.zoneDisplayEnable", pcbOnly(() => dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: "filled" })));
+    m.set("pcbnew.Control.zoneDisplayDisable", pcbOnly(() => dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: "outline" })));
+    m.set(
+      "pcbnew.Control.zoneDisplayToggle",
+      pcbOnly(() => dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: state.zoneDisplayMode === "filled" ? "outline" : "filled" }))
+    );
+
+    // pcbnew.EditorControl.trackWidthInc/Dec (W/Shift+W): BOARD_DESIGN_
+    // SETTINGS' real behavior is dual-purpose -- step the board's own
+    // "current" width (state.currentTrackWidthUm, read by Canvas.tsx's
+    // route tool for the *next* track) AND, if anything is selected,
+    // apply the new width to every selected track in the same keypress
+    // (so W on an already-drawn track resizes it in place, not just the
+    // next one you draw).
+    const trackWidthList = (): number[] => {
+      const board = state.board;
+      const base = board?.board_rules?.track_width ?? 250;
+      return [base, ...(board?.routing?.track_width_presets ?? [])];
+    };
+    const cycleTrackWidth = (dir: 1 | -1) => {
+      const list = trackWidthList();
+      const cur = state.currentTrackWidthUm ?? list[0]!;
+      const i = list.indexOf(cur);
+      // Source's spin control clamps at the list ends rather than
+      // wrapping (ADVANCED_CFG has no "wrap" setting for this one).
+      const next = list[Math.max(0, Math.min(list.length - 1, (i === -1 ? 0 : i) + dir))]!;
+      dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthUm: next });
+      for (const id of state.selection) if (api.trackById(id)) api.cmd({ op: "set_track_width", id, width: next });
+    };
+    m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleTrackWidth(1)));
+    m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleTrackWidth(-1)));
+
+    // pcbnew.EditorControl.viaSizeInc/Dec ("\\"/unbound): same dual-purpose
+    // idea as the track-width cycle above, for `routing.via_presets`.
+    const viaPresetList = (): { diameter: number; drill: number }[] => {
+      const board = state.board;
+      const base = { diameter: board?.board_rules?.via_diameter ?? 600, drill: board?.board_rules?.via_drill ?? 300 };
+      return [base, ...(board?.routing?.via_presets ?? [])];
+    };
+    const sameViaPreset = (a: { diameter: number; drill: number }, b: { diameter: number; drill: number }) => a.diameter === b.diameter && a.drill === b.drill;
+    const cycleViaPreset = (dir: 1 | -1) => {
+      const list = viaPresetList();
+      const cur = state.currentViaPreset ?? list[0]!;
+      const i = list.findIndex((p) => sameViaPreset(p, cur));
+      const next = list[Math.max(0, Math.min(list.length - 1, (i === -1 ? 0 : i) + dir))]!;
+      dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: next });
+      for (const id of state.selection) if (api.viaById(id)) api.cmd({ op: "edit_via", id, diameter: next.diameter, drill: next.drill });
+    };
+    m.set("pcbnew.EditorControl.viaSizeInc", pcbOnly(() => cycleViaPreset(1)));
+    m.set("pcbnew.EditorControl.viaSizeDec", pcbOnly(() => cycleViaPreset(-1)));
+
+    // dialog_board_setup.cpp -- see BoardSetupDialog.tsx.
+    m.set("pcbnew.EditorControl.boardSetup", pcbOnly(() => dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: true })));
+
     const cycleGrid = (dir: 1 | -1) => {
       const i = GRID_OPTIONS_UM.indexOf(state.gridUm);
       const next = GRID_OPTIONS_UM[Math.max(0, Math.min(GRID_OPTIONS_UM.length - 1, (i === -1 ? 0 : i) + dir))]!;

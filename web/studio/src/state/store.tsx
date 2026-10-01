@@ -7,8 +7,8 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, Cmd, DrcReport, ErcReport, Part, Ratsnest, Schematic, SchematicSymbol, SchematicWire, Shape, Track, Um, Via, Zone, BoardText } from "../api/types";
-import { fetchDrc, fetchErc, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
+import type { BoardState, Cmd, DrcReport, ErcReport, FillReport, Part, Ratsnest, Schematic, SchematicSymbol, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields, BoardText } from "../api/types";
+import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
@@ -146,6 +146,33 @@ export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   kicadModels: true,
 };
 
+/**
+ * `ZONE_SETTINGS::ZONE_SETTINGS()`'s hardcoded defaults (`pcbnew/
+ * zone_settings.cpp`), exactly mirroring `crates/model/src/ir.rs` `Zone`'s
+ * own `impl Default` (same field values, same source comments there) --
+ * what a brand-new zone gets from `add_zone` before `ZoneDialog.tsx`'s own
+ * settings panel (or `api.addZone`'s unchanged-settings check) touches
+ * anything.
+ */
+export const DEFAULT_ZONE_SETTINGS: ZoneSettingsFields = {
+  clearance: 500,
+  min_thickness: 250,
+  thermal_gap: 500,
+  thermal_spoke_width: 500,
+  pad_connection: "Thermal",
+  priority: 0,
+  island_removal_mode: "Always",
+  min_island_area: 10_000_000,
+  fill_mode: "Polygons",
+  hatch_thickness: 1000,
+  hatch_gap: 1500,
+  hatch_orientation_mdeg: 0,
+  hatch_smoothing_level: 0,
+  hatch_smoothing_value: 0.1,
+  hatch_hole_min_area: 0.15,
+  hatch_border_algorithm: 1,
+};
+
 export interface StudioState {
   board: BoardState | null;
   boardError: string | null;
@@ -167,8 +194,46 @@ export interface StudioState {
   movePreview: MovePreview | null;
   activeTool: ToolId;
   drawState: DrawState | null;
-  /** A just-drawn zone outline waiting for its net/layer to be confirmed in ZoneDialog before `add_zone` commits it. */
+  /** A just-drawn zone outline waiting for its settings to be confirmed in ZoneDialog before `add_zone` commits it. */
   zonePending: [Um, Um][] | null;
+  /** A selected zone's id ("E", or double-click) -- opens ZoneDialog in edit mode (`edit_zone`) instead of add mode. Independent of `zonePending` (one or the other is ever set, never both). */
+  zoneEditId: string | null;
+  /**
+   * `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` (B/Ctrl+B,
+   * zone_filler_tool.cpp): the last GET /api/fill this session asked
+   * for, or null if zones have never been filled (or were just
+   * unfilled) -- the "outline only, nothing computed" state every zone
+   * starts in, same as a freshly drawn KiCad zone. Kept fresh by the
+   * same version-change poll `ratsnest`/`drc` already use, gated on
+   * this being non-null (see StudioProvider's poll loop) -- unlike real
+   * KiCad, there is no "stale fill" hatch state to show, since
+   * `/api/fill` is cheap to recompute and never cached either side.
+   */
+  zoneFill: FillReport | null;
+  /**
+   * `pcbnew.Control.zoneDisplayEnable`/`zoneDisplayDisable`/
+   * `zoneDisplayToggle` (`ZONE_DISPLAY_MODE`): how a zone that DOES have
+   * fill data (`zoneFill` above) paints -- solid copper, or just its
+   * outline. A zone with no fill data yet always shows its outline
+   * regardless of this mode, same as source (nothing to fill with).
+   * KiCad's other two modes (fracture-borders/triangulation) are
+   * developer debug views, not ported -- see PARITY-pcb.md.
+   */
+  zoneDisplayMode: "filled" | "outline";
+  /** Board Setup... (dialog_board_setup.cpp) -- net classes/track-via sizing/rules/etc, see BoardSetupDialog.tsx. */
+  boardSetupDialogOpen: boolean;
+  /**
+   * `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec` (W/Shift+W):
+   * the board's own default (`board_rules.track_width`) plus
+   * `routing.track_width_presets`' index the cycle is currently on, as
+   * an actual width rather than an index so it survives the preset list
+   * changing underneath it -- null until the first W/Shift+W press
+   * (every route/new-track client falls back to `board_rules.track_width`
+   * until then, same value this would resolve to anyway).
+   */
+  currentTrackWidthUm: Um | null;
+  /** Same idea as `currentTrackWidthUm`, for `pcbnew.EditorControl.viaSizeInc`/`viaSizeDec` cycling `board_rules.via_diameter`/`via_drill` plus `routing.via_presets`. */
+  currentViaPreset: ViaPreset | null;
   /** The text tool/E-to-edit dialog: "add" (fresh, at a clicked point) or "edit" (an existing text's id). */
   textDialog: { mode: "add"; at: [Um, Um] } | { mode: "edit"; id: string } | null;
 
@@ -297,6 +362,12 @@ const initialState: StudioState = {
   activeTool: "select",
   drawState: null,
   zonePending: null,
+  zoneEditId: null,
+  zoneFill: null,
+  zoneDisplayMode: "filled",
+  boardSetupDialogOpen: false,
+  currentTrackWidthUm: null,
+  currentViaPreset: null,
   textDialog: null,
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
@@ -400,6 +471,13 @@ export type Action =
   | { type: "SET_ERC_SELECTED"; index: number | null }
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
+  | { type: "SET_ZONE_EDIT_ID"; id: string | null }
+  | { type: "FILL_OK"; fill: FillReport }
+  | { type: "CLEAR_ZONE_FILL" }
+  | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" }
+  | { type: "SET_BOARD_SETUP_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_CURRENT_TRACK_WIDTH"; widthUm: Um }
+  | { type: "SET_CURRENT_VIA_PRESET"; preset: ViaPreset }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
   | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
   | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean };
@@ -447,7 +525,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       // reset, and anywhere else that needs to drop whatever the route/
       // zone/drawing/text tools were in the middle of, not just a
       // footprint selection/move.
-      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null, itemPropertiesId: null };
+      return { ...state, selection: new Set(), armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, zoneEditId: null, textDialog: null, itemPropertiesId: null };
     case "ESCAPE": {
       // pcb_selection_tool.cpp's IsCancel() handler, tiered exactly like
       // source: an in-progress tool (move/draw/armed-place) owns Escape
@@ -460,7 +538,7 @@ function reducer(state: StudioState, action: Action): StudioState {
       // the move and leaves the pre-move selection exactly as it was.
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.movePreview != null;
       if (inProgress) {
-        return { ...state, armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, textDialog: null };
+        return { ...state, armed: null, movePreview: null, activeTool: "select", drawState: null, zonePending: null, zoneEditId: null, textDialog: null };
       }
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
@@ -562,6 +640,23 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drawState: action.draw };
     case "SET_ZONE_PENDING":
       return { ...state, zonePending: action.outline };
+    case "SET_ZONE_EDIT_ID":
+      return { ...state, zoneEditId: action.id };
+    case "FILL_OK":
+      return { ...state, zoneFill: action.fill };
+    case "CLEAR_ZONE_FILL":
+      // zone_filler_tool.cpp ZoneUnfillAll: discards the computed fill;
+      // the canvas falls back to outline-only (painter.ts), same as a
+      // zone that has never been filled at all.
+      return { ...state, zoneFill: null };
+    case "SET_ZONE_DISPLAY_MODE":
+      return { ...state, zoneDisplayMode: action.mode };
+    case "SET_BOARD_SETUP_DIALOG_OPEN":
+      return { ...state, boardSetupDialogOpen: action.open };
+    case "SET_CURRENT_TRACK_WIDTH":
+      return { ...state, currentTrackWidthUm: action.widthUm };
+    case "SET_CURRENT_VIA_PRESET":
+      return { ...state, currentViaPreset: action.preset };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.dialog };
     case "SET_CLIPBOARD":
@@ -615,6 +710,22 @@ export interface StudioApi {
   pasteClipboard: () => Promise<void>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
+  /**
+   * ZoneDialog's "Add Zone": `add_zone` (net/layer/outline only, same as
+   * `Cmd::AddZone`'s own shape -- see that type's doc on why it stays
+   * that way) then, if the dialog's settings aren't every one of
+   * `Zone::default()`'s own values, an immediate follow-up `edit_zone` on
+   * the fresh zone's id (found the same before/after-id-diff way
+   * `duplicateSelection`/`pasteClipboard` already do, since the reply has
+   * no structured "here's what I made" field). Two Cmds, not one atomic
+   * `Cmd::AddZone` with inline settings, so every existing caller of that
+   * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
+   */
+  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields) => Promise<void>;
+  /** B ("Fill All Zones"): GET /api/fill now, and keep it live-updated (state.zoneFill) until `unfillZones`. */
+  fillZones: () => Promise<void>;
+  /** Ctrl+B ("Unfill All Zones"): back to outline-only, same as a zone that was never filled. */
+  unfillZones: () => void;
 }
 
 const StudioStateContext = createContext<StudioState | null>(null);
@@ -672,6 +783,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshFill = useCallback(async () => {
+    try {
+      const fill = await fetchFill();
+      dispatch({ type: "FILL_OK", fill });
+    } catch {
+      // same reasoning as refreshDrc -- keep the last good report.
+    }
+  }, []);
+
   // Poll /api/version (cheap) and only refetch the full /api/state when it
   // changes -- mirrors the old studio.html poll loop so CLI edits and
   // other browser tabs show up here within ~1s without hammering the
@@ -687,6 +807,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     let lastRatsnestFetch: string | null = null;
     let lastDrcFetch: string | null = null;
     let lastErcFetch: string | null = null;
+    let lastFillFetch: string | null = null;
     const tick = async () => {
       try {
         const v = await fetchVersion();
@@ -719,6 +840,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           lastErcFetch = v;
           await refreshErc();
         }
+        // Gated on "has been filled at least once this session" (not a
+        // dialog -- there isn't one, B/Ctrl+B just toggle a canvas
+        // rendering mode) -- same reasoning as DRC/ERC above: computing
+        // fills nobody is looking at would be pure waste, but once shown
+        // they should track the board live, same as KiCad's own
+        // auto-refill-on-edit behavior (ZONE_FILLER_TOOL::ZoneFillDirty).
+        if (stateRef.current.zoneFill != null && lastFillFetch !== v) {
+          lastFillFetch = v;
+          await refreshFill();
+        }
       } catch {
         // backend restarting or unreachable; try again next tick
       }
@@ -729,7 +860,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       stopped = true;
       clearInterval(id);
     };
-  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc, refreshErc]);
+  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc, refreshErc, refreshFill]);
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {
@@ -864,6 +995,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
     },
+    addZone: async (net, layer, outline, settings) => {
+      const board = stateRef.current.board;
+      if (!board) return;
+      const before = allItemIds(board);
+      const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) });
+      if (!ok) return;
+      const after = stateRef.current.board;
+      if (!after) return;
+      const newId = [...allItemIds(after)].find((id) => !before.has(id));
+      if (!newId) return;
+      // Default-valued settings need no follow-up at all -- `add_zone`
+      // already landed on exactly that.
+      const unchanged = (Object.keys(DEFAULT_ZONE_SETTINGS) as (keyof ZoneSettingsFields)[]).every((k) => settings[k] === DEFAULT_ZONE_SETTINGS[k]);
+      if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
+    },
     copySelection: () => {
       const board = stateRef.current.board;
       if (!board) return;
@@ -888,6 +1034,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
     },
+    fillZones: refreshFill,
+    unfillZones: () => dispatch({ type: "CLEAR_ZONE_FILL" }),
   };
 
   return (

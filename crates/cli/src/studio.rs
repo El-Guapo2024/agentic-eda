@@ -687,7 +687,30 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "zones": r.zones.iter().map(|z| json!({
                 "id": z.id, "net": z.net, "layer": z.layer,
                 "outline": z.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+                // Full `ZONE_SETTINGS` (crates/model/src/ir.rs's `Zone`),
+                // for ZoneDialog's edit mode (dialog_copper_zones.cpp) --
+                // was net/layer/outline only. Enums (`pad_connection`/
+                // `island_removal_mode`/`fill_mode`) serialize through
+                // their own `Serialize` impl, same PascalCase variant
+                // names `eda_ops::Cmd::EditZone` deserializes back.
+                "clearance": z.clearance, "min_thickness": z.min_thickness,
+                "thermal_gap": z.thermal_gap, "thermal_spoke_width": z.thermal_spoke_width,
+                "pad_connection": z.pad_connection, "priority": z.priority,
+                "island_removal_mode": z.island_removal_mode, "min_island_area": z.min_island_area,
+                "fill_mode": z.fill_mode, "hatch_thickness": z.hatch_thickness, "hatch_gap": z.hatch_gap,
+                "hatch_orientation_mdeg": z.hatch_orientation_mdeg, "hatch_smoothing_level": z.hatch_smoothing_level,
+                "hatch_smoothing_value": z.hatch_smoothing_value, "hatch_hole_min_area": z.hatch_hole_min_area,
+                "hatch_border_algorithm": z.hatch_border_algorithm,
             })).collect::<Vec<_>>(),
+            // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
+            // the Board Setup "Track Widths & Vias" panel's editable
+            // preset lists (`eda_ops::Cmd::SetTrackWidthPresets`/
+            // `SetViaPresets`), driving the W/Shift+W and via-size-cycle
+            // hotkeys. The board's own default (board_rules.track_width/
+            // via_diameter/via_drill below) is always the implicit first
+            // entry, not repeated in these lists.
+            "track_width_presets": r.track_width_presets,
+            "via_presets": r.via_presets.iter().map(|p| json!({ "diameter": p.diameter, "drill": p.drill })).collect::<Vec<_>>(),
         })
     });
     let drawings = design.drawings.as_ref().map(|d| {
@@ -723,6 +746,24 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "via_drill": model.board.via_drill,
             "via_diameter": model.board.via_diameter,
             "clearance": model.board.clearance,
+            // Board Setup dialog (dialog_board_setup.cpp) material this
+            // project's constraint model actually holds. Net classes,
+            // per-class track/via sizing, and text/graphics defaults live
+            // on the *intent*-derived `ConstraintModel` (`model`,
+            // immutable here), not the editable `design.json` IR, so
+            // there is no `Cmd` to change them yet -- exposed read-only,
+            // same "no command exists for this field yet" convention
+            // ItemPropertiesDialog already uses for other fields. See
+            // GAPS.md #10 and PARITY-pcb.md's Board Setup section.
+            "net_classes": model.board.net_classes,
+            "hole_to_hole_min_um": model.board.hole_to_hole_min_um,
+            "hole_clearance_um": model.board.hole_clearance_um,
+            "silk_clearance_um": model.board.silk_clearance_um,
+            "annular_width_min_um": model.board.annular_width_min_um,
+            "min_silk_text_height_um": model.board.min_silk_text_height_um,
+            "min_silk_text_thickness_um": model.board.min_silk_text_thickness_um,
+            "refdes_font_um": model.board.refdes_font_um,
+            "stackup": model.stackup,
         },
         "routing": routing,
         "drawings": drawings,

@@ -25,7 +25,31 @@ function viaToCmd(v: Via): CmdVia {
   return { net: v.net, at: { x: v.x, y: v.y }, drill: v.drill, diameter: v.d, from_layer: v.from, to_layer: v.to };
 }
 function zoneToCmd(z: Zone): CmdZone {
-  return { net: z.net, layer: z.layer, outline: z.outline.map(pt) };
+  // Every ZONE_SETTINGS field forwarded explicitly, not just net/layer/
+  // outline -- otherwise a copy/paste or duplicate of a zone with
+  // customized clearance/priority/hatch/etc. would silently reset it to
+  // KiCad's defaults the moment it round-trips through `paste_items`.
+  return {
+    net: z.net,
+    layer: z.layer,
+    outline: z.outline.map(pt),
+    clearance: z.clearance,
+    min_thickness: z.min_thickness,
+    thermal_gap: z.thermal_gap,
+    thermal_spoke_width: z.thermal_spoke_width,
+    pad_connection: z.pad_connection,
+    priority: z.priority,
+    island_removal_mode: z.island_removal_mode,
+    min_island_area: z.min_island_area,
+    fill_mode: z.fill_mode,
+    hatch_thickness: z.hatch_thickness,
+    hatch_gap: z.hatch_gap,
+    hatch_orientation_mdeg: z.hatch_orientation_mdeg,
+    hatch_smoothing_level: z.hatch_smoothing_level,
+    hatch_smoothing_value: z.hatch_smoothing_value,
+    hatch_hole_min_area: z.hatch_hole_min_area,
+    hatch_border_algorithm: z.hatch_border_algorithm,
+  };
 }
 function shapeToCmd(s: Shape): CmdShape {
   const common = { layer: s.layer, stroke_width: s.stroke_width, filled: s.filled };

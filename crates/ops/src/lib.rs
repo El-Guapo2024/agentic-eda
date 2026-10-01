@@ -41,8 +41,8 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads};
 use eda_model::ir::{
-    Design, DrawingsSection, FootprintInstance, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, Point, PowerSymbol, RoutingSection, SchematicSection, Shape, Side, SymbolInstance, Text,
-    TextJustify, Track, Um, Via, Wire, Zone,
+    Design, DrawingsSection, FillMode, FootprintInstance, IslandRemovalMode, LabelKind, LabelSide, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection,
+    SchematicSection, Shape, Side, SymbolInstance, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -185,6 +185,12 @@ pub enum Cmd {
     /// `Cmd::clears_routing` and the CLI's `step`). Deferred, not fixed
     /// here -- see the report.
     Flip { part: String },
+    /// Footprint Properties' reference-designator "Text Placement" field
+    /// (`pcb_properties_panel.cpp`'s silkscreen label side) -- which side
+    /// of the courtyard the refdes label sits on. Does not move or
+    /// resize anything else about the part, so unlike `Flip`/`Rotate`/
+    /// `MoveTo` this does not clear the board's routing.
+    SetLabelSide { part: String, side: LabelSide },
 
     /// Add a hand-drawn copper track. `net` and `layer` are refused if
     /// they do not name a real net / a real copper layer; whether the
@@ -205,11 +211,51 @@ pub enum Cmd {
     /// Move a via to a new position. Its id, net, drill, diameter and
     /// layer span do not change.
     MoveVia { id: String, x: Um, y: Um },
+    /// `dialog_track_via_properties.cpp`'s editable via fields (GAPS.md
+    /// #11): pad diameter and drill. Net, position and layer span are
+    /// unchanged (KiCad does not let you re-net or re-span an existing via
+    /// from this dialog either -- that is what delete-and-redraw is for).
+    EditVia { id: String, diameter: Um, drill: Um },
+    /// `BOARD_DESIGN_SETTINGS::m_TrackWidthList`, replaced wholesale --
+    /// the studio's Board Setup "Track Widths & Vias" panel has no
+    /// per-entry add/remove Cmd of its own, it just resubmits the whole
+    /// list on every change, same spirit as `PasteItems`. The board's own
+    /// default (`BoardRules::track_width`) is not part of this list -- a
+    /// consumer always offers it as the implicit first entry.
+    SetTrackWidthPresets { widths: Vec<Um> },
+    /// Same idea as `SetTrackWidthPresets`, for `m_ViaSizeList`.
+    SetViaPresets { presets: Vec<ViaPreset> },
 
     /// Add a copper pour.
     AddZone { net: String, layer: String, outline: Vec<Point> },
     /// Remove a zone by id.
     DeleteZone { id: String },
+    /// `dialog_copper_zones.cpp`'s "OK": replace a zone's net/layer and
+    /// every `ZONE_SETTINGS` field at once -- KiCad has no concept of
+    /// editing just one field of the panel, the whole thing commits
+    /// together. The outline is untouched (see the point editor, GAPS.md
+    /// #1's zone item, for corner-level edits).
+    EditZone {
+        id: String,
+        net: String,
+        layer: String,
+        clearance: Um,
+        min_thickness: Um,
+        thermal_gap: Um,
+        thermal_spoke_width: Um,
+        pad_connection: PadConnection,
+        priority: u32,
+        island_removal_mode: IslandRemovalMode,
+        min_island_area: i64,
+        fill_mode: FillMode,
+        hatch_thickness: Um,
+        hatch_gap: Um,
+        hatch_orientation_mdeg: Millideg,
+        hatch_smoothing_level: i32,
+        hatch_smoothing_value: f64,
+        hatch_hole_min_area: f64,
+        hatch_border_algorithm: i32,
+    },
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -221,6 +267,11 @@ pub enum Cmd {
     /// has no single position the way a via or a text does (its geometry
     /// is two or more points), so the move is a delta, not a destination.
     MoveShape { id: String, dx: Um, dy: Um },
+    /// `dialog_pcb_shape_properties.cpp`'s editable fields (GAPS.md #11):
+    /// layer, line width, and filled/unfilled. Geometry itself has no
+    /// dialog field to edit in source either (dragging the shape's own
+    /// points is the only way) -- left for a future point editor.
+    EditShape { id: String, layer: String, stroke_width: Um, filled: bool },
 
     /// Add free text.
     AddText { text: Text },
@@ -413,16 +464,20 @@ impl Cmd {
             | Cmd::Nudge { part, .. }
             | Cmd::Rotate { part, .. }
             | Cmd::Rip { part }
-            | Cmd::Flip { part } => vec![part],
+            | Cmd::Flip { part }
+            | Cmd::SetLabelSide { part, .. } => vec![part],
             Cmd::Swap { a, b } => vec![a, b],
             Cmd::AddTrack { net, .. } | Cmd::AddVia { net, .. } | Cmd::AddZone { net, .. } => vec![net.as_str()],
             Cmd::DeleteTrack { id }
             | Cmd::SetTrackWidth { id, .. }
             | Cmd::DeleteVia { id }
             | Cmd::MoveVia { id, .. }
+            | Cmd::EditVia { id, .. }
             | Cmd::DeleteZone { id }
+            | Cmd::EditZone { id, .. }
             | Cmd::DeleteShape { id }
             | Cmd::MoveShape { id, .. }
+            | Cmd::EditShape { id, .. }
             | Cmd::EditText { id, .. }
             | Cmd::DeleteText { id }
             | Cmd::MoveText { id, .. } => vec![id.as_str()],
@@ -431,6 +486,8 @@ impl Cmd {
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } => vec!["paste"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
+            Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
+            Cmd::SetViaPresets { .. } => vec!["via_presets"],
 
             Cmd::MoveSymbol { id, .. } | Cmd::DragSymbol { id, .. } | Cmd::RotateSymbol { id, .. } | Cmd::MirrorSymbol { id } | Cmd::DeleteSymbol { id } | Cmd::AddSymbol { id, .. } => vec![id],
             Cmd::AddWire { .. } => vec!["wire"],
@@ -678,6 +735,7 @@ impl<'a> Board<'a> {
             Cmd::Swap { a, b } => self.swap(a, b),
             Cmd::Rip { part } => self.rip(part),
             Cmd::Flip { part } => self.flip(part),
+            Cmd::SetLabelSide { part, side } => self.set_label_side(part, *side),
 
             Cmd::AddTrack { net, layer, width, pts } => self.add_track(net, layer, *width, pts),
             Cmd::DeleteTrack { id } => self.delete_track(id),
@@ -686,13 +744,58 @@ impl<'a> Board<'a> {
             Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer } => self.add_via(net, *x, *y, *drill, *diameter, from_layer, to_layer),
             Cmd::DeleteVia { id } => self.delete_via(id),
             Cmd::MoveVia { id, x, y } => self.move_via(id, *x, *y),
+            Cmd::EditVia { id, diameter, drill } => self.edit_via(id, *diameter, *drill),
+            Cmd::SetTrackWidthPresets { widths } => self.set_track_width_presets(widths),
+            Cmd::SetViaPresets { presets } => self.set_via_presets(presets),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
+            Cmd::EditZone {
+                id,
+                net,
+                layer,
+                clearance,
+                min_thickness,
+                thermal_gap,
+                thermal_spoke_width,
+                pad_connection,
+                priority,
+                island_removal_mode,
+                min_island_area,
+                fill_mode,
+                hatch_thickness,
+                hatch_gap,
+                hatch_orientation_mdeg,
+                hatch_smoothing_level,
+                hatch_smoothing_value,
+                hatch_hole_min_area,
+                hatch_border_algorithm,
+            } => self.edit_zone(
+                id,
+                net,
+                layer,
+                *clearance,
+                *min_thickness,
+                *thermal_gap,
+                *thermal_spoke_width,
+                *pad_connection,
+                *priority,
+                *island_removal_mode,
+                *min_island_area,
+                *fill_mode,
+                *hatch_thickness,
+                *hatch_gap,
+                *hatch_orientation_mdeg,
+                *hatch_smoothing_level,
+                *hatch_smoothing_value,
+                *hatch_hole_min_area,
+                *hatch_border_algorithm,
+            ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
             Cmd::DeleteShape { id } => self.delete_shape(id),
             Cmd::MoveShape { id, dx, dy } => self.move_shape(id, *dx, *dy),
+            Cmd::EditShape { id, layer, stroke_width, filled } => self.edit_shape(id, layer, *stroke_width, *filled),
 
             Cmd::AddText { text } => self.add_text(text.clone()),
             Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror } => {
@@ -1106,6 +1209,14 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    fn set_label_side(&mut self, part: &str, side: LabelSide) -> Result<(), Vec<CheckResult>> {
+        self.require_placed(part)?;
+        let fps = &mut self.design.placement.as_mut().unwrap().footprints;
+        let i = fps.iter().position(|f| f.id == part).expect("caller checked the part is placed");
+        fps[i].label = side;
+        Ok(())
+    }
+
     // --------------------------------------------------------- copper
 
     fn known_net(&self, net: &str) -> Result<(), Vec<CheckResult>> {
@@ -1133,7 +1244,7 @@ impl<'a> Board<'a> {
     /// must never clear an existing routing section -- see
     /// `Cmd::clears_routing`.
     fn routing_mut(&mut self) -> &mut RoutingSection {
-        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![] })
+        self.design.routing.get_or_insert_with(|| RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] })
     }
 
     /// The board's drawings section, creating an empty one on first use.
@@ -1229,6 +1340,44 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    fn edit_via(&mut self, id: &str, diameter: Um, drill: Um) -> Result<(), Vec<CheckResult>> {
+        if drill <= 0 || diameter <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_via", id, "via drill and diameter must be positive")]);
+        }
+        if drill >= diameter {
+            return Err(vec![CheckResult::fail("ops_bad_via", id, format!("drill {drill} um is not smaller than the {diameter} um pad, so the via has no annular ring"))]);
+        }
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "the board has no routing yet")])?;
+        let v = rt.vias.iter_mut().find(|v| v.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_via", id, "no via with this id")])?;
+        v.diameter = diameter;
+        v.drill = drill;
+        Ok(())
+    }
+
+    /// Board Setup > Track Widths & Vias' "Track Widths" list -- a plain
+    /// whole-list replace (see `Cmd::SetTrackWidthPresets`'s own doc).
+    fn set_track_width_presets(&mut self, widths: &[Um]) -> Result<(), Vec<CheckResult>> {
+        if widths.iter().any(|w| *w <= 0) {
+            return Err(vec![CheckResult::fail("ops_bad_track", "track_width_presets", "every preset width must be positive")]);
+        }
+        self.routing_mut().track_width_presets = widths.to_vec();
+        Ok(())
+    }
+
+    /// Same panel's "Via Sizes" list.
+    fn set_via_presets(&mut self, presets: &[ViaPreset]) -> Result<(), Vec<CheckResult>> {
+        for p in presets {
+            if p.drill <= 0 || p.diameter <= 0 {
+                return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", "via drill and diameter must be positive")]);
+            }
+            if p.drill >= p.diameter {
+                return Err(vec![CheckResult::fail("ops_bad_via", "via_presets", "drill must be smaller than diameter")]);
+            }
+        }
+        self.routing_mut().via_presets = presets.to_vec();
+        Ok(())
+    }
+
     fn add_zone(&mut self, net: &str, layer: &str, outline: &[Point]) -> Result<(), Vec<CheckResult>> {
         self.known_net(net)?;
         self.known_layer(layer)?;
@@ -1248,6 +1397,72 @@ impl<'a> Board<'a> {
         if rt.zones.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")]);
         }
+        Ok(())
+    }
+
+    /// `dialog_copper_zones.cpp`'s "OK": see `Cmd::EditZone`'s own doc.
+    /// Outline untouched; every other `ZONE_SETTINGS` field replaced
+    /// wholesale, same convention `edit_text` already uses for a full
+    /// properties-dialog commit.
+    #[allow(clippy::too_many_arguments)]
+    fn edit_zone(
+        &mut self,
+        id: &str,
+        net: &str,
+        layer: &str,
+        clearance: Um,
+        min_thickness: Um,
+        thermal_gap: Um,
+        thermal_spoke_width: Um,
+        pad_connection: PadConnection,
+        priority: u32,
+        island_removal_mode: IslandRemovalMode,
+        min_island_area: i64,
+        fill_mode: FillMode,
+        hatch_thickness: Um,
+        hatch_gap: Um,
+        hatch_orientation_mdeg: Millideg,
+        hatch_smoothing_level: i32,
+        hatch_smoothing_value: f64,
+        hatch_hole_min_area: f64,
+        hatch_border_algorithm: i32,
+    ) -> Result<(), Vec<CheckResult>> {
+        self.known_net(net)?;
+        self.known_layer(layer)?;
+        if clearance < 0 {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "clearance cannot be negative")]);
+        }
+        if min_thickness <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "minimum width must be positive")]);
+        }
+        if thermal_spoke_width < min_thickness {
+            // panel_zone_properties.cpp's AcceptOptions(): "Thermal spoke
+            // width cannot be smaller than the minimum width."
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "thermal spoke width cannot be smaller than the minimum width")]);
+        }
+        if fill_mode == FillMode::HatchPattern && (hatch_thickness < min_thickness || hatch_gap < min_thickness) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "hatch thickness and gap must be at least the minimum width")]);
+        }
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
+        let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
+        z.net = net.into();
+        z.layer = layer.into();
+        z.clearance = clearance;
+        z.min_thickness = min_thickness;
+        z.thermal_gap = thermal_gap;
+        z.thermal_spoke_width = thermal_spoke_width;
+        z.pad_connection = pad_connection;
+        z.priority = priority;
+        z.island_removal_mode = island_removal_mode;
+        z.min_island_area = min_island_area;
+        z.fill_mode = fill_mode;
+        z.hatch_thickness = hatch_thickness;
+        z.hatch_gap = hatch_gap;
+        z.hatch_orientation_mdeg = hatch_orientation_mdeg;
+        z.hatch_smoothing_level = hatch_smoothing_level;
+        z.hatch_smoothing_value = hatch_smoothing_value;
+        z.hatch_hole_min_area = hatch_hole_min_area;
+        z.hatch_border_algorithm = hatch_border_algorithm;
         Ok(())
     }
 
@@ -1283,6 +1498,21 @@ impl<'a> Board<'a> {
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
         let s = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])?;
         s.translate(dx, dy);
+        Ok(())
+    }
+
+    fn edit_shape(&mut self, id: &str, layer: &str, stroke_width: Um, filled: bool) -> Result<(), Vec<CheckResult>> {
+        if layer.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "a shape needs a layer")]);
+        }
+        if stroke_width <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width must be positive")]);
+        }
+        let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
+        let s = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])?;
+        s.set_layer(layer.into());
+        s.set_stroke_width(stroke_width);
+        s.set_filled(filled);
         Ok(())
     }
 

@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, ErcReport, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, ErcReport, FillReport, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
 
 export class ApiError extends Error {}
 
@@ -87,6 +87,13 @@ export async function fetchDrc(): Promise<DrcReport> {
 /** `eda_kicad::check_erc` (gap #4), run fresh server-side on every call -- same no-caching reasoning as `fetchDrc`. */
 export async function fetchErc(): Promise<ErcReport> {
   const r = await getJson<ErcReport & { error?: string }>("/api/erc");
+  if (r.error) throw new ApiError(r.error);
+  return r;
+}
+
+/** `crates/zone-filler`'s real KiCad fill algorithm, run fresh server-side on every call (B/Ctrl+B -- see state/store.tsx's `zoneFill`). */
+export async function fetchFill(): Promise<FillReport> {
+  const r = await getJson<FillReport & { error?: string }>("/api/fill");
   if (r.error) throw new ApiError(r.error);
   return r;
 }

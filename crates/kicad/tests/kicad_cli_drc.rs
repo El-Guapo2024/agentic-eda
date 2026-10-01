@@ -212,7 +212,7 @@ fn kicad_cli_drc_bottom_side_pads() {
         provenance: Provenance { engine_version: "0".into(), intent_hash: "bottom_side_pads".into(), seed: 0, stage_hashes: vec![] },
         schematic: None, nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints.clone(), modules: Vec::new() }),
-        routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![] }),
+        routing: Some(RoutingSection { tracks, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![] }),
         drawings: None,
     };
 

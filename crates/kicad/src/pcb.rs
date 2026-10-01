@@ -669,6 +669,8 @@ mod tests {
                 tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }] }],
                 vias: vec![],
                 zones: vec![],
+                track_width_presets: vec![],
+                via_presets: vec![],
             }),
             drawings: None,
         };

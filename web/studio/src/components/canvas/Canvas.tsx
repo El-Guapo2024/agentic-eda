@@ -247,6 +247,9 @@ export function Canvas() {
       ratsnestEdges: state.ratsnest?.edges ?? null,
       drcViolations: state.drc?.violations ?? null,
       drcSelected: state.drcSelected,
+      zoneFill: state.zoneFill,
+      zoneDisplayMode: state.zoneDisplayMode,
+      currentViaPreset: state.currentViaPreset,
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
       activeLayer: state.activeLayer,
@@ -298,7 +301,7 @@ export function Canvas() {
       ctx.stroke();
     }
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, marquee, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, marquee, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -416,7 +419,9 @@ export function Canvas() {
           return;
         }
         const rules = board.board_rules;
-        api.cmd({ op: "add_via", net: anchor.net, x: sx, y: sy, drill: rules?.via_drill ?? 300, diameter: rules?.via_diameter ?? 600, from_layer: "F.Cu", to_layer: "B.Cu" });
+        // pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), same board-default fallback the hotkey itself uses until it's ever pressed.
+        const viaPreset = state.currentViaPreset ?? { diameter: rules?.via_diameter ?? 600, drill: rules?.via_drill ?? 300 };
+        api.cmd({ op: "add_via", net: anchor.net, x: sx, y: sy, drill: viaPreset.drill, diameter: viaPreset.diameter, from_layer: "F.Cu", to_layer: "B.Cu" });
         return;
       }
 
@@ -429,7 +434,9 @@ export function Canvas() {
             return;
           }
           const layer = anchor.layer ?? state.activeLayer ?? board.layers[0] ?? "F.Cu";
-          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "route", net: anchor.net, layer, width: board.board_rules?.track_width ?? 250, pts: [anchor.at] } });
+          // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
+          const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
+          dispatch({ type: "SET_DRAW_STATE", draw: { kind: "route", net: anchor.net, layer, width, pts: [anchor.at] } });
           return;
         }
         const last = draw.pts[draw.pts.length - 1]!;

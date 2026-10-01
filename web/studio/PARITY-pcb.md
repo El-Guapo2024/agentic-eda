@@ -290,3 +290,43 @@ user-visible impact; this table is for lookup, not priority order.
 | `common.Interactive.finish` | End | Finish (generic "end the current interactive action") |
 | `common.Interactive.measureTool` | Ctrl+Shift+M | Measure Tool |
 | `common.SuiteControl.openPreferences` | Ctrl+, | Preferences... (no Preferences dialog in this app) |
+
+## 8. Zones
+
+Port of `pcbnew/zone_filler_tool.cpp` (fill/unfill, display mode) and
+`pcbnew/dialogs/panel_zone_properties.cpp` (the settings panel). The fill
+*engine* itself (`crates/zone-filler`) and the IR's `ZONE_SETTINGS` fields
+(`crates/model/src/ir.rs` `Zone`) were already ported in an earlier
+session (see this file's intro and `docs/parity/GAPS.md` #5) -- this
+session is the UI on top of that: drawing the real computed fill, the
+fill/unfill and display-mode actions, and a settings dialog that actually
+reaches every one of those IR fields instead of just net/layer.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| B = Fill All Zones (GET /api/fill, the real ported `ZONE_FILLER`) | identical in effect | `zone_filler_tool.cpp:ZoneFillAll`/`FillAllZones` -- `useActionRunner.ts`'s `pcbnew.ZoneFiller.zoneFillAll`, `state/store.tsx`'s `zoneFill`/`fillZones`. No per-zone fill cache to mutate (this app's `/api/fill` always recomputes from scratch, cheaply) -- "fill" is "go fetch it", kept live-updated on every board-version change while any fill is showing (no "stale fill" hatch state to show, unlike source, since there's nothing cached to go stale) |
+| Ctrl+B = Unfill All Zones | identical in effect | `zone_filler_tool.cpp:ZoneUnfillAll` -- `unfillZones` just discards `state.zoneFill`, same end state as source's `zone->UnFill()` |
+| Per-zone Fill/Unfill (`pcbnew.ZoneFiller.zoneFill`/`zoneUnfill`, selection-scoped) | missing | only the *All* variants are wired -- this app's `/api/fill` already computes every zone each call, so a selection-scoped fetch would save nothing server-side; the real gap is no fine-grained *display* control (next row) |
+| `ZONE_DISPLAY_MODE`: solid fill vs. outline-only, independent of whether fill data exists | 2 of 4 modes ported | `pcb_control.cpp:ZoneDisplayMode` (`PCB_ACTIONS::zoneDisplayEnable`/`Disable`/`Toggle`) -- `state.zoneDisplayMode`, `painter.ts:drawZones`. Source's other two (`zoneDisplayOutlines` = fracture-borders, `zoneDisplayTesselation` = triangulation) are developer debug views of the filler's internal geometry, not ported. A zone with no fill data at all (never filled, or just Ctrl+B'd) always shows its outline regardless of this mode, matching source (nothing to fill with) |
+| Filled-zone rendering: each fragment (island) as its own closed, already-`Fracture`d ring | identical | `pcb_painter.cpp`'s zone-fill paint (polygon fill, no separate even-odd holes pass needed) -- `crates/cli/src/studio.rs:fill_json`'s own doc on why fragments are pre-fractured |
+| Selected zone, filled mode | simplified | source's selection-shadow layer isn't modeled; this app strokes the zone's own (unfractured) outline in the selection color on top of the solid fill instead -- same visual intent, different mechanism |
+| Zone Properties dialog: net, layer, clearance, min width, priority | identical | `panel_zone_properties.cpp`'s `TransferZoneSettingsToWindow`/`AcceptOptions` -- `ZoneDialog.tsx` |
+| Pad connection (Solid/Thermal/PTH-only-thermal/None), thermal gap + spoke width | identical, including source's own "never disabled by the connection choice" rule for the gap/spoke fields | same file -- `m_PadInZoneOpt`, `m_antipadClearance`/`m_spokeWidth` (explicitly never `Enable(false)`-d, per that file's own comment, since a per-pad override can still need them) |
+| Island removal (always/never/below area limit) + area threshold | identical | same file -- `m_cbRemoveIslands`/`m_islandThreshold`, shown only in "Area" mode |
+| Fill type (solid/hatched) + hatch width/gap/orientation/smoothing level/smoothing value | identical, shown only when Hatched | same file -- `m_cbHatched`'s `onHatched` enable/disable group |
+| Zone name, Locked, corner smoothing (chamfer/fillet) + radius, outline border display style (hatched/full/invisible), per-layer hatch-offset overrides, teardrops | not ported -- no IR field | this model's `Zone` has no `name`/`locked`/corner-smoothing/border-display-style/per-layer-override/teardrop concept at all (single-layer outline + the fill-engine fields only) -- same "nothing to show, not a bug" convention as every other dialog here for a field with no backing data |
+| Net picker limited to nets actually present on a pad | identical in spirit, simpler widget | source's `NET_SELECTOR` (searchable combo over the whole board netlist); this app's `<select>` over `state.board.parts[].pads[].net` (unchanged from before this session) |
+| Multi-copper-layer zones (one outline, several layers) | not ported -- single-layer `Zone.layer: string` | `ZONE::GetLayerSet()`; this model's zones are one layer each, unchanged scope from before this session |
+| Add flow: outline first, then settings (vs. source's settings-first-then-draw) | unchanged, documented simplification from an earlier session | `ZoneDialog.tsx`'s own header comment; the dialog itself is now the full settings panel, not just net/layer |
+| Add flow backend shape: `add_zone` (net/layer/outline, unchanged 3-field `Cmd`) + an immediate `edit_zone` only if any setting differs from `Zone::default()` | deliberate 2-Cmd design, not 1 atomic Cmd | keeps `Cmd::AddZone`'s wire shape stable for every existing caller (the CLI, this crate's own tests) -- `state/store.tsx`'s `addZone`, `crates/ops/src/lib.rs`'s `Cmd::EditZone`/`edit_zone` |
+| Zone outline editing (drag a corner, add/remove a corner) | missing | `pcbnew/tools/pcb_point_editor.cpp` -- not attempted this session; see the task's ranked "what's left" |
+| Zone Cutout / Similar Zone / Rule Areas (keepouts) | missing, unchanged | `pcbnew.InteractiveDrawing.zoneCutout`/`similarZone`/`ruleArea` -- no keepout-zone concept in this model |
+
+Rust: `crates/ops/src/lib.rs`'s `Cmd::EditZone`/`edit_zone` (full
+`ZONE_SETTINGS` replace, outline untouched; validates clearance >= 0, min
+width > 0, thermal spoke >= min width, and -- matching source's own
+`AcceptOptions` -- hatch thickness/gap >= min width in hatch mode), 5 new
+tests in `crates/ops/src/tests.rs`. `crates/cli/src/studio.rs`'s
+`fill_json`'s endpoint was already there; `state()`'s `zones` JSON and
+`routing` JSON both gained the new fields (full settings; track/via preset
+lists, see section 9).
