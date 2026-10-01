@@ -176,6 +176,13 @@ enum Core {
     Seg(Seg),
     /// Closed simple polygon (last point implicitly joins the first).
     Polygon(Vec<Point>),
+    /// An open, disjoint set of pen-stroke segments (a glyph or a run of
+    /// text): unlike `Polygon`, never has an interior, so
+    /// `contains_point` always answers `false` for it (the same as
+    /// `Point`/`Seg`) -- every collision against it falls through to the
+    /// boundary-segment scan, which is the exact right test for a stroked
+    /// (not filled) shape.
+    Segs(Vec<Seg>),
 }
 
 impl Core {
@@ -190,6 +197,7 @@ impl Core {
                 }
                 (0..n).map(|i| Seg::new(pts[i], pts[(i + 1) % n])).collect()
             }
+            Core::Segs(segs) => segs.clone(),
         }
     }
 
@@ -200,6 +208,7 @@ impl Core {
             Core::Point(p) => *p,
             Core::Seg(s) => s.a,
             Core::Polygon(pts) => pts[0],
+            Core::Segs(segs) => segs[0].a,
         }
     }
 
@@ -252,6 +261,12 @@ pub enum Shape {
     /// A closed simple polygon: a zone outline, a courtyard, or a
     /// hand-drawn graphic polygon.
     Polygon { pts: Vec<Point> },
+    /// A piece of stroked (vector-font) text: KiCad's Newstroke glyphs are
+    /// pen strokes, not filled outlines, so this is the disjoint set of
+    /// pen-down segments for a whole string, inflated by half the stroke
+    /// thickness -- see `crate::stroke_font`. Never empty (an empty/
+    /// all-space string produces no `SilkItem` at all; see `board.rs`).
+    Strokes { segs: Vec<Seg>, r: Um },
 }
 
 impl Shape {
@@ -275,6 +290,7 @@ impl Shape {
                 }
             }
             Shape::Polygon { pts } => Core::Polygon(pts.clone()),
+            Shape::Strokes { segs, .. } => Core::Segs(segs.clone()),
         }
     }
 
@@ -288,7 +304,7 @@ impl Shape {
 
     pub fn radius(&self) -> Um {
         match self {
-            Shape::Circle { r, .. } | Shape::Stadium { r, .. } | Shape::RoundRect { r, .. } => *r,
+            Shape::Circle { r, .. } | Shape::Stadium { r, .. } | Shape::RoundRect { r, .. } | Shape::Strokes { r, .. } => *r,
             Shape::Rect { .. } | Shape::Polygon { .. } => 0,
         }
     }
@@ -314,6 +330,10 @@ impl Shape {
                 widen(Point { x: *c, y: *d });
             }
             Shape::Polygon { pts } => pts.iter().for_each(|p| widen(*p)),
+            Shape::Strokes { segs, .. } => segs.iter().for_each(|s| {
+                widen(s.a);
+                widen(s.b);
+            }),
         }
         let r = self.radius() + clearance;
         (x0 - r, y0 - r, x1 + r, y1 + r)

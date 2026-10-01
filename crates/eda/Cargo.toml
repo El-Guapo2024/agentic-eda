@@ -19,3 +19,6 @@ eda-freeroute = { path = "../freeroute" }
 eda-place = { path = "../place" }
 eda-logger = { path = "../logger" }
 eda-cypress = { path = "../cypress" }
+
+[dev-dependencies]
+serde_yaml = { workspace = true }

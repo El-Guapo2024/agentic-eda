@@ -46,7 +46,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 let len = crate::kimath::dist(*a, *b);
                 (len + r * 2, r * 2)
             }
-            crate::kimath::Shape::Polygon { .. } => continue,
+            crate::kimath::Shape::Polygon { .. } | crate::kimath::Shape::Strokes { .. } => continue,
         };
         let width = ((w - drill) / 2).min((h - drill) / 2);
         if width < min_annular {

@@ -134,13 +134,39 @@ pub trait Chooser {
 /// In-block anchors are tried first; the whole board is used only when
 /// the block offers no workable anchor at all, so a block that genuinely
 /// must reach outside still can.
+/// A candidate's full search-ranking key: fail count, warn count,
+/// wirelength, then a stable id. See `Board::search_rank`'s doc comment
+/// for why fail/warn are split; the id is this candidate's *position* in
+/// its own call's fixed, content-derived enumeration (`options_for`'s
+/// output order, or the caller's frontier order) -- never anything from
+/// the check engine. `options_for` enumerates independently of which
+/// engine (`eda_gates` or `eda_drc`) computes fails/warns, so this is
+/// still a genuine tie-break on the *candidate*, not on incidental
+/// engine-call order -- it just also happens to exactly preserve
+/// first-candidate-wins, the implicit rule every caller already relied
+/// on before this type existed (verified: an id built from the
+/// candidate's own part/anchor/side fields instead, sorted
+/// alphabetically, is just as engine-independent but silently reorders
+/// which of several genuinely-tied poses wins on `mcu_board_30plus`,
+/// tripping `placement_stub_crossings` -- a real backward-compatibility
+/// trap for a change meant to be invisible when nothing actually
+/// disagrees). `Ord`'s lexicographic tuple comparison does the rest:
+/// smaller is better, same as the old `(fails, wl) < (*bf, *bw)`.
+type Rank = (usize, usize, i64, usize);
+
+fn rank_of(trial: &Board, model: &ConstraintModel, idx: usize) -> Rank {
+    let (fails, warns) = trial.search_rank();
+    let wl = hpwl_of(trial.design(), model);
+    (fails, warns, wl, idx)
+}
+
 fn best_pose_within(
     board: &Board,
     part: &str,
     members: &BTreeSet<String>,
-) -> std::option::Option<(Option_, usize, i64)> {
-    let mut best: std::option::Option<(Option_, usize, i64)> = None;
-    for o in options_for(board, part) {
+) -> std::option::Option<(Option_, Rank)> {
+    let mut best: std::option::Option<(Option_, Rank)> = None;
+    for (idx, o) in options_for(board, part).into_iter().enumerate() {
         if !members.contains(&o.anchor) {
             continue;
         }
@@ -148,26 +174,24 @@ fn best_pose_within(
         if trial.apply(&Cmd::Place { part: o.part.clone(), anchor: o.anchor.clone(), side: o.side }).is_err() {
             continue;
         }
-        let fails = trial.failures();
-        let wl = hpwl_of(trial.design(), board.model());
-        if best.as_ref().map_or(true, |(_, bf, bw)| (fails, wl) < (*bf, *bw)) {
-            best = Some((o, fails, wl));
+        let rank = rank_of(&trial, board.model(), idx);
+        if best.as_ref().map_or(true, |(_, br)| rank < *br) {
+            best = Some((o, rank));
         }
     }
     best.or_else(|| best_pose(board, part))
 }
 
-pub fn best_pose(board: &Board, part: &str) -> std::option::Option<(Option_, usize, i64)> {
-    let mut best: std::option::Option<(Option_, usize, i64)> = None;
-    for o in options_for(board, part) {
+pub fn best_pose(board: &Board, part: &str) -> std::option::Option<(Option_, Rank)> {
+    let mut best: std::option::Option<(Option_, Rank)> = None;
+    for (idx, o) in options_for(board, part).into_iter().enumerate() {
         let mut trial = board.fork();
         if trial.apply(&Cmd::Place { part: o.part.clone(), anchor: o.anchor.clone(), side: o.side }).is_err() {
             continue; // no room that side; not a failure, just not this one
         }
-        let fails = trial.failures();
-        let wl = hpwl_of(trial.design(), board.model());
-        if best.as_ref().map_or(true, |(_, bf, bw)| (fails, wl) < (*bf, *bw)) {
-            best = Some((o, fails, wl));
+        let rank = rank_of(&trial, board.model(), idx);
+        if best.as_ref().map_or(true, |(_, br)| rank < *br) {
+            best = Some((o, rank));
         }
     }
     best
@@ -186,14 +210,21 @@ impl Chooser for Greedy {
 
     /// Take whichever frontier part places best right now.
     fn choose_part(&mut self, board: &Board, frontier: &[String]) -> Result<Option<String>, Vec<CheckResult>> {
-        let mut best: std::option::Option<(String, usize, i64)> = None;
-        for part in frontier {
-            let Some((_, fails, wl)) = best_pose(board, part) else { continue };
-            if best.as_ref().map_or(true, |(_, bf, bw)| (fails, wl) < (*bf, *bw)) {
-                best = Some((part.clone(), fails, wl));
+        // This picks *which part*, a different question from best_pose's
+        // "which pose for one given part" -- so it needs its own stable id
+        // (frontier position), not the pose-internal one `best_pose`
+        // returns as part of its `Rank` (comparing "pose index 0 within
+        // part A's options" against "pose index 0 within part B's" would
+        // not mean anything).
+        let mut best: std::option::Option<(String, Rank)> = None;
+        for (idx, part) in frontier.iter().enumerate() {
+            let Some((_, (fails, warns, wl, _))) = best_pose(board, part) else { continue };
+            let rank = (fails, warns, wl, idx);
+            if best.as_ref().map_or(true, |(_, br)| rank < *br) {
+                best = Some((part.clone(), rank));
             }
         }
-        Ok(best.map(|(p, _, _)| p))
+        Ok(best.map(|(p, _)| p))
     }
 }
 
@@ -342,7 +373,7 @@ pub fn build(
         let before = b.placed().len();
         match chooser.choose_part(&b, &frontier)? {
             Some(part) => match best_pose(&b, &part) {
-                Some((o, _, _)) => {
+                Some((o, _)) => {
                     b.apply(&Cmd::Place { part: o.part, anchor: o.anchor, side: o.side })?;
                     steps += 1;
                 }
@@ -582,8 +613,8 @@ fn place_block(
                 break frontier
                     .iter()
                     .filter_map(|p| best_pose_within(b, p, members))
-                    .min_by_key(|(_, f, w)| (*f, *w))
-                    .map(|(o, _, _)| Cmd::Place { part: o.part, anchor: o.anchor, side: o.side });
+                    .min_by(|a, b| a.1.cmp(&b.1))
+                    .map(|(o, _)| Cmd::Place { part: o.part, anchor: o.anchor, side: o.side });
             }
             let Some(p) = chooser.choose_part(b, &open)? else { break None };
             // A connector belongs on an edge wherever it is placed, not
@@ -594,7 +625,7 @@ fn place_block(
                 }
             }
             match best_pose_within(b, &p, members) {
-                Some((o, fails, _)) if fails <= baseline => {
+                Some((o, (fails, _, _, _))) if fails <= baseline => {
                     break Some(Cmd::Place { part: o.part, anchor: o.anchor, side: o.side })
                 }
                 _ => {
@@ -677,22 +708,24 @@ fn seed_of(model: &ConstraintModel, remaining: &[&String]) -> std::option::Optio
 /// reproducible, and every candidate is measured on a fork rather than
 /// assumed: an edge that collides or overhangs is simply not offered.
 fn best_edge_pose(b: &Board, part: &str, baseline: usize) -> std::option::Option<Cmd> {
-    let mut best: std::option::Option<(Cmd, usize, i64)> = None;
+    let mut best: std::option::Option<(Cmd, Rank)> = None;
+    let mut idx = 0usize;
     for edge in [Dir::West, Dir::North, Dir::East, Dir::South] {
         for f in [0.5, 0.25, 0.75, 0.1, 0.9] {
             let cmd = Cmd::PlaceEdge { part: part.to_string(), edge, fraction: f };
             let mut trial = b.fork();
             if trial.apply(&cmd).is_err() {
+                idx += 1;
                 continue;
             }
-            let fails = trial.failures();
-            let wl = hpwl_of(trial.design(), b.model());
-            if best.as_ref().map_or(true, |(_, bf, bw)| (fails, wl) < (*bf, *bw)) {
-                best = Some((cmd, fails, wl));
+            let rank = rank_of(&trial, b.model(), idx);
+            idx += 1;
+            if best.as_ref().map_or(true, |(_, br)| rank < *br) {
+                best = Some((cmd, rank));
             }
         }
     }
-    best.filter(|(_, f, _)| *f <= baseline).map(|(c, _, _)| c)
+    best.filter(|(_, (f, _, _, _))| *f <= baseline).map(|(c, _)| c)
 }
 
 fn seed_one(b: &mut Board, model: &ConstraintModel, part: &str) -> Result<(), Vec<CheckResult>> {

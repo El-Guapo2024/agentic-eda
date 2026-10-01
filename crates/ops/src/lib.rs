@@ -457,6 +457,30 @@ impl<'a> Board<'a> {
         self.checks().iter().filter(|c| matches!(c.status, CheckStatus::Fail)).count()
     }
 
+    /// The search's own ranking key for this board state: `(fail count,
+    /// warn count)`. Used instead of a bare `failures()` wherever a
+    /// constructive search picks the best of several candidates, so a
+    /// tie on fail count still prefers the candidate with fewer/lesser
+    /// warnings before falling through to wirelength and a stable id
+    /// (see `crates/ops/src/build.rs`'s `best_pose`/`best_pose_within`/
+    /// `Greedy::choose_part`/`best_edge_pose`) -- rather than whatever
+    /// incidental order the underlying check engine happened to return
+    /// its results in. That stability matters specifically because
+    /// `check_placement_partial` is re-run on a narrowed, *partial*
+    /// design at every step: two different (but equally valid)
+    /// implementations of the same check can disagree by a warning or
+    /// two on an unfinished board without either being wrong, and a
+    /// search that only compared fail counts could tip a close call
+    /// differently depending on which implementation was plugged in.
+    /// Computed from one `checks()` call, not two, so this costs nothing
+    /// extra over the old `failures()` at these hot call sites.
+    pub fn search_rank(&self) -> (usize, usize) {
+        let checks = self.checks();
+        let fails = checks.iter().filter(|c| matches!(c.status, CheckStatus::Fail)).count();
+        let warns = checks.iter().filter(|c| matches!(c.status, CheckStatus::Warn)).count();
+        (fails, warns)
+    }
+
     /// Apply a command, or refuse it.
     pub fn apply(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         match cmd {
