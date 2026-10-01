@@ -52,6 +52,16 @@ impl PartialEq for Point64 {
 }
 impl Eq for Point64 {}
 
+impl std::hash::Hash for Point64 {
+    // Consistent with the hand-written `PartialEq` above (`z` doesn't
+    // participate in equality, so it mustn't participate in the hash).
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.x.hash(state);
+        self.y.hash(state);
+    }
+}
+
 impl std::ops::Neg for Point64 {
     type Output = Point64;
     #[inline]
