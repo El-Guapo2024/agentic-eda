@@ -1400,7 +1400,7 @@ mod tests {
         let outline = vec![Point { x: 0, y: 0 }, Point { x: 20000, y: 0 }, Point { x: 20000, y: 20000 }, Point { x: 0, y: 20000 }];
         let fpi = |id: &str, x| FootprintInstance { id: id.into(), at: Point { x, y: 5000 }, rot: 0, side: Side::Top, label: Default::default() };
         let design = Design {
-            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,

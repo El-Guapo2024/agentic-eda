@@ -127,7 +127,7 @@ pub(crate) mod tests_support {
             ..Default::default()
         };
         let design = Design {
-            footprint_library: None, sheet_contents: None, bus_aliases: vec![],
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: 1,
             provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
             schematic: None, nets: None,

@@ -10,6 +10,7 @@ const TABS: Array<{ id: EditorTab; label: string }> = [
   { id: "pcb", label: "PCB" },
   { id: "schematic", label: "Schematic" },
   { id: "footprint", label: "Footprint" },
+  { id: "symbol", label: "Symbol" },
   { id: "3d", label: "3D" },
 ];
 

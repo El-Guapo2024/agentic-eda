@@ -350,6 +350,152 @@ pub fn resolve_library_symbols(model: &mut ConstraintModel, lib_root: &Path) -> 
     warnings
 }
 
+/// Derive a standalone `.kicad_sym` library file from a project
+/// symbol-library entry (Symbol Editor's "Export .kicad_sym") -- the
+/// write-side counterpart of `parse_symbol_library` above, reusing this
+/// crate's own format helpers (`crate::sexpr_str`/`crate::fmt_mm_f`) so
+/// the two never drift on what a string/number looks like on disk.
+///
+/// Takes the editable `eda_model::ir::LibrarySymbol` directly (not the
+/// resolved, read-only `eda_model::LibSymbol` `to_engine_symbol` produces)
+/// because only the editable type still has `pin_numbers_hidden`/
+/// `pin_names_hidden`/`pin_name_offset_mm`/`footprint_filters` -- fields
+/// the resolved type never modeled at all (see `LibrarySymbol`'s own doc)
+/// and this export is the one place in the app that writes them to a real
+/// file.
+///
+/// Units/body styles: KiCad's own `"<name>_<unit>_<style>"` sub-block
+/// convention has no file-level "unit count" field at all -- a reader
+/// (this crate's own, and real KiCad's) infers it from which `_<N>_1`
+/// sub-blocks exist, so `style == 1` always emits one sub-block per
+/// declared unit (`1..=unit_count`), even an empty one, so a unit count
+/// set in the Symbol Properties dialog with nothing yet drawn on a unit
+/// still round-trips; `style == 2` (only emitted when
+/// `has_alternate_body_style`) only covers units that actually have
+/// alternate-style content, a narrower, documented simplification. An
+/// item whose own `body_style` is `0` (this editor's "common to every
+/// style" convention, not a real sub-block suffix -- see
+/// `LibrarySymbolGraphic`'s own doc) is duplicated into every concrete
+/// style's own sub-block rather than left out, so it actually appears
+/// under whichever alternate style(s) exist.
+pub fn export_kicad_sym(sym: &eda_model::ir::LibrarySymbol) -> String {
+    use std::fmt::Write as _;
+
+    let bare_name = sym.lib_id.rsplit(':').next().unwrap_or(sym.lib_id.as_str());
+    let yn = |b: bool| if b { "yes" } else { "no" };
+    let max_style: u32 = if sym.has_alternate_body_style { 2 } else { 1 };
+
+    let mut out = String::new();
+    writeln!(out, "(kicad_symbol_lib (version 20231120) (generator \"eda\") (generator_version \"1.0\")").unwrap();
+    writeln!(out, "\t(symbol {}", crate::sexpr_str(bare_name)).unwrap();
+    writeln!(out, "\t\t(pin_numbers (hide {}))", yn(sym.pin_numbers_hidden)).unwrap();
+    writeln!(out, "\t\t(pin_names (offset {}) (hide {}))", crate::fmt_mm_f(sym.pin_name_offset_mm), yn(sym.pin_names_hidden)).unwrap();
+    writeln!(out, "\t\t(in_bom {}) (on_board {})", yn(sym.in_bom), yn(sym.on_board)).unwrap();
+    if sym.power {
+        writeln!(out, "\t\t(power)").unwrap();
+    }
+
+    let prop = |out: &mut String, key: &str, value: &str, y: f64, hidden: bool| {
+        write!(out, "\t\t(property {} {} (at 0 {} 0) (effects (font (size 1.27 1.27)))", crate::sexpr_str(key), crate::sexpr_str(value), crate::fmt_mm_f(y)).unwrap();
+        if hidden {
+            write!(out, " hide").unwrap();
+        }
+        writeln!(out, ")").unwrap();
+    };
+    prop(&mut out, "Reference", if sym.reference_prefix.is_empty() { "U" } else { &sym.reference_prefix }, 5.08, false);
+    prop(&mut out, "Value", bare_name, 2.54, false);
+    prop(&mut out, "Footprint", "", 0.0, true);
+    prop(&mut out, "Datasheet", &sym.datasheet, 0.0, true);
+    if !sym.description.is_empty() {
+        prop(&mut out, "Description", &sym.description, 0.0, true);
+    }
+    if !sym.keywords.is_empty() {
+        prop(&mut out, "ki_keywords", &sym.keywords, 0.0, true);
+    }
+    if !sym.footprint_filters.is_empty() {
+        prop(&mut out, "ki_fp_filters", &sym.footprint_filters.join(" "), 0.0, true);
+    }
+
+    for style in 1..=max_style {
+        let mut units: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        if style == 1 {
+            units.extend(1..=sym.unit_count.max(1));
+        }
+        units.extend(sym.graphics.iter().filter(|g| g.body_style() == 0 || g.body_style() == style).map(|g| g.unit()));
+        units.extend(sym.pins.iter().filter(|p| p.body_style == 0 || p.body_style == style).map(|p| p.unit));
+
+        for unit in units {
+            writeln!(out, "\t\t(symbol \"{bare_name}_{unit}_{style}\"").unwrap();
+            for g in sym.graphics.iter().filter(|g| g.unit() == unit && (g.body_style() == 0 || g.body_style() == style)) {
+                write_symbol_graphic(&mut out, g);
+            }
+            for p in sym.pins.iter().filter(|p| p.unit == unit && (p.body_style == 0 || p.body_style == style)) {
+                write_symbol_pin(&mut out, p);
+            }
+            writeln!(out, "\t\t)").unwrap();
+        }
+    }
+
+    writeln!(out, "\t)").unwrap();
+    writeln!(out, ")").unwrap();
+    out
+}
+
+fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic) {
+    use eda_model::ir::{LibraryFill, LibrarySymbolGraphic as G};
+    use std::fmt::Write as _;
+    let fill_tok = |f: LibraryFill| match f {
+        LibraryFill::None => "none",
+        LibraryFill::Outline => "outline",
+        LibraryFill::Background => "background",
+    };
+    let stroke = |s: f64| format!("(stroke (width {}) (type default))", crate::fmt_mm_f(s));
+    let fill = |f: LibraryFill| format!("(fill (type {}))", fill_tok(f));
+    let pt = |p: eda_model::symbol::SPoint| format!("{} {}", crate::fmt_mm_f(p.x), crate::fmt_mm_f(p.y));
+    match g {
+        G::Rectangle { start, end, stroke_mm, fill: f, .. } => {
+            writeln!(out, "\t\t\t(rectangle (start {}) (end {}) {} {})", pt(*start), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
+        }
+        G::Polyline { pts, stroke_mm, fill: f, .. } => {
+            write!(out, "\t\t\t(polyline (pts").unwrap();
+            for p in pts {
+                write!(out, " (xy {})", pt(*p)).unwrap();
+            }
+            writeln!(out, ") {} {})", stroke(*stroke_mm), fill(*f)).unwrap();
+        }
+        G::Circle { center, radius_mm, stroke_mm, fill: f, .. } => {
+            writeln!(out, "\t\t\t(circle (center {}) (radius {}) {} {})", pt(*center), crate::fmt_mm_f(*radius_mm), stroke(*stroke_mm), fill(*f)).unwrap();
+        }
+        G::Arc { start, mid, end, stroke_mm, fill: f, .. } => {
+            writeln!(out, "\t\t\t(arc (start {}) (mid {}) (end {}) {} {})", pt(*start), pt(*mid), pt(*end), stroke(*stroke_mm), fill(*f)).unwrap();
+        }
+        G::Text { text, at, angle_deg, size_mm, .. } => {
+            writeln!(out, "\t\t\t(text {} (at {} {} {}) (effects (font (size {} {}))))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg), crate::fmt_mm_f(*size_mm), crate::fmt_mm_f(*size_mm)).unwrap();
+        }
+    }
+}
+
+fn write_symbol_pin(out: &mut String, p: &eda_model::ir::LibrarySymbolPin) {
+    use std::fmt::Write as _;
+    let name_size = p.name_size_mm.unwrap_or(1.27);
+    let number_size = p.number_size_mm.unwrap_or(1.27);
+    write!(out, "\t\t\t(pin {} {} (at {} {} {}) (length {})", p.electrical_type, p.shape, crate::fmt_mm_f(p.at.x), crate::fmt_mm_f(p.at.y), crate::fmt_mm_f(p.angle_deg), crate::fmt_mm_f(p.length_mm)).unwrap();
+    if p.hidden {
+        write!(out, " hide").unwrap();
+    }
+    writeln!(
+        out,
+        " (name {} (effects (font (size {} {})))) (number {} (effects (font (size {} {})))))",
+        crate::sexpr_str(if p.name.is_empty() { "~" } else { &p.name }),
+        crate::fmt_mm_f(name_size),
+        crate::fmt_mm_f(name_size),
+        crate::sexpr_str(&p.number),
+        crate::fmt_mm_f(number_size),
+        crate::fmt_mm_f(number_size),
+    )
+    .unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,5 +675,93 @@ mod tests {
 
         let conn = resolve_symbol(&root, "Connector_Generic:Conn_01x04").expect("ships with KiCad");
         assert_eq!(conn.pins.len(), 4);
+    }
+
+    // -------------------------------------------------- export_kicad_sym
+
+    fn lib_pin(number: &str, unit: u32, body_style: u32, x: f64, y: f64, hidden: bool) -> eda_model::ir::LibrarySymbolPin {
+        eda_model::ir::LibrarySymbolPin {
+            id: format!("pin_{number}_{unit}_{body_style}"),
+            number: number.into(),
+            name: format!("N{number}"),
+            electrical_type: "passive".into(),
+            shape: "line".into(),
+            at: eda_model::symbol::SPoint::new(x, y),
+            angle_deg: 270.0,
+            length_mm: 2.54,
+            unit,
+            body_style,
+            hidden,
+            name_size_mm: Some(1.27),
+            number_size_mm: Some(1.27),
+        }
+    }
+
+    #[test]
+    fn export_kicad_sym_round_trips_through_this_crates_own_reader() {
+        let sym = eda_model::ir::LibrarySymbol {
+            lib_id: "Test:RoundTrip".into(),
+            reference_prefix: "U".into(),
+            description: "a test symbol".into(),
+            keywords: "test fixture".into(),
+            datasheet: "http://example.com/ds.pdf".into(),
+            power: false,
+            in_bom: true,
+            on_board: true,
+            pin_numbers_hidden: true,
+            pin_names_hidden: false,
+            pin_name_offset_mm: 0.508,
+            unit_count: 2,
+            has_alternate_body_style: false,
+            footprint_filters: vec!["SOIC*".into()],
+            graphics: vec![eda_model::ir::LibrarySymbolGraphic::Rectangle { id: "g1".into(), unit: 0, body_style: 1, start: eda_model::symbol::SPoint::new(-2.54, -2.54), end: eda_model::symbol::SPoint::new(2.54, 2.54), stroke_mm: 0.254, fill: eda_model::ir::LibraryFill::Background }],
+            pins: vec![lib_pin("1", 1, 1, 0.0, 5.08, false), lib_pin("2", 1, 1, 0.0, -5.08, false), lib_pin("3", 2, 1, 0.0, 5.08, true)],
+            published: false,
+        };
+
+        let text = export_kicad_sym(&sym);
+        let table = parse_symbol_library(&text).expect("the exported file must parse back through this crate's own reader");
+        let back = table.get("RoundTrip").expect("bare symbol name, no library prefix");
+
+        // Every unit's pins survive, including the empty-but-declared unit
+        // count's own placeholder sub-block (unit 2's pin "3" here is real
+        // content, but unit_count=2 with no content at all must still
+        // parse -- covered by the unit-count-only case below).
+        assert_eq!(back.pins.len(), 3, "pins across both declared units");
+        assert!(back.pins.iter().any(|p| p.number == "1" && p.unit == 1));
+        assert!(back.pins.iter().any(|p| p.number == "3" && p.unit == 2));
+        assert_eq!(back.reference_prefix, "U");
+        assert_eq!(back.datasheet, "http://example.com/ds.pdf");
+        assert_eq!(back.description, "a test symbol");
+        assert_eq!(back.graphics.len(), 1, "the shared (unit 0) rectangle");
+        assert!(matches!(back.graphics[0], eda_model::symbol::SymbolGraphic::Rectangle { .. }));
+    }
+
+    #[test]
+    fn export_kicad_sym_preserves_a_declared_unit_count_even_with_nothing_drawn_on_it() {
+        // `unit_count` has no field of its own in the file format (see
+        // `export_kicad_sym`'s own doc) -- it is recovered only from which
+        // `_<N>_1` sub-blocks exist, so a brand-new unit with no pins or
+        // graphics yet must still get its own (empty) sub-block, or a
+        // reader (this crate's own, or real KiCad) would silently forget
+        // it was ever declared.
+        let sym = eda_model::ir::LibrarySymbol { unit_count: 3, pins: vec![lib_pin("1", 1, 1, 0.0, 5.08, false)], ..eda_model::ir::LibrarySymbol::new_empty("Test:Sparse") };
+        let text = export_kicad_sym(&sym);
+        assert!(text.contains("\"Sparse_2_1\""), "unit 2 (declared, empty) must still get a sub-block:\n{text}");
+        assert!(text.contains("\"Sparse_3_1\""), "unit 3 (declared, empty) must still get a sub-block:\n{text}");
+        let table = parse_symbol_library(&text).unwrap();
+        assert!(table.contains_key("Sparse"));
+    }
+
+    #[test]
+    fn export_kicad_sym_writes_alternate_body_style_only_when_declared() {
+        let mut sym = eda_model::ir::LibrarySymbol { has_alternate_body_style: true, ..eda_model::ir::LibrarySymbol::new_empty("Test:Alt") };
+        sym.pins = vec![lib_pin("1", 1, 1, 0.0, 5.08, false), lib_pin("1", 1, 2, 0.0, -5.08, false)];
+        let text = export_kicad_sym(&sym);
+        assert!(text.contains("\"Alt_1_2\""), "the alternate body style's own sub-block must exist:\n{text}");
+        assert!(parse_symbol_library(&text).is_ok(), "a real reader must still accept the alternate-style file");
+
+        let without_alt = eda_model::ir::LibrarySymbol { has_alternate_body_style: false, ..eda_model::ir::LibrarySymbol::new_empty("Test:NoAlt") };
+        assert!(!export_kicad_sym(&without_alt).contains("_1_2\""), "no style-2 sub-block at all when has_alternate_body_style is false");
     }
 }

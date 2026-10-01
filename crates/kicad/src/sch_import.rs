@@ -348,7 +348,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         placement: None,
         routing: None,
         drawings: None,
-        footprint_library: None, sheet_contents: None, bus_aliases,
+        footprint_library: None, sheet_contents: None, bus_aliases, symbol_library: None,
     };
     design.assign_missing_ids();
 
@@ -1016,7 +1016,7 @@ mod tests {
             sheets: vec![], instance_overrides: vec![],
             imported_from_kicad: false,
         };
-        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![] };
+        let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None };
 
         let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "multi_unit" }).unwrap();
         assert!(text.contains("(unit 1)"), "{text}");
@@ -1161,6 +1161,7 @@ mod tests {
             footprint_library: None,
             sheet_contents: None,
             bus_aliases: vec![eda_model::ir::BusAlias { name: "USB".into(), members: vec!["D+".into(), "D-".into()] }],
+            symbol_library: None,
         };
         let model = ConstraintModel::default();
         let text = crate::export_kicad_sch(&design, &model, &crate::ExportMeta { date: "2026-01-01", title: "bus test" }).expect("exports cleanly with zero symbols");

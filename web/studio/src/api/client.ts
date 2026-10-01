@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolLibrary, TuneLengthReply, Um } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolEditorNames, SymbolLibrary, TuneLengthReply, Um } from "./types";
 
 export class ApiError extends Error {}
 
@@ -172,12 +172,12 @@ export async function postRoute(): Promise<RouteReply> {
  * ("footprint_editor") -- see `board::undo`'s own doc for the full
  * mechanism.
  */
-export async function postUndo(domain: "pcb" | "schematic" | "footprint_editor"): Promise<CmdReply> {
+export async function postUndo(domain: "pcb" | "schematic" | "footprint_editor" | "symbol_editor"): Promise<CmdReply> {
   const r = await fetch("/api/undo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
   return (await r.json()) as CmdReply;
 }
 
-export async function postRedo(domain: "pcb" | "schematic" | "footprint_editor"): Promise<CmdReply> {
+export async function postRedo(domain: "pcb" | "schematic" | "footprint_editor" | "symbol_editor"): Promise<CmdReply> {
   const r = await fetch("/api/redo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ domain }) });
   return (await r.json()) as CmdReply;
 }
@@ -258,6 +258,41 @@ export async function downloadFootprintKicadMod(name: string): Promise<void> {
   const a = document.createElement("a");
   a.href = url;
   a.download = `${fileName}.kicad_mod`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// -------------------------------------------------------------- symbol editor
+//
+// The Symbol Editor tab. `fetchLibrarySymbol` polls the one symbol
+// currently open the same way `fetchFootprint` polls its own tab's
+// document; `fetchSymbolEditorNames` is the "Open from Library" picker's
+// list; `downloadSymbolKicadSym` is the derived `.kicad_sym` export.
+
+export async function fetchLibrarySymbol(libId: string): Promise<LibrarySymbol> {
+  const s = await getJson<LibrarySymbol & { error?: string }>(`/api/symbol?lib_id=${encodeURIComponent(libId)}`);
+  if (s.error) throw new ApiError(s.error);
+  return s;
+}
+
+export async function fetchSymbolEditorNames(): Promise<SymbolEditorNames> {
+  const r = await getJson<SymbolEditorNames & { error?: string }>("/api/symbol_editor/names");
+  if (r.error) throw new ApiError(r.error);
+  return r;
+}
+
+export async function downloadSymbolKicadSym(libId: string): Promise<void> {
+  const r = await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(libId)}`, { cache: "no-store" });
+  if (!r.ok) throw new ApiError(await r.text());
+  const text = await r.text();
+  const blob = new Blob([text], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const fileName = libId.includes(":") ? libId.split(":").slice(1).join(":") : libId;
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${fileName}.kicad_sym`;
   document.body.appendChild(a);
   a.click();
   a.remove();
