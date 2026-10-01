@@ -1,17 +1,15 @@
-// Hit-testing for the non-footprint selectable items (item 7: tracks,
-// vias, zones, shapes, text) -- Canvas.tsx's existing partHit/partsAt
-// cover footprints; this covers everything the model extension added.
-// Not pixel-perfect against KiCad's own hit-test geometry (e.g. a real
-// stroked-arc hit test, or true point-in-stroke for a thick polyline) --
-// reasonable distance/bounds checks, good enough to select something
-// that's visibly under the cursor at a normal zoom level.
-import type { BoardState, BoardText, Shape } from "../../api/types";
-
-export type HitKind = "track" | "via" | "zone" | "shape" | "text";
-export interface Hit {
-  kind: HitKind;
-  id: string;
-}
+// Geometry helpers for the non-footprint selectable items (tracks, vias,
+// zones, shapes, text): distance-to-shape (for click "sloppiness" and
+// GuessSelectionCandidates), area (for its size-ratio pass), and
+// bounding boxes (for a box-select's contained/touching test). Shared by
+// `selectionCandidates.ts`'s `collectSelectionCandidates`/
+// `collectBoxSelection`, which is also where these kinds' own per-kind
+// selection-filter/layer gating lives. Not pixel-perfect against KiCad's
+// own hit-test geometry (e.g. a real stroked-arc hit test, or true
+// point-in-stroke for a thick polyline) -- reasonable distance/bounds
+// checks, good enough to select something that's visibly under the
+// cursor at a normal zoom level.
+import type { BoardText, Shape } from "../../api/types";
 
 export function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const dx = bx - ax,
@@ -144,36 +142,4 @@ export function textBoundingBox(t: BoardText): { x0: number; y0: number; x1: num
   const w = Math.max(t.content.length, 1) * t.size * 0.6;
   const x0 = t.justify === "left" ? t.x : t.justify === "right" ? t.x - w : t.x - w / 2;
   return { x0, y0: t.y - halfH, x1: x0 + w, y1: t.y + halfH };
-}
-
-/** Every non-footprint item under (xUm, yUm), nearest first -- Canvas.tsx tries this after partHit() finds nothing, so a footprint under a track/zone still wins (matches KiCad: copper items are behind footprints in the click-priority KiCad's own selection tool uses). */
-export function itemHitsAt(board: BoardState, xUm: number, yUm: number, toleranceUm: number): Hit[] {
-  const hits: Array<Hit & { d: number }> = [];
-
-  for (const t of board.routing?.tracks ?? []) {
-    const d = distToPolyline(xUm, yUm, t.pts) - t.width / 2;
-    if (d <= toleranceUm) hits.push({ kind: "track", id: t.id, d: Math.max(d, 0) });
-  }
-  for (const v of board.routing?.vias ?? []) {
-    const d = Math.hypot(xUm - v.x, yUm - v.y) - v.d / 2;
-    if (d <= toleranceUm) hits.push({ kind: "via", id: v.id, d: Math.max(d, 0) });
-  }
-  for (const z of board.routing?.zones ?? []) {
-    if (z.outline.length < 3) continue;
-    const inside = pointInPolygon(xUm, yUm, z.outline);
-    const d = inside ? 0 : distToPolyline(xUm, yUm, [...z.outline, z.outline[0]!]);
-    if (d <= toleranceUm) hits.push({ kind: "zone", id: z.id, d });
-  }
-  for (const s of board.drawings?.shapes ?? []) {
-    const d = shapeHitDistance(s, xUm, yUm);
-    if (d <= toleranceUm) hits.push({ kind: "shape", id: s.id, d });
-  }
-  for (const t of board.drawings?.texts ?? []) {
-    const { x0, y0, x1, y1 } = textBoundingBox(t);
-    const d = xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1 ? 0 : Math.hypot(xUm - t.x, yUm - t.y) - (x1 - x0) / 2;
-    if (d <= toleranceUm) hits.push({ kind: "text", id: t.id, d: Math.max(d, 0) });
-  }
-
-  hits.sort((a, b) => a.d - b.d);
-  return hits;
 }
