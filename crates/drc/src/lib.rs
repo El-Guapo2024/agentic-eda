@@ -93,7 +93,7 @@ mod tests {
     use eda_model::{Net, Part, Pin, PinKind};
 
     fn model_two_pads() -> ConstraintModel {
-        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None };
+        let part = |r: &str| Part { reference: r.into(), mpn: None, lcsc: None, datasheet: None, symbol: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, edge: None };
         ConstraintModel { parts: vec![part("R1"), part("R2")], nets: vec![Net { name: "A".into(), pins: vec!["R1.1".into()] }, Net { name: "B".into(), pins: vec!["R2.1".into()] }], ..Default::default() }
     }
 
