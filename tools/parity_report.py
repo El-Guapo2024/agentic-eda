@@ -269,6 +269,28 @@ def render_report(drc, erc, conn, rt, scores):
     if erc:
         lines.append(f"Boards evaluated: {len([b for b in erc['boards'] if not b.get('error')])} (of {len(erc['boards'])} attempted).\n")
         lines.append(f"**Overall precision: {fmt(erc['precision'])}, recall: {fmt(erc['recall'])}.**\n")
+        lines.append(
+            "_Reading this number_: the two largest remaining gaps are both understood, not mysterious. "
+            "`lib_symbol_mismatch`'s 562 missing are concentrated in this project's own freshly-derived "
+            "(not yet exported) example boards: `check_lib_symbol_issues` compares a schematic's embedded "
+            "symbol cache against the real library, but for a design that hasn't been through `export_kicad_sch` "
+            "yet, the \"cached\" copy *is* the same in-memory lookup as the \"real\" one, so no structural "
+            "difference can ever be found there -- only once a file is actually written does this project's "
+            "own box-corner re-baking of a real symbol's graphics diverge from the library's native coordinates "
+            "the way `kicad-cli` sees it. Catching that would mean predicting the exporter's own output from "
+            "inside ERC (or changing what the exporter writes), both out of scope for this port; the QA "
+            "corpus's own real mismatches (5, version-skew on `Jumper`/`Device:R`) are matched correctly. "
+            "`label_dangling`'s 75 extra are concentrated in two `work/` boards (full place-and-route pipeline "
+            "output, not this task's own freshly-generated examples) whose labels don't coincide with this "
+            "project's current exporter's own pin placement -- consistent with those two fixtures predating a "
+            "later exporter change, not a logic bug in the check itself (the *schematic-only* generation path "
+            "for the same kind of board has zero such mismatches). `pin_not_connected`/`pin_not_driven`/"
+            "`power_pin_not_driven`'s smaller residual gaps trace to a real architectural difference: KiCad "
+            "groups pins into per-sheet graphical subgraphs first and only secondarily merges by net name, "
+            "while this project's net model (`ConstraintModel::nets`) merges by name from the start -- a full "
+            "subgraph port is out of scope here. `undefined_netclass`/`unresolved_variable` need IR concepts "
+            "(netclasses, text-variable resolution) this project doesn't have yet.\n"
+        )
         lines.append(type_table(erc["totals"]))
         style_only = erc.get("style_only_totals") or {}
         if style_only:

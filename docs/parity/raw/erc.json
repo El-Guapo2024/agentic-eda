@@ -1155,9 +1155,9 @@
       "types": {
         "footprint_link_issues": {
           "kicad": 3,
-          "ours": 0,
-          "matched": 0,
-          "missing": 3,
+          "ours": 3,
+          "matched": 3,
+          "missing": 0,
           "extra": 0
         },
         "lib_symbol_issues": {
@@ -1377,9 +1377,9 @@
     },
     "footprint_link_issues": {
       "kicad": 3,
-      "ours": 0,
-      "matched": 0,
-      "missing": 3,
+      "ours": 3,
+      "matched": 3,
+      "missing": 0,
       "extra": 0
     },
     "isolated_pin_label": {
@@ -1487,7 +1487,7 @@
     "schematic_wire_overlap": 5,
     "schematic_wire_through_symbol": 47
   },
-  "precision": 0.75,
-  "recall": 0.4752233956133225,
+  "precision": 0.7509578544061303,
+  "recall": 0.4776604386677498,
   "import_failures": []
 }

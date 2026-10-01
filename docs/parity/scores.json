@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-01T05:50:25.107599+00:00",
+  "generated_at": "2026-10-01T14:14:00.203963+00:00",
   "metrics": [
     {
       "name": "connectivity_boards_evaluated",
@@ -33,13 +33,13 @@
     },
     {
       "name": "erc_precision",
-      "current": 0.34834123222748814,
-      "floor": 0.34834123222748814
+      "current": 0.7509578544061303,
+      "floor": 0.7509578544061303
     },
     {
       "name": "erc_recall",
-      "current": 0.2388302193338749,
-      "floor": 0.2388302193338749
+      "current": 0.4776604386677498,
+      "floor": 0.4776604386677498
     },
     {
       "name": "roundtrip_own_footprint_pose_survival_rate",
