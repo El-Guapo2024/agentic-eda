@@ -1,20 +1,24 @@
 //! A port of KiCad's schematic ERC (Electrical Rules Check): the pin-type
 //! conflict matrix, unconnected pins, dangling wires/labels, power-input
-//! pins left undriven, and duplicate references. Reports as `CheckResult`s
-//! under the exact check names KiCad's own `erc_settings.cpp`/`erc_item.cpp`
-//! use as JSON `"type"`/settings-key strings (`pin_to_pin`,
-//! `pin_not_connected`, `pin_not_driven`, `power_pin_not_driven`,
-//! `label_dangling`, `wire_dangling`, `unconnected_wire_endpoint`,
-//! `no_connect_connected`, `no_connect_dangling`, `lib_symbol_issues`,
-//! `lib_symbol_mismatch`, `duplicate_reference`), so a failure here reads
-//! the same as one from `kicad-cli sch erc --format json`.
+//! pins left undriven, library/footprint-library link issues, off-grid
+//! endpoints, isolated labels, and duplicate references. Reports as
+//! `CheckResult`s under the exact check names KiCad's own
+//! `erc_settings.cpp`/`erc_item.cpp` use as JSON `"type"`/settings-key
+//! strings (`pin_to_pin`, `pin_not_connected`, `pin_not_driven`,
+//! `power_pin_not_driven`, `label_dangling`, `wire_dangling`,
+//! `unconnected_wire_endpoint`, `no_connect_connected`,
+//! `no_connect_dangling`, `lib_symbol_issues`, `lib_symbol_mismatch`,
+//! `footprint_link_issues`, `endpoint_off_grid`, `isolated_pin_label`,
+//! `duplicate_reference`), so a failure here reads the same as one from
+//! `kicad-cli sch erc --format json`.
 //!
 //! Severities match KiCad's own shipped defaults (`ERC_SETTINGS::ERC_SETTINGS()`):
 //! `pin_not_connected`/`pin_not_driven`/`power_pin_not_driven`/
 //! `label_dangling`/`wire_dangling` are Fail (KiCad: Error); `pin_to_pin` is
 //! Fail or Warn per the matrix cell; `unconnected_wire_endpoint`/
 //! `no_connect_connected`/`no_connect_dangling`/`lib_symbol_issues`/
-//! `lib_symbol_mismatch` are Warn (KiCad: Warning).
+//! `lib_symbol_mismatch`/`footprint_link_issues`/`endpoint_off_grid`/
+//! `isolated_pin_label` are Warn (KiCad: Warning).
 //! `duplicate_reference` is scored Fail here even though upstream KiCad's
 //! own `RunTests()` never actually invokes the (otherwise fully
 //! implemented) annotation-duplicate check in this source snapshot — see
@@ -296,13 +300,31 @@ fn resolve_pins(design: &Design, model: &ConstraintModel) -> Vec<ResolvedPin> {
 /// `pin_world` was built in the first place — reusing
 /// `sch_import::transform_local_point` directly rather than re-deriving the
 /// same math means a real file's recorded rotation/mirror is honored here
-/// too, which the engine-box path below has never needed to handle. `None`
-/// for a generated (non-imported) schematic, an `nc`-kind pin (its point
-/// comes from `no_connects` instead, same as always), or the rare imported
-/// pin number a resolved real symbol doesn't actually have — every one of
-/// those falls back to the pre-existing engine-box computation.
+/// too, which the engine-box path below has never needed to handle.
+///
+/// Deliberately *not* skipped for an `nc`-kind pin here, unlike the
+/// engine-box fallback: that fallback's own `no_connects` lookup only works
+/// for a schematic `derive_schematic` built (its generator populates
+/// `NoConnect::pin` itself when it places the flag), but
+/// `sch_import::reconcile` *never* backfills `NoConnect::pin` for an
+/// imported file — a point an explicit no-connect flag sits on is
+/// deliberately excluded from `pins_of_point` there (so it can never
+/// contribute a pin to a net), which as a side effect means the field
+/// whoever reads `nc.pin` back stays empty forever, not just until some
+/// later pass fills it in. Resolving an imported `nc` pin's point the same
+/// direct way an ordinary one is here instead -- the real resolved
+/// symbol's own per-pin coordinate always has one, whether or not that
+/// pin's *library* electrical type happens to be `no_connect` -- is what
+/// lets [`check_no_connects`] actually find the real pin KiCad drew a
+/// no-connect flag onto, instead of landing on this function's `(0, 0)`
+/// placeholder and reporting every single imported no-connect flag as
+/// dangling regardless of the file.
+///
+/// `None` for a generated (non-imported) schematic, or the rare imported
+/// pin number a resolved real symbol doesn't actually have — both fall
+/// back to the pre-existing engine-box computation.
 fn native_imported_pin_at(sch: &eda_model::ir::SchematicSection, sym: &eda_model::ir::SymbolInstance, pin: &eda_model::Pin, resolved_sym: Option<&eda_model::symbol::LibSymbol>, angle_deg: f64) -> Option<Point> {
-    if !sch.imported_from_kicad || pin.kind == eda_model::PinKind::Nc {
+    if !sch.imported_from_kicad {
         return None;
     }
     let real_pin = resolved_sym?.pin_by_number(&pin.number)?;
@@ -337,6 +359,7 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     check_lib_symbol_issues(sch, model, &mut out);
     check_off_grid_endpoints(sch, &pins, &mut out);
     check_isolated_pin_label(sch, model, &mut out);
+    check_footprint_link_issues(sch, &mut out);
     check_duplicate_references(sch, &mut out);
     out.extend(crate::erc_style::check_style(design, model));
     out
@@ -835,6 +858,29 @@ fn check_off_grid_endpoints(sch: &eda_model::ir::SchematicSection, pins: &[Resol
 fn check_isolated_pin_label(sch: &eda_model::ir::SchematicSection, model: &ConstraintModel, out: &mut Vec<CheckResult>) {
     let mut ok = true;
     for l in &sch.labels {
+        // A global label is deliberately exempt: its entire purpose is to
+        // be resolved by *name* anywhere in the project, not by local pin
+        // adjacency, and KiCad polices "this name is suspiciously alone"
+        // for one separately (`ERCE_SINGLE_GLOBAL_LABEL`, not ported here
+        // -- not yet observed in this port's measured corpus) rather than
+        // through this check. A real single-sheet schematic that fans a
+        // handful of signals out to global labels for documentation/test-
+        // point purposes, with nothing else on the same sheet, is common
+        // and *not* an ERC finding in real KiCad -- confirmed directly
+        // against a real QA fixture this port's own harness measured
+        // (`issue23851.kicad_sch`: 21 once-only global labels, 0 of them
+        // flagged by real `kicad-cli sch erc`). A local label is sheet-
+        // scoped by definition, so this project's own single-sheet net
+        // model judges it exactly the way KiCad would. A hierarchical
+        // label has no parent sheet in this project's model at all (no
+        // hierarchy support -- see `docs/parity/GAPS.md` #6), which is the
+        // same "can never connect to anything else" situation a real
+        // top-of-hierarchy sheet's own hierarchical label is in -- also
+        // confirmed against this port's one real measured instance
+        // (`i2c_thingy.kicad_sch`'s hierarchical `AD0`).
+        if matches!(l.kind, eda_model::ir::LabelKind::Global { .. }) {
+            continue;
+        }
         let pin_count = model.nets.iter().find(|n| n.name == l.net).map(|n| n.pins.len()).unwrap_or(0);
         if pin_count == 1 {
             out.push(CheckResult {
@@ -849,6 +895,43 @@ fn check_isolated_pin_label(sch: &eda_model::ir::SchematicSection, model: &Const
     }
     if ok {
         out.push(CheckResult::pass("isolated_pin_label"));
+    }
+}
+
+/// (i4) `footprint_link_issues`, ported from KiCad's own `ERC_TESTER::
+/// TestFootprintLinkIssues` (`erc.cpp`): is a symbol instance's assigned
+/// Footprint field's library nickname a real, currently-installed KiCad
+/// footprint library -- the same "is it configured" question
+/// [`check_lib_symbol_issues`] asks of a symbol's own library, now asked of
+/// `SymbolInstance::footprint`. Scoped to that one sub-case (KiCad's own
+/// `KIFACE_TEST_FOOTPRINT_LINK_NO_LIBRARY` result) -- the only one this
+/// port's measured corpus has ever needed; "footprint not found in an
+/// existing library" (`KIFACE_TEST_FOOTPRINT_LINK_NO_FOOTPRINT`) and
+/// "doesn't match this symbol's own `fp_filters`" (`TestFootprintFilters`,
+/// a different upstream function entirely, gated off by KiCad's own
+/// default `ERCE_FOOTPRINT_FILTERS` severity of Ignore) are both real,
+/// separate checks this port does not implement.
+fn check_footprint_link_issues(sch: &eda_model::ir::SchematicSection, out: &mut Vec<CheckResult>) {
+    let root = crate::footprint_lib::default_footprint_library_root();
+    let mut ok = true;
+    for sym in &sch.symbols {
+        let Some((lib_name, fp_name)) = sym.footprint.split_once(':') else { continue };
+        if lib_name.is_empty() || fp_name.is_empty() {
+            continue;
+        }
+        if !root.join(format!("{lib_name}.pretty")).is_dir() {
+            out.push(CheckResult {
+                check: "footprint_link_issues".into(),
+                status: CheckStatus::Warn,
+                location: Some(sym.id.clone()),
+                hint: Some(format!("The current configuration does not include the footprint library '{lib_name}'")),
+                detail: None,
+            });
+            ok = false;
+        }
+    }
+    if ok {
+        out.push(CheckResult::pass("footprint_link_issues"));
     }
 }
 

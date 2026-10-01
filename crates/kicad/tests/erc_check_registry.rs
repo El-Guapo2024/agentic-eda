@@ -23,6 +23,7 @@ const REGISTERED: &[&str] = &[
     // -- electrical (erc.rs) -----------------------------------------
     "duplicate_reference",
     "endpoint_off_grid",
+    "footprint_link_issues",
     "isolated_pin_label",
     "label_dangling",
     "lib_symbol_issues",
