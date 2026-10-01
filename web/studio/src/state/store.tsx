@@ -282,6 +282,12 @@ export interface StudioState {
   zoneDisplayMode: "filled" | "outline";
   /** Board Setup... (dialog_board_setup.cpp) -- net classes/track-via sizing/rules/etc, see BoardSetupDialog.tsx. */
   boardSetupDialogOpen: boolean;
+  /** File > Fabrication Outputs > Gerbers... (dialog_plot.cpp), see PlotDialog.tsx. */
+  plotDialogOpen: boolean;
+  /** File > Fabrication Outputs > Drill Files... (dialog_gendrill.cpp), see GenerateDrillDialog.tsx. */
+  generateDrillDialogOpen: boolean;
+  /** File > Fabrication Outputs > Component Placement... (dialog_gen_footprint_position.cpp), see FootprintPositionDialog.tsx. */
+  footprintPositionDialogOpen: boolean;
   /**
    * `pcbnew.EditorControl.trackWidthInc`/`trackWidthDec` (W/Shift+W):
    * the board's own default (`board_rules.track_width`) plus
@@ -426,6 +432,9 @@ const initialState: StudioState = {
   zoneFill: null,
   zoneDisplayMode: "filled",
   boardSetupDialogOpen: false,
+  plotDialogOpen: false,
+  generateDrillDialogOpen: false,
+  footprintPositionDialogOpen: false,
   currentTrackWidthUm: null,
   currentViaPreset: null,
   textDialog: null,
@@ -536,6 +545,9 @@ export type Action =
   | { type: "CLEAR_ZONE_FILL" }
   | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" }
   | { type: "SET_BOARD_SETUP_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_PLOT_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_GENERATE_DRILL_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN"; open: boolean }
   | { type: "SET_CURRENT_TRACK_WIDTH"; widthUm: Um }
   | { type: "SET_CURRENT_VIA_PRESET"; preset: ViaPreset }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
@@ -713,6 +725,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, zoneDisplayMode: action.mode };
     case "SET_BOARD_SETUP_DIALOG_OPEN":
       return { ...state, boardSetupDialogOpen: action.open };
+    case "SET_PLOT_DIALOG_OPEN":
+      return { ...state, plotDialogOpen: action.open };
+    case "SET_GENERATE_DRILL_DIALOG_OPEN":
+      return { ...state, generateDrillDialogOpen: action.open };
+    case "SET_FOOTPRINT_POSITION_DIALOG_OPEN":
+      return { ...state, footprintPositionDialogOpen: action.open };
     case "SET_CURRENT_TRACK_WIDTH":
       return { ...state, currentTrackWidthUm: action.widthUm };
     case "SET_CURRENT_VIA_PRESET":

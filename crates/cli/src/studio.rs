@@ -20,6 +20,7 @@
 //! was fixed to run in the background instead.
 
 use crate::board;
+use crate::fab_api;
 use crate::route_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::{LabelSide, Shape, Side};
@@ -599,6 +600,14 @@ fn handle(
         ("POST", "/api/route/drag_start") => respond(stream, "200 OK", "application/json", route_api::drag_start(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/drag_move") => respond(stream, "200 OK", "application/json", route_api::drag_move(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/drag_finish") => respond(stream, "200 OK", "application/json", route_api::drag_finish(dir, route_session, &body).to_string().as_bytes()),
+        // Fabrication outputs (Plot / Generate Drill Files / Footprint
+        // Position Files dialogs, plus the plain BOM): `crate::fab_api`
+        // runs the same `eda_fab` writers `eda fab ...` does and writes
+        // into `<dir>/export/` -- see that module's own doc comment.
+        ("POST", "/api/fab/gerbers") => respond(stream, "200 OK", "application/json", fab_api::gerbers(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/fab/drill") => respond(stream, "200 OK", "application/json", fab_api::drill(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/fab/pos") => respond(stream, "200 OK", "application/json", fab_api::pos(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/fab/bom") => respond(stream, "200 OK", "application/json", fab_api::bom(dir).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }

@@ -160,6 +160,46 @@ export async function postRedo(domain: "pcb" | "schematic"): Promise<CmdReply> {
   return (await r.json()) as CmdReply;
 }
 
+// ------------------------------------------------------- fabrication outputs
+//
+// crates/cli/src/fab_api.rs, backing the Plot / Generate Drill Files /
+// Footprint Position Files dialogs (see those components) -- each runs the
+// matching `eda_fab` writer (ported from KiCad; see crates/fab/src/
+// gerber.rs/drill.rs/position.rs) and writes into the board directory's
+// own `export/` folder, returning the paths written.
+
+/** Shared reply shape for every `/api/fab/*` endpoint. */
+export interface FabReply {
+  ok: boolean;
+  /** Paths written, relative to the board directory (e.g. `export/board-F_Cu.gtl`). */
+  files?: string[];
+  message?: string;
+}
+
+export function postFabGerbers(layers?: string[]): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/gerbers", layers && layers.length > 0 ? { layers } : {});
+}
+
+export function postFabDrill(separateTh: boolean): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh });
+}
+
+export interface FabPosOptions {
+  format: "csv" | "ascii";
+  side: "front" | "back" | "both";
+  units_mm: boolean;
+  smd_only: boolean;
+  exclude_fp_th: boolean;
+}
+
+export function postFabPos(opts: FabPosOptions): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/pos", opts);
+}
+
+export function postFabBom(): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/bom", {});
+}
+
 // ------------------------------------------------------- interactive router
 //
 // Gap #7's push-and-shove router (crates/pns), driven through
