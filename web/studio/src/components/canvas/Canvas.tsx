@@ -1,10 +1,11 @@
 // The PCB canvas. Owns the <canvas> element, the render loop, and the
 // view/selection/edit pointer+keyboard interactions:
-//   - wheel zoom about the cursor; middle-drag pan (KiCad keeps left-drag
-//     for box select, not pan -- see pcbnew/tools/pcb_selection_tool.cpp,
-//     which this session could not read, so the *exact* pan modifier set
-//     -- e.g. whether space+left-drag also pans -- is not confirmed; only
-//     middle-drag is wired here).
+//   - wheel zoom/pan exactly like wx_view_controls.cpp's onWheel (see
+//     kicad-port/viewControls.ts: plain wheel zooms about the cursor,
+//     Ctrl+wheel pans horizontally, Shift/Alt+wheel pans vertically);
+//     middle- and right-drag both pan (KiCad's own drag_middle/drag_right
+//     defaults), edge auto-pan while dragging (off by default, same as
+//     KiCad -- state.autoPanEnabled).
 //   - click to select (Shift adds); drag from empty space box-selects,
 //     left-to-right = window (fully enclosed), right-to-left = crossing
 //     (touching) -- crates/ops/src/view.rs has no notion of this, it's
@@ -17,14 +18,22 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import type { ToolId } from "../../state/store";
-import { boundsOfPoints, fitTransform, screenToWorld, zoomAbout } from "./view";
+import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
 import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
-import { snapPoint } from "./gridHelper";
+import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
 import { findRouteAnchor, posture45, commitRoute } from "./routing";
 import { itemHitsAt } from "./itemHitTest";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
+import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
+import { pickDefaultZoomController, type ZoomController } from "../../kicad-port/zoomController";
+import { isMac } from "../../platform";
 import "../../styles/canvas.css";
+
+/** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
+const PAN_BUTTONS = new Set([1, 2]);
+/** Screen-px movement past which a right-button press counts as a pan-drag rather than a click-to-open-the-context-menu. */
+const PAN_CLICK_TOLERANCE_PX = 4;
 
 const LONG_PRESS_MS = 500;
 const LONG_PRESS_MOVE_TOLERANCE_PX = 6;
@@ -72,8 +81,8 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, "segment" | "arc" | "rect" | "circ
 };
 
 type DragState =
-  | { kind: "pan"; startScreen: [number, number]; startView: [number, number] }
-  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text"; startWorld: [number, number]; moved: boolean }
+  | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
+  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number]; additive: boolean };
 
 /** Every part whose courtyard contains the point, topmost (last drawn) first. */
@@ -104,6 +113,26 @@ export function Canvas() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const longPressRef = useRef<{ timer: ReturnType<typeof setTimeout>; startScreen: [number, number] } | null>(null);
+  // wx_view_controls.cpp LoadSettings(): the zoom controller is a
+  // long-lived object across wheel events (ACCELERATING_ZOOM_CONTROLLER
+  // specifically needs to remember the previous tick's timestamp/
+  // direction to decide whether to accelerate) -- one instance per
+  // mount, picked once for this platform, not reconstructed per wheel
+  // event.
+  const zoomControllerRef = useRef<ZoomController>(pickDefaultZoomController(isMac()));
+  // Autopan (view_controls.cpp handleAutoPanning/onTimer) needs the
+  // latest state/cursor position inside a self-scheduling
+  // requestAnimationFrame loop without restarting that loop on every
+  // render -- these refs are the loop's "current values" without being
+  // render dependencies. lastPointerScreenRef is container-relative,
+  // same space as computeAutoPanDirection expects.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const containerSizeRef = useRef(containerSize);
+  containerSizeRef.current = containerSize;
+  const lastPointerScreenRef = useRef<{ x: number; y: number } | null>(null);
+  /** Set by onPointerUp when a right-button pan-drag just ended with real movement, so the native `contextmenu` event that follows (a separate, later browser event) knows to suppress the menu instead of opening it -- see onContextMenu. */
+  const justPannedRef = useRef(false);
 
   const board = state.board;
 
@@ -120,6 +149,38 @@ export function Canvas() {
     ro.observe(container);
     return () => ro.disconnect();
   }, []);
+
+  // wx_view_controls.cpp handleAutoPanning/onTimer: while the cursor sits
+  // in the border near a canvas edge DURING an active drag/draw
+  // interaction, pan every frame, accelerating with how far past the
+  // border it is. Off entirely unless state.autoPanEnabled (KiCad's own
+  // default, see store.tsx) -- a persistent rAF loop rather than
+  // per-dependency effect restarts, so it reads refs fresh each frame
+  // instead of needing to be re-created on every state change.
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const s = stateRef.current;
+      if (!s.autoPanEnabled) return;
+      // Only while an interactive tool is actually running -- a box
+      // select or move drag in progress, or a route/zone/shape tool
+      // mid-click-sequence -- matching source's per-tool SetAutoPan(true)
+      // gate (plain idle hover near the edge in the Select tool never
+      // autopans in real KiCad either).
+      const drag = dragRef.current;
+      const interactive = drag?.kind === "box" || drag?.kind === "move" || s.drawState != null;
+      const pointer = lastPointerScreenRef.current;
+      if (!interactive || !pointer) return;
+      const screenSize = containerSizeRef.current;
+      const dir = computeAutoPanDirection(pointer, screenSize, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin);
+      const step = computeAutoPanStep(dir, screenSize, s.view.scale, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanAcceleration);
+      if (!step) return;
+      dispatch({ type: "SET_VIEW", view: panByWorldDelta(s.view, step.x, step.y) });
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [dispatch]);
 
   // Fit to the container until the user pans/zooms by hand (userMovedRef,
   // set in the wheel/pointer handlers below) -- same rule the old
@@ -229,6 +290,19 @@ export function Canvas() {
     },
     [state.view]
   );
+
+  /** tool_event.h/edit_tool_move_fct.cpp's real move-tool modifiers (see kicad-port/gridSnap.ts's header comment): Ctrl (Cmd on macOS) disables grid round-off, Shift disables anchor snapping. */
+  const gridSnapModifiers = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): GridSnapModifiers => ({
+    ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+    shiftKey: e.shiftKey,
+  });
+
+  /** pcb_grid_helper.cpp BestSnapAnchor, applied to a single reference point -- see gridHelper.ts:snapWithAnchors. Falls back to plain grid snap when there's no board yet (shouldn't happen once a drag is possible, but keeps this total). */
+  const snapRef = (wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, excludeOwnerId?: string): [number, number] => {
+    if (!board) return snapPoint(wx, wy, state.gridUm);
+    const { x, y } = snapWithAnchors(wx, wy, board.snap ?? state.gridUm, state.view.scale, board, gridSnapModifiers(e), excludeOwnerId);
+    return [x, y];
+  };
 
   /** pcb_selection_tool.cpp: where several items overlap, Alt-click (and, here, a press-and-hold) shows a picker instead of always taking the topmost. */
   const disambiguate = useCallback(
@@ -365,8 +439,14 @@ export function Canvas() {
       api.placeArmedAt(sx, sy);
       return;
     }
-    if (e.button === 1) {
-      dragRef.current = { kind: "pan", startScreen: [e.clientX, e.clientY], startView: [state.view.x, state.view.y] };
+    if (PAN_BUTTONS.has(e.button)) {
+      // wx_view_controls.cpp onButton: MiddleDown/RightDown both start
+      // DRAG_PANNING by default. A right-button press might still turn
+      // out to be a plain click (-> the context menu, via the browser's
+      // own native `contextmenu` event on button-up) rather than a drag;
+      // onContextMenu below tells the two apart by whether real movement
+      // happened.
+      dragRef.current = { kind: "pan", button: e.button as 1 | 2, startScreen: [e.clientX, e.clientY], startView: [state.view.x, state.view.y], moved: false };
       return;
     }
     if (e.button !== 0) return;
@@ -405,7 +485,7 @@ export function Canvas() {
         dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
         refs = [hit.ref];
       }
-      dragRef.current = { kind: "move", refs, moveKind: "part", startWorld: [wx, wy], moved: false };
+      dragRef.current = { kind: "move", refs, moveKind: "part", startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, hit.ref), moved: false };
       return;
     }
 
@@ -420,7 +500,7 @@ export function Canvas() {
         else dispatch({ type: "SET_SELECTION", refs: [itemHit.id] });
         // Tracks/zones have no move_* Cmd (see api/types.ts) -- selectable, not draggable.
         if (itemHit.kind === "via" || itemHit.kind === "shape" || itemHit.kind === "text") {
-          dragRef.current = { kind: "move", refs: [itemHit.id], moveKind: itemHit.kind, startWorld: [wx, wy], moved: false };
+          dragRef.current = { kind: "move", refs: [itemHit.id], moveKind: itemHit.kind, startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, itemHit.id), moved: false };
         }
         return;
       }
@@ -433,6 +513,8 @@ export function Canvas() {
   const onPointerMove = (e: React.PointerEvent) => {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
+    const containerRectForAutoPan = containerRef.current?.getBoundingClientRect();
+    if (containerRectForAutoPan) lastPointerScreenRef.current = { x: e.clientX - containerRectForAutoPan.left, y: e.clientY - containerRectForAutoPan.top };
 
     if (longPressRef.current) {
       const [sx, sy] = longPressRef.current.startScreen;
@@ -441,10 +523,21 @@ export function Canvas() {
 
     if (moveMode && state.selection.size > 0) {
       const origin = state.moveOriginUm ?? { x: wx, y: wy };
-      const [dx, dy] = snapPoint(wx - origin.x, wy - origin.y, board?.snap ?? state.gridUm);
       const first = [...state.selection][0]!;
       const kind = api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part";
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: dx, dyUm: dy } });
+      // pcb_grid_helper.cpp BestSnapAnchor applied to both ends: the
+      // delta is "where the (snapped) cursor is now" minus "where the
+      // (snapped) cursor started" -- not a plain grid-rounded delta --
+      // so a drag that starts and ends at the same anchor is exactly
+      // zero movement, and dragging onto a *different* nearby anchor
+      // (another part's pad, say) lands precisely on it. Only excludes
+      // the dragged item's own anchors for a single-item move; a
+      // multi-select drag doesn't exclude any member (a reasonable,
+      // documented simplification -- see PARITY-pcb.md).
+      const soleRef = state.selection.size === 1 ? first : undefined;
+      const [ox, oy] = snapRef(origin.x, origin.y, e, soleRef);
+      const [sx, sy] = snapRef(wx, wy, e, soleRef);
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: sx - ox, dyUm: sy - oy } });
       return;
     }
 
@@ -452,9 +545,12 @@ export function Canvas() {
     if (!drag) return;
     if (drag.kind === "pan") {
       userMovedRef.current = true;
+      if (Math.hypot(e.clientX - drag.startScreen[0], e.clientY - drag.startScreen[1]) > PAN_CLICK_TOLERANCE_PX) drag.moved = true;
       dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + (e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
     } else if (drag.kind === "move") {
-      const [dx, dy] = snapPoint(wx - drag.startWorld[0], wy - drag.startWorld[1], board?.snap ?? state.gridUm);
+      const [sx, sy] = snapRef(wx, wy, e, drag.refs.length === 1 ? drag.refs[0] : undefined);
+      const dx = sx - drag.snapOrigin[0];
+      const dy = sy - drag.snapOrigin[1];
       if (dx !== 0 || dy !== 0) drag.moved = true;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: drag.moveKind, dxUm: dx, dyUm: dy } : null });
     } else if (drag.kind === "box") {
@@ -472,7 +568,9 @@ export function Canvas() {
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
-    if (drag.kind === "move") {
+    if (drag.kind === "pan") {
+      justPannedRef.current = drag.button === 2 && drag.moved;
+    } else if (drag.kind === "move") {
       if (drag.moved && state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind);
       else dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
     } else if (drag.kind === "box" && board) {
@@ -498,17 +596,35 @@ export function Canvas() {
     }
   };
 
+  /** wx_view_controls.cpp WX_VIEW_CONTROLS::onWheel, via kicad-port/viewControls.ts's handleWheel -- plain wheel zooms about the cursor (ConstantZoomController/AcceleratingZoomController per platform, not an ad hoc factor), Ctrl+wheel pans horizontally, Shift/Alt+wheel pans vertically, matching KiCad's default scroll_modifier_zoom/scroll_modifier_pan_h settings. */
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
-    const factor = Math.exp(-e.deltaY * 0.0015);
-    dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, e.clientX - rect.left, e.clientY - rect.top, factor) });
+    const input: WheelInput = {
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      shiftKey: e.shiftKey,
+      ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+      altKey: e.altKey,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, DEFAULT_VIEW_CONTROL_SETTINGS, zoomControllerRef.current);
+    if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
   };
 
   /** KiCad builds this per-selection from whatever tool/edit actions apply (pcb_selection_tool.cpp/edit_tool.cpp) -- ported here as exactly the actions this app implements, everything else the usual disabled "(not ported yet)". */
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
+    // wx_view_controls.cpp onButton: a right-drag pans rather than
+    // opening anything -- the browser's own native `contextmenu` event
+    // still fires on button-up regardless of how far the mouse moved in
+    // between, so this is what actually suppresses it for a real drag.
+    if (justPannedRef.current) {
+      justPannedRef.current = false;
+      return;
+    }
     if (!board) return;
     const [wx, wy] = worldAt(e);
     const hit = partHit(board.parts, wx, wy);

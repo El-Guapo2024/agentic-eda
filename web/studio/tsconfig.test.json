@@ -1,0 +1,35 @@
+{
+  // A separate compile target for unit tests (`npm run test:unit`): Node
+  // v20 can't strip TypeScript types itself, and this repo takes no new
+  // npm packages (no ts-node/vitest/jest), so pure-logic modules get
+  // compiled to plain CommonJS here and run with `node --test`. Only the
+  // dependency-free "kicad-port" modules (and anything else with no
+  // React/DOM/JSX in its import graph) belong under `include` -- see
+  // each port module's own header comment for why it avoids importing
+  // from state/store.tsx or other React-bearing files.
+  "compilerOptions": {
+    "target": "ES2022",
+    // DOM for hotkeys.ts's KeyboardEvent/navigator (shared with the real
+    // app's tsconfig.json); no @types/node in this project (no new
+    // packages), so node:test/node:assert instead get the tiny ambient
+    // shim at tools/types/node-test-shims.d.ts, covering just the surface
+    // these tests use.
+    "lib": ["ES2022", "DOM"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    // No outDir here on purpose -- `npm run test:unit` passes a fresh
+    // `mktemp -d` via `tsc ... --outDir`, so repeat runs (and concurrent
+    // ones, e.g. two worktrees) never share or stomp on one another's
+    // compiled output.
+    "rootDir": ".",
+    "noEmit": false
+  },
+  "include": ["src/kicad-port/**/*.ts", "src/actions/hotkeys.test.ts", "src/actions/hotkeys.ts", "src/kicad/types.ts", "src/platform.ts", "tools/types/node-test-shims.d.ts"]
+}

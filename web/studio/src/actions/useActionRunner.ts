@@ -15,13 +15,16 @@
 
 import { useCallback, useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { zoomAbout, fitTransform, boundsOfPoints } from "../components/canvas/view";
+import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { commitRoute, dropViaAndSwitchLayer } from "../components/canvas/routing";
 import { GRID_OPTIONS_UM } from "../components/Toolbar";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
 }
+
+/** common/tool/common_tools.cpp doZoomInOut: "Step must be AT LEAST 1.3" -- the exact per-step factor for zoomIn/zoomOut (F1/F2) and zoomInCenter/zoomOutCenter alike (doZoomInOut/doZoomInOutCenter share it). Source then snaps the result to the nearest entry in a separate zoom% preset list before applying it -- not ported (that preset list lives in per-app window settings this project has no equivalent of yet), so this applies the 1.3 factor directly. */
+const ZOOM_STEP_FACTOR = 1.3;
 
 export function useActionRunner() {
   const api = useStudioApi();
@@ -147,37 +150,83 @@ export function useActionRunner() {
       })
     );
 
-    m.set(
-      "common.Control.zoomFitScreen",
-      pcbOnly(() => {
-        const rect = canvasRect();
-        const bounds = state.board?.outline ? boundsOfPoints(state.board.outline) : null;
-        if (!rect || !bounds) return;
-        dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height) });
-      })
-    );
+    const fitToBoard = pcbOnly(() => {
+      const rect = canvasRect();
+      const bounds = state.board?.outline ? boundsOfPoints(state.board.outline) : null;
+      if (!rect || !bounds) return;
+      dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height) });
+    });
+    // common_tools.cpp ZoomFitScreen (ZOOM_FIT_ALL -- the worksheet page,
+    // or the edited object if there's no page) vs. ZoomFitObjects
+    // (ZOOM_FIT_OBJECTS -- everything on screen): two different fit
+    // targets in source. This app has no separate worksheet-page concept
+    // to distinguish them, so both fit to the same thing -- the board
+    // outline -- same as this already did for zoomFitScreen alone.
+    m.set("common.Control.zoomFitScreen", fitToBoard);
+    m.set("common.Control.zoomFitObjects", fitToBoard);
+
+    // common_tools.cpp doZoomInOut/doZoomInOutCenter: the *Center variants
+    // anchor at the view's center (an unmoving zoom); zoomIn/zoomOut (F1/
+    // F2, or Cmd+'+'/Cmd+'-' on macOS -- actions.json's real macHotkey
+    // now that tools/lib/actionsParser.js's #if __WXMAC__ parsing is
+    // fixed) anchor at the cursor instead ("Zoom In/Out at Cursor",
+    // doZoomToPreset's `SetScale(scale, cursorPosition)` when
+    // aCenterOnCursor is true). `state.cursorUm` is the last known cursor
+    // world position (Canvas.tsx's pointer-move handler); converting it
+    // back through the CURRENT view gives back the actual screen pixel it
+    // was under, since nothing else can have moved the view in between a
+    // pointer-move and this hotkey firing synchronously.
     const zoomAtCenter = pcbOnly((factor: number) => {
       const rect = canvasRect();
       if (!rect) return;
       dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, rect.width / 2, rect.height / 2, factor) });
     });
-    m.set("common.Control.zoomInCenter", () => zoomAtCenter(1.5));
-    m.set("common.Control.zoomOutCenter", () => zoomAtCenter(1 / 1.5));
-    // NOT common.Control.zoomIn/zoomOut here: extraction gave both of
-    // those the same "Ctrl+F1"/"Ctrl+F2" hotkeys as zoomInCenter/
-    // zoomOutCenter's near-neighbors in source position, which also
-    // collides with common.SuiteControl.listHotKeys's real Ctrl+F1 --
-    // almost certainly a parser misattribution (regex proximity, not a
-    // real shared binding). Leaving them out of the registry is what
-    // actually resolves the collision: useGlobalHotkeys tries every
-    // action name registered against a given key and fires the first one
-    // that isEnabled() -- with zoomIn/zoomOut absent, listHotKeys is the
-    // only enabled candidate left for Ctrl+F1, so it wins Ctrl+F1 without
-    // this file needing to guess which of the two dubious bindings to
-    // keep.
-    m.set("common.Control.zoomCenter", () => zoomAtCenter(1));
-    m.set("common.Control.zoomRedraw", () => zoomAtCenter(1));
+    const zoomAtCursor = pcbOnly((factor: number) => {
+      const rect = canvasRect();
+      if (!rect) return;
+      const [px, py] = state.cursorUm ? worldToScreen(state.view, state.cursorUm.x, state.cursorUm.y) : [rect.width / 2, rect.height / 2];
+      dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, px, py, factor) });
+    });
+    m.set("common.Control.zoomInCenter", () => zoomAtCenter(ZOOM_STEP_FACTOR));
+    m.set("common.Control.zoomOutCenter", () => zoomAtCenter(1 / ZOOM_STEP_FACTOR));
+    m.set("common.Control.zoomIn", () => zoomAtCursor(ZOOM_STEP_FACTOR));
+    m.set("common.Control.zoomOut", () => zoomAtCursor(1 / ZOOM_STEP_FACTOR));
+
+    // common_tools.cpp ZoomCenter: `getViewControls()->CenterOnCursor()`
+    // -- pans so the cursor's current world point becomes the new view
+    // center, AND warps the real pointer to the screen center so it still
+    // visually sits over the same spot. This app never moves the real
+    // pointer (hard rule, and not something a web page can do anyway), so
+    // only the pan half happens: the content jumps to center under a
+    // pointer that stays where it was. See PARITY-pcb.md.
+    m.set(
+      "common.Control.zoomCenter",
+      pcbOnly(() => {
+        const rect = canvasRect();
+        if (!rect || !state.cursorUm) return;
+        const [centerWx, centerWy] = screenToWorld(state.view, rect.width / 2, rect.height / 2);
+        dispatch({ type: "SET_VIEW", view: panByWorldDelta(state.view, state.cursorUm.x - centerWx, state.cursorUm.y - centerWy) });
+      })
+    );
+    // common_tools.cpp ZoomRedraw: `m_frame->HardRedraw()` -- forces a
+    // full repaint of possibly-stale cached GAL layers. This app has no
+    // such cache (every render reads current state directly), so there is
+    // nothing for "redraw" to actually do -- registered as a real no-op
+    // rather than left unimplemented, since the action itself is always
+    // trivially satisfied here, not missing.
+    m.set("common.Control.zoomRedraw", () => {});
     m.set("common.SuiteControl.listHotKeys", () => dispatch({ type: "SET_HOTKEYS_DIALOG_OPEN", open: true }));
+
+    // common_tools.cpp ResetLocalCoords: sets the status bar's dx/dy/dist
+    // origin to wherever the cursor currently is (Space). Independent of
+    // the move tool, active or not -- see state/store.tsx's
+    // localOriginUm doc.
+    m.set(
+      "common.Control.resetLocalCoords",
+      pcbOnly(() => {
+        if (state.cursorUm) dispatch({ type: "SET_LOCAL_ORIGIN", at: state.cursorUm });
+      })
+    );
 
     m.set("pcbnew.Control.showLayersManager", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "appearance" }));
     m.set("common.Control.showProperties", () => {}); // properties panel is always visible in this layout; a no-op is the correct behavior, not a missing feature
@@ -262,6 +311,30 @@ export function useActionRunner() {
     // panels/RightDock.tsx), so that's what this jumps to.
     m.set("common.Interactive.search", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "activity" }));
     m.set("pcbnew.Control.showNetInspector", () => dispatch({ type: "SET_NET_INSPECTOR_OPEN", open: true }));
+
+    // common.Interactive.selectAll/unselectAll: every placed footprint
+    // (respecting the footprints selection-filter toggle, same as a box
+    // select already does -- tracks/vias/zones/shapes/text have no
+    // filter toggle of their own yet, per selectionFilter's own doc in
+    // state/store.tsx) plus every track/via/zone/shape/text id. Unselect
+    // All only clears the selection (SET_SELECTION, not CLEAR_SELECTION
+    // -- it shouldn't also cancel an in-progress tool/drawing the way
+    // Escape does).
+    m.set(
+      "common.Interactive.selectAll",
+      pcbOnly(() => {
+        if (!state.board) return;
+        const refs: string[] = [];
+        if (state.selectionFilter.footprints) for (const p of state.board.parts) if (p.placed) refs.push(p.ref);
+        for (const t of state.board.routing?.tracks ?? []) refs.push(t.id);
+        for (const v of state.board.routing?.vias ?? []) refs.push(v.id);
+        for (const z of state.board.routing?.zones ?? []) refs.push(z.id);
+        for (const s of state.board.drawings?.shapes ?? []) refs.push(s.id);
+        for (const t of state.board.drawings?.texts ?? []) refs.push(t.id);
+        dispatch({ type: "SET_SELECTION", refs });
+      })
+    );
+    m.set("common.Interactive.unselectAll", pcbOnly(() => dispatch({ type: "SET_SELECTION", refs: [] })));
 
     return m;
   }, [api, dispatch, state]);

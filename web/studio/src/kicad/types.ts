@@ -29,12 +29,27 @@ export interface KicadAction {
   /** Menu/tooltip label (`_( "..." )` in the ctor). */
   label: string;
   tooltip: string;
-  /** Default hotkey, normalized (best-effort) to "Ctrl+Shift+X" style. */
+  /** Default hotkey, normalized (best-effort) to "Ctrl+Shift+X" style. Already "the Windows/Linux default"; macOS uses this same string with Cmd standing in for Ctrl UNLESS `macHotkey` overrides it (see below). */
   hotkey: string | null;
   altHotkey: string | null;
   /** The C++ expression the normalizer read `hotkey` from, e.g. "MD_CTRL + 'X'" -- kept so a wrong guess is visible and fixable rather than silently swallowed. */
   hotkeyRaw: string | null;
   altHotkeyRaw: string | null;
+  /**
+   * A handful of actions (redo, delete, the F1/F2/F5/Home zoom actions)
+   * give macOS a genuinely different default in source
+   * (`#if defined( __WXMAC__ )`), not just Cmd standing in for Ctrl --
+   * e.g. zoomIn is bare F1 on Windows/Linux but Cmd+'+' on macOS, and
+   * delete is Del vs. Backspace. Null means there's no such override:
+   * macOS uses `hotkey`/`altHotkey` as-is (with Cmd for Ctrl, per usual).
+   * Use `effectiveHotkey()` (actions/hotkeys.ts) rather than reading
+   * `hotkey`/`macHotkey` directly, so every call site resolves this the
+   * same way.
+   */
+  macHotkey: string | null;
+  macAltHotkey: string | null;
+  macHotkeyRaw: string | null;
+  macAltHotkeyRaw: string | null;
   /** `BITMAPS::` enumerator name, or null for text-only actions. */
   icon: string | null;
   /** AF_* flags and similar (e.g. checkable/toggle markers). */

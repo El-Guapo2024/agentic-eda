@@ -7,14 +7,22 @@ import actionsData from "../kicad/actions.json";
 import iconsData from "../kicad/icons.json";
 import type { ToolbarsFile, ToolbarId, ActionsFile, IconsFile, ToolbarItem } from "../kicad/types";
 import { useActionRunner } from "../actions/useActionRunner";
+import { effectiveHotkey } from "../actions/hotkeys";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength } from "../state/units";
+import { DEFAULT_PCB_GRIDS_UM } from "../kicad-port/grid";
 
-// KiCad's own default grid list (pcbnew/tools/pcb_grid_helper.cpp-
-// adjacent settings) has not been read this session -- these are
-// reasonable common PCB grid steps in µm, not a source-verified list.
-export const GRID_OPTIONS_UM = [10, 25, 50, 100, 127, 250, 500, 1000, 2540];
+/**
+ * KiCad's real default PCB grid list (app_settings.cpp
+ * APP_SETTINGS_BASE::DefaultGridSizeList) -- see kicad-port/grid.ts's own
+ * header comment for why this is declaration order, not sorted by size
+ * (a deliberate jump from 1 mil to 5.0 mm partway through). The dropdown
+ * below renders it in exactly that order, same as KiCad's own grid
+ * dropdown and N/Shift+N cycling (common.Control.gridNext/gridPrev,
+ * useActionRunner.ts).
+ */
+export const GRID_OPTIONS_UM = DEFAULT_PCB_GRIDS_UM;
 
 // No source-verified "100% = this many px/mm" reference for KiCad's own
 // zoom percentage readout either; this defines 100% as 1 screen px per
@@ -168,7 +176,8 @@ function ToolbarItemView({ item }: { item: ToolbarItem }) {
   const action = actionsByName.get(item.action);
   const enabled = isEnabled(item.action);
   const label = action?.label ?? item.action;
-  const tooltip = enabled ? [label, action?.hotkey].filter(Boolean).join(" — ") : `${label} (not ported yet)`;
+  const hotkey = action ? effectiveHotkey(action).hotkey : null;
+  const tooltip = enabled ? [label, hotkey].filter(Boolean).join(" — ") : `${label} (not ported yet)`;
   return (
     <button className="toolbar-button" disabled={!enabled} title={tooltip} onClick={() => run(item.action)}>
       <ActionIcon iconName={action?.icon ?? null} />
