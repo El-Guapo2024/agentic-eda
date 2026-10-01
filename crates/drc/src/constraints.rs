@@ -34,6 +34,51 @@ pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Um {
     ca.max(cb)
 }
 
+/// [`clearance`], then applying any matching `.kicad_dru` custom rules on
+/// top (task item 4) -- see `crate::pcbexpr`'s module doc comment for the
+/// condition-evaluator subset and `providers::copper_clearance`'s
+/// `facts_of_*`/`net_class_name` helpers for how `a`/`b` are built from a
+/// real board item. A board with no custom rules (`rules.custom_rules` is
+/// empty, the overwhelming majority) is identical to plain [`clearance`].
+///
+/// Matches `DRC_ENGINE::EvalRules`'s own "winner takes all" rule selection
+/// for an explicit rule (`drc_engine.cpp`, read directly from the KiCad
+/// source): once any custom `clearance` rule's condition matches, its
+/// `min` **replaces** the netclass/board-default value entirely rather
+/// than being maxed with it (an explicit rule's `processConstraint`
+/// overwrites `constraint.m_Value` and the function returns immediately,
+/// *before* the separate "max with local override / board minimum" step
+/// that only ever runs when nothing explicit matched) -- so a custom rule
+/// can legitimately *loosen* the default too, same as real KiCad. Multiple
+/// matching rules are walked in file order and the last match wins, same
+/// as KiCad's own rule list (`m_constraintMap`'s iteration order is
+/// implicit-then-file-order, and each match is a plain overwrite, not an
+/// accumulation).
+///
+/// Not ported: a rule's own `(layer ...)` restriction is honored (glob
+/// against `layer`), but KiCad also offers per-item *local* clearance
+/// overrides and footprint net-tie exclusions that take precedence over
+/// even an explicit rule -- this model has no field for either, so they
+/// are simply never in play, same as before custom rules existed.
+pub fn clearance_with_custom_rules(rules: &BoardRules, a_net: Option<&str>, b_net: Option<&str>, layer: &str, a: &crate::pcbexpr::Facts, b: &crate::pcbexpr::Facts) -> Um {
+    let mut value = clearance(rules, a_net, b_net);
+    for rule in &rules.custom_rules {
+        if rule.constraint_type != "clearance" {
+            continue;
+        }
+        let Some(min) = rule.min else { continue };
+        if let Some(pat) = &rule.layer {
+            if !eda_model::glob_match(pat, layer) {
+                continue;
+            }
+        }
+        if crate::pcbexpr::matches(rule.condition.as_deref(), a, b) {
+            value = min;
+        }
+    }
+    value
+}
+
 /// The largest clearance value *any* pair on this board could possibly
 /// resolve to -- `BOARD::GetMaxClearanceValue()` / `m_DRCMaxClearance` in
 /// `drc_cache_generator.cpp`, used there to size how far a `DRC_RTREE`
@@ -133,5 +178,56 @@ mod tests {
     fn no_net_on_either_side_is_zero() {
         let r = BoardRules::default();
         assert_eq!(clearance(&r, None, None), 0);
+    }
+
+    fn facts(item_type: &'static str, net_class: &'static str, net_name: &'static str) -> crate::pcbexpr::Facts<'static> {
+        crate::pcbexpr::Facts { item_type, net_class, net_name, reference: "" }
+    }
+
+    #[test]
+    fn custom_rule_overrides_the_netclass_default() {
+        let r = BoardRules {
+            custom_rules: vec![eda_model::CustomRule { name: "r".into(), constraint_type: "clearance".into(), min: Some(50), max: None, opt: None, layer: None, severity: None, condition: Some("A.NetClass == B.NetClass".into()) }],
+            ..BoardRules::default()
+        };
+        let (a, b) = (facts("Pad", "Default", "GND"), facts("Pad", "Default", "GND"));
+        // Same class -> the rule matches and *replaces* the board default,
+        // even though 50um here is smaller than it (an explicit rule can
+        // loosen a default too -- see this function's doc comment).
+        assert_eq!(clearance_with_custom_rules(&r, Some("GND"), Some("GND"), "F.Cu", &a, &b), 50);
+    }
+
+    #[test]
+    fn custom_rule_with_non_matching_condition_is_a_no_op() {
+        let r = BoardRules {
+            custom_rules: vec![eda_model::CustomRule { name: "r".into(), constraint_type: "clearance".into(), min: Some(50), max: None, opt: None, layer: None, severity: None, condition: Some("A.NetClass == B.NetClass".into()) }],
+            ..BoardRules::default()
+        };
+        let (a, b) = (facts("Pad", "power", "VIN"), facts("Pad", "signal", "SIG"));
+        assert_eq!(clearance_with_custom_rules(&r, Some("VIN"), Some("SIG"), "F.Cu", &a, &b), clearance(&r, Some("VIN"), Some("SIG")), "different classes -> condition does not match -> plain default");
+    }
+
+    #[test]
+    fn custom_rule_scoped_to_a_different_layer_is_a_no_op() {
+        let r = BoardRules {
+            custom_rules: vec![eda_model::CustomRule { name: "r".into(), constraint_type: "clearance".into(), min: Some(50), max: None, opt: None, layer: Some("B.Cu".into()), severity: None, condition: None }],
+            ..BoardRules::default()
+        };
+        let (a, b) = (facts("Pad", "Default", "A"), facts("Pad", "Default", "B"));
+        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "F.Cu", &a, &b), clearance(&r, Some("A"), Some("B")), "rule is scoped to B.Cu, this pair is on F.Cu");
+        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "B.Cu", &a, &b), 50, "same pair, matching layer");
+    }
+
+    #[test]
+    fn last_matching_custom_rule_wins() {
+        let r = BoardRules {
+            custom_rules: vec![
+                eda_model::CustomRule { name: "first".into(), constraint_type: "clearance".into(), min: Some(300), max: None, opt: None, layer: None, severity: None, condition: None },
+                eda_model::CustomRule { name: "second".into(), constraint_type: "clearance".into(), min: Some(400), max: None, opt: None, layer: None, severity: None, condition: None },
+            ],
+            ..BoardRules::default()
+        };
+        let (a, b) = (facts("Pad", "Default", "A"), facts("Pad", "Default", "B"));
+        assert_eq!(clearance_with_custom_rules(&r, Some("A"), Some("B"), "F.Cu", &a, &b), 400, "both match unconditionally; the later rule in file order wins");
     }
 }

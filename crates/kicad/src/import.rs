@@ -380,6 +380,52 @@ pub fn merge_project_net_classes(model: &mut eda_model::ConstraintModel, project
     }
 }
 
+/// A `.kicad_pro`'s `board.design_settings.rule_severities` -- KiCad 7+'s
+/// per-DRC-type severity table (`BOARD_DESIGN_SETTINGS`'s `rule_severities`
+/// `PARAM_LAMBDA`, `pcbnew/board_design_settings.cpp`: `ret[settingsKey] =
+/// SeverityToString(m_DRCSeverities[code])` for every type it knows about).
+/// KiCad always writes the *complete* resolved table on save (every known
+/// type, including ones the user never touched), not just overrides, so
+/// this returns the whole thing verbatim -- same "unrecognized/absent JSON
+/// is an empty no-op, never an error" convention as
+/// [`parse_project_net_classes`].
+///
+/// The one wrinkle ported deliberately: a V8-era project may still carry
+/// the legacy `"hole_near_hole"` key instead of (or alongside) the current
+/// `"hole_to_hole"` one. KiCad's own loader reads `hole_near_hole` first,
+/// then lets any `hole_to_hole` key overwrite it (`board_design_settings.
+/// cpp`'s migration comment, read directly from the source); reproduced
+/// here by seeding `"hole_to_hole"` from the legacy key only when the
+/// modern one is not already present.
+pub fn parse_rule_severities(project_json: &str) -> std::collections::BTreeMap<String, String> {
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else {
+        return Default::default();
+    };
+    let Some(obj) = root.get("board").and_then(|b| b.get("design_settings")).and_then(|d| d.get("rule_severities")).and_then(|v| v.as_object()) else {
+        return Default::default();
+    };
+    let mut out: std::collections::BTreeMap<String, String> = obj.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect();
+    if let Some(legacy) = obj.get("hole_near_hole").and_then(|v| v.as_str()) {
+        out.entry("hole_to_hole".to_string()).or_insert_with(|| legacy.to_string());
+    }
+    out
+}
+
+/// Merge a `.kicad_pro`'s `rule_severities` into an already-imported board
+/// (task item 2: "import `rule_severities` ... into the IR, additively").
+/// Wholesale replacement, not a key-by-key merge, because KiCad's own file
+/// always holds the complete table already (see [`parse_rule_severities`]'s
+/// doc comment) -- there is nothing to merge *with* on the `.kicad_pcb`
+/// side, unlike net classes, which a legacy board file can carry its own
+/// (partial) copy of. A caller with both files should call this after
+/// [`import_kicad_pcb`], same pattern as [`merge_project_net_classes`].
+pub fn merge_project_rule_severities(model: &mut eda_model::ConstraintModel, project_json: &str) {
+    let severities = parse_rule_severities(project_json);
+    if !severities.is_empty() {
+        model.board.rule_severities = severities;
+    }
+}
+
 // -------------------------------------------------------------- footprints
 
 /// `(property "Reference"/"Value" "text" ...)` (KiCad 8+) or the older
@@ -601,8 +647,36 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 /// circumference: start, mid, end) as a short polyline, since our model
 /// has no arc primitive. Exact at the sampled points; the endpoints are
 /// kept bit-exact regardless of any trig round-off in between.
+///
+/// `SEGMENTS` was 8 until this was measured as the root cause of
+/// `docs/parity/GAPS.md` #3's `tracks_crossing` false positives (1567 on
+/// one real QA board, 100% of them wrong): KiCad's own `tracks_crossing`
+/// fast path only ever special-cases two genuine straight `PCB_TRACE_T`
+/// segments (`drc_test_provider_copper_clearance.cpp`'s
+/// `item->Type() == PCB_TRACE_T && other->Type() == PCB_TRACE_T` gate) --
+/// a real arc (`PCB_ARC_T`) never takes it, so KiCad always judges an
+/// arc's clearance against its true curve, which its own routing keeps
+/// genuinely clear. Our model has no arc primitive to fall back on the
+/// same way, so a tessellated arc's piecewise-straight chords are the only
+/// shape this port can test -- and at 8 segments, two closely-routed,
+/// similarly-curved different-net arcs (common on a round/flex-style
+/// board, which is exactly what the offending QA board is: 666 of its
+/// ~1500 track primitives are arcs) can have chords that cross even though
+/// the true curves never do, purely from each chord's deviation (sagitta)
+/// from its arc. Sagitta shrinks with the *square* of the segment count
+/// (`r * sweep^2 / (8 * N^2)`), so raising `N` 8 -> 32 cuts it 16x -- for a
+/// typical PCB fillet-scale arc this pushes the residual error from
+/// several µm to a small fraction of a µm, well under any real clearance
+/// rule, without needing a new arc primitive or touching the many other
+/// call sites a shared `Track` IR field would have required (several of
+/// which belong to the router/autorouter crates this task was told to
+/// leave alone). A materially larger constant would only matter for an
+/// arc with a very large radius *and* a very wide sweep, which is not
+/// representative of real PCB track geometry (fillets and chamfers, not
+/// highway interchanges); tested directly against the real QA board that
+/// surfaced this (see `crates/drc/tests/parity_drc.rs`).
 fn tessellate_arc(start: Point, mid: Point, end: Point) -> Vec<Point> {
-    const SEGMENTS: usize = 8;
+    const SEGMENTS: usize = 32;
     let (sx, sy) = (start.x as f64, start.y as f64);
     let (mx, my) = (mid.x as f64, mid.y as f64);
     let (ex, ey) = (end.x as f64, end.y as f64);

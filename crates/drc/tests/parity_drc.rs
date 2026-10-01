@@ -529,6 +529,13 @@ fn process_qa_board(cli: &Path, pcb: &Path) -> BoardResult {
             let pro_path = pcb.with_extension("kicad_pro");
             if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
                 eda_kicad::merge_project_net_classes(&mut model, &pro_text);
+                eda_kicad::merge_project_rule_severities(&mut model, &pro_text);
+            }
+            // `.kicad_dru` (task item 4) is its own sibling file, not a
+            // `.kicad_pro` section.
+            let dru_path = pcb.with_extension("kicad_dru");
+            if let Ok(dru_text) = std::fs::read_to_string(&dru_path) {
+                eda_kicad::merge_custom_rules(&mut model, &dru_text);
             }
             let kicad_report = run_kicad_drc(&cli, &pcb, true);
             let ours = eda_drc::run(&design, &model);
