@@ -906,7 +906,7 @@ fn schematic_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection {
                 power_symbols: vec![],
                 no_connects: vec![],
-                erc_exclusions: vec![],
+                erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
                 symbols: Vec::new(),

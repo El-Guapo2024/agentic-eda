@@ -1295,7 +1295,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![],
-                erc_exclusions: vec![],
+                erc_exclusions: vec![], imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
             }),

@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-01T11:26:30.773738+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-01T14:24:41.738308+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -24,8 +24,8 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 | `drc_precision` | 7.8% | 7.8% |
 | `drc_recall` | 19.2% | 19.2% |
 | `erc_boards_evaluated` | 52 | 52 |
-| `erc_precision` | 34.8% | 34.8% |
-| `erc_recall` | 23.9% | 23.9% |
+| `erc_precision` | 75.1% | 75.1% |
+| `erc_recall` | 47.8% | 47.8% |
 | `roundtrip_own_footprint_pose_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_own_segment_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_own_via_survival_rate` | 100.0% | 100.0% |
@@ -97,27 +97,28 @@ _Excluded from the above: 1170 occurrences of this project's own placement-quali
 
 Boards evaluated: 52 (of 52 attempted).
 
-**Overall precision: 34.8%, recall: 23.9%.**
+**Overall precision: 75.1%, recall: 47.8%.**
+
+_Reading this number_: the two largest remaining gaps are both understood, not mysterious. `lib_symbol_mismatch`'s 562 missing are concentrated in this project's own freshly-derived (not yet exported) example boards: `check_lib_symbol_issues` compares a schematic's embedded symbol cache against the real library, but for a design that hasn't been through `export_kicad_sch` yet, the "cached" copy *is* the same in-memory lookup as the "real" one, so no structural difference can ever be found there -- only once a file is actually written does this project's own box-corner re-baking of a real symbol's graphics diverge from the library's native coordinates the way `kicad-cli` sees it. Catching that would mean predicting the exporter's own output from inside ERC (or changing what the exporter writes), both out of scope for this port; the QA corpus's own real mismatches (5, version-skew on `Jumper`/`Device:R`) are matched correctly. `label_dangling`'s 75 extra are concentrated in two `work/` boards (full place-and-route pipeline output, not this task's own freshly-generated examples) whose labels don't coincide with this project's current exporter's own pin placement -- consistent with those two fixtures predating a later exporter change, not a logic bug in the check itself (the *schematic-only* generation path for the same kind of board has zero such mismatches). `pin_not_connected`/`pin_not_driven`/`power_pin_not_driven`'s smaller residual gaps trace to a real architectural difference: KiCad groups pins into per-sheet graphical subgraphs first and only secondarily merges by net name, while this project's net model (`ConstraintModel::nets`) merges by name from the start -- a full subgraph port is out of scope here. `undefined_netclass`/`unresolved_variable` need IR concepts (netclasses, text-variable resolution) this project doesn't have yet.
 
 | type | kicad | ours | matched | missing | extra |
 |---|---:|---:|---:|---:|---:|
-| `endpoint_off_grid` | 2 | 0 | 0 | 2 | 0 |
-| `footprint_link_issues` | 3 | 0 | 0 | 3 | 0 |
-| `isolated_pin_label` | 1 | 0 | 0 | 1 | 0 |
-| `label_dangling` | 17 | 118 | 17 | 0 | 101 |
-| `lib_symbol_issues` | 228 | 0 | 0 | 228 | 0 |
-| `lib_symbol_mismatch` | 567 | 0 | 0 | 567 | 0 |
-| `no_connect_dangling` | 0 | 65 | 0 | 0 | 65 |
-| `pin_not_connected` | 242 | 252 | 216 | 26 | 36 |
-| `pin_not_driven` | 39 | 0 | 0 | 39 | 0 |
+| `endpoint_off_grid` | 2 | 2 | 2 | 0 | 0 |
+| `footprint_link_issues` | 3 | 3 | 3 | 0 | 0 |
+| `isolated_pin_label` | 1 | 1 | 1 | 0 | 0 |
+| `label_dangling` | 17 | 92 | 17 | 0 | 75 |
+| `lib_symbol_issues` | 228 | 228 | 228 | 0 | 0 |
+| `lib_symbol_mismatch` | 567 | 76 | 5 | 562 | 71 |
+| `pin_not_connected` | 242 | 248 | 216 | 26 | 32 |
+| `pin_not_driven` | 39 | 33 | 30 | 9 | 3 |
 | `pin_to_pin` | 9 | 8 | 7 | 2 | 1 |
-| `power_pin_not_driven` | 60 | 30 | 25 | 35 | 5 |
-| `unconnected_wire_endpoint` | 38 | 318 | 27 | 11 | 291 |
+| `power_pin_not_driven` | 60 | 57 | 50 | 10 | 7 |
+| `unconnected_wire_endpoint` | 38 | 33 | 27 | 11 | 6 |
 | `undefined_netclass` | 8 | 0 | 0 | 8 | 0 |
 | `unresolved_variable` | 1 | 0 | 0 | 1 | 0 |
-| `wire_dangling` | 16 | 53 | 2 | 14 | 51 |
+| `wire_dangling` | 16 | 2 | 2 | 14 | 0 |
 
-_Excluded from the above: 1223 occurrences of this project's own schematic readability/style checks (`schematic_*`, from `erc_style.rs`), which have no KiCad counterpart by design and would only add noise to precision/recall._
+_Excluded from the above: 1227 occurrences of this project's own schematic readability/style checks (`schematic_*`, from `erc_style.rs`), which have no KiCad counterpart by design and would only add noise to precision/recall._
 
 
 ## 3. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
