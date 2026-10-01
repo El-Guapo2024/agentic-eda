@@ -6,23 +6,24 @@
 // Errors [n] / Warnings [n] / Exclusions [n]" filter row with a
 // Save... button, then Delete Marker / Delete All Markers / OK-Cancel.
 //
-// This app has one real data source -- state.board.checks, the
-// placement/routing rules already computed server-side and refreshed by
-// the same /api/state poll that drives everything else -- so most of
-// that maps to an honest simplification rather than a 1:1 port:
-//  - no DRC engine runs here, so there's no "running" phase, no
-//    per-test progress, and the refill-zones/schematic-parity options
-//    are shown (matching the real layout) but disabled, same convention
-//    as the toolbar's unbacked controls.
-//  - "Unconnected Items", "Schematic Parity" and "Ignored Tests" are
-//    real KiCad tabs with nothing behind them yet -- kept as clickable,
-//    honestly-empty tabs rather than omitted, matching how a disabled
-//    menu item still shows with "(not ported yet)" instead of vanishing.
-//  - "Exclusions"/Save/Delete Marker have no backing concept (nothing
-//    persists a marker to exclude or delete) and are left out rather
-//    than wired to a no-op.
+// Violations now come from GET /api/drc -- crates/drc, the ported real
+// KiCad DRC engine (clearance/courtyard/silk/track-width/placement-
+// quality providers), not a client-side read of this app's own
+// placement/routing gate checks the way this dialog used to work (see
+// git history for that version). KiCad's own `type` names (ErrorType's
+// snake_case, matching kicad-cli's own DRC report) are shown directly as
+// each violation's category rather than this app inventing its own.
+//
+// "Unconnected Items", "Schematic Parity" and "Ignored Tests" are real
+// KiCad tabs with nothing behind them yet -- kept as clickable, honestly
+// -empty tabs rather than omitted, matching how a disabled menu item
+// still shows with "(not ported yet)" instead of vanishing. Exclusions/
+// Save/Delete Marker have no backing concept (nothing persists a marker
+// to exclude or delete) and are left out rather than wired to a no-op.
 import { useMemo, useState } from "react";
+import type { DrcViolation } from "../api/types";
 import { useStudioDispatch, useStudioState } from "../state/store";
+import { boundsOfPoints, fitTransform } from "./canvas/view";
 
 type DrcTab = "violations" | "unconnected" | "parity" | "ignored";
 
@@ -32,6 +33,11 @@ const STUB_TABS: Array<{ id: DrcTab; label: string }> = [
   { id: "ignored", label: "Ignored Tests" },
 ];
 
+/** `<ref>` or `<ref>.<pad>` (crates/drc's `DrcRefItem.id` convention, see types.ts) -> the bare part reference, for SET_HOT/SET_SELECTION (a track/via/zone id has no "." and passes through as-is -- this app's canvas selection already accepts those ids directly, same as a part ref). */
+function baseRef(id: string): string {
+  return id.split(".")[0]!;
+}
+
 export function DrcDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
@@ -39,16 +45,41 @@ export function DrcDialog() {
   const [showErrors, setShowErrors] = useState(true);
   const [showWarnings, setShowWarnings] = useState(true);
 
-  const checks = state.board?.checks ?? [];
-  const errors = useMemo(() => checks.filter((c) => c.fail), [checks]);
-  const warnings = useMemo(() => checks.filter((c) => !c.fail), [checks]);
-  const visible = checks.filter((c) => (c.fail ? showErrors : showWarnings));
+  const violations = state.drc?.violations ?? [];
+  const errors = useMemo(() => violations.filter((v) => v.severity === "error"), [violations]);
+  const warnings = useMemo(() => violations.filter((v) => v.severity === "warning"), [violations]);
+  const visible = violations.filter((v) => (v.severity === "error" ? showErrors : showWarnings));
 
   if (!state.drcDialogOpen) return null;
   const close = () => dispatch({ type: "SET_DRC_OPEN", open: false });
-  const jumpTo = (at: string | null | undefined) => {
-    const refs = (at ?? "").split(/[^A-Za-z0-9_]+/).filter((t) => state.board?.parts.some((p) => p.ref === t));
+
+  /**
+   * KiCad's own "click a violation to select and zoom to it" (the real
+   * dialog cross-probes to the board the same way). Selects/hots every
+   * item the violation names, then re-frames the PCB canvas on their
+   * combined position -- read directly off the live container's own
+   * size (this dialog has no canvas ref of its own: Canvas.tsx owns the
+   * element, this just measures the one already on screen, the same
+   * class name SchematicView.tsx's own view-fit measures by).
+   */
+  const jumpTo = (v: DrcViolation, index: number) => {
+    dispatch({ type: "SET_DRC_SELECTED", index });
+    const refs = v.items.map((it) => baseRef(it.id));
+    dispatch({ type: "SET_SELECTION", refs });
     dispatch({ type: "SET_HOT", refs });
+
+    const container = document.querySelector(".pcb-canvas-container");
+    const rect = container?.getBoundingClientRect();
+    if (!rect || rect.width < 50 || rect.height < 50) return;
+    const bounds = boundsOfPoints(v.items.map((it) => it.pos));
+    if (!bounds) return;
+    // A single-point (or tightly-clustered) violation's own bounds are
+    // ~0x0 -- pad them out to a sane minimum (2mm) so fitTransform
+    // frames a sensible close-up instead of zooming to a single point.
+    const padUm = 2_000;
+    const padded = { minX: bounds.minX - padUm, minY: bounds.minY - padUm, maxX: bounds.maxX + padUm, maxY: bounds.maxY + padUm };
+    dispatch({ type: "SET_VIEW", view: fitTransform(padded, rect.width, rect.height, 60) });
+    dispatch({ type: "SET_TAB", tab: "pcb" });
   };
 
   return (
@@ -62,7 +93,7 @@ export function DrcDialog() {
           </span>
         </div>
         <div className="dialog-body" style={{ paddingTop: 10 }}>
-          <div style={{ display: "flex", gap: 18, marginBottom: 10, opacity: 0.45 }} title="No DRC engine runs in this app -- checks are live from board state, not a batch test.">
+          <div style={{ display: "flex", gap: 18, marginBottom: 10, opacity: 0.45 }} title="eda_drc runs fresh on every open/board-change -- there's no separate 'run DRC' step or progress phase to show.">
             <label className="toggle">
               <input type="checkbox" checked readOnly disabled />
               Refill all zones before performing DRC
@@ -75,7 +106,7 @@ export function DrcDialog() {
 
           <div className="dock-tabs" style={{ marginBottom: 10 }}>
             <div className={`dock-tab${tab === "violations" ? " active" : ""}`} onClick={() => setTab("violations")}>
-              Violations ({checks.length})
+              Violations ({violations.length})
             </div>
             {STUB_TABS.map((t) => (
               <div key={t.id} className={`dock-tab${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>
@@ -100,14 +131,23 @@ export function DrcDialog() {
                 </label>
               </div>
 
-              {checks.length === 0 && <div className="panel-empty">No violations.</div>}
-              {checks.length > 0 && visible.length === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
-              {visible.map((c, i) => (
-                <div key={i} className={`problem-row${c.fail ? "" : " warn"}`} onClick={() => jumpTo(c.at)}>
-                  <b>{c.check.replace(/_/g, " ")}</b> <span>{c.at ?? ""}</span>
-                  <small>{c.hint ?? ""}</small>
-                </div>
-              ))}
+              {!state.drc && <div className="panel-empty">Running DRC…</div>}
+              {state.drc && violations.length === 0 && <div className="panel-empty">No violations.</div>}
+              {state.drc && violations.length > 0 && visible.length === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
+              {visible.map((v) => {
+                const index = violations.indexOf(v);
+                return (
+                  <div key={index} className={`problem-row${v.severity === "warning" ? " warn" : ""}`} onClick={() => jumpTo(v, index)}>
+                    <b>{v.type.replace(/_/g, " ")}</b> <span>{v.description}</span>
+                    {v.items.length > 0 && <small>{v.items.map((it) => it.description).join(", ")}</small>}
+                    {v.fix && (
+                      <small style={{ display: "block", color: "var(--chrome-accent, #4ea1ff)" }}>
+                        Fix: move {v.fix.mover} toward {v.fix.toward} ({v.fix.suggested_command})
+                      </small>
+                    )}
+                  </div>
+                );
+              })}
             </>
           )}
         </div>

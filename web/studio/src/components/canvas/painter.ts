@@ -5,7 +5,7 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, Part, Pad, RatsnestEdge, Shape } from "../../api/types";
+import type { BoardState, DrcViolation, Part, Pad, RatsnestEdge, Shape } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
@@ -43,6 +43,10 @@ export interface PaintOptions {
   sketchPads: boolean;
   sketchTracks: boolean;
   sketchVias: boolean;
+  /** GET /api/drc's violations (crates/drc, see DrcDialog.tsx) -- null until the dialog has been opened at least once this session (nothing drawn until then); kept showing after it's closed, like real KiCad's markers persisting until the next DRC run. */
+  drcViolations: DrcViolation[] | null;
+  /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
+  drcSelected: number | null;
 }
 
 function layerAlpha(opts: PaintOptions, key: string): number {
@@ -474,6 +478,46 @@ function drawViaGhost(ctx: CanvasRenderingContext2D, board: BoardState, opts: Pa
   ctx.restore();
 }
 
+/** Radius, um, of a DRC marker's circle -- not a KiCad constant (real KiCad's MARKER_BASE is a small fixed-pixel icon drawn in screen space, independent of zoom; this app has no screen-space-constant-size drawing primitive, so markers scale with the board like everything else here, sized to read clearly at a normal working zoom). */
+const DRC_MARKER_RADIUS_UM = 300;
+
+/**
+ * DRC violation markers -- one circle per violation, centered on its
+ * first item's position (every violation here has at least one item;
+ * `crates/drc` never emits an empty `items[]`), color-coded by severity
+ * (or LAYER_DRC_HIGHLIGHTED when it's the dialog's currently-focused
+ * one), with a small "!" so a marker reads as "problem here" even before
+ * the dialog's list gives it a description. This is a legible, KiCad-
+ * colored stand-in for real KiCad's own MARKER_BASE icon shape (a
+ * distinctive triangle-ish glyph drawn at a fixed screen size) --
+ * drawing that exact polygon wasn't part of this pass's source research,
+ * so a plain circle is the honest simplification here, not a guess at
+ * the real shape.
+ */
+function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, violations: DrcViolation[], selected: number | null) {
+  const hair = hairlineUm(view, 1.5);
+  violations.forEach((v, i) => {
+    const item = v.items[0];
+    if (!item) return;
+    const [x, y] = item.pos;
+    const on = i === selected;
+    const color = on ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(v.severity === "error" ? "LAYER_DRC_ERROR" : "LAYER_DRC_WARNING");
+    const r = on ? DRC_MARKER_RADIUS_UM * 1.4 : DRC_MARKER_RADIUS_UM;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(100, hair);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.globalAlpha = 0.35;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.stroke();
+    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
+    ctx.restore();
+  });
+}
+
 /**
  * Paints the whole board into `ctx`, which must already have `view`
  * applied (ctx.translate/scale) -- see Canvas.tsx. Iterates GAL layers in
@@ -508,4 +552,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // In-progress route/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, opts);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
+  // DRC markers last of all -- an overlay above every board layer and
+  // the in-progress tool preview, matching real KiCad.
+  if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected);
 }

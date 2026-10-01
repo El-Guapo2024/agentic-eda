@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, Cmd, CmdReply, Ratsnest, RouteReply, Schematic } from "./types";
+import type { BoardGlbResult, BoardState, Cmd, CmdReply, DrcReport, Ratsnest, RouteReply, Schematic, SchematicSymbol } from "./types";
 
 export class ApiError extends Error {}
 
@@ -34,7 +34,34 @@ export async function fetchState(): Promise<BoardState> {
 export async function fetchSchematic(): Promise<Schematic> {
   const s = await getJson<Schematic & { error?: string }>("/api/schematic");
   if (s.error) throw new ApiError(s.error);
-  return s;
+  // Defensive defaults for the lib_symbols/power_symbols/no_connects
+  // fields, and per-symbol/per-label fields, the Eeschema-port merge
+  // adds (see types.ts's Schematic doc comment): a backend built before
+  // that merge lands, or simply an empty schematic, may send any of
+  // these absent or null rather than the real value -- painter.ts and
+  // layout.ts should never need an `?? {}`/`?? []`/`?? 1` of their own
+  // for this. `title_block` is genuinely optional (nullable in the type
+  // too) so it's passed through as-is; `lib_id: null` on a symbol is
+  // also a real, meaningful value (this app's own "no real graphics
+  // resolved yet" signal), not defaulted away.
+  return {
+    ...s,
+    lib_symbols: s.lib_symbols ?? {},
+    power_symbols: s.power_symbols ?? [],
+    no_connects: s.no_connects ?? [],
+    title_block: s.title_block ?? null,
+    symbols: (s.symbols ?? []).map((sym) => {
+      // `mirror` replaces an earlier `mirrored: boolean` (see types.ts's
+      // SchematicSymbol doc comment) that could only ever express one of
+      // KiCad's two mirror axes -- this app's own prior rendering always
+      // treated that boolean as what KiCad calls "mirror y" (horizontal
+      // flip), so a backend that still sends the old shape is read the
+      // same way rather than silently losing its mirroring altogether.
+      const legacy = sym as SchematicSymbol & { mirrored?: boolean };
+      return { ...sym, lib_id: sym.lib_id ?? null, unit: sym.unit ?? 1, body_style: sym.body_style ?? 1, mirror: sym.mirror ?? (legacy.mirrored ? "y" : null) };
+    }),
+    labels: (s.labels ?? []).map((l) => ({ ...l, scope: l.scope ?? "local", shape: l.shape ?? null })),
+  };
 }
 
 /**
@@ -46,6 +73,13 @@ export async function fetchSchematic(): Promise<Schematic> {
  */
 export async function fetchRatsnest(): Promise<Ratsnest> {
   const r = await getJson<Ratsnest & { error?: string }>("/api/ratsnest");
+  if (r.error) throw new ApiError(r.error);
+  return r;
+}
+
+/** The ported KiCad DRC engine (crates/drc), run fresh server-side on every call -- no caching, matching studio.rs's own doc comment on why (cheap enough on these board sizes). */
+export async function fetchDrc(): Promise<DrcReport> {
+  const r = await getJson<DrcReport & { error?: string }>("/api/drc");
   if (r.error) throw new ApiError(r.error);
   return r;
 }
