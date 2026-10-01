@@ -146,16 +146,31 @@ impl Seg {
         }
         let param2 = dir2x * offy - dir2y * offx; // dir2.Cross(offset)
         let param1 = dir1x * offy - dir1y * offx; // dir1.Cross(offset)
+        // Solving `self.a + t*dir1 == other.a + s*dir2` by crossing with
+        // dir2 (resp. dir1) gives `t = (off x dir2) / (dir1 x dir2)` and
+        // `s = (off x dir1) / (dir1 x dir2)`; since `det` here is
+        // `dir2 x dir1 == -(dir1 x dir2)` and `param2`/`param1` are
+        // `dir2 x off`/`dir1 x off == -(off x dir2)`/`-(off x dir1)`, the
+        // two sign flips cancel and `t = param2 / det`, `s = param1 / det`
+        // -- i.e. the point along *this* segment (`dir1`) is driven by
+        // `param2`, not `param1`. Bounds-checking both against `[0, det]`
+        // (or `[det, 0]`) is unaffected by this (either both are in range
+        // or neither is), but using the wrong one for the final point
+        // silently returned a point along `self` at `other`'s crossing
+        // fraction instead of `self`'s own -- invisible on a symmetric
+        // pair (where `param1 == param2`, e.g. this file's own
+        // `seg_seg_crossing_is_zero` test below) but wrong for any
+        // asymmetric one. See `asymmetric_crossing_point_is_on_both_segments`.
         let (t, s) = if det > 0 {
             if param1 < 0 || param1 > det || param2 < 0 || param2 > det {
                 return None;
             }
-            (param1, param2)
+            (param2, param1)
         } else {
             if param1 > 0 || param1 < det || param2 > 0 || param2 < det {
                 return None;
             }
-            (param1, param2)
+            (param2, param1)
         };
         let _ = s;
         let px = ax + (dir1x * t) / det;
@@ -465,6 +480,25 @@ mod tests {
         let b = Seg::new(p(0, 1000), p(1000, 0));
         assert_eq!(a.intersect(&b), Some(p(500, 500)));
         assert_eq!(a.sq_distance_to_seg(&b), 0);
+    }
+
+    /// A horizontal/vertical crossing with asymmetric offsets and lengths
+    /// (unlike the symmetric diagonal pair above, where `param1 == param2`
+    /// by construction and a `t`/`s` mislabeling can't show up): caught a
+    /// real bug where `intersect` returned a point along `self` at
+    /// `other`'s crossing fraction instead of its own, landing nowhere
+    /// near either segment (discovered porting `crates/pns`'s walkaround,
+    /// which -- unlike every caller in this crate -- actually uses the
+    /// returned point, not just `is_some()`).
+    #[test]
+    fn asymmetric_crossing_point_is_on_both_segments() {
+        let horizontal = Seg::new(p(-2475, -1905), p(8665, -1905));
+        let vertical = Seg::new(p(1200, -1569), p(1200, -2241));
+        let hit = horizontal.intersect(&vertical).expect("segments cross");
+        assert_eq!(hit, p(1200, -1905));
+
+        let other_vertical = Seg::new(p(3750, -2241), p(3750, -1569));
+        assert_eq!(horizontal.intersect(&other_vertical), Some(p(3750, -1905)));
     }
 
     #[test]

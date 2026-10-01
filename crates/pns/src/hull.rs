@@ -38,10 +38,21 @@ use eda_model::ir::{Point, Um};
 /// degrees, circumradius `r / cos(22.5deg)`. Degenerates gracefully for
 /// `r <= 0` (returns 8 coincident points at `c`, harmless as convex-hull
 /// input).
+///
+/// `MARGIN_UM` pads the circumradius a couple of micrometers past the
+/// exact value: every per-vertex coordinate is independently rounded to
+/// the nearest integer micrometer, which can shift a vertex up to ~0.7um
+/// closer to centre than the exact construction -- enough, for an edge's
+/// apothem that was exactly on the target clearance boundary, to put a
+/// walked path's own leg ~1um inside it (caught by `walkaround`'s own
+/// tests: a route hugging this hull collided with the very pad it was
+/// hugging, `actual: 199` against a required `200`). The hull only has to
+/// be *at least* clearance-offset, never exactly it, so padding is free.
 fn circle_pts(c: Point, r: Um) -> [Point; 8] {
     const COS22_5: f64 = 0.923_879_532_511_286_8;
+    const MARGIN_UM: f64 = 2.0;
     let r = r.max(0);
-    let circumradius = r as f64 / COS22_5;
+    let circumradius = r as f64 / COS22_5 + MARGIN_UM;
     let mut pts = [Point { x: 0, y: 0 }; 8];
     for (k, p) in pts.iter_mut().enumerate() {
         let theta = (22.5 + 45.0 * k as f64).to_radians();

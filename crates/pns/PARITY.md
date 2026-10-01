@@ -60,6 +60,25 @@ exists rather than letting you rediscover it.
 | `pns_walkaround.{h,cpp}` | `src/walkaround.rs` | Core `Route()` loop (hug nearest obstacle, re-detect, chain) ported. Simplified: hugs one obstacle item per iteration rather than a whole `TOPOLOGY::AssembleCluster` blob (still converges to the same place over a few more iterations); no `RestrictToCluster` scoping; CW/CCW reported as two plain candidates (`WalkResult::best()` picks the shorter), no live-cursor-proximity fallback (no continuous mouse-tick stream to fall back from in this architecture) or length-expansion telemetry. |
 | `pns_line_placer.{h,cpp}`, `pns_mouse_trail_tracer.{h,cpp}` | `src/line_placer.rs` | See that file's own doc comment for the detailed list; headline simplification is posture: this port keeps the explicit direction state and the `/` toggle (`Direction45::right()`) and continues from the last fixed segment's direction, but does not implement `MOUSE_TRAIL_TRACER`'s continuous mouse-trail-area heuristic (automatic posture guessing from how the cursor swept toward the target) -- not meaningful without a continuous mouse-move stream to measure. |
 
+Two real bugs surfaced while getting the stage 2 tests to pass on a
+realistic multi-footprint board, both fixed rather than worked around:
+
+- `eda_drc::kimath::Seg::intersect` returned a point along *the wrong
+  segment's own direction* for an asymmetric crossing (correct only when
+  the two segments happen to be geometrically symmetric, which is why the
+  crate's own existing test never caught it -- every consumer inside
+  `eda_drc` only ever used `.is_some()`, never the point). Fixed in
+  `crates/drc/src/kimath.rs` with a new regression test,
+  `asymmetric_crossing_point_is_on_both_segments`; see that function's own
+  updated doc comment for the derivation. `walkaround.rs` is the first
+  caller in this workspace that actually consumes the returned point.
+- [`hull::hull_of`]'s octagon vertices are each rounded to the nearest
+  integer micrometer independently, which can shift a vertex up to ~0.7um
+  closer to centre than the exact construction -- enough to put a walked
+  leg a single micrometer inside the clearance boundary it was supposed to
+  stay outside of. Fixed with a small (2um) safety margin baked into the
+  circumradius; see `circle_pts`'s doc comment.
+
 ## Stage 3 -- SHOVE
 
 `pns_shove.{h,cpp}` -> `src/shove.rs`. See that file's doc comment. Headline

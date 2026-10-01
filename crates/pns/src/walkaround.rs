@@ -234,6 +234,37 @@ mod tests {
         assert_eq!(wr.best().unwrap(), &path);
     }
 
+    /// A long leg whose straight-45-degree elbow passes exactly through a
+    /// second, narrower obstacle on the way to a much farther target --
+    /// the shape that originally caught the `Seg::intersect` sign bug this
+    /// module depends on (see `eda_drc::kimath`'s own regression test,
+    /// `asymmetric_crossing_point_is_on_both_segments`): a short
+    /// roundrect pad straddling one long horizontal leg, asymmetric enough
+    /// that a mislabeled crossing point lands nowhere near either segment.
+    #[test]
+    fn walks_around_a_narrow_pad_on_a_long_asymmetric_leg() {
+        use crate::item::Solid;
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid {
+            net: None,
+            layers: LayerRange::new(0, 1),
+            pos: Point { x: 2475, y: -1905 },
+            shape: Shape::RoundRect { x0: 2475 - 975, y0: -1905 - 300, x1: 2475 + 975, y1: -1905 + 300, r: 150 },
+            source: "U1.8".into(),
+        }));
+        let rules: BoardRules = serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap();
+        let path = vec![Point { x: -2475, y: -1905 }, Point { x: 8665, y: -1905 }, Point { x: 12475, y: 1905 }];
+        let net = net_of("SIG");
+        let wr = route(&path, &node, &net, 0, 200, &rules, &[], 40);
+        let best = wr.best().expect("at least one winding must clear a single narrow pad");
+        assert_eq!(best.first(), Some(&path[0]));
+        assert_eq!(best.last(), Some(&path[2]));
+        for w in best.windows(2) {
+            let shape = Shape::Stadium { a: w[0], b: w[1], r: 100 };
+            assert!(node.first_colliding(&shape, &net, LayerRange::single(0), &rules, &[]).is_none(), "leg {:?}-{:?} still collides", w[0], w[1]);
+        }
+    }
+
     #[test]
     fn walks_around_a_pad_blocking_the_direct_path() {
         let mut node = Node::new();
