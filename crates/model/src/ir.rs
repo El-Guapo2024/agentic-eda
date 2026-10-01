@@ -1133,7 +1133,7 @@ pub struct FootprintField {
 /// something real to show/edit and the derived `.kicad_mod` export (step
 /// 6) can write a correct `(layers ...)` line instead of guessing one
 /// from `kind`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LibraryPad {
     #[serde(default, skip_serializing_if = "String::is_empty")]
