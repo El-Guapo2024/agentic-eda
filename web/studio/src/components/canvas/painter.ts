@@ -5,7 +5,7 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um } from "../../api/types";
+import type { BoardState, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
@@ -276,6 +276,69 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
  * it). The other two real `ZONE_DISPLAY_MODE` values (fracture-borders,
  * triangulation) are developer debug views, not ported.
  */
+/** `ZONE::GetIsRuleArea()` keepouts (task item 3) never have fill data and
+ * are never copper -- KiCad draws one as a hatched outline labelled with
+ * which items it disallows, regardless of the current zone display mode
+ * (solid/outline), since there is no "fill" concept for one to toggle.
+ * This port's stand-in: a dashed outline in a dedicated color, a light
+ * diagonal hatch, and an abbreviated restriction label at the centroid. */
+const RULE_AREA_COLOR = "#ff8c00";
+/** World-space hatch spacing, µm (0.8 mm) -- a fixed physical pitch, same
+ * convention a real cross-hatch fill pattern uses, so it reads as a
+ * consistent density at any zoom rather than a fixed screen-pixel count. */
+const RULE_AREA_HATCH_PITCH_UM = 800;
+
+function ruleAreaLabel(z: Zone): string {
+  const parts: string[] = [];
+  if (z.keepout_tracks) parts.push("Tracks");
+  if (z.keepout_vias) parts.push("Vias");
+  if (z.keepout_pads) parts.push("Pads");
+  if (z.keepout_copper_pour) parts.push("Copper");
+  if (z.keepout_footprints) parts.push("Fp");
+  return parts.length > 0 ? `Keepout: ${parts.join("/")}` : "Rule Area";
+}
+
+function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, selected: boolean) {
+  const color = selected ? layerColor("selection") : RULE_AREA_COLOR;
+
+  ctx.save();
+  ctx.beginPath();
+  z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+  ctx.clip();
+  // Diagonal (45-degree) hatch across the outline's bounding box, clipped
+  // to the real outline above -- KiCad's own keepout rendering is a
+  // proper cross-hatch fill pattern; this is a lighter stand-in with the
+  // same intent (visually distinct from solid copper, at a glance).
+  const xs = z.outline.map((p) => p[0]);
+  const ys = z.outline.map((p) => p[1]);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const span = y1 - y0;
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.35;
+  ctx.lineWidth = hairlineUm(view, 1);
+  for (let d = x0 - span; d < x1; d += RULE_AREA_HATCH_PITCH_UM) {
+    ctx.beginPath();
+    ctx.moveTo(d, y0);
+    ctx.lineTo(d + span, y1);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.beginPath();
+  z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  ctx.closePath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
+  ctx.setLineDash([hairlineUm(view, 6), hairlineUm(view, 4)]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  drawStrokeText(ctx, ruleAreaLabel(z), cx, cy, { sizeUm: Math.max(hairlineUm(view, 11), 300), justify: "center", color });
+}
+
 function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
   if (!board.routing) return;
   for (const z of board.routing.zones) {
@@ -285,6 +348,10 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     if (opts.layerVisible[z.layer] === false) continue;
     if (z.outline.length < 3) continue;
     const selected = opts.selection.has(z.id);
+    if (z.is_rule_area) {
+      drawRuleArea(ctx, view, z, selected);
+      continue;
+    }
     const copperColor = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
     const fill = opts.zoneFill?.zones.find((f) => f.id === z.id);
     withAlpha(ctx, layerAlpha(opts, z.layer), () => {

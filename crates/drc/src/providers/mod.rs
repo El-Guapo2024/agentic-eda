@@ -2,6 +2,7 @@ pub mod annular_via;
 pub mod copper_clearance;
 pub mod courtyard;
 pub mod dangling;
+pub mod disallow;
 pub mod edge_clearance;
 pub mod hole;
 pub mod outline;

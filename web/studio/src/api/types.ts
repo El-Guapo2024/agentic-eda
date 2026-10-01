@@ -118,16 +118,31 @@ export interface ZoneSettingsFields {
 }
 
 /**
+ * `crates/model/src/ir.rs` `Zone`'s rule-area (keepout) fields, task item
+ * 3 -- `ZONE::GetIsRuleArea()` plus its five `DoNotAllow*` flags. Shares a
+ * zone with `ZoneSettingsFields` the same way source's one dialog just
+ * swaps panels on `IsRuleArea()`; see `ZoneDialog.tsx`.
+ */
+export interface RuleAreaFields {
+  is_rule_area: boolean;
+  keepout_tracks: boolean;
+  keepout_vias: boolean;
+  keepout_pads: boolean;
+  keepout_copper_pour: boolean;
+  keepout_footprints: boolean;
+}
+
+/**
  * `crates/model/src/ir.rs` `Zone` -- id/net/layer/outline plus the full
- * `ZONE_SETTINGS` (`ZoneSettingsFields`), ported into the IR so
- * `crates/zone-filler` can read them; see `ZoneDialog.tsx`. Every
- * settings field has a KiCad-matching server-side default
- * (`Zone::default()`) once `add_zone` creates a zone, so these are never
- * actually absent from a real `/api/state` response -- not marked
- * optional, same convention this file uses for every other
+ * `ZONE_SETTINGS` (`ZoneSettingsFields`) and rule-area flags
+ * (`RuleAreaFields`), ported into the IR so `crates/zone-filler` can read
+ * them; see `ZoneDialog.tsx`. Every settings field has a KiCad-matching
+ * server-side default (`Zone::default()`) once `add_zone` creates a zone,
+ * so these are never actually absent from a real `/api/state` response --
+ * not marked optional, same convention this file uses for every other
  * always-present field.
  */
-export interface Zone extends ZoneSettingsFields {
+export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   id: string;
   net: string;
   layer: string;
@@ -482,7 +497,7 @@ export interface CmdVia {
  * a copy/paste or duplicate of a customized zone does not silently reset
  * it to KiCad's defaults.
  */
-export interface CmdZone extends Partial<ZoneSettingsFields> {
+export interface CmdZone extends Partial<ZoneSettingsFields>, Partial<RuleAreaFields> {
   id?: string;
   net: string;
   layer: string;
@@ -532,7 +547,7 @@ export type Cmd =
    * one field of the panel, the whole thing commits together. Outline is
    * untouched (no point editor yet, see PARITY-pcb.md).
    */
-  | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields)
+  | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
   | { op: "set_zone_outline"; id: string; outline: PointXY[] }
   | { op: "add_shape"; shape: CmdShape }

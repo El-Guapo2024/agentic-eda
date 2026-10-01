@@ -313,9 +313,26 @@ export function useActionRunner() {
       "pcbnew.InteractiveDrawing.via",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "via" ? "select" : "via" }))
     );
+    // Rule Areas (task item 3): the same outline-drawing path as "Draw
+    // Filled Zones" below -- a rule area and a copper-pour zone share one
+    // outline tool and one properties dialog in source too
+    // (dialog_copper_zones.cpp's single `IsRuleArea()`-branching panel).
+    // `state.nextZoneIsRuleArea` is the one bit telling ZoneDialog.tsx
+    // which of the two armed it, so a fresh outline's dialog opens with
+    // "Rule area" pre-checked only for this entry.
+    m.set(
+      "pcbnew.InteractiveDrawing.ruleArea",
+      pcbOnly(() => {
+        dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: true });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" });
+      })
+    );
     m.set(
       "pcbnew.InteractiveDrawing.zone",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" }))
+      pcbOnly(() => {
+        dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zone" ? "select" : "zone" });
+      })
     );
     m.set(
       "pcbnew.InteractiveDrawing.line",

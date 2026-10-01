@@ -1017,6 +1017,37 @@ pub struct Zone {
     /// `m_HatchBorderAlgorithm`.
     #[serde(default = "default_hatch_border_algorithm")]
     pub hatch_border_algorithm: i32,
+
+    // ---- rule area / keepout (`ZONE::GetIsRuleArea`, task item 3). A
+    // zone's `net`/outline/layer are shared with a copper-pour zone (same
+    // dialog, same "draw a filled zone" tool -- see `tools/drawing_tool.cpp`
+    // and `dialog_copper_zones.cpp`'s own single dialog that swaps panels on
+    // `IsRuleArea()`); only these six fields distinguish a rule area, and
+    // every `ZONE_SETTINGS` fill field above is simply unused for one
+    // (matching source, which still stores them unread rather than making
+    // them a separate type). Additive: absent in an older `design.json`
+    // reads as "an ordinary copper-pour zone", exactly as before this field
+    // existed.
+    /// `ZONE::GetIsRuleArea()`.
+    #[serde(default)]
+    pub is_rule_area: bool,
+    /// `GetDoNotAllowTracks()`.
+    #[serde(default)]
+    pub keepout_tracks: bool,
+    /// `GetDoNotAllowVias()`.
+    #[serde(default)]
+    pub keepout_vias: bool,
+    /// `GetDoNotAllowPads()`.
+    #[serde(default)]
+    pub keepout_pads: bool,
+    /// `GetDoNotAllowZoneFills()` -- disallow copper pours (zone fills)
+    /// under this area, not "fill this zone with copper" (that is
+    /// `fill_mode`/`FillMode`, meaningless for a rule area anyway).
+    #[serde(default)]
+    pub keepout_copper_pour: bool,
+    /// `GetDoNotAllowFootprints()`.
+    #[serde(default)]
+    pub keepout_footprints: bool,
 }
 
 impl Zone {
@@ -1052,6 +1083,12 @@ impl Default for Zone {
             hatch_smoothing_value: default_hatch_smoothing_value(),
             hatch_hole_min_area: default_hatch_hole_min_area(),
             hatch_border_algorithm: default_hatch_border_algorithm(),
+            is_rule_area: false,
+            keepout_tracks: false,
+            keepout_vias: false,
+            keepout_pads: false,
+            keepout_copper_pour: false,
+            keepout_footprints: false,
         }
     }
 }

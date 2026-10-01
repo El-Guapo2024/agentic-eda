@@ -796,6 +796,11 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 "hatch_orientation_mdeg": z.hatch_orientation_mdeg, "hatch_smoothing_level": z.hatch_smoothing_level,
                 "hatch_smoothing_value": z.hatch_smoothing_value, "hatch_hole_min_area": z.hatch_hole_min_area,
                 "hatch_border_algorithm": z.hatch_border_algorithm,
+                // Rule area / keepout (task item 3) -- see `eda_model::ir::
+                // Zone::is_rule_area`'s own doc.
+                "is_rule_area": z.is_rule_area, "keepout_tracks": z.keepout_tracks,
+                "keepout_vias": z.keepout_vias, "keepout_pads": z.keepout_pads,
+                "keepout_copper_pour": z.keepout_copper_pour, "keepout_footprints": z.keepout_footprints,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable

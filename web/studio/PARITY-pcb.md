@@ -329,7 +329,8 @@ reaches every one of those IR fields instead of just net/layer.
 | Add flow: outline first, then settings (vs. source's settings-first-then-draw) | unchanged, documented simplification from an earlier session | `ZoneDialog.tsx`'s own header comment; the dialog itself is now the full settings panel, not just net/layer |
 | Add flow backend shape: `add_zone` (net/layer/outline, unchanged 3-field `Cmd`) + an immediate `edit_zone` only if any setting differs from `Zone::default()` | deliberate 2-Cmd design, not 1 atomic Cmd | keeps `Cmd::AddZone`'s wire shape stable for every existing caller (the CLI, this crate's own tests) -- `state/store.tsx`'s `addZone`, `crates/ops/src/lib.rs`'s `Cmd::EditZone`/`edit_zone` |
 | Zone outline editing: drag a corner, double-click an edge to add one, right-click a corner to delete it | ported, scoped down from source -- see section 11 | `pcbnew/tools/pcb_point_editor.cpp` -- `kicad-port/zonePointEditor.ts` (corner/edge hit-testing, 9 unit tests), `Cmd::SetZoneOutline`, `Canvas.tsx`'s onPointerDown/Move/Up + onDoubleClick + onContextMenu, `painter.ts:drawZoneHandles` |
-| Zone Cutout / Similar Zone / Rule Areas (keepouts) | missing, unchanged | `pcbnew.InteractiveDrawing.zoneCutout`/`similarZone`/`ruleArea` -- no keepout-zone concept in this model |
+| Rule Areas (keepouts) | ported -- see section 14 | `pcbnew.InteractiveDrawing.ruleArea` |
+| Zone Cutout / Similar Zone | missing, unchanged | `pcbnew.InteractiveDrawing.zoneCutout`/`similarZone` |
 
 Rust: `crates/ops/src/lib.rs`'s `Cmd::EditZone`/`edit_zone` (full
 `ZONE_SETTINGS` replace, outline untouched; validates clearance >= 0, min
@@ -474,3 +475,40 @@ than a preview/apply pair. Net/layer/selection filtering is computed
 client-side (this crate has no selection/UI-filter concept of its own,
 same split section 12's cleanup dialog uses) in
 `GlobalEditTracksAndViasDialog.tsx`/`GlobalEditTextAndGraphicsDialog.tsx`.
+
+## 14. Rule areas (keepout zones)
+
+Port of `pcbnew/zone.cpp`'s `ZONE::GetIsRuleArea()`/`GetDoNotAllow*()`
+flags (task item 3) and `pcbnew/drc/drc_test_provider_disallow.cpp`'s
+keepout half. A rule area shares `Zone`'s own IR struct, outline-drawing
+tool and properties dialog with a copper-pour zone -- same single-dialog-
+two-panels shape source itself uses -- rather than being a separate type.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| IR: `is_rule_area` + 5 `keepout_*` flags (tracks/vias/pads/copper pours/footprints) on `Zone`, additive | identical | `eda_model::ir::Zone` -- `ZONE::GetIsRuleArea`/`GetDoNotAllow{Tracks,Vias,Pads,ZoneFills,Footprints}` |
+| A zone/rule area may have no net at all (KiCad's net code 0) | identical | `add_zone`/`edit_zone` no longer require `known_net` for an empty string -- previously impossible to create, needed for every real-world keepout |
+| Drawing: outline-drawn with the same tool as a copper-pour zone | ported, one hotkey/menu difference from source rather than a separate tool -- `pcbnew.InteractiveDrawing.ruleArea` (Ctrl+Shift+K) arms the identical outline tool as `.zone`; `state.nextZoneIsRuleArea` is the one bit telling `ZoneDialog.tsx` to pre-check "Rule area" for *this* entry's outline, same end result (draw outline, dialog opens, Rule Area already ticked) with no second drawing-tool code path to maintain | `tools/drawing_tool.cpp`'s zone/keepout entry points, which upstream also funnel through one outline-drawing loop |
+| Properties dialog: "Rule area" checkbox swaps the panel between fill settings and the 5 keepout checkboxes | identical in effect | `dialog_copper_zones.cpp`'s `IsRuleArea()` branch -- `ZoneDialog.tsx` |
+| Zone filler honors a copper-pour keepout: every other zone's fill excludes it, any net, any priority | identical in effect | `ZONE_FILLER::fillCopperZone`'s keepout knockout -- `crates/zone-filler`'s new `FillInput::keepouts`/`FillKeepout`, 2 new tests. Previously an explicit, named gap in that crate's own doc comment ("Not ported: ... keepout zones") |
+| DRC: track/via/pad/footprint landing inside a matching keepout is reported (`items_not_allowed`) | ported for the explicit-keepout-zone path; a track/via/pad is layer-matched exactly, a footprint ignores the keepout's own layer (a component exclusion zone's layer is cosmetic -- see below) | `drc_test_provider_disallow.cpp`'s `DISALLOW_CONSTRAINT`/`antiTrackKeepouts` paths -- new `crates/drc/src/providers/disallow.rs`, 8 tests |
+| DRC: copper-pour-in-keepout cross-check (belt-and-suspenders over the filler's own exclusion) | ported, with the same epsilon-deflate trick source's own `query_areas` uses -- otherwise the filler's own zero-gap cut would always register as "touching" and false-positive | `drc_test_provider_disallow.cpp`'s `query_areas` cached-intersection test |
+| Multi-layer rule areas (one outline, several layers); custom `(disallow ...)` DRC rules on non-keepout items; `DRCE_TEXT_ON_EDGECUTS` (a different, unrelated half of the same KiCad source file) | not ported -- this model's `Zone` is single-layer only (an existing, documented limitation predating this item), has no custom-rule language (GAPS.md #10), and text-on-Edge.Cuts is a separate check | `ZONE::GetLayerSet()`, `panel_setup_rules.cpp`, `drc_test_provider_disallow.cpp`'s `checkTextOnEdgeCuts` |
+| `.kicad_pcb` export of a rule area | not ported -- `crates/kicad`'s exporter was out of this item's explicit scope; a rule area round-tripped through export today would still be written as (and read back as) a zone, net/fill fields included, which is not what a real `.kicad_pcb`'s `(zone (keepout ...))` block looks like | `crates/kicad/src/pcb.rs`'s zone writer -- flagged here for a follow-up, not silently dropped |
+| Canvas rendering: a rule area draws as a dashed outline with a diagonal hatch and a restriction label ("Keepout: Tracks/Vias"), never a solid fill (it never has one) | ported, a simplified stand-in for source's real cross-hatch keepout rendering | `pcb_painter.cpp`'s zone paint, keepout branch -- `painter.ts`'s new `drawRuleArea` |
+
+Rust: `crates/model/src/ir.rs` (`Zone`'s 6 new fields), `crates/ops/src/lib.rs`
+(`Cmd::EditZone` carries them; `add_zone`/`edit_zone` allow an empty net),
+2 new `crates/ops/src/tests.rs` tests. `crates/zone-filler/src/lib.rs`
+(`FillKeepout`, the knockout pass), 2 new tests. `crates/drc`: `DrcKeepout`
+(`board.rs`, kept entirely separate from `DrcZone`/`board.zones` so every
+*other* existing provider -- `copper_clearance` in particular -- keeps
+treating `board.zones` as "real copper only", unaffected by rule areas
+coming into existence as a concept); `ErrorType::ItemsNotAllowed`
+(`item.rs`, appended, matching KiCad's own `items_not_allowed` settings
+key); the new `providers/disallow.rs` (8 tests); one new line in `lib.rs`'s
+`run()` registering it. Frontend: `RuleAreaFields`/`Zone`/`CmdZone` in
+`api/types.ts`, `ZoneDialog.tsx`'s rule-area panel, `clipboard.ts`'s
+`zoneToCmd` (copy/paste/duplicate fidelity), `painter.ts`'s `drawRuleArea`,
+`useActionRunner.ts`'s `ruleArea` action, `state.nextZoneIsRuleArea`
+(`store.tsx`).

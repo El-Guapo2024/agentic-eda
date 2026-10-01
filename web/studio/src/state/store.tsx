@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, LabelScope, Part, Ratsnest, RouteMode, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, DrcReport, ErcReport, FillReport, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -320,6 +320,15 @@ export function selectionBoundsCenter(
   return any ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : null;
 }
 
+export const DEFAULT_RULE_AREA_SETTINGS: RuleAreaFields = {
+  is_rule_area: false,
+  keepout_tracks: false,
+  keepout_vias: false,
+  keepout_pads: false,
+  keepout_copper_pour: false,
+  keepout_footprints: false,
+};
+
 export const DEFAULT_ZONE_SETTINGS: ZoneSettingsFields = {
   clearance: 500,
   min_thickness: 250,
@@ -552,6 +561,17 @@ export interface StudioState {
   routerSettingsDialogOpen: boolean;
   /** `7` (pcbnew.LengthTuner.TuneSingleTrack) -- components/LengthTuningDialog.tsx. */
   lengthTuningDialogOpen: boolean;
+  /**
+   * `pcbnew.InteractiveDrawing.ruleArea` vs `.zone` (task item 3): both
+   * arm the same outline-drawing tool (`activeTool === "zone"`); this is
+   * the one bit that tells `ZoneDialog.tsx` which hotkey/menu entry armed
+   * it, so a fresh outline's dialog opens with "Rule area" pre-checked
+   * when it was the dedicated rule-area entry. Irrelevant once
+   * `state.zonePending` is set (the dialog reads it exactly once, when a
+   * new outline first arrives) and reset whenever either tool is
+   * (re-)armed.
+   */
+  nextZoneIsRuleArea: boolean;
   /** `pcbnew.GlobalEdit.cleanupTracksAndVias` -- components/CleanupTracksDialog.tsx. */
   cleanupTracksDialogOpen: boolean;
   /** `pcbnew.GlobalEdit.editTracksAndVias` -- components/GlobalEditTracksAndViasDialog.tsx. */
@@ -657,6 +677,7 @@ const initialState: StudioState = {
   moveExactDialogOpen: false,
   routerSettingsDialogOpen: false,
   lengthTuningDialogOpen: false,
+  nextZoneIsRuleArea: false,
   cleanupTracksDialogOpen: false,
   editTracksAndViasDialogOpen: false,
   editTextAndGraphicsDialogOpen: false,
@@ -749,6 +770,7 @@ export type Action =
   | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
   | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
   | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN"; open: boolean };
@@ -998,6 +1020,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, routerSettings: action.settings };
     case "SET_LENGTH_TUNING_DIALOG_OPEN":
       return { ...state, lengthTuningDialogOpen: action.open };
+    case "SET_NEXT_ZONE_IS_RULE_AREA":
+      return { ...state, nextZoneIsRuleArea: action.value };
     case "SET_CLEANUP_TRACKS_DIALOG_OPEN":
       return { ...state, cleanupTracksDialogOpen: action.open };
     case "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN":
@@ -1071,7 +1095,7 @@ export interface StudioApi {
    * `Cmd::AddZone` with inline settings, so every existing caller of that
    * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
    */
-  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields) => Promise<void>;
+  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields & RuleAreaFields) => Promise<void>;
   /** B ("Fill All Zones"): GET /api/fill now, and keep it live-updated (state.zoneFill) until `unfillZones`. */
   fillZones: () => Promise<void>;
   /** Ctrl+B ("Unfill All Zones"): back to outline-only, same as a zone that was never filled. */
@@ -1461,7 +1485,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!newId) return;
       // Default-valued settings need no follow-up at all -- `add_zone`
       // already landed on exactly that.
-      const unchanged = (Object.keys(DEFAULT_ZONE_SETTINGS) as (keyof ZoneSettingsFields)[]).every((k) => settings[k] === DEFAULT_ZONE_SETTINGS[k]);
+      const defaults = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
+      const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
       if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
     },
     copySelection: () => {

@@ -93,6 +93,17 @@ pub struct FillZoneRef {
     pub priority: u32,
 }
 
+/// A rule area (keepout) that disallows copper pours under it
+/// (`ZONE::GetDoNotAllowZoneFills`, task item 3) -- the one keepout
+/// restriction the filler itself needs to know about; the other four
+/// (tracks/vias/pads/footprints) are a placement/routing/DRC concern, not
+/// a fill one, and are checked by `eda_drc`'s disallow provider instead.
+#[derive(Debug, Clone)]
+pub struct FillKeepout {
+    pub layer: String,
+    pub outline: LineChain,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FillInput {
     pub pads: Vec<FillPad>,
@@ -100,6 +111,12 @@ pub struct FillInput {
     pub vias: Vec<FillVia>,
     pub other_zones: Vec<FillZoneRef>,
     pub board_outline: Option<LineChain>,
+    /// Copper-pour keepouts on this layer. Unconditional knockout, no net/
+    /// priority test (`other_zones`' own gate) -- a rule area wins against
+    /// every zone regardless of net or priority, matching
+    /// `ZONE_FILLER::fillCopperZone`'s own unconditional keepout
+    /// subtraction.
+    pub keepouts: Vec<FillKeepout>,
 }
 
 /// `max_error`: the polygon-approximation tolerance for circles/arcs
@@ -289,6 +306,24 @@ where
                 clearance_holes.add_polygon(poly);
             }
         }
+    }
+
+    // -------------------------------------------------------------------
+    // Rule area (keepout) copper-pour exclusion -- not part of upstream's
+    // `fillCopperZone` pipeline order comment at the top of this file
+    // (which predates this knockout), but the same idea as the zone/pad/
+    // track knockouts above: a hole cut from `fill` before the min-width/
+    // island passes run, so a keepout-adjacent sliver is pruned by the
+    // same geometry those passes already apply to every other knockout.
+    for keepout in &input.keepouts {
+        if keepout.layer != layer {
+            continue;
+        }
+        let kb = { let s = Shape::Polygon { pts: keepout.outline.clone() }; bbox_of(&s) };
+        if !bboxes_intersect(kb, zone_bbox) {
+            continue;
+        }
+        clearance_holes.add_outline(keepout.outline.clone());
     }
 
     // -------------------------------------------------------------------

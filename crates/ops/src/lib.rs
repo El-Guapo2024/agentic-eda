@@ -324,6 +324,23 @@ pub enum Cmd {
         hatch_smoothing_value: f64,
         hatch_hole_min_area: f64,
         hatch_border_algorithm: i32,
+        /// Task item 3: `ZONE::GetIsRuleArea()` plus its five `DoNotAllow*`
+        /// keepout flags -- see `eda_model::ir::Zone`'s own doc. Carried on
+        /// this same `Cmd` (not a separate one) because real KiCad edits
+        /// them through the identical "zone properties" dialog, just
+        /// showing a different panel.
+        #[serde(default)]
+        is_rule_area: bool,
+        #[serde(default)]
+        keepout_tracks: bool,
+        #[serde(default)]
+        keepout_vias: bool,
+        #[serde(default)]
+        keepout_pads: bool,
+        #[serde(default)]
+        keepout_copper_pour: bool,
+        #[serde(default)]
+        keepout_footprints: bool,
     },
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
@@ -1181,6 +1198,12 @@ impl<'a> Board<'a> {
                 hatch_smoothing_value,
                 hatch_hole_min_area,
                 hatch_border_algorithm,
+                is_rule_area,
+                keepout_tracks,
+                keepout_vias,
+                keepout_pads,
+                keepout_copper_pour,
+                keepout_footprints,
             } => self.edit_zone(
                 id,
                 net,
@@ -1201,6 +1224,12 @@ impl<'a> Board<'a> {
                 *hatch_smoothing_value,
                 *hatch_hole_min_area,
                 *hatch_border_algorithm,
+                *is_rule_area,
+                *keepout_tracks,
+                *keepout_vias,
+                *keepout_pads,
+                *keepout_copper_pour,
+                *keepout_footprints,
             ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
@@ -1946,7 +1975,13 @@ impl<'a> Board<'a> {
     }
 
     fn add_zone(&mut self, net: &str, layer: &str, outline: &[Point]) -> Result<(), Vec<CheckResult>> {
-        self.known_net(net)?;
+        // "" is a real, valid choice here -- KiCad's own net code 0 ("No
+        // net"), the common case for a rule area/keepout (task item 3) and
+        // allowed for an ordinary zone too (matches `known_net`'s sibling
+        // checks, which only ever validate a *non-empty* name).
+        if !net.is_empty() {
+            self.known_net(net)?;
+        }
         self.known_layer(layer)?;
         if outline.len() < 3 {
             return Err(vec![CheckResult::fail("ops_bad_zone", net, "a zone outline needs at least three points")]);
@@ -2005,8 +2040,18 @@ impl<'a> Board<'a> {
         hatch_smoothing_value: f64,
         hatch_hole_min_area: f64,
         hatch_border_algorithm: i32,
+        is_rule_area: bool,
+        keepout_tracks: bool,
+        keepout_vias: bool,
+        keepout_pads: bool,
+        keepout_copper_pour: bool,
+        keepout_footprints: bool,
     ) -> Result<(), Vec<CheckResult>> {
-        self.known_net(net)?;
+        // "" (no net) is normal for a rule area, and allowed for an
+        // ordinary zone too -- see `add_zone`'s matching comment.
+        if !net.is_empty() {
+            self.known_net(net)?;
+        }
         self.known_layer(layer)?;
         if clearance < 0 {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "clearance cannot be negative")]);
@@ -2042,6 +2087,12 @@ impl<'a> Board<'a> {
         z.hatch_smoothing_value = hatch_smoothing_value;
         z.hatch_hole_min_area = hatch_hole_min_area;
         z.hatch_border_algorithm = hatch_border_algorithm;
+        z.is_rule_area = is_rule_area;
+        z.keepout_tracks = keepout_tracks;
+        z.keepout_vias = keepout_vias;
+        z.keepout_pads = keepout_pads;
+        z.keepout_copper_pour = keepout_copper_pour;
+        z.keepout_footprints = keepout_footprints;
         Ok(())
     }
 

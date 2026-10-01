@@ -63,7 +63,8 @@ pub use item::{DrcRefItem, DrcViolation, ErrorType, FixHint, Severity};
 /// Run every ported test provider and return every violation found, in the
 /// same provider order the task brief lists them (copper clearance, track
 /// width, via/annular width, hole size & hole-to-hole, edge clearance,
-/// courtyard, silk & mask, text dimensions, dangling items), followed by
+/// courtyard, silk & mask, text dimensions, dangling items, rule-area
+/// keepouts -- task item 3), followed by
 /// the placement-quality providers ported in from `eda_gates::pcb`.
 pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     let b = board::build(design, model);
@@ -80,6 +81,7 @@ pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     out.extend(providers::silk_mask::check(&b, rules));
     out.extend(providers::text_dims::check(&b, rules));
     out.extend(providers::dangling::check(&b));
+    out.extend(providers::disallow::check(&b, rules));
     out.extend(providers::outline::check(design, model));
     out.extend(providers::schematic_parity::check(design, model));
     out.extend(providers::placement_quality::check(design, model));

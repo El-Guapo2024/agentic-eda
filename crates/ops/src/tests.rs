@@ -584,6 +584,46 @@ fn add_zone_then_delete_it() {
     assert!(b.design().routing.as_ref().unwrap().zones.is_empty());
 }
 
+#[test]
+fn add_zone_allows_an_empty_net_for_a_rule_area() {
+    // A keepout normally has no net at all (KiCad's net code 0) -- this
+    // must not be refused the way a real but-unknown net name still is.
+    let m = net_model();
+    let mut b = board(&m);
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 0 }, Point { x: 5_000, y: 5_000 }];
+    b.apply(&Cmd::AddZone { net: "".into(), layer: "F.Cu".into(), outline }).unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().zones[0].net, "");
+
+    let e = b.apply(&Cmd::AddZone { net: "NOPE".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 0 }, Point { x: 1, y: 1 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_net", "a real but unknown net name must still be refused");
+}
+
+#[test]
+fn edit_zone_keepout_flags_round_trip_and_empty_net_is_allowed() {
+    let m = net_model();
+    let mut b = board(&m);
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 0 }, Point { x: 5_000, y: 5_000 }];
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+
+    b.apply(&edit_zone_cmd(id.clone(), "", |z| {
+        z.is_rule_area = true;
+        z.keepout_tracks = true;
+        z.keepout_vias = true;
+        z.keepout_pads = false;
+        z.keepout_copper_pour = true;
+        z.keepout_footprints = false;
+    }))
+    .unwrap();
+
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!(z.id, id, "id must not move");
+    assert_eq!(z.net, "", "a rule area may drop to no net");
+    assert!(z.is_rule_area);
+    assert!(z.keepout_tracks && z.keepout_vias && z.keepout_copper_pour);
+    assert!(!z.keepout_pads && !z.keepout_footprints);
+}
+
 fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cmd {
     // `panel_zone_properties.cpp`'s real defaults (`ZONE_SETTINGS::
     // ZONE_SETTINGS()`), the same ones `Zone::default()` carries -- tests
@@ -610,6 +650,12 @@ fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cm
         hatch_smoothing_value: z.hatch_smoothing_value,
         hatch_hole_min_area: z.hatch_hole_min_area,
         hatch_border_algorithm: z.hatch_border_algorithm,
+        is_rule_area: z.is_rule_area,
+        keepout_tracks: z.keepout_tracks,
+        keepout_vias: z.keepout_vias,
+        keepout_pads: z.keepout_pads,
+        keepout_copper_pour: z.keepout_copper_pour,
+        keepout_footprints: z.keepout_footprints,
     }
 }
 

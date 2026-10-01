@@ -49,6 +49,12 @@ function zoneToCmd(z: Zone): CmdZone {
     hatch_smoothing_value: z.hatch_smoothing_value,
     hatch_hole_min_area: z.hatch_hole_min_area,
     hatch_border_algorithm: z.hatch_border_algorithm,
+    is_rule_area: z.is_rule_area,
+    keepout_tracks: z.keepout_tracks,
+    keepout_vias: z.keepout_vias,
+    keepout_pads: z.keepout_pads,
+    keepout_copper_pour: z.keepout_copper_pour,
+    keepout_footprints: z.keepout_footprints,
   };
 }
 function shapeToCmd(s: Shape): CmdShape {

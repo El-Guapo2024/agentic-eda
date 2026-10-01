@@ -59,6 +59,13 @@ pub enum ErrorType {
     /// no concept of "the intent asked for this class"); kept under gates'
     /// original `routing_track_width` name.
     NetClassTrackWidth,
+
+    /// `DRCE_ALLOWED_ITEMS` (`drc_test_provider_disallow.cpp`, task item
+    /// 3): a track/via/pad/footprint/copper-pour landing inside a rule
+    /// area (keepout) that disallows it. Appended here rather than sorted
+    /// in among the other KiCad-ported codes above, purely to keep this
+    /// addition a one-line diff at the end of an actively-worked-on file.
+    ItemsNotAllowed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -107,6 +114,7 @@ impl ErrorType {
             ErrorType::PlacementEdgeConnector => "placement_edge_connector",
             ErrorType::PlacementRefdesClear => "placement_refdes_clear",
             ErrorType::NetClassTrackWidth => "routing_track_width",
+            ErrorType::ItemsNotAllowed => "items_not_allowed",
         }
     }
 
@@ -148,6 +156,7 @@ impl ErrorType {
             ErrorType::PlacementEdgeConnector => "Edge connector not on the board edge",
             ErrorType::PlacementRefdesClear => "Reference label overlaps a neighbouring courtyard",
             ErrorType::NetClassTrackWidth => "Track width does not match its net class",
+            ErrorType::ItemsNotAllowed => "Items not allowed",
         }
     }
 
