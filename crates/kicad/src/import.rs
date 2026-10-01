@@ -107,6 +107,18 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if outline.len() >= 3 {
         board.outline = Some(outline.clone());
     }
+    // `eda_drc::providers::outline`'s `invalid_outline` check (task item 5)
+    // reads this back at DRC time -- see `BoardRules::outline_closed`'s own
+    // doc comment for why it lives here rather than on `PlacementSection`.
+    // A `gr_poly`/`gr_circle`-derived outline is inherently one closed
+    // loop; a chained-edges one carries `chain_edges`'s own verdict
+    // (`ImportNotes::outline_open`, negated); no Edge.Cuts graphics at all
+    // leaves this `None` (nothing to assert either way).
+    board.outline_closed = match notes.outline_source {
+        "poly" | "circle" => Some(true),
+        "lines" => Some(!notes.outline_open),
+        _ => None,
+    };
 
     let mut design = Design {
         schema: 1,

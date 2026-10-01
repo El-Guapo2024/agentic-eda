@@ -80,6 +80,8 @@ pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     out.extend(providers::silk_mask::check(&b, rules));
     out.extend(providers::text_dims::check(&b, rules));
     out.extend(providers::dangling::check(&b));
+    out.extend(providers::outline::check(design, model));
+    out.extend(providers::schematic_parity::check(design, model));
     out.extend(providers::placement_quality::check(design, model));
     apply_rule_severities(&mut out, &rules.rule_severities);
     out

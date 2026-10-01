@@ -181,6 +181,28 @@ pub struct BoardRules {
     /// evaluator subset that reads `condition` back out at DRC time).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_rules: Vec<CustomRule>,
+    /// Whether `eda_kicad::import_kicad_pcb` found the board outline's
+    /// Edge.Cuts graphics chained into a genuinely closed loop
+    /// (`ImportNotes::outline_open`, negated, carried forward here since
+    /// that struct itself is import-time-only and does not reach
+    /// `eda_drc::run`). `None` = not applicable/not tracked -- a board
+    /// this workspace's own pipeline produced (always a clean closed
+    /// rectangle by construction), an outline reconstructed from a single
+    /// `gr_poly`/`gr_circle` (inherently closed), or a `design.json`
+    /// written before this field existed. Lives on `BoardRules` rather
+    /// than `PlacementSection` (the more obvious home for an outline-shape
+    /// fact) because the latter has no `Default` impl and is built via a
+    /// full field literal in several `crates/pns`/`crates/freeroute`
+    /// router files this task was told to leave alone -- adding a
+    /// required field there would have forced edits across all of them
+    /// for one DRC check. See `providers::outline`'s doc comment for why
+    /// this -- not a guess from the point list alone -- is the only
+    /// faithful way to know this at DRC time: an implicitly-closed polygon
+    /// (first point not repeated as the last, this model's own convention
+    /// for *every* board) and a genuinely broken import-time chain are
+    /// geometrically indistinguishable from the point list by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_closed: Option<bool>,
 }
 
 /// One `(rule ...)` block from a `.kicad_dru` file
@@ -538,7 +560,7 @@ impl Default for BoardRules {
             net_classes: Vec::new(), outline: None, refdes_font_um: None, pours: Vec::new(), tuning: RoutingTuning::default(),
             hole_to_hole_min_um: d_hole_to_hole_min(), hole_clearance_um: d_hole_clearance(), silk_clearance_um: d_silk_clearance(),
             annular_width_min_um: d_annular_width_min(), min_silk_text_height_um: d_min_silk_text_height(), min_silk_text_thickness_um: d_min_silk_text_thickness(),
-            rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(),
+            rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(), outline_closed: None,
         }
     }
 }

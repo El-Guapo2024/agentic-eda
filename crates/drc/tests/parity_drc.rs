@@ -409,6 +409,16 @@ fn run_kicad_drc(cli: &Path, pcb: &Path, refill: bool) -> serde_json::Value {
     if refill {
         args.push("--refill-zones".into());
     }
+    // `--schematic-parity` (task item 5 / GAPS.md #19): without this flag
+    // kicad-cli never runs `duplicate_footprints`/`missing_footprint`/
+    // `extra_footprint` at all, which would make every one of our own
+    // `schematic_parity` provider's violations count as 100% false
+    // positives regardless of whether they're actually right -- a board
+    // with no project/schematic context (every synthetic example this
+    // harness exports) is unaffected either way (kicad-cli has nothing to
+    // cross-check against, so it reports nothing from this group with or
+    // without the flag).
+    args.push("--schematic-parity".into());
     args.extend(["--format".into(), "json".into(), "--severity-all".into(), "--output".into(), report_path.display().to_string(), pcb.display().to_string()]);
     let out = Command::new(cli).args(&args).output().expect("failed to run kicad-cli pcb drc");
     if !report_path.exists() {
