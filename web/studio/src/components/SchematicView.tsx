@@ -33,6 +33,7 @@ import { alignToGrid } from "../kicad-port/gridSnap";
 import { isMac } from "../platform";
 import { computeDragAttachment } from "./schematic/wireAttachment";
 import { nextReference } from "../kicad-port/nextReference";
+import { collectBoxSelection } from "./schematic/boxSelection";
 import "../styles/canvas.css";
 
 type DragState =
@@ -169,24 +170,9 @@ function hitWireNet(sch: Schematic, xUm: number, yUm: number, thresholdUm: numbe
   return best?.net ?? null;
 }
 
-/**
- * pcb_selection_tool.cpp SelectRectArea, narrowed to symbols (the only
- * box-selectable schematic item this pass ports -- wires/labels are a
- * documented gap, see this file's own header comment): "fully enclosed"
- * needs the whole bounding box inside the marquee, "crossing" only needs
- * an overlap.
- */
-function collectBoxSelection(sch: Schematic, box: [number, number, number, number], crossing: boolean): string[] {
-  const [x0, y0, x1, y1] = box;
-  const hits: string[] = [];
-  for (const s of sch.symbols) {
-    const b = symbolBounds(s, sch.lib_symbols);
-    const overlaps = b.minX < x1 && b.maxX > x0 && b.minY < y1 && b.maxY > y0;
-    const enclosed = b.minX >= x0 && b.maxX <= x1 && b.minY >= y0 && b.maxY <= y1;
-    if (crossing ? overlaps : enclosed) hits.push(s.id);
-  }
-  return hits;
-}
+// collectBoxSelection moved to ./schematic/boxSelection.ts this session
+// (symbols + wires now, previously symbols only -- see that file's own
+// doc) so it's unit-testable like this app's other pure geometry modules.
 
 /**
  * The live rubber-band preview: `attach` (state.dragAttach, resolved once

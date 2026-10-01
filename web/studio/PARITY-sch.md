@@ -34,9 +34,26 @@ resolving a `CheckResult::location` string to a canvas point/refs,
 `painter.ts`'s `drawErcMarkers`, and `Cmd::AddErcExclusion`/
 `DeleteErcExclusion` persisting to `design.schematic.erc_exclusions`,
 applied by the pre-existing `check_erc_excluding` and surfaced as a third
-`"excluded"` `ErcSeverity`). Still not wired: `J` junction, and wire
-box-select / the rest of `sch_line_wire_bus_tool.cpp`'s edge cases
-(section 2) — see the bottom of each section.
+`"excluded"` `ErcSeverity`), and item 8 -- wire box-select plus one real
+`sch_line_wire_bus_tool.cpp`-adjacent correctness fix (section 1/2 --
+`components/schematic/boxSelection.ts` extends box-select to wires, and
+`components/schematic/junctions.ts` fixes a found-not-told junction-dot
+gap: a wire ending partway along another wire, or a power-symbol/label
+anchor dropped onto one, was already correctly connected model-side
+-- `reconcile`'s own T-junction union-find predates this session -- but
+drew no dot, since the pre-existing dot logic only ever matched 3+
+exactly-coincident wire endpoints, never the interior-landing case the
+name "T-junction" actually describes). No backend changes were needed
+for item 8 -- both fixes are rendering/selection-side only, since the
+connectivity model was already correct. Still not wired: `J` junction,
+real KiCad's bus wires/bus entries/bus unfolding (no IR concept of a bus
+at all -- a new subsystem, not an edge case of the existing wire tool,
+deliberately out of scope this pass), and the finer per-segment box-
+select/overlap-trim/collinear-simplify functions `sch_line_wire_bus_tool
+.cpp` also has (`TrimOverLappingWires`/`simplifyWireList`) -- this app's
+one-polyline-per-wire model doesn't produce the kind of duplicate/
+overlapping-segment mess those exist to clean up after, so no concrete
+bug motivated porting them — see the bottom of each section.
 
 **Found and fixed while wiring `E`/`U`/`V`/`F`'s hotkeys**: several
 physical keys are double-booked by one `pcbnew.*` and one `eeschema.*`
@@ -108,12 +125,12 @@ the intent YAML file.
 | Shift+click: add to selection | identical | `common/tool/selection_tool.cpp` modifier table (`computeClickModifiers`, shared with the PCB port) |
 | Ctrl/Cmd+click: toggle (exclusive-or) | identical | same (confirmed `ctrlClickHighlights()` is off by default, same as pcbnew) |
 | Ctrl/Cmd+Shift+click: subtract | identical | same |
-| Box select, left→right = fully enclosed, right→left = crossing | identical for symbols | `common/tool/selection_tool.cpp::SelectRectArea` (`isCrossingSelection`, shared with the PCB port); `SchematicView.tsx::collectBoxSelection` |
-| Box select: wires (crossing = whole wire if touched at all; enclosed = both endpoints, or one if it's dangling) | missing (wires are not box-selectable yet) | `sch_selection_tool.cpp::SelectMultiple` lines ~2640-2666 — researched this session, not yet ported; see `collectBoxSelection`'s own doc |
+| Box select, left→right = fully enclosed, right→left = crossing | identical for symbols and wires | `common/tool/selection_tool.cpp::SelectRectArea` (`isCrossingSelection`, shared with the PCB port); `components/schematic/boxSelection.ts::collectBoxSelection` (extracted from `SchematicView.tsx` and unit-tested this session when wires were added) |
+| Box select: wires (crossing = whole wire if touched at all; enclosed = both endpoints, or one if it's dangling) | partial — a touched/enclosed wire's *whole* polyline is selected as one atomic unit (bounds test over every point, not just its own two ends — see `boxSelection.test.ts`'s multi-bend test); source's own finer per-`SCH_LINE`-segment granularity (a box can touch just one bend of a multi-segment wire and select only that piece) has no equivalent here since this app's `Wire.pts` is already one polyline per wire, not source's many atomic 2-point segments (same architecture note `G`'s own row above makes). `Del` on a box-selected wire works (`common.Interactive.delete`'s existing `api.wireById` branch); `M`/`G` on a wire-only selection does not — there is no `move_wire`/`drag_wire` Cmd at all, so a selected wire can be deleted but not moved independent of a symbol | `sch_selection_tool.cpp::SelectMultiple` lines ~2640-2666 — researched a prior session, ported (to this app's own coarser-grained wire model) this one |
 | Pins/junctions win ties over symbol body/wire at an exact hit | missing (no finer-than-symbol hit test yet) | `sch_selection_tool.cpp::GuessSelectionCandidates`/`narrowSelection` |
 | `M`: move (breaks wire connections — a wire's endpoint is a bare coordinate, not a pin reference) | identical | `sch_move_tool.cpp` (`setupItemsForDrag` never adds connected wires in MOVE mode); `Cmd::MoveSymbol`, `SchematicView.tsx`'s `moveMode` branch |
 | `G`: drag (attached wire endpoints rubber-band) | identical for this app's IR (see the gap noted below for what's left out) | `sch_move_tool.cpp::getConnectedDragItems` (`wireAttachment.ts::attachedWireEndpoints`, same arm-then-click-to-drop flow as `M`, `Cmd::DragSymbol`). A wire here is one polyline (every bend from one `W` session), not a separate `SCH_LINE` per segment, so only its own two true ends are tested for attachment -- matching `pinSnapPoints`'s existing "landing on a pin" convention. Every wire at a junction a dragged pin sits on attaches and moves together |
-| New stub wire at an unselected 3-way junction (source's own fallback when a junction's *other* wires are deliberately not moving) | not applicable to this IR | `ptHasUnselectedJunction`'s branch only matters when a caller can select one wire at a junction independent of the symbol being dragged -- this app's `G` has no such partial case yet (no wire box-select, see item 8 below), so every wire at a junction a dragged pin sits on is always fully attached (previous row) and a stub is never needed |
+| New stub wire at an unselected 3-way junction (source's own fallback when a junction's *other* wires are deliberately not moving) | not applicable to this IR | `ptHasUnselectedJunction`'s branch only matters when a caller can select one wire at a junction independent of the symbol being dragged and then move it -- wire box-select exists now (item 8), but there is still no `move_wire`/`drag_wire` Cmd at all (see that row above), so a selected wire can never actually be the thing being dragged; every wire at a junction a dragged *symbol's* pin sits on is still always fully attached (previous row) and a stub is still never needed |
 | Grid snap during move | identical (grid only) | `edit_tool_move_fct.cpp` (`kicad-port/gridSnap.ts::alignToGrid`, reused) |
 | Anchor/pin snap during move | missing | `ee_grid_helper.cpp` — per-item-category grids + pin-anchor snap not ported; PCB side has the analogous gap too (`PARITY-pcb.md`) |
 | Escape cancels an in-progress move without touching the prior selection | identical | shared `ESCAPE` reducer case (already generic across tabs) |
@@ -126,7 +143,7 @@ the intent YAML file.
 | **Found while wiring this**: `api/types.ts`'s `SchematicSymbol.mirror: "x"\|"y"\|null` and the renderer that reads it (`transform.ts`, `libSymbol.ts`) were already fully two-axis, written *ahead of* this backend field by the session that merged the Eeschema-port itself -- the backend was only ever sending the single legacy `mirrored` boolean, so `X` mirroring only ever rendered at all because `api/client.ts`'s `fetchSchematic` already had a same-session compatibility shim (`sym.mirror ?? (legacy.mirrored ? "y" : null)`). `schematic_json` now sends a real `"mirror": "x"\|"y"\|null` field (plus `"mirrored"`, redundant but harmless, for that same shim), so the fallback is now dead code but was never a bug to fix -- no frontend rendering changes were needed for either axis | n/a | n/a |
 | Mirror during an active move | missing | `sch_edit_tool.cpp::Mirror`'s own `IsMoving()` branch (asymmetric from Rotate's in source itself — no `updateStoredPositions()` call) |
 | `Del`: delete symbol, wires left dangling (no cascade) | identical | `sch_edit_tool.cpp::DoDelete` (confirmed: wires are never auto-deleted); `Cmd::DeleteSymbol`, `common.Interactive.delete`'s schematic branch |
-| `Del`: delete wire | identical (wire must already be selected via a modified click — see the box-select gap above) | `Cmd::DeleteWire` |
+| `Del`: delete wire | identical (wire must already be selected -- a modified click, or now a box-select, item 8) | `Cmd::DeleteWire` |
 | `E` Properties | partial — `SymbolPropertiesDialog.tsx`: Reference/Value/Footprint/Datasheet, the fields this IR actually has (no unit/DeMorgan/pin-table editing source's full `DIALOG_SYMBOL_PROPERTIES` also offers) | `sch_edit_tool.cpp::Properties` — dispatches to one of 6 different dialogs by item type; this app only has symbols selectable, so always this one shape |
 | `U`/`V`/`F`: quick-edit Reference/Value/Footprint | partial — same dialog as `E`, just autofocused on the one field (source uses a separate, smaller single-field `DIALOG_FIELD_PROPERTIES` for these three; one shared component here, deliberately, since both ends run the same two Cmds either way) | `sch_edit_tool.cpp::EditField`/`sch_actions.cpp` (confirmed `U` = reference, not "unit" — a wrong guess here would have mis-bound a hotkey) |
 | `U`'s own rename: cascades every `"REF.PIN"` string this sheet's wires/power-symbols/no-connects hold | partial — refuses a blank or already-used new id; a wire/power-symbol/no-connect whose pin happens to sit exactly on a real resolvable pin gets its reference re-derived for free by the next `reconcile_schematic` pass (same geometric mechanism that already runs after every schematic `Cmd`, confirmed by a dedicated test with real connected wire geometry) -- the explicit string-cascade in `rename_symbol` only matters for the degenerate case where a power-symbol/no-connect's own position doesn't resolve to a real pin at all, a safety net, not the primary mechanism. Deliberately does **not** retarget `design.placement`'s `FootprintInstance` (no rename concept on the PCB side at all) or intent.yaml (read-only to every verb in this file) -- the old reference's PCB footprint, if any, is left exactly where it was, now matching no schematic symbol; the next reconcile pass synthesizes a fresh, unplaced `Part` for the new reference, the same mechanism `AddSymbol` already uses for a part with no intent counterpart. A real "rename and keep the PCB placement" is future work | new `Cmd::RenameSymbol`, `crates/ops` |
@@ -144,7 +161,7 @@ the intent YAML file.
 | Landing back on a pin auto-finishes the wire | identical, pins only (not also wires/junctions/sheet-pins, per `sch_screen.cpp::IsTerminalPoint`'s fuller list) | `sch_screen.cpp::IsTerminalPoint` |
 | Backspace: undo last in-progress segment | identical | `SCH_ACTIONS::undoLastSegment`; `eeschema.InteractiveDrawingLineWireBus.undoLastSegment` |
 | Escape discards the whole in-progress wire | identical | `doDrawSegments`'s `cleanup()` (shared `ESCAPE` reducer case, already generic) |
-| Auto-junction at a T (3+ wire exit angles) | identical, **for connectivity** — the dot itself is drawn wherever 3+ wire endpoints/segments meet, computed live from geometry (`painter.ts::junctionPoints`, pre-existing); never a stored item, matching this project's own IR (no `junctions` field — see `Cmd::AddWire`'s own doc) | `junction_helpers.cpp::AnalyzePoint`; `reconcile`'s own T-junction union-find pass already gives correct electrical connectivity with or without a visible dot |
+| Auto-junction at a T (3+ wire exit angles) | identical, computed live from geometry, never a stored item (matching this project's own IR -- no `junctions` field, see `Cmd::AddWire`'s own doc). Connectivity was already correct before this session (`reconcile`'s own T-junction union-find pass, and `erc.rs`'s dangling checks, both already treated a wire endpoint landing on another wire's *interior* as a real connection) -- but the dot itself was not: the pre-existing `painter.ts::junctionPoints` only ever drew one for 3+ wire endpoints *exactly coincident* (a "star"), never for the classic T shape this row is actually named for (one wire ending partway along another's run), so a correctly-connected T drew no visual confirmation of it at all. Fixed this session: `components/schematic/junctions.ts` (extracted, unit-tested) ports the backend's own `point_on_segment_interior` test arithmetic-for-arithmetic, and also now covers a power-symbol or label anchor landing on a wire's interior (common in practice -- dropping a GND flag or a net label onto an existing wire rather than ending the wire exactly there), which had the identical dot-less symptom for the identical reason | `junction_helpers.cpp::AnalyzePoint`; `reconcile`'s own T-junction union-find pass |
 | `J`: explicit junction at a plain crossing | missing (no stored concept to place one at — see above; connectivity is correct regardless, this is a cosmetic/explicit-marker gap only) | `SCH_DRAWING_TOOLS::SingleClickPlace` |
 | `Q`: no-connect flag, click to place | partial — place only; source's own "click again on one to remove it" isn't ported, and neither is selecting/`Del`-ing an already-placed no-connect by any other means (`Cmd::DeleteNoConnect` exists; no frontend hit-test for this item kind yet, same documented gap as the labels/power-symbols/text this session also only ever *adds* — see this section's own intro) | `SCH_DRAWING_TOOLS::SingleClickPlace`, no-connect branch; `SchematicView.tsx`'s `sch_no_connect` tool branch pin-snaps the same way `W` does, then `Cmd::AddNoConnect` commits immediately -- stays armed for the next click, same as the wire tool |
 | Wire merges two nets / delete splits them | identical | proven by this session's Rust test, see section 0 |
@@ -381,3 +398,21 @@ click through:
     "REF.PIN") -- `ercMarkerPosition.ts`'s own unit tests cover every
     shape in isolation, but only a real board proves `check_erc` actually
     emits the shapes that module expects.
+21. Draw two wires that form a plain "T" -- one wire, then a second
+    starting from a point partway along the first (not at either of its
+    ends) and heading off in another direction. Confirm a junction dot
+    now appears right at that T point (it did not before this session,
+    even though `GET /api/schematic`'s `nets` already correctly merged
+    the two wires onto one net -- this was a draw-only bug). Then drag a
+    box around several wires and a symbol together (left-to-right for
+    enclosed, right-to-left for crossing, same as symbols already work):
+    confirm the wires highlight (the selection color, same as a net
+    highlight) along with the symbol, and confirm `Del` removes all of
+    them in one press. Separately, place a power symbol (`P`, e.g. GND)
+    and/or a label (`L`) by clicking directly on top of an existing wire
+    rather than at either of its ends -- confirm a junction dot appears
+    there too. Finally, confirm two wires that simply cross in their
+    interiors with neither ending on the other (an X, not a T) still show
+    no dot and are not merged onto one net -- this is correct,
+    unchanged, real-KiCad-matching behavior, not something this session's
+    fix should have altered.

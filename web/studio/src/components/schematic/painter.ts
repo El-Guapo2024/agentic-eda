@@ -40,6 +40,7 @@ import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform
 import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement } from "./labelShape";
 import { drawStrokeText } from "../text/strokeFont";
 import { ercMarkerPosition } from "./ercMarkerPosition";
+import { junctionPoints } from "./junctions";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -138,20 +139,6 @@ function stubTip(port: ResolvedSymbol["ports"][number], lx: number, ly: number):
   }
 }
 
-/** Same-net wire *endpoints* (not interior polyline vertices) that coincide 3+ times -- a reasonable T-junction approximation of geometry.rs `wire_junction_points` for this app's simplified wire model. */
-function junctionPoints(wires: SchematicWire[]): Array<[number, number]> {
-  const counts = new Map<string, { at: [number, number]; n: number }>();
-  for (const w of wires) {
-    if (w.pts.length === 0) continue;
-    for (const p of [w.pts[0]!, w.pts[w.pts.length - 1]!]) {
-      const key = `${w.net}|${p[0]},${p[1]}`;
-      const e = counts.get(key);
-      if (e) e.n++;
-      else counts.set(key, { at: p, n: 1 });
-    }
-  }
-  return [...counts.values()].filter((e) => e.n >= 3).map((e) => e.at);
-}
 
 // ------------------------------------------------------------- box fallback
 
@@ -769,9 +756,13 @@ function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch:
 export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
   const hair = 1 / view.scale;
 
-  // Wires.
+  // Wires. `on`: net-highlighted (click a wire with no modifier), or
+  // box/modified-click *selected* (new this session -- `opts.selection`
+  // previously only ever affected a symbol's own outline; a selected
+  // wire drew no differently from an unselected one, so Del on a box- or
+  // shift-selected wire had no visual confirmation it would do anything).
   for (const w of sch.wires) {
-    const on = opts.netHighlight === w.net;
+    const on = opts.netHighlight === w.net || opts.selection.has(w.id);
     ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_WIRE");
     ctx.lineWidth = Math.max(on ? 300 : 150, hair * (on ? 2.5 : 1));
     ctx.beginPath();
@@ -779,9 +770,12 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.stroke();
   }
 
-  // Junctions.
+  // Junctions -- see junctions.ts's own doc for exactly which points
+  // besides coincident wire endpoints (power symbol/label anchors landing
+  // on a wire's interior, i.e. a T) now also get a dot.
+  const junctionAnchors: Array<[number, number]> = [...sch.power_symbols.map((p) => p.at), ...sch.labels.map((l) => l.at)];
   ctx.fillStyle = layerColor("LAYER_JUNCTION");
-  for (const [x, y] of junctionPoints(sch.wires)) {
+  for (const [x, y] of junctionPoints(sch.wires, junctionAnchors)) {
     ctx.beginPath();
     ctx.arc(x, y, Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
     ctx.fill();

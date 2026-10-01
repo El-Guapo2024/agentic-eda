@@ -49,6 +49,13 @@
     // ERC canvas-marker/cross-probe location parsing -- same "pure,
     // dependency-free" criterion, depends only on libSymbol.ts above.
     "src/components/schematic/ercMarkerPosition.ts",
-    "src/components/schematic/ercMarkerPosition.test.ts"
+    "src/components/schematic/ercMarkerPosition.test.ts",
+    // Item 8: wire box-select + the T-junction dot fix -- same criterion;
+    // boxSelection.ts depends only on libSymbol.ts above, junctions.ts on
+    // nothing at all.
+    "src/components/schematic/boxSelection.ts",
+    "src/components/schematic/boxSelection.test.ts",
+    "src/components/schematic/junctions.ts",
+    "src/components/schematic/junctions.test.ts"
   ]
 }
