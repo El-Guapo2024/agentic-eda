@@ -156,9 +156,14 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
       <Sep />
       <ToolbarButton label={opts.orthographic ? "Ortho" : "Persp"} title="Toggle orthographic / perspective projection" active={opts.orthographic} onClick={() => set({ orthographic: !opts.orthographic })} />
       <Sep />
+      <ToolbarButton label="Board Body" title="Show/hide the board substrate (render.show_board_body)" active={opts.showBoardBody} onClick={() => set({ showBoardBody: !opts.showBoardBody })} />
       <ToolbarButton label="Silkscreen" title="Show/hide silkscreen" active={opts.showSilkscreen} onClick={() => set({ showSilkscreen: !opts.showSilkscreen })} />
       <ToolbarButton label="Solder Mask" title="Show/hide solder mask" active={opts.showSolderMask} onClick={() => set({ showSolderMask: !opts.showSolderMask })} />
+      <ToolbarButton label="Solder Paste" title="Show/hide solder paste (render.show_solderpaste)" active={opts.showSolderPaste} onClick={() => set({ showSolderPaste: !opts.showSolderPaste })} />
       <ToolbarButton label="Components" title="Show/hide the rendered component models" active={opts.showComponents} onClick={() => set({ showComponents: !opts.showComponents })} />
+      <ToolbarButton label="TH Models" title="Show/hide through-hole footprints (T)" active={opts.showTHT} onClick={() => set({ showTHT: !opts.showTHT })} />
+      <ToolbarButton label="SMD Models" title="Show/hide SMD footprints (S)" active={opts.showSMD} onClick={() => set({ showSMD: !opts.showSMD })} />
+      <ToolbarButton label="Bounding Boxes" title="Show/hide per-part bounding boxes (render.opengl_show_model_bbox)" active={opts.showBoundingBoxes} onClick={() => set({ showBoundingBoxes: !opts.showBoundingBoxes })} />
       <Sep />
       <ToolbarButton label="KiCad Models" title={kicadModelsTitle} active={opts.kicadModels} onClick={() => set({ kicadModels: !opts.kicadModels })} />
     </div>

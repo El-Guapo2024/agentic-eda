@@ -216,13 +216,43 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     }
     container.appendChild(renderer.domElement);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
-    keyLight.position.set(1, 2, 1.5);
-    scene.add(keyLight);
-    const fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
-    fillLight.position.set(-1.5, -0.6, -1);
-    scene.add(fillLight);
+    // render_3d_opengl.cpp's init_lights(): exactly 3 fixed-function GL
+    // lights, always all enabled together -- "top" and "bottom" fixed
+    // directional lights at a shallow 5.4-degree elevation (so they
+    // mostly skim the board, giving its copper/silk a visible highlight
+    // rather than flooding it from directly overhead), and "front", a
+    // positional headlight that moves with the camera every frame (see
+    // the render loop below). Source's own light colors are all neutral
+    // grey/white (ambient 0.084, diffuse/specular 0.7 for top & bottom,
+    // 0.3/0.5 for the headlight) with NO separate scene-wide ambient term
+    // (`GL_LIGHT_MODEL_AMBIENT=(0,0,0)`) -- all ambient comes from the 3
+    // lights' own small ambient terms, folded here into one AmbientLight
+    // at roughly their combined strength (0.084*3 ~= 0.25) since
+    // Three.js's MeshStandardMaterial has no per-light ambient slot.
+    //
+    // Direction vectors are given in KiCad's own axis convention
+    // (SphericalToCartesian(pi*0.03, pi*0.25), 3d_math.h/render_3d_opengl.
+    // cpp:457-474) and converted through this file's camera basis change
+    // (kicad-port/camera3d.ts's header comment: KiCad-local/world (x,y,z)
+    // -> this app's world (x, z, -y)) rather than re-deriving the angle
+    // in this app's own axes.
+    scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+    const TOP_LIGHT_DIR = new THREE.Vector3(0.0665, 0.9956, -0.0665); // KiCad (0.0665, 0.0665, 0.9956)
+    const topLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    topLight.position.copy(TOP_LIGHT_DIR).multiplyScalar(1000);
+    scene.add(topLight);
+    const bottomLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    bottomLight.position.copy(TOP_LIGHT_DIR).multiplyScalar(-1000); // source: same x/y, z negated -- a full negation is the same thing once converted to this app's axes
+    scene.add(bottomLight);
+    // Headlight ("front"): positional, re-aimed at the camera's own
+    // position every frame below. `decay=0` (no inverse-square falloff)
+    // deliberately: a physically-decaying point light would make this
+    // swing from imperceptible to blinding across this viewer's actual
+    // zoom range (a few mm to hundreds of mm from the board), which
+    // source's own fixed-function GL point light never did either (GL's
+    // legacy attenuation was left at its default 1/0/0 = no falloff).
+    const headlight = new THREE.PointLight(0xffffff, 0.45, 0, 0);
+    scene.add(headlight);
 
     const boardGroup = new THREE.Group();
     scene.add(boardGroup);
@@ -330,6 +360,21 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
      * listener and maybe firing an unrelated same-key 2D action.
      */
     const onKeyDown = (e: KeyboardEvent) => {
+      // eda_3d_actions.cpp's showTHT ('T') / showSMD ('S') -- visibility
+      // view-OPTIONS, not camera actions, so these go straight to the
+      // store (Viewer3DOptions) rather than through Action3D/camera3d.
+      // (showVirtual/showNotInPosFile/showDNP -- 'V'/'P'/'D' in source --
+      // have no equivalent in this app's data model at all: no "virtual
+      // footprint", pick-and-place, or DNP concept exists here, so those
+      // 3 hotkeys are not bound; see PARITY-3d.md.)
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "t" || e.key === "T" || e.key === "s" || e.key === "S")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === "t" || e.key === "T") dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { showTHT: !viewer3dRef.current.showTHT } });
+        else dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { showSMD: !viewer3dRef.current.showSMD } });
+        return;
+      }
+
       const action = resolve3DAction(e, macPlatform);
       if (!action) return;
       e.preventDefault();
@@ -373,6 +418,10 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     const animate = () => {
       const pose = camera3d.getRenderPose();
       const proj = camera3d.getProjectionParams();
+      // render_3d_opengl.cpp's init_lights() "front" headlight moves with
+      // the camera every Redraw() -- same here, once per frame rather
+      // than wiring it through every single camera-mutating method.
+      headlight.position.set(pose.position.x, pose.position.y, pose.position.z);
       let active: THREE.Camera;
       if (proj.kind === "perspective") {
         perspCamera.fov = proj.fovDeg;
@@ -437,14 +486,16 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   // alone never changes `board.outline` (boardOutlineBounds only looks at
   // that), so it rebuilds geometry without moving the camera -- the same
   // way KiCad's own show/hide toggles don't reset your view.
-  const { showComponents, showSilkscreen, showSolderMask } = state.viewer3d;
+  const { showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes } = state.viewer3d;
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
 
     disposeObject3D(three.boardGroup);
     three.scene.remove(three.boardGroup);
-    const nextGroup = board ? buildBoardGroup(board, { showComponents, showSilkscreen, showSolderMask }) : new THREE.Group();
+    const nextGroup = board
+      ? buildBoardGroup(board, { showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes })
+      : new THREE.Group();
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
 
@@ -462,7 +513,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         (Math.abs(prev.minX - bounds.minX) > EPS_MM || Math.abs(prev.minZ - bounds.minZ) > EPS_MM || Math.abs(prev.maxX - bounds.maxX) > EPS_MM || Math.abs(prev.maxZ - bounds.maxZ) > EPS_MM));
     lastFitBoundsRef.current = bounds;
     if (boundsChanged) three.camera3d.reset();
-  }, [board, showComponents, showSilkscreen, showSolderMask]);
+  }, [board, showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes]);
 
   // Flip/orthographic are camera-only now (KiCad's own flipView/
   // toggleOrtho actions move the camera, not the board -- eda_3d_actions.
