@@ -434,6 +434,18 @@ impl BoardRules {
         self.class_of(net).and_then(|c| c.clearance).unwrap_or(self.clearance)
     }
 
+    /// Via copper diameter `net`'s vias should use. Absent from the net's
+    /// class (or no class) = the board default.
+    pub fn via_diameter_of(&self, net: &str) -> ir::Um {
+        self.class_of(net).and_then(|c| c.via_diameter).unwrap_or(self.via_diameter)
+    }
+
+    /// Via drill diameter `net`'s vias should use. Absent from the net's
+    /// class (or no class) = the board default.
+    pub fn via_drill_of(&self, net: &str) -> ir::Um {
+        self.class_of(net).and_then(|c| c.via_drill).unwrap_or(self.via_drill)
+    }
+
     /// Widest track any net on this board can take. The router's clearance
     /// summaries are precomputed for one querying width, so they are built
     /// at this one: conservative for narrow nets, correct for every net.
@@ -638,6 +650,38 @@ pub struct NetClass {
     /// rule KiCad's own `DRC_ENGINE::EvalRules` netclass fast path uses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clearance: Option<ir::Um>,
+    /// Via *copper* diameter for this class (KiCad `net_settings.classes[].
+    /// via_diameter`). Absent = the board default (`BoardRules::
+    /// via_diameter`). Additive field: every existing `NetClass` literal
+    /// predates this and compiles unchanged as `None` (serde default too,
+    /// for a `.kicad_pro`/older intent file with no such key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via_diameter: Option<ir::Um>,
+    /// Via drill diameter for this class. Absent = the board default
+    /// (`BoardRules::via_drill`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via_drill: Option<ir::Um>,
+    /// Microvia copper diameter for this class. This workspace's router and
+    /// DRC don't model microvias as a distinct item (see `crates/drc`'s own
+    /// fidelity notes), so this is carried for round-tripping a `.kicad_pro`
+    /// faithfully but not yet read by any constraint resolution here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microvia_diameter: Option<ir::Um>,
+    /// Microvia drill diameter for this class (see `microvia_diameter`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub microvia_drill: Option<ir::Um>,
+    /// Differential-pair trace width for this class. Not yet read by any
+    /// provider (this workspace has no diff-pair concept in routing/DRC
+    /// yet -- `docs/parity/GAPS.md` #22), carried additively so a
+    /// `.kicad_pro` import doesn't silently drop it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_pair_width: Option<ir::Um>,
+    /// Differential-pair gap for this class (see `diff_pair_width`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_pair_gap: Option<ir::Um>,
+    /// Differential-pair via gap for this class (see `diff_pair_width`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_pair_via_gap: Option<ir::Um>,
     /// Routed before lower numbers. Power belongs first: it needs copper,
     /// it sets the return paths, and it is the hardest thing to squeeze in
     /// once signal nets have taken the channels. Default 0; signals sit at
@@ -822,7 +866,7 @@ mod tests {
     #[test]
     fn net_class_clearance_overrides_the_board_default_only_for_its_own_nets() {
         let mut rules = BoardRules { clearance: 200, ..BoardRules::default() };
-        rules.net_classes.push(NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150), clearance: Some(150), priority: 0 });
+        rules.net_classes.push(NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150), clearance: Some(150), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         assert_eq!(rules.clearance_of("CC1"), 150);
         assert_eq!(rules.clearance_of("CC2"), 150);
         assert_eq!(rules.clearance_of("GND"), 200, "a net outside the class keeps the board default");
@@ -832,7 +876,7 @@ mod tests {
     #[test]
     fn a_negative_net_class_clearance_fails_validation() {
         let mut rules = BoardRules::default();
-        rules.net_classes.push(NetClass { name: "bad".into(), nets: vec!["X".into()], track_width: None, clearance: Some(-1), priority: 0 });
+        rules.net_classes.push(NetClass { name: "bad".into(), nets: vec!["X".into()], track_width: None, clearance: Some(-1), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         let fails = rules.validate();
         assert!(fails.iter().any(|c| c.location.as_deref() == Some("board.net_classes")), "{fails:?}");
     }

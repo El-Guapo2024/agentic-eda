@@ -160,11 +160,17 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         }
         let class_clearance_mm = mm(class.clearance.unwrap_or(model.board.clearance));
         let class_track_mm = mm(class.track_width.unwrap_or(model.board.track_width));
+        // Additive `NetClass` fields (see `eda_model::NetClass`'s doc
+        // comments): a class with its own via size used to always fall
+        // through to the board-wide via here regardless of what it asked
+        // for, the same gap `clearance`/`trace_width` above don't have.
+        let class_via_dia_mm = mm(class.via_diameter.unwrap_or(model.board.via_diameter));
+        let class_via_drill_mm = mm(class.via_drill.unwrap_or(model.board.via_drill));
         writeln!(out, "\t(net_class {} \"\"", sexpr_str(&class.name)).unwrap();
         writeln!(out, "\t\t(clearance {class_clearance_mm})").unwrap();
         writeln!(out, "\t\t(trace_width {class_track_mm})").unwrap();
-        writeln!(out, "\t\t(via_dia {via_dia_mm})").unwrap();
-        writeln!(out, "\t\t(via_drill {via_drill_mm})").unwrap();
+        writeln!(out, "\t\t(via_dia {class_via_dia_mm})").unwrap();
+        writeln!(out, "\t\t(via_drill {class_via_drill_mm})").unwrap();
         writeln!(out, "\t\t(uvia_dia 0.3)").unwrap();
         writeln!(out, "\t\t(uvia_drill 0.1)").unwrap();
         for name in &nets_in_class {

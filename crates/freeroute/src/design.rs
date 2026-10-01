@@ -1459,7 +1459,7 @@ mod tests {
             footprints: vec![pad1],
             board: BoardRules {
                 clearance: 200,
-                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150), clearance: Some(150), priority: 0 }],
+                net_classes: vec![NetClass { name: "cc_escape".into(), nets: vec!["CC1".into(), "CC2".into()], track_width: Some(150), clearance: Some(150), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }],
                 ..BoardRules::default()
             },
             ..Default::default()

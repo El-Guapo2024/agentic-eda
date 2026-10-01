@@ -400,7 +400,16 @@ fn process_qa_board(cli: &Path, pcb: &Path) -> BoardResult {
     let result = with_timeout(move || {
         catch(AssertUnwindSafe(|| {
             let text = std::fs::read_to_string(&pcb).unwrap_or_else(|e| panic!("read {}: {e}", pcb.display()));
-            let (design, model, _notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb failed: {e:?}"));
+            let (design, mut model, _notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb failed: {e:?}"));
+            // Real net classes live in the sidecar `.kicad_pro` (KiCad
+            // 7+), not the `.kicad_pcb` itself -- see `eda_kicad::
+            // merge_project_net_classes`'s doc comment. A bare single-file
+            // QA fixture with no project (common in this corpus) has none
+            // to merge, which is a correct no-op, not a gap.
+            let pro_path = pcb.with_extension("kicad_pro");
+            if let Ok(pro_text) = std::fs::read_to_string(&pro_path) {
+                eda_kicad::merge_project_net_classes(&mut model, &pro_text);
+            }
             let kicad_report = run_kicad_drc(&cli, &pcb, true);
             let ours = eda_drc::run(&design, &model);
             (compare(&kicad_report, &ours), our_non_kicad_counts(&ours))

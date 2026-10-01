@@ -46,6 +46,7 @@ pub mod constraints;
 pub mod item;
 pub mod kimath;
 pub mod providers;
+pub mod rtree;
 pub mod stroke_font;
 
 use eda_model::ir::Design;
