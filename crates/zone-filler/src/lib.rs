@@ -65,6 +65,8 @@ pub struct FillVia {
     pub net: Option<String>,
     pub at: Point64,
     pub diameter: i64,
+    /// Drill diameter (0 = unknown): knocked out at the hole clearance.
+    pub drill: i64,
     pub from_layer: String,
     pub to_layer: String,
     pub layer_order: Vec<String>,
@@ -120,6 +122,9 @@ pub struct FillInput {
     /// `ZONE_FILLER::fillCopperZone`'s own unconditional keepout
     /// subtraction.
     pub keepouts: Vec<FillKeepout>,
+    /// `HOLE_CLEARANCE_CONSTRAINT` (the board's hole clearance): a
+    /// different-net pad or via hole is knocked out at `max( gap, this )`.
+    pub hole_clearance: i64,
 }
 
 /// `max_error`: the polygon-approximation tolerance for circles/arcs
@@ -207,7 +212,8 @@ where
             let gap = clearance_fn(zone_net, pad.net.as_deref()).max(zone.clearance);
             add_knockout(&mut clearance_holes, &pad.copper, gap, max_error);
             if let Some(hole) = &pad.hole {
-                add_knockout(&mut clearance_holes, hole, gap, max_error);
+                // `knockoutPadClearance`: the hole at max( gap, HOLE_CLEARANCE ).
+                add_knockout(&mut clearance_holes, hole, gap.max(input.hole_clearance), max_error);
             }
             continue;
         }
@@ -269,6 +275,10 @@ where
         if !same_net {
             let gap = clearance_fn(zone_net, via.net.as_deref()).max(zone.clearance);
             add_knockout(&mut clearance_holes, &shape, gap, max_error);
+            // `knockoutTrackClearance`: the drill at max( gap, HOLE_CLEARANCE ).
+            if via.drill > 0 {
+                add_knockout(&mut clearance_holes, &Shape::Circle { c: via.at, r: via.drill / 2 }, gap.max(input.hole_clearance), max_error);
+            }
         } else {
             // Same-net vias connect directly in a solid fill (no thermal
             // relief for vias outside hatch-pattern zones -- see the module

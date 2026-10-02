@@ -98,7 +98,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
         })
         .collect();
     let vias: Vec<FillVia> =
-        board.vias.iter().map(|v| FillVia { net: v.net.clone(), at: pt(v.at), diameter: v.diameter, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone(), layer_order: board.layers.clone() }).collect();
+        board.vias.iter().map(|v| FillVia { net: v.net.clone(), at: pt(v.at), diameter: v.diameter, drill: v.drill, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone(), layer_order: board.layers.clone() }).collect();
 
     let mut out = FillResults { zones: HashMap::new() };
     for z in &board.zones {
@@ -131,7 +131,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
         let keepouts: Vec<FillKeepout> =
             board.keepouts.iter().filter(|k| k.no_copper_pour && k.layer == z.layer).map(|k| FillKeepout { layer: k.layer.clone(), outline: k.outline.iter().map(|&p| pt(p)).collect() }).collect();
 
-        let input = FillInput { pads: pads.clone(), tracks: tracks.clone(), vias: vias.clone(), other_zones, board_outline: board_outline.clone(), keepouts };
+        let input = FillInput { pads: pads.clone(), tracks: tracks.clone(), vias: vias.clone(), other_zones, board_outline: board_outline.clone(), keepouts, hole_clearance: crate::constraints::hole_clearance_min(rules) };
         let clearance_fn = |a: Option<&str>, b: Option<&str>| crate::constraints::clearance(rules, a, b);
         let fill = fill_zone(&zone, &zone.layer, &input, clearance_fn, DEFAULT_MAX_ERROR);
         out.zones.insert(z.id.clone(), ZoneFill { fill });
