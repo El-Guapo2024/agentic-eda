@@ -6,6 +6,8 @@
 
 import type { BoardGlbResult, BoardState, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolEditorNames, SymbolLibrary, TuneLengthReply, Um } from "./types";
 
+import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
+
 export class ApiError extends Error {}
 
 async function getJson<T>(url: string): Promise<T> {
@@ -220,6 +222,22 @@ export function postFabPos(opts: FabPosOptions): Promise<FabReply> {
 
 export function postFabBom(): Promise<FabReply> {
   return postJson<FabReply>("/api/fab/bom", {});
+}
+
+// ------------------------------------------------------- schematic outputs
+//
+// crates/cli/src/sch_api.rs, backing File > Plot... (PlotSchematicDialog)
+// and File > Export > Netlist... (ExportNetlistDialog) on the Schematic
+// tab. Read-only exports -- they write into the board directory's `export/`
+// folder and never touch design.json, so there is no /api/cmd verb or undo
+// entry. Same reply shape as the fabrication endpoints above.
+
+export function postSchPlot(req: SchPlotRequest): Promise<FabReply> {
+  return postJson<FabReply>("/api/sch/plot", req);
+}
+
+export function postSchNetlist(req: SchNetlistRequest): Promise<FabReply> {
+  return postJson<FabReply>("/api/sch/netlist", req);
 }
 
 // ---------------------------------------------------------- footprint editor

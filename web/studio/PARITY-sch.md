@@ -242,6 +242,59 @@ explicit-selection scope leaving everything else untouched).
 |---|---|---|
 | Ctrl+Z/Y on the Schematic tab only ever reverts/replays that tab's own edits (a clean no-op once its own stack is empty, never a silent PCB revert) | identical | Internal fix, no KiCad source counterpart (KiCad has genuinely separate editor processes/undo buffers; this app has one shared `design.json`). `crates/ops::Domain` + `Cmd::domain`, `crates/cli/src/board.rs`'s `push_snapshot`/`pop_snapshot`/`restore_domain` (tag each undo-stack entry by domain, splice only that domain's fields back on restore), `POST /api/undo`/`/api/redo`'s new `{"domain": ...}` body, `store.tsx`'s `api.undo`/`redo` (always pass `state.tab`). Proven by `board.rs`'s `undo_redo_are_scoped_to_the_tab_that_asked` test: one PCB edit + one schematic edit, every undo/redo combination checked. `eda board undo`/`redo` (CLI, no tab concept) keep the original unscoped behavior (`scope: None`) |
 
+## 7. Plot and netlist export (`sch_plotter.cpp`, `netlist_exporter_*.cpp`)
+
+File > Plot... on the Schematic tab (`common.Control.plot`, which is shared
+with the PCB tab's Gerber plot and so dispatches by tab -- there is no
+`eeschema.EditorControl.plot` in the real action table) and File > Export >
+Netlist... (`eeschema.EditorControl.exportNetlist`) now work end to end:
+`PlotSchematicDialog.tsx`/`ExportNetlistDialog.tsx` -> `POST /api/sch/plot`/
+`/api/sch/netlist` (`crates/cli/src/sch_api.rs`) -> `eda_kicad::plot_schematic`/
+`export_netlist`, writing into the board's `export/`. Both are read-only
+exports (nothing is written to `design.json`), so there is no `/api/cmd`
+verb or undo entry. The netlist reads `ConstraintModel::nets` -- the one
+netlist of section 0, with `Design::nets` already applied -- and never
+re-derives connectivity from geometry. A board with no `schematic` section
+plots/exports the schematic the engine would derive from its intent, like
+`GET /api/schematic.svg`.
+
+The plotter is a port of KiCad's `PLOTTER` class hierarchy
+(`crates/kicad/src/plotter/`): one abstract `Plotter` trait
+(`MoveTo`/`LineTo`/`FinishTo`/`PenTo`, `Circle`, `Arc`, `Rect`, `PlotPoly`,
+`Text`, `SetColor`/`SetDash`/`SetCurrentLineWidth`), an SVG back end that
+reproduces `SVG_PLOTTER`'s lazy `<g style=...>` grouping, mm device units and
+4-digit precision, and a hand-written PDF back end that reproduces
+`PDF_PLOTTER`'s object table / deferred `/Length` / page tree / outline /
+`xref`+`trailer` layout (uncompressed streams -- KiCad's own
+`m_DebugPDFWriter` path; the workspace has no zlib). Coordinates are
+eeschema IU (0.1 um).
+
+| KiCad feature | Status | KiCad source <-> our code |
+|---|---|---|
+| Plot dialog: format, colour/B&W, drawing sheet, background colour, page size, all/current page | partial | `DIALOG_PLOT_SCHEMATIC` / `SCH_PLOT_OPTS` <-> `PlotSchematicDialog.tsx`, `kicad-port/schOutputs.ts` (`buildSchPlotRequest`, unit-tested), `sch_api::plot`, `eda_kicad::SchPlotOpts`. Not ported: PostScript/DXF/PNG formats (HPGL is gone upstream), colour-theme chooser, hop-over, PDF property popups / hierarchical links / metadata, `m_plotPages` in the dialog (the API takes `pages`), output-directory/file-name fields (always `export/`) |
+| SVG: one file per sheet, named `<root>-<sheet>-...` | identical | `SCH_PLOTTER::createSVGFiles`, `plotOneSheetSVG`, `SCHEMATIC::GetUniqueFilenameForCurrentSheet` <-> `sch_plot::plot_schematic` (`PlotFormat::Svg`) |
+| PDF: one multi-page file, one page per sheet, page bookmarks nested by hierarchy | identical | `SCH_PLOTTER::createPDFFile`, `plotOneSheetPDF`, `setupPlotPagePDF`, `PDF_PLOTTER::StartPage`/`ClosePage` outline tree <-> `sch_plot::plot_schematic` (`PlotFormat::Pdf`), `plotter/pdf.rs` |
+| Page size Auto / A4 / A and the `min( scalex, scaley )` viewport scale | identical (the IR has one paper size, A4, so "Auto" = A4) | `plotOneSheetSVG`/`setupPlotPagePDF` <-> `sch_plot::plot_page` |
+| Background rect, black-and-white colour rule (`PSLIKE_PLOTTER::SetColor`: black unless white) | identical | `plotOneSheetSVG` <-> `plot_one_sheet`, `SvgPlotter::set_color`/`PdfPlotter::set_color` |
+| Drawing sheet (frame, zone grid, title block) | identical for the default sheet; no custom `.kicad_wks` | `PlotDrawingSheet` (`common_plot_functions.cpp`), `DS_DATA_ITEM::SyncDrawItems`, `defaultDrawingSheet` <-> `sch_plot::plot_drawing_sheet` -- the real default description is embedded verbatim and parsed with `sexpr.rs`; corners, `repeat`/`incrx`/`incry`, label increment, in-page clipping and `${TITLE}`/`${REVISION}`/`${ISSUE_DATE}`/`${COMMENTn}`/`${SHEETPATH}`/`${#}`/`${##}` follow source |
+| Stroke-font text (justification, rotation, `~{overbar}`/`_{sub}`/`^{super}`, italic) | identical layout, vector output | `FONT::getLinePositions`, `drawMarkup`, `STROKE_FONT::GetTextAsGlyphs` <-> `plotter::stroke_text_segments` over `eda_drc::stroke_font::glyph_strokes`. SVG also writes the invisible `<text>` + `<g class="stroked-text"><desc>` pair as `SVG_PLOTTER::Text` does. PDF writes strokes, not `PDF_PLOTTER`'s Type3 font text, so PDF text is not selectable/searchable |
+| Item plot order: background pass, then SHEET, SYMBOL, labels, LINE, bus entries, no-connects, text, junctions last | identical, except the "overlapping symbols re-plot their fields on top" pass | `SCH_SCREEN::Plot` <-> `sch_plot::plot_screen` |
+| Wires / buses / bus entries / no-connect / junction dots | identical geometry, widths (6/12 mil), colours | `SCH_LINE::Plot`, `SCH_BUS_ENTRY_BASE::Plot`, `SCH_NO_CONNECT::Plot`, `SCH_JUNCTION::Plot` <-> `plot_wire`/`plot_bus_entry`/`plot_no_connect`/`plot_junction`. The IR stores no junctions, so the dots use the canvas' own rule (`components/schematic/junctions.ts` ported to `junction_points`) at KiCad's default 6x wire-width diameter |
+| Symbol graphics (rectangle, polyline, circle, arc, text) | partial | `LIB_SYMBOL::Plot`, `SCH_SHAPE::Plot` <-> `plot_graphic`. `SymbolGraphic::filled` is one bool, so every fill is `FILLED_SHAPE` (outline colour); KiCad's `FILLED_WITH_BG_BODYCOLOR` yellow body fill is not representable in the IR |
+| Pins: line, inverted/clock/low/non-logic decorations, NC cross, names inside / numbers above | identical shapes; one text size | `SCH_PIN::PlotPinType`/`PlotPinTexts` <-> `plot_pin_type`/`plot_pin_texts`. `LibPin` has no name/number size or hide flag (50 mil, power-symbol pins hidden) and stacked-pin number formatting is not ported |
+| Reference / Value fields | partial | `SCH_FIELD::Plot` <-> `plot_symbol`. The IR carries no per-field position/size/visibility: Reference sits above the body, Value below, centred, 50 mil (what the canvas does); Footprint/Datasheet are never drawn |
+| Power symbols | partial | `SCH_SYMBOL::Plot` of a power symbol <-> `plot_power_symbol`; the Value text goes on the side the body extends to |
+| Labels (local / global / hierarchical) | partial | `SCH_LABEL_BASE::Plot` <-> `plot_label`. Text offset (`GetSchematicTextOffset`) and colours follow source; spin is inferred from the attached wire (the IR stores none); global/hierarchical flags are a simplified outline, not `CreateGraphicShape` |
+| Free text, hierarchical sheet box + name/file fields + pin names | partial | `SCH_TEXT::Plot`, `SCH_SHEET::Plot` (background + border, quirk included) <-> `plot_free_text`, `plot_sheet`; sheet pins draw their name, not the shape glyph |
+| DNP cross-out, local-power icon, text boxes / tables / images, rule areas, variants, hop-over, per-symbol bookmarks, hyperlinks | missing | `SCH_SYMBOL::PlotDNP`/`PlotLocalPowerIconShape`, `SCH_TEXTBOX`/`SCH_TABLE`/`SCH_BITMAP::Plot`, `PDF_PLOTTER::Bookmark`/`HyperlinkBox`/`HyperlinkMenu` |
+| Netlist: KiCad `.net` s-expression (`export (version "E")`) | identical structure | `NETLIST_EXPORTER_KICAD::Format`, `XNODE::Format`, `KICAD_FORMAT::Prettify` <-> `netlist::export_netlist` (`NetlistFormat::Kicad`), `XNode::format`, `netlist::prettify` (tab-indented like the real file) |
+| Netlist: generic `.xml` | identical structure | `NETLIST_EXPORTER_XML::WriteNetlist` (`wxXmlDocument::Save`) <-> `NetlistFormat::Xml`, `XNode::write_xml` |
+| Sections: `design` (+ one `sheet`/`title_block` per hierarchy sheet), `components`, `groups`+`variants` (`.net` only), `libparts`, `libraries`, `nets` | identical order; groups/variants empty | `makeRoot`, `makeDesignHeader`, `makeSymbols`, `makeGroups`, `makeVariants`, `makeLibParts`, `makeLibraries`, `makeListOfNets` <-> `netlist.rs`. `libraries` lists a library only when the installed `.kicad_sym` is found (`GetFullURI`) |
+| Component ordering, `#` references skipped, multi-unit reference emitted once, `units`/`tstamps`/`sheetpath`/`libsource`/`fields`/`property` | identical | `makeSymbols`, `addSymbolFields`, `NETLIST_EXPORTER_BASE::findNextSymbol` <-> `make_symbols`. The IR has no per-symbol UUID: `tstamps` use the same `duid("sym:<ref>")` the `.kicad_sch` export writes; `MPN`/`LCSC` are emitted as user fields; library `in_bom`/`on_board` give `exclude_from_bom`/`exclude_from_board` (and `.net` skips off-board symbols as `GNL_OPT_KICAD` does) |
+| Net order and codes, node order, duplicate removal, `pinfunction`, `pintype`, `+no_connect`, net class | identical | `makeListOfNets` <-> `make_list_of_nets`: nets sorted by `StrNumCmp(name)`, `code = index + 1` over the sorted list (nets with only `#` pins are skipped and leave a gap, as in source), nodes by ref then pin number, duplicates dropped, `pinfunction = <name>_<number>` only for named pins, `class` = the board's net class (else `Default`) |
+| Pins no net names | identical naming | `SCH_PIN::GetDefaultNetName` <-> `default_net_name`: `Net-(R1-Pad2)` / `unconnected-(U1-NC-Pad5)` single-node nets |
+| Spice / Cadstar / OrcadPCB2 / Allegro / PADS exporters, netlist plugins/commands, component classes, text variables, variants | missing | `netlist_exporter_spice.cpp`, `_cadstar.cpp`, `_orcadpcb2.cpp`, `_allegro.cpp`, `_pads.cpp` |
+
 ## Manual click-through needed
 
 The in-app browser pane could not be used this session (hidden pane, per
@@ -423,3 +476,31 @@ click through:
     no dot and are not merged onto one net -- this is correct,
     unchanged, real-KiCad-matching behavior, not something this session's
     fix should have altered.
+22. Plot and netlist export (section 7). Open the Schematic tab on a board
+    with a few symbols, wires and a power symbol. File > Plot...: confirm
+    the dialog opens (and that on the PCB tab the same menu item still
+    opens the Gerber Plot dialog). Choose SVG + Color + Plot drawing sheet
+    and click Plot: the result box should list `export/<board>.svg`; open
+    that file in a browser -- the A4 frame with zone letters/numbers and
+    the title block (Title/Rev/Date/Sheet/File/Id) should be there, wires
+    green, symbol bodies/pins dark red, pin names/numbers and
+    Reference/Value text legible, junction dots at T points. Re-plot as
+    Black and white and confirm everything is black, with no page-colour
+    fill; untick "Plot drawing sheet" and confirm the frame is gone. Choose
+    PDF: `export/<board>.pdf` should open in a PDF viewer with one page per
+    sheet (check a hierarchical board: one page per sheet, and the
+    viewer's bookmark panel shows the sheet tree). On a hierarchical board
+    choose "Plot current page only" while viewing a child sheet and
+    confirm only `<board>-<sheet>.svg` is written. File > Export >
+    Netlist...: export KiCad and then XML and open the files -- the `.net`
+    should start `(export` / `(version "E")`, list `components` sorted by
+    reference and `nets` sorted by name numbered from 1; import it in
+    KiCad's PCB editor (File > Import > Netlist) to confirm it is
+    accepted. Confirm no undo entry is created by either export (Ctrl+Z
+    after exporting reverts your previous *edit*, not the export), and
+    that editing the schematic (e.g. a label that merges two nets) and
+    re-exporting changes the netlist accordingly.
+    Not run this session: the frontend was verified by `tsc --noEmit`
+    (no errors in the touched files; react types are not installed so the
+    rest is filtered noise) and `schOutputs.test.ts` only -- the dialogs
+    themselves were never rendered in a browser.

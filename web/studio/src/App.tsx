@@ -40,6 +40,8 @@ import { SymbolChooserDialog } from "./components/SymbolChooserDialog";
 import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
 import { PlotDialog } from "./components/PlotDialog";
+import { PlotSchematicDialog } from "./components/PlotSchematicDialog";
+import { ExportNetlistDialog } from "./components/ExportNetlistDialog";
 import { GenerateDrillDialog } from "./components/GenerateDrillDialog";
 import { FootprintPositionDialog } from "./components/FootprintPositionDialog";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
@@ -199,6 +201,8 @@ function StudioFrame() {
       <SymbolPropertiesDialog />
       <AnnotateDialog />
       <PlotDialog />
+      <PlotSchematicDialog />
+      <ExportNetlistDialog />
       <GenerateDrillDialog />
       <FootprintPositionDialog />
     </div>

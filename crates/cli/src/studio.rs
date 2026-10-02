@@ -24,6 +24,7 @@ use crate::board_stats;
 use crate::cleanup_api;
 use crate::fab_api;
 use crate::route_api;
+use crate::sch_api;
 use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::{LabelSide, Shape, Side};
@@ -681,6 +682,12 @@ fn handle(
         ("POST", "/api/fab/drill") => respond(stream, "200 OK", "application/json", fab_api::drill(dir, &body).to_string().as_bytes()),
         ("POST", "/api/fab/pos") => respond(stream, "200 OK", "application/json", fab_api::pos(dir, &body).to_string().as_bytes()),
         ("POST", "/api/fab/bom") => respond(stream, "200 OK", "application/json", fab_api::bom(dir).to_string().as_bytes()),
+        // Schematic outputs (File > Plot... / File > Export > Netlist...):
+        // `crate::sch_api` runs `eda_kicad::plot_schematic` (SCH_PLOTTER) and
+        // `eda_kicad::export_netlist` (NETLIST_EXPORTER_*) and writes into
+        // `<dir>/export/`, same contract as `/api/fab/*` above.
+        ("POST", "/api/sch/plot") => respond(stream, "200 OK", "application/json", sch_api::plot(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sch/netlist") => respond(stream, "200 OK", "application/json", sch_api::netlist(dir, &body).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }

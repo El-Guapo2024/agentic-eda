@@ -116,6 +116,24 @@ fn get_glyph(codepoint: u32) -> Glyph {
     }
 }
 
+/// One decoded Newstroke glyph for callers outside this crate that lay out
+/// text themselves (the schematic plotter, `eda_kicad::plotter`, ports
+/// `STROKE_FONT::GetTextAsGlyphs`' markup/cursor logic on top of this):
+/// the advance width and the pen-down runs, both in font-design units
+/// (multiply by the text size). Same fallback to `?` as [`get_glyph`].
+pub struct GlyphStrokes {
+    /// Advance width (`STROKE_GLYPH::BoundingBox().GetEnd().x`).
+    pub width: f64,
+    /// Pen-down runs, y-down with the baseline at y = 0.
+    pub strokes: Vec<Vec<(f64, f64)>>,
+}
+
+/// Public view of [`get_glyph`] -- see [`GlyphStrokes`].
+pub fn glyph_strokes(codepoint: u32) -> GlyphStrokes {
+    let g = get_glyph(codepoint);
+    GlyphStrokes { width: g.width, strokes: g.strokes }
+}
+
 /// World-space pen-stroke segments for `text`, set at `size_um` and
 /// anchored (baseline-left, before `justify`) at `anchor` -- the same
 /// convention `web/studio`'s canvas painter uses for free board text

@@ -50,6 +50,14 @@ pub use hierarchy::flatten as flatten_hierarchy;
 mod bus;
 pub use bus::{expand_bus_members, is_bus_name};
 
+pub mod plotter;
+
+mod sch_plot;
+pub use sch_plot::{plot_schematic, sheet_list, LibResolver, PageSizeSelect, PlotFile, PlotFormat, PlotMeta, SchPlotOpts, SheetEntry};
+
+mod netlist;
+pub use netlist::{export_netlist, NetlistFormat, NetlistMeta};
+
 const STUB_MM: f64 = 1.27;
 
 /// Fixed provenance for the title block. Passed explicitly (never system
