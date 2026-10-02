@@ -67,6 +67,19 @@ pub use item::{DrcRefItem, DrcViolation, ErrorType, FixHint, Severity};
 /// keepouts -- task item 3), followed by
 /// the placement-quality providers ported in from `eda_gates::pcb`.
 pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
+    run_with(design, model, None)
+}
+
+/// A replacement for the built-in dangling check: `eda_connectivity`
+/// supplies its port of `CONNECTIVITY_DATA::TestTrackEndpointDangling`
+/// (the real connectivity graph, per-layer via rule) through
+/// `eda_connectivity::run_drc` -- this crate can't depend on it directly
+/// (`eda_connectivity` depends on this crate for zone fills).
+pub type DanglingCheck<'a> = &'a dyn Fn(&Design, &ConstraintModel) -> Vec<DrcViolation>;
+
+/// [`run`], with the dangling-track/via check optionally swapped for the
+/// connectivity graph's own.
+pub fn run_with(design: &Design, model: &ConstraintModel, dangling: Option<DanglingCheck>) -> Vec<DrcViolation> {
     let b = board::build(design, model);
     let rules = &model.board;
 
@@ -80,7 +93,10 @@ pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     out.extend(providers::courtyard::check(&b));
     out.extend(providers::silk_mask::check(&b, rules));
     out.extend(providers::text_dims::check(&b, rules));
-    out.extend(providers::dangling::check(&b));
+    match dangling {
+        Some(f) => out.extend(f(design, model)),
+        None => out.extend(providers::dangling::check(&b)),
+    }
     out.extend(providers::disallow::check(&b, rules));
     out.extend(providers::outline::check(design, model));
     out.extend(providers::schematic_parity::check(design, model));

@@ -44,6 +44,38 @@ pub use items::{CnItem, ItemRef};
 pub use ratsnest::{compute_ratsnest, RatsnestEdge};
 pub use teardrop::generate_teardrops;
 
+/// `eda_drc::run` with `DRCE_DANGLING_TRACK`/`DRCE_DANGLING_VIA` answered
+/// by this crate's port of `CONNECTIVITY_DATA::TestTrackEndpointDangling`
+/// over the real connectivity graph (zone fills, the per-layer via rule)
+/// -- what `drc_test_provider_connectivity.cpp` does -- instead of
+/// `eda_drc`'s geometric stand-in.
+pub fn run_drc(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<eda_drc::DrcViolation> {
+    eda_drc::run_with(design, model, Some(&dangling_violations))
+}
+
+fn dangling_violations(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<eda_drc::DrcViolation> {
+    use eda_drc::{DrcRefItem, DrcViolation, ErrorType};
+    let graph = build_graph(design, model);
+    let rt = design.routing.as_ref();
+    let net_label = |n: &str| if n.is_empty() { "<no net>".to_string() } else { n.to_string() };
+    dangling_tracks_and_vias(&graph)
+        .into_iter()
+        .map(|d| match d.kind {
+            DanglingKind::Track => {
+                let base = d.id.split('#').next().unwrap_or(&d.id);
+                let layer = rt.and_then(|rt| rt.tracks.iter().find(|t| t.id == base)).map(|t| t.layer.clone()).unwrap_or_default();
+                let id = if d.id.contains('#') { d.id.clone() } else { format!("{}#0", d.id) };
+                DrcViolation::new(ErrorType::TrackDangling, "", vec![DrcRefItem { description: format!("Track [{}] on {layer}", net_label(&d.net)), pos: (d.at.x, d.at.y), id }])
+            }
+            DanglingKind::Via => {
+                let v = rt.and_then(|rt| rt.vias.iter().find(|v| v.id == d.id));
+                let span = v.map(|v| format!("{}-{}", v.from_layer, v.to_layer)).unwrap_or_default();
+                DrcViolation::new(ErrorType::ViaDangling, "", vec![DrcRefItem { description: format!("Via [{}] on {span}", net_label(&d.net)), pos: (d.at.x, d.at.y), id: d.id.clone() }])
+            }
+        })
+        .collect()
+}
+
 use eda_model::ir::Design;
 use eda_model::{CheckResult, ConstraintModel};
 

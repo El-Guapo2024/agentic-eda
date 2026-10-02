@@ -48,7 +48,7 @@ fn our_counts(pcb: &Path) -> Result<BTreeMap<String, usize>, String> {
         eda_kicad::merge_custom_rules(&mut model, &dru);
     }
     let mut out = BTreeMap::new();
-    for v in eda_drc::run(&design, &model) {
+    for v in eda_connectivity::run_drc(&design, &model) {
         if OUR_NON_KICAD_TYPES.contains(&v.error_type) {
             continue;
         }
@@ -143,7 +143,7 @@ fn dump_type() {
         eda_kicad::merge_custom_rules(&mut model, &dru);
     }
     let limit: usize = std::env::var("PARITY_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
-    let all: Vec<_> = eda_drc::run(&design, &model).into_iter().filter(|v| v.error_type == ty).collect();
+    let all: Vec<_> = eda_connectivity::run_drc(&design, &model).into_iter().filter(|v| v.error_type == ty).collect();
     println!("{} {} violations", all.len(), ty);
     for v in all.iter().take(limit) {
         println!("{} | {}", v.description, v.items.iter().map(|i| format!("{} @({},{}) [{}]", i.description, i.pos.0, i.pos.1, i.id)).collect::<Vec<_>>().join(" ; "));

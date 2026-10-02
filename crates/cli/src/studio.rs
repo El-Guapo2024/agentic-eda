@@ -1557,7 +1557,7 @@ fn erc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 
 fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    let found = eda_drc::run(&design, &model);
+    let found = eda_connectivity::run_drc(&design, &model);
     let counts = eda_drc::counts_by_type(&found);
     let violations: Vec<Value> = found
         .iter()

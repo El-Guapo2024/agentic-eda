@@ -548,6 +548,7 @@ name = "eda-drc"
 version = "0.1.0"
 dependencies = [
  "eda-clipper2",
+ "eda-connectivity",
  "eda-engine",
  "eda-freeroute",
  "eda-kicad",

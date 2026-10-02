@@ -113,7 +113,7 @@ fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
 /// the run (matching KiCad's own default severities -- see
 /// `eda_drc::item`); an `error` does.
 fn print_drc(d: &eda_model::ir::Design, model: &ConstraintModel) -> bool {
-    let violations = eda_drc::run(d, model);
+    let violations = eda_connectivity::run_drc(d, model);
     let errors = violations.iter().filter(|v| v.severity == eda_drc::Severity::Error).count();
     let warnings = violations.len() - errors;
     println!("drc: {} violations, {errors} error, {warnings} warning", violations.len());
