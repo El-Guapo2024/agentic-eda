@@ -402,9 +402,31 @@ impl Shape {
         if bx1 < ox0 || ox1 < bx0 || by1 < oy0 || oy1 < by0 {
             return None;
         }
-        let (actual, pos) = self.clearance_to(other);
-        if actual == 0 || actual < clearance {
-            Some((actual, pos))
+        // Decided on squared distances, as `SHAPE::Collide` does
+        // (`dist_sq < SEG::Square( clearance + radii )`): taking an
+        // integer root first would round a 199.6 µm gap down to 199 and
+        // flag it against a 200 µm clearance.
+        let (c1, c2) = (self.core(), other.core());
+        if c1.contains_point(c2.probe_point()) || c2.contains_point(c1.probe_point()) {
+            return Some((0, c1.probe_point()));
+        }
+        let (segs1, segs2) = (c1.boundary_segs(), c2.boundary_segs());
+        let mut best_sq = i128::MAX;
+        let mut best_pt = segs1[0].a;
+        for s1 in &segs1 {
+            for s2 in &segs2 {
+                let d = s1.sq_distance_to_seg(s2);
+                if d < best_sq {
+                    best_sq = d;
+                    best_pt = s1.nearest_point(s2.nearest_point(s1.a));
+                }
+            }
+        }
+        let reach = (self.radius() + other.radius()) as i128;
+        let need = reach + clearance.max(0) as i128;
+        if best_sq <= reach * reach || best_sq < need * need {
+            let actual = (isqrt(best_sq) - self.radius() - other.radius()).max(0);
+            Some((actual, best_pt))
         } else {
             None
         }
