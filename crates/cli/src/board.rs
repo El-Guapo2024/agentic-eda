@@ -482,7 +482,9 @@ fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<Snapshot> {
         let name = p.file_stem()?.to_str()?; // "<timestamp>.<tag>"
         let tag = name.rsplit('.').next()?;
         let domain = match tag {
-            FILE_TAG => return Some(None), // a whole-design step matches every scope
+            // A whole-design step matches the board's own scopes; the
+            // library editors keep their own local history, as in KiCad.
+            FILE_TAG => return (!matches!(scope, Some(Domain::FootprintEditor | Domain::SymbolEditor))).then_some(None),
             "schematic" => Domain::Schematic,
             "footprint_editor" => Domain::FootprintEditor,
             "symbol_editor" => Domain::SymbolEditor,
@@ -600,7 +602,13 @@ fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
 }
 
 fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckResult>> {
-    let (meta, design, mut model) = load(dir)?;
+    let (meta, mut design, mut model) = load(dir)?;
+    // The studio shows a board with no stored schematic as the one derived
+    // from its intent; the first schematic edit stores that derived one, so
+    // editing what is on screen works (an undo goes back to "none stored").
+    if cmd.domain() == Domain::Schematic && design.schematic.is_none() {
+        design.schematic = eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic;
+    }
     let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
     let before = all_failures(&board, &model);
     let was = board.fork();
