@@ -31,6 +31,16 @@ import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from 
 import { GRID_OPTIONS_UM } from "../components/Toolbar";
 import { computeDragAttachment } from "../components/schematic/wireAttachment";
 import { findNextMatch } from "../components/schematic/findNavigation";
+import { resolveLibSymbol } from "../components/schematic/libSymbol";
+import { symbolBounds } from "../components/schematic/painter";
+import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
+import { alignToGrid } from "../kicad-port/gridSnap";
+import { alignAxis, alignDeltas, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
+import { netAtPoint } from "../kicad-port/schNetAtPoint";
+import { selectConnection, selectNodeAt } from "../kicad-port/schConnection";
+import { goBack, goForward } from "../kicad-port/navHistory";
+import { nextLineMode, LINE_MODE_FREE, LINE_MODE_90, LINE_MODE_45 } from "../kicad-port/schLineMode";
+import { useSymApi } from "../state/symbolEditorStore";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -46,6 +56,7 @@ export function useActionRunner() {
   const api = useStudioApi();
   const dispatch = useStudioDispatch();
   const state = useStudioState();
+  const symApi = useSymApi();
 
   const registry = useMemo(() => {
     const m = new Map<string, () => void>();
@@ -1020,8 +1031,182 @@ export function useActionRunner() {
     // directly; confirming a choice there is what arms `sch_place_symbol`.
     m.set("eeschema.InteractiveDrawing.placeSymbol", schematicOnly(() => dispatch({ type: "SET_SYMBOL_CHOOSER_OPEN", open: true })));
 
+    // ===================================================================
+    // eeschema parity block (UI-ACTIONS.md "eeschema: not handled").
+    // Everything between here and `return m` is the schematic-parity port;
+    // each registration cites its source function.
+    // ===================================================================
+    const sch = state.schematic;
+    const schConnInput = () => ({
+      wires: (sch?.wires ?? []).map((w) => ({ id: w.id, pts: w.pts, bus: w.bus })),
+      labels: (sch?.labels ?? []).map((l) => ({ id: l.id, at: l.at })),
+      pinPoints: [
+        ...(sch?.symbols ?? []).flatMap((s) => resolveLibSymbol(s, sch!.lib_symbols)?.pins.map((p) => p.tip) ?? []),
+        ...(sch?.power_symbols ?? []).map((ps) => ps.at),
+      ] as [number, number][],
+      noConnectPoints: (sch?.no_connects ?? []).map((n) => [n.at[0], n.at[1]] as [number, number]),
+    });
+    const cursorSnapped = (): [number, number] | null => {
+      if (!state.cursorUm) return null;
+      const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, SCH_GRID_UM, { x: 0, y: 0 }, { ctrlOrCmd: false });
+      return [p.x, p.y];
+    };
+
+    // `\`` -- SCH_EDITOR_CONTROL::HighlightNet (sch_editor_control.cpp ->
+    // highlightNet(toolMgr, cursorPos)): highlight the net of the
+    // connectable item under the cursor; nothing there clears it.
+    m.set(
+      "eeschema.EditorControl.highlightNet",
+      schematicOnly(() => {
+        const c = cursorSnapped();
+        if (!sch || !c) return;
+        const net = netAtPoint(
+          sch.wires,
+          [...sch.labels.map((l) => ({ net: l.net, at: l.at })), ...sch.power_symbols.map((p) => ({ net: p.net, at: p.at }))],
+          c[0],
+          c[1],
+          400 / state.schematicView.scale
+        );
+        dispatch({ type: "SET_NET_HIGHLIGHT", net });
+      })
+    );
+    // `~` -- SCH_EDITOR_CONTROL::ClearHighlight: highlightNet(toolMgr, CLEAR).
+    m.set("eeschema.EditorControl.clearHighlight", schematicOnly(() => dispatch({ type: "SET_NET_HIGHLIGHT", net: null })));
+
+    // Shift+Space -- SCH_EDITOR_CONTROL::NextLineMode: line_mode =
+    // (line_mode + 1) % LINE_MODE_COUNT (kicad-port/schLineMode.ts).
+    m.set("eeschema.EditorControl.lineModeNext", schematicOnly(() => dispatch({ type: "SET_SCH_LINE_MODE", mode: nextLineMode(state.schLineMode) })));
+    // SCH_EDITOR_CONTROL::ChangeLineMode (lineModeFree / lineMode90 /
+    // lineMode45; source's 90-degree action is spelled `lineModeOrthonal`
+    // in actions.json).
+    m.set("eeschema.EditorControl.lineModeFree", schematicOnly(() => dispatch({ type: "SET_SCH_LINE_MODE", mode: LINE_MODE_FREE })));
+    m.set("eeschema.EditorControl.lineModeOrthonal", schematicOnly(() => dispatch({ type: "SET_SCH_LINE_MODE", mode: LINE_MODE_90 })));
+    m.set("eeschema.EditorControl.lineMode45", schematicOnly(() => dispatch({ type: "SET_SCH_LINE_MODE", mode: LINE_MODE_45 })));
+    // SCH_EDITOR_CONTROL::OnAngleSnapModeChanged: only refreshes the
+    // toolbar's selected line-mode button; the toolbar here reads
+    // `state.schLineMode` directly, so there is nothing further to do.
+    m.set("eeschema.EditorControl.angleSnapModeChanged", schematicOnly(() => {}));
+
+    // `/` -- SCH_LINE_WIRE_BUS_TOOL::doDrawSegments's
+    // `switchSegmentPosture` branch: `posture = !posture` while a wire
+    // with >= 2 segments is being drawn, then the break point is
+    // recomputed (here: the preview recomputes from `state.schPosture`).
+    m.set(
+      "eeschema.InteractiveDrawingLineWireBus.switchPosture",
+      schematicOnly(() => {
+        if (state.drawState?.kind !== "wire") return;
+        dispatch({ type: "TOGGLE_SCH_POSTURE" });
+      })
+    );
+
+    // Ctrl+4 -- SCH_SELECTION_TOOL::SelectConnection (staged
+    // junction -> pin -> never expansion; kicad-port/schConnection.ts).
+    m.set(
+      "eeschema.InteractiveSelection.SelectConnection",
+      schematicOnly(() => {
+        if (!sch || state.selection.size === 0) return;
+        dispatch({ type: "SET_SELECTION", refs: selectConnection(schConnInput(), [...state.selection]) });
+      })
+    );
+    // Alt+3 -- SCH_SELECTION_TOOL::SelectNode: SelectPoint(cursor,
+    // connectedTypes), the connectable items at the cursor.
+    m.set(
+      "eeschema.InteractiveSelection.SelectNode",
+      schematicOnly(() => {
+        const c = cursorSnapped();
+        if (!sch || !c) return;
+        dispatch({ type: "SET_SELECTION", refs: selectNodeAt(schConnInput(), c) });
+      })
+    );
+
+    // Alt+Left / Alt+Right -- SCH_NAVIGATE_TOOL::Back / Forward
+    // (kicad-port/navHistory.ts): step m_navIndex, clear the selection,
+    // and switch to that sheet WITHOUT pushing a new history entry.
+    const navStep = (dir: "back" | "forward") =>
+      schematicOnly(() => {
+        const next = dir === "back" ? goBack(state.schNav) : goForward(state.schNav);
+        if (!next) return; // source: wxBell()
+        dispatch({ type: "SET_SCH_NAV", nav: next });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+        void api.navigateToSheet(next.entries[next.index]!, false);
+      });
+    m.set("eeschema.NavigateTool.back", navStep("back"));
+    m.set("eeschema.NavigateTool.forward", navStep("forward"));
+
+    // Ctrl+H -- SCH_EDITOR_CONTROL::ShowHierarchy (sch_editor_control.cpp)
+    // shows/raises the Hierarchy Navigator pane; HierarchyPanel is always
+    // docked here, so this brings it into view and focuses it.
+    m.set(
+      "eeschema.EditorTool.showHierarchy",
+      schematicOnly(() => {
+        const el = document.getElementById("hierarchy-panel");
+        el?.scrollIntoView({ block: "nearest" });
+        el?.focus();
+      })
+    );
+
+    // Ctrl+E / Ctrl+Shift+E -- SCH_EDITOR_CONTROL::EditWithSymbolEditor
+    // (editWithSymbolEditor, and editLibSymbolWithSymbolEditor which
+    // routes through the same function): open the selected symbol's
+    // library entry in the Symbol Editor. This IR has one symbol library
+    // (no separate schematic-local copy), so both open the same entry.
+    // An unresolvable lib_id starts a blank symbol named after the
+    // reference (`Cmd::OpenSymbolForEdit`'s own precedent).
+    const editInSymbolEditor = schematicOnly(() => {
+      if (state.selection.size !== 1) return;
+      const id = [...state.selection][0]!;
+      const sym = sch?.symbols.find((s) => s.id === id);
+      if (!sym) return;
+      const libId = sym.lib_id && sym.lib_id.trim() ? sym.lib_id : `eda:${sym.id}`;
+      dispatch({ type: "SET_TAB", tab: "symbol" });
+      void symApi.openSymbol(libId);
+    });
+    m.set("eeschema.EditorControl.editWithSymbolEditor", editInSymbolEditor);
+    m.set("eeschema.EditorControl.editLibSymbolWithSymbolEditor", editInSymbolEditor);
+
+    // SCH_ACTIONS::alignLeft/Right/Top/Bottom/CenterX/CenterY
+    // (eeschema/tools/sch_edit_tool.cpp -> ALIGN_DISTRIBUTE_TOOL) --
+    // same per-edge math as PCB (kicad-port/alignDistribute.ts) over the
+    // selected symbols' bounding boxes. Symbols only; wires/labels are
+    // attached geometry here and are not aligned independently.
+    const alignSymbols = (edge: AlignEdge) =>
+      schematicOnly(() => {
+        if (!sch) return;
+        const syms = sch.symbols.filter((s) => state.selection.has(s.id));
+        if (syms.length < 2) return;
+        const boxes: Box[] = syms.map((s) => {
+          const b = symbolBounds(s, sch.lib_symbols);
+          return [b.minX, b.minY, b.maxX, b.maxY];
+        });
+        const deltas = alignDeltas(boxes, edge);
+        const axis = alignAxis(edge);
+        syms.forEach((s, i) => {
+          const d = deltas[i]!;
+          if (d !== 0) void api.commitMove([s.id], axis === "x" ? d : 0, axis === "y" ? d : 0, "symbol");
+        });
+      });
+    m.set("eeschema.Align.alignLeft", alignSymbols("left"));
+    m.set("eeschema.Align.alignRight", alignSymbols("right"));
+    m.set("eeschema.Align.alignTop", alignSymbols("top"));
+    m.set("eeschema.Align.alignBottom", alignSymbols("bottom"));
+    m.set("eeschema.Align.alignCenterX", alignSymbols("centerX"));
+    m.set("eeschema.Align.alignCenterY", alignSymbols("centerY"));
+    // SCH_EDIT_TOOL::AlignToGrid: round each selected item's anchor to the
+    // grid (symbols only here; each is one undoable move_symbol Cmd).
+    m.set(
+      "eeschema.AlignToGrid",
+      schematicOnly(() => {
+        if (!sch) return;
+        for (const s of sch.symbols) {
+          if (!state.selection.has(s.id)) continue;
+          const p = alignToGrid({ x: s.at[0], y: s.at[1] }, SCH_GRID_UM, { x: 0, y: 0 }, { ctrlOrCmd: false });
+          if (p.x !== s.at[0] || p.y !== s.at[1]) void api.commitMove([s.id], p.x - s.at[0], p.y - s.at[1], "symbol");
+        }
+      })
+    );
+
     return m;
-  }, [api, dispatch, state]);
+  }, [api, dispatch, state, symApi]);
 
   // `registry.has(name)` alone used to be the whole check, but the
   // registry holds EVERY action's handler regardless of tab (every

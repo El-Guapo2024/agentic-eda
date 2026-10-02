@@ -34,7 +34,7 @@ export function HierarchyPanel() {
   };
 
   return (
-    <div className="panel-section">
+    <div className="panel-section" id="hierarchy-panel" tabIndex={-1}>
       <h3>Hierarchy</h3>
       <div className={`unplaced-row${atRoot ? " armed" : ""}`} style={{ cursor: atRoot ? "default" : "pointer" }} onClick={() => !atRoot && goTo(0)} title={atRoot ? undefined : "Go to root sheet"}>
         <b>Root</b>

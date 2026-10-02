@@ -33,6 +33,7 @@ import { alignToGrid } from "../kicad-port/gridSnap";
 import { isMac } from "../platform";
 import { computeDragAttachment } from "./schematic/wireAttachment";
 import { nextReference } from "../kicad-port/nextReference";
+import { wireTail } from "../kicad-port/schLineMode";
 import { collectBoxSelection } from "./schematic/boxSelection";
 import "../styles/canvas.css";
 
@@ -204,6 +205,8 @@ export function SchematicView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const userMovedRef = useRef(false);
+  /** Previous wire-preview elbow, for computeBreakPoint's "maintain current line shape" hint (kicad-port/schLineMode.ts). */
+  const elbowRef = useRef<{ mid: readonly [number, number]; end: readonly [number, number] } | null>(null);
   /** The plain-click/drag symbol-drag distinguisher's deferred click (see DragState's own "move" kind doc) -- set only for a click that keeps a multi-selection's whole group for a potential drag, same as Canvas.tsx's own `pendingClickRef`. */
   const pendingClickRef = useRef<string | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -280,7 +283,16 @@ export function SchematicView() {
     });
     paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercSelected: state.ercSelected });
     if (state.drawState?.kind === "wire") {
-      const pts = state.cursorUm ? [...state.drawState.pts, [state.cursorUm.x, state.cursorUm.y] as [number, number]] : state.drawState.pts;
+      // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the
+      // rubber band from the last click to the cursor is two segments (an
+      // elbow) in LINE_MODE_90/45, one straight segment in LINE_MODE_FREE.
+      let pts = state.drawState.pts;
+      if (state.cursorUm) {
+        const c = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false });
+        const tail = wireTail(pts[pts.length - 1]!, [c.x, c.y], state.schLineMode, state.schPosture, elbowRef.current);
+        elbowRef.current = tail.length === 2 ? { mid: tail[0]!, end: tail[1]! } : null;
+        pts = [...pts, ...(tail as [number, number][])];
+      }
       // GAPS.md #20: the bus tool shares this exact preview (same
       // `DrawState` kind), colored to match whichever is actually armed.
       ctx.strokeStyle = layerColor(state.activeTool === "bus" ? "LAYER_BUS" : "LAYER_WIRE");
@@ -302,7 +314,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercSelected, state.activeTool]);
+  }, [sch, displaySch, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercSelected, state.activeTool]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -352,7 +364,9 @@ export function SchematicView() {
             dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [snapped] } });
             return;
           }
-          const next = { ...draw, pts: [...draw.pts, snapped] as [number, number][] };
+          const tail = wireTail(draw.pts[draw.pts.length - 1]!, snapped, state.schLineMode, state.schPosture, elbowRef.current);
+          elbowRef.current = null;
+          const next = { ...draw, pts: [...draw.pts, ...(tail as [number, number][])] };
           // sch_screen.cpp IsTerminalPoint, simplified: landing back on a
           // pin auto-finishes the wire, same as a real click on a pin/
           // junction/other wire does in source -- this app only checks

@@ -9,6 +9,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
+import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
+import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
@@ -386,6 +388,12 @@ export interface StudioState {
   /** Refs to flash/outline because a problem in the panel references them. */
   hot: Set<string>;
   netHighlight: string | null;
+  /** eeschema wire/bus Line Mode (eeschema_settings.h LINE_MODE; `m_Drawing.line_mode`, default LINE_MODE_90) -- see kicad-port/schLineMode.ts. */
+  schLineMode: LineMode;
+  /** doDrawSegments' `static bool posture` (the `/` hotkey, SCH_ACTIONS::switchSegmentPosture). */
+  schPosture: boolean;
+  /** SCH_NAVIGATE_TOOL::m_navHistory/m_navIndex (Alt+Left/Alt+Right). */
+  schNav: NavHistory;
   /** An unplaced part ref chosen from the panel, waiting for a canvas click to place it. */
   armed: string | null;
   movePreview: MovePreview | null;
@@ -661,6 +669,9 @@ const initialState: StudioState = {
   enteredGroupId: null,
   hot: new Set(),
   netHighlight: null,
+  schLineMode: 1,
+  schPosture: false,
+  schNav: initialNavHistory(),
   armed: null,
   movePreview: null,
   activeTool: "select",
@@ -753,7 +764,10 @@ export type Action =
   | { type: "BOARD_ERR"; message: string }
   | { type: "VERSION"; version: string }
   | { type: "SET_TAB"; tab: EditorTab }
-  | { type: "SET_SHEET_PATH"; path: string[] }
+  | { type: "SET_SHEET_PATH"; path: string[]; /** false = do not push onto the Back/Forward history (Back/Forward themselves). Default true. */ record?: boolean }
+  | { type: "SET_SCH_NAV"; nav: NavHistory }
+  | { type: "SET_SCH_LINE_MODE"; mode: LineMode }
+  | { type: "TOGGLE_SCH_POSTURE" }
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
   | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
@@ -892,7 +906,13 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_TAB":
       return { ...state, tab: action.tab };
     case "SET_SHEET_PATH":
-      return { ...state, currentSheetPath: action.path };
+      return { ...state, currentSheetPath: action.path, schNav: action.record === false ? state.schNav : pushToHistory(state.schNav, action.path) };
+    case "SET_SCH_NAV":
+      return { ...state, schNav: action.nav };
+    case "SET_SCH_LINE_MODE":
+      return { ...state, schLineMode: action.mode };
+    case "TOGGLE_SCH_POSTURE":
+      return { ...state, schPosture: !state.schPosture };
     case "SET_RIGHT_DOCK_TAB":
       return { ...state, rightDockTab: action.tab };
     case "SET_VIEWER3D_OPTIONS":
@@ -1173,7 +1193,7 @@ export interface StudioApi {
   commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
   /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
-  navigateToSheet: (path: string[]) => Promise<void>;
+  navigateToSheet: (path: string[], record?: boolean) => Promise<void>;
   route: () => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
@@ -1613,8 +1633,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const ok = await runCmd({ op: "place_at", part: ref, x: xUm, y: yUm });
       if (ok) dispatch({ type: "SET_SELECTION", refs: [ref] });
     },
-    navigateToSheet: async (path) => {
-      dispatch({ type: "SET_SHEET_PATH", path });
+    navigateToSheet: async (path, record = true) => {
+      dispatch({ type: "SET_SHEET_PATH", path, record });
       // Clearing the selection/net-highlight on navigation matches real
       // eeschema's own `SCH_SHEET_PATH::UpdateAllScreenReferences`-adjacent
       // behavior (switching sheets repaints the view fresh) and avoids a
