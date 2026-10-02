@@ -730,6 +730,9 @@ fn stamp(p: PathBuf) -> u128 {
 /// Changes whenever the board, its activity or the routing job does, so
 /// the page knows to fetch the state again.
 fn version_string(dir: &Path, job: &Job) -> String {
+    // An outside edit of design.json (an agent writing the file directly)
+    // becomes its own `file` history step before the page reloads.
+    board::sync_external_edits(dir);
     let j = job.lock().map(|j| j.clone()).unwrap_or_default();
     format!("{}-{}-{}", stamp(dir.join("design.json")), stamp(dir.join("activity.jsonl")), j.len() + j.bytes().map(|b| b as usize).sum::<usize>())
 }

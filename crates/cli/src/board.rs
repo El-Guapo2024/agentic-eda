@@ -220,8 +220,50 @@ fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut Constrain
 pub(crate) fn save(dir: &Path, design: &eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
     let s = serde_json::to_string_pretty(design)
         .map_err(|e| fail("board_encode", "design.json", format!("the design could not be encoded: {e}")))?;
-    std::fs::write(design_path(dir), s)
-        .map_err(|e| fail("board_write", "design.json", format!("the design could not be written: {e}")))
+    std::fs::write(design_path(dir), &s)
+        .map_err(|e| fail("board_write", "design.json", format!("the design could not be written: {e}")))?;
+    write_head(dir, s.as_bytes());
+    Ok(())
+}
+
+/// `.history/head.json`: the design as the last recorded step left it.
+/// A `design.json` that no longer matches it was edited outside any
+/// command (by hand, or an agent writing the file directly).
+fn head_path(dir: &Path) -> PathBuf {
+    history_root(dir).join("head.json")
+}
+
+fn write_head(dir: &Path, bytes: &[u8]) {
+    let _ = std::fs::create_dir_all(history_root(dir));
+    let _ = std::fs::write(head_path(dir), bytes);
+}
+
+/// Record an outside edit of `design.json` as its own history step, tagged
+/// `file`: the pre-edit design (`head.json`) goes on the undo stack, so an
+/// undo reverts the hand edit first instead of silently overwriting it, and
+/// a redo brings it back. Called before every command/undo/redo and from
+/// the studio's version poll. Returns whether an outside edit was found.
+pub(crate) fn sync_external_edits(dir: &Path) -> bool {
+    let Ok(now) = std::fs::read(design_path(dir)) else { return false };
+    let Ok(head) = std::fs::read(head_path(dir)) else {
+        write_head(dir, &now); // first sight of this board: nothing to compare against yet
+        return false;
+    };
+    if head == now {
+        return false;
+    }
+    let Ok(previous) = serde_json::from_slice::<eda_model::ir::Design>(&head) else {
+        write_head(dir, &now);
+        return false;
+    };
+    if serde_json::from_slice::<eda_model::ir::Design>(&now).is_err() {
+        return false; // a half-written or broken file: wait for the next look
+    }
+    let _ = push_snapshot_tagged(&undo_dir(dir), &previous, FILE_TAG, "file");
+    clear_dir(&redo_dir(dir));
+    write_head(dir, &now);
+    log_activity(dir, "file", "edit design.json", true, "design.json changed outside a command");
+    true
 }
 
 /// How close this board is to finished: everything placed, nothing
@@ -296,6 +338,7 @@ fn print_fill(design: &eda_model::ir::Design, model: &ConstraintModel, want_zone
 /// stack and clears redo -- the usual "a new edit erases old redos"
 /// rule; a refused command changes nothing, so it pushes nothing.
 pub(crate) fn step(dir: &Path, cmd: Cmd, strict: bool, by: &str) -> Result<String, Vec<CheckResult>> {
+    sync_external_edits(dir);
     let line = cmd_line(&cmd);
     let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
     let domain = cmd.domain();
@@ -303,7 +346,7 @@ pub(crate) fn step(dir: &Path, cmd: Cmd, strict: bool, by: &str) -> Result<Strin
     match &r {
         Ok(summary) => {
             if let Some(before) = before {
-                let _ = push_snapshot(&undo_dir(dir), &before, domain);
+                let _ = push_snapshot_tagged(&undo_dir(dir), &before, domain_tag(domain), by);
                 clear_dir(&redo_dir(dir));
             }
             log_activity(dir, by, &line, true, summary)
@@ -343,11 +386,27 @@ fn domain_tag(d: Domain) -> &'static str {
     }
 }
 
-fn push_snapshot(stack_dir: &Path, design: &eda_model::ir::Design, domain: Domain) -> std::io::Result<()> {
+/// The tag of a whole-design step (an outside edit of `design.json`):
+/// it matches every undo scope and always restores the whole design.
+const FILE_TAG: &str = "file";
+
+/// Push a snapshot named `<timestamp>.<tag>.json`, with its author (`ui`,
+/// `agent`, `file`, ...) in a `<timestamp>.<tag>.by` sidecar.
+fn push_snapshot_tagged(stack_dir: &Path, design: &eda_model::ir::Design, tag: &str, by: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(stack_dir)?;
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let s = serde_json::to_string(design).unwrap_or_default();
-    std::fs::write(stack_dir.join(format!("{t:020}.{}.json", domain_tag(domain))), s)
+    std::fs::write(stack_dir.join(format!("{t:020}.{tag}.by")), by)?;
+    std::fs::write(stack_dir.join(format!("{t:020}.{tag}.json")), s)
+}
+
+/// One popped history step.
+struct Snapshot {
+    /// `None` for a `file` step (whole design).
+    domain: Option<Domain>,
+    tag: String,
+    by: String,
+    design: eda_model::ir::Design,
 }
 
 /// The most recent snapshot on the stack, removed from it -- the most
@@ -359,7 +418,7 @@ fn push_snapshot(stack_dir: &Path, design: &eda_model::ir::Design, domain: Domai
 /// Scoping never removes a *different*-domain entry sitting more recently
 /// on the stack -- it is left exactly where it is, for a later undo of
 /// *that* domain to find.
-fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<(Domain, eda_model::ir::Design)> {
+fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<Snapshot> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(stack_dir)
         .ok()?
         .filter_map(|e| e.ok())
@@ -367,22 +426,27 @@ fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<(Domain, eda_
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
         .collect();
     entries.sort();
-    let matches = |p: &Path| -> Option<Domain> {
+    let matches = |p: &Path| -> Option<Option<Domain>> {
         let name = p.file_stem()?.to_str()?; // "<timestamp>.<tag>"
         let tag = name.rsplit('.').next()?;
         let domain = match tag {
+            FILE_TAG => return Some(None), // a whole-design step matches every scope
             "schematic" => Domain::Schematic,
             "footprint_editor" => Domain::FootprintEditor,
             "symbol_editor" => Domain::SymbolEditor,
             _ => Domain::Pcb,
         };
-        (scope.is_none() || scope == Some(domain)).then_some(domain)
+        (scope.is_none() || scope == Some(domain)).then_some(Some(domain))
     };
     let (idx, domain) = entries.iter().enumerate().rev().find_map(|(i, p)| matches(p).map(|d| (i, d)))?;
     let path = entries.remove(idx);
     let design = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok())?;
+    let by_path = path.with_extension("by");
+    let by = std::fs::read_to_string(&by_path).unwrap_or_else(|_| "?".into());
+    let tag = path.file_stem().and_then(|n| n.to_str()).and_then(|n| n.rsplit('.').next()).unwrap_or("pcb").to_string();
     let _ = std::fs::remove_file(&path);
-    Some((domain, design))
+    let _ = std::fs::remove_file(&by_path);
+    Some(Snapshot { domain, tag, by, design })
 }
 
 fn clear_dir(stack_dir: &Path) {
@@ -425,16 +489,18 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
 /// routing the same way an unscoped one always did -- if the edit being
 /// undone was itself a route, undo removes the routing along with it.
 pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String, Vec<CheckResult>> {
+    sync_external_edits(dir);
     let (_, current, _) = load(dir)?;
-    let Some((domain, previous)) = pop_snapshot(&undo_dir(dir), scope) else {
+    let Some(snap) = pop_snapshot(&undo_dir(dir), scope) else {
         let msg = "nothing to undo".to_string();
         log_activity(dir, by, "undo", false, &msg);
         return Err(fail("board_no_undo", "undo", msg));
     };
-    let _ = push_snapshot(&redo_dir(dir), &current, domain);
-    let restored = restore_domain(current, previous, scope);
+    let _ = push_snapshot_tagged(&redo_dir(dir), &current, &snap.tag, &snap.by);
+    // A whole-design (`file`) step restores everything, whatever the scope.
+    let restored = restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope });
     save(dir, &restored)?;
-    let msg = "undo: reverted the last edit".to_string();
+    let msg = format!("undo: reverted the last edit (by {})", snap.by);
     log_activity(dir, by, "undo", true, &msg);
     Ok(msg)
 }
@@ -445,16 +511,18 @@ pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
 /// domain's -- see its own doc comment), same as any other undo/redo
 /// stack.
 pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String, Vec<CheckResult>> {
+    sync_external_edits(dir);
     let (_, current, _) = load(dir)?;
-    let Some((domain, next)) = pop_snapshot(&redo_dir(dir), scope) else {
+    let Some(snap) = pop_snapshot(&redo_dir(dir), scope) else {
         let msg = "nothing to redo".to_string();
         log_activity(dir, by, "redo", false, &msg);
         return Err(fail("board_no_redo", "redo", msg));
     };
-    let _ = push_snapshot(&undo_dir(dir), &current, domain);
-    let restored = restore_domain(current, next, scope);
+    let _ = push_snapshot_tagged(&undo_dir(dir), &current, &snap.tag, &snap.by);
+    // A whole-design (`file`) step restores everything, whatever the scope.
+    let restored = restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope });
     save(dir, &restored)?;
-    let msg = "redo: re-applied the undone edit".to_string();
+    let msg = format!("redo: re-applied the undone edit (by {})", snap.by);
     log_activity(dir, by, "redo", true, &msg);
     Ok(msg)
 }
