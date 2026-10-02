@@ -704,3 +704,57 @@ hotkeys for these two are null, same gap already noted there for Escape),
 `common.Interactive.group/ungroup/groupEnter/groupLeave` in
 `useActionRunner.ts`, `Canvas.tsx`'s `onDoubleClick` group-enter check,
 `painter.ts`'s `drawSelectedGroups`.
+
+## 19. Board Statistics and Swap Layers
+
+Verified line-by-line against the KiCad source snapshot (`8303b2ad`):
+`pcbnew/board_statistics_report.cpp` (`ComputeBoardStatistics`,
+`FormatBoardStatisticsReport`, `appendTable`), `pcbnew/board_statistics.cpp`
+(`CollectDrillLineItems`), `pcbnew/dialogs/dialog_board_statistics.cpp`,
+`common/eda_units.cpp` (`MessageTextFromValue`), `pcbnew/dialogs/
+dialog_swap_layers.cpp` and `pcbnew/tools/global_edit_tool.cpp`
+(`SwapLayers`, `swapBoardItem`).
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Footprint counts THT/SMD/Unspecified x front/back, "Exclude footprints with no pads" | identical logic; type comes from pad composition, since placed parts carry no `FP_THROUGH_HOLE`/`FP_SMD` attribute in this IR | `ComputeBoardStatistics` footprint loop |
+| Pad counts (Through hole/SMD/Connector/NPTH + Castellated/Press-fit) | identical; Connector/Castellated/Press-fit always 0 (not in the IR) | `updatePadCounts` |
+| Via counts by type (through/blind/buried/micro) | identical from each via's layer pair; no microvia flag in the IR | `viaEntries` loop |
+| Min track width (straight tracks only) | identical | `track->Type() == PCB_TRACE_T` |
+| Min track clearance: every ordered track/via pair on the same `GetLayer()` (a via's is its top layer), different nets, effective shapes, clamped at 0 | identical (was tracks-only and unclamped before this pass) | `trackShapeA->Collide( ..., &actual )` |
+| Unset minimums print as INT_MAX nm (`2147.4836 mm`) | identical, kept on purpose | `std::numeric_limits<int>::max()` |
+| Drill table: pads (footprint order) then vias, grouped, sorted by count descending | identical, stable for ties (was hash-map order before) | `CollectDrillLineItems`, `COMPARE( COL_COUNT, false )` |
+| Min drill = smallest round drill | identical | `drill.shape == PAD_DRILL_SHAPE::CIRCLE` |
+| Board area/size from the outline; "Subtract holes from board area" removes pad holes (`len*w + pi/4 w^2`) and via drills | identical; Edge.Cuts interior cutouts don't exist in this IR | `GetBoardPolygonOutlines` block |
+| Footprint (courtyard) area: courtyards + PTH pads inflated by the default clearance + NPTH holes, both sides, `Simplify()`d union | identical algorithm; courtyards are this IR's courtyard box | `frontShapesForArea`/`Simplify()` |
+| Copper area: every pad/track/via/copper graphic/**zone fill** on F.Cu/B.Cu, plain `Area()` sum (overlaps double-count); "Subtract holes from copper areas" unions via `BooleanSubtract` | identical, including the double-count quirk (was simple-shape formulas without zones before) | `RunOnChildren` + `BooleanSubtract` |
+| Board thickness from stackup, default 1.6 mm | identical | `GetStackupOrDefault().BuildBoardThicknessFromStackup()` |
+| Number formatting (`%.4f`/`%.3f` + 2.5-digit trim for mm areas, `%.3e` fallback, ` mils`/` in` labels, `²`) | identical, both in Rust (report) and TS (`kicad-port/messageText.ts`, dialog) | `MessageTextFromValue`, `GetText` |
+| Dialog: General page (Components/Pads/Vias/Board grids), Drill Holes page with header-click sort toggling asc/desc, three checkboxes re-running on click, session-persistent checkbox state, Close (not Cancel) | identical | `DIALOG_BOARD_STATISTICS` -- `BoardStatisticsDialog.tsx` |
+| Generate Report File... -> `<board>_report.txt` with source's exact text layout | identical text; saved through a browser download instead of a native Save dialog | `saveReportClicked`, `FormatBoardStatisticsReport` |
+| JSON report (`FormatBoardStatisticsJson`) | missing -- only the kicad-cli path uses it | `FormatBoardStatisticsJson` |
+| Swap Layers: one row per copper layer in UI order, defaulting to itself; destination picker copper-only; map applied simultaneously (so a two-way swap works); one undo step; nothing committed when every row is identity | identical | `DIALOG_SWAP_LAYERS`, `GLOBAL_EDIT_TOOL::SwapLayers` -- `SwapLayersDialog.tsx`, `Cmd::SwapLayers` |
+| Swap Layers on vias: through vias skipped, blind/buried vias get their layer pair remapped | identical (vias were never remapped before this pass) | `via->GetViaType() == VIATYPE::THROUGH`, `SetLayerPair` |
+
+Rust: `crates/cli/src/board_stats.rs` (rewritten on `eda_drc::board::build`
++ `eda_drc::fill::fill_all_zones` + `eda_shape_poly_set`, 11 tests),
+`POST /api/board_stats` now takes the three options plus `report`/`units`/
+`date`. `crates/ops/src/lib.rs` `swap_layers` via handling + 1 new test.
+UI: `BoardStatisticsDialog.tsx`, `SwapLayersDialog.tsx`,
+`kicad-port/messageText.ts` (+ test), wired to the existing
+`pcbnew.InspectionTool.ShowBoardStatistics` / `pcbnew.GlobalEdit.swapLayers`
+menu actions.
+
+Click-through:
+1. Inspect > Show Board Statistics on a routed board with a zone. Check
+   the four grids fill, the drill table lists pad holes before vias at
+   equal counts, and Min track clearance is a real value.
+2. Tick each checkbox. The numbers update on every click (board area drops
+   with "Subtract holes from board area", copper area drops with "Subtract
+   holes from copper areas"). Close and reopen: the ticks are kept.
+3. Drill Holes tab: click "X Size" twice; the order flips.
+4. Generate Report File...: `<board>_report.txt` downloads; compare its
+   layout with a KiCad-written report for the same board.
+5. Switch units to mils, reopen: values read `NN.NN mils`, areas `NNN mils²`.
+6. Edit > Swap Layers...: set F.Cu -> B.Cu and B.Cu -> F.Cu, OK. Tracks
+   and zones trade sides; through vias stay put. Ctrl+Z restores in one step.

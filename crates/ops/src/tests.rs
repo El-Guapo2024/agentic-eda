@@ -2084,6 +2084,25 @@ fn swap_layers_remaps_a_dimension_on_a_mapped_layer() {
 }
 
 #[test]
+fn swap_layers_remaps_a_blind_via_but_never_a_through_via() {
+    // `GLOBAL_EDIT_TOOL::SwapLayers`: THROUGH vias are skipped, any other
+    // via gets `SetLayerPair( map[top], map[bottom] )`.
+    let mut m = net_model();
+    m.board.layers = vec!["F.Cu".into(), "In1.Cu".into(), "In2.Cu".into(), "B.Cu".into()];
+    let mut b = board(&m);
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 0, y: 0, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "In1.Cu".into() }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 5000, y: 0, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+
+    b.apply(&Cmd::SwapLayers { mapping: vec![("F.Cu".into(), "B.Cu".into()), ("In1.Cu".into(), "In2.Cu".into())] }).unwrap();
+
+    let vias = &b.design().routing.as_ref().unwrap().vias;
+    let blind = vias.iter().find(|v| v.at.x == 0).unwrap();
+    let through = vias.iter().find(|v| v.at.x == 5000).unwrap();
+    assert_eq!((blind.from_layer.as_str(), blind.to_layer.as_str()), ("B.Cu", "In2.Cu"));
+    assert_eq!((through.from_layer.as_str(), through.to_layer.as_str()), ("F.Cu", "B.Cu"));
+}
+
+#[test]
 fn swap_layers_rejects_an_unknown_destination_layer() {
     let m = net_model();
     let mut b = board(&m);

@@ -571,10 +571,10 @@ pub enum Cmd {
     /// layer absent from `mapping` is left untouched, matching source's
     /// own per-row grid where every row defaults to itself). Applies to
     /// every track/zone/shape/text/dimension whose own `layer` matches a
-    /// key -- vias are never remapped, since this model has no blind/
-    /// buried via concept and so every via is source's own skipped
-    /// `VIATYPE::THROUGH` case (`if (via->GetViaType() == VIATYPE::
-    /// THROUGH) continue;`); footprints aren't touched either, same as
+    /// key, and to a blind/buried via's layer pair (a through via --
+    /// spanning both outer layers -- is source's own skipped
+    /// `if (via->GetViaType() == VIATYPE::THROUGH) continue;` case);
+    /// footprints aren't touched either, same as
     /// source (a footprint's own "layer" is just `Side`, not a copper
     /// layer this swaps). Each destination layer must already be one of
     /// the board's own copper layers.
@@ -2982,6 +2982,23 @@ impl<'a> Board<'a> {
             for z in rt.zones.iter_mut() {
                 if let Some(dest) = map.get(z.layer.as_str()) {
                     z.layer = (*dest).to_string();
+                }
+            }
+            // `if( via->GetViaType() == VIATYPE::THROUGH ) continue;` --
+            // a blind/buried via (one not spanning both outer layers) gets
+            // its own layer pair remapped via `SetLayerPair`.
+            let layers = &self.model.board.layers;
+            let (first, last) = (layers.first().map(String::as_str), layers.last().map(String::as_str));
+            for v in rt.vias.iter_mut() {
+                let through = (Some(v.from_layer.as_str()) == first && Some(v.to_layer.as_str()) == last) || (Some(v.from_layer.as_str()) == last && Some(v.to_layer.as_str()) == first);
+                if through {
+                    continue;
+                }
+                if let Some(dest) = map.get(v.from_layer.as_str()) {
+                    v.from_layer = (*dest).to_string();
+                }
+                if let Some(dest) = map.get(v.to_layer.as_str()) {
+                    v.to_layer = (*dest).to_string();
                 }
             }
         }

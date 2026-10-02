@@ -28,6 +28,8 @@ import { MoveExactDialog } from "./components/MoveExactDialog";
 import { RouterSettingsDialog } from "./components/RouterSettingsDialog";
 import { LengthTuningDialog } from "./components/LengthTuningDialog";
 import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
+import { BoardStatisticsDialog } from "./components/BoardStatisticsDialog";
+import { SwapLayersDialog } from "./components/SwapLayersDialog";
 import { GlobalEditTracksAndViasDialog } from "./components/GlobalEditTracksAndViasDialog";
 import { GlobalEditTextAndGraphicsDialog } from "./components/GlobalEditTextAndGraphicsDialog";
 import { CreateArrayDialog } from "./components/CreateArrayDialog";
@@ -187,6 +189,8 @@ function StudioFrame() {
       <RouterSettingsDialog />
       <LengthTuningDialog />
       <CleanupTracksDialog />
+      <BoardStatisticsDialog />
+      <SwapLayersDialog />
       <GlobalEditTracksAndViasDialog />
       <GlobalEditTextAndGraphicsDialog />
       <CreateArrayDialog />

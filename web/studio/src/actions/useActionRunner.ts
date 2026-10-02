@@ -310,6 +310,10 @@ export function useActionRunner() {
     // `dialog_global_edit_tracks_and_vias.cpp` / `dialog_global_edit_text_
     // and_graphics.cpp` (task item 2) -- see GlobalEditTracksAndViasDialog.tsx
     // / GlobalEditTextAndGraphicsDialog.tsx for scope.
+    // `DIALOG_BOARD_STATISTICS` (read-only) / `DIALOG_SWAP_LAYERS` -- see
+    // components/BoardStatisticsDialog.tsx / SwapLayersDialog.tsx.
+    m.set("pcbnew.InspectionTool.ShowBoardStatistics", pcbOnly(() => dispatch({ type: "SET_BOARD_STATISTICS_DIALOG_OPEN", open: true })));
+    m.set("pcbnew.GlobalEdit.swapLayers", pcbOnly(() => dispatch({ type: "SET_SWAP_LAYERS_DIALOG_OPEN", open: true })));
     m.set("pcbnew.GlobalEdit.editTracksAndVias", pcbOnly(() => dispatch({ type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN", open: true })));
     m.set("pcbnew.GlobalEdit.editTextAndGraphics", pcbOnly(() => dispatch({ type: "SET_EDIT_TEXT_AND_GRAPHICS_DIALOG_OPEN", open: true })));
     // Ctrl+T (task item 6): `ARRAY_TOOL::CreateArray`'s own

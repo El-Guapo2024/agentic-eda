@@ -716,6 +716,8 @@ export type Cmd =
   | { op: "edit_dimension"; id: string; dimension: CmdDimension }
   /** Board Setup > Dimension Properties: applied to new dimensions from then on only. */
   | { op: "set_dimension_settings"; settings: DimensionSettings }
+  /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
+  | { op: "swap_layers"; mapping: [string, string][] }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**
@@ -1564,4 +1566,62 @@ export interface ErcReport {
   violations: ErcViolation[];
   /** Violation count by `check`. */
   counts: Record<string, number>;
+}
+
+/**
+ * `POST /api/board_stats` (crates/cli/src/board_stats.rs): a port of
+ * `BOARD_STATISTICS_DATA`, driving components/BoardStatisticsDialog.tsx.
+ * Lengths in µm, areas in µm². An unset minimum is source's own INT_MAX
+ * nm sentinel (2147483.647 µm), kept on purpose so it displays the same.
+ */
+export interface BoardStatsOptions {
+  exclude_footprints_without_pads: boolean;
+  subtract_holes_from_board_area: boolean;
+  subtract_holes_from_copper_areas: boolean;
+}
+
+export interface BoardStatsEntry {
+  title: string;
+  qty: number;
+}
+
+export interface BoardStatsDrill {
+  qty: number;
+  shape: "round" | "slot";
+  x_um: number;
+  y_um: number;
+  plated: boolean;
+  is_pad: boolean;
+  start_layer: string | null;
+  stop_layer: string | null;
+}
+
+export interface BoardStatsReply {
+  ok: boolean;
+  message?: string;
+  board?: {
+    has_outline: boolean;
+    width_um: number;
+    height_um: number;
+    area_um2: number;
+    front_copper_area_um2: number;
+    back_copper_area_um2: number;
+    front_courtyard_area_um2: number;
+    back_courtyard_area_um2: number;
+    front_density_pct: number;
+    back_density_pct: number;
+    min_track_width_um: number;
+    min_clearance_um: number;
+    min_drill_um: number;
+    thickness_um: number;
+  };
+  footprints?: { title: string; front: number; back: number }[];
+  pads?: BoardStatsEntry[];
+  pad_properties?: BoardStatsEntry[];
+  vias?: BoardStatsEntry[];
+  drills?: BoardStatsDrill[];
+  /** `FormatBoardStatisticsReport`'s text, only when requested with `report: true`. */
+  report?: string;
+  /** `<board>_report.txt`, source's default Save dialog name. */
+  report_file_name?: string;
 }

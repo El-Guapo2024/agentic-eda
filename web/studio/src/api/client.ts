@@ -4,7 +4,8 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolEditorNames, SymbolLibrary, TuneLengthReply, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolEditorNames, SymbolLibrary, TuneLengthReply, Um } from "./types";
+import type { LengthUnit } from "../state/units";
 
 export class ApiError extends Error {}
 
@@ -427,4 +428,11 @@ export function cleanupTracksPreview(opts: CleanupOptions): Promise<CleanupReply
 
 export function cleanupTracksApply(opts: CleanupOptions): Promise<CleanupReply> {
   return postJson("/api/cleanup_tracks/apply", opts);
+}
+
+// `pcbnew.InspectionTool.ShowBoardStatistics` -- read-only, see
+// crates/cli/src/board_stats.rs and api/types.ts's `BoardStatsReply`.
+
+export function postBoardStats(opts: BoardStatsOptions, report?: { units: LengthUnit; date: string }): Promise<BoardStatsReply> {
+  return postJson("/api/board_stats", report ? { ...opts, report: true, units: report.units, date: report.date } : opts);
 }

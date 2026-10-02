@@ -22,5 +22,6 @@ eda-drc = { path = "../drc" }
 eda-pns = { path = "../pns" }
 eda-connectivity = { path = "../connectivity" }
 eda-kicad = { path = "../kicad" }
+eda-clipper2 = { path = "../clipper2" }
 eda-shape-poly-set = { path = "../shape-poly-set" }
 eda-zone-filler = { path = "../zone-filler" }
