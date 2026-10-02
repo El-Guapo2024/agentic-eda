@@ -131,6 +131,8 @@ pub struct DrcKeepout {
     pub no_pads: bool,
     pub no_copper_pour: bool,
     pub no_footprints: bool,
+    /// `Zone::parent_footprint`: a footprint's own rule area.
+    pub parent_footprint: Option<String>,
 }
 
 pub struct DrcFootprint {
@@ -388,6 +390,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     no_pads: z.keepout_pads,
                     no_copper_pour: z.keepout_copper_pour,
                     no_footprints: z.keepout_footprints,
+                    parent_footprint: z.parent_footprint.clone(),
                 });
                 continue;
             }

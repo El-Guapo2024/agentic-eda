@@ -1315,6 +1315,13 @@ pub struct Zone {
     /// pipeline the way a drawn zone's settings fields describe.
     #[serde(default)]
     pub teardrop: bool,
+
+    /// The footprint this zone belongs to (`ZONE::GetParentFootprint()`),
+    /// for a zone imported from inside a `(footprint ...)`; `None` for a
+    /// board-level zone. A footprint's own rule area never tests the
+    /// footprint itself (`intersectsArea`'s `aArea->GetParent() == item`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_footprint: Option<String>,
 }
 
 impl Zone {
@@ -1357,6 +1364,7 @@ impl Default for Zone {
             keepout_copper_pour: false,
             keepout_footprints: false,
             teardrop: false,
+            parent_footprint: None,
         }
     }
 }

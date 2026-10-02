@@ -38,10 +38,6 @@ fn via_spans_layer(from: &str, to: &str, layer: &str, layers: &[String]) -> bool
     }
 }
 
-fn keepout_shape(k: &DrcKeepout) -> Shape {
-    Shape::Polygon { pts: k.outline.clone() }
-}
-
 /// The keepout's outline, shrunk by a hairline epsilon --
 /// `drc_test_provider_disallow.cpp`'s own `query_areas`: "Collisions
 /// include touching, so we need to deflate outline by enough to exclude
@@ -68,87 +64,161 @@ fn violation(kind: &str, keepout_id: &str, item_desc: String, item_pos: Point, i
     )
 }
 
+/// One KiCad rule area: the IR splits a multi-layer `ZONE` into one
+/// single-layer keepout per layer, so those are folded back into the
+/// zone's `GetLayerSet()` here -- KiCad reports an item once per rule
+/// area, not once per layer of it.
+struct RuleArea<'a> {
+    id: &'a str,
+    layers: Vec<&'a str>,
+    outline: &'a [Point],
+    k: &'a DrcKeepout,
+}
+
+impl RuleArea<'_> {
+    fn on(&self, layer: &str) -> bool {
+        self.layers.contains(&layer)
+    }
+}
+
+fn rule_areas(board: &DrcBoard) -> Vec<RuleArea<'_>> {
+    let mut out: Vec<RuleArea> = Vec::new();
+    for k in &board.keepouts {
+        let flags = (k.no_tracks, k.no_vias, k.no_pads, k.no_copper_pour, k.no_footprints, &k.parent_footprint);
+        if let Some(a) = out.iter_mut().find(|a| a.outline == k.outline.as_slice() && (a.k.no_tracks, a.k.no_vias, a.k.no_pads, a.k.no_copper_pour, a.k.no_footprints, &a.k.parent_footprint) == flags && !a.on(&k.layer)) {
+            a.layers.push(&k.layer);
+        } else {
+            out.push(RuleArea { id: &k.id, layers: vec![&k.layer], outline: &k.outline, k });
+        }
+    }
+    out
+}
+
+/// The copper layers a via spans (`PCB_VIA::GetLayerSet`).
+fn via_layers<'a>(from: &str, to: &str, layers: &'a [String]) -> Vec<&'a str> {
+    layers.iter().filter(|l| via_spans_layer(from, to, l, layers)).map(String::as_str).collect()
+}
+
+fn is_front(l: &str) -> bool {
+    l.starts_with("F.")
+}
+
+fn is_back(l: &str) -> bool {
+    l.starts_with("B.")
+}
+
+/// `DRC_TEST_PROVIDER_DISALLOW::Run`'s keepout half. Tracks are collided
+/// against every no-tracks rule area on their layer (`antiTrackKeepouts`,
+/// one marker per crossing area); every other item goes through
+/// `EvalRules( DISALLOW_CONSTRAINT, item )`, which resolves to a single
+/// constraint, so it is reported at most once however many rule areas it
+/// intersects. Membership is `intersectsArea` (`pcbexpr_functions.cpp`):
+/// common layers with the area, then `collidesWithArea` per layer against
+/// the area outline deflated by the DRC epsilon.
 pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     let mut out = Vec::new();
     if board.keepouts.is_empty() {
         return out;
     }
+    let areas = rule_areas(board);
+    let deflated: Vec<Option<Shape>> = areas
+        .iter()
+        .map(|a| {
+            let d = deflated_keepout_outline(a.outline);
+            (d.len() >= 3).then_some(Shape::Polygon { pts: d })
+        })
+        .collect();
 
-    for k in &board.keepouts {
-        let kshape = keepout_shape(k);
-
-        if k.no_tracks {
-            for t in &board.tracks {
-                if t.layer != k.layer {
-                    continue;
-                }
-                if kshape.collides(&t.shape(), 0).is_some() {
-                    out.push(violation("Track", &k.id, format!("Track on {}", t.layer), t.a, t.id.clone()));
-                }
-            }
-        }
-
-        if k.no_vias {
-            for v in &board.vias {
-                if !via_spans_layer(&v.from_layer, &v.to_layer, &k.layer, &board.layers) {
-                    continue;
-                }
-                if kshape.collides(&v.shape(), 0).is_some() {
-                    out.push(violation("Via", &k.id, "Via".into(), v.at, v.id.clone()));
-                }
-            }
-        }
-
-        if k.no_pads {
-            for p in &board.pads {
-                if !p.layers.iter().any(|l| l == &k.layer) {
-                    continue;
-                }
-                if kshape.collides(&p.copper, 0).is_some() {
-                    out.push(violation("Pad", &k.id, format!("Pad {} of {}", p.number, p.footprint_ref), p.center, p.id.clone()));
-                }
-            }
-        }
-
-        if k.no_footprints {
-            for f in &board.footprints {
-                let (x0, y0, x1, y1) = f.courtyard;
-                let fshape = Shape::Rect { x0, y0, x1, y1 };
-                if kshape.collides(&fshape, 0).is_some() {
-                    let center = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
-                    out.push(violation("Footprint", &k.id, format!("Footprint {}", f.id), center, f.id.clone()));
-                }
+    // antiTrackKeepouts->QueryColliding( track, layer, layer, ... ) against the undeflated outline.
+    for t in &board.tracks {
+        for a in areas.iter().filter(|a| a.k.no_tracks && a.on(&t.layer)) {
+            if (Shape::Polygon { pts: a.outline.to_vec() }).collides(&t.shape(), 0).is_some() {
+                out.push(violation("Track", a.id, format!("Track on {}", t.layer), t.a, t.id.clone()));
             }
         }
     }
 
-    // Copper-pour keepouts: the filler (`eda_zone_filler`) already excludes
-    // keepout area from every fill it computes (task item 3's other
-    // deliverable) -- this is the DRC-side sanity check that it actually
-    // did, same belt-and-suspenders role `drc_test_provider_disallow.cpp`
-    // itself plays upstream (it tests the *already-filled* zone, not the
-    // filler's own internal state).
-    if board.keepouts.iter().any(|k| k.no_copper_pour) {
-        let fills = fill_all_zones(board, rules);
-        for k in board.keepouts.iter().filter(|k| k.no_copper_pour) {
-            let deflated = deflated_keepout_outline(&k.outline);
-            if deflated.len() < 3 {
-                continue; // a sliver keepout that vanishes under deflate has nothing left to test
+    // The first rule area that disallows the item and intersects it.
+    let first_hit = |allowed: &dyn Fn(&DrcKeepout) -> bool, item_layers: &[&str], collides: &dyn Fn(usize, &Shape, &[&str]) -> bool| -> Option<usize> {
+        areas.iter().enumerate().find_map(|(i, a)| {
+            if !allowed(a.k) {
+                return None;
             }
-            let kshape = Shape::Polygon { pts: deflated };
-            for z in board.zones.iter().filter(|z| z.layer == k.layer) {
-                let Some(fill) = fills.zones.get(&z.id) else { continue };
-                for poly in &fill.fill.polys {
-                    let Some(outline) = poly.first() else { continue };
-                    let pts: Vec<Point> = outline.iter().map(|p| Point { x: p.x, y: p.y }).collect();
-                    if pts.len() < 3 {
-                        continue;
-                    }
-                    if kshape.collides(&Shape::Polygon { pts }, 0).is_some() {
-                        out.push(violation("Copper pour", &k.id, format!("Zone on {}", z.layer), k.outline.first().copied().unwrap_or(Point { x: 0, y: 0 }), z.id.clone()));
-                        break;
-                    }
-                }
+            let common: Vec<&str> = item_layers.iter().copied().filter(|l| a.on(l)).collect();
+            if common.is_empty() {
+                return None;
+            }
+            let shape = deflated[i].as_ref()?;
+            collides(i, shape, &common).then_some(i)
+        })
+    };
+
+    for v in &board.vias {
+        let layers = via_layers(&v.from_layer, &v.to_layer, &board.layers);
+        let vshape = v.shape();
+        if let Some(i) = first_hit(&|k| k.no_vias, &layers, &|_, s, _| s.collides(&vshape, 0).is_some()) {
+            out.push(violation("Via", areas[i].id, "Via".into(), v.at, v.id.clone()));
+        }
+    }
+
+    for p in &board.pads {
+        let layers: Vec<&str> = p.layers.iter().map(String::as_str).collect();
+        if let Some(i) = first_hit(&|k| k.no_pads, &layers, &|_, s, _| s.collides(&p.copper, 0).is_some()) {
+            out.push(violation("Pad", areas[i].id, format!("Pad {} of {}", p.number, p.footprint_ref), p.center, p.id.clone()));
+        }
+    }
+
+    for f in &board.footprints {
+        // FOOTPRINT::GetLayerSet() is its own layer; the courtyard tested
+        // depends on which side(s) the area covers.
+        let own = if f.side == eda_model::ir::Side::Bottom { "B.Cu" } else { "F.Cu" };
+        let court: Vec<Shape> = if f.outlines.is_empty() {
+            let (x0, y0, x1, y1) = f.courtyard;
+            vec![Shape::Rect { x0, y0, x1, y1 }]
+        } else {
+            f.outlines.iter().map(|o| Shape::Polygon { pts: o.clone() }).collect()
+        };
+        let collides = |i: usize, s: &Shape, _: &[&str]| {
+            let a = &areas[i];
+            let side_ok = if own == "B.Cu" { a.layers.iter().any(|l| is_back(l)) } else { a.layers.iter().any(|l| is_front(l)) };
+            side_ok && court.first().is_some_and(|c| s.collides(c, 0).is_some())
+        };
+        if let Some(i) = first_hit(&|k| k.no_footprints && k.parent_footprint.as_deref() != Some(f.id.as_str()), &[own], &collides) {
+            let (x0, y0, x1, y1) = f.courtyard;
+            let center = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+            out.push(violation("Footprint", areas[i].id, format!("Footprint {}", f.id), center, f.id.clone()));
+        }
+    }
+
+    // Copper zones (and teardrops, tested as tracks) against the filled
+    // copper on each common layer; a multi-layer zone is one KiCad item.
+    let wants_zones = areas.iter().any(|a| a.k.no_copper_pour || a.k.no_tracks);
+    if wants_zones {
+        let fills = fill_all_zones(board, rules);
+        let mut groups: Vec<(&crate::board::DrcZone, Vec<&str>)> = Vec::new();
+        for z in &board.zones {
+            if let Some(g) = groups.iter_mut().find(|(g, _)| g.outline == z.outline && g.net == z.net && g.priority == z.priority && g.teardrop == z.teardrop) {
+                g.1.push(&z.layer);
+            } else {
+                groups.push((z, vec![&z.layer]));
+            }
+        }
+        for (z, layers) in &groups {
+            let teardrop = z.teardrop;
+            let allowed = |k: &DrcKeepout| if teardrop { k.no_tracks } else { k.no_copper_pour };
+            let collides = |_: usize, s: &Shape, common: &[&str]| {
+                board.zones.iter().filter(|zz| zz.outline == z.outline && zz.net == z.net && zz.priority == z.priority && zz.teardrop == z.teardrop && common.contains(&zz.layer.as_str())).any(|zz| {
+                    let Some(fill) = fills.zones.get(&zz.id) else { return false };
+                    fill.fill.polys.iter().any(|poly| {
+                        let Some(o) = poly.first() else { return false };
+                        let pts: Vec<Point> = o.iter().map(|p| Point { x: p.x, y: p.y }).collect();
+                        pts.len() >= 3 && s.collides(&Shape::Polygon { pts }, 0).is_some()
+                    })
+                })
+            };
+            if let Some(i) = first_hit(&allowed, layers, &collides) {
+                let kind = if teardrop { "Track" } else { "Copper pour" };
+                out.push(violation(kind, areas[i].id, format!("Zone on {}", z.layer), areas[i].outline.first().copied().unwrap_or(Point { x: 0, y: 0 }), z.id.clone()));
             }
         }
     }
@@ -167,7 +237,7 @@ mod tests {
     }
 
     fn rect_keepout(id: &str, layer: &str, x0: i64, y0: i64, x1: i64, y1: i64) -> DrcKeepout {
-        DrcKeepout { id: id.into(), layer: layer.into(), outline: vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }], no_tracks: false, no_vias: false, no_pads: false, no_copper_pour: false, no_footprints: false }
+        DrcKeepout { id: id.into(), layer: layer.into(), outline: vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }], no_tracks: false, no_vias: false, no_pads: false, no_copper_pour: false, no_footprints: false, parent_footprint: None }
     }
 
     #[test]
@@ -236,12 +306,31 @@ mod tests {
     }
 
     #[test]
-    fn a_footprint_courtyard_overlapping_a_no_footprints_keepout_is_reported_regardless_of_keepout_layer() {
+    fn a_footprint_courtyard_overlapping_a_no_footprints_keepout_on_its_side_is_reported() {
         let mut b = empty_board();
-        b.keepouts = vec![DrcKeepout { no_footprints: true, ..rect_keepout("k1", "F.SilkS", 0, 0, 1000, 1000) }];
+        b.keepouts = vec![DrcKeepout { no_footprints: true, ..rect_keepout("k1", "F.Cu", 0, 0, 1000, 1000) }];
         b.footprints = vec![crate::board::DrcFootprint { id: "U1".into(), side: eda_model::ir::Side::Top, courtyard: (500, 500, 1500, 1500), outlines: vec![] }];
         let v = check(&b, &BoardRules::default());
         assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn a_footprint_is_reported_once_for_a_rule_area_on_several_layers() {
+        let mut b = empty_board();
+        b.keepouts = vec![
+            DrcKeepout { no_footprints: true, no_pads: true, ..rect_keepout("k1", "F.Cu", 0, 0, 1000, 1000) },
+            DrcKeepout { no_footprints: true, no_pads: true, ..rect_keepout("k2", "B.Cu", 0, 0, 1000, 1000) },
+        ];
+        b.footprints = vec![crate::board::DrcFootprint { id: "U1".into(), side: eda_model::ir::Side::Top, courtyard: (500, 500, 1500, 1500), outlines: vec![] }];
+        assert_eq!(check(&b, &BoardRules::default()).len(), 1);
+    }
+
+    #[test]
+    fn a_back_footprint_ignores_a_front_only_rule_area() {
+        let mut b = empty_board();
+        b.keepouts = vec![DrcKeepout { no_footprints: true, ..rect_keepout("k1", "F.Cu", 0, 0, 1000, 1000) }];
+        b.footprints = vec![crate::board::DrcFootprint { id: "U1".into(), side: eda_model::ir::Side::Bottom, courtyard: (500, 500, 1500, 1500), outlines: vec![] }];
+        assert!(check(&b, &BoardRules::default()).is_empty());
     }
 
     #[test]

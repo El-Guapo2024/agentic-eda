@@ -29,7 +29,7 @@
 //!
 //! What real boards carry that this does not import, and why (see the
 //! task's report for proposed model shapes):
-//! - **Footprint-level zones**: counted in [`ImportNotes::zones_skipped`].
+//! - **Footprint-level zones**: imported as zones tagged with `parent_footprint`.
 //!   Board-level zones (pours, teardrops, rule areas) are imported by
 //!   [`import_zones`]; their stored fills are not read, fills are derived.
 //! - **Track/board-edge arcs**: KiCad's `(arc ...)`/`(gr_arc ...)` have no
@@ -1147,12 +1147,30 @@ fn import_outline(root: &[Sexpr], notes: &mut ImportNotes) -> Vec<Point> {
 /// (layer, outline). The stored `(filled_polygon ...)`s are not read --
 /// fills are always derived (`eda_zone_filler`), which is also what
 /// kicad-cli's own `pcb drc --refill-zones` run does. Footprint-level
-/// zones are not imported yet ([`ImportNotes::zones_skipped`]).
+/// zones are imported too, tagged with their parent footprint.
 fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes) -> Vec<Zone> {
+    // Board-level zones, then each footprint's own (`forEachGeometryItem`
+    // walks `footprint->Zones()` too; a footprint zone's points are stored
+    // in board coordinates). The parent reference is recomputed exactly as
+    // `import_footprints` assigns it (a repeat gets a "#n" suffix).
+    let mut all: Vec<(&[Sexpr], Option<String>)> = sexpr::find_all(root, "zone").map(|z| (z, None)).collect();
+    let mut seen_refs: BTreeMap<String, usize> = BTreeMap::new();
+    let raw: Vec<&[Sexpr]> = sexpr::find_all(root, "footprint").chain(sexpr::find_all(root, "module")).collect();
+    for (idx, fp) in raw.iter().enumerate() {
+        let Some(at) = sexpr::find(fp, "at") else { continue };
+        if sexpr::num(at, 1).is_none() || sexpr::num(at, 2).is_none() {
+            continue;
+        }
+        let base_ref = footprint_field(fp, "Reference").filter(|s| !s.is_empty()).unwrap_or_else(|| format!("FP{}", idx + 1));
+        let n = seen_refs.entry(base_ref.clone()).or_insert(0usize);
+        *n += 1;
+        let reference = if *n == 1 { base_ref } else { format!("{base_ref}#{n}") };
+        all.extend(sexpr::find_all(fp, "zone").map(|z| (z, Some(reference.clone()))));
+    }
     let mut out = Vec::new();
-    for z in sexpr::find_all(root, "zone") {
+    for (z, parent) in all {
         // `SetIslandRemovalMode( ISLAND_REMOVAL_MODE::ALWAYS )` and priority 0 before parsing.
-        let mut zone = Zone::default();
+        let mut zone = Zone { parent_footprint: parent, ..Zone::default() };
         // `(net N)` (code) or, in newer files, `(net "name")`; `(net_name ...)` as a fallback.
         if let Some(n) = sexpr::find(z, "net") {
             zone.net = match sexpr::num(n, 1) {
