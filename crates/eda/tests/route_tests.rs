@@ -32,6 +32,7 @@ fn lin(n: usize) -> Footprint {
             .collect(),
         courtyard: None,
         model: None,
+        courtyard_outlines: vec![],
     }
 }
 
@@ -60,6 +61,7 @@ fn lin_th(n: usize) -> Footprint {
             .collect(),
         courtyard: None,
         model: None,
+        courtyard_outlines: vec![],
     }
 }
 

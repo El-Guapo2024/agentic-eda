@@ -50,7 +50,12 @@ pub use teardrop::generate_teardrops;
 /// -- what `drc_test_provider_connectivity.cpp` does -- instead of
 /// `eda_drc`'s geometric stand-in.
 pub fn run_drc(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<eda_drc::DrcViolation> {
-    eda_drc::run_with(design, model, Some(&dangling_violations))
+    run_drc_with(design, model, false)
+}
+
+/// [`run_drc`] with the schematic-parity tests on or off (`aTestFootprints`).
+pub fn run_drc_with(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, test_footprints: bool) -> Vec<eda_drc::DrcViolation> {
+    eda_drc::run_with(design, model, Some(&dangling_violations), test_footprints)
 }
 
 fn dangling_violations(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel) -> Vec<eda_drc::DrcViolation> {

@@ -26,7 +26,7 @@ fn tht(number: &str, drill: Option<i64>) -> Pad {
 }
 
 fn fp(pads: Vec<Pad>) -> Footprint {
-    Footprint { name: "TEST_FP".into(), pads, courtyard: None, model: None }
+    Footprint { name: "TEST_FP".into(), pads, courtyard: None, model: None, courtyard_outlines: vec![] }
 }
 
 #[test]

@@ -67,7 +67,7 @@ pub use item::{DrcRefItem, DrcViolation, ErrorType, FixHint, Severity};
 /// keepouts -- task item 3), followed by
 /// the placement-quality providers ported in from `eda_gates::pcb`.
 pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
-    run_with(design, model, None)
+    run_with(design, model, None, false)
 }
 
 /// A replacement for the built-in dangling check: `eda_connectivity`
@@ -79,7 +79,12 @@ pub type DanglingCheck<'a> = &'a dyn Fn(&Design, &ConstraintModel) -> Vec<DrcVio
 
 /// [`run`], with the dangling-track/via check optionally swapped for the
 /// connectivity graph's own.
-pub fn run_with(design: &Design, model: &ConstraintModel, dangling: Option<DanglingCheck>) -> Vec<DrcViolation> {
+///
+/// `test_footprints` is `RunTests`' `aTestFootprints` -- the DRC dialog's
+/// "Test for parity between PCB and schematic" (unchecked by default) /
+/// `kicad-cli pcb drc --schematic-parity`: only then does
+/// `DRC_TEST_PROVIDER_SCHEMATIC_PARITY` run.
+pub fn run_with(design: &Design, model: &ConstraintModel, dangling: Option<DanglingCheck>, test_footprints: bool) -> Vec<DrcViolation> {
     let b = board::build(design, model);
     let rules = &model.board;
 
@@ -99,7 +104,9 @@ pub fn run_with(design: &Design, model: &ConstraintModel, dangling: Option<Dangl
     }
     out.extend(providers::disallow::check(&b, rules));
     out.extend(providers::outline::check(design, model));
-    out.extend(providers::schematic_parity::check(design, model));
+    if test_footprints {
+        out.extend(providers::schematic_parity::check(design, model));
+    }
     out.extend(providers::placement_quality::check(design, model));
     apply_rule_severities(&mut out, &rules.rule_severities);
     apply_error_limits(&mut out);

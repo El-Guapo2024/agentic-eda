@@ -3973,7 +3973,7 @@ impl<'a> Board<'a> {
         if pad.size.0 <= 0 || pad.size.1 <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_pad", &pad.number, "pad size must be positive")]);
         }
-        let probe = Footprint { name: "probe".into(), pads: vec![pad.to_engine_pad()], courtyard: None, model: None };
+        let probe = Footprint { name: "probe".into(), pads: vec![pad.to_engine_pad()], courtyard: None, model: None, courtyard_outlines: vec![] };
         let errs = probe.validate();
         if errs.is_empty() {
             Ok(())

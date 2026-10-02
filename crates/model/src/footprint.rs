@@ -274,6 +274,13 @@ pub struct Footprint {
     /// exactly. Extending this to an offset rect is future work.
     #[serde(default)]
     pub courtyard: Option<(Um, Um)>,
+    /// The real courtyard (`FOOTPRINT::GetCourtyard`): closed outlines in
+    /// the footprint's local frame (same frame as `Pad::at`), built from a
+    /// KiCad footprint's `F.CrtYd`/`B.CrtYd` graphics. Empty when unknown
+    /// (built-in footprints, or a KiCad footprint without courtyard
+    /// graphics), in which case `courtyard`/`courtyard_half` stand in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub courtyard_outlines: Vec<Vec<(Um, Um)>>,
     /// KiCad `(model "...")` path for this footprint's 3D model, e.g.
     /// `"${KICAD9_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl"`.
     /// `None` when no model is known (this footprint predates 3D model
@@ -488,6 +495,7 @@ fn two_pad(name: &str, pitch: Um, pw: Um, ph: Um) -> Footprint {
         ],
         courtyard: None,
         model: None,
+        courtyard_outlines: vec![],
     }
 }
 
@@ -506,7 +514,7 @@ fn dual_row(name: &str, n: usize, pitch: Um, col_x: Um, pw: Um, ph: Um) -> Footp
     for i in 0..per_col {
         pads.push(Pad::simple((per_col + i + 1).to_string(), (col_x, y0 + (per_col - 1 - i) as Um * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
     }
-    Footprint { name: name.into(), pads, courtyard: None, model: None }
+    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![] }
 }
 
 /// Single-row 2.54 mm through-hole header, `n` pins along +x, centred.
@@ -515,7 +523,7 @@ fn pin_header(name: &str, n: usize) -> Footprint {
     let pads = (0..n)
         .map(|i| Pad::simple((i + 1).to_string(), (x0 + i as Um * 2540, 0), (1700, 1700), if i == 0 { PadShape::Rect } else { PadShape::Circle }, PadKind::ThroughHole, Some(1000)))
         .collect();
-    Footprint { name: name.into(), pads, courtyard: None, model: None }
+    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![] }
 }
 
 /// All fixed-key built-ins (excludes the generic `PINHEADER-N` family, which
@@ -555,6 +563,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
             ],
             courtyard: None,
             model: None,
+            courtyard_outlines: vec![],
         },
         // Package_TO_SOT_SMD.pretty/SOT-23-5.kicad_mod / SOT-23-6.kicad_mod:
         // both columns at x = ∓1.1375mm, pitch 0.95mm. SOT-23-5 omits the
@@ -588,6 +597,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
             ],
             courtyard: None,
             model: None,
+            courtyard_outlines: vec![],
         },
         // Package_SO.pretty SOIC-8/14/16_3.9x*mm_P1.27mm.
         "SOIC-8" => dual_row(&key, 8, 1270, 2475, 1950, 600),
@@ -745,7 +755,7 @@ mod tests {
         // footprint, must present the same board-space extent as an
         // unrotated pad inside a footprint rotated 90 degrees: rotation
         // composes additively regardless of which side contributes it.
-        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None };
+        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None, courtyard_outlines: vec![] };
         fp.pads[0].rot = 90_000;
         let (model, part) = part_with("T", fp.clone());
         let via_pad_rot = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -773,6 +783,7 @@ mod tests {
             ],
             courtyard: None,
             model: None,
+            courtyard_outlines: vec![],
         };
         let (model, part) = part_with("CONN", shield);
         let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -793,6 +804,7 @@ mod tests {
             }],
             courtyard: None,
             model: None,
+            courtyard_outlines: vec![],
         };
         let (model, part) = part_with("T", fp);
         let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();

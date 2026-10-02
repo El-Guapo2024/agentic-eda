@@ -61,6 +61,7 @@ fn footprint_shapes() -> Footprint {
         ],
         courtyard: Some((4500, 3500)),
         model: None,
+        courtyard_outlines: vec![],
     }
 }
 
@@ -76,6 +77,7 @@ fn footprint_th() -> Footprint {
         ],
         courtyard: Some((3800, 2200)),
         model: None,
+        courtyard_outlines: vec![],
     }
 }
 

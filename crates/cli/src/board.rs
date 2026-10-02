@@ -1205,6 +1205,7 @@ mod tests {
             ],
             courtyard: Some((2000, 1000)),
             model: None,
+            courtyard_outlines: vec![],
         };
         let part = |r: &str| Part {
             reference: r.into(),

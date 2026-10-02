@@ -20,6 +20,47 @@ fn rect_contains_point(r: (i64, i64, i64, i64), p: eda_model::ir::Point) -> bool
     p.x > r.0 && p.x < r.2 && p.y > r.1 && p.y < r.3
 }
 
+/// The footprint's courtyard as DRC shapes: its real outlines when known,
+/// else the `courtyard` box.
+fn courtyard_shapes(f: &DrcFootprint) -> Vec<crate::kimath::Shape> {
+    if f.outlines.is_empty() {
+        let (x0, y0, x1, y1) = f.courtyard;
+        vec![crate::kimath::Shape::Rect { x0, y0, x1, y1 }]
+    } else {
+        f.outlines.iter().map(|o| crate::kimath::Shape::Polygon { pts: o.clone() }).collect()
+    }
+}
+
+/// `frontA.Collide( &frontB, clearance )` with the default 0 courtyard
+/// clearance: the triangulated outlines must actually overlap -- two
+/// courtyards that only share an edge (the usual tight placement) don't
+/// collide, as measured on KiCad's QA boards. Box-only courtyards keep the
+/// same strict interior-overlap test.
+fn courtyards_collide(a: &DrcFootprint, b: &DrcFootprint) -> bool {
+    if a.outlines.is_empty() || b.outlines.is_empty() {
+        return rects_overlap(a.courtyard, b.courtyard);
+    }
+    let to_set = |f: &DrcFootprint| {
+        let mut set = eda_shape_poly_set::ShapePolySet::new();
+        for o in &f.outlines {
+            set.add_outline(o.iter().map(|p| eda_clipper2::Point64::new(p.x, p.y)).collect());
+        }
+        set
+    };
+    let mut inter = eda_shape_poly_set::ShapePolySet::new();
+    inter.boolean_intersection_of(&to_set(a), &to_set(b));
+    inter.area() > 0.0
+}
+
+/// `front.Collide( hole.get(), 0 )`: the pad's drilled hole against the
+/// courtyard outline (the pad centre for a box-only courtyard, as before).
+fn hole_in_courtyard(p: &crate::board::DrcPad, f: &DrcFootprint) -> bool {
+    match (&p.hole, f.outlines.is_empty()) {
+        (Some(h), false) => courtyard_shapes(f).iter().any(|c| c.collides(h, 0).is_some()),
+        _ => rect_contains_point(f.courtyard, p.center),
+    }
+}
+
 fn fp_ref(f: &DrcFootprint) -> DrcRefItem {
     DrcRefItem { description: format!("Footprint {}", f.id), pos: ((f.courtyard.0 + f.courtyard.2) / 2, (f.courtyard.1 + f.courtyard.3) / 2), id: f.id.clone() }
 }
@@ -38,7 +79,7 @@ pub fn check(board: &DrcBoard) -> Vec<DrcViolation> {
             if a.side != b.side {
                 continue; // front/back courtyards can never physically collide
             }
-            if rects_overlap(a.courtyard, b.courtyard) {
+            if courtyards_collide(a, b) {
                 out.push(DrcViolation::new(ErrorType::CourtyardsOverlap, "", vec![fp_ref(a), fp_ref(b)]));
             }
         }
@@ -62,7 +103,7 @@ pub fn check(board: &DrcBoard) -> Vec<DrcViolation> {
             // B_CrtYd for a pad hole regardless of which side the pad's
             // footprint is on.
             let _ = f.side;
-            if rect_contains_point(f.courtyard, p.center) {
+            if hole_in_courtyard(p, f) {
                 out.push(DrcViolation::new(error_type, "", vec![DrcRefItem { description: format!("Pad {} of {}", p.number, p.footprint_ref), pos: (p.center.x, p.center.y), id: p.id.clone() }, fp_ref(f)]));
             }
         }
@@ -77,7 +118,7 @@ mod tests {
     use eda_model::ir::{Point, Side};
 
     fn fp(id: &str, side: Side, c: (i64, i64, i64, i64)) -> DrcFootprint {
-        DrcFootprint { id: id.into(), side, courtyard: c }
+        DrcFootprint { id: id.into(), side, courtyard: c, outlines: vec![] }
     }
 
     fn empty_board() -> DrcBoard {

@@ -560,6 +560,7 @@ mod tests {
             pads: vec![eda_model::Pad { number: "1".into(), at: (0, 0), size: (1000, 1000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
+            courtyard_outlines: vec![],
         });
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());

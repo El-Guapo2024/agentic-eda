@@ -2312,7 +2312,7 @@ impl LibraryFootprint {
     /// silkscreen art or a BOM-exclude flag), same split `LibraryPad::
     /// to_engine_pad`'s doc explains.
     pub fn to_engine_footprint(&self) -> crate::footprint::Footprint {
-        crate::footprint::Footprint { name: self.name.clone(), pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(), courtyard: self.courtyard, model: self.model.clone() }
+        crate::footprint::Footprint { name: self.name.clone(), pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(), courtyard: self.courtyard, model: self.model.clone(), courtyard_outlines: vec![] }
     }
 
     /// Assign a deterministic id to every pad/graphic/text whose `id` is

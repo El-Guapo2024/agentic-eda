@@ -138,6 +138,10 @@ pub struct DrcFootprint {
     pub side: Side,
     /// `(x0, y0, x1, y1)`.
     pub courtyard: (Um, Um, Um, Um),
+    /// The real courtyard outlines in board space (`FOOTPRINT::GetCourtyard`),
+    /// when the footprint has them (`Footprint::courtyard_outlines`); empty
+    /// means only the `courtyard` box is known.
+    pub outlines: Vec<Vec<Point>>,
 }
 
 pub struct DrcBoard {
@@ -265,7 +269,8 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             let Some(part) = model.part(&fp.id) else { continue };
             let Some(footprint) = model.footprint_of(part) else { continue };
             if let Some(c) = placed_courtyard(model, part, fp) {
-                footprints.push(DrcFootprint { id: fp.id.clone(), side: fp.side, courtyard: c });
+                let outlines = footprint.courtyard_outlines.iter().map(|o| o.iter().map(|&p| pad_center(fp, p)).collect()).collect();
+                footprints.push(DrcFootprint { id: fp.id.clone(), side: fp.side, courtyard: c, outlines });
             }
             let board_rot = fp.rot as i64;
             for pad in &footprint.pads {

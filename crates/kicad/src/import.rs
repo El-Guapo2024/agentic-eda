@@ -725,6 +725,71 @@ fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str,
 /// courtyard is conservatively enclosed by the smallest symmetric box that
 /// contains every point found here -- the same simplification
 /// `courtyard_half` already documents for a hand-authored one.
+/// `FOOTPRINT::BuildCourtyardCaches`: the courtyard graphics chained into
+/// closed outlines, in the footprint's local frame (a back-side instance's
+/// x un-mirrored like a pad's -- see [`footprint_courtyard_half`]).
+/// `fp_rect`/`fp_poly`/`fp_circle` are closed already; `fp_line`/`fp_arc`
+/// segments are chained end to end. An open chain is dropped, like the
+/// malformed-courtyard case in source.
+fn footprint_courtyard_outlines(fp: &[Sexpr], side: Side) -> Vec<Vec<(i64, i64)>> {
+    let is_crtyd = |item: &[Sexpr]| -> bool { matches!(sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd")) };
+    let mut outlines: Vec<Vec<Point>> = Vec::new();
+    for item in sexpr::find_all(fp, "fp_rect").filter(|it| is_crtyd(it)) {
+        if let (Some(a), Some(b)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) {
+            outlines.push(vec![a, Point { x: b.x, y: a.y }, b, Point { x: a.x, y: b.y }]);
+        }
+    }
+    for item in sexpr::find_all(fp, "fp_poly").filter(|it| is_crtyd(it)) {
+        if let Some(poly) = poly_points(item) {
+            outlines.push(poly);
+        }
+    }
+    for item in sexpr::find_all(fp, "fp_circle").filter(|it| is_crtyd(it)) {
+        let (Some(c), Some(e)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
+        let r = ((e.x - c.x) as f64).hypot((e.y - c.y) as f64);
+        outlines.push((0..32).map(|i| { let t = i as f64 * std::f64::consts::TAU / 32.0; Point { x: c.x + (r * t.cos()).round() as i64, y: c.y + (r * t.sin()).round() as i64 } }).collect());
+    }
+    let mut edges: Vec<(Point, Point)> = Vec::new();
+    for item in sexpr::find_all(fp, "fp_line").filter(|it| is_crtyd(it)) {
+        if let (Some(a), Some(b)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) {
+            edges.push((a, b));
+        }
+    }
+    for item in sexpr::find_all(fp, "fp_arc").filter(|it| is_crtyd(it)) {
+        if let (Some(a), Some(m), Some(b)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "mid").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) {
+            let pts = eda_model::ir::tessellate_arc(a, m, b, 8);
+            edges.extend(pts.windows(2).map(|w| (w[0], w[1])));
+        }
+    }
+    // Chain every closed loop out of the loose segments.
+    let mut used = vec![false; edges.len()];
+    for start in 0..edges.len() {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let mut chain = vec![edges[start].0, edges[start].1];
+        loop {
+            let tail = *chain.last().unwrap();
+            if tail == chain[0] {
+                break;
+            }
+            let Some(k) = (0..edges.len()).find(|&k| !used[k] && (edges[k].0 == tail || edges[k].1 == tail)) else { break };
+            used[k] = true;
+            chain.push(if edges[k].0 == tail { edges[k].1 } else { edges[k].0 });
+        }
+        if chain.len() >= 4 && chain.first() == chain.last() {
+            chain.pop();
+            outlines.push(chain);
+        }
+    }
+    outlines
+        .into_iter()
+        .filter(|o| o.len() >= 3)
+        .map(|o| o.into_iter().map(|p| (if side == Side::Bottom { -p.x } else { p.x }, p.y)).collect())
+        .collect()
+}
+
 fn footprint_courtyard_half(fp: &[Sexpr], side: Side) -> Option<(i64, i64)> {
     let is_crtyd = |item: &[Sexpr]| -> bool { matches!(sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd")) };
 
@@ -844,7 +909,8 @@ fn import_footprints(
         // one for every instance.
         let key = dedup_footprint_key(&mut explicit, &lib_id, &pads);
         let courtyard = footprint_courtyard_half(fp, side);
-        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, model: crate::footprint_lib::model_from(fp) });
+        let courtyard_outlines = footprint_courtyard_outlines(fp, side);
+        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp) });
 
         parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_um: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
@@ -1369,11 +1435,11 @@ mod tests {
         let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
         let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads);
         assert_eq!(key_top, lib_id, "first instance (R35, top) gets the plain lib id");
-        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, model: None });
+        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None });
 
         let key_bottom = dedup_footprint_key(&mut explicit, lib_id, &bottom_pads);
         assert_ne!(key_bottom, lib_id, "R34 (bottom)'s own un-mirrored geometry disagrees with R35's cached one -- it must get its own slot, not silently reuse R35's");
-        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, model: None });
+        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None });
 
         // A third instance matching either existing slot exactly must reuse
         // it rather than growing a new one every time.

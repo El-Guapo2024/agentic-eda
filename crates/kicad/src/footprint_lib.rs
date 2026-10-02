@@ -77,7 +77,7 @@ pub fn parse_footprint_file(text: &str, name: &str) -> Result<Footprint, String>
         return Err("footprint has no pads this reader could place (missing at/size?)".into());
     }
 
-    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root) })
+    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root), courtyard_outlines: vec![] })
 }
 
 /// The `(model "...")` path, verbatim (KiCad writes it with its own

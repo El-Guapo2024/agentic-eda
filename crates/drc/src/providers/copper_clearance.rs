@@ -775,7 +775,7 @@ mod tests {
         let pad = smd_pad("U4.1", "U4", Some("GND"), (0, 0), 600); // 1.2mm square pad, centred at the origin, right edge at x=600
         let track = seg("t1", Some("+5V"), (870, -2000), (870, 2000)); // width 200 (seg()'s default) -> left edge at x=770, a 170um gap from the pad
         let mut board = empty_board(vec![track], vec![pad]);
-        board.footprints.push(crate::board::DrcFootprint { id: "U4".into(), side: Side::Top, courtyard: (-2000, -2000, 2000, 2000) });
+        board.footprints.push(crate::board::DrcFootprint { id: "U4".into(), side: Side::Top, courtyard: (-2000, -2000, 2000, 2000), outlines: vec![] });
 
         let default_rule = BoardRules { clearance: 200, ..BoardRules::default() };
         let v_default = check(&board, &default_rule);

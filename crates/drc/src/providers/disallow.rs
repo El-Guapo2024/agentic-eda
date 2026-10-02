@@ -239,7 +239,7 @@ mod tests {
     fn a_footprint_courtyard_overlapping_a_no_footprints_keepout_is_reported_regardless_of_keepout_layer() {
         let mut b = empty_board();
         b.keepouts = vec![DrcKeepout { no_footprints: true, ..rect_keepout("k1", "F.SilkS", 0, 0, 1000, 1000) }];
-        b.footprints = vec![crate::board::DrcFootprint { id: "U1".into(), side: eda_model::ir::Side::Top, courtyard: (500, 500, 1500, 1500) }];
+        b.footprints = vec![crate::board::DrcFootprint { id: "U1".into(), side: eda_model::ir::Side::Top, courtyard: (500, 500, 1500, 1500), outlines: vec![] }];
         let v = check(&b, &BoardRules::default());
         assert_eq!(v.len(), 1);
     }
