@@ -27,6 +27,7 @@ mod route_api;
 mod sch_output_api;
 mod studio;
 mod view_api;
+mod kicad_engine;
 mod tune_api;
 
 use eda::prelude::*;

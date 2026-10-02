@@ -536,7 +536,9 @@ fn handle(
         }
         ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job),
         ("GET", "/api/drc") => {
-            let v = drc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `?engine=kicad`: run the real kicad-cli DRC on the current design.
+            let kicad = target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "engine=kicad");
+            let v = if kicad { crate::kicad_engine::drc(dir) } else { drc_json(dir) }.unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/erc") => {

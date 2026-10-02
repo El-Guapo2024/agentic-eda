@@ -8,7 +8,7 @@ shape/kind, a track per copper layer, a via, a net-attached zone fill).
 | layer | kicad apertures | ours | kicad flashes | ours | kicad regions | ours | kicad area um2 | ours | area delta |
 |---|---|---|---|---|---|---|---|---|---|
 | parity_fixture-F_Cu.gtl | 9 | 9 | 8 | 8 | 0 | 0 | 0 | 0 | 0.00% |
-| parity_fixture-B_Cu.gbl | 5 | 5 | 4 | 4 | 1 | 1 | 248166458 | 248166458 | 0.00% |
+| parity_fixture-B_Cu.gbl | 5 | 5 | 4 | 4 | 1 | 1 | 248042842 | 248042842 | 0.00% |
 | parity_fixture-F_Mask.gts | 7 | 7 | 7 | 7 | 0 | 0 | 0 | 0 | 0.00% |
 | parity_fixture-B_Mask.gbs | 3 | 3 | 3 | 3 | 0 | 0 | 0 | 0 | 0.00% |
 | parity_fixture-F_Paste.gtp | 4 | 4 | 4 | 4 | 0 | 0 | 0 | 0 | 0.00% |

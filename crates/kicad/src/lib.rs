@@ -21,7 +21,7 @@ use eda_model::ir::{Design, NetLabel, NoConnect, PowerSymbol, SchematicText, Sym
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
-pub use pcb::{export_kicad_pcb, export_kicad_pro};
+pub use pcb::{export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro};
 
 mod sexpr;
 mod import;
@@ -947,6 +947,35 @@ pub(crate) fn pad_rot_from_file(fp_side: eda_model::ir::Side, fp_rot: eda_model:
 /// true RFC 4122 v5, but stable/collision-resistant and structurally valid
 /// so KiCad accepts it as a UUID field).
 pub(crate) fn duid(seed: &str) -> String {
+    duid_raw(seed)
+}
+
+thread_local! {
+    /// Active while [`pcb::export_kicad_pcb_mapped`] runs: every exported
+    /// item's KiCad uuid -> our own item id.
+    static UUID_MAP: std::cell::RefCell<Option<std::collections::HashMap<String, String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// [`duid`], also recording `uuid -> our_id` when a mapped export is running.
+pub(crate) fn duid_for(seed: &str, our_id: &str) -> String {
+    let u = duid_raw(seed);
+    UUID_MAP.with(|m| {
+        if let Some(map) = m.borrow_mut().as_mut() {
+            map.insert(u.clone(), our_id.to_string());
+        }
+    });
+    u
+}
+
+pub(crate) fn start_uuid_map() {
+    UUID_MAP.with(|m| *m.borrow_mut() = Some(Default::default()));
+}
+
+pub(crate) fn take_uuid_map() -> std::collections::HashMap<String, String> {
+    UUID_MAP.with(|m| m.borrow_mut().take().unwrap_or_default())
+}
+
+fn duid_raw(seed: &str) -> String {
     let hash = blake3::hash(seed.as_bytes());
     let b = hash.as_bytes();
     let mut bytes = [0u8; 16];

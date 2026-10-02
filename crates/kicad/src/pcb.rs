@@ -11,7 +11,18 @@ use std::fmt::Write as _;
 use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
 
-use crate::{duid, fmt_mm_f, mm, sexpr_str};
+use crate::{fmt_mm_f, mm, sexpr_str};
+
+/// [`export_kicad_pcb`], also returning every exported item's KiCad uuid
+/// mapped to our own item id (track `id`/`id#segment`, via, zone,
+/// footprint, `REF.PAD`, shape, text; Edge.Cuts lines map to `outline`) --
+/// how a kicad-cli report is pointed back at `design.json`.
+pub fn export_kicad_pcb_mapped(design: &Design, model: &ConstraintModel, meta: &super::ExportMeta) -> Result<(String, std::collections::HashMap<String, String>), Vec<CheckResult>> {
+    crate::start_uuid_map();
+    let r = export_kicad_pcb(design, model, meta);
+    let map = crate::take_uuid_map();
+    r.map(|s| (s, map))
+}
 
 pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super::ExportMeta) -> Result<String, Vec<CheckResult>> {
     let Some(pl) = &design.placement else {
@@ -226,7 +237,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
                 let x2 = mm(pair[1].x);
                 let y2 = mm(pair[1].y);
                 let w = mm(t.width);
-                let uuid = duid(&format!("segment:{}:{}:{}:{}", t.net, t.layer, ti, j));
+                let uuid = crate::duid_for(&format!("segment:{}:{}:{}:{}", t.net, t.layer, ti, j), &if j == 0 { t.id.clone() } else { format!("{}#{j}", t.id) });
                 writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}) (layer {}) (net {n}) (uuid \"{uuid}\"))", sexpr_str(&t.layer)).unwrap();
             }
         }
@@ -239,7 +250,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             let y = mm(v.at.y);
             let dia = mm(v.diameter);
             let drill = mm(v.drill);
-            let uuid = duid(&format!("via:{}:{}:{}", v.net, v.at.x, v.at.y));
+            let uuid = crate::duid_for(&format!("via:{}:{}:{}", v.net, v.at.x, v.at.y), &v.id);
             writeln!(
                 out,
                 "\t(via (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}) (net {n}) (uuid \"{uuid}\"))",
@@ -267,7 +278,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
                 continue;
             }
             let n = net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net);
-            let uuid = duid(&format!("zone:{}:{}", z.net, z.layer));
+            // Seeded by the zone's own id: two pours on one net and layer must not share a uuid.
+            let uuid = crate::duid_for(&if z.id.is_empty() { format!("zone:{}:{}", z.net, z.layer) } else { format!("zone:{}", z.id) }, &z.id);
             writeln!(out, "\t(zone (net {n}) (net_name {}) (layer {}) (uuid \"{uuid}\")", sexpr_str(&z.net), sexpr_str(&z.layer)).unwrap();
             writeln!(out, "\t\t(hatch edge 0.5)").unwrap();
             writeln!(out, "\t\t(connect_pads (clearance {clearance_mm}))").unwrap();
@@ -326,7 +338,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             let y1 = mm(a.y);
             let x2 = mm(b.x);
             let y2 = mm(b.y);
-            let uuid = duid(&format!("edge:{i}:{}:{}:{}:{}", a.x, a.y, b.x, b.y));
+            let uuid = crate::duid_for(&format!("edge:{i}:{}:{}:{}:{}", a.x, a.y, b.x, b.y), "outline");
             writeln!(out, "\t(gr_line (start {x1} {y1}) (end {x2} {y2}) (layer \"Edge.Cuts\") (uuid \"{uuid}\"))").unwrap();
         }
     }
@@ -394,7 +406,7 @@ fn write_footprint(
     // `footprint::to_board` output and `kicad-cli pcb drc` unconnected-item
     // positions for a rotated part.
     let rot_deg = fmt_mm_f(-(fp.rot as f64) / 1000.0);
-    let uuid = duid(&format!("footprint:{}", fp.id));
+    let uuid = crate::duid_for(&format!("footprint:{}", fp.id), &fp.id);
     let lib_name = part.footprint.clone().unwrap_or_else(|| footprint.name.clone());
     let lib_id = if lib_name.contains(':') { lib_name } else { format!("eda:{lib_name}") };
 
@@ -409,7 +421,7 @@ fn write_footprint(
     // flipped footprint's fields (EDA_TEXT::Format), and its DRC flags
     // back-layer text without it (nonmirrored_text_on_back_layer).
     let justify = if fp.side == Side::Bottom { " (justify mirror)" } else { "" };
-    let ref_uuid = duid(&format!("footprint:{}:ref", fp.id));
+    let ref_uuid = crate::duid_for(&format!("footprint:{}:ref", fp.id), &fp.id);
     // Label offset from the footprint origin, in the footprint's own frame:
     // just outside the courtyard on the side the placer chose.
     let (hw, hh) = footprint.courtyard_half();
@@ -428,7 +440,7 @@ fn write_footprint(
         sexpr_str(ref_layer)
     )
     .unwrap();
-    let val_uuid = duid(&format!("footprint:{}:val", fp.id));
+    let val_uuid = crate::duid_for(&format!("footprint:{}:val", fp.id), &fp.id);
     let fab_layer = if fp.side == Side::Bottom { "B.Fab" } else { "F.Fab" };
     writeln!(
         out,
@@ -476,7 +488,7 @@ fn write_footprint(
         // physical pads on one pin), so the number alone cannot make a
         // unique uuid; the position can, since two pads of one footprint
         // never coincide.
-        let uuid = duid(&format!("pad:{}:{}:{}:{}", fp.id, pad.number, pad.at.0, pad.at.1));
+        let uuid = crate::duid_for(&format!("pad:{}:{}:{}:{}", fp.id, pad.number, pad.at.0, pad.at.1), &format!("{}.{}", fp.id, pad.number));
         // KiCad stores a pad's orientation as its footprint's own angle
         // plus the pad's own (0 for the overwhelming majority of pads) --
         // see `pad_file_angle` for the mirroring subtlety.
@@ -546,7 +558,7 @@ fn write_footprint(
 /// interior, and KiCad's own writer never emits `fill` for either).
 fn write_shape(out: &mut String, shape: &Shape) {
     let sw = |w: Um| mm(w.max(0));
-    let uuid = duid(&format!("shape:{}", shape.id()));
+    let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let layer = sexpr_str(shape.layer());
     let fill = |filled: bool| if filled { "yes" } else { "no" };
     match shape {
@@ -598,7 +610,7 @@ fn write_shape(out: &mut String, shape: &Shape) {
 /// not centred/unmirrored (exactly KiCad's own rule, so a plain centred
 /// label round-trips without growing a token it never had).
 fn write_text(out: &mut String, text: &Text) {
-    let uuid = duid(&format!("text:{}", text.id));
+    let uuid = crate::duid_for(&format!("text:{}", text.id), &text.id);
     let angle_deg = fmt_mm_f(text.angle as f64 / 1000.0);
     let size_mm = mm(text.size_um);
     let thickness_mm = mm(text.stroke_width);

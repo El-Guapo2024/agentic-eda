@@ -1233,6 +1233,16 @@ pub fn run(
         // studio UI's own `/api/undo`/`/api/redo` (see their own doc).
         "undo" => undo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
         "redo" => redo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
+        // DRC: our own engine, or `--kicad` for kicad-cli on the exported board.
+        "drc" => {
+            let v = if rest.iter().any(|a| a == "--kicad") { crate::kicad_engine::drc(&dir)? } else {
+                let (_, design, model) = load(&dir)?;
+                let found = eda_connectivity::run_drc(&design, &model);
+                serde_json::json!({ "engine": "eda", "counts": eda_drc::counts_by_type(&found), "violations": found.iter().map(|v| serde_json::json!({ "type": v.error_type, "description": v.description, "items": v.items.iter().map(|i| serde_json::json!({ "id": i.id, "description": i.description, "pos": [i.pos.0, i.pos.1] })).collect::<Vec<_>>() })).collect::<Vec<_>>() })
+            };
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            Ok(())
+        }
         // Shared view state (`view_api`): print it, or select / switch tab /
         // zoom to items in the studio as this actor.
         "gui" => {
@@ -1259,7 +1269,7 @@ pub fn run(
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|gui|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|gui|serve> [-C dir] [--strict]",
         )),
     }
 }

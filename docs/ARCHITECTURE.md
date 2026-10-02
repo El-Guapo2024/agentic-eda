@@ -37,9 +37,12 @@ never edited as masters.
 - **kicad-cli is the main engine** for batch work it already does exactly:
   DRC, ERC, plots, Gerber/drill/position/STEP exports, netlist, BOM. The
   backend exports the current `design.json` revision, runs kicad-cli, and
-  maps the report back to our item ids. (Install pending: the sandbox
-  network must allow `ppa.launchpadcontent.net`, `keyserver.ubuntu.com`,
-  `api.launchpad.net` for KiCad 9.)
+  maps the report back to our item ids (`crates/cli/src/kicad_engine.rs`,
+  `eda board drc --kicad`, `GET /api/drc?engine=kicad`; derived files go
+  to `.kicad/` beside `design.json`). KiCad 9.0.9 from the
+  kicad-9.0-releases PPA; `EDA_KICAD_CLI` overrides the binary. kicad-cli
+  9.0 has no `--refill-zones`, so its DRC checks the zone fills our
+  exporter writes; newer kicad-cli refills them itself.
 - **Our own ports** are kept for what kicad-cli cannot do or cannot do fast
   enough interactively:
   - the interactive router (`crates/pns`, a port of KiCad's PNS),
