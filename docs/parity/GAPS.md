@@ -111,3 +111,27 @@ Catalog-coverage headline, independent of any one board sample: KiCad's `DRC_ITE
 - DRC: `track_angle`, `track_segment_length`, `track_on_post_machined_layer`, `track_not_centered_on_via`, `tuning_profile_track_geometries`, `missing_tuning_profile` — newer KiCad 9/10 length-tuning-adjacent checks, all coupled to gap #22.
 - ERC: `stacked_pin_name`, `field_name_whitespace`, `similar_labels`, `similar_power`, `similar_label_and_power`, `undefined_netclass`, `simulation_model_issue` — lower-severity style/lint checks, cheap individually but low impact.
 - 3D viewer: placed-part geometry in the always-on procedural scene is flat boxes, not real component shapes (real models only via a separate, best-effort async GLB fetch) — L, confidence low (KiCad's `3d-viewer/` source wasn't present in the snapshot read for this audit).
+
+## Function audit: `pcbnew/zone_filler.cpp` (3,927 lines) vs `crates/zone-filler` (876)
+
+Function-by-function, against KiCad commit 8303b2ad. "Plumbing" = threading,
+progress, cancel, undo/commit -- no effect on the fill geometry.
+
+| KiCad function | lines | ours | status |
+|---|---|---|---|
+| `Fill` (orchestration) | ~1080 | `eda_drc::fill::fill_all_zones` | **partial**: no iterative refill (issue 21746), island removal is our own `apply_island_removal` not `FillIsolatedIslandsMap` via connectivity, no teardrop/zone priority ordering pass; rest is plumbing |
+| `addKnockout` (pad / graphic) | ~110 | `add_knockout` | partial: no custom-pad convex-hull mode |
+| `addHoleKnockout` | 5 | inline | ported |
+| `knockoutThermalReliefs` | ~315 | inline in `fill_zone` | **partial**: no per-pad zone-connection overrides, no padstack per-layer shapes |
+| `buildCopperItemClearances` | ~500 | inline in `fill_zone` | **partial**: copper text (as strokes) since 5770886; no courtyard clearance knockouts, no net-tie exemptions, no Edge.Cuts/Margin graphic knockouts by edge clearance (board outline only) |
+| `buildDifferentNetZoneClearances` | ~65 | `other_zones` loop | ported |
+| `subtractHigherPriorityZones` | ~35 | in `fill_zone` | ported |
+| `connect_nearby_polys` | ~45 | -- | **missing** |
+| `postKnockoutMinWidthPrune` | ~55 | `postknockout_min_width_prune_if_needed` | ported |
+| `fillCopperZone` | ~355 | `fill_zone` | partial (see rows above) |
+| `fillNonCopperZone` | ~110 | -- | **missing** (non-copper zones) |
+| `fillSingleZone` | ~35 | `fill_zone` | partial |
+| `buildThermalSpokes` | ~375 | `spokes::build_spokes` (~30) | **simplified**: bbox-based spokes; KiCad uses pad shape, spoke angle, circle/oval special cases, spoke-end-in-fill test with epsilon |
+| `buildHatchZoneThermalRings` | ~115 | -- | **missing** |
+| `addHatchFillTypeOnZone` | ~235 | -- | **missing** (hatch fill mode) |
+| `refillZoneFromCache` | ~110 | -- | missing (iterative refill) |
