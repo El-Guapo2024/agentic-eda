@@ -182,6 +182,71 @@ pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     Ok(json!({ "engine": format!("kicad-cli {}", cli_version(&cli)), "violations": violations, "counts": counts }))
 }
 
+/// kicad-cli `pcb export` subcommands that write a directory of files; every
+/// other kind writes one file named `board.<ext>`.
+const DIR_KINDS: &[&str] = &["gerbers", "drill"];
+
+fn export_ext(kind: &str) -> &'static str {
+    match kind {
+        "pos" => "pos",
+        "step" => "step",
+        "stpz" => "stpz",
+        "brep" => "brep",
+        "xao" => "xao",
+        "glb" => "glb",
+        "stl" => "stl",
+        "ply" => "ply",
+        "u3d" => "u3d",
+        "vrml" => "wrl",
+        "pdf" | "3dpdf" => "pdf",
+        "svg" => "svg",
+        "dxf" => "dxf",
+        "ps" => "ps",
+        "png" => "png",
+        "ipc2581" => "xml",
+        "ipcd356" => "d356",
+        "odb" => "zip",
+        "gencad" => "cad",
+        "idf" => "emn",
+        "bom" => "csv",
+        "stats" | "stackup" => "txt",
+        _ => "out",
+    }
+}
+
+/// `kicad-cli pcb export <kind> [args...]` on the current design, into
+/// `export/kicad/<kind>/`. `args` are passed through (e.g. `--layers
+/// F.Cu,B.Cu`, `--format csv`). Returns the files written this run,
+/// relative to `dir`.
+pub fn export(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+    if !kind.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(fail("kicad_cli_export", kind, "unknown export kind"));
+    }
+    let cli = find_cli().ok_or_else(|| fail("kicad_cli_missing", "kicad-cli", "kicad-cli not found (set EDA_KICAD_CLI or install KiCad)"))?;
+    let (pcb, _) = export_board(dir)?;
+    let out_dir = dir.join("export").join("kicad").join(kind);
+    std::fs::create_dir_all(&out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
+    let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
+    let target = if DIR_KINDS.contains(&kind) { out_dir.clone() } else { out_dir.join(format!("board.{}", export_ext(kind))) };
+    let mut out_arg = target.to_string_lossy().to_string();
+    if DIR_KINDS.contains(&kind) && !out_arg.ends_with('/') {
+        out_arg.push('/');
+    }
+    let out = Command::new(&cli).args(["pcb", "export", kind]).args(args).arg("-o").arg(&out_arg).arg(&pcb).output().map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
+    let mut files: Vec<String> = std::fs::read_dir(&out_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started))
+        .map(|e| format!("export/kicad/{kind}/{}", e.file_name().to_string_lossy()))
+        .collect();
+    files.sort();
+    if !out.status.success() || files.is_empty() {
+        return Err(fail("kicad_cli_export", kind, format!("kicad-cli pcb export {kind} failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))));
+    }
+    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(&cli)), "files": files }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

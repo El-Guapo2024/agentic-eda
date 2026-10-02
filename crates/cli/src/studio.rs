@@ -692,6 +692,13 @@ fn handle(
         // Position Files dialogs, plus the plain BOM): `crate::fab_api`
         // runs the same `eda_fab` writers `eda fab ...` does and writes
         // into `<dir>/export/` -- see that module's own doc comment.
+        ("POST", "/api/fab/kicad") => {
+            let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let kind = req["kind"].as_str().unwrap_or("");
+            let args: Vec<String> = req["args"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            let v = crate::kicad_engine::export(dir, kind, &args).unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("POST", "/api/fab/gerbers") => respond(stream, "200 OK", "application/json", fab_api::gerbers(dir, &body).to_string().as_bytes()),
         ("POST", "/api/fab/drill") => respond(stream, "200 OK", "application/json", fab_api::drill(dir, &body).to_string().as_bytes()),
         ("POST", "/api/fab/pos") => respond(stream, "200 OK", "application/json", fab_api::pos(dir, &body).to_string().as_bytes()),

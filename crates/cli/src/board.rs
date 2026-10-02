@@ -1233,6 +1233,14 @@ pub fn run(
         // studio UI's own `/api/undo`/`/api/redo` (see their own doc).
         "undo" => undo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
         "redo" => redo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
+        // Any kicad-cli `pcb export` kind on the exported board:
+        // `eda board export --kicad gerbers [-- kicad-cli args...]`.
+        "export" => {
+            let kind = rest.iter().position(|a| a == "--kicad").and_then(|i| rest.get(i + 1)).ok_or_else(|| fail("board_usage", "export", "usage: eda board export --kicad <gerbers|drill|pos|step|glb|pdf|svg|ipc2581|odb|...> [-- args]"))?;
+            let pass: Vec<String> = rest.iter().skip_while(|a| *a != "--").skip(1).cloned().collect();
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::export(&dir, kind, &pass)?).unwrap_or_default());
+            Ok(())
+        }
         // ERC through kicad-cli on the exported schematic.
         "erc" => {
             if !rest.iter().any(|a| a == "--kicad") {
@@ -1277,7 +1285,7 @@ pub fn run(
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|erc|gui|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|erc|export|gui|serve> [-C dir] [--strict]",
         )),
     }
 }
