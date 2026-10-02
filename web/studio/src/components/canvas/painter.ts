@@ -9,7 +9,8 @@ import type { BoardState, Dimension, DrcViolation, FillReport, Part, Pad, Ratsne
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { boundsOfPoints, hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
-import { posture45 } from "./routing";
+import { constrainByAngleMode } from "./routing";
+import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
@@ -51,6 +52,8 @@ export interface PaintOptions {
   drawState: DrawState | null;
   cursorUm: { x: number; y: number } | null;
   activeTool: ToolId;
+  /** `pcbnew.EditorControl.lineModeNext`'s current mode -- constrains the segment/rect tools' rubber-band, same as their click does (Canvas.tsx). Absent = the pre-existing 45-degree behavior. */
+  angleSnapMode?: AngleSnapMode;
   /**
    * pcbnew.Control.pad/track/viaDisplayMode ("Sketch Pads/Tracks/Vias"):
    * outline instead of filled. KiCad draws a true unfilled outline (two
@@ -760,7 +763,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   if (cursor && !frozen) {
     const last = pts[pts.length - 1]!;
     const usePosture = draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect");
-    const raw: [number, number] = usePosture ? posture45(last, [cursor.x, cursor.y]) : [cursor.x, cursor.y];
+    const raw: [number, number] = usePosture ? constrainByAngleMode(opts.angleSnapMode ?? "45", last, [cursor.x, cursor.y]) : [cursor.x, cursor.y];
     rubberEnd = snapPoint(raw[0], raw[1], opts.gridUm);
   }
   const color = layerColor("selection");

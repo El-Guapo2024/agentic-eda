@@ -15,6 +15,8 @@ import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
+import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { movableItem } from "../kicad-port/pcbEditActions";
 import { alignAxis, alignDeltas, getDeltasForDistributeByGaps, getDeltasForDistributeByPoints, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
@@ -607,6 +609,8 @@ export interface StudioState {
   routerSettingsDialogOpen: boolean;
   /** `7` (pcbnew.LengthTuner.TuneSingleTrack) -- components/LengthTuningDialog.tsx. */
   lengthTuningDialogOpen: boolean;
+  /** The "pcbnew parity" action batch's own state (move-individually queue, zone cutout/similar mode, parity dialogs, angle snap, ...) -- see kicad-port/pcbParityState.ts. Patched by the single `PCBX` action. */
+  pcbx: PcbParityState;
   /**
    * `pcbnew.InteractiveDrawing.ruleArea` vs `.zone` (task item 3): both
    * arm the same outline-drawing tool (`activeTool === "zone"`); this is
@@ -737,6 +741,7 @@ const initialState: StudioState = {
   moveExactDialogOpen: false,
   routerSettingsDialogOpen: false,
   lengthTuningDialogOpen: false,
+  pcbx: DEFAULT_PCB_PARITY,
   nextZoneIsRuleArea: false,
   cleanupTracksDialogOpen: false,
   editTracksAndViasDialogOpen: false,
@@ -841,6 +846,7 @@ export type Action =
   | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
   | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean }
+  | { type: "PCBX"; patch: Partial<PcbParityState> }
   | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
   | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
@@ -932,6 +938,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         schTextPending: null,
         armedSymbol: null,
         symbolProperties: null,
+        pcbx: { ...state.pcbx, moveQueue: [], movingIndividually: false, zoneDrawMode: null },
       };
     case "ESCAPE": {
       // pcb_selection_tool.cpp's IsCancel() handler, tiered exactly like
@@ -960,6 +967,7 @@ function reducer(state: StudioState, action: Action): StudioState {
           schTextPending: null,
           armedSymbol: null,
           symbolProperties: null,
+          pcbx: { ...state.pcbx, moveQueue: [], movingIndividually: false, zoneDrawMode: null },
         };
       }
       if (state.selection.size > 0) {
@@ -1140,8 +1148,11 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, routerSettings: action.settings };
     case "SET_LENGTH_TUNING_DIALOG_OPEN":
       return { ...state, lengthTuningDialogOpen: action.open };
+    case "PCBX":
+      return { ...state, pcbx: { ...state.pcbx, ...action.patch } };
     case "SET_NEXT_ZONE_IS_RULE_AREA":
-      return { ...state, nextZoneIsRuleArea: action.value };
+      // Arming a plain zone/rule-area draw also drops any pending cutout/similar mode (pcbx.zoneDrawMode).
+      return { ...state, nextZoneIsRuleArea: action.value, pcbx: { ...state.pcbx, zoneDrawMode: null } };
     case "SET_CLEANUP_TRACKS_DIALOG_OPEN":
       return { ...state, cleanupTracksDialogOpen: action.open };
     case "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN":
@@ -1206,6 +1217,8 @@ export interface StudioApi {
   deleteSymbol: (id: string) => Promise<void>;
   /** Any other Cmd this file doesn't have a named wrapper for (the delete_ ops, set_track_width, edit_text, ...) -- returns whether the backend accepted it, same as every named wrapper's underlying runCmd. */
   cmd: (c: Cmd) => Promise<boolean>;
+  /** `moveIndividually` hand-off to the next queued item (state.pcbx.moveQueue) -- after a drop commits, or for `skip` (Tab) without committing. */
+  advanceMoveQueue: () => void;
   /**
    * Cmd+D on the current selection's tracks/vias/zones/shapes/text
    * (footprints excluded -- see `Cmd::Duplicate`'s own doc comment).
@@ -1431,6 +1444,40 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     [refresh]
   );
 
+  /**
+   * `EDIT_TOOL::Move`'s moveIndividually hand-off ("if( ++itemIdx <
+   * orig_items.size() ) { ...Pick up new item }"): once the dropped item has
+   * committed, glue the next queued one to the cursor -- selection becomes
+   * just that item, and the move origin is ITS anchor so the anchor lands
+   * on the cursor (`nextItem->Move( cursor - nextItem->GetPosition() )`).
+   * Also what `pcbnew.InteractiveEdit.skip` (Tab) calls, minus the commit.
+   * No-op when the queue is empty (every ordinary move).
+   */
+  const advanceMoveQueue = (queue: readonly string[] = stateRef.current.pcbx.moveQueue) => {
+    const board = stateRef.current.board;
+    if (queue.length === 0 || !board) {
+      // Last item dropped/skipped: Move Individually is over.
+      if (stateRef.current.pcbx.movingIndividually) {
+        dispatch({ type: "PCBX", patch: { movingIndividually: false } });
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      }
+      return;
+    }
+    const [next, ...rest] = queue;
+    const item = movableItem(board, next!);
+    dispatch({ type: "PCBX", patch: { moveQueue: rest } });
+    if (!item) {
+      // Vanished or unmovable since the queue was built: skip straight on.
+      advanceMoveQueue(rest);
+      return;
+    }
+    dispatch({ type: "SET_SELECTION", refs: [next!] });
+    dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+    dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+    dispatch({ type: "SET_MOVE_ORIGIN", at: { x: item.at[0], y: item.at[1] } });
+  };
+
   const api: StudioApi = {
     refresh,
     partByRef: (ref) => stateRef.current.board?.parts.find((p) => p.ref === ref),
@@ -1468,6 +1515,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       await runCmd({ op: "delete_symbol", id });
     },
     cmd: (c) => runCmd(c),
+    advanceMoveQueue: () => advanceMoveQueue(),
     // edit_tool.cpp's real Rotate: a single selected item spins about its
     // own anchor (dx=dy=0, no pivot -- Cmd::MoveExact's own pivot:None
     // branch lands on exactly the same pose Cmd::Rotate's simpler
@@ -1605,6 +1653,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           if (rotateQuarterTurns) await runCmd({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
         }
       }
+      advanceMoveQueue();
     },
     placeArmedAt: async (xUm, yUm) => {
       const ref = stateRef.current.armed;

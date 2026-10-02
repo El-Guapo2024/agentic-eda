@@ -23,7 +23,48 @@ const DOM_KEY_TO_CANONICAL: Record<string, string> = {
   "`": "`",
   "+": "+",
   "-": "-",
+  Insert: "Insert",
 };
+
+/** The unshifted character of the physical key `KeyboardEvent.code` names -- for hotkeys KiCad writes as Shift + that key ("Ctrl+Shift+."), where the browser instead reports the shifted character (">") in `key`. */
+const UNSHIFTED_CHAR_BY_CODE: Record<string, string> = {
+  Period: ".",
+  Comma: ",",
+  Slash: "/",
+  Minus: "-",
+  Equal: "=",
+  Semicolon: ";",
+  Quote: "'",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backslash: "\\",
+  Backquote: "`",
+};
+
+/**
+ * Every hotkey string a keydown could be spelled as in actions.json:
+ * `eventToHotkey`'s own reading first, then -- only when Shift is down and the
+ * typed key is a single symbol character -- two alternates, because the
+ * browser reports a *shifted* symbol and KiCad's table spells such hotkeys
+ * both ways:
+ *   - the typed character already carries the Shift, so the explicit Shift
+ *     is dropped ("Ctrl++" for Ctrl+Shift+= typed as "+", "Ctrl+<", "?");
+ *   - explicit Shift plus the physical key's unshifted character, from
+ *     `e.code` ("Ctrl+Shift+." for Ctrl+Shift+> ).
+ * Letters/digits/named keys never produce alternates.
+ */
+export function eventToHotkeyCandidates(e: KeyboardEvent | ReactKeyboardEvent, isMacPlatform: boolean = isMac()): string[] {
+  const primary = eventToHotkey(e, isMacPlatform);
+  if (!primary) return [];
+  const out = [primary];
+  if (!e.shiftKey || e.key.length !== 1 || /[A-Za-z0-9]/.test(e.key)) return out;
+  const ctrlLike = isMacPlatform ? e.metaKey : e.ctrlKey;
+  const prefix = (withShift: boolean) => `${ctrlLike ? "Ctrl+" : ""}${e.altKey ? "Alt+" : ""}${withShift ? "Shift+" : ""}`;
+  out.push(`${prefix(false)}${e.key}`);
+  const unshifted = UNSHIFTED_CHAR_BY_CODE[(e as KeyboardEvent).code];
+  if (unshifted) out.push(`${prefix(true)}${unshifted}`);
+  return out;
+}
 
 /**
  * e.g. `{ctrlKey:true, shiftKey:true, key:"z"}` -> "Ctrl+Shift+Z" (or with

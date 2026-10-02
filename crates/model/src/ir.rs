@@ -1895,6 +1895,15 @@ pub struct DrawingsSection {
     /// checked against other copper and knocked out of zone fills.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub copper_texts: Vec<FootprintText>,
+    /// `BOARD_ITEM::IsLocked()`: ids of every locked item -- a placed part's
+    /// reference, or a track/via/zone/shape/text id. Cross-kind on purpose,
+    /// same storage-convenience reason [`Group`] lives here (one set, one
+    /// `Cmd::SetLocked`, no per-struct field to thread through every
+    /// construction site). Sorted and de-duplicated; `eda_ops` prunes ids
+    /// whose item no longer exists whenever it rewrites the set. Additive:
+    /// absent in an older `design.json` reads as "nothing locked".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locked_ids: Vec<String>,
 }
 
 /// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no

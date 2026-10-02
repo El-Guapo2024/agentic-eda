@@ -13,10 +13,7 @@
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { tuneLengthApply, tuneLengthPreview } from "../api/client";
-import { formatLength, umFrom } from "../state/units";
-
-const DEFAULT_AMPLITUDE_UM = 200;
-const DEFAULT_SPACING_UM = 400;
+import { formatLength, umFrom, umTo } from "../state/units";
 
 export function LengthTuningDialog() {
   const state = useStudioState();
@@ -28,8 +25,26 @@ export function LengthTuningDialog() {
   const track = trackId ? api.trackById(trackId) : undefined;
 
   const [targetLength, setTargetLength] = useState(0); // display units
-  const [amplitude, setAmplitude] = useState(DEFAULT_AMPLITUDE_UM); // display units
-  const [spacing, setSpacing] = useState(DEFAULT_SPACING_UM); // display units
+  // Amplitude/spacing are the persistent MEANDER_SETTINGS (state.pcbx.lengthTuner) -- the same
+  // values `pcbnew.lengthTuner.AmplIncrease/Decrease/SpacingIncrease/Decrease` ("4"/"3"/"2"/"1")
+  // step while this dialog is open. Typed values are kept locally (so "0." survives a keystroke)
+  // and mirrored into the store; an outside change (a hotkey step) flows back into the field.
+  const tuner = state.pcbx.lengthTuner;
+  const [amplitude, setAmplitudeLocal] = useState(umTo(tuner.amplitudeUm, state.units)); // display units
+  const [spacing, setSpacingLocal] = useState(umTo(tuner.spacingUm, state.units)); // display units
+  const setAmplitude = (v: number) => {
+    setAmplitudeLocal(v);
+    dispatch({ type: "PCBX", patch: { lengthTuner: { ...tuner, amplitudeUm: Math.max(1, Math.round(umFrom(v, state.units))) } } });
+  };
+  const setSpacing = (v: number) => {
+    setSpacingLocal(v);
+    dispatch({ type: "PCBX", patch: { lengthTuner: { ...tuner, spacingUm: Math.max(1, Math.round(umFrom(v, state.units))) } } });
+  };
+  useEffect(() => {
+    if (Math.max(1, Math.round(umFrom(amplitude, state.units))) !== tuner.amplitudeUm) setAmplitudeLocal(umTo(tuner.amplitudeUm, state.units));
+    if (Math.max(1, Math.round(umFrom(spacing, state.units))) !== tuner.spacingUm) setSpacingLocal(umTo(tuner.spacingUm, state.units));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tuner.amplitudeUm, tuner.spacingUm, state.units]);
   const [flip, setFlip] = useState(false);
   const [preview, setPreview] = useState<{ achieved?: number; colliding?: boolean; message?: string } | null>(null);
 
@@ -38,8 +53,6 @@ export function LengthTuningDialog() {
   useEffect(() => {
     if (!open || !track) return;
     setTargetLength(Math.round((originalLengthUm * 1.2) / umFrom(1, state.units)) || 0);
-    setAmplitude(DEFAULT_AMPLITUDE_UM / umFrom(1, state.units));
-    setSpacing(DEFAULT_SPACING_UM / umFrom(1, state.units));
     setFlip(false);
     setPreview(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps

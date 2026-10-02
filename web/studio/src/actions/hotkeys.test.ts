@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eventToHotkey, displayHotkey, effectiveHotkey } from "./hotkeys";
+import { eventToHotkey, eventToHotkeyCandidates, displayHotkey, effectiveHotkey } from "./hotkeys";
 
 function key(partial: Partial<{ key: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }>) {
   return { key: "a", ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...partial } as unknown as KeyboardEvent;
@@ -72,4 +72,37 @@ test("effectiveHotkey: Mac prefers macHotkey/macAltHotkey when KiCad's source gi
 test("effectiveHotkey: common.Interactive.delete -- Del on Windows/Linux, Backspace on macOS", () => {
   const del = { hotkey: "Del", altHotkey: null, macHotkey: "Backspace", macAltHotkey: null };
   assert.deepEqual(effectiveHotkey(del, true), { hotkey: "Backspace", altHotkey: null });
+});
+
+function keyc(partial: Partial<{ key: string; code: string; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }>) {
+  return { key: "a", code: "KeyA", ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...partial } as unknown as KeyboardEvent;
+}
+
+test("eventToHotkey: Insert is a named key", () => {
+  assert.equal(eventToHotkey(keyc({ key: "Insert" }), false), "Insert");
+});
+
+test("eventToHotkeyCandidates: letters, digits and named keys have exactly one spelling", () => {
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "X", shiftKey: true }), false), ["Shift+X"]);
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "4" }), false), ["4"]);
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "Delete", shiftKey: true }), false), ["Shift+Del"]);
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "Shift", shiftKey: true }), false), []);
+});
+
+test("eventToHotkeyCandidates: Ctrl+'+' typed with Shift also matches KiCad's 'Ctrl++'", () => {
+  // changeTrackLayerNext / zoomIn (macOS) are spelled "Ctrl++": the typed "+" already carries the Shift.
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "+", code: "Equal", ctrlKey: true, shiftKey: true }), false), ["Ctrl+Shift++", "Ctrl++", "Ctrl+Shift+="]);
+  // no Shift (numpad '+'): only the plain reading
+  assert.deepEqual(eventToHotkeyCandidates(keyc({ key: "+", code: "NumpadAdd", ctrlKey: true }), false), ["Ctrl++"]);
+});
+
+test("eventToHotkeyCandidates: Ctrl+Shift+'.' (typed as '>') matches similarZone's 'Ctrl+Shift+.'", () => {
+  const c = eventToHotkeyCandidates(keyc({ key: ">", code: "Period", ctrlKey: true, shiftKey: true }), false);
+  assert.ok(c.includes("Ctrl+Shift+."), c.join(" | "));
+  assert.equal(c[0], "Ctrl+Shift+>");
+});
+
+test("eventToHotkeyCandidates: Cmd stands in for Ctrl on Mac in every alternate", () => {
+  const c = eventToHotkeyCandidates(keyc({ key: "+", code: "Equal", metaKey: true, shiftKey: true }), true);
+  assert.deepEqual(c, ["Ctrl+Shift++", "Ctrl++", "Ctrl+Shift+="]);
 });

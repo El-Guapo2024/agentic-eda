@@ -701,9 +701,11 @@ dependencies = [
 name = "eda-ops"
 version = "0.1.0"
 dependencies = [
+ "eda-clipper2",
  "eda-connectivity",
  "eda-gates",
  "eda-model",
+ "eda-shape-poly-set",
  "serde",
  "serde_json",
  "serde_yaml",
