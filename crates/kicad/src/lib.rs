@@ -68,6 +68,16 @@ pub struct ExportMeta<'a> {
     pub title: &'a str,
 }
 
+/// [`export_kicad_sch`] plus every exported item's KiCad uuid -> our id
+/// (symbol ref, `REF.PIN`, power symbol, wire, label, no-connect, text) --
+/// how a kicad-cli ERC report is pointed back at `design.json`.
+pub fn export_kicad_sch_mapped(design: &Design, model: &ConstraintModel, meta: &ExportMeta) -> Result<(String, std::collections::HashMap<String, String>), Vec<CheckResult>> {
+    start_uuid_map();
+    let r = export_kicad_sch(design, model, meta);
+    let map = take_uuid_map();
+    r.map(|s| (s, map))
+}
+
 pub fn export_kicad_sch(
     design: &Design,
     model: &ConstraintModel,
@@ -184,7 +194,7 @@ pub fn export_kicad_sch(
         let resolved = if eda_model::is_synthetic_lib_id(&lib_id) { None } else { model.symbol_of(&lib_id) };
         let x = mm(sym.at.x);
         let y = mm(sym.at.y);
-        let uuid = duid(&format!("sym:{}", sym.id));
+        let uuid = duid_for(&format!("sym:{}", sym.id), &sym.id);
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit {})", sexpr_str(&lib_id), sym.unit).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
@@ -206,7 +216,7 @@ pub fn export_kicad_sch(
         // symbol resolved, or one with exactly one unit) has every pin
         // match trivially, same list as before this field existed.
         for pin in part.pins.iter().filter(|pin| resolved.as_ref().and_then(|s| s.pin_by_number(&pin.number)).is_none_or(|p| p.unit == 0 || p.unit == sym.unit)) {
-            let pin_uuid = duid(&format!("pin:{}:{}", sym.id, pin.number));
+            let pin_uuid = duid_for(&format!("pin:{}:{}", sym.id, pin.number), &format!("{}.{}", sym.id, pin.number));
             writeln!(out, "\t\t(pin {} (uuid \"{pin_uuid}\"))", sexpr_str(&pin.number)).unwrap();
         }
         writeln!(out, "\t\t(instances").unwrap();
@@ -224,7 +234,7 @@ pub fn export_kicad_sch(
     for ps in &power_symbols {
         let x = mm(ps.at.x);
         let y = mm(ps.at.y);
-        let uuid = duid(&format!("pwr:{}", ps.id));
+        let uuid = duid_for(&format!("pwr:{}", ps.id), &ps.id);
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom no) (on_board no) (dnp no)").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
@@ -232,7 +242,7 @@ pub fn export_kicad_sch(
         write_property(&mut out, "Value", &ps.net, 0.0, 2.0, false);
         write_property(&mut out, "Footprint", "", 0.0, 0.0, true);
         write_property(&mut out, "Datasheet", "", 0.0, 0.0, true);
-        let pin_uuid = duid(&format!("pwrpin:{}", ps.id));
+        let pin_uuid = duid_for(&format!("pwrpin:{}", ps.id), &ps.id);
         writeln!(out, "\t\t(pin \"1\" (uuid \"{pin_uuid}\"))").unwrap();
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
@@ -255,7 +265,7 @@ pub fn export_kicad_sch(
             let y1 = mm(pair[0].y);
             let x2 = mm(pair[1].x);
             let y2 = mm(pair[1].y);
-            let uuid = duid(&format!("{tag}:{}:{}:{}", w.net, i, j));
+            let uuid = duid_for(&format!("{tag}:{}:{}:{}", w.net, i, j), &w.id);
             writeln!(out, "\t({tag}").unwrap();
             writeln!(out, "\t\t(pts (xy {x1} {y1}) (xy {x2} {y2}))").unwrap();
             writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
@@ -323,7 +333,7 @@ pub fn export_kicad_sch(
     for nc in &no_connects {
         let x = mm(nc.at.x);
         let y = mm(nc.at.y);
-        let uuid = duid(&format!("nc:{}:{}", nc.at.x, nc.at.y));
+        let uuid = duid_for(&format!("nc:{}:{}", nc.at.x, nc.at.y), &nc.id);
         writeln!(out, "\t(no_connect (at {x} {y}) (uuid \"{uuid}\"))").unwrap();
     }
 
@@ -331,7 +341,7 @@ pub fn export_kicad_sch(
     for l in &labels {
         let x = mm(l.at.x);
         let y = mm(l.at.y);
-        let uuid = duid(&format!("label:{}:{}:{}", l.net, l.at.x, l.at.y));
+        let uuid = duid_for(&format!("label:{}:{}:{}", l.net, l.at.x, l.at.y), &l.id);
         let (tag, shape) = match &l.kind {
             eda_model::ir::LabelKind::Local => ("label", None),
             eda_model::ir::LabelKind::Global { shape } => ("global_label", Some(*shape)),
@@ -354,7 +364,7 @@ pub fn export_kicad_sch(
         let y = mm(t.at.y);
         let angle_deg = t.angle as f64 / 1000.0;
         let size_mm = t.size_um as f64 / 1000.0;
-        let uuid = duid(&format!("text:{}:{}:{}", t.content, t.at.x, t.at.y));
+        let uuid = duid_for(&format!("text:{}:{}:{}", t.content, t.at.x, t.at.y), &t.id);
         writeln!(out, "\t(text {}", sexpr_str(&t.content)).unwrap();
         writeln!(out, "\t\t(at {x} {y} {angle_deg})").unwrap();
         writeln!(out, "\t\t(effects (font (size {size_mm} {size_mm})))").unwrap();

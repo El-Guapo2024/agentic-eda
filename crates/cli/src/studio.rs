@@ -541,6 +541,10 @@ fn handle(
             let v = if kicad { crate::kicad_engine::drc(dir) } else { drc_json(dir) }.unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        ("GET", "/api/erc") if target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "engine=kicad") => {
+            let v = crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("GET", "/api/erc") => {
             let v = erc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())

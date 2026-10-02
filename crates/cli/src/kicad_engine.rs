@@ -133,6 +133,55 @@ pub fn drc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     }))
 }
 
+/// Export the current schematic as `board.kicad_sch` (+ `board.kicad_pro`).
+fn export_schematic(dir: &Path) -> Result<(PathBuf, std::collections::HashMap<String, String>), Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    let date = chrono_like_today();
+    let (sch, map) = eda_kicad::export_kicad_sch_mapped(&design, &model, &eda_kicad::ExportMeta { date: &date, title: "board" })?;
+    let w = work_dir(dir)?;
+    let path = w.join("board.kicad_sch");
+    std::fs::write(&path, sch).map_err(|e| fail("kicad_engine_write", "board.kicad_sch", e.to_string()))?;
+    std::fs::write(w.join("board.kicad_pro"), eda_kicad::export_kicad_pro(&model)).map_err(|e| fail("kicad_engine_write", "board.kicad_pro", e.to_string()))?;
+    Ok((path, map))
+}
+
+/// `kicad-cli sch erc` on the current schematic, in the studio's ERC shape
+/// (`check`, `severity`, `location` = the first item's id, `hint`) plus the
+/// full mapped `items` list. Violations from every sheet are flattened.
+pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let cli = find_cli().ok_or_else(|| fail("kicad_cli_missing", "kicad-cli", "kicad-cli not found (set EDA_KICAD_CLI or install KiCad)"))?;
+    let (sch, map) = export_schematic(dir)?;
+    let report = sch.with_file_name("erc.json");
+    let out = Command::new(&cli)
+        .args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"])
+        .arg(&report)
+        .arg(&sch)
+        .output()
+        .map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
+    let text = std::fs::read_to_string(&report).map_err(|_| fail("kicad_cli_erc", "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))?;
+    let raw: Value = serde_json::from_str(&text).map_err(|e| fail("kicad_cli_erc", "erc.json", e.to_string()))?;
+    let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut violations = Vec::new();
+    for sheet in raw["sheets"].as_array().into_iter().flatten() {
+        for v in sheet["violations"].as_array().into_iter().flatten() {
+            let m = map_violation(v, &map, units_mm);
+            let ty = m["type"].as_str().unwrap_or("?").to_string();
+            *counts.entry(ty.clone()).or_default() += 1;
+            let location = m["items"].as_array().and_then(|is| is.iter().find_map(|i| i["id"].as_str().map(str::to_string))).unwrap_or_default();
+            let item_desc: Vec<&str> = m["items"].as_array().map(|is| is.iter().filter_map(|i| i["description"].as_str()).collect()).unwrap_or_default();
+            violations.push(json!({
+                "check": ty,
+                "severity": m["severity"],
+                "location": location,
+                "hint": format!("{}{}{}", m["description"].as_str().unwrap_or(""), if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
+                "items": m["items"],
+            }));
+        }
+    }
+    Ok(json!({ "engine": format!("kicad-cli {}", cli_version(&cli)), "violations": violations, "counts": counts }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

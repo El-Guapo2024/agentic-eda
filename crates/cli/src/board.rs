@@ -1233,6 +1233,14 @@ pub fn run(
         // studio UI's own `/api/undo`/`/api/redo` (see their own doc).
         "undo" => undo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
         "redo" => redo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
+        // ERC through kicad-cli on the exported schematic.
+        "erc" => {
+            if !rest.iter().any(|a| a == "--kicad") {
+                return Err(fail("board_usage", "erc", "usage: eda board erc --kicad"));
+            }
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::erc(&dir)?).unwrap_or_default());
+            Ok(())
+        }
         // DRC: our own engine, or `--kicad` for kicad-cli on the exported board.
         "drc" => {
             let v = if rest.iter().any(|a| a == "--kicad") { crate::kicad_engine::drc(&dir)? } else {
@@ -1269,7 +1277,7 @@ pub fn run(
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|gui|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|erc|gui|serve> [-C dir] [--strict]",
         )),
     }
 }
