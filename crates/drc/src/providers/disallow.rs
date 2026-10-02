@@ -174,7 +174,7 @@ mod tests {
     fn a_track_crossing_a_no_tracks_keepout_is_reported() {
         let mut b = empty_board();
         b.keepouts = vec![DrcKeepout { no_tracks: true, ..rect_keepout("k1", "F.Cu", 0, 0, 1000, 1000) }];
-        b.tracks = vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "F.Cu".into(), width: 100, a: Point { x: -500, y: 500 }, b: Point { x: 500, y: 500 } }];
+        b.tracks = vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "F.Cu".into(), width: 100, a: Point { x: -500, y: 500 }, b: Point { x: 500, y: 500 }, arc_mid: None }];
         let v = check(&b, &BoardRules::default());
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].error_type, "items_not_allowed");
@@ -184,7 +184,7 @@ mod tests {
     fn a_track_outside_the_keepout_is_clean() {
         let mut b = empty_board();
         b.keepouts = vec![DrcKeepout { no_tracks: true, ..rect_keepout("k1", "F.Cu", 0, 0, 1000, 1000) }];
-        b.tracks = vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "F.Cu".into(), width: 100, a: Point { x: 2000, y: 2000 }, b: Point { x: 3000, y: 2000 } }];
+        b.tracks = vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "F.Cu".into(), width: 100, a: Point { x: 2000, y: 2000 }, b: Point { x: 3000, y: 2000 }, arc_mid: None }];
         assert!(check(&b, &BoardRules::default()).is_empty());
     }
 
@@ -192,7 +192,7 @@ mod tests {
     fn a_track_on_a_different_layer_than_the_keepout_is_not_reported() {
         let mut b = empty_board();
         b.keepouts = vec![DrcKeepout { no_tracks: true, ..rect_keepout("k1", "F.Cu", 0, 0, 1000, 1000) }];
-        b.tracks = vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "B.Cu".into(), width: 100, a: Point { x: 500, y: 500 }, b: Point { x: 600, y: 500 } }];
+        b.tracks = vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "B.Cu".into(), width: 100, a: Point { x: 500, y: 500 }, b: Point { x: 600, y: 500 }, arc_mid: None }];
         assert!(check(&b, &BoardRules::default()).is_empty());
     }
 
@@ -200,7 +200,7 @@ mod tests {
     fn a_track_crossing_is_fine_when_no_tracks_is_not_set() {
         let mut b = empty_board();
         b.keepouts = vec![rect_keepout("k1", "F.Cu", 0, 0, 1000, 1000)]; // every flag false
-        b.tracks = vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "F.Cu".into(), width: 100, a: Point { x: -500, y: 500 }, b: Point { x: 500, y: 500 } }];
+        b.tracks = vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "F.Cu".into(), width: 100, a: Point { x: -500, y: 500 }, b: Point { x: 500, y: 500 }, arc_mid: None }];
         assert!(check(&b, &BoardRules::default()).is_empty());
     }
 

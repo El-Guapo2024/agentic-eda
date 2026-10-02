@@ -83,7 +83,19 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
 
     let pads: Vec<FillPad> =
         board.pads.iter().map(|p| FillPad { net: p.net.clone(), layers: p.layers.clone(), copper: convert_shape(&p.copper), hole: p.hole.as_ref().map(convert_shape) }).collect();
-    let tracks: Vec<FillTrack> = board.tracks.iter().map(|t| FillTrack { net: t.net.clone(), layer: t.layer.clone(), a: pt(t.a), b: pt(t.b), width: t.width }).collect();
+    // An arc knocks out its true curve: one `FillTrack` per chord of its
+    // `ARC_HIGH_DEF` polyline (`PCB_ARC::TransformShapeToPolygon`).
+    let tracks: Vec<FillTrack> = board
+        .tracks
+        .iter()
+        .flat_map(|t| {
+            let pts = match t.arc_mid {
+                Some(mid) => crate::board::arc_polyline(t.a, mid, t.b, crate::board::ARC_HIGH_DEF),
+                None => vec![t.a, t.b],
+            };
+            pts.windows(2).map(|w| FillTrack { net: t.net.clone(), layer: t.layer.clone(), a: pt(w[0]), b: pt(w[1]), width: t.width }).collect::<Vec<_>>()
+        })
+        .collect();
     let vias: Vec<FillVia> =
         board.vias.iter().map(|v| FillVia { net: v.net.clone(), at: pt(v.at), diameter: v.diameter, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone(), layer_order: board.layers.clone() }).collect();
 

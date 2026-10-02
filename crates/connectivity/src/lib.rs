@@ -181,7 +181,7 @@ mod tests {
     fn a_routed_track_between_the_same_two_pads_clears_the_ratsnest() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()], layer: "F.Cu".into(), width: 200, pts: vec![a, b] });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
         let report = analyze(&design, &model);
         assert!(report.ratsnest.is_empty(), "{:?}", report.ratsnest.iter().map(|e| &e.net).collect::<Vec<_>>());
         assert!(report.dangling.is_empty());

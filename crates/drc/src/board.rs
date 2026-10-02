@@ -77,6 +77,10 @@ pub struct DrcTrackSeg {
     pub width: Um,
     pub a: Point,
     pub b: Point,
+    /// `Some(mid)` for a `PCB_ARC` (`a`/`b` are its start/end): one DRC
+    /// item for the whole arc, as in KiCad, rather than one per chord of
+    /// the IR's tessellated `pts` (see `eda_model::ir::Track::arc`).
+    pub arc_mid: Option<Point>,
 }
 
 pub struct DrcVia {
@@ -297,8 +301,12 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     if let Some(rt) = &design.routing {
         for t in &rt.tracks {
             let net = if t.net.is_empty() { None } else { Some(t.net.clone()) };
+            if let Some((start, mid, end)) = t.arc() {
+                tracks.push(DrcTrackSeg { id: format!("{}#0", t.id), net, layer: t.layer.clone(), width: t.width, a: start, b: end, arc_mid: Some(mid) });
+                continue;
+            }
             for (i, w) in t.pts.windows(2).enumerate() {
-                tracks.push(DrcTrackSeg { id: format!("{}#{i}", t.id), net: net.clone(), layer: t.layer.clone(), width: t.width, a: w[0], b: w[1] });
+                tracks.push(DrcTrackSeg { id: format!("{}#{i}", t.id), net: net.clone(), layer: t.layer.clone(), width: t.width, a: w[0], b: w[1], arc_mid: None });
             }
         }
         for v in &rt.vias {
@@ -385,9 +393,48 @@ impl DrcVia {
     }
 }
 
+/// `ARC_HIGH_DEF` (0.005 mm), in µm -- the chord error a DRC arc's
+/// polyline is held to (`SHAPE_ARC::ConvertToPolyline`'s default).
+pub const ARC_HIGH_DEF: f64 = 5.0;
+
+/// An arc's polyline at most `max_error` µm from the true curve:
+/// `GetArcToSegmentCount` (360 / (2 * acos(1 - err/r)) segments per turn),
+/// over the arc's own sweep. A near-straight or degenerate arc gives its
+/// chord.
+pub fn arc_polyline(start: Point, mid: Point, end: Point, max_error: f64) -> Vec<Point> {
+    let probe = eda_model::ir::tessellate_arc(start, mid, end, 2);
+    if probe.len() < 3 {
+        return probe;
+    }
+    let (sx, sy, mx, my, ex, ey) = (start.x as f64, start.y as f64, mid.x as f64, mid.y as f64, end.x as f64, end.y as f64);
+    let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
+    let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
+    let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
+    let r = (sx - ux).hypot(sy - uy);
+    // Sweep from the two-segment probe's own direction choice.
+    let ang = |p: Point| (p.y as f64 - uy).atan2(p.x as f64 - ux);
+    let half = (ang(probe[1]) - ang(start)).rem_euclid(std::f64::consts::TAU);
+    let half = if half > std::f64::consts::PI { std::f64::consts::TAU - half } else { half };
+    let sweep = 2.0 * half;
+    let per_rad = if r > max_error { 1.0 / (2.0 * (1.0 - max_error / r).acos()) } else { 1.0 };
+    let n = ((sweep * per_rad).ceil() as usize).clamp(2, 4096);
+    eda_model::ir::tessellate_arc(start, mid, end, n)
+}
+
 impl DrcTrackSeg {
     pub fn shape(&self) -> Shape {
-        Shape::Stadium { a: self.a, b: self.b, r: self.width / 2 }
+        match self.arc_mid {
+            Some(mid) => {
+                let pts = arc_polyline(self.a, mid, self.b, ARC_HIGH_DEF);
+                Shape::Strokes { segs: pts.windows(2).map(|w| crate::kimath::Seg::new(w[0], w[1])).collect(), r: self.width / 2 }
+            }
+            None => Shape::Stadium { a: self.a, b: self.b, r: self.width / 2 },
+        }
+    }
+
+    /// `true` for a `PCB_ARC`.
+    pub fn is_arc(&self) -> bool {
+        self.arc_mid.is_some()
     }
 }
 

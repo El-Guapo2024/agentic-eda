@@ -963,9 +963,91 @@ pub struct Track {
     pub layer: String,
     pub width: Um,
     pub pts: Vec<Point>,
+    /// Set when this track is a KiCad arc (`PCB_ARC`, `(arc (start)(mid)
+    /// (end))`): its `mid` point, stored as an offset from `pts[0]` so a
+    /// plain translation (move, array) keeps it valid. `pts` always holds
+    /// the arc's tessellation ([`tessellate_arc`]), so every consumer that
+    /// only knows polylines keeps working; consumers that need the true
+    /// primitive (DRC, the `.kicad_pcb` exporter) go through
+    /// [`Track::arc`], which only reports the arc while `pts` still *is*
+    /// its tessellation -- any edit that reshapes the track silently turns
+    /// it back into a plain polyline instead of leaving a stale arc behind.
+    /// Additive: absent everywhere a track was never an arc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arc_mid_offset: Option<Point>,
+}
+
+/// Segment count [`tessellate_arc`] uses for a track arc's `pts`.
+pub const TRACK_ARC_SEGMENTS: usize = 32;
+
+/// Approximate an arc given as three points on its circumference (start,
+/// mid, end -- KiCad's `PCB_ARC`/`SHAPE_ARC` convention: the circle
+/// through all three, swept from start *through mid* to end, exactly
+/// `SHAPE_ARC::GetCentralAngle`'s choice) as a polyline of `segments`
+/// chords. Endpoints are kept bit-exact. Collinear points (no circle)
+/// give the straight chord.
+pub fn tessellate_arc(start: Point, mid: Point, end: Point, segments: usize) -> Vec<Point> {
+    let (sx, sy) = (start.x as f64, start.y as f64);
+    let (mx, my) = (mid.x as f64, mid.y as f64);
+    let (ex, ey) = (end.x as f64, end.y as f64);
+
+    // Circumcenter of the three points (`CalcArcCenter`).
+    let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
+    if d.abs() < 1e-6 {
+        return vec![start, end];
+    }
+    let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
+    let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
+    let r = ((sx - ux).powi(2) + (sy - uy).powi(2)).sqrt();
+
+    let ang = |x: f64, y: f64| (y - uy).atan2(x - ux);
+    let two_pi = std::f64::consts::TAU;
+    let norm = |a: f64| a.rem_euclid(two_pi);
+    let (a0, a1, a2) = (ang(sx, sy), ang(mx, my), ang(ex, ey));
+    let mut sweep = norm(a2 - a0);
+    if norm(a1 - a0) > sweep {
+        // The short way around does not pass through mid: sweep the other way.
+        sweep -= two_pi;
+    }
+
+    let n = segments.max(1);
+    let mut pts = Vec::with_capacity(n + 1);
+    for i in 0..=n {
+        let a = a0 + sweep * (i as f64 / n as f64);
+        pts.push(Point { x: (ux + r * a.cos()).round() as i64, y: (uy + r * a.sin()).round() as i64 });
+    }
+    pts[0] = start;
+    *pts.last_mut().expect("n + 1 >= 1") = end;
+    pts
 }
 
 impl Track {
+    /// A KiCad-arc track, from its start, mid and end points.
+    pub fn new_arc(net: String, layer: String, width: Um, start: Point, mid: Point, end: Point) -> Track {
+        Track {
+            id: String::new(),
+            net,
+            pins: vec![],
+            layer,
+            width,
+            pts: tessellate_arc(start, mid, end, TRACK_ARC_SEGMENTS),
+            arc_mid_offset: Some(Point { x: mid.x - start.x, y: mid.y - start.y }),
+        }
+    }
+
+    /// `(start, mid, end)` when this track is still exactly the arc
+    /// `arc_mid_offset` describes (see that field's doc), else `None`.
+    pub fn arc(&self) -> Option<(Point, Point, Point)> {
+        let off = self.arc_mid_offset?;
+        let (start, end) = (*self.pts.first()?, *self.pts.last()?);
+        let mid = Point { x: start.x + off.x, y: start.y + off.y };
+        let expect = tessellate_arc(start, mid, end, TRACK_ARC_SEGMENTS);
+        // 1 µm slack: a translated arc re-tessellates through float
+        // round-off that can land a sample one unit over.
+        let same = expect.len() == self.pts.len() && expect.iter().zip(&self.pts).all(|(a, b)| (a.x - b.x).abs() <= 1 && (a.y - b.y).abs() <= 1);
+        same.then_some((start, mid, end))
+    }
+
     fn id_seed(&self) -> String {
         let pts: Vec<String> = self.pts.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
         format!("{}|{}|{}", self.net, self.layer, pts.join(";"))
@@ -2936,7 +3018,7 @@ mod tests {
     // -------------------------------------------------------- item ids
 
     fn track(net: &str, layer: &str, pts: &[(Um, Um)]) -> Track {
-        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() }
+        Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
     }
     fn via(net: &str, x: Um, y: Um) -> Via {
         Via { id: String::new(), net: net.into(), at: Point { x, y }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }

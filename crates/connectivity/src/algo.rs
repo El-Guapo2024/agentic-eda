@@ -151,7 +151,7 @@ mod tests {
     fn a_track_between_them_merges_into_one_cluster() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b] });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
         let graph = build_graph(&design, &model);
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 1);

@@ -667,7 +667,7 @@ mod tests {
             schematic: None, nets: None,
             placement: Some(placement),
             routing: Some(RoutingSection {
-                tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }] }],
+                tracks: vec![Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 5_000, y: 5_000 }, Point { x: 10_000, y: 5_000 }], arc_mid_offset: None }],
                 vias: vec![],
                 zones: vec![],
                 track_width_presets: vec![],

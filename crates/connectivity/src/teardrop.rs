@@ -271,7 +271,7 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
         design.routing.as_mut().unwrap().vias.push(Via { id: "v1".into(), net: "N1".into(), at: a, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, Point { x: a.x + 5000, y: a.y }] });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, Point { x: a.x + 5000, y: a.y }], arc_mid_offset: None });
         assert!(generate_teardrops(&design, &model, &TeardropSettings::default()).is_empty());
     }
 
@@ -282,7 +282,7 @@ mod tests {
         let via_at = Point { x: a.x + 3000, y: a.y };
         let rt = design.routing.as_mut().unwrap();
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![via_at, Point { x: via_at.x + 5000, y: via_at.y }] });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![via_at, Point { x: via_at.x + 5000, y: via_at.y }], arc_mid_offset: None });
 
         let out = generate_teardrops(&design, &model, &enabled_settings());
         assert_eq!(out.len(), 1, "{out:?}");
@@ -306,7 +306,7 @@ mod tests {
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         // Via diameter 800 * best_length_ratio 0.5 = 400um requested length,
         // but this track is only 50um long -- must be skipped, not clipped.
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![via_at, Point { x: via_at.x + 50, y: via_at.y }] });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![via_at, Point { x: via_at.x + 50, y: via_at.y }], arc_mid_offset: None });
 
         assert!(generate_teardrops(&design, &model, &enabled_settings()).is_empty());
     }
@@ -318,7 +318,7 @@ mod tests {
         let via_at = Point { x: a.x + 3000, y: a.y };
         let rt = design.routing.as_mut().unwrap();
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.tracks.push(Track { id: "t1".into(), net: "OTHER".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![via_at, Point { x: via_at.x + 5000, y: via_at.y }] });
+        rt.tracks.push(Track { id: "t1".into(), net: "OTHER".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![via_at, Point { x: via_at.x + 5000, y: via_at.y }], arc_mid_offset: None });
         assert!(generate_teardrops(&design, &model, &enabled_settings()).is_empty());
     }
 
@@ -329,7 +329,7 @@ mod tests {
         let via_at = Point { x: a.x + 3000, y: a.y };
         let rt = design.routing.as_mut().unwrap();
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 800, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![via_at, Point { x: via_at.x + 5000, y: via_at.y }] });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![via_at, Point { x: via_at.x + 5000, y: via_at.y }], arc_mid_offset: None });
         let settings = TeardropSettings { enabled: true, target_vias: false, ..Default::default() };
         assert!(generate_teardrops(&design, &model, &settings).is_empty());
     }
@@ -346,7 +346,7 @@ mod tests {
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());
         let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: 200, pts: vec![a, Point { x: a.x, y: a.y + 5000 }] });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: 200, pts: vec![a, Point { x: a.x, y: a.y + 5000 }], arc_mid_offset: None });
 
         let out = generate_teardrops(&design, &model, &enabled_settings());
         assert_eq!(out.len(), 1, "{out:?}");
@@ -359,7 +359,7 @@ mod tests {
         // anchors only (see module doc).
         let (mut design, model) = two_pad_model();
         let a = pad_center(&design, &model, "R1", "1");
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 150, pts: vec![a, Point { x: a.x + 5000, y: a.y }] });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 150, pts: vec![a, Point { x: a.x + 5000, y: a.y }], arc_mid_offset: None });
         assert!(generate_teardrops(&design, &model, &enabled_settings()).is_empty());
     }
 

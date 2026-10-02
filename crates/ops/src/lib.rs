@@ -2176,7 +2176,7 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_track", net, "a track needs at least two points")]);
         }
         let rt = self.routing_mut();
-        rt.tracks.push(Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width, pts: pts.to_vec() });
+        rt.tracks.push(Track { id: String::new(), net: net.into(), pins: vec![], layer: layer.into(), width, pts: pts.to_vec(), arc_mid_offset: None });
         rt.assign_missing_ids();
         self.sort_routing();
         Ok(())

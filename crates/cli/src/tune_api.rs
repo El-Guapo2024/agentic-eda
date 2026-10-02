@@ -107,7 +107,7 @@ pub fn apply(dir: &Path, body: &[u8]) -> Value {
     if colliding {
         return json!({ "ok": false, "message": "the tuned shape collides with something else on the board; adjust amplitude/spacing or target length" });
     }
-    let new_track = Track { id: String::new(), net: track.net.clone(), pins: track.pins.clone(), layer: track.layer.clone(), width: track.width, pts: meander.pts };
+    let new_track = Track { id: String::new(), net: track.net.clone(), pins: track.pins.clone(), layer: track.layer.clone(), width: track.width, pts: meander.pts, arc_mid_offset: None };
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: vec![track.id.clone()], remove_via_ids: vec![], tracks: vec![new_track], vias: vec![] };
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary, "achieved_length": meander.achieved_length }),

@@ -82,7 +82,7 @@ mod tests {
             layers: vec![],
             outline: vec![],
             pads: vec![],
-            tracks: vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "F.Cu".into(), width, a: Point { x: 0, y: 0 }, b: Point { x: 1000, y: 0 } }],
+            tracks: vec![DrcTrackSeg { id: "t1".into(), net: Some("A".into()), layer: "F.Cu".into(), width, a: Point { x: 0, y: 0 }, b: Point { x: 1000, y: 0 }, arc_mid: None }],
             vias: vec![],
             zones: vec![],
             keepouts: vec![],

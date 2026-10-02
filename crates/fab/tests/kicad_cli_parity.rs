@@ -101,8 +101,8 @@ fn fixture() -> (Design, ConstraintModel) {
 
     let routing = RoutingSection {
         tracks: vec![
-            Track { id: String::new(), net: "NET1".into(), pins: vec![], layer: "F.Cu".into(), width: 250, pts: vec![Point { x: 3_000, y: 5_000 }, Point { x: 9_000, y: 5_000 }] },
-            Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "B.Cu".into(), width: 300, pts: vec![Point { x: 3_000, y: 7_000 }, Point { x: 3_000, y: 12_000 }] },
+            Track { id: String::new(), net: "NET1".into(), pins: vec![], layer: "F.Cu".into(), width: 250, pts: vec![Point { x: 3_000, y: 5_000 }, Point { x: 9_000, y: 5_000 }], arc_mid_offset: None },
+            Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "B.Cu".into(), width: 300, pts: vec![Point { x: 3_000, y: 7_000 }, Point { x: 3_000, y: 12_000 }], arc_mid_offset: None },
         ],
         vias: vec![Via { id: String::new(), net: "NET1".into(), at: Point { x: 9_000, y: 5_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
         zones: vec![Zone {

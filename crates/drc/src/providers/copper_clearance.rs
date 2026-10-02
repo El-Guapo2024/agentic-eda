@@ -259,10 +259,11 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 // clearance is actually positive; a rule that sets it to
                 // exactly 0 between two nets disables both, not just one.
                 let pair_clearance = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_track(rules, a, &courtyards), &facts_of_track(rules, b, &courtyards), &compiled_rules);
-                if pair_clearance > 0 {
+                // `item->Type() == PCB_TRACE_T && other->Type() == PCB_TRACE_T`: arcs never take the crossing path.
+                if pair_clearance > 0 && !a.is_arc() && !b.is_arc() {
                     let (sa, sb) = (crate::kimath::Seg::new(a.a, a.b), crate::kimath::Seg::new(b.a, b.b));
                     if let Some(pt) = sa.intersect(&sb) {
-                        out.push(DrcViolation::new(ErrorType::TracksCrossing, "", vec![track_ref(a), ref_item("crossing point".into(), pt, String::new())]));
+                        out.push(DrcViolation::new(ErrorType::TracksCrossing, "", vec![track_ref(a), track_ref(b), ref_item("crossing point".into(), pt, String::new())]));
                         continue;
                     }
                 }
@@ -424,7 +425,7 @@ mod tests {
     }
 
     fn seg(id: &str, net: Option<&str>, a: (i64, i64), b: (i64, i64)) -> DrcTrackSeg {
-        DrcTrackSeg { id: id.into(), net: net.map(String::from), layer: "F.Cu".into(), width: 200, a: Point { x: a.0, y: a.1 }, b: Point { x: b.0, y: b.1 } }
+        DrcTrackSeg { id: id.into(), net: net.map(String::from), layer: "F.Cu".into(), width: 200, a: Point { x: a.0, y: a.1 }, b: Point { x: b.0, y: b.1 }, arc_mid: None }
     }
 
     fn pad_with_hole(id: &str, net: Option<&str>, center: (i64, i64), hole_r: i64) -> DrcPad {

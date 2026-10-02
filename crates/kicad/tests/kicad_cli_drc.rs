@@ -204,6 +204,7 @@ fn kicad_cli_drc_bottom_side_pads() {
             layer: if instance(&n.pins[0]).side == Side::Bottom { "B.Cu" } else { "F.Cu" }.into(),
             width: model.board.track_width,
             pts: vec![pad_at(&n.pins[0]), pad_at(&n.pins[1])],
+            arc_mid_offset: None,
         })
         .collect();
     let outline = vec![Point { x: 0, y: 0 }, Point { x: 28_000, y: 0 }, Point { x: 28_000, y: 22_000 }, Point { x: 0, y: 22_000 }];

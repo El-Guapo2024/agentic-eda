@@ -168,7 +168,7 @@ mod tests {
         // pad, the other dangles.
         let a = pad_center(&design, &model, "R1", "1");
         let free_end = Point { x: a.x, y: a.y + 10_000 };
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, free_end] });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, free_end], arc_mid_offset: None });
         let graph = build_graph(&design, &model);
         let out = dangling_tracks_and_vias(&graph);
         assert_eq!(out.len(), 1);
@@ -180,7 +180,7 @@ mod tests {
     fn a_fully_routed_track_has_no_dangling_ends() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
-        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b] });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
         let graph = build_graph(&design, &model);
         assert!(dangling_tracks_and_vias(&graph).is_empty());
     }
@@ -191,7 +191,7 @@ mod tests {
         let a = pad_center(&design, &model, "R1", "1");
         let via_at = Point { x: a.x, y: a.y + 3_000 };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, via_at] });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, via_at], arc_mid_offset: None });
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let graph = build_graph(&design, &model);
         let out = dangling_tracks_and_vias(&graph);
@@ -205,8 +205,8 @@ mod tests {
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         let via_at = Point { x: a.x, y: a.y + 3_000 };
         let rt = design.routing.as_mut().unwrap();
-        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, via_at] });
-        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: 200, pts: vec![via_at, b] });
+        rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, via_at], arc_mid_offset: None });
+        rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: 200, pts: vec![via_at, b], arc_mid_offset: None });
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
         let graph = build_graph(&design, &model);
         let out = dangling_tracks_and_vias(&graph);

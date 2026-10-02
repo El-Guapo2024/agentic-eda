@@ -220,7 +220,7 @@ impl Router {
             if run.point_count() < 2 {
                 continue;
             }
-            commit.tracks.push(eda_model::ir::Track { id: String::new(), net: net_name.clone(), pins: Vec::new(), layer: self.layer_name(run.layer).to_string(), width: run.width, pts: run.pts.clone() });
+            commit.tracks.push(eda_model::ir::Track { id: String::new(), net: net_name.clone(), pins: Vec::new(), layer: self.layer_name(run.layer).to_string(), width: run.width, pts: run.pts.clone(), arc_mid_offset: None });
         }
         // Vias this session placed sit at the shared endpoint between two
         // consecutive runs (see `LinePlacer::switch_layer`'s doc comment);
@@ -244,7 +244,7 @@ impl Router {
             for (track_id, line) in s.placer.displaced_tracks() {
                 commit.remove_track_ids.push(track_id.to_string());
                 if line.point_count() >= 2 {
-                    commit.tracks.push(eda_model::ir::Track { id: String::new(), net: self.net_name_of(line), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts: line.pts.clone() });
+                    commit.tracks.push(eda_model::ir::Track { id: String::new(), net: self.net_name_of(line), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts: line.pts.clone(), arc_mid_offset: None });
                 }
             }
             for (via_id, pos) in s.placer.displaced_vias() {
@@ -316,7 +316,7 @@ impl Router {
             if line.point_count() < 2 {
                 continue;
             }
-            commit.tracks.push(eda_model::ir::Track { id: String::new(), net: line.net.as_deref().unwrap_or("").to_string(), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts: line.pts.clone() });
+            commit.tracks.push(eda_model::ir::Track { id: String::new(), net: line.net.as_deref().unwrap_or("").to_string(), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts: line.pts.clone(), arc_mid_offset: None });
         }
         for (pos, diameter, drill, source_via) in &drag_commit.vias {
             // A dragged via keeps its own net/layer/size; a via displaced
@@ -429,7 +429,7 @@ impl Router {
                 if run.point_count() < 2 {
                     continue;
                 }
-                commit.tracks.push(eda_model::ir::Track { id: String::new(), net: net_name.clone(), pins: Vec::new(), layer: layer_name.clone(), width, pts: run.pts.clone() });
+                commit.tracks.push(eda_model::ir::Track { id: String::new(), net: net_name.clone(), pins: Vec::new(), layer: layer_name.clone(), width, pts: run.pts.clone(), arc_mid_offset: None });
             }
         }
         self.diff = None;
@@ -483,7 +483,7 @@ mod tests {
             nets: None,
             placement: Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] }),
             routing: Some(RoutingSection {
-                tracks: vec![eda_model::ir::Track { id: "trkA".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }],
+                tracks: vec![eda_model::ir::Track { id: "trkA".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }],
                 vias: vec![eda_model::ir::Via { id: "viaA".into(), net: "GND".into(), at: Point { x: 5000, y: 0 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }],
                 zones: vec![],
                 track_width_presets: vec![],

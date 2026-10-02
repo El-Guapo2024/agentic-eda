@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn builds_one_item_per_pad_and_per_track_segment() {
         let (mut design, model) = two_pad_model();
-        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 100, y: 0 }, Point { x: 100, y: 100 }] });
+        design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 100, y: 0 }, Point { x: 100, y: 100 }], arc_mid_offset: None });
         let items = build_items(&design, &model);
         let pads = items.iter().filter(|i| matches!(i.item, ItemRef::Pad { .. })).count();
         let segs = items.iter().filter(|i| matches!(i.item, ItemRef::TrackSeg { .. })).count();

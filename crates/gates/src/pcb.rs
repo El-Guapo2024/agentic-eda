@@ -1412,7 +1412,7 @@ mod tests {
     }
 
     fn track(net: &str, pts: &[(Um, Um)]) -> Track {
-        Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect() }
+        Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| Point { x, y }).collect(), arc_mid_offset: None }
     }
 
     fn fails(design: &Design, model: &ConstraintModel, check: &str) -> Vec<CheckResult> {

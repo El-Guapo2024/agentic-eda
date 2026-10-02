@@ -1146,7 +1146,7 @@ fn duplicate_with_a_mix_of_known_and_unknown_ids_copies_only_the_known_ones() {
 fn paste_items_inserts_fresh_copies_and_ignores_incoming_ids() {
     let m = net_model();
     let mut b = board(&m);
-    let track = Track { id: "stale-id-from-another-board".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2000, y: 2000 }, Point { x: 3000, y: 2000 }] };
+    let track = Track { id: "stale-id-from-another-board".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2000, y: 2000 }, Point { x: 3000, y: 2000 }], arc_mid_offset: None };
     let text = Text { id: "also-stale".into(), content: "PASTED".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false };
 
     b.apply(&Cmd::PasteItems { tracks: vec![track], vias: vec![], zones: vec![], shapes: vec![], texts: vec![text] }).unwrap();
@@ -1184,8 +1184,8 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
         remove_track_ids: vec![old_id.clone()],
         remove_via_ids: vec![],
         tracks: vec![
-            Track { id: "ignored".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }] },
-            Track { id: "ignored2".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2500, y: -2000 }, Point { x: 2200, y: 0 }, Point { x: 2500, y: 2000 }] },
+            Track { id: "ignored".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }], arc_mid_offset: None },
+            Track { id: "ignored2".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2500, y: -2000 }, Point { x: 2200, y: 0 }, Point { x: 2500, y: 2000 }], arc_mid_offset: None },
         ],
         vias: vec![],
     })
@@ -1203,7 +1203,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
 fn commit_route_tolerates_an_already_gone_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }], vias: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
@@ -1211,7 +1211,7 @@ fn commit_route_tolerates_an_already_gone_id() {
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }] }], vias: vec![] }).unwrap_err();
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![] }).unwrap_err();
     assert!(!e.is_empty());
     assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
 }

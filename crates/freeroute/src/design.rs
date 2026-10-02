@@ -1037,7 +1037,7 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
                         }
                     }
                 }
-                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: 2 * half_width / UNITS_PER_UM, pts });
+                tracks.push(Track { id: String::new(), net, pins: on_pins, layer: plan.layers[*layer as usize].clone(), width: 2 * half_width / UNITS_PER_UM, pts, arc_mid_offset: None });
             }
             ItemKind::Via { center, .. } => vias.push(IrVia {
                 id: String::new(),
@@ -1398,7 +1398,7 @@ mod tests {
     }
 
     fn track(pts: &[(i64, i64)]) -> Track {
-        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect() }
+        Track { id: String::new(), net: "A".into(), pins: Vec::new(), layer: "F.Cu".into(), width: 200, pts: pts.iter().map(|&(x, y)| IrPoint { x, y }).collect(), arc_mid_offset: None }
     }
 
     fn gate_pads(pads: &[PlacedPad]) -> Vec<GatePad<'_>> {

@@ -35,7 +35,7 @@
 //!   do not compute.
 //! - **Track/board-edge arcs**: KiCad's `(arc ...)`/`(gr_arc ...)` have no
 //!   analogue in our polyline-only `Track`/`outline`; both are tessellated
-//!   into short straight segments (see [`tessellate_arc`]), counted in
+//!   into short straight segments (see [`eda_model::ir::tessellate_arc`]), counted in
 //!   [`ImportNotes::track_arcs_approximated`]. Exact at the sampled points,
 //!   not bit-identical on re-export. A board-level `gr_arc` *not* on
 //!   Edge.Cuts becomes a [`eda_model::ir::Shape::Arc`] instead, exactly
@@ -871,7 +871,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         }
         let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
-        tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e] });
+        tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e], arc_mid_offset: None });
     }
 
     for arc in sexpr::find_all(root, "arc") {
@@ -887,7 +887,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         notes.track_arcs_approximated += 1;
-        tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: tessellate_arc(s, m, e) });
+        tracks.push(Track::new_arc(net, layer, width, s, m, e));
     }
 
     let mut vias = Vec::new();
@@ -908,86 +908,11 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
     (tracks, vias)
 }
 
-/// Approximate a KiCad track/board-edge arc (given as three points on its
-/// circumference: start, mid, end) as a short polyline, since our model
-/// has no arc primitive. Exact at the sampled points; the endpoints are
-/// kept bit-exact regardless of any trig round-off in between.
-///
-/// `SEGMENTS` was 8 until this was measured as the root cause of
-/// `docs/parity/GAPS.md` #3's `tracks_crossing` false positives (1567 on
-/// one real QA board, 100% of them wrong): KiCad's own `tracks_crossing`
-/// fast path only ever special-cases two genuine straight `PCB_TRACE_T`
-/// segments (`drc_test_provider_copper_clearance.cpp`'s
-/// `item->Type() == PCB_TRACE_T && other->Type() == PCB_TRACE_T` gate) --
-/// a real arc (`PCB_ARC_T`) never takes it, so KiCad always judges an
-/// arc's clearance against its true curve, which its own routing keeps
-/// genuinely clear. Our model has no arc primitive to fall back on the
-/// same way, so a tessellated arc's piecewise-straight chords are the only
-/// shape this port can test -- and at 8 segments, two closely-routed,
-/// similarly-curved different-net arcs (common on a round/flex-style
-/// board, which is exactly what the offending QA board is: 666 of its
-/// ~1500 track primitives are arcs) can have chords that cross even though
-/// the true curves never do, purely from each chord's deviation (sagitta)
-/// from its arc. Sagitta shrinks with the *square* of the segment count
-/// (`r * sweep^2 / (8 * N^2)`).
-///
-/// `N = 32`, not a smaller value, despite the real cost that comes with it
-/// (see below): `N = 16` was tried first as a cheaper-looking compromise
-/// (half the extra segments, and the sagitta math alone suggested plenty of
-/// margin) and measured directly against the real offending QA board --
-/// it cut the false `tracks_crossing` count from 1567 to 1177, **not**
-/// to zero. The remaining false positives are concentrated on arcs with a
-/// larger radius and/or sweep than the "fillet-scale" case the sagitta
-/// estimate above assumed, so the formula's comfortable-looking margin
-/// did not hold in practice. `N = 32` was re-measured directly on the
-/// same board and does eliminate it completely (0 `tracks_crossing` false
-/// positives). The real cost: at `N = 32` this one arc-heavy board's
-/// `eda_drc::run` exceeds the parity harness's 60s per-board watchdog
-/// (unrelated to custom-rule evaluation, which has its own fix -- see
-/// `constraints::CompiledClearanceRules` -- and does not touch this
-/// board). Between "one large QA board excluded from the measurement
-/// entirely" and "the headline false-positive bug this was ported to fix
-/// is only mostly gone," the former is the honest trade: an excluded board
-/// contributes neither a false positive nor a true match, while a
-/// half-fixed correctness bug is still a correctness bug. See
-/// `docs/parity/GAPS.md` #3 and `crates/drc/tests/parity_drc.rs`.
-fn tessellate_arc(start: Point, mid: Point, end: Point) -> Vec<Point> {
-    const SEGMENTS: usize = 32;
-    let (sx, sy) = (start.x as f64, start.y as f64);
-    let (mx, my) = (mid.x as f64, mid.y as f64);
-    let (ex, ey) = (end.x as f64, end.y as f64);
-
-    // Circumcenter of the three points.
-    let d = 2.0 * (sx * (my - ey) + mx * (ey - sy) + ex * (sy - my));
-    if d.abs() < 1e-6 {
-        return vec![start, end]; // collinear (degenerate arc): a straight chord
-    }
-    let ux = ((sx * sx + sy * sy) * (my - ey) + (mx * mx + my * my) * (ey - sy) + (ex * ex + ey * ey) * (sy - my)) / d;
-    let uy = ((sx * sx + sy * sy) * (ex - mx) + (mx * mx + my * my) * (sx - ex) + (ex * ex + ey * ey) * (mx - sx)) / d;
-    let r = ((sx - ux).powi(2) + (sy - uy).powi(2)).sqrt();
-
-    let ang = |x: f64, y: f64| (y - uy).atan2(x - ux);
-    let two_pi = std::f64::consts::TAU;
-    let norm = |a: f64| a.rem_euclid(two_pi);
-    let (a0, a1, a2) = (ang(sx, sy), ang(mx, my), ang(ex, ey));
-    let mut sweep = norm(a2 - a0);
-    let mid_sweep = norm(a1 - a0);
-    if mid_sweep > sweep {
-        // The short way around does not pass through the file's own mid
-        // point, so the real arc sweeps the other way.
-        sweep -= two_pi;
-    }
-
-    let mut pts = Vec::with_capacity(SEGMENTS + 1);
-    for i in 0..=SEGMENTS {
-        let t = i as f64 / SEGMENTS as f64;
-        let a = a0 + sweep * t;
-        pts.push(Point { x: (ux + r * a.cos()).round() as i64, y: (uy + r * a.sin()).round() as i64 });
-    }
-    pts[0] = start;
-    *pts.last_mut().expect("SEGMENTS + 1 >= 1") = end;
-    pts
-}
+// Track arcs go through `Track::new_arc` (eda_model), which keeps the true
+// `mid` so DRC and the exporter can treat the arc as one `PCB_ARC` item (a
+// single DRC item, no `tracks_crossing` special case --
+// `drc_test_provider_copper_clearance.cpp` only takes that path for two
+// `PCB_TRACE_T`s) instead of 32 chords.
 
 // --------------------------------------------------------- drawings
 
@@ -1367,7 +1292,7 @@ mod tests {
         let start = Point { x: 10_000, y: 0 };
         let mid = Point { x: 7_071, y: 7_071 };
         let end = Point { x: 0, y: 10_000 };
-        let pts = tessellate_arc(start, mid, end);
+        let pts = eda_model::ir::tessellate_arc(start, mid, end, eda_model::ir::TRACK_ARC_SEGMENTS);
         assert_eq!(*pts.first().unwrap(), start);
         assert_eq!(*pts.last().unwrap(), end);
         assert!(pts.len() > 2);
