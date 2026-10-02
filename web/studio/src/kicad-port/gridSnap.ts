@@ -114,10 +114,12 @@ export interface AnchorSourceBoard {
     ref: string;
     placed: boolean;
     at?: readonly [number, number];
-    pads?: ReadonlyArray<{ x: number; y: number }>;
+    /** Which copper face the footprint is on -- only read when a layer filter is given. */
+    side?: "top" | "bottom";
+    pads?: ReadonlyArray<{ x: number; y: number; th?: boolean }>;
   }>;
   routing?: {
-    tracks: ReadonlyArray<{ id: string; pts: ReadonlyArray<readonly [number, number]> }>;
+    tracks: ReadonlyArray<{ id: string; layer?: string; pts: ReadonlyArray<readonly [number, number]> }>;
     vias: ReadonlyArray<{ id: string; x: number; y: number }>;
   } | null;
 }
@@ -128,6 +130,28 @@ export interface MagneticSettings {
   tracks: boolean;
   /** Not in KiCad's MAGNETIC_ITEMS at all (footprint "origin" is really just its placement anchor) -- offered as its own flag since this app's model makes it trivial to include or exclude independently. */
   footprintOrigins: boolean;
+}
+
+/**
+ * MAGNETIC_SETTINGS::allLayers (pcbnew_settings.cpp default false; flipped by
+ * `common.Control.magneticSnapToggle`, PCB_CONTROL::SnapMode). pcb_grid_helper.cpp
+ * keeps an item as a snap candidate only `if( allLayers || ( aLayers &
+ * boardItem->GetLayerSet() ).any() )`, where `aLayers` is the active layer.
+ * `activeLayer: null` (nothing active) leaves nothing filtered, as no layer
+ * set exists to intersect with.
+ */
+export interface SnapLayerFilter {
+  allLayers: boolean;
+  activeLayer: string | null;
+}
+
+/** `allCopper`: the item's layer set is every copper layer (a via, a through-hole pad). */
+export function matchesActiveLayer(filter: SnapLayerFilter | undefined, itemLayer: string | null | undefined, allCopper = false): boolean {
+  if (!filter || filter.allLayers || filter.activeLayer == null) return true;
+  if (allCopper) return /\.Cu$/.test(filter.activeLayer);
+  // Items with no layer information (older callers) stay candidates.
+  if (itemLayer == null) return true;
+  return itemLayer === filter.activeLayer;
 }
 
 export const DEFAULT_MAGNETIC_SETTINGS: MagneticSettings = { pads: true, tracks: true, footprintOrigins: true };
@@ -142,20 +166,26 @@ export const DEFAULT_MAGNETIC_SETTINGS: MagneticSettings = { pads: true, tracks:
  * drops a single item's own anchors (e.g. don't let a part snap to its
  * own pads while it's the thing being dragged).
  */
-export function collectAnchors(board: AnchorSourceBoard, magnetic: MagneticSettings = DEFAULT_MAGNETIC_SETTINGS, excludeOwnerId?: string): SnapAnchor[] {
+export function collectAnchors(board: AnchorSourceBoard, magnetic: MagneticSettings = DEFAULT_MAGNETIC_SETTINGS, excludeOwnerId?: string, layerFilter?: SnapLayerFilter): SnapAnchor[] {
   const anchors: SnapAnchor[] = [];
+  const onLayer = (layer: string | null | undefined, allCopper = false) => matchesActiveLayer(layerFilter, layer, allCopper);
 
   for (const part of board.parts) {
     if (!part.placed || !part.at || part.ref === excludeOwnerId) continue;
-    if (magnetic.footprintOrigins) anchors.push({ x: part.at[0], y: part.at[1], kind: "footprint-origin", ownerId: part.ref });
+    const partLayer = part.side === "bottom" ? "B.Cu" : "F.Cu";
+    if (magnetic.footprintOrigins && onLayer(partLayer)) anchors.push({ x: part.at[0], y: part.at[1], kind: "footprint-origin", ownerId: part.ref });
     if (magnetic.pads) {
-      for (const pad of part.pads ?? []) anchors.push({ x: pad.x, y: pad.y, kind: "pad", ownerId: part.ref });
+      for (const pad of part.pads ?? []) {
+        // A through-hole pad is on every copper layer; an SMD pad only on its footprint's face.
+        if (onLayer(partLayer, pad.th === true)) anchors.push({ x: pad.x, y: pad.y, kind: "pad", ownerId: part.ref });
+      }
     }
   }
 
   if (magnetic.tracks) {
     for (const track of board.routing?.tracks ?? []) {
       if (track.id === excludeOwnerId || track.pts.length === 0) continue;
+      if (!onLayer(track.layer)) continue;
       const first = track.pts[0]!;
       const last = track.pts[track.pts.length - 1]!;
       anchors.push({ x: first[0], y: first[1], kind: "track-end", ownerId: track.id });
@@ -168,6 +198,7 @@ export function collectAnchors(board: AnchorSourceBoard, magnetic: MagneticSetti
     }
     for (const via of board.routing?.vias ?? []) {
       if (via.id === excludeOwnerId) continue;
+      if (!onLayer(null, true)) continue; // a via's layer set is every copper layer
       anchors.push({ x: via.x, y: via.y, kind: "via", ownerId: via.id });
     }
   }

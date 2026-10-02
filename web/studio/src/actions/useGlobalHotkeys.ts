@@ -12,6 +12,7 @@ import { eventToHotkey, effectiveHotkey } from "./hotkeys";
 const actionsFile = actionsData as ActionsFile;
 
 const TEXT_INPUT_TAGS = new Set(["INPUT", "SELECT", "TEXTAREA"]);
+const NAV_COMBO = /^(?:(?:Ctrl|Shift)\+)?(?:Up|Down|Left|Right)$|^(?:Enter|End)$/;
 
 export function useGlobalHotkeys() {
   const { run, isEnabled } = useActionRunner();
@@ -67,6 +68,12 @@ export function useGlobalHotkeys() {
 
       const combo = eventToHotkey(e);
       if (!combo) return;
+      // common.Control.cursor*/pan*/cursorClick/cursorDblClick/finish bind bare
+      // navigation keys (arrows, Enter, End). In KiCad those only reach the
+      // canvas tool framework -- a dialog, menu or focused button gets them
+      // first. Only fire them from the canvas/body so a list in a dialog or
+      // a focused toolbar button keeps its own arrow/Enter behavior.
+      if (NAV_COMBO.test(combo) && target && target !== document.body && !target.closest(".pcb-canvas-container")) return;
       const actionName = hotkeyIndex.get(combo)?.find(isEnabled);
       if (!actionName) return;
       e.preventDefault();

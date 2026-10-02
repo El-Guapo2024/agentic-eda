@@ -18,6 +18,7 @@ import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
 import { ErcDialog } from "./components/ErcDialog";
 import { HotkeysDialog } from "./components/HotkeysDialog";
+import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
@@ -186,6 +187,7 @@ function StudioFrame() {
       <DrcDialog />
       <ErcDialog />
       <HotkeysDialog />
+      <ZoomAreaOverlay />
       <FootprintPropertiesDialog />
       <NetInspectorDialog />
       <ZoneDialog />

@@ -13,14 +13,19 @@
 // the exact same flow the M/Escape keyboard shortcuts do, and
 // Canvas.tsx no longer needs any keydown handling of its own.
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { finishInteractiveRoute, cancelInteractiveRoute } from "../components/canvas/routing";
-import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment } from "../api/client";
+import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc } from "../api/client";
+import { formatLength } from "../state/units";
+import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
+import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, gridPresetIndex, fastGridCycleTarget, DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2, type CursorDir } from "../kicad-port/cursorControl";
+import { nextMarker } from "../kicad-port/markerNav";
+import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { finishDiffPairRoute } from "../components/canvas/diffPairRouting";
@@ -57,6 +62,8 @@ export function useActionRunner() {
   const dispatch = useStudioDispatch();
   const state = useStudioState();
   const symApi = useSymApi();
+  /** `m_afterItem` of find-next-marker (SCH_FIND_REPLACE_TOOL): the last ERC marker visited, so the next press continues from it. */
+  const markerCursor = useRef<string | null>(null);
 
   const registry = useMemo(() => {
     const m = new Map<string, () => void>();
@@ -1204,6 +1211,256 @@ export function useActionRunner() {
         }
       })
     );
+
+    // ===================================================================
+    // common.* parity block (UI-ACTIONS.md "common: not handled, hotkeyed
+    // first"): cursor/pan keys, fast grids, snap mode, zoom-to-area, save/
+    // print status, datasheet, copy-as-text, find-next-marker, library
+    // search focus. Each registration cites its KiCad source function.
+    // Pure math lives in kicad-port/cursorControl.ts, markerNav.ts and
+    // itemText.ts (unit tested). Not ported (no subsystem behind them):
+    // open/new/saveAs, toggleGridOverrides, updatePcbFromSchematic,
+    // pasteSpecial, cycleArcEditMode, openPreferences -- see
+    // docs/parity/UI-ACTIONS.md notes.
+    // ===================================================================
+    const onCanvasTab = state.tab === "pcb" || state.tab === "schematic";
+    const canvasOnly =
+      <Args extends unknown[]>(fn: (...args: Args) => void) =>
+      (...args: Args) => {
+        if (onCanvasTab) fn(...args);
+      };
+    const activeView = () => (state.tab === "schematic" ? state.schematicView : state.view);
+    const setActiveView = (view: typeof state.view) => dispatch(state.tab === "schematic" ? { type: "SET_SCHEMATIC_VIEW", view } : { type: "SET_VIEW", view });
+    /** The grid CursorControl/PanControl step by: this app's PCB grid, or the schematic's fixed 50 mil (SCH_GRID_UM). */
+    const activeGridUm = () => (state.tab === "schematic" ? SCH_GRID_UM : state.gridUm);
+
+    /**
+     * Stand-in for `m_toolMgr->ProcessEvent(TC_MOUSE...)` / the warped pointer
+     * generating a motion event: re-dispatches a pointer/mouse event on the
+     * live canvas at a world position, so every tool that follows the
+     * pointer (move preview, route/wire rubber band, click handlers) sees
+     * the keyboard cursor exactly as it would a real mouse at that spot.
+     * `viewOverride` is the view the position must be projected through when
+     * a view change was dispatched in the same tick (it has not rendered yet).
+     */
+    const emitCanvasPointer = (type: "pointermove" | "pointerdown" | "pointerup" | "dblclick", world: { x: number; y: number }, viewOverride?: typeof state.view) => {
+      const el = document.querySelector(".pcb-canvas-container canvas");
+      const rect = canvasRect();
+      if (!el || !rect) return;
+      const [sx, sy] = worldToScreen(viewOverride ?? activeView(), world.x, world.y);
+      const init = { bubbles: true, cancelable: true, composed: true, clientX: rect.left + sx, clientY: rect.top + sy, button: 0 };
+      if (type === "dblclick") el.dispatchEvent(new MouseEvent("dblclick", { ...init, detail: 2 }));
+      else el.dispatchEvent(new PointerEvent(type, { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true, buttons: type === "pointerdown" ? 1 : 0 }));
+    };
+
+    // common_tools.cpp COMMON_TOOLS::CursorControl (CURSOR_UP/DOWN/LEFT/RIGHT
+    // and the *_FAST variants, Ctrl+arrows): step the raw cursor one grid
+    // cell (ten when fast), SetCursorPosition( cursor, warpView=true ) --
+    // re-centre the view if the cursor left the canvas -- then refreshPreview.
+    const moveCursor = (dir: CursorDir, fast: boolean) =>
+      canvasOnly(() => {
+        const rect = canvasRect();
+        const view = activeView();
+        if (!rect || !(view.scale > 0)) return;
+        const from = state.cursorUm ?? viewCenter(view, rect.width, rect.height);
+        const to = cursorMove(from, activeGridUm(), dir, fast);
+        const nextView = warpViewToInclude(view, rect.width, rect.height, to);
+        dispatch({ type: "SET_CURSOR", at: to });
+        if (nextView !== view) setActiveView(nextView);
+        // PostAction( refreshPreview ): let previews re-evaluate at the new cursor once the view above has rendered.
+        window.setTimeout(() => emitCanvasPointer("pointermove", to, nextView), 20);
+      });
+    m.set("common.Control.cursorUp", moveCursor("up", false));
+    m.set("common.Control.cursorDown", moveCursor("down", false));
+    m.set("common.Control.cursorLeft", moveCursor("left", false));
+    m.set("common.Control.cursorRight", moveCursor("right", false));
+    m.set("common.Control.cursorUpFast", moveCursor("up", true));
+    m.set("common.Control.cursorDownFast", moveCursor("down", true));
+    m.set("common.Control.cursorLeftFast", moveCursor("left", true));
+    m.set("common.Control.cursorRightFast", moveCursor("right", true));
+
+    // CursorControl's CURSOR_CLICK / CURSOR_DBL_CLICK: a TC_MOUSE click/double-click
+    // event at the cursor position. While a PCB route/zone/shape is being drawn
+    // Enter already finishes it (Canvas.tsx's own convention), so the click is
+    // left to that handler there.
+    m.set(
+      "common.Control.cursorClick",
+      canvasOnly(() => {
+        if (!state.cursorUm || (state.tab === "pcb" && state.drawState)) return;
+        emitCanvasPointer("pointerdown", state.cursorUm);
+        emitCanvasPointer("pointerup", state.cursorUm);
+      })
+    );
+    const dblClickAtCursor = canvasOnly(() => {
+      if (state.cursorUm) emitCanvasPointer("dblclick", state.cursorUm);
+    });
+    m.set("common.Control.cursorDblClick", dblClickAtCursor);
+    // ACTIONS::finishInteractive (End): ends whatever multi-point tool is in
+    // progress. The route/zone/shape/wire tools here all finish on double-click
+    // (Canvas.tsx / SchematicView.tsx onDoubleClick), so this is that, but only
+    // while something is actually being drawn.
+    m.set(
+      "common.Interactive.finish",
+      canvasOnly(() => {
+        if (state.drawState) dblClickAtCursor();
+      })
+    );
+
+    // common_tools.cpp COMMON_TOOLS::PanControl (Shift+arrows): move the view
+    // centre by ten current-grid cells.
+    const panView = (dir: CursorDir) =>
+      canvasOnly(() => {
+        const rect = canvasRect();
+        const view = activeView();
+        if (!rect || !(view.scale > 0)) return;
+        setActiveView(panByGrid(view, rect.width, rect.height, activeGridUm(), dir));
+      });
+    m.set("common.Control.panUp", panView("up"));
+    m.set("common.Control.panDown", panView("down"));
+    m.set("common.Control.panLeft", panView("left"));
+    m.set("common.Control.panRight", panView("right"));
+
+    // common_tools.cpp COMMON_TOOLS::GridFast1/GridFast2/GridFastCycle -> GridPreset(idx, fromHotkey=true)
+    // -> OnGridChanged: clamp the index into the grid list, apply it, put the
+    // cursor on the new grid (SetCrossHairCursorPosition( GetCursorPosition(true) )),
+    // and show the hotkey feedback. PCB tab only: the schematic's grid here is a
+    // fixed 50 mil (layout.ts GRID) with no grid list to index into.
+    if (state.tab === "pcb") {
+      const applyGridPreset = (idx: number) => {
+        const i = gridPresetIndex(idx, GRID_OPTIONS_UM.length);
+        const um = GRID_OPTIONS_UM[i]!;
+        dispatch({ type: "SET_GRID_UM", um });
+        if (state.cursorUm) {
+          const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, um, { x: 0, y: 0 }, { ctrlOrCmd: false });
+          dispatch({ type: "SET_CURSOR", at: { x: p.x, y: p.y } });
+        }
+        dispatch({ type: "TOAST", message: `Grid: ${formatLength(um, state.units)}`, kind: "info" });
+      };
+      m.set("common.Control.gridFast1", () => applyGridPreset(DEFAULT_FAST_GRID_1));
+      m.set("common.Control.gridFast2", () => applyGridPreset(DEFAULT_FAST_GRID_2));
+      m.set("common.Control.gridFastCycle", () => applyGridPreset(fastGridCycleTarget(GRID_OPTIONS_UM.indexOf(state.gridUm), DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2)));
+
+      // pcb_control.cpp PCB_CONTROL::SnapMode (magneticSnapToggle, Shift+S):
+      // `settings.allLayers = !settings.allLayers`; SnapModeFeedback pops up
+      // "Object Snapping: Active Layer / All Layers". The setting feeds
+      // collectAnchors' layer filter (kicad-port/gridSnap.ts).
+      m.set("common.Control.magneticSnapToggle", () => {
+        const next = !state.magneticAllLayers;
+        dispatch({ type: "SET_MAGNETIC_ALL_LAYERS", value: next });
+        dispatch({ type: "TOAST", message: `Object Snapping: ${next ? "All Layers" : "Active Layer"}`, kind: "info" });
+      });
+    }
+
+    // zoom_tool.cpp ZOOM_TOOL::Main (Ctrl+F5): arm the rubber-band zoom tool;
+    // components/ZoomAreaOverlay.tsx owns the drag (selectRegion).
+    m.set("common.Control.zoomTool", canvasOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "zoom_area" ? "select" : "zoom_area" })));
+
+    // pcbnew/files.cpp SavePcbFile / eeschema/files-io.cpp SaveEEFile report
+    // "File '%s' saved." in the status area. Every edit here already went
+    // through /api/cmd and was written to design.json, so there is nothing
+    // left to flush -- only KiCad's status message is shown (no file dialog).
+    m.set(
+      "common.Control.save",
+      canvasOnly(() => dispatch({ type: "TOAST", message: "File 'design.json' saved.", kind: "info" }))
+    );
+    // common.Control.print (Ctrl+P): KiCad opens its print dialog for the
+    // current sheet/board; here the browser's print of the current view
+    // (the @media print rules in styles/layout.css reduce the page to the canvas).
+    m.set("common.Control.print", canvasOnly(() => window.print()));
+
+    // sch_inspection_tool.cpp SCH_INSPECTION_TOOL::ShowDatasheet (D): the
+    // selected symbol (RequestSelection({SCH_SYMBOL_T}) falls back to the
+    // symbol under the cursor); empty or "~" -> "No datasheet defined."
+    // (ShowInfoBarError), otherwise open it (GetAssociatedDocument). Schematic
+    // tab only -- in pcbnew D is registered by the footprint editor alone,
+    // and this app's footprint editor tab has no datasheet field.
+    if (state.tab === "schematic") {
+      m.set("common.Control.showDatasheet", () => {
+        if (!sch) return;
+        let symbol = [...state.selection].map((id) => sch.symbols.find((s) => s.id === id)).find((s) => s != null);
+        if (!symbol && state.cursorUm) {
+          const { x, y } = state.cursorUm;
+          symbol = sch.symbols.find((s) => {
+            const b = symbolBounds(s, sch.lib_symbols);
+            return x >= b.minX && x <= b.maxX && y >= b.minY && y <= b.maxY;
+          });
+        }
+        if (!symbol) return;
+        const target = datasheetTarget(symbol.datasheet);
+        if (target.kind === "none") dispatch({ type: "TOAST", message: "No datasheet defined.", kind: "error" });
+        else if (target.kind === "url") window.open(target.url, "_blank", "noopener,noreferrer");
+        else dispatch({ type: "TOAST", message: `Cannot open datasheet '${target.text}': only absolute http(s)/file URLs can be opened from a browser.`, kind: "error" });
+      });
+    }
+
+    // edit_tool.cpp EDIT_TOOL::copyToClipboardAsText (Ctrl+Shift+C, PCB: text,
+    // dimensions) and sch_editor_control.cpp SCH_EDITOR_CONTROL::CopyAsText ->
+    // sch_tool_utils.cpp GetSelectedItemsAsText (labels, text): the shown text
+    // of each selected item, trimmed, newline-joined, onto the clipboard.
+    m.set(
+      "common.Interactive.copyAsText",
+      canvasOnly(() => {
+        const ids = [...state.selection];
+        const texts =
+          state.tab === "schematic"
+            ? ids.map((id) => sch?.labels.find((l) => l.id === id)?.net ?? sch?.texts.find((t) => t.id === id)?.content)
+            : ids.map((id) => api.textById(id)?.content ?? api.dimensionById(id)?.text);
+        const text = selectionAsText(texts);
+        if (text === "") return;
+        navigator.clipboard.writeText(text).catch(() => dispatch({ type: "TOAST", message: "Could not write to the clipboard.", kind: "error" }));
+      })
+    );
+
+    // sch_find_replace_tool.cpp SCH_FIND_REPLACE_TOOL::FindNext with
+    // `data.markersOnly = true` (ACTIONS::findNextMarker, Ctrl+Shift+F3): the next
+    // ERC marker after the last one visited, in nextMatch()'s x-then-y order;
+    // select it and FocusOnLocation. At the end: "Reached end of sheet. Find
+    // again to wrap around to the start." (kicad-port/markerNav.ts). Schematic
+    // only -- pcbnew has no findNextMarker (its DRC dialog owns nextMarker).
+    if (state.tab === "schematic") {
+      m.set("common.Interactive.findNextMarker", () => {
+        void (async () => {
+          let report = state.erc;
+          if (!report) {
+            try {
+              report = await fetchErc();
+              dispatch({ type: "ERC_OK", erc: report });
+            } catch {
+              dispatch({ type: "TOAST", message: "Could not run ERC.", kind: "error" });
+              return;
+            }
+          }
+          const located = report.violations.flatMap((v, index) => {
+            const at = ercMarkerPosition(v.location, sch);
+            return at ? [{ key: `${v.check}|${v.location}`, x: at.at[0], y: at.at[1], index, refs: at.refs }] : [];
+          });
+          const hit = nextMarker(located, markerCursor.current);
+          markerCursor.current = hit.cursor;
+          if (!hit.marker) {
+            dispatch({ type: "TOAST", message: located.length === 0 ? "No markers found." : "Reached end of sheet. Find again to wrap around to the start.", kind: "info" });
+            return;
+          }
+          const found = located.find((l) => l.key === hit.marker!.key)!;
+          dispatch({ type: "SET_ERC_SELECTED", index: found.index });
+          dispatch({ type: "SET_SELECTION", refs: found.refs });
+          dispatch({ type: "SET_HOT", refs: found.refs });
+          const rect = canvasRect();
+          const view = state.schematicView;
+          if (rect && view.scale > 0) dispatch({ type: "SET_SCHEMATIC_VIEW", view: viewCenteredOn(view, rect.width, rect.height, { x: found.x, y: found.y }) });
+        })();
+      });
+    }
+
+    // common/lib_tree / LIB_TREE's ACTIONS::libraryTreeSearch (Ctrl+L): focus
+    // the search field of the symbol chooser. Registered only while that
+    // dialog is open. (This app has no footprint chooser.)
+    if (state.symbolChooserOpen) {
+      m.set("common.Control.libraryTreeSearch", () => {
+        const el = document.getElementById("library-tree-search") as HTMLInputElement | null;
+        el?.focus();
+        el?.select();
+      });
+    }
 
     return m;
   }, [api, dispatch, state, symApi]);
