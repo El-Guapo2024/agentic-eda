@@ -258,7 +258,8 @@ export function Canvas() {
   // Render loop: repaint whenever anything visible changes.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !board || containerSize.width === 0) return;
+    // Nothing to paint until the first fit has given the view a real scale.
+    if (!canvas || !board || containerSize.width === 0 || !(state.view.scale > 0)) return;
     const dpr = window.devicePixelRatio || 1;
     const { width, height } = containerSize;
     canvas.width = Math.round(width * dpr);

@@ -53,3 +53,8 @@ test("DEFAULT_PCB_GRIDS_UM: the real KiCad default list, unsorted mil-then-mm bl
   for (let i = 13; i < DEFAULT_PCB_GRIDS_UM.length; i++) assert.ok(DEFAULT_PCB_GRIDS_UM[i]! < DEFAULT_PCB_GRIDS_UM[i - 1]!);
   assert.ok(DEFAULT_PCB_GRIDS_UM[12]! > DEFAULT_PCB_GRIDS_UM[11]!, "1 mil -> 5.0mm is a jump UP in size, not sorted");
 });
+
+test("computeVisibleGridSize: an unfitted view (scale 0) returns instead of looping forever", () => {
+  assert.equal(computeVisibleGridSize(1000, 0), 1000);
+  assert.equal(computeVisibleGridSize(1000, Number.NaN), 1000);
+});

@@ -76,6 +76,10 @@ export function computeVisibleGridSize(gridUm: number, scalePxPerUm: number, sty
   // input guard (grid size of exactly 0); not meaningful in µm terms at
   // any real zoom, kept only so gridUm=0 doesn't loop forever below.
   if (spacing <= 0) spacing = 100;
+  // A view not fitted yet (scale 0) makes the threshold infinite: KiCad's
+  // VIEW never has scale 0, here the first paint can race the first fit.
+  // Return the base grid rather than loop forever; tick <= 1 never grows.
+  if (!(scalePxPerUm > 0) || !Number.isFinite(threshold) || tick <= 1) return spacing;
   while (spacing <= threshold) spacing *= tick;
   return spacing;
 }
