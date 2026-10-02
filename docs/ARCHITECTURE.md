@@ -39,10 +39,11 @@ never edited as masters.
   backend exports the current `design.json` revision, runs kicad-cli, and
   maps the report back to our item ids (`crates/cli/src/kicad_engine.rs`,
   `eda board drc --kicad`, `GET /api/drc?engine=kicad`; derived files go
-  to `.kicad/` beside `design.json`). KiCad 9.0.9 from the
-  kicad-9.0-releases PPA; `EDA_KICAD_CLI` overrides the binary. kicad-cli
-  9.0 has no `--refill-zones`, so its DRC checks the zone fills our
-  exporter writes; newer kicad-cli refills them itself.
+  to `.kicad/` beside `design.json`). Target: KiCad **nightly** (10.99,
+  kicad-dev-nightly PPA, matching the master source we port from),
+  installed by `tools/install-kicad-nightly.sh`; `EDA_KICAD_CLI` overrides
+  the binary. Zones are refilled by kicad-cli (`--refill-zones`) when the
+  installed version has it (nightly does; 9.0 does not).
 - **Our own ports** are kept for what kicad-cli cannot do or cannot do fast
   enough interactively:
   - the interactive router (`crates/pns`, a port of KiCad's PNS),
