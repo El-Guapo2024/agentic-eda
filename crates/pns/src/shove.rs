@@ -31,12 +31,13 @@
 //!   (confirmed by the task's SHOVE research spec: `VIA::PushoutForce`'s
 //!   iterative search is used for via lead-in/dragging, not by SHOVE
 //!   itself).
-//! - Each obstacle *line* is pushed with a single hull-hug attempt per
-//!   pusher segment (chained in sequence, same as upstream's per-segment
-//!   hull loop in `ShoveObstacleLine`), not upstream's 3-retry clearance-
-//!   expansion x 4-winding-order search. A push that doesn't clear in one
-//!   attempt fails this call (falls back to walkaround), rather than
-//!   retrying with gradually relaxed geometry.
+//! - Each obstacle *line* is pushed exactly as `ShoveObstacleLine` /
+//!   `shoveLineToHullSet` do: one hull per pusher segment, 4 traversal-
+//!   order x winding attempts validated by `checkShoveDirection`, endpoint,
+//!   self-intersection and pusher-collision checks, and 3 tries with the
+//!   hulls grown 1 µm each (the last may snap via-less ends onto a hull).
+//!   The hull walk itself is still our simplified `walk_around_hull`, not a
+//!   full `LINE::Walkaround` port.
 //!
 //! Unlike `walkaround`/`optimizer` (pure functions over a borrowed
 //! [`Node`]), this module needs to *mutate* a node -- shoving genuinely
@@ -95,33 +96,152 @@ fn is_locked(node: &Node, line: &Line) -> bool {
     line.segment_ids.iter().any(|id| matches!(node.get(*id), Some(Item::Segment(s)) if s.locked))
 }
 
-/// Push `obstacle` (a full assembled line) out of the way of `pusher`'s
-/// geometry: walk it around one hull per pusher segment, chained in
-/// sequence (`ShoveObstacleLine`'s per-segment hull loop). `None` if any
-/// segment's hull-hug fails in both windings.
-fn push_line(pusher: &Line, obstacle: &Line, rules: &BoardRules) -> Option<Vec<Point>> {
-    let mut pts = obstacle.pts.clone();
-    let clearance = Node::clearance(rules, &pusher.net, &obstacle.net);
-    for (a, b) in pusher.segs() {
-        let hull = crate::hull::hull_of(&Shape::Stadium { a, b, r: pusher.width / 2 }, clearance, obstacle.width);
-        if hull.len() < 3 {
-            continue;
-        }
-        let forward = walkaround::walk_around_hull(&pts, &hull, true);
-        let backward = walkaround::walk_around_hull(&pts, &hull, false);
-        pts = match (forward, backward) {
-            (Some(f), Some(b)) if path_len(&b) < path_len(&f) => b,
-            (Some(f), Some(_)) => f,
-            (Some(f), None) => f,
-            (None, Some(b)) => b,
-            (None, None) => return None,
-        };
-    }
-    Some(pts)
+/// `c_ENDPOINT_ON_HULL_THRESHOLD` (1000 nm) in this IR's µm.
+const ENDPOINT_ON_HULL_THRESHOLD: f64 = 1.0;
+/// `cHullFailureExpansionFactor` (1000 nm) in µm.
+const HULL_FAILURE_EXPANSION: Um = 1;
+
+/// `SHAPE_LINE_CHAIN::POINT_INSIDE_TRACKER` over the closed polygon
+/// `obstacle + reverse(shoved)`: is `p` inside the area swept by the move?
+fn point_inside_swept(p: Point, obstacle: &[Point], shoved: &[Point]) -> bool {
+    let poly: Vec<Point> = obstacle.iter().copied().chain(shoved.iter().rev().copied()).collect();
+    crate::walkaround::point_in_polygon(&poly, p)
 }
 
-fn path_len(pts: &[Point]) -> f64 {
-    pts.windows(2).map(|w| (((w[1].x - w[0].x) as f64).powi(2) + ((w[1].y - w[0].y) as f64).powi(2)).sqrt()).sum()
+/// `SHOVE::checkShoveDirection`: the obstacle must move *away* from the
+/// pusher, i.e. the pusher's start point is not inside the area between
+/// the obstacle's old and new shape.
+fn check_shove_direction(pusher: &Line, obstacle: &[Point], shoved: &[Point]) -> bool {
+    let Some(cp) = pusher.first() else { return true };
+    !point_inside_swept(cp, obstacle, shoved)
+}
+
+/// `SHAPE_LINE_CHAIN::SelfIntersecting`: any two non-adjacent segments cross.
+fn self_intersecting(pts: &[Point]) -> bool {
+    let n = pts.len();
+    for i in 0..n.saturating_sub(1) {
+        for j in (i + 2)..n.saturating_sub(1) {
+            let (a, b) = (eda_drc::kimath::Seg::new(pts[i], pts[i + 1]), eda_drc::kimath::Seg::new(pts[j], pts[j + 1]));
+            if a.intersect(&b).is_some() {
+                // Closed chains touch at the shared endpoint; this chain is open.
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `LINE::Collide( &aCurLine, ... )`: any segment pair within clearance.
+fn lines_collide(a: &[Point], aw: Um, b: &Line, clearance: Um) -> bool {
+    let need = clearance + aw / 2 + b.width / 2;
+    let need_sq = (need as i128) * (need as i128);
+    a.windows(2).any(|s| b.segs().any(|(c, d)| eda_drc::kimath::Seg::new(s[0], s[1]).sq_distance_to_seg(&eda_drc::kimath::Seg::new(c, d)) < need_sq))
+}
+
+/// `SHAPE_LINE_CHAIN::NearestPoint` on a closed hull.
+fn hull_nearest(hull: &[Point], p: Point) -> Point {
+    (0..hull.len())
+        .map(|i| eda_drc::kimath::Seg::new(hull[i], hull[(i + 1) % hull.len()]).nearest_point(p))
+        .min_by_key(|q| (q.x - p.x).pow(2) + (q.y - p.y).pow(2))
+        .unwrap_or(p)
+}
+
+/// `SHOVE::shoveLineToHullSet`: re-walk `obstacle` around every hull in
+/// turn, trying the 4 combinations of hull traversal order x winding, and
+/// accept the first result that keeps both endpoints, moves away from the
+/// pusher, doesn't self-intersect and clears the pusher.
+fn shove_line_to_hull_set(pusher: &Line, obstacle: &Line, hulls: &[Vec<Point>], clearance: Um, adjust_start: bool, adjust_end: bool) -> Option<Vec<Point>> {
+    for attempt in 0..4 {
+        let invert = attempt >= 2;
+        let clockwise = attempt % 2 == 1;
+        let order: Vec<usize> = if invert { (0..hulls.len()).rev().collect() } else { (0..hulls.len()).collect() };
+        let mut obs = obstacle.pts.clone();
+
+        if (adjust_start || adjust_end) && obs.len() >= 2 {
+            let min_dist_p = |pref: Point| -> Option<(f64, Point)> {
+                let mut best: Option<(f64, Point)> = None;
+                for &i in &order {
+                    let hull = &hulls[i];
+                    let p = hull_nearest(hull, pref);
+                    let d = if crate::walkaround::point_in_polygon(hull, pref) { 0.0 } else { (((p.x - pref.x) as f64).powi(2) + ((p.y - pref.y) as f64).powi(2)).sqrt() };
+                    if d < ENDPOINT_ON_HULL_THRESHOLD && best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, p));
+                    }
+                }
+                best
+            };
+            let p0 = min_dist_p(obs[0]);
+            let p1 = min_dist_p(*obs.last().unwrap());
+            if let (Some((_, p)), true) = (p1, adjust_end) {
+                obs.push(p);
+            }
+            if let (Some((_, p)), true) = (p0, adjust_start) {
+                obs.insert(0, p);
+            }
+        }
+
+        let mut path = obs.clone();
+        let mut fail = false;
+        for &i in &order {
+            match walkaround::walk_around_hull(&path, &hulls[i], clockwise) {
+                Some(p) => {
+                    let mut l = Line::from_points(obstacle.net.clone(), obstacle.layer, obstacle.width, p);
+                    l.simplify();
+                    path = l.pts;
+                }
+                None => {
+                    fail = true;
+                    break;
+                }
+            }
+        }
+        if fail || path.len() < 2 {
+            continue;
+        }
+        if path.first() != obs.first() || path.last() != obs.last() {
+            continue;
+        }
+        if !check_shove_direction(pusher, &obs, &path) {
+            continue;
+        }
+        if self_intersecting(&path) {
+            continue;
+        }
+        if lines_collide(&path, obstacle.width, pusher, clearance) {
+            continue;
+        }
+        return Some(path);
+    }
+    None
+}
+
+/// `JOINT::Via()`: a via is linked at this joint.
+fn has_via(node: &Node, p: Point, net: &Net) -> bool {
+    node.joint_at(p, net).is_some_and(|j| j.links.iter().any(|&id| matches!(node.get(id), Some(Item::Via(_)))))
+}
+
+/// `SHOVE::ShoveObstacleLine`: one hull per pusher segment at clearance +
+/// the obstacle's width, three tries with the hulls grown by 1 µm each
+/// time; the third try may also snap the obstacle's free (via-less) ends
+/// onto a hull.
+fn push_line(node: &Node, pusher: &Line, obstacle: &Line, rules: &BoardRules) -> Option<Vec<Point>> {
+    let clearance = Node::clearance(rules, &pusher.net, &obstacle.net);
+    let voe_start = obstacle.via_at_start.is_some() || obstacle.first().is_some_and(|p| has_via(node, p, &obstacle.net));
+    let voe_end = obstacle.via_at_end.is_some() || obstacle.last().is_some_and(|p| has_via(node, p, &obstacle.net));
+    let mut extra = 0;
+    for attempt in 0..3 {
+        let hulls: Vec<Vec<Point>> = pusher
+            .segs()
+            .map(|(a, b)| crate::hull::hull_of(&Shape::Stadium { a, b, r: pusher.width / 2 }, clearance + extra, obstacle.width))
+            .filter(|h| h.len() >= 3)
+            .collect();
+        let (adj_start, adj_end) = (attempt >= 2 && !voe_start, attempt >= 2 && !voe_end);
+        if let Some(p) = shove_line_to_hull_set(pusher, obstacle, &hulls, clearance, adj_start, adj_end) {
+            return Some(p);
+        }
+        extra += HULL_FAILURE_EXPANSION;
+    }
+    None
 }
 
 /// `SHOVE::Run`/`ShoveLine`: push whatever `raw` (the candidate head path)
@@ -218,7 +338,7 @@ pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, 
                 if is_locked(&work, &obstacle_line) {
                     return None;
                 }
-                let new_pts = push_line(&line, &obstacle_line, rules)?;
+                let new_pts = push_line(&work, &line, &obstacle_line, rules)?;
                 let src = source_track_of(&work, &obstacle_line);
                 let mut new_line = obstacle_line.clone();
                 new_line.pts = new_pts;
@@ -282,6 +402,19 @@ mod tests {
         // disconnects anything it moves).
         assert_eq!(moved.first(), Some(Point { x: 2500, y: -2000 }));
         assert_eq!(moved.last(), Some(Point { x: 2500, y: 2000 }));
+    }
+
+    #[test]
+    fn shove_direction_rejects_moving_toward_the_pusher() {
+        // Obstacle along y=0; pusher starts above it at y=500. Shoving the
+        // obstacle up past the pusher's start puts that start inside the
+        // swept area -- the wrong way.
+        let pusher = Line::from_points(None, 0, 100, vec![Point { x: 500, y: 500 }, Point { x: 500, y: -500 }]);
+        let obs = vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }];
+        let up = vec![Point { x: 0, y: 0 }, Point { x: 0, y: 800 }, Point { x: 1000, y: 800 }, Point { x: 1000, y: 0 }];
+        let down = vec![Point { x: 0, y: 0 }, Point { x: 0, y: -800 }, Point { x: 1000, y: -800 }, Point { x: 1000, y: 0 }];
+        assert!(!check_shove_direction(&pusher, &obs, &up));
+        assert!(check_shove_direction(&pusher, &obs, &down));
     }
 
     #[test]

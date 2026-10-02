@@ -30,7 +30,7 @@ fn dist_f(a: Point, b: Point) -> f64 {
     (((b.x - a.x) as f64).powi(2) + ((b.y - a.y) as f64).powi(2)).sqrt()
 }
 
-fn point_in_polygon(poly: &[Point], p: Point) -> bool {
+pub(crate) fn point_in_polygon(poly: &[Point], p: Point) -> bool {
     if poly.len() < 3 {
         return false;
     }
