@@ -505,6 +505,8 @@ export interface BoardState {
   routing: Routing | null;
   drawings: Drawings | null;
   checks: Check[];
+  /** `BOARD_ITEM::IsLocked()` for every kind at once: a placed part's ref, or a track/via/zone/shape/text id (`DrawingsSection::locked_ids`, set by `set_locked`). Absent from an older backend = nothing locked. */
+  locked?: string[];
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */
@@ -718,6 +720,14 @@ export type Cmd =
   | { op: "set_dimension_settings"; settings: DimensionSettings }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
   | { op: "swap_layers"; mapping: [string, string][] }
+  /** Removal-only use of `Cmd::CommitRoute`: delete several tracks/vias as ONE undo step (unknown ids tolerated) -- what `unrouteSegment`/`deleteFull` send. */
+  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[] }
+  /** `BOARD_EDITOR_CONTROL::modifyLockSelected` -- lock/unlock every id (part ref or track/via/zone/shape/text id). */
+  | { op: "set_locked"; ids: string[]; locked: boolean }
+  /** `EDIT_TOOL::Swap` -- cyclic pose shift across `parts` in selection order (position, rotation, side). */
+  | { op: "swap_chain"; parts: string[] }
+  /** `ZONE_CREATE_HELPER::performZoneCutout` -- subtract a closed polygon from one zone's outline. */
+  | { op: "zone_cutout"; id: string; cutout: PointXY[] }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**

@@ -945,6 +945,9 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         },
         "routing": routing,
         "drawings": drawings,
+        // `BOARD_ITEM::IsLocked()` for every kind at once (a part ref or a
+        // track/via/zone/shape/text id) -- see `DrawingsSection::locked_ids`.
+        "locked": design.drawings.as_ref().map(|d| d.locked_ids.clone()).unwrap_or_default(),
         "checks": checks,
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),

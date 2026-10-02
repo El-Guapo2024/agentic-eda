@@ -15,6 +15,8 @@ import { routeCancel, routeFinish, routeFix, routeStart } from "../../api/client
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
+import { posture90 } from "../../kicad-port/pcbEditActions";
+import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 
 /** `X` / the first click after arming the route tool: start a session from
  * whatever pad/via/track-end is at `(x, y)`. Shows an error toast and
@@ -112,6 +114,19 @@ export function findRouteAnchor(board: BoardState, xUm: number, yUm: number, thr
     }
   }
   return best;
+}
+
+/**
+ * `to` constrained by the current line mode (`PCBNEW_SETTINGS::m_AngleSnapMode`,
+ * cycled by `pcbnew.EditorControl.lineModeNext`): `direct` = free angle
+ * (`LEADER_MODE::DIRECT`), `45` = nearest 45-degree ray (`DEG45`), `90` =
+ * orthogonal (`DEG90`). The shape tools' segment/rect preview and click
+ * both go through this so they can never disagree.
+ */
+export function constrainByAngleMode(mode: AngleSnapMode, from: [number, number], to: [number, number]): [number, number] {
+  if (mode === "direct") return to;
+  if (mode === "90") return posture90(from, to);
+  return posture45(from, to);
 }
 
 const POSTURE_STEP_DEG = 45;

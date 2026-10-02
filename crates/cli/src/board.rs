@@ -690,6 +690,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditDimension { id, .. } => format!("dimension edit {id}"),
         Cmd::SetDimensionSettings { .. } => "board-setup dimensions".to_string(),
         Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
+        Cmd::SetLocked { ids, locked } => format!("{} {}", if *locked { "lock" } else { "unlock" }, ids.join(" ")),
+        Cmd::SwapChain { parts } => format!("swap-chain {}", parts.join(" ")),
+        Cmd::ZoneCutout { id, cutout } => format!("zone cutout {id} --pts \"{}\"", pts(cutout)),
 
         Cmd::Duplicate { ids } => format!("duplicate {}", ids.join(" ")),
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
@@ -864,6 +867,9 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::EditDimension { .. } => "dimension-edit",
         Cmd::SetDimensionSettings { .. } => "dimension-settings",
         Cmd::SwapLayers { .. } => "swap-layers",
+        Cmd::SetLocked { .. } => "lock",
+        Cmd::SwapChain { .. } => "swap",
+        Cmd::ZoneCutout { .. } => "zone",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::MoveExact { .. } => "move-exact",

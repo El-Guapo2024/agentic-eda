@@ -25,6 +25,11 @@ export function SelectionFilterPanel() {
   return (
     <div className="panel-section">
       <h3>Selection Filter</h3>
+      {/* panel_selection_filter.cpp: "Locked items" sits above "All Items" and is not part of it (`All Items` only sweeps the per-kind rows). */}
+      <label className="filter-row" title="Allow selection of locked items">
+        <input type="checkbox" checked={f.lockedItems} onChange={(e) => dispatch({ type: "SET_SELECTION_FILTER", filter: { lockedItems: e.target.checked } })} />
+        Locked items
+      </label>
       <label className="filter-row">
         <input
           type="checkbox"

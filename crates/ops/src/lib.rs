@@ -580,6 +580,32 @@ pub enum Cmd {
     /// the board's own copper layers.
     SwapLayers { mapping: Vec<(String, String)> },
 
+    /// `BOARD_EDITOR_CONTROL::modifyLockSelected` (`L`, "Toggle Lock"):
+    /// set (`locked: true`) or clear (`false`) `BOARD_ITEM::SetLocked` on
+    /// every id -- a placed part's reference, or a track/via/zone/shape/text
+    /// id. The caller resolves source's TOGGLE mode (any selected item
+    /// already locked -> unlock all, else lock all) before sending this, so
+    /// one Cmd is one `commit.Push( "Lock" / "Unlock" )`. An unknown id
+    /// refuses the whole Cmd (nothing partially applied).
+    SetLocked { ids: Vec<String>, locked: bool },
+    /// `EDIT_TOOL::Swap` (`Alt+S`) for footprints: `parts` is in selection
+    /// order and, exactly like source's `for i in 0..n-1: swap(sorted[i],
+    /// sorted[i+1])`, the result is a cyclic shift of the whole pose
+    /// (position, orientation AND board side) -- the first part ends on the
+    /// second's pose, ..., the last on the first's. Two parts is a plain
+    /// pose swap. One Cmd so the whole chain is one undo step.
+    SwapChain { parts: Vec<String> },
+    /// `ZONE_CREATE_HELPER::performZoneCutout` (`Shift+C`, "Add a Zone
+    /// Cutout"): subtract the closed polygon `cutout` from zone `id`'s
+    /// outline (`SHAPE_POLY_SET::BooleanSubtract`) and replace the zone by
+    /// one copy of itself per resulting main outline, same settings, fill
+    /// dropped (`UnFill`; fills are always derived here). This IR's zone has
+    /// one outline and no holes, so a cutout lying wholly inside the zone --
+    /// which source keeps as a real hole -- is stored fractured (the
+    /// hole joined to the outline by a zero-width slit, `SHAPE_POLY_SET::
+    /// Fracture`): the same copper area, so fills and DRC agree.
+    ZoneCutout { id: String, cutout: Vec<Point> },
+
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
     /// assigned here, the same deterministic way as everywhere else.
@@ -1284,6 +1310,9 @@ impl Cmd {
             Cmd::DeleteDimension { id } | Cmd::MoveDimension { id, .. } | Cmd::EditDimension { id, .. } => vec![id.as_str()],
             Cmd::SetDimensionSettings { .. } => vec!["dimension_settings"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
+            Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
+            Cmd::ZoneCutout { id, .. } => vec![id.as_str()],
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -1357,6 +1386,7 @@ impl Cmd {
                 | Cmd::Nudge { .. }
                 | Cmd::Rotate { .. }
                 | Cmd::Swap { .. }
+                | Cmd::SwapChain { .. }
                 | Cmd::Rip { .. }
                 | Cmd::Flip { .. }
                 | Cmd::MoveExact { .. }
@@ -1617,6 +1647,9 @@ impl<'a> Board<'a> {
             Cmd::EditDimension { id, dimension } => self.edit_dimension(id, dimension.clone()),
             Cmd::SetDimensionSettings { settings } => self.set_dimension_settings(*settings),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
+            Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
+            Cmd::SwapChain { parts } => self.swap_chain(parts),
+            Cmd::ZoneCutout { id, cutout } => self.zone_cutout(id, cutout),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
@@ -3019,6 +3052,102 @@ impl<'a> Board<'a> {
 
     fn set_dimension_settings(&mut self, settings: DimensionSettings) -> Result<(), Vec<CheckResult>> {
         self.drawings_mut().dimension_settings = settings;
+        Ok(())
+    }
+
+    /// `Cmd::SwapChain` -- see that variant's own doc.
+    fn swap_chain(&mut self, parts: &[String]) -> Result<(), Vec<CheckResult>> {
+        if parts.len() < 2 {
+            return Err(vec![CheckResult::fail("ops_swap_chain", "swap", "swapping needs at least two parts")]);
+        }
+        let mut seen = BTreeSet::new();
+        for p in parts {
+            if !seen.insert(p.as_str()) {
+                return Err(vec![CheckResult::fail("ops_swap_self", p, "a part cannot be swapped with itself")]);
+            }
+        }
+        let poses: Vec<FootprintInstance> = parts.iter().map(|p| self.require_placed(p)).collect::<Result<_, _>>()?;
+        let n = parts.len();
+        for (i, part) in parts.iter().enumerate() {
+            let src = &poses[(i + 1) % n];
+            self.set_pose(part, src.at, src.rot)?;
+            let fps = &mut self.design.placement.as_mut().unwrap().footprints;
+            let k = fps.iter().position(|f| f.id == *part).expect("caller checked the part is placed");
+            fps[k].side = src.side;
+        }
+        Ok(())
+    }
+
+    /// `Cmd::SetLocked` -- see that variant's own doc.
+    fn set_locked(&mut self, ids: &[String], locked: bool) -> Result<(), Vec<CheckResult>> {
+        if ids.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_lock", "set_locked", "no items given")]);
+        }
+        let known = self.lockable_ids();
+        for id in ids {
+            if !known.contains(id) {
+                return Err(vec![CheckResult::fail("ops_unknown_item", id, "no placed part, track, via, zone, shape or text with this id")]);
+            }
+        }
+        let dr = self.drawings_mut();
+        let mut set: BTreeSet<String> = dr.locked_ids.iter().filter(|i| known.contains(*i)).cloned().collect();
+        for id in ids {
+            if locked {
+                set.insert(id.clone());
+            } else {
+                set.remove(id);
+            }
+        }
+        dr.locked_ids = set.into_iter().collect();
+        Ok(())
+    }
+
+    /// Every id `Cmd::SetLocked` accepts: placed part references plus every
+    /// track/via/zone/shape/text id currently on the board.
+    fn lockable_ids(&self) -> BTreeSet<String> {
+        let mut out: BTreeSet<String> = self.placement().footprints.iter().map(|f| f.id.clone()).collect();
+        if let Some(rt) = &self.design.routing {
+            out.extend(rt.tracks.iter().map(|t| t.id.clone()));
+            out.extend(rt.vias.iter().map(|v| v.id.clone()));
+            out.extend(rt.zones.iter().map(|z| z.id.clone()));
+        }
+        if let Some(dr) = &self.design.drawings {
+            out.extend(dr.shapes.iter().map(|s| s.id().to_string()));
+            out.extend(dr.texts.iter().map(|t| t.id.clone()));
+        }
+        out
+    }
+
+    /// `Cmd::ZoneCutout` -- see that variant's own doc.
+    fn zone_cutout(&mut self, id: &str, cutout: &[Point]) -> Result<(), Vec<CheckResult>> {
+        use eda_clipper2::Point64;
+        use eda_shape_poly_set::ShapePolySet;
+        if cutout.len() < 3 {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "a zone cutout needs at least three points")]);
+        }
+        let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
+        let zi = rt.zones.iter().position(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
+        let chain = |pts: &[Point]| pts.iter().map(|p| Point64::new(p.x, p.y)).collect::<Vec<_>>();
+        let mut remaining = ShapePolySet::from_outline(chain(&rt.zones[zi].outline));
+        let before_area = remaining.area();
+        remaining.boolean_subtract(&ShapePolySet::from_outline(chain(cutout)));
+        if (remaining.area() - before_area).abs() < 0.5 {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "the cutout does not overlap the zone")]);
+        }
+        // One zone per remaining main outline; holes ride along fractured.
+        remaining.fracture(false);
+        let template = rt.zones.remove(zi);
+        for poly in &remaining.polys {
+            let ring = &poly[0];
+            if ring.len() < 3 {
+                continue;
+            }
+            let mut z = template.clone();
+            z.id = String::new();
+            z.outline = ring.iter().map(|p| Point { x: p.x, y: p.y }).collect();
+            rt.zones.push(z);
+        }
+        rt.assign_missing_ids();
         Ok(())
     }
 

@@ -19,13 +19,18 @@ import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
-import { finishInteractiveRoute, cancelInteractiveRoute } from "../components/canvas/routing";
-import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc } from "../api/client";
+import { finishInteractiveRoute, cancelInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
+import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel } from "../api/client";
 import { formatLength } from "../state/units";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, gridPresetIndex, fastGridCycleTarget, DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
+import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { snapPoint } from "../components/canvas/gridHelper";
+import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
+import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
+import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { finishDiffPairRoute } from "../components/canvas/diffPairRouting";
@@ -507,35 +512,46 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveSelection.SelectConnection",
       pcbOnly(() => {
-        const board = state.board;
-        if (!board) return;
-        const tracks: ConnTrack[] = (board.routing?.tracks ?? []).map((t) => ({ id: t.id, net: t.net, start: t.pts[0]!, end: t.pts[t.pts.length - 1]! })).filter((t) => t.start && t.end);
-        const vias: ConnVia[] = (board.routing?.vias ?? []).map((v) => ({ id: v.id, net: v.net, at: [v.x, v.y] }));
-        const startPoints: StartPoint[] = [];
-        const selectedTrackIds: string[] = [];
-        const selectedViaIds: string[] = [];
-        for (const id of state.selection) {
-          const t = api.trackById(id);
-          const v = api.viaById(id);
-          const p = api.partByRef(id);
-          if (t) {
-            selectedTrackIds.push(id);
-            startPoints.push({ point: t.pts[0]!, net: t.net }, { point: t.pts[t.pts.length - 1]!, net: t.net });
-          } else if (v) {
-            selectedViaIds.push(id);
-            startPoints.push({ point: [v.x, v.y], net: v.net });
-          } else if (p?.placed) {
-            for (const pad of p.pads ?? []) if (pad.net) startPoints.push({ point: [pad.x, pad.y], net: pad.net });
-          }
-        }
-        if (startPoints.length === 0) return;
-        const result = expandConnection(tracks, vias, startPoints, { trackIds: selectedTrackIds, viaIds: selectedViaIds });
-        const refs = new Set(state.selection);
-        for (const id of result.trackIds) refs.add(id);
-        for (const id of result.viaIds) refs.add(id);
-        dispatch({ type: "SET_SELECTION", refs: [...refs] });
+        const refs = computeConnectionRefs(state.selection);
+        if (refs) dispatch({ type: "SET_SELECTION", refs });
       })
     );
+    /**
+     * The body of `SelectConnection` above, factored out so `deleteFull`
+     * (`pcbnew.InteractiveEdit.deleteFull`, whose `REMOVE_FLAGS::ALT` runs
+     * `PCB_ACTIONS::selectConnection` before deleting) expands exactly the
+     * same way: `selection` plus everything `expandConnection` adds, or null
+     * when nothing in it can seed a flood.
+     */
+    function computeConnectionRefs(selection: ReadonlySet<string>): string[] | null {
+      const board = state.board;
+      if (!board) return null;
+      const tracks: ConnTrack[] = (board.routing?.tracks ?? []).map((t) => ({ id: t.id, net: t.net, start: t.pts[0]!, end: t.pts[t.pts.length - 1]! })).filter((t) => t.start && t.end);
+      const vias: ConnVia[] = (board.routing?.vias ?? []).map((v) => ({ id: v.id, net: v.net, at: [v.x, v.y] }));
+      const startPoints: StartPoint[] = [];
+      const selectedTrackIds: string[] = [];
+      const selectedViaIds: string[] = [];
+      for (const id of selection) {
+        const t = api.trackById(id);
+        const v = api.viaById(id);
+        const p = api.partByRef(id);
+        if (t) {
+          selectedTrackIds.push(id);
+          startPoints.push({ point: t.pts[0]!, net: t.net }, { point: t.pts[t.pts.length - 1]!, net: t.net });
+        } else if (v) {
+          selectedViaIds.push(id);
+          startPoints.push({ point: [v.x, v.y], net: v.net });
+        } else if (p?.placed) {
+          for (const pad of p.pads ?? []) if (pad.net) startPoints.push({ point: [pad.x, pad.y], net: pad.net });
+        }
+      }
+      if (startPoints.length === 0) return null;
+      const result = expandConnection(tracks, vias, startPoints, { trackIds: selectedTrackIds, viaIds: selectedViaIds });
+      const refs = new Set(selection);
+      for (const id of result.trackIds) refs.add(id);
+      for (const id of result.viaIds) refs.add(id);
+      return [...refs];
+    }
 
     const fitToBoard = pcbOnly(() => {
       const rect = canvasRect();
@@ -865,7 +881,9 @@ export function useActionRunner() {
         for (const z of state.board.routing?.zones ?? []) refs.push(z.id);
         for (const s of state.board.drawings?.shapes ?? []) refs.push(s.id);
         for (const t of state.board.drawings?.texts ?? []) refs.push(t.id);
-        dispatch({ type: "SET_SELECTION", refs });
+        // pcb_selection_tool.cpp itemPassesFilter: locked items are skipped unless the "Locked items" filter is on.
+        const locked = new Set(state.board.locked ?? []);
+        dispatch({ type: "SET_SELECTION", refs: state.selectionFilter.lockedItems ? refs : refs.filter((id) => !locked.has(id)) });
       })
     );
     m.set("common.Interactive.unselectAll", pcbOnly(() => dispatch({ type: "SET_SELECTION", refs: [] })));
@@ -1460,6 +1478,384 @@ export function useActionRunner() {
         el?.focus();
         el?.select();
       });
+    }
+
+    // pcbnew parity block -- the "pcbnew: not handled, hotkeyed first" rows
+    // of docs/parity/UI-ACTIONS.md. Every handler cites the KiCad source
+    // function it ports (pcbnew/tools/*.cpp at commit 8303b2ad); pure logic
+    // lives in kicad-port/pcbEditActions.ts + pcbParityState.ts (unit
+    // tested), every board edit is an `/api/cmd` verb (so it has undo).
+    // Context-sensitive hotkeys (Ctrl++, Backspace, Ctrl+E, Tab, 1-4) are
+    // registered only in the state that owns them, which is how this app's
+    // flat registry stands in for KiCad's tool stack (see the note on F
+    // above): exactly one candidate per key is ever enabled.
+    // ===================================================================
+    {
+      const board = state.board;
+      const lockedSet = new Set(board?.locked ?? []);
+      const ratsnestEdges = state.ratsnest?.edges ?? [];
+      const copperLayers = board?.layers ?? [];
+      const routing = state.drawState?.kind === "route";
+      const shapeToolActive = state.activeTool === "draw_segment" || state.activeTool === "draw_arc" || state.activeTool === "draw_rect" || state.activeTool === "draw_circle" || state.activeTool === "draw_polygon";
+
+      /** `PCB_SELECTION_TOOL::RequestSelection`: the current selection, or -- when nothing is selected -- the item under the cursor (`selectPoint`; a clarification menu is not raised, the best candidate wins). */
+      const requestSelection = (): string[] => {
+        if (state.selection.size > 0) return [...state.selection];
+        if (!board || !state.cursorUm) return [];
+        const toleranceUm = Math.max(150, 6 / state.view.scale);
+        const cands = pickSelectionCandidates(board, state.cursorUm.x, state.cursorUm.y, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
+        return cands[0] ? [cands[0].id] : [];
+      };
+
+      // ---- toggleLock / lock / unlock -- board_editor_control.cpp BOARD_EDITOR_CONTROL::modifyLockSelected
+      const modifyLock = (mode: "toggle" | "on" | "off") =>
+        pcbOnly(() => {
+          // A selection that is empty falls back to selectionCursor (the item under the cursor). Free pads are never locked (n/a here: no free pads).
+          const ids = requestSelection().filter((id) => Boolean(api.partByRef(id)?.placed || api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id)));
+          if (ids.length === 0) return;
+          const locked = mode === "toggle" ? resolveToggleLock(ids, lockedSet) : mode === "on";
+          void api.cmd({ op: "set_locked", ids, locked });
+        });
+      m.set("pcbnew.EditorControl.toggleLock", modifyLock("toggle"));
+      m.set("pcbnew.EditorControl.lock", modifyLock("on"));
+      m.set("pcbnew.EditorControl.unlock", modifyLock("off"));
+
+      // ---- deleteFull (Shift+Del) -- edit_tool.cpp EDIT_TOOL::Remove with REMOVE_FLAGS::ALT: "we expand selected track items to their full connection" (RunAction(selectConnection)), then DeleteItems.
+      const deleteItems = async (ids: string[]) => {
+        dispatch({ type: "SET_SELECTION", refs: [] });
+        const trackIds = ids.filter((id) => api.trackById(id));
+        const viaIds = ids.filter((id) => api.viaById(id));
+        // One Cmd for all copper, so the whole delete is one undo step (as one BOARD_COMMIT::Push in source).
+        if (trackIds.length || viaIds.length) await api.cmd({ op: "commit_route", remove_track_ids: trackIds, remove_via_ids: viaIds });
+        for (const id of ids) {
+          if (api.trackById(id) || api.viaById(id)) continue;
+          if (api.zoneById(id)) await api.cmd({ op: "delete_zone", id });
+          else if (api.shapeById(id)) await api.cmd({ op: "delete_shape", id });
+          else if (api.textById(id)) await api.cmd({ op: "delete_text", id });
+          else if (api.dimensionById(id)) await api.cmd({ op: "delete_dimension", id });
+          else if (api.partByRef(id)?.placed) await api.cmd({ op: "rip", part: id });
+        }
+      };
+      m.set(
+        "pcbnew.InteractiveEdit.deleteFull",
+        pcbOnly(() => {
+          let ids = requestSelection();
+          if (ids.length === 0) return;
+          if (ids.some((id) => api.trackById(id) || api.viaById(id))) ids = computeConnectionRefs(new Set(ids)) ?? ids;
+          void deleteItems(ids);
+        })
+      );
+
+      // ---- FindMove (T) -- edit_tool.cpp EDIT_TOOL::GetAndPlace: DIALOG_GET_FOOTPRINT_BY_NAME, then select it and start Move (components/PcbParityDialogs.tsx).
+      m.set("pcbnew.InteractiveEdit.FindMove", pcbOnly(() => dispatch({ type: "PCBX", patch: { pcbDialog: "find_move" } })));
+
+      // ---- moveIndividually (Ctrl+M) / skip (Tab) -- edit_tool_move_fct.cpp EDIT_TOOL::doMoveSelection's `moveIndividually` branch:
+      // items are picked up one at a time (selection order), each glued to the cursor by its anchor; a click drops it and picks up the next, Tab leaves it where it was.
+      const startMoveIndividually = (refs: string[]) => {
+        if (!board) return;
+        const movable = refs.filter((r) => movableItem(board, r));
+        const [first, ...rest] = movable;
+        if (!first) return;
+        const at = movableItem(board, first)!.at;
+        dispatch({ type: "SET_SELECTION", refs: [first] });
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        dispatch({ type: "PCBX", patch: { moveQueue: rest, movingIndividually: true } });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: { x: at[0], y: at[1] } });
+      };
+      m.set("pcbnew.InteractiveMove.moveIndividually", pcbOnly(() => startMoveIndividually(requestSelection())));
+      if (state.pcbx.movingIndividually) {
+        m.set(
+          "pcbnew.InteractiveEdit.skip",
+          pcbOnly(() => {
+            dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+            api.advanceMoveQueue();
+          })
+        );
+      }
+
+      // ---- SelectUnconnected (O) / GrabUnconnected (Shift+O) -- pcb_selection_tool.cpp PCB_SELECTION_TOOL::selectUnconnected / grabUnconnected
+      m.set(
+        "pcbnew.InteractiveSelection.SelectUnconnected",
+        pcbOnly(() => {
+          if (!board) return;
+          dispatch({ type: "SET_SELECTION", refs: selectUnconnectedFootprints(board.parts, ratsnestEdges, [...state.selection]) });
+        })
+      );
+      m.set(
+        "pcbnew.InteractiveSelection.GrabUnconnected",
+        pcbOnly(() => {
+          if (!board) return;
+          const refs = grabNearestUnconnectedFootprints(board.parts, ratsnestEdges, [...state.selection]);
+          dispatch({ type: "SET_SELECTION", refs });
+          // `m_toolMgr->RunAction( PCB_ACTIONS::moveIndividually )`
+          startMoveIndividually(refs);
+        })
+      );
+
+      // ---- swap (Alt+S) -- edit_tool_move_fct.cpp EDIT_TOOL::Swap, footprints (needs 2+ selected; poses shift cyclically in selection order).
+      m.set(
+        "pcbnew.InteractiveEdit.swap",
+        pcbOnly(() => {
+          const parts = [...state.selection].filter((id) => api.partByRef(id)?.placed);
+          if (parts.length < 2) return;
+          void api.cmd({ op: "swap_chain", parts });
+        })
+      );
+
+      // ---- changeTrackLayerNext/Prev (Ctrl++ / Ctrl+-) -- edit_tool.cpp EDIT_TOOL::ChangeTrackLayer: step the active layer (layerNext/layerPrev), then move every selected track onto it.
+      // Not while routing, and not while a graphic tool is armed (there Ctrl++/Ctrl+- are incWidth/decWidth).
+      if (!routing && !shapeToolActive) {
+        const changeTrackLayer = (dir: 1 | -1) =>
+          pcbOnly(() => {
+            const next = stepCopperLayer(copperLayers, state.layerVisible, state.activeLayer, dir);
+            if (!next) return; // newLayer == origLayer: nothing to do
+            const ids = requestSelection().filter((id) => api.trackById(id));
+            dispatch({ type: "SET_ACTIVE_LAYER", layer: next });
+            if (ids.length) void api.cmd({ op: "edit_tracks_and_vias", ids, layer: next });
+          });
+        m.set("pcbnew.Control.changeTrackLayerNext", changeTrackLayer(1));
+        m.set("pcbnew.Control.changeTrackLayerPrev", changeTrackLayer(-1));
+      }
+
+      // ---- layerTop / layerInnerN / layerBottom -- pcb_control.cpp PCB_CONTROL::LayerSwitch (PCB_EDIT_FRAME::SwitchLayer): make that copper layer active if the board has it.
+      const switchLayer = (layer: string) =>
+        pcbOnly(() => {
+          if (copperLayers.includes(layer)) dispatch({ type: "SET_ACTIVE_LAYER", layer });
+        });
+      m.set("pcbnew.Control.layerTop", switchLayer("F.Cu"));
+      m.set("pcbnew.Control.layerBottom", switchLayer("B.Cu"));
+      m.set("pcbnew.Control.layerInner1", switchLayer("In1.Cu"));
+      m.set("pcbnew.Control.layerInner2", switchLayer("In2.Cu"));
+      m.set("pcbnew.Control.layerInner3", switchLayer("In3.Cu"));
+      m.set("pcbnew.Control.layerInner4", switchLayer("In4.Cu"));
+      m.set("pcbnew.Control.layerInner5", switchLayer("In5.Cu"));
+      m.set("pcbnew.Control.layerInner6", switchLayer("In6.Cu"));
+      m.set("pcbnew.Control.layerInner7", switchLayer("In7.Cu"));
+      m.set("pcbnew.Control.layerInner8", switchLayer("In8.Cu"));
+      m.set("pcbnew.Control.layerInner9", switchLayer("In9.Cu"));
+      m.set("pcbnew.Control.layerInner10", switchLayer("In10.Cu"));
+      m.set("pcbnew.Control.layerInner11", switchLayer("In11.Cu"));
+      m.set("pcbnew.Control.layerInner12", switchLayer("In12.Cu"));
+      m.set("pcbnew.Control.layerInner13", switchLayer("In13.Cu"));
+      m.set("pcbnew.Control.layerInner14", switchLayer("In14.Cu"));
+      m.set("pcbnew.Control.layerInner15", switchLayer("In15.Cu"));
+      m.set("pcbnew.Control.layerInner16", switchLayer("In16.Cu"));
+      m.set("pcbnew.Control.layerInner17", switchLayer("In17.Cu"));
+      m.set("pcbnew.Control.layerInner18", switchLayer("In18.Cu"));
+      m.set("pcbnew.Control.layerInner19", switchLayer("In19.Cu"));
+      m.set("pcbnew.Control.layerInner20", switchLayer("In20.Cu"));
+      m.set("pcbnew.Control.layerInner21", switchLayer("In21.Cu"));
+      m.set("pcbnew.Control.layerInner22", switchLayer("In22.Cu"));
+      m.set("pcbnew.Control.layerInner23", switchLayer("In23.Cu"));
+      m.set("pcbnew.Control.layerInner24", switchLayer("In24.Cu"));
+      m.set("pcbnew.Control.layerInner25", switchLayer("In25.Cu"));
+      m.set("pcbnew.Control.layerInner26", switchLayer("In26.Cu"));
+      m.set("pcbnew.Control.layerInner27", switchLayer("In27.Cu"));
+      m.set("pcbnew.Control.layerInner28", switchLayer("In28.Cu"));
+      m.set("pcbnew.Control.layerInner29", switchLayer("In29.Cu"));
+      m.set("pcbnew.Control.layerInner30", switchLayer("In30.Cu"));
+
+      // ---- layerPairPresetCycle (Shift+V) -- pcb_control.cpp PCB_CONTROL::CycleLayerPresets: "if( presets.size() < 2 ) return 0;". This model has one layer pair (the outer pair) and no
+      // user-defined LAYER_PAIR_SETTINGS presets, so the cycle is always source's early return.
+      m.set("pcbnew.Control.layerPairPresetCycle", pcbOnly(() => {}));
+
+      // ---- zoneCutout (Shift+C) / similarZone (Ctrl+Shift+.) -- drawing_tool.cpp DRAWING_TOOL::DrawZone with ZONE_MODE::CUTOUT / SIMILAR (getSourceZoneForAction: a single zone, from
+      // the selection or else under the cursor); the outline is then drawn with the ordinary zone tool and Canvas.tsx's finishDraw commits it (zone_cutout / add_zone, no dialog).
+      const armSourceZoneDraw = (mode: "cutout" | "similar") =>
+        pcbOnly(() => {
+          const ids = requestSelection();
+          const source = ids.length === 1 ? api.zoneById(ids[0]!) : undefined;
+          if (!source) return;
+          dispatch({ type: "SET_SELECTION", refs: [source.id] });
+          dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false }); // also clears any older zoneDrawMode, so set ours after it
+          dispatch({ type: "PCBX", patch: { zoneDrawMode: { mode, sourceId: source.id } } });
+          dispatch({ type: "SET_ACTIVE_TOOL", tool: "zone" });
+        });
+      m.set("pcbnew.InteractiveDrawing.zoneCutout", armSourceZoneDraw("cutout"));
+      m.set("pcbnew.InteractiveDrawing.similarZone", armSourceZoneDraw("similar"));
+
+      // ---- positionRelative (Shift+P) -- position_relative_tool.cpp POSITION_RELATIVE_TOOL::PositionRelative -> DIALOG_POSITION_RELATIVE (components/PcbParityDialogs.tsx)
+      m.set(
+        "pcbnew.PositionRelative.positionRelative",
+        pcbOnly(() => {
+          const ids = requestSelection();
+          if (ids.length === 0) return;
+          if (state.selection.size === 0) dispatch({ type: "SET_SELECTION", refs: ids });
+          dispatch({ type: "PCBX", patch: { pcbDialog: "position_relative" } });
+        })
+      );
+
+      // ---- placeFootprint (A) -- board_editor_control.cpp BOARD_EDITOR_CONTROL::PlaceFootprint (components/PcbParityDialogs.tsx: pick an unplaced footprint, click to place)
+      m.set("pcbnew.EditorControl.placeFootprint", pcbOnly(() => dispatch({ type: "PCBX", patch: { pcbDialog: "place_footprint" } })));
+
+      // ---- unrouteSegment (Backspace) -- pcb_selection_tool.cpp PCB_SELECTION_TOOL::unrouteSegment: delete the selected tracks/vias, then select what they were connected to
+      // so the user can keep backing up. Idle only (while routing/drawing Backspace is UndoLastSegment/deleteLastPoint).
+      if (!routing && !state.drawState) {
+        m.set(
+          "pcbnew.InteractiveSelection.unrouteSegment",
+          pcbOnly(() => {
+            if (!board) return;
+            const ids = [...state.selection].filter((id) => api.trackById(id) || api.viaById(id));
+            if (ids.length === 0) return;
+            const tracks = board.routing?.tracks ?? [];
+            const vias = board.routing?.vias ?? [];
+            const reselect = unrouteSegmentReselect(tracks, vias, new Set(ids));
+            void api.cmd({ op: "commit_route", remove_track_ids: ids.filter((id) => api.trackById(id)), remove_via_ids: ids.filter((id) => api.viaById(id)) }).then((ok) => {
+              if (ok) dispatch({ type: "SET_SELECTION", refs: reselect });
+            });
+          })
+        );
+      }
+
+      // ---- deleteLastPoint (Backspace) -- drawing_tool.cpp (DrawZone/DrawSegment/...): `polyGeomMgr.DeleteLastCorner()`; with no corner left the draw is cleaned up.
+      const draw = state.drawState;
+      if (draw?.kind === "zone" || draw?.kind === "shape") {
+        m.set(
+          "pcbnew.InteractiveDrawing.deleteLastPoint",
+          pcbOnly(() => dispatch({ type: "SET_DRAW_STATE", draw: draw.pts.length <= 1 ? null : { ...draw, pts: draw.pts.slice(0, -1) } }))
+        );
+      }
+
+      // ---- incWidth / decWidth (Ctrl++ / Ctrl+-) -- drawing_tool.cpp DRAWING_TOOL::DrawSegment: `m_stroke.SetWidth( width +/- WIDTH_STEP )` while a graphic tool is armed.
+      if (shapeToolActive) {
+        m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeWidthUm: stepStrokeWidth(state.pcbx.drawStrokeWidthUm, 1) } })));
+        m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeWidthUm: stepStrokeWidth(state.pcbx.drawStrokeWidthUm, -1) } })));
+      }
+
+      // ---- lineModeNext (Shift+Space) and the explicit modes -- pcb_viewer_tools.cpp PCB_VIEWER_TOOLS::NextLineMode: DIRECT -> DEG45 -> DEG90 -> DIRECT.
+      m.set("pcbnew.EditorControl.lineModeNext", pcbOnly(() => dispatch({ type: "PCBX", patch: { angleSnapMode: nextAngleSnapMode(state.pcbx.angleSnapMode) } })));
+      m.set("pcbnew.EditorControl.lineModeFree", pcbOnly(() => dispatch({ type: "PCBX", patch: { angleSnapMode: "direct" } })));
+      m.set("pcbnew.EditorControl.lineMode45", pcbOnly(() => dispatch({ type: "PCBX", patch: { angleSnapMode: "45" } })));
+      m.set("pcbnew.EditorControl.lineModeOrthonal", pcbOnly(() => dispatch({ type: "PCBX", patch: { angleSnapMode: "90" } })));
+
+      // ---- addCorner (Insert; the extractor kept only macOS's F1) -- pcb_point_editor.cpp PCB_POINT_EDITOR::addCorner: a new corner on the single selected zone's outline, at the point of the nearest edge under the cursor.
+      if (state.selection.size === 1 && state.cursorUm) {
+        const zone = api.zoneById([...state.selection][0]!);
+        const at = state.cursorUm;
+        if (zone) {
+          m.set(
+            "pcbnew.PointEditor.addCorner",
+            pcbOnly(() => {
+              const idx = findNearestEdgeInsertionIndex(zone.outline, at.x, at.y, Math.max(300, 10 / state.view.scale));
+              if (idx == null) return;
+              const [sx, sy] = snapPoint(at.x, at.y, board?.snap ?? state.gridUm);
+              void api.cmd({ op: "set_zone_outline", id: zone.id, outline: insertCorner(zone.outline, idx, sx, sy).map(([x, y]) => ({ x, y })) });
+            })
+          );
+        }
+      }
+
+      // ---- EditFpInFpEditor (Ctrl+E) / EditLibFpInFpEditor (Ctrl+Shift+E) -- board_editor_control.cpp BOARD_EDITOR_CONTROL::EditFpInFpEditor / EditLibFpInFpEditor.
+      // The Footprint Editor is its own store; useFootprintEditHotkey.ts performs the request. This model's board footprint IS its library footprint (by name), so both open that name.
+      // Not while routing (there Ctrl+E is ContinueFromEnd).
+      const openFootprintEditor = (lib: boolean) =>
+        pcbOnly(() => {
+          const ref = requestSelection().find((id) => api.partByRef(id)?.placed);
+          const part = ref ? api.partByRef(ref) : undefined;
+          if (!part) return;
+          if (!part.footprint) {
+            dispatch({ type: "TOAST", message: `${part.ref} has no footprint${lib ? "" : "/package"} to open`, kind: "error" });
+            return;
+          }
+          dispatch({ type: "PCBX", patch: { fpEditRequest: part.footprint } });
+        });
+      if (!routing) m.set("pcbnew.EditorControl.EditFpInFpEditor", openFootprintEditor(false));
+      m.set("pcbnew.EditorControl.EditLibFpInFpEditor", openFootprintEditor(true));
+
+      // ---- lengthTuner.{AmplIncrease,AmplDecrease,SpacingIncrease,SpacingDecrease} (3/4/1/2) -- pns_meander_placer_base.cpp MEANDER_PLACER_BASE::AmplitudeStep / SpacingStep,
+      // active while the length-tuning dialog (this app's "tuning tool active") is open.
+      if (state.lengthTuningDialogOpen) {
+        const tuner = state.pcbx.lengthTuner;
+        const selTrack = [...state.selection][0] ? api.trackById([...state.selection][0]!) : undefined;
+        const trackWidth = selTrack?.width ?? board?.board_rules?.track_width ?? 250;
+        const clearance = board?.board_rules?.clearance ?? 0;
+        const setTuner = (patch: Partial<typeof tuner>) => dispatch({ type: "PCBX", patch: { lengthTuner: { ...tuner, ...patch } } });
+        m.set("pcbnew.lengthTuner.AmplIncrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, 1) })));
+        m.set("pcbnew.lengthTuner.AmplDecrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, -1) })));
+        m.set("pcbnew.lengthTuner.SpacingIncrease", pcbOnly(() => setTuner({ spacingUm: spacingStep(tuner.spacingUm, 1, trackWidth, clearance) })));
+        m.set("pcbnew.lengthTuner.SpacingDecrease", pcbOnly(() => setTuner({ spacingUm: spacingStep(tuner.spacingUm, -1, trackWidth, clearance) })));
+      }
+      // ---- LengthTuner.Settings (Ctrl+L) -- pcb_tuning_pattern.cpp `lengthTunerSettings`: this app's tuner settings live in the length-tuning dialog, so it opens it on a single straight track.
+      m.set(
+        "pcbnew.LengthTuner.Settings",
+        pcbOnly(() => {
+          const refs = [...state.selection];
+          if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
+          dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
+        })
+      );
+
+      // ---- RouteSelected (Shift+X) / RouteSelectedFromEnd (Shift+E) / Autoroute (Shift+F) -- router_tool.cpp ROUTER_TOOL::RouteSelected. For every ratsnest line leaving the selected
+      // footprints' pads (or selected track ends/vias) a route starts at the item's end; `Autoroute` aims it at the line's far end and keeps it only if it reaches it (otherwise the
+      // live session is left for the user to finish -- and, unlike source's loop, stops there); the other two hand the first connection to the live route tool, from this end / the far end.
+      const routeSelected = (variant: "interactive" | "fromEnd" | "auto") =>
+        pcbOnly(async () => {
+          if (!board || routing) return; // `if( m_router->RoutingInProgress() ) return 0;`
+          const selection = [...state.selection];
+          if (selection.length === 0) return;
+          const anchors = routeSelectedAnchors(board.parts, ratsnestEdges, board.routing?.tracks ?? [], board.routing?.vias ?? [], selection);
+          if (anchors.length === 0) {
+            dispatch({ type: "TOAST", message: "Nothing to route: the selection has no unrouted connections.", kind: "info" });
+            return;
+          }
+          dispatch({ type: "SET_SELECTION", refs: [] });
+          const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
+          const settings = state.routerSettings;
+          const handOver = async (at: [number, number], layer: string) => {
+            dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
+            await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch);
+          };
+          if (variant !== "auto") {
+            const a = anchors[0]!;
+            await handOver(variant === "fromEnd" ? a.target : a.at, routeStartLayer(a, copperLayers, state.activeLayer));
+            return;
+          }
+          let done = 0;
+          for (const a of anchors) {
+            const layer = routeStartLayer(a, copperLayers, state.activeLayer);
+            const started = await routeStart(a.at[0], a.at[1], layer, width, settings.mode, settings.removeLoops);
+            if (!started.ok) continue;
+            const head = await routeMove(a.target[0], a.target[1]);
+            // AttemptFinish: only a head that reaches the far end without colliding completes by itself.
+            if (head.ok && !head.colliding && head.snapped_end && (await routeFinish(a.target[0], a.target[1])).ok) {
+              done++;
+              continue;
+            }
+            await routeCancel();
+            await api.refresh();
+            dispatch({ type: "TOAST", message: `Autorouted ${done} of ${anchors.length} connections; finish the next one by hand.`, kind: "info" });
+            await handOver(a.at, layer);
+            return;
+          }
+          await api.refresh();
+          dispatch({ type: "TOAST", message: `Autorouted ${done} of ${anchors.length} connections.`, kind: done === anchors.length ? "info" : "error" });
+        });
+      m.set("pcbnew.InteractiveRouter.RouteSelected", routeSelected("interactive"));
+      m.set("pcbnew.InteractiveRouter.RouteSelectedFromEnd", routeSelected("fromEnd"));
+      m.set("pcbnew.InteractiveRouter.Autoroute", routeSelected("auto"));
+
+      // ---- ContinueFromEnd (Ctrl+E while routing) -- router_tool.cpp `routerContinueFromEnd` -> pns_router.cpp ROUTER::ContinueFromEnd: restart the route from the far end of its
+      // ratsnest line. Only before anything was fixed (source's `HasPlacedAnything()` false case: nothing to carry over); the live session is replaced.
+      if (routing && state.drawState?.kind === "route") {
+        const live = state.drawState;
+        m.set(
+          "pcbnew.InteractiveRouter.ContinueFromEnd",
+          pcbOnly(async () => {
+            if ((live.runs?.length ?? 0) > 0 || live.via || live.pts.length === 0) {
+              dispatch({ type: "TOAST", message: "Route From Other End: only available before the first segment is fixed.", kind: "error" });
+              return;
+            }
+            const far = otherEndOfStart(live.pts[0]!, live.net, ratsnestEdges);
+            if (!far) {
+              dispatch({ type: "TOAST", message: "Route From Other End: this route does not start on an unrouted connection.", kind: "error" });
+              return;
+            }
+            cancelInteractiveRoute(dispatch);
+            await startInteractiveRoute(far[0], far[1], live.layer, live.width, state.routerSettings, dispatch);
+          })
+        );
+      }
     }
 
     return m;

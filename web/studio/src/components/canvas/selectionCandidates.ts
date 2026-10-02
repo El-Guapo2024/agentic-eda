@@ -34,6 +34,8 @@ export interface SelectionCandidate extends GuessCandidate {
  * (panels/SelectionFilterPanel.tsx).
  */
 export interface SelectionFilter {
+  /** `PCB_SELECTION_FILTER_OPTIONS::lockedItems` ("Allow selection of locked items") -- default OFF, exactly like `m_filter.lockedItems = false` in `PCB_SELECTION_TOOL`'s constructor: a locked item (`L`, `set_locked`) can't be picked by a click/box until this is on. */
+  lockedItems: boolean;
   footprints: boolean;
   tracks: boolean;
   vias: boolean;
@@ -43,7 +45,7 @@ export interface SelectionFilter {
   dimensions: boolean;
 }
 
-export const DEFAULT_SELECTION_FILTER: SelectionFilter = { footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true };
+export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true };
 
 function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
   switch (kind) {
@@ -100,9 +102,12 @@ export function collectSelectionCandidates(
   subtractiveOnly: boolean
 ): SelectionCandidate[] {
   const out: SelectionCandidate[] = [];
+  const locked = new Set(board.locked ?? []);
   const consider = (kind: SelectableKind, id: string, slopUm: number, areaUm2: number, layer: string | null) => {
     if (slopUm > toleranceUm) return;
     if (!filterAllows(filter, kind)) return;
+    // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected.
+    if (!filter.lockedItems && locked.has(id)) return;
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
     if (subtractiveOnly && !selection.has(id)) return;
     out.push({ kind, id, slopUm: Math.max(slopUm, 0), areaUm2: Math.max(areaUm2, 1), layer });
@@ -229,8 +234,11 @@ function boxMatches(itemBox: Box, selBox: Box, crossing: boolean): boolean {
  */
 export function collectBoxSelection(board: BoardState, selBox: Box, crossing: boolean, filter: SelectionFilter, layerVisible: Record<string, boolean>, activeLayer: string | null, highContrast: boolean): BoxSelectHit[] {
   const out: BoxSelectHit[] = [];
+  const locked = new Set(board.locked ?? []);
   const consider = (kind: SelectableKind, id: string, itemBox: Box, layer: string | null) => {
     if (!filterAllows(filter, kind)) return;
+    if (!filter.lockedItems && locked.has(id)) return; // itemPassesFilter, as above
+
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
     if (boxMatches(itemBox, selBox, crossing)) out.push({ kind, id });
   };

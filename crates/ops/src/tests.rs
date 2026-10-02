@@ -2394,3 +2394,144 @@ fn symbol_editor_commands_are_scoped_to_the_symbol_editor_domain() {
         assert_eq!(cmd.domain(), Domain::SymbolEditor);
     }
 }
+
+// -------------------------------------------- pcbnew action-parity cmds
+
+#[test]
+fn set_locked_locks_and_unlocks_any_item_kind_and_prunes_dead_ids() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 250, pts: vec![Point { x: 0, y: 0 }, Point { x: 5_000, y: 0 }] }).unwrap();
+    let tid = b.design().routing.as_ref().unwrap().tracks[0].id.clone();
+
+    b.apply(&Cmd::SetLocked { ids: vec![tid.clone()], locked: true }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().locked_ids, vec![tid.clone()]);
+    // locking twice is idempotent (a set, not a counter)
+    b.apply(&Cmd::SetLocked { ids: vec![tid.clone()], locked: true }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().locked_ids.len(), 1);
+
+    // an unknown id refuses the whole Cmd -- nothing is half-applied
+    let e = b.apply(&Cmd::SetLocked { ids: vec![tid.clone(), "nope".into()], locked: false }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_item");
+    assert_eq!(b.design().drawings.as_ref().unwrap().locked_ids.len(), 1);
+
+    // deleting the item and then touching the lock set prunes the dead id
+    b.apply(&Cmd::DeleteTrack { id: tid }).unwrap();
+    b.apply(&Cmd::AddVia { net: "GND".into(), x: 1_000, y: 1_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }).unwrap();
+    let vid = b.design().routing.as_ref().unwrap().vias[0].id.clone();
+    b.apply(&Cmd::SetLocked { ids: vec![vid.clone()], locked: true }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().locked_ids, vec![vid.clone()]);
+    b.apply(&Cmd::SetLocked { ids: vec![vid], locked: false }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().locked_ids.is_empty());
+
+    assert_eq!(b.apply(&Cmd::SetLocked { ids: vec![], locked: true }).unwrap_err()[0].check, "ops_bad_lock");
+}
+
+#[test]
+fn set_locked_accepts_a_placed_part_but_not_an_unplaced_one() {
+    let m = model(vec![part("U1", "SOIC-8"), part("U2", "SOIC-8")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceRegion { part: "U1".into(), region: Region::Centre }).unwrap();
+    b.apply(&Cmd::SetLocked { ids: vec!["U1".into()], locked: true }).unwrap();
+    assert_eq!(b.design().drawings.as_ref().unwrap().locked_ids, vec!["U1".to_string()]);
+    assert_eq!(b.apply(&Cmd::SetLocked { ids: vec!["U2".into()], locked: true }).unwrap_err()[0].check, "ops_unknown_item");
+}
+
+#[test]
+fn swap_chain_shifts_every_pose_one_step_including_rotation_and_side() {
+    let m = model(vec![part("R1", "0603"), part("R2", "0603"), part("R3", "0603")], &[], vec![]);
+    let mut b = board(&m);
+    for (r, x) in [("R1", 10_000), ("R2", 30_000), ("R3", 50_000)] {
+        b.apply(&Cmd::PlaceAt { part: r.into(), x, y: 20_000 }).unwrap();
+    }
+    b.apply(&Cmd::Rotate { part: "R2".into(), quarter_turns: 1 }).unwrap();
+    b.apply(&Cmd::Flip { part: "R3".into() }).unwrap();
+    let before: Vec<_> = ["R1", "R2", "R3"].iter().map(|r| b.pose_of(r).unwrap().clone()).collect();
+
+    b.apply(&Cmd::SwapChain { parts: vec!["R1".into(), "R2".into(), "R3".into()] }).unwrap();
+    // source: swap(R1,R2) then swap(R2,R3) -> R1 takes R2's pose, R2 takes R3's, R3 takes R1's.
+    for (r, src) in [("R1", 1), ("R2", 2), ("R3", 0)] {
+        let p = b.pose_of(r).unwrap();
+        assert_eq!((p.at, p.rot, p.side), (before[src].at, before[src].rot, before[src].side), "{r}");
+    }
+}
+
+#[test]
+fn swap_chain_of_two_is_a_plain_pose_swap_and_refuses_bad_input() {
+    let m = model(vec![part("R1", "0603"), part("R2", "0603")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: 10_000, y: 10_000 }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R2".into(), x: 40_000, y: 30_000 }).unwrap();
+    let (a, c) = (b.pose_of("R1").unwrap().at, b.pose_of("R2").unwrap().at);
+    b.apply(&Cmd::SwapChain { parts: vec!["R1".into(), "R2".into()] }).unwrap();
+    assert_eq!((b.pose_of("R1").unwrap().at, b.pose_of("R2").unwrap().at), (c, a));
+
+    assert_eq!(b.apply(&Cmd::SwapChain { parts: vec!["R1".into()] }).unwrap_err()[0].check, "ops_swap_chain");
+    assert_eq!(b.apply(&Cmd::SwapChain { parts: vec!["R1".into(), "R1".into()] }).unwrap_err()[0].check, "ops_swap_self");
+    assert_eq!(b.apply(&Cmd::SwapChain { parts: vec!["R1".into(), "R9".into()] }).unwrap_err()[0].check, "ops_not_placed");
+}
+
+fn square(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<Point> {
+    vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }]
+}
+
+fn zone_area(z: &Zone) -> f64 {
+    let n = z.outline.len();
+    (0..n).map(|i| (z.outline[i].x as f64) * (z.outline[(i + 1) % n].y as f64) - (z.outline[(i + 1) % n].x as f64) * (z.outline[i].y as f64)).sum::<f64>().abs() / 2.0
+}
+
+#[test]
+fn zone_cutout_across_an_edge_trims_the_zone_and_keeps_its_settings() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000, 10_000) }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.clearance = 777)).unwrap();
+
+    b.apply(&Cmd::ZoneCutout { id, cutout: square(6_000, -1_000, 11_000, 11_000) }).unwrap();
+    let zones = &b.design().routing.as_ref().unwrap().zones;
+    assert_eq!(zones.len(), 1);
+    assert!((zone_area(&zones[0]) - 60_000_000.0).abs() < 1.0, "10x10mm minus the right 4mm strip");
+    assert_eq!((zones[0].net.as_str(), zones[0].layer.as_str(), zones[0].clearance), ("GND", "F.Cu", 777));
+}
+
+#[test]
+fn zone_cutout_that_splits_the_zone_makes_one_zone_per_piece() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000, 10_000) }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    b.apply(&Cmd::ZoneCutout { id, cutout: square(4_000, -1_000, 6_000, 11_000) }).unwrap();
+    let zones = &b.design().routing.as_ref().unwrap().zones;
+    assert_eq!(zones.len(), 2, "source makes one new ZONE per main outline");
+    assert!(zones.iter().all(|z| (zone_area(z) - 40_000_000.0).abs() < 1.0));
+    assert_ne!(zones[0].id, zones[1].id);
+}
+
+#[test]
+fn zone_cutout_inside_the_zone_is_a_fractured_hole_with_the_right_area() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000, 10_000) }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    b.apply(&Cmd::ZoneCutout { id, cutout: square(3_000, 3_000, 5_000, 5_000) }).unwrap();
+    let zones = &b.design().routing.as_ref().unwrap().zones;
+    assert_eq!(zones.len(), 1);
+    assert!(zones[0].outline.len() > 4, "outline plus bridged hole ring");
+    assert!((zone_area(&zones[0]) - 96_000_000.0).abs() < 1.0, "100 - 4 mm^2 (slit has no width)");
+}
+
+#[test]
+fn zone_cutout_refuses_a_disjoint_cutout_a_degenerate_one_and_an_unknown_zone() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: square(0, 0, 10_000, 10_000) }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    let e = b.apply(&Cmd::ZoneCutout { id: id.clone(), cutout: square(20_000, 20_000, 30_000, 30_000) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_zone");
+    let e = b.apply(&Cmd::ZoneCutout { id: id.clone(), cutout: vec![Point { x: 0, y: 0 }, Point { x: 1, y: 1 }] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_zone");
+    let e = b.apply(&Cmd::ZoneCutout { id: "zone_nope".into(), cutout: square(0, 0, 1_000, 1_000) }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_zone");
+    assert_eq!(b.design().routing.as_ref().unwrap().zones.len(), 1, "a refused cutout leaves the zone alone");
+}

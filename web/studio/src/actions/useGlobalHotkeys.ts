@@ -7,7 +7,7 @@ import { useEffect, useMemo } from "react";
 import actionsData from "../kicad/actions.json";
 import type { ActionsFile } from "../kicad/types";
 import { useActionRunner } from "./useActionRunner";
-import { eventToHotkey, effectiveHotkey } from "./hotkeys";
+import { eventToHotkeyCandidates, effectiveHotkey } from "./hotkeys";
 
 const actionsFile = actionsData as ActionsFile;
 
@@ -45,6 +45,11 @@ export function useGlobalHotkeys() {
     // names Ctrl+G/Ctrl+Shift+G explicitly, matching real KiCad's actual
     // shipped defaults; added directly here rather than guessed at in the
     // extractor.
+    // pcbnew.PointEditor.addCorner ("Create Corner"): source is
+    // `#ifdef __WXMAC__ WXK_F1 #else WXK_INSERT`, and the extractor kept only the
+    // macOS arm (F1, which on every other platform is zoomIn's). Insert is the
+    // real non-Mac default.
+    add("Insert", "pcbnew.PointEditor.addCorner");
     add("Ctrl+G", "common.Interactive.group");
     add("Ctrl+Shift+G", "common.Interactive.ungroup");
     return idx;
@@ -66,15 +71,19 @@ export function useGlobalHotkeys() {
         return;
       }
 
-      const combo = eventToHotkey(e);
-      if (!combo) return;
+      // `eventToHotkeyCandidates`: a Shift-typed symbol ("+", ">") is also
+      // tried the way KiCad's table spells it ("Ctrl++", "Ctrl+Shift+.").
       // common.Control.cursor*/pan*/cursorClick/cursorDblClick/finish bind bare
       // navigation keys (arrows, Enter, End). In KiCad those only reach the
       // canvas tool framework -- a dialog, menu or focused button gets them
       // first. Only fire them from the canvas/body so a list in a dialog or
       // a focused toolbar button keeps its own arrow/Enter behavior.
-      if (NAV_COMBO.test(combo) && target && target !== document.body && !target.closest(".pcb-canvas-container")) return;
-      const actionName = hotkeyIndex.get(combo)?.find(isEnabled);
+      let actionName: string | undefined;
+      for (const combo of eventToHotkeyCandidates(e)) {
+        if (NAV_COMBO.test(combo) && target && target !== document.body && !target.closest(".pcb-canvas-container")) continue;
+        actionName = hotkeyIndex.get(combo)?.find(isEnabled);
+        if (actionName) break;
+      }
       if (!actionName) return;
       e.preventDefault();
       run(actionName);

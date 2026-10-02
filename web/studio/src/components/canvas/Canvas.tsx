@@ -16,13 +16,14 @@
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
+import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import type { ToolId } from "../../state/store";
+import type { RuleAreaFields, Zone, ZoneSettingsFields } from "../../api/types";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
 import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
 import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
-import { findRouteAnchor, posture45, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
+import { findRouteAnchor, constrainByAngleMode, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
 import { routeMove, routeDragMove, dpMove } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
@@ -41,6 +42,13 @@ import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCor
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import "../../styles/canvas.css";
 
+/** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
+function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys({ ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS })) out[k] = (zone as unknown as Record<string, unknown>)[k];
+  return out as unknown as ZoneSettingsFields & RuleAreaFields;
+}
+
 /** A candidate's own kind determines which Cmd a drag of it would commit through -- tracks/zones have no move_* Cmd (api/types.ts), so they're selectable but never draggable, same as before this session. */
 const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "via", "shape", "text", "dimension"]);
 
@@ -54,7 +62,7 @@ const LONG_PRESS_MOVE_TOLERANCE_PX = 6;
 /** A click within this many board um of a pad/via/track-end counts as landing on it -- generous enough to be usable at a typical zoom without needing pixel-perfect precision, same idea as pcb_grid_helper's own anchor snapping (not ported here, see gridHelper.ts). */
 const ANCHOR_SNAP_UM = 500;
 /** No per-board "default graphic line width" setting exists (board_rules only covers track/via) -- a plain 0.15mm default, same order of magnitude as KiCad's own out-of-the-box default (0.15-0.2mm silkscreen line width, by version/theme). */
-const DEFAULT_STROKE_WIDTH_UM = 150;
+// (DEFAULT_STROKE_WIDTH_UM now lives in kicad-port/pcbParityState.ts -- incWidth/decWidth step state.pcbx.drawStrokeWidthUm from it.)
 /** How many points finish a given drawing-tool shape by itself, once reached, without waiting for an explicit Enter/double-click -- a plain 2-point line/rect/circle doesn't need a third confirmation the way a polygon does. Arc is start/mid/end (3); zone/polygon/route have no auto-finish (arbitrary length). */
 function shapeAutoFinishCount(kind: "segment" | "arc" | "rect" | "circle" | "polygon"): number | null {
   switch (kind) {
@@ -70,19 +78,19 @@ function shapeAutoFinishCount(kind: "segment" | "arc" | "rect" | "circle" | "pol
 }
 
 /** `pts` -> the matching `CmdShape` variant for `add_shape`, or null if there aren't enough points yet -- the IR's own point-count floor per kind (a polygon needs 3+, everything else exactly the fixed count `shapeAutoFinishCount` already enforces before this is ever called with too few). */
-function shapeFromPoints(kind: "segment" | "arc" | "rect" | "circle" | "polygon", pts: [number, number][], layer: string): CmdShape | null {
+function shapeFromPoints(kind: "segment" | "arc" | "rect" | "circle" | "polygon", pts: [number, number][], layer: string, widthUm: number): CmdShape | null {
   const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
   switch (kind) {
     case "segment":
-      return pts.length >= 2 ? { kind: "segment", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: false, start: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "segment", layer, stroke_width: widthUm, filled: false, start: p(0), end: p(1) } : null;
     case "rect":
-      return pts.length >= 2 ? { kind: "rect", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: false, start: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "rect", layer, stroke_width: widthUm, filled: false, start: p(0), end: p(1) } : null;
     case "circle":
-      return pts.length >= 2 ? { kind: "circle", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: false, center: p(0), end: p(1) } : null;
+      return pts.length >= 2 ? { kind: "circle", layer, stroke_width: widthUm, filled: false, center: p(0), end: p(1) } : null;
     case "arc":
-      return pts.length >= 3 ? { kind: "arc", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
+      return pts.length >= 3 ? { kind: "arc", layer, stroke_width: widthUm, filled: false, start: p(0), mid: p(1), end: p(2) } : null;
     case "polygon":
-      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: DEFAULT_STROKE_WIDTH_UM, filled: true, pts: pts.map((_, i) => p(i)) } : null;
+      return pts.length >= 3 ? { kind: "polygon", layer, stroke_width: widthUm, filled: true, pts: pts.map((_, i) => p(i)) } : null;
   }
 }
 
@@ -297,6 +305,7 @@ export function Canvas() {
       drawState: state.drawState,
       cursorUm: state.cursorUm,
       activeTool: state.activeTool,
+      angleSnapMode: state.pcbx.angleSnapMode,
     });
     ctx.restore();
 
@@ -335,7 +344,7 @@ export function Canvas() {
       ctx.stroke();
     }
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, marquee, zoneCornerPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, marquee, zoneCornerPreview, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -430,16 +439,28 @@ export function Canvas() {
       void finishDiffPairRoute(x, y, dispatch, api);
     } else if (draw.kind === "zone") {
       if (draw.pts.length >= 3) {
-        dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
+        // zone_create_helper.cpp commitZone(): a cutout subtracts from its source zone and a
+        // "similar" zone copies its settings -- neither shows the properties dialog (only
+        // createNewZone() does); a plain draw still goes through ZoneDialog.
+        const mode = state.pcbx.zoneDrawMode;
+        const source = mode ? api.zoneById(mode.sourceId) : undefined;
+        if (mode?.mode === "cutout" && source) {
+          void api.cmd({ op: "zone_cutout", id: source.id, cutout: draw.pts.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
+        } else if (mode?.mode === "similar" && source) {
+          void api.addZone(source.net, source.layer, draw.pts, zoneSettingsOf(source));
+        } else {
+          dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
+        }
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+        dispatch({ type: "PCBX", patch: { zoneDrawMode: null } });
       }
       dispatch({ type: "SET_DRAW_STATE", draw: null });
     } else if (draw.kind === "shape") {
-      const shape = shapeFromPoints(draw.shapeKind, draw.pts, state.activeLayer ?? "F.SilkS");
+      const shape = shapeFromPoints(draw.shapeKind, draw.pts, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm);
       if (shape) api.cmd({ op: "add_shape", shape });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
     }
-  }, [state.drawState, state.activeLayer, api, dispatch]);
+  }, [state.drawState, state.activeLayer, state.pcbx, api, dispatch]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     // Throws NotFoundError for a synthesized pointer (common.Control.cursorClick's
@@ -572,13 +593,13 @@ export function Canvas() {
         let point: [number, number] = [sx, sy];
         if (already.length > 0 && (shapeKind === "segment" || shapeKind === "rect")) {
           const last = already[already.length - 1]!;
-          const constrained = posture45(last, [sx, sy]);
+          const constrained = constrainByAngleMode(state.pcbx.angleSnapMode, last, [sx, sy]);
           point = snapPoint(constrained[0], constrained[1], board.snap ?? state.gridUm);
         }
         const pts = [...already, point];
         const finishAt = shapeAutoFinishCount(shapeKind);
         if (finishAt !== null && pts.length >= finishAt) {
-          const shape = shapeFromPoints(shapeKind, pts, state.activeLayer ?? "F.SilkS");
+          const shape = shapeFromPoints(shapeKind, pts, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm);
           if (shape) api.cmd({ op: "add_shape", shape });
           dispatch({ type: "SET_DRAW_STATE", draw: null });
         } else {
