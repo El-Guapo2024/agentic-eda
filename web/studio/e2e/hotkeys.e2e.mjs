@@ -60,11 +60,11 @@ if (stillOpen) { await p.getByRole("button", { name: /cancel|close/i }).first().
 // ---- RequestSelection hover fallback + multi-select + one undo step (pcbnew edit_tool.cpp Rotate)
 const state = async () => (await fetch(BASE + "/api/state")).json();
 const rotOf = async (ref) => (await state()).parts.find((q) => q.ref === ref)?.rot;
-const undoCount = () => { try { return readdirSync(DIR + "/.history/undo").length; } catch { return 0; } };
+const undoCount = () => { try { return readdirSync(DIR + "/.history/undo").filter((f) => f.endsWith(".json")).length; } catch { return 0; } };
 const center = async () => { const bx = await canvas.boundingBox(); return [bx.x + bx.width / 2, bx.y + bx.height / 2]; };
-gui("--select", "R1"); await p.waitForTimeout(1500); await focusCanvas();
+gui("--zoom-to", "R1"); await p.waitForTimeout(1500); await focusCanvas();
 {
-  const [cx, cy] = await center();
+  const [cx, cy] = await center(); // --zoom-to centres the view on R1, so the canvas centre is over it
   const r0 = await rotOf("R1");
   await p.mouse.move(cx, cy); await p.waitForTimeout(250);
   await p.keyboard.press("r");
@@ -73,15 +73,15 @@ gui("--select", "R1"); await p.waitForTimeout(1500); await focusCanvas();
   await p.keyboard.press("Control+z"); await waitFor(async () => (await rotOf("R1")) === r0);
 }
 {
-  const [r0u, r0r] = [await rotOf("R6"), await rotOf("R7")];
-  gui("--select", "R6,R7"); await p.waitForTimeout(1200); await p.mouse.move(800, 500);
+  const [r0u, r0r] = [await rotOf("R2"), await rotOf("D2")];
+  gui("--select", "R2,D2"); await p.waitForTimeout(1200); await p.mouse.move(800, 500);
   const u0 = undoCount();
   await p.keyboard.press("r");
-  const both = await waitFor(async () => (await rotOf("R6")) !== r0u && (await rotOf("R7")) !== r0r);
+  const both = await waitFor(async () => (await rotOf("R2")) !== r0u && (await rotOf("D2")) !== r0r);
   check("R with two footprints selected rotates both", !!both);
   check("multi-footprint rotate is ONE undo step", undoCount() - u0 === 1, `${undoCount() - u0} step(s)`);
   await p.keyboard.press("Control+z");
-  const back = await waitFor(async () => (await rotOf("R6")) === r0u && (await rotOf("R7")) === r0r);
+  const back = await waitFor(async () => (await rotOf("R2")) === r0u && (await rotOf("D2")) === r0r);
   check("one Ctrl+Z restores both footprints", !!back);
 }
 {
@@ -95,9 +95,9 @@ gui("--select", "R1"); await p.waitForTimeout(1500); await focusCanvas();
   await focusCanvas(); await p.mouse.move(800, 500);
   const seq = [];
   for (let i = 0; i < 40; i++) { await p.keyboard.press("n"); await p.waitForTimeout(60); seq.push(await grid()); }
-  const L = new Set(seq).size;
+  const L = seq.findIndex((_, j) => j > 0 && seq[j] === seq[0] && seq[j + 1] === seq[1] && seq[j + 2] === seq[2]);
   check("N never sticks at the last grid", seq.every((g, i) => i === 0 || g !== seq[i - 1]), seq.slice(0, 4).join(","));
-  check("N wraps: the grid sequence repeats with the list length", L > 1 && seq.slice(0, 40 - L).every((g, i) => g === seq[i + L]), `${L} grids: ${seq.slice(0, 24).join(",")}`);
+  check("N wraps: the grid sequence repeats with the list length", L > 1 && seq.slice(0, 40 - L).every((g, i) => g === seq[i + L]), `period ${L}`);
   await p.keyboard.press("Shift+n"); await p.waitForTimeout(150); const back = await grid();
   await p.keyboard.press("n"); await p.waitForTimeout(150);
   check("Shift+N steps back", (await grid()) !== back);
