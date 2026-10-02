@@ -561,7 +561,7 @@ fn import_rot_millideg_sch(file_deg: f64) -> eda_model::ir::Millideg {
 /// placed, sheet-space offset from the instance's own origin (mm, +y down)
 /// -- everything `eda_kicad::lib::baked_local` does, run forward instead of
 /// pre-baked: negate y (library +y-up -> sheet +y-down, see
-/// `baked_local`'s own doc comment), mirror, then rotate.
+/// `baked_local`'s own doc comment), rotate, then mirror.
 ///
 /// `mirror_y` (KiCad's `SYM_MIRROR_X`, "Mirror Vertically") does *not*
 /// negate `local.y` a second time on top of the always-applied library
@@ -576,13 +576,41 @@ fn import_rot_millideg_sch(file_deg: f64) -> eda_model::ir::Millideg {
 /// once in a real symbol (same "one axis or none" rule `transform.ts`'s
 /// own header comment states) -- the composition below is only defined
 /// for that case, like source's own.
+///
+/// Order and sense, verified against source: the parser builds the
+/// rotation as `TRANSFORM( 0, 1, -1, 0 )` for a file angle of 90 (`x' = y,
+/// y' = -x` on the Y-flipped library point -- a rotation by *minus* the
+/// file angle in this Y-down frame), then `SetOrientation( SYM_MIRROR_X /
+/// _Y )` composes the mirror *after* it (`newTransform = temp * old`), so
+/// the mirror flips the already-rotated point in sheet space.
 pub fn transform_local_point(local: SPoint, angle_deg: f64, mirrored: bool, mirror_y: bool) -> SPoint {
-    let ly = if mirror_y { local.y } else { -local.y };
-    let lx = if mirrored { -local.x } else { local.x };
-    let theta = angle_deg.to_radians();
-    let rx = lx * theta.cos() - ly * theta.sin();
-    let ry = lx * theta.sin() + ly * theta.cos();
+    let (x, y) = (local.x, -local.y);
+    let theta = (-angle_deg).to_radians();
+    let (c, s) = (theta.cos().round_to_unit(), theta.sin().round_to_unit());
+    let (mut rx, mut ry) = (x * c - y * s, x * s + y * c);
+    if mirrored {
+        rx = -rx;
+    }
+    if mirror_y {
+        ry = -ry;
+    }
     SPoint::new(rx, ry)
+}
+
+/// Snap `cos`/`sin` of a multiple of 90 degrees to exactly -1/0/1, so a
+/// quarter-turn never leaves `6.1e-17`-style residue in a pin position.
+trait RoundToUnit {
+    fn round_to_unit(self) -> f64;
+}
+
+impl RoundToUnit for f64 {
+    fn round_to_unit(self) -> f64 {
+        if (self - self.round()).abs() < 1e-12 {
+            self.round()
+        } else {
+            self
+        }
+    }
 }
 
 // ---------------------------------------------------------------- net reconciliation
@@ -821,6 +849,12 @@ mod tests {
             (180.0, true, false, (3.0, 5.0)),
             (270.0, false, true, (5.0, -3.0)),
             (270.0, true, false, (-5.0, 3.0)),
+            // Plain rotations: `TRANSFORM( 0, 1, -1, 0 )` etc. straight
+            // from the parser (internal point = (3, -5)).
+            (0.0, false, false, (3.0, -5.0)),
+            (90.0, false, false, (-5.0, -3.0)),
+            (180.0, false, false, (-3.0, 5.0)),
+            (270.0, false, false, (5.0, 3.0)),
         ];
         for (angle_deg, mirrored, mirror_y, (ex, ey)) in cases {
             let got = transform_local_point(p, angle_deg, mirrored, mirror_y);
