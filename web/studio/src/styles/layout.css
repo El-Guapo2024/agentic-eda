@@ -335,3 +335,31 @@ label.toggle {
   font-weight: 600;
   margin-right: 4px;
 }
+
+/* common.Control.print (Ctrl+P): the browser's print of the current view.
+   Only the canvas column is printed -- the equivalent of KiCad's print
+   dialog printing the sheet, not the window chrome. */
+@media print {
+  .app-frame {
+    display: block;
+    height: auto;
+  }
+  .app-frame .menubar-row,
+  .app-frame .tabs-row,
+  .app-frame .main-toolbar-row,
+  .app-frame .aux-toolbar-row,
+  .app-frame .message-panel-row,
+  .app-frame .status-bar-row,
+  .app-body .properties-col,
+  .app-body .options-toolbar-col,
+  .app-body .drawing-toolbar-col,
+  .app-body .right-dock-col {
+    display: none !important;
+  }
+  .app-body {
+    display: block;
+  }
+  .app-body .canvas-col {
+    height: 90vh;
+  }
+}

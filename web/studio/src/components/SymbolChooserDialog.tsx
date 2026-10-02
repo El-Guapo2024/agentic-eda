@@ -109,6 +109,7 @@ export function SymbolChooserDialog() {
         </div>
         <div className="dialog-body">
           <input
+            id="library-tree-search"
             autoFocus
             placeholder="Search symbols (e.g. R, Device:C, diode)…"
             value={query}

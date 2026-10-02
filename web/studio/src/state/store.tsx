@@ -93,7 +93,9 @@ export type ToolId =
    * still round-trips/renders correctly). */
   | "sch_bus_entry"
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
-  | "sch_place_symbol";
+  | "sch_place_symbol"
+  /** `common.Control.zoomTool` (Ctrl+F5, zoom_tool.cpp): drag a rectangle to zoom to it -- see components/ZoomAreaOverlay.tsx. */
+  | "zoom_area";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
@@ -120,6 +122,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_no_connect: "No Connect: click a pin to flag it unconnected",
   sch_bus_entry: "Bus Entry: click a point on a bus to tap a wire into it",
   sch_place_symbol: "Place Symbol: click where to place it",
+  zoom_area: "Zoom to Selection Area: drag a rectangle (left button zooms in, right button zooms out), Esc to cancel",
 };
 
 /**
@@ -500,6 +503,8 @@ export interface StudioState {
   polar: boolean;
   gridUm: number;
   gridVisible: boolean;
+  /** `MAGNETIC_SETTINGS::allLayers` (pcbnew_settings.cpp, default false): snap to items on every layer instead of the active layer only. Toggled by `common.Control.magneticSnapToggle` (Shift+S). UI state, not design data. */
+  magneticAllLayers: boolean;
   fullscreenCrosshair: boolean;
   showRatsnest: boolean;
   /** pcbnew.Control.ratsnestLineMode ("Curved Ratsnest Lines"). */
@@ -714,6 +719,7 @@ const initialState: StudioState = {
   polar: false,
   gridUm: 1000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
   gridVisible: true,
+  magneticAllLayers: false,
   fullscreenCrosshair: false,
   showRatsnest: true,
   ratsnestCurved: false,
@@ -796,6 +802,7 @@ export type Action =
   | { type: "TOGGLE_POLAR" }
   | { type: "SET_GRID_UM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
+  | { type: "SET_MAGNETIC_ALL_LAYERS"; value: boolean }
   | { type: "TOGGLE_CROSSHAIR" }
   | { type: "SET_FULLSCREEN_CROSSHAIR"; value: boolean }
   | { type: "TOGGLE_RATSNEST" }
@@ -1029,6 +1036,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, gridUm: action.um };
     case "TOGGLE_GRID_VISIBLE":
       return { ...state, gridVisible: !state.gridVisible };
+    case "SET_MAGNETIC_ALL_LAYERS":
+      return { ...state, magneticAllLayers: action.value };
     case "TOGGLE_CROSSHAIR":
       return { ...state, fullscreenCrosshair: !state.fullscreenCrosshair };
     case "SET_FULLSCREEN_CROSSHAIR":

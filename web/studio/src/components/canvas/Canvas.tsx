@@ -354,7 +354,7 @@ export function Canvas() {
   /** pcb_grid_helper.cpp BestSnapAnchor, applied to a single reference point -- see gridHelper.ts:snapWithAnchors. Falls back to plain grid snap when there's no board yet (shouldn't happen once a drag is possible, but keeps this total). */
   const snapRef = (wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, excludeOwnerId?: string): [number, number] => {
     if (!board) return snapPoint(wx, wy, state.gridUm);
-    const { x, y } = snapWithAnchors(wx, wy, board.snap ?? state.gridUm, state.view.scale, board, gridSnapModifiers(e), excludeOwnerId);
+    const { x, y } = snapWithAnchors(wx, wy, board.snap ?? state.gridUm, state.view.scale, board, gridSnapModifiers(e), excludeOwnerId, { allLayers: state.magneticAllLayers, activeLayer: state.activeLayer });
     return [x, y];
   };
 
@@ -442,7 +442,13 @@ export function Canvas() {
   }, [state.drawState, state.activeLayer, api, dispatch]);
 
   const onPointerDown = (e: React.PointerEvent) => {
-    (e.target as Element).setPointerCapture(e.pointerId);
+    // Throws NotFoundError for a synthesized pointer (common.Control.cursorClick's
+    // Enter-key click, actions/useActionRunner.ts), which has no real pointer to capture.
+    try {
+      (e.target as Element).setPointerCapture(e.pointerId);
+    } catch {
+      /* synthetic pointer */
+    }
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
 

@@ -16,7 +16,7 @@
 // split. Wired into Canvas.tsx's move-drag preview; other tools (route/
 // zone/shape placement) still use plain `snapPoint` for now.
 
-import { computeNearest, bestSnapPoint, collectAnchors, DEFAULT_MAGNETIC_SETTINGS, type AnchorSourceBoard, type GridSnapModifiers, type SnapAnchor } from "../../kicad-port/gridSnap";
+import { computeNearest, bestSnapPoint, collectAnchors, DEFAULT_MAGNETIC_SETTINGS, type AnchorSourceBoard, type GridSnapModifiers, type SnapAnchor, type SnapLayerFilter } from "../../kicad-port/gridSnap";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
 
 export function snap(valueUm: number, gridUm: number): number {
@@ -37,8 +37,8 @@ export type { GridSnapModifiers, SnapAnchor };
  * ported snap radius. `excludeOwnerId` should be the ref/id of whatever
  * is being dragged, so it never snaps to its own anchors.
  */
-export function snapWithAnchors(xUm: number, yUm: number, gridUm: number, scalePxPerUm: number, board: AnchorSourceBoard, modifiers: GridSnapModifiers, excludeOwnerId?: string): { x: number; y: number; snappedTo: SnapAnchor | null } {
-  const anchors = collectAnchors(board, DEFAULT_MAGNETIC_SETTINGS, excludeOwnerId);
+export function snapWithAnchors(xUm: number, yUm: number, gridUm: number, scalePxPerUm: number, board: AnchorSourceBoard, modifiers: GridSnapModifiers, excludeOwnerId?: string, layerFilter?: SnapLayerFilter): { x: number; y: number; snappedTo: SnapAnchor | null } {
+  const anchors = collectAnchors(board, DEFAULT_MAGNETIC_SETTINGS, excludeOwnerId, layerFilter);
   const visibleGridUm = computeVisibleGridSize(gridUm, scalePxPerUm);
   const { point, snappedTo } = bestSnapPoint({ x: xUm, y: yUm }, gridUm, { x: 0, y: 0 }, scalePxPerUm, visibleGridUm, anchors, modifiers);
   return { x: point.x, y: point.y, snappedTo };
