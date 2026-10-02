@@ -797,6 +797,14 @@ export type Cmd =
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
   | { op: "add_erc_exclusion"; check: string; location: string }
   | { op: "delete_erc_exclusion"; check: string; location: string }
+  /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
+  | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
+  /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
+  | { op: "replace_text"; search: SchSearchData; items?: string[] | null }
+  /** panel_setup_pinmap.cpp changeErrorLevel: one pin-map cell + its mirror (type indexes 0..11, level 0 OK / 1 warning / 2 error). */
+  | { op: "set_erc_pin_map_cell"; a: number; b: number; level: number }
+  /** `ERC_SETTINGS::ResetPinMap` ("Reset to Defaults"). */
+  | { op: "reset_erc_pin_map" }
 
   // -------------------------------------------------- footprint editor
   //
@@ -1624,4 +1632,121 @@ export interface BoardStatsReply {
   report?: string;
   /** `<board>_report.txt`, source's default Save dialog name. */
   report_file_name?: string;
+}
+
+// ---------------------------------------------------------------- Symbol Fields Table / Find / ERC pin map
+//
+// Source of truth: crates/ops/src/fields_table.rs, crates/ops/src/search.rs,
+// crates/cli/src/sch_api.rs (the /api/sch/* routes).
+
+export interface SymbolFieldEdit {
+  /** Reference designator of the symbol (all its units). */
+  id: string;
+  /** "Value" / "Footprint" / "Datasheet" or a user field's name. Never "Reference". */
+  field: string;
+  value: string;
+}
+
+export interface SymbolFieldRename {
+  from: string;
+  to: string;
+}
+
+/** One column of the fields table (`BOM_FIELD`). `name` is the canonical field name ("Reference", "Value", "Footprint", "Datasheet", "${QUANTITY}", or a user field). */
+export interface FieldsTableColumn {
+  name: string;
+  label: string;
+  show: boolean;
+  group_by: boolean;
+}
+
+/** The dialog's view state (`BOM_PRESET`). */
+export interface FieldsTableSpec {
+  columns: FieldsTableColumn[];
+  group_symbols: boolean;
+  sort_field: string;
+  sort_asc: boolean;
+  filter: string;
+}
+
+export interface FieldsTableRow {
+  /** Distinct reference designators in this row -- the ids a cell edit applies to. */
+  refs: string[];
+  flag: "singleton" | "group" | "child";
+  item_number: number;
+  /** One display string per column, in `spec.columns` order. */
+  cells: string[];
+  /** True where the cell is the "-- mixed values --" placeholder. */
+  mixed: boolean[];
+  /** A group row's per-symbol rows (what expanding it reveals). */
+  children: FieldsTableRow[];
+}
+
+export interface FieldsTableReply {
+  ok: boolean;
+  message?: string;
+  spec: FieldsTableSpec;
+  user_fields: string[];
+  rows: FieldsTableRow[];
+}
+
+/** `BOM_FMT_PRESET`. */
+export interface BomFmt {
+  name: string;
+  field_delimiter: string;
+  string_delimiter: string;
+  ref_delimiter: string;
+  ref_range_delimiter: string;
+  keep_tabs: boolean;
+  keep_line_breaks: boolean;
+}
+
+export interface BomExportReply {
+  ok: boolean;
+  message?: string;
+  text?: string;
+  /** Relative to the board directory; present once a file was written. */
+  file?: string;
+  default_path?: string;
+}
+
+/** `EDA_SEARCH_DATA` + `SCH_SEARCH_DATA` (wire format of `eda_ops::search::SearchData`). */
+export interface SchSearchData {
+  find: string;
+  replace: string;
+  match_case: boolean;
+  mode: "plain" | "whole_word" | "wildcard";
+  search_hidden_fields: boolean;
+  search_pins: boolean;
+  search_net_names: boolean;
+  replace_references: boolean;
+  search_and_replace: boolean;
+}
+
+export interface FindMatch {
+  /** `kind:id:name` -- stable key `replace_text.items` is restricted by. */
+  key: string;
+  kind: "field" | "label" | "text" | "pin";
+  /** Symbol reference / label id / text id that owns the match. */
+  id: string;
+  /** Field name or pin number (empty for labels/text). */
+  name: string;
+  /** World-space um. */
+  at: [number, number];
+  text: string;
+}
+
+export interface FindReply {
+  ok: boolean;
+  message?: string;
+  matches: FindMatch[];
+}
+
+export interface ErcPinMapReply {
+  ok: boolean;
+  message?: string;
+  /** 12x12 `PIN_ERROR` grid (0 OK / 1 warning / 2 error), `ELECTRICAL_PINTYPE` order. */
+  matrix: number[][];
+  /** True when the design stores its own map (`schematic.erc_pin_map`). */
+  custom: boolean;
 }

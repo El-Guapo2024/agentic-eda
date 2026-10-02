@@ -876,6 +876,52 @@ pub enum Cmd {
     /// PARITY-sch.md.
     RenameSymbol { id: String, new_id: String },
 
+    /// Symbol Fields Table "OK/Apply" (`dialog_symbol_fields_table.cpp`'s
+    /// `TransferDataFromWindow` -> `FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData`):
+    /// the whole batch of staged cell edits and column adds / renames /
+    /// removals as ONE verb, so one Ctrl+Z undoes the entire Apply (the
+    /// source commits them in one `SCH_COMMIT`). Applied in the order
+    /// remove, rename, add, edits (edits address the final names); refused
+    /// as a whole -- nothing applied -- if any part is invalid (Reference
+    /// edit, unknown symbol, duplicate or mandatory field name). See
+    /// [`fields_table::apply_field_changes`].
+    SetSymbolFields {
+        #[serde(default)]
+        edits: Vec<fields_table::FieldEdit>,
+        #[serde(default)]
+        add_fields: Vec<String>,
+        #[serde(default)]
+        rename_fields: Vec<fields_table::FieldRename>,
+        #[serde(default)]
+        remove_fields: Vec<String>,
+    },
+
+    /// Find and Replace's "Replace" / "Replace All"
+    /// (`SCH_FIND_REPLACE_TOOL::ReplaceAndFindNext` / `ReplaceAll`):
+    /// replaces `search.find` with `search.replace` in every matching
+    /// searchable item (`EDA_ITEM::Replace`) as one undo step
+    /// (`commit.Push( "Find and Replace All" )`). `items` restricts it to
+    /// the given [`search::Hit::key`]s -- one key is "Replace" on the
+    /// current match; `None` is "Replace All". Replacing a Reference
+    /// renames the symbol (cascading like `RenameSymbol`) and only happens
+    /// with `search.replace_references`. Refused when nothing matched.
+    ReplaceText {
+        search: search::SearchData,
+        #[serde(default)]
+        items: Option<Vec<String>>,
+    },
+
+    /// `panel_setup_pinmap.cpp::changeErrorLevel`: set one pin-map cell to
+    /// `level` (0 = OK, 1 = warning, 2 = error) and its mirror -- the
+    /// panel only has the lower triangle and always writes both
+    /// `SetPinMapValue( y, x )` and `( x, y )`. `a`/`b` are
+    /// `ELECTRICAL_PINTYPE` indexes (0..12). Materializes the default map
+    /// into `SchematicSection::erc_pin_map` first when it was absent.
+    SetErcPinMapCell { a: usize, b: usize, level: u8 },
+    /// `ERC_SETTINGS::ResetPinMap` ("Reset to Defaults"): back to KiCad's
+    /// default map -- stored as an absent `erc_pin_map`.
+    ResetErcPinMap,
+
     /// `Ctrl+A` (Annotate): assign reference designators to every
     /// not-yet-annotated symbol (an `id` this project synthesizes as
     /// `"U?1"`/`"U?2"`/... when `AddSymbol` is given a blank prefix+number
@@ -1145,6 +1191,10 @@ impl Cmd {
             | Cmd::AddSymbol { .. }
             | Cmd::EditSymbolFields { .. }
             | Cmd::RenameSymbol { .. }
+            | Cmd::SetSymbolFields { .. }
+            | Cmd::ReplaceText { .. }
+            | Cmd::SetErcPinMapCell { .. }
+            | Cmd::ResetErcPinMap
             | Cmd::Annotate { .. } => Domain::Schematic,
             Cmd::OpenFootprintForEdit { .. }
             | Cmd::DeleteLibraryFootprint { .. }
@@ -1253,6 +1303,9 @@ impl Cmd {
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
             Cmd::Annotate { .. } => vec!["annotate"],
+            Cmd::SetSymbolFields { .. } => vec!["symbol_fields"],
+            Cmd::ReplaceText { .. } => vec!["replace_text"],
+            Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => vec!["erc_pin_map"],
 
             Cmd::OpenFootprintForEdit { name } | Cmd::DeleteLibraryFootprint { name } | Cmd::EditFootprintProperties { name, .. } | Cmd::SetFootprintAnchor { name, .. } | Cmd::UpdateFootprintOnBoard { name } => {
                 vec![name.as_str()]
@@ -1665,6 +1718,10 @@ impl<'a> Board<'a> {
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
+            Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
+            Cmd::ReplaceText { search, items } => self.replace_text(search, items.as_deref()),
+            Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
+            Cmd::ResetErcPinMap => self.reset_erc_pin_map(),
             Cmd::Annotate { reset_existing, order, ids } => self.annotate(*reset_existing, *order, ids.as_deref()),
 
             Cmd::OpenFootprintForEdit { name } => self.open_footprint_for_edit(name),
@@ -3293,7 +3350,7 @@ impl<'a> Board<'a> {
     /// `derive_schematic` never ran); everything else targets an id that
     /// can only already exist inside a section that is already there.
     fn schematic_mut_or_create(&mut self) -> &mut SchematicSection {
-        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![] })
+        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![] })
     }
 
     fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {
@@ -3397,7 +3454,12 @@ impl<'a> Board<'a> {
     /// units are untouched.
     fn delete_symbol(&mut self, id: &str, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
         let i = self.find_symbol_unit_index(id, unit)?;
-        self.schematic_mut()?.symbols.remove(i);
+        let sch = self.schematic_mut()?;
+        sch.symbols.remove(i);
+        // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it.
+        if !sch.symbols.iter().any(|s| s.id == id) {
+            sch.user_fields.remove(id);
+        }
         Ok(())
     }
 
@@ -3580,6 +3642,116 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// Symbol Fields Table Apply: see `Cmd::SetSymbolFields`'s own doc.
+    fn set_symbol_fields(&mut self, edits: &[fields_table::FieldEdit], add: &[String], rename: &[fields_table::FieldRename], remove: &[String]) -> Result<(), Vec<CheckResult>> {
+        if edits.is_empty() && add.is_empty() && rename.is_empty() && remove.is_empty() {
+            return Err(vec![CheckResult::fail("ops_nothing_to_apply", "symbol_fields", "no field changes to apply")]);
+        }
+        let changes = fields_table::FieldChanges { edits: edits.to_vec(), add_fields: add.to_vec(), rename_fields: rename.to_vec(), remove_fields: remove.to_vec() };
+        let sch = self.schematic_mut()?;
+        fields_table::apply_field_changes(sch, &changes).map_err(|m| vec![CheckResult::fail("ops_bad_fields", "symbol_fields", m)])
+    }
+
+    /// Find and Replace: see `Cmd::ReplaceText`'s own doc. Replacements
+    /// are computed against a fresh walk of the matches
+    /// (`SCH_FIND_REPLACE_TOOL::ReplaceAll`'s `nextMatch` loop), written
+    /// back per item kind, and Reference replacements are applied last
+    /// through `rename_symbol` so wires/power symbols/no-connects follow.
+    fn replace_text(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
+        if search.find.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_search", "replace_text", "nothing to search for")]);
+        }
+        let mut data = search.clone();
+        data.search_and_replace = true;
+        let model = self.model;
+        let hits = search::find_items(self.schematic()?, model, &data);
+        let hits: Vec<search::Hit> = hits.into_iter().filter(|h| items.is_none_or(|keys| keys.iter().any(|k| *k == h.key()))).collect();
+
+        let mut renames: Vec<(String, String)> = Vec::new();
+        let mut replaced = 0usize;
+        {
+            let sch = self.schematic_mut()?;
+            for h in &hits {
+                match h.kind {
+                    search::ItemKind::Field if h.name == "Reference" => {
+                        if let Some(new) = search::replace_text(&h.id, &data) {
+                            renames.push((h.id.clone(), new));
+                            replaced += 1;
+                        }
+                    }
+                    search::ItemKind::Field => {
+                        let current = match h.name.as_str() {
+                            "Value" => sch.symbols.iter().find(|s| s.id == h.id).map(|s| if s.value.is_empty() { model.part(&h.id).and_then(|p| p.value.clone()).unwrap_or_default() } else { s.value.clone() }),
+                            "Footprint" => sch.symbols.iter().find(|s| s.id == h.id).map(|s| s.footprint.clone()),
+                            "Datasheet" => sch.symbols.iter().find(|s| s.id == h.id).map(|s| s.datasheet.clone()),
+                            other => sch.user_fields.get(&h.id).and_then(|m| m.get(other)).cloned(),
+                        };
+                        let Some(new) = current.and_then(|c| search::replace_text(&c, &data)) else { continue };
+                        match h.name.as_str() {
+                            "Value" => sch.symbols.iter_mut().filter(|s| s.id == h.id).for_each(|s| s.value = new.clone()),
+                            "Footprint" => sch.symbols.iter_mut().filter(|s| s.id == h.id).for_each(|s| s.footprint = new.clone()),
+                            "Datasheet" => sch.symbols.iter_mut().filter(|s| s.id == h.id).for_each(|s| s.datasheet = new.clone()),
+                            other => {
+                                sch.user_fields.entry(h.id.clone()).or_default().insert(other.to_string(), new);
+                            }
+                        }
+                        replaced += 1;
+                    }
+                    search::ItemKind::Label => {
+                        if let Some(l) = sch.labels.iter_mut().find(|l| l.id == h.id) {
+                            if let Some(new) = search::replace_text(&l.net, &data) {
+                                if new.is_empty() {
+                                    return Err(vec![CheckResult::fail("ops_bad_replace", &h.id, "replacing would leave a net label empty")]);
+                                }
+                                l.net = new;
+                                replaced += 1;
+                            }
+                        }
+                    }
+                    search::ItemKind::Text => {
+                        if let Some(t) = sch.texts.iter_mut().find(|t| t.id == h.id) {
+                            if let Some(new) = search::replace_text(&t.content, &data) {
+                                t.content = new;
+                                replaced += 1;
+                            }
+                        }
+                    }
+                    search::ItemKind::Pin => {} // SCH_PIN::Replace is a no-op in the schematic
+                }
+            }
+        }
+        for (old, new) in renames {
+            self.rename_symbol(&old, &new)?;
+        }
+        if replaced == 0 {
+            return Err(vec![CheckResult::fail("ops_nothing_to_replace", "replace_text", "nothing to replace")]);
+        }
+        Ok(())
+    }
+
+    /// `panel_setup_pinmap.cpp::changeErrorLevel`: see
+    /// `Cmd::SetErcPinMapCell`'s own doc.
+    fn set_erc_pin_map_cell(&mut self, a: usize, b: usize, level: u8) -> Result<(), Vec<CheckResult>> {
+        if a >= 12 || b >= 12 || level > 2 {
+            return Err(vec![CheckResult::fail("ops_bad_pin_map", "erc_pin_map", "pin map cell out of range (types 0..12, level 0..=2)")]);
+        }
+        let sch = self.schematic_mut()?;
+        let mut matrix = sch.erc_pin_map.take().filter(|m| m.matrix.len() == 12 && m.matrix.iter().all(|r| r.len() == 12)).map(|m| m.matrix).unwrap_or_else(eda_model::ir::ErcPinMap::default_matrix);
+        matrix[a][b] = level;
+        matrix[b][a] = level;
+        sch.erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix });
+        Ok(())
+    }
+
+    /// `ERC_SETTINGS::ResetPinMap`.
+    fn reset_erc_pin_map(&mut self) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if sch.erc_pin_map.take().is_none() {
+            return Err(vec![CheckResult::fail("ops_pin_map_default", "erc_pin_map", "the pin map is already the default")]);
+        }
+        Ok(())
+    }
+
     /// `U`: see `Cmd::RenameSymbol`'s own doc. Renames *every* placed unit
     /// sharing `id` together, in one step -- a multi-unit reference's units
     /// are the same physical part, so they always carry the same reference
@@ -3617,6 +3789,9 @@ impl<'a> Board<'a> {
         }
         for s in sch.symbols.iter_mut().filter(|s| s.id == id) {
             s.id = new_id.to_string();
+        }
+        if let Some(fields) = sch.user_fields.remove(id) {
+            sch.user_fields.insert(new_id.to_string(), fields);
         }
         Ok(())
     }
@@ -4312,6 +4487,8 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 mod tests;
 
 pub mod build;
+pub mod fields_table;
+pub mod search;
 pub mod repair;
 pub mod view;
 pub mod episode;

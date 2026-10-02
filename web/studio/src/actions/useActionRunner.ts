@@ -30,6 +30,7 @@ import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
 import { GRID_OPTIONS_UM } from "../components/Toolbar";
 import { computeDragAttachment } from "../components/schematic/wireAttachment";
+import { findNextMatch } from "../components/schematic/findNavigation";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -942,6 +943,25 @@ export function useActionRunner() {
     // `Ctrl+A`: opens AnnotateDialog.tsx (scope/order/reset options) --
     // the dialog itself issues the real `annotate` Cmd on confirm.
     m.set("eeschema.EditorControl.annotate", schematicOnly(() => dispatch({ type: "SET_ANNOTATE_DIALOG_OPEN", open: true })));
+
+    // Symbol Fields Table (`editSymbolFields`), Schematic Setup > ERC pin
+    // map (`schematicSetup`) and Find / Find and Replace / Find Next /
+    // Find Previous (`common.Interactive.find*`, F3 / Shift+F3): each opens
+    // its dialog (SymbolFieldsTableDialog / SchematicSetupDialog /
+    // FindReplaceDialog) or, for F3, cycles the shared match cursor
+    // (components/schematic/findNavigation.ts). The `common.*` find actions
+    // are registered on the Schematic tab only: `isActionEnabledForTab`
+    // treats `common.*` as tab-less, and the PCB tab has no schematic search
+    // to run, so leaving them unregistered there keeps the PCB menu entry
+    // honestly disabled.
+    if (state.tab === "schematic") {
+      m.set("eeschema.EditorControl.editSymbolFields", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "fields_table" }));
+      m.set("eeschema.EditorControl.schematicSetup", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "setup" }));
+      m.set("common.Interactive.find", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "find" }));
+      m.set("common.Interactive.findAndReplace", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "replace" }));
+      m.set("common.Interactive.findNext", () => void findNextMatch(state, dispatch, false));
+      m.set("common.Interactive.findPrevious", () => void findNextMatch(state, dispatch, true));
+    }
 
     // `W`: arm/disarm the wire tool -- SchematicView.tsx's own
     // onPointerDown/onDoubleClick own the actual click-to-add-point/

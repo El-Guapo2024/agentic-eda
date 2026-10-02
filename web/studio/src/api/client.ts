@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcReport, FillReport, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SymbolEditorNames, SymbolLibrary, TuneLengthReply, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 
 export class ApiError extends Error {}
@@ -435,4 +435,33 @@ export function cleanupTracksApply(opts: CleanupOptions): Promise<CleanupReply> 
 
 export function postBoardStats(opts: BoardStatsOptions, report?: { units: LengthUnit; date: string }): Promise<BoardStatsReply> {
   return postJson("/api/board_stats", report ? { ...opts, report: true, units: report.units, date: report.date } : opts);
+}
+
+// ---- Symbol Fields Table / Find / ERC pin map (crates/cli/src/sch_api.rs)
+
+/** The staged (not yet applied) changes the fields-table dialog overlays on the design, same shape as `set_symbol_fields`. */
+export interface StagedFieldChanges {
+  edits: SymbolFieldEdit[];
+  add_fields: string[];
+  rename_fields: SymbolFieldRename[];
+  remove_fields: string[];
+}
+
+/** POST /api/sch/fields_table: omit `spec` for the dialog's initial view. */
+export function fetchFieldsTable(spec: FieldsTableSpec | null, changes: StagedFieldChanges | null): Promise<FieldsTableReply> {
+  return postJson("/api/sch/fields_table", { spec, changes });
+}
+
+/** POST /api/sch/bom_export: `path` (relative to the board directory) omitted = preview text only; `preview: true` with a path also skips writing. */
+export function exportBom(spec: FieldsTableSpec, fmt: BomFmt, changes: StagedFieldChanges | null, path?: string, preview?: boolean): Promise<BomExportReply> {
+  return postJson("/api/sch/bom_export", { spec, fmt, changes, path, preview });
+}
+
+/** POST /api/sch/find: ordered matches (ascending x, y -- `nextMatch` order). `scope` = owner ids for "search only selected objects". */
+export function fetchSchFind(search: SchSearchData, scope?: string[]): Promise<FindReply> {
+  return postJson("/api/sch/find", { search, scope });
+}
+
+export async function fetchErcPinMap(): Promise<ErcPinMapReply> {
+  return getJson<ErcPinMapReply>("/api/sch/erc_pin_map");
 }

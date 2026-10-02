@@ -666,6 +666,10 @@ fn cmd_line(c: &Cmd) -> String {
             datasheet.as_ref().map(|d| format!(" --datasheet {d:?}")).unwrap_or_default(),
         ),
         Cmd::RenameSymbol { id, new_id } => format!("schematic rename {id} {new_id}"),
+        Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => format!("schematic fields-table --edits {} --add {} --rename {} --remove {}", edits.len(), add_fields.len(), rename_fields.len(), remove_fields.len()),
+        Cmd::ReplaceText { search, items } => format!("schematic replace {:?} {:?}{}", search.find, search.replace, items.as_ref().map(|i| format!(" --items {}", i.len())).unwrap_or_default()),
+        Cmd::SetErcPinMapCell { a, b, level } => format!("schematic erc-pin-map {a} {b} {level}"),
+        Cmd::ResetErcPinMap => "schematic erc-pin-map-reset".to_string(),
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
@@ -811,6 +815,9 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSymbol { .. } => "schematic-place",
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
         Cmd::RenameSymbol { .. } => "schematic-rename",
+        Cmd::SetSymbolFields { .. } => "schematic-fields-table",
+        Cmd::ReplaceText { .. } => "schematic-replace-text",
+        Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => "schematic-erc-pin-map",
         Cmd::Annotate { .. } => "schematic-annotate",
 
         Cmd::OpenFootprintForEdit { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
@@ -1381,7 +1388,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![], bus_entries: vec![],
-                erc_exclusions: vec![], imported_from_kicad: false,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![],
@@ -1720,6 +1727,193 @@ mod tests {
         assert_eq!(r1.value, "10k", "the second edit (footprint only) must not have reset the first edit's value");
         assert_eq!(r1.footprint, "Resistor_SMD:R_0603");
         assert_eq!(r1.datasheet, "", "never touched, stays at its default");
+    }
+
+    /// Symbol Fields Table Apply: the whole batch (cell edits + column
+    /// add/rename) is ONE verb, so a single undo reverts all of it, and a
+    /// batch with one bad edit applies none of it.
+    #[test]
+    fn set_symbol_fields_is_one_atomic_undo_step() {
+        use eda_ops::fields_table::{FieldEdit, FieldRename};
+        let dir = scratch("sch_fields_table");
+        setup_schematic(&dir);
+
+        let cmd = Cmd::SetSymbolFields {
+            edits: vec![
+                FieldEdit { id: "R1".into(), field: "Value".into(), value: "10k".into() },
+                FieldEdit { id: "R2".into(), field: "Value".into(), value: "10k".into() },
+                FieldEdit { id: "R1".into(), field: "MPN".into(), value: "ERJ-3".into() },
+            ],
+            add_fields: vec!["MPN".into()],
+            rename_fields: vec![],
+            remove_fields: vec![],
+        };
+        step(&dir, cmd, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert!(sch.symbols.iter().all(|s| s.value == "10k"));
+        assert_eq!(sch.user_fields["R1"]["MPN"], "ERJ-3");
+        assert_eq!(sch.user_fields["R2"]["MPN"], "", "added column exists (empty) on every symbol");
+
+        // Atomic refusal: a bad edit anywhere in the batch applies nothing.
+        let bad = Cmd::SetSymbolFields {
+            edits: vec![FieldEdit { id: "R1".into(), field: "Value".into(), value: "99".into() }, FieldEdit { id: "R1".into(), field: "Reference".into(), value: "X1".into() }],
+            add_fields: vec![],
+            rename_fields: vec![],
+            remove_fields: vec![],
+        };
+        assert!(step(&dir, bad, false, "test").is_err());
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().symbols[0].value, "10k");
+
+        // A rename in a second Apply...
+        step(&dir, Cmd::SetSymbolFields { edits: vec![], add_fields: vec![], rename_fields: vec![FieldRename { from: "MPN".into(), to: "Part Number".into() }], remove_fields: vec![] }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().user_fields["R1"]["Part Number"], "ERJ-3");
+
+        // ...undoes alone; one more undo reverts the entire first Apply.
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().user_fields["R1"]["MPN"], "ERJ-3");
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let sch = design.schematic.as_ref().unwrap();
+        assert!(sch.symbols.iter().all(|s| s.value.is_empty()), "one undo reverted every cell edit of the batch");
+        assert!(sch.user_fields.is_empty(), "and the added column");
+    }
+
+    /// Find and Replace's Replace / Replace All: one undo step each; Replace
+    /// can be restricted to one match key; references are only touched with
+    /// `replace_references`; nothing matched is refused.
+    #[test]
+    fn replace_text_replace_all_and_single_with_undo() {
+        use eda_ops::search::{MatchMode, SearchData};
+        let dir = scratch("sch_replace_text");
+        setup_schematic(&dir);
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k".into()), footprint: None, datasheet: None }, false, "test").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("22K".into()), footprint: None, datasheet: None }, false, "test").unwrap();
+        step(&dir, Cmd::AddSchText { content: "set to 10k".into(), at: Point { x: 0, y: 0 }, angle_millideg: 0, size_um: 1270 }, false, "test").unwrap();
+
+        let values = |dir: &Path| -> Vec<String> {
+            let (_, design, _) = load(dir).unwrap();
+            design.schematic.as_ref().unwrap().symbols.iter().map(|s| s.value.clone()).collect()
+        };
+
+        // Replace All, case-insensitive: "K" also hits "22K" and the note text.
+        let search = SearchData { find: "k".into(), replace: "kR".into(), ..Default::default() };
+        step(&dir, Cmd::ReplaceText { search: search.clone(), items: None }, false, "test").unwrap();
+        assert_eq!(values(&dir), vec!["10kR".to_string(), "22kR".to_string()]);
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().texts[0].content, "set to 10kR");
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(values(&dir), vec!["10k".to_string(), "22K".to_string()], "one undo reverts the whole Replace All");
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().texts[0].content, "set to 10k");
+
+        // Single "Replace": only the keyed match changes.
+        step(&dir, Cmd::ReplaceText { search: search.clone(), items: Some(vec!["field:R2:Value".into()]) }, false, "test").unwrap();
+        assert_eq!(values(&dir), vec!["10k".to_string(), "22kR".to_string()]);
+
+        // Whole-word + match-case: "10K" does not match "10k"; nothing to replace is refused.
+        let strict = SearchData { find: "10K".into(), replace: "x".into(), match_case: true, mode: MatchMode::WholeWord, ..Default::default() };
+        assert!(step(&dir, Cmd::ReplaceText { search: strict, items: None }, false, "test").is_err());
+
+        // Reference replacement needs replace_references, then renames like `RenameSymbol`.
+        let refs_off = SearchData { find: "R1".into(), replace: "R7".into(), mode: MatchMode::WholeWord, ..Default::default() };
+        assert!(step(&dir, Cmd::ReplaceText { search: refs_off.clone(), items: None }, false, "test").is_err(), "references are not replaced by default");
+        let refs_on = SearchData { replace_references: true, ..refs_off };
+        step(&dir, Cmd::ReplaceText { search: refs_on, items: None }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        let ids: Vec<&str> = design.schematic.as_ref().unwrap().symbols.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"R7") && !ids.contains(&"R1"), "{ids:?}");
+    }
+
+    /// Pin-map cell edits are symmetric (`changeErrorLevel` writes both
+    /// triangles), persist additively, undo as one step each, and Reset
+    /// restores the absent/default form.
+    #[test]
+    fn erc_pin_map_cell_is_symmetric_undoable_and_resettable() {
+        let dir = scratch("sch_erc_pin_map");
+        setup_schematic(&dir);
+        let pin_map = |dir: &Path| load(dir).unwrap().1.schematic.unwrap().erc_pin_map;
+        assert!(pin_map(&dir).is_none(), "absent = KiCad default");
+
+        step(&dir, Cmd::SetErcPinMapCell { a: 1, b: 1, level: 0 }, false, "test").unwrap(); // output<->output -> OK
+        step(&dir, Cmd::SetErcPinMapCell { a: 1, b: 6, level: 2 }, false, "test").unwrap(); // output<->unspecified -> error
+        let m = pin_map(&dir).unwrap().matrix;
+        assert_eq!(m[1][1], 0);
+        assert_eq!((m[1][6], m[6][1]), (2, 2), "the mirror cell follows");
+        assert_eq!(m[0][0], 0, "everything else is still the default");
+        assert_eq!(m[1][8], 2, "output<->power_out stays an error");
+
+        assert!(step(&dir, Cmd::SetErcPinMapCell { a: 12, b: 0, level: 1 }, false, "test").is_err());
+        assert!(step(&dir, Cmd::SetErcPinMapCell { a: 0, b: 0, level: 3 }, false, "test").is_err());
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(pin_map(&dir).unwrap().matrix[1][6], 1, "undo restores the previous cell (default: warning)");
+
+        step(&dir, Cmd::ResetErcPinMap, false, "test").unwrap();
+        assert!(pin_map(&dir).is_none());
+        assert!(step(&dir, Cmd::ResetErcPinMap, false, "test").is_err(), "already default");
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert!(pin_map(&dir).is_some(), "undo of Reset brings the custom map back");
+    }
+
+    /// The `/api/sch/*` queries over a real board directory: the fields
+    /// table regroups on *staged* (unapplied) changes, the BOM export writes
+    /// inside the board directory only, Find returns ordered match keys, and
+    /// the pin-map query reports custom vs default.
+    #[test]
+    fn sch_api_fields_table_bom_export_find_and_pin_map() {
+        use serde_json::{json, Value};
+        let dir = scratch("sch_api");
+        setup_schematic(&dir);
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k".into()), footprint: Some("R_0603".into()), datasheet: None }, false, "test").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("22k".into()), footprint: Some("R_0603".into()), datasheet: None }, false, "test").unwrap();
+        let call = |f: fn(&Path, &[u8]) -> Value, v: Value| f(&dir, v.to_string().as_bytes());
+
+        // Default view: one row per distinct value+footprint.
+        let t = call(crate::sch_api::fields_table, json!({}));
+        assert_eq!(t["ok"], true, "{t}");
+        assert_eq!(t["rows"].as_array().unwrap().len(), 2);
+
+        // Staged (unapplied) edit making both values equal regroups them into one "R1-R2"-style row...
+        let t = call(
+            crate::sch_api::fields_table,
+            json!({ "changes": { "edits": [{ "id": "R2", "field": "Value", "value": "10k" }] } }),
+        );
+        let rows = t["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{t}");
+        assert_eq!(rows[0]["cells"][0], "R1, R2", "two consecutive refs are listed, not ranged");
+        // ...without having touched the design on disk.
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().symbols[1].value, "22k");
+
+        // BOM export: preview, then write; escaping the board dir is refused.
+        let p = call(crate::sch_api::bom_export, json!({ "path": "export/bom.csv", "preview": true }));
+        assert!(p["text"].as_str().unwrap().starts_with("\"Reference\",\"Qty\",\"Value\",\"Footprint\",\"Datasheet\"\n"), "{p}");
+        assert!(!dir.join("export/bom.csv").exists(), "preview writes nothing");
+        let w = call(crate::sch_api::bom_export, json!({ "path": "export/bom.csv" }));
+        assert_eq!(w["ok"], true, "{w}");
+        assert!(std::fs::read_to_string(dir.join("export/bom.csv")).unwrap().contains("\"R1\",\"1\",\"10k\",\"R_0603\""));
+        assert_eq!(call(crate::sch_api::bom_export, json!({ "path": "../evil.csv" }))["ok"], false);
+
+        // Find: Value fields are visible, Footprint is hidden until asked for.
+        let f = call(crate::sch_api::find, json!({ "search": { "find": "r_0603" } }));
+        assert_eq!(f["matches"].as_array().unwrap().len(), 0, "hidden Footprint fields need 'search all fields'");
+        let f = call(crate::sch_api::find, json!({ "search": { "find": "r_0603", "search_hidden_fields": true } }));
+        let keys: Vec<&str> = f["matches"].as_array().unwrap().iter().map(|m| m["key"].as_str().unwrap()).collect();
+        assert!(keys.contains(&"field:R1:Footprint") && keys.contains(&"field:R2:Footprint"), "{keys:?}");
+        // x-ordered: R1 (x=10000) before R2 (x=20000).
+        assert!(keys.iter().position(|k| *k == "field:R1:Footprint") < keys.iter().position(|k| *k == "field:R2:Footprint"));
+
+        // Pin map: default, then custom.
+        let m = crate::sch_api::erc_pin_map(&dir);
+        assert_eq!(m["custom"], false);
+        step(&dir, Cmd::SetErcPinMapCell { a: 1, b: 1, level: 0 }, false, "test").unwrap();
+        let m = crate::sch_api::erc_pin_map(&dir);
+        assert_eq!((m["custom"].clone(), m["matrix"][1][1].clone()), (json!(true), json!(0)));
     }
 
     /// `dialog_annotate.cpp`'s "Order Options": Y-then-X is the default

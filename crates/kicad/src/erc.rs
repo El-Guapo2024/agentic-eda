@@ -115,33 +115,52 @@ impl ElectricalPinType {
 }
 
 const OK: u8 = 0;
+#[cfg(test)]
 const WAR: u8 = 1;
 const ERR: u8 = 2;
 
 /// KiCad's default pin-to-pin conflict matrix (`erc_settings.cpp`'s
-/// `m_defaultPinMap`), transcribed verbatim: row = first pin's type,
-/// column = second pin's type, in [`ALL_TYPES`] order. `OK`/`WAR`/`ERR` = no
-/// error / warning / error, exactly as KiCad ships it — this project
-/// applies no customization on top.
-#[rustfmt::skip]
-const MATRIX: [[u8; 12]; 12] = [
-    /*         In,  Out, Bid, 3S,  Pas, Free,Uns, PwrI,PwrO,OC,  OE,  NC  */
-    /* In  */ [OK,  OK,  OK,  OK,  OK,  OK,  WAR, OK,  OK,  OK,  OK,  ERR],
-    /* Out */ [OK,  ERR, OK,  WAR, OK,  OK,  WAR, OK,  ERR, ERR, ERR, ERR],
-    /* Bid */ [OK,  OK,  OK,  OK,  OK,  OK,  WAR, OK,  WAR, OK,  WAR, ERR],
-    /* 3S  */ [OK,  WAR, OK,  OK,  OK,  OK,  WAR, WAR, ERR, WAR, WAR, ERR],
-    /* Pas */ [OK,  OK,  OK,  OK,  OK,  OK,  WAR, OK,  OK,  OK,  OK,  ERR],
-    /* Free*/ [OK,  OK,  OK,  OK,  OK,  OK,  OK,  OK,  OK,  OK,  OK,  ERR],
-    /* Uns */ [WAR, WAR, WAR, WAR, WAR, OK,  WAR, WAR, WAR, WAR, WAR, ERR],
-    /*PwrI */ [OK,  OK,  OK,  WAR, OK,  OK,  WAR, OK,  OK,  OK,  OK,  ERR],
-    /*PwrO */ [OK,  ERR, WAR, ERR, OK,  OK,  WAR, OK,  ERR, ERR, ERR, ERR],
-    /* OC  */ [OK,  ERR, OK,  WAR, OK,  OK,  WAR, OK,  ERR, OK,  OK,  ERR],
-    /* OE  */ [OK,  ERR, WAR, WAR, OK,  OK,  WAR, OK,  ERR, OK,  OK,  ERR],
-    /* NC  */ [ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR],
-];
+/// `m_defaultPinMap`) -- the table itself lives in the IR crate
+/// ([`eda_model::ir::DEFAULT_ERC_PIN_MAP`]) so the ops verbs
+/// (`SetErcPinMapCell`, "Reset to defaults") share the one copy. Row =
+/// first pin's type, column = second pin's type, in [`ALL_TYPES`] order.
+/// `OK`/`WAR`/`ERR` = no error / warning / error. A design's own
+/// `erc_pin_map` overrides it ([`resolve_pin_map`]).
+const MATRIX: [[u8; 12]; 12] = eda_model::ir::DEFAULT_ERC_PIN_MAP;
 
+#[cfg(test)]
 fn matrix_lookup(a: ElectricalPinType, b: ElectricalPinType) -> u8 {
     MATRIX[a.index()][b.index()]
+}
+
+/// KiCad's default conflict matrix as a plain 12x12 grid
+/// (`ERC_SETTINGS::m_defaultPinMap`) -- what a design with no
+/// `SchematicSection::erc_pin_map` is judged by, and what "Reset to
+/// defaults" (`ERC_SETTINGS::ResetPinMap`) restores.
+pub fn default_pin_map() -> Vec<Vec<u8>> {
+    eda_model::ir::ErcPinMap::default_matrix()
+}
+
+/// The conflict matrix this design's ERC runs with
+/// (`ERC_SETTINGS::m_PinMap`): its stored `erc_pin_map` when present and
+/// well-formed, else KiCad's default. Mirrors `ERC_SETTINGS`'s own
+/// `pin_map` loader (`erc_settings.cpp`): a grid that is not 12x12 is
+/// ignored wholesale, and an individual cell outside `0..=2` keeps the
+/// default value for that cell.
+pub fn resolve_pin_map(design: &Design) -> [[u8; 12]; 12] {
+    let mut map = MATRIX;
+    let Some(stored) = design.schematic.as_ref().and_then(|s| s.erc_pin_map.as_ref()) else { return map };
+    if stored.matrix.len() != 12 || stored.matrix.iter().any(|r| r.len() != 12) {
+        return map;
+    }
+    for (i, row) in stored.matrix.iter().enumerate() {
+        for (j, &v) in row.iter().enumerate() {
+            if v <= ERR {
+                map[i][j] = v;
+            }
+        }
+    }
+    map
 }
 
 /// A driving pin type for an ordinary net (KiCad's `DrivingPinTypes`).
@@ -390,6 +409,9 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     // sheet's geometry dumped into one list, which would make a bus entry
     // match a point from the wrong sheet's own bus run entirely).
     let original_design = design;
+    // `ERC_SETTINGS::m_PinMap`: read from the *original* design (the
+    // flattened stand-in below is only a netlist carrier).
+    let pin_map = resolve_pin_map(design);
 
     let owned_flat: Option<(Design, ConstraintModel)> = design.sheet_contents.is_some().then(|| crate::hierarchy::flatten(design, model)).flatten().map(|(sch, nets)| {
         (Design { schematic: Some(sch), nets: None, ..design.clone() }, ConstraintModel { nets, ..model.clone() })
@@ -401,7 +423,7 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     let pins_by_ref: BTreeMap<String, &ResolvedPin> = pins.iter().map(|p| (p.pin_ref(), p)).collect();
 
     let mut out = Vec::new();
-    check_pin_to_pin(model, sch, &pins_by_ref, &mut out);
+    check_pin_to_pin(model, sch, &pins_by_ref, &pin_map, &mut out);
     check_unconnected_pins(model, &pins, &mut out);
     check_driven_pins(model, sch, &pins_by_ref, &mut out);
     check_no_connects(sch, &pins, &mut out);
@@ -460,19 +482,19 @@ pub fn check_erc_excluding(design: &Design, model: &ConstraintModel, exclusions:
 }
 
 /// (a) Pin-to-pin electrical conflict, per net: every unordered pair of
-/// distinct pins on the net is looked up in [`MATRIX`]; a non-OK cell
+/// distinct pins on the net is looked up in the design's pin map (see [`resolve_pin_map`]; [`MATRIX`] by default); a non-OK cell
 /// reports once per pair (KiCad instead reduces every mismatch on a net
 /// down to one marker on its "worst" pin — reporting every offending pair
 /// is the simplification this port makes, in exchange for never hiding a
 /// real conflict behind one that sorted higher).
-fn check_pin_to_pin(model: &ConstraintModel, sch: &eda_model::ir::SchematicSection, pins_by_ref: &BTreeMap<String, &ResolvedPin>, out: &mut Vec<CheckResult>) {
+fn check_pin_to_pin(model: &ConstraintModel, sch: &eda_model::ir::SchematicSection, pins_by_ref: &BTreeMap<String, &ResolvedPin>, pin_map: &[[u8; 12]; 12], out: &mut Vec<CheckResult>) {
     let mut ok = true;
     for net in &model.nets {
         let members = net_members(net, sch, model, pins_by_ref);
         for i in 0..members.len() {
             for j in (i + 1)..members.len() {
                 let (a, b) = (&members[i], &members[j]);
-                let severity = matrix_lookup(a.etype(), b.etype());
+                let severity = pin_map[a.etype().index()][b.etype().index()];
                 if severity == OK {
                     continue;
                 }
@@ -1441,6 +1463,48 @@ mod tests {
         assert_eq!(matrix_lookup(Passive, Passive), OK);
     }
 
+    /// `panel_setup_pinmap.cpp` only ever edits the lower triangle and
+    /// mirrors it, so KiCad's default map must itself be symmetric -- the
+    /// precondition for the symmetric-cell verb being lossless.
+    #[test]
+    fn default_pin_map_is_symmetric_and_matches_const() {
+        let d = default_pin_map();
+        assert_eq!(d.len(), 12);
+        for i in 0..12 {
+            assert_eq!(d[i].len(), 12);
+            for j in 0..12 {
+                assert_eq!(d[i][j], d[j][i], "default map must be symmetric at ({i},{j})");
+                assert_eq!(d[i][j], MATRIX[i][j]);
+            }
+        }
+    }
+
+    /// Two output pins (U1.3 = Y1, U1.6 = Y2) tied together: an error under
+    /// KiCad's default map; a custom `erc_pin_map` with output<->output set
+    /// to OK removes it, and set to warning downgrades it. Absent map =
+    /// default.
+    #[test]
+    fn custom_pin_map_changes_pin_to_pin_results() {
+        let model = ConstraintModel { parts: vec![dual_gate_part()], symbols: vec![dual_gate_symbol()], nets: vec![net("N", &["U1.3", "U1.6"])], ..Default::default() };
+        let mut design = sch_design(vec![sym_instance("U1", 1, 0, "DUAL", "Fp:A"), sym_instance("U1", 2, 10_000, "DUAL", "Fp:A")], vec![]);
+        let status_of = |design: &Design| -> Vec<CheckStatus> { check_erc(design, &model).into_iter().filter(|r| r.check == "pin_to_pin").map(|r| r.status).collect() };
+
+        assert_eq!(status_of(&design), vec![CheckStatus::Fail], "absent erc_pin_map = KiCad default (output<->output is an error)");
+
+        let mut matrix = default_pin_map();
+        matrix[Output.index()][Output.index()] = OK;
+        design.schematic.as_mut().unwrap().erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix: matrix.clone() });
+        assert_eq!(status_of(&design), vec![CheckStatus::Pass], "output<->output set to OK removes the conflict");
+
+        matrix[Output.index()][Output.index()] = WAR;
+        design.schematic.as_mut().unwrap().erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix });
+        assert_eq!(status_of(&design), vec![CheckStatus::Warn], "warning level downgrades the finding");
+
+        // A malformed grid is ignored wholesale, like ERC_SETTINGS's loader.
+        design.schematic.as_mut().unwrap().erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix: vec![vec![0; 3]; 3] });
+        assert_eq!(status_of(&design), vec![CheckStatus::Fail]);
+    }
+
     #[test]
     fn clean_ldo_design_passes_every_check() {
         let model = ldo_model();
@@ -1628,7 +1692,7 @@ mod tests {
         Design {
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }),
+            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }),
             nets: None,
             placement: None,
             routing: None,

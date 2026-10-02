@@ -24,6 +24,7 @@ use crate::board_stats;
 use crate::cleanup_api;
 use crate::fab_api;
 use crate::route_api;
+use crate::sch_api;
 use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::{LabelSide, Shape, Side};
@@ -541,6 +542,11 @@ fn handle(
             let v = erc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        // Symbol Fields Table / Find / ERC pin map backends: `crate::sch_api`.
+        ("POST", "/api/sch/fields_table") => respond(stream, "200 OK", "application/json", sch_api::fields_table(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -1090,7 +1096,7 @@ fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model
     let mut current = design.schematic.clone().unwrap_or(eda_model::ir::SchematicSection {
         power_symbols: vec![],
         no_connects: vec![], bus_entries: vec![],
-        erc_exclusions: vec![],
+        erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(),
         imported_from_kicad: false,
         title_block: None,
         sheets: vec![],
@@ -1129,7 +1135,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
             eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection {
                 power_symbols: vec![],
                 no_connects: vec![], bus_entries: vec![],
-                erc_exclusions: vec![], imported_from_kicad: false,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![],
@@ -1719,7 +1725,7 @@ mod tests {
     use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
 
     fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
-        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets, instance_overrides: vec![], imported_from_kicad: false }
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], imported_from_kicad: false }
     }
 
     fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {

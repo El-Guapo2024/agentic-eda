@@ -253,6 +253,8 @@ fn visit(design: &Design, model: &ConstraintModel, sch: &SchematicSection, path:
             no_connects,
             bus_entries: sch.bus_entries.clone(),
             erc_exclusions: sch.erc_exclusions.clone(),
+            erc_pin_map: sch.erc_pin_map.clone(),
+            user_fields: sch.user_fields.clone(),
             title_block: sch.title_block.clone(),
             sheets: sch.sheets.clone(),
             instance_overrides: Vec::new(),
@@ -465,6 +467,8 @@ pub fn flatten(design: &Design, model: &ConstraintModel) -> Option<(SchematicSec
         no_connects: Vec::new(),
         bus_entries: Vec::new(),
         erc_exclusions: root.erc_exclusions.clone(),
+        erc_pin_map: root.erc_pin_map.clone(),
+        user_fields: root.user_fields.clone(),
         title_block: root.title_block.clone(),
         sheets: root.sheets.clone(),
         instance_overrides: Vec::new(),
@@ -510,7 +514,7 @@ mod tests {
     }
 
     fn empty_sch(symbols: Vec<SymbolInstance>) -> SchematicSection {
-        SchematicSection { symbols, wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
+        SchematicSection { symbols, wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
     }
 
     fn design_with(root: SchematicSection, screens: Map<String, SchematicSection>) -> Design {
