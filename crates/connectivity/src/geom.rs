@@ -248,3 +248,16 @@ mod tests {
         assert!((pad_pad_distance(&a, &b) - 2000.0).abs() < 1e-6);
     }
 }
+
+/// Shoelace area (absolute), µm² -- `SHAPE_LINE_CHAIN::Area( true )`.
+pub fn polygon_area(pts: &[Point]) -> f64 {
+    if pts.len() < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for i in 0..pts.len() {
+        let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+        sum += (a.x as f64) * (b.y as f64) - (b.x as f64) * (a.y as f64);
+    }
+    (sum / 2.0).abs()
+}

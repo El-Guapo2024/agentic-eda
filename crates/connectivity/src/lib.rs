@@ -63,7 +63,8 @@ fn dangling_violations(design: &eda_model::ir::Design, model: &eda_model::Constr
     let graph = build_graph(design, model);
     let rt = design.routing.as_ref();
     let net_label = |n: &str| if n.is_empty() { "<no net>".to_string() } else { n.to_string() };
-    dangling_tracks_and_vias(&graph)
+    let mut out = isolated_copper(design, &graph);
+    let dangling: Vec<DrcViolation> = dangling_tracks_and_vias(&graph)
         .into_iter()
         .map(|d| match d.kind {
             DanglingKind::Track => {
@@ -78,7 +79,63 @@ fn dangling_violations(design: &eda_model::ir::Design, model: &eda_model::Constr
                 DrcViolation::new(ErrorType::ViaDangling, "", vec![DrcRefItem { description: format!("Via [{}] on {span}", net_label(&d.net)), pos: (d.at.x, d.at.y), id: d.id.clone() }])
             }
         })
-        .collect()
+        .collect();
+    // `drc_test_provider_connectivity.cpp` reports dangling tracks/vias
+    // first, then the isolated zone islands.
+    let mut all = dangling;
+    all.append(&mut out);
+    all
+}
+
+/// `DRCE_ISOLATED_COPPER`: `CN_CONNECTIVITY_ALGO::FillIsolatedIslandsMap`
+/// over `m_ZoneIsolatedIslandsMap` (every non-teardrop, non-rule-area zone
+/// layer). A fill fragment is isolated when its connectivity cluster
+/// (`SearchClusters( CSM_CONNECTIVITY_CHECK )`: same-net, net > 0) has no
+/// pad (`CN_CLUSTER::IsOrphaned`); a zone layer with fill but no net is
+/// never in any cluster, so it reports once, at outline 0.
+fn isolated_copper(design: &eda_model::ir::Design, graph: &ConnGraph) -> Vec<eda_drc::DrcViolation> {
+    use eda_drc::{DrcRefItem, DrcViolation, ErrorType};
+    let mut out = Vec::new();
+    let Some(rt) = design.routing.as_ref() else { return out };
+    let clusters = search_clusters(graph);
+    let mut cluster_of = vec![usize::MAX; graph.items.len()];
+    for (ci, c) in clusters.iter().enumerate() {
+        for &i in &c.items {
+            cluster_of[i] = ci;
+        }
+    }
+    let has_pad = |ci: usize| clusters[ci].items.iter().any(|&i| matches!(graph.items[i].item, ItemRef::Pad { .. }));
+    for z in rt.zones.iter().filter(|z| !z.teardrop && !z.is_rule_area) {
+        let frags: Vec<usize> = (0..graph.items.len()).filter(|&i| matches!(&graph.items[i].item, ItemRef::ZoneOutline { zone_id } if *zone_id == z.id)).collect();
+        let report = |i: usize, out: &mut Vec<DrcViolation>| {
+            let p = graph.items[i].anchors.first().copied().unwrap_or_default();
+            let net = if z.net.is_empty() { "<no net>".to_string() } else { z.net.clone() };
+            out.push(DrcViolation::new(ErrorType::IsolatedCopper, "", vec![DrcRefItem { description: format!("Zone [{net}] on {}", z.layer), pos: (p.x, p.y), id: z.id.clone() }]));
+        };
+        if z.net.is_empty() {
+            if let Some(&first) = frags.first() {
+                report(first, &mut out);
+            }
+            continue;
+        }
+        let islands: Vec<usize> = frags.iter().copied().filter(|&i| cluster_of[i] == usize::MAX || !has_pad(cluster_of[i])).collect();
+        // What survives `ZONE_FILLER::Fill`'s island removal (same orphaned-
+        // cluster test) is what DRC then finds isolated: with ALWAYS every
+        // island is deleted unless *all* fragments are islands, with AREA
+        // only those under the minimum area go.
+        let all_islands = islands.len() == frags.len();
+        for i in islands {
+            let kept = match z.island_removal_mode {
+                eda_model::ir::IslandRemovalMode::Never => true,
+                eda_model::ir::IslandRemovalMode::Always => all_islands,
+                eda_model::ir::IslandRemovalMode::Area => all_islands || geom::polygon_area(&graph.items[i].anchors) >= z.min_island_area as f64,
+            };
+            if kept {
+                report(i, &mut out);
+            }
+        }
+    }
+    out
 }
 
 use eda_model::ir::Design;

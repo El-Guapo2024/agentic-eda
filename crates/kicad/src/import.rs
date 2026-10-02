@@ -110,7 +110,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let net_names = import_net_names(root);
     let mut board = import_board_rules(root, &layers);
 
-    let (footprints_ir, parts, explicit_footprints, pin_nets) = import_footprints(root, &mut notes)?;
+    let (footprints_ir, parts, explicit_footprints, pin_nets) = import_footprints(root, &net_names, &mut notes)?;
     let nets = build_nets(&net_names, &pin_nets);
     let outline = import_outline(root, &mut notes);
     let (tracks, vias) = import_routing(root, &net_names, &mut notes);
@@ -234,15 +234,32 @@ fn import_net_names(root: &[Sexpr]) -> BTreeMap<i64, String> {
     map
 }
 
+/// An item's `(net ...)`: legacy `(net N)`/`(net N "name")` (the code is
+/// authoritative) or KiCad 10's `(net "name")` -- `parsePAD`'s / `parseTRACK`'s
+/// `T_net` handling.
+fn net_ref(net: Option<&[Sexpr]>, net_names: &BTreeMap<i64, String>) -> String {
+    let Some(n) = net else { return String::new() };
+    match sexpr::num(n, 1) {
+        Some(code) => net_names.get(&(code as i64)).cloned().or_else(|| sexpr::txt(n, 2).map(str::to_string)).unwrap_or_default(),
+        None => sexpr::txt(n, 1).unwrap_or("").to_string(),
+    }
+}
+
 fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)]) -> Vec<Net> {
     let mut pins_by_name: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for (pin, net) in pin_nets {
         pins_by_name.entry(net.as_str()).or_default().push(pin.clone());
     }
-    net_names
-        .values()
+    // KiCad 10 files carry no top-level net table: every name used by a pad
+    // is a net too.
+    let mut names: Vec<&str> = net_names.values().map(String::as_str).collect();
+    names.extend(pin_nets.iter().map(|(_, n)| n.as_str()));
+    names.sort_unstable();
+    names.dedup();
+    names
+        .into_iter()
         .filter(|n| !n.is_empty())
-        .map(|n| Net { name: n.clone(), pins: pins_by_name.get(n.as_str()).cloned().unwrap_or_default() })
+        .map(|n| Net { name: n.to_string(), pins: pins_by_name.get(n).cloned().unwrap_or_default() })
         .collect()
 }
 
@@ -828,6 +845,7 @@ fn footprint_courtyard_half(fp: &[Sexpr], side: Side) -> Option<(i64, i64)> {
 #[allow(clippy::type_complexity)]
 fn import_footprints(
     root: &[Sexpr],
+    net_names: &BTreeMap<i64, String>,
     notes: &mut ImportNotes,
 ) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>), Vec<CheckResult>> {
     let mut footprints_ir = Vec::new();
@@ -870,12 +888,9 @@ fn import_footprints(
             // a stub for), but it still occupies space in `pads`, so it
             // still counts as a hole for clearance.
             if p.kind != PadKind::NonPlatedHole {
-                if let Some(net) = sexpr::find(pad, "net") {
-                    if let Some(name) = sexpr::txt(net, 2) {
-                        if !name.is_empty() {
-                            pin_nets.push((format!("{reference}.{}", p.number), name.to_string()));
-                        }
-                    }
+                let name = net_ref(sexpr::find(pad, "net"), net_names);
+                if !name.is_empty() {
+                    pin_nets.push((format!("{reference}.{}", p.number), name));
                 }
                 pins.push(Pin { number: p.number.clone(), name: None, kind: PinKind::Signal });
             }
@@ -925,12 +940,11 @@ fn import_footprints(
 // ---------------------------------------------------------------- routing
 
 fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes) -> (Vec<Track>, Vec<Via>) {
-    let net_of = |code: Option<f64>| -> String { code.map(|c| c as i64).and_then(|c| net_names.get(&c)).cloned().unwrap_or_default() };
 
     let mut tracks = Vec::new();
     for seg in sexpr::find_all(root, "segment") {
         let (Some(s), Some(e)) = (sexpr::find(seg, "start").and_then(xy_point), sexpr::find(seg, "end").and_then(xy_point)) else { continue };
-        let net = net_of(sexpr::find(seg, "net").and_then(|n| sexpr::num(n, 1)));
+        let net = net_ref(sexpr::find(seg, "net"), net_names);
         // Net 0 (no net) stays as an empty `net`: KiCad still checks a
         // netless track (clearance, shorting, dangling) like any other.
         let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
@@ -944,7 +958,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         else {
             continue;
         };
-        let net = net_of(sexpr::find(arc, "net").and_then(|n| sexpr::num(n, 1)));
+        let net = net_ref(sexpr::find(arc, "net"), net_names);
         let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         notes.track_arcs_approximated += 1;
@@ -954,7 +968,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
     let mut vias = Vec::new();
     for via in sexpr::find_all(root, "via") {
         let Some(at) = sexpr::find(via, "at").and_then(xy_point) else { continue };
-        let net = net_of(sexpr::find(via, "net").and_then(|n| sexpr::num(n, 1)));
+        let net = net_ref(sexpr::find(via, "net"), net_names);
         let dia = sexpr::find(via, "size").and_then(|s| sexpr::num(s, 1)).map(mm_to_um).unwrap_or(600);
         let drill = sexpr::find(via, "drill").and_then(|d| sexpr::num(d, 1)).map(mm_to_um).unwrap_or(300);
         let (from_layer, to_layer) = sexpr::find(via, "layers")
@@ -1217,6 +1231,9 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             zone.teardrop = sexpr::find(a, "teardrop").is_some();
         }
 
+        // Only copper layers make a copper zone (`GetLayerSet() & boardCopperLayers`).
+        layers.retain(|l| copper_layers.contains(l));
+        layers.dedup();
         let outlines: Vec<Vec<Point>> = sexpr::find_all(z, "polygon").filter_map(poly_points).collect();
         if outlines.is_empty() || layers.is_empty() {
             notes.zones_skipped += 1;

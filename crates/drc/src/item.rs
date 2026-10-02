@@ -35,6 +35,8 @@ pub enum ErrorType {
     TextThickness,
     TrackDangling,
     ViaDangling,
+    /// `DRCE_ISOLATED_COPPER`.
+    IsolatedCopper,
     InvalidOutline,
     DuplicateFootprint,
     MissingFootprint,
@@ -102,6 +104,7 @@ impl ErrorType {
             ErrorType::TextThickness => "text_thickness",
             ErrorType::TrackDangling => "track_dangling",
             ErrorType::ViaDangling => "via_dangling",
+            ErrorType::IsolatedCopper => "isolated_copper",
             ErrorType::InvalidOutline => "invalid_outline",
             ErrorType::DuplicateFootprint => "duplicate_footprints",
             ErrorType::MissingFootprint => "missing_footprint",
@@ -144,6 +147,7 @@ impl ErrorType {
             ErrorType::TextThickness => "Text thickness out of range",
             ErrorType::TrackDangling => "Track has unconnected end",
             ErrorType::ViaDangling => "Via is not connected or connected on only one layer",
+            ErrorType::IsolatedCopper => "Isolated copper fill",
             ErrorType::InvalidOutline => "Invalid board outline",
             ErrorType::DuplicateFootprint => "Duplicate footprints",
             ErrorType::MissingFootprint => "Missing footprint",
@@ -173,6 +177,7 @@ impl ErrorType {
             | ErrorType::TextThickness
             | ErrorType::TrackDangling
             | ErrorType::ViaDangling
+            | ErrorType::IsolatedCopper
             | ErrorType::DuplicateFootprint
             | ErrorType::MissingFootprint
             | ErrorType::ExtraFootprint => Severity::Warning,
