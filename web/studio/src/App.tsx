@@ -3,7 +3,6 @@ import { StudioProvider, useStudioDispatch, useStudioState } from "./state/store
 import { FootprintEditorProvider } from "./state/footprintEditorStore";
 import { SymbolEditorProvider } from "./state/symbolEditorStore";
 import { useFootprintEditHotkey } from "./actions/useFootprintEditHotkey";
-import { useSymbolEditHotkey } from "./actions/useSymbolEditHotkey";
 import { FootprintEditorView } from "./components/footprint/FootprintEditorView";
 import { SymbolEditorView } from "./components/symbol/SymbolEditorView";
 import { EditorTabs } from "./components/EditorTabs";
@@ -91,7 +90,9 @@ function StudioFrame() {
   const state = useStudioState();
   useGlobalHotkeys();
   useFootprintEditHotkey();
-  useSymbolEditHotkey();
+  // Ctrl+Shift+E / Ctrl+E on the Schematic tab are now the registered actions
+  // eeschema.EditorControl.editLibSymbolWithSymbolEditor / editWithSymbolEditor
+  // (useActionRunner.ts); useSymbolEditHotkey.ts is superseded and no longer called.
   const [viewer3d, setViewer3d] = useState<Viewer3DApi | null>(null);
   // The 3D tab has no real "own chrome" to extract (3d-viewer/'s source
   // wasn't available this session) and no properties/appearance concept
