@@ -34,8 +34,10 @@ use eda_model::BoardRules;
 /// provider before calling this, exactly as `testSingleLayerItemAgainstItem`
 /// zeroes `testClearance` when `itemNet == otherNet`).
 pub fn clearance(rules: &BoardRules, a: Option<&str>, b: Option<&str>) -> Um {
-    let ca = a.map(|n| rules.clearance_of(n)).unwrap_or(0);
-    let cb = b.map(|n| rules.clearance_of(n)).unwrap_or(0);
+    // A netless item (net 0, or a non-connected copper graphic) is still
+    // in the Default netclass: its implicit clearance rule applies.
+    let ca = a.map(|n| rules.clearance_of(n)).unwrap_or(rules.clearance);
+    let cb = b.map(|n| rules.clearance_of(n)).unwrap_or(rules.clearance);
     // `bds.m_MinClearance`: an absolute board-wide floor maxed in on top of
     // the netclass value -- `EvalRules`'s final `CLEARANCE_CONSTRAINT`
     // special case ("Board minimum clearance"), applied whenever the
@@ -301,9 +303,10 @@ mod tests {
     }
 
     #[test]
-    fn no_net_on_either_side_is_zero() {
+    fn no_net_on_either_side_gets_the_default_netclass() {
+        // Net 0 is still in the Default netclass (KiCad's implicit rule).
         let r = BoardRules::default();
-        assert_eq!(clearance(&r, None, None), 0);
+        assert_eq!(clearance(&r, None, None), r.clearance);
     }
 
     fn facts(item_type: &'static str, net_class: &'static str, net_name: &'static str) -> crate::pcbexpr::Facts<'static> {
@@ -393,7 +396,7 @@ mod tests {
         // Factory default (`rules.min_clearance` = 0mm) must not change
         // existing behavior for the overwhelming majority of boards.
         let r = BoardRules::default();
-        assert_eq!(clearance(&r, None, None), 0);
+        assert_eq!(clearance(&r, Some("A"), Some("B")), r.clearance);
     }
 
     #[test]

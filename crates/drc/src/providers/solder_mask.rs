@@ -1069,7 +1069,7 @@ mod tests {
 
     fn board(pads: Vec<DrcPad>) -> DrcBoard {
         let n = pads.len();
-        let mut b = DrcBoard { layers: vec!["F.Cu".into(), "B.Cu".into()], outline: vec![], pads, tracks: vec![], vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() };
+        let mut b = DrcBoard { copper_graphics: vec![], layers: vec!["F.Cu".into(), "B.Cu".into()], outline: vec![], pads, tracks: vec![], vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() };
         b.mask.pads = (0..n).map(|_| pad_mask(None)).collect();
         b
     }

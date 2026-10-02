@@ -96,6 +96,14 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
             };
             pts.windows(2).map(|w| FillTrack { net: t.net.clone(), layer: t.layer.clone(), a: pt(w[0]), b: pt(w[1]), width: t.width }).collect::<Vec<_>>()
         })
+        .chain(board.copper_graphics.iter().flat_map(|g| {
+            // `knockoutGraphicClearance`: a text's strokes, each inflated by
+            // its pen half-width plus the zone clearance -- a netless track.
+            match &g.shape {
+                crate::kimath::Shape::Strokes { segs, r } => segs.iter().map(|s| FillTrack { net: None, layer: g.layer.clone(), a: pt(s.a), b: pt(s.b), width: 2 * r }).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            }
+        }))
         .collect();
     let vias: Vec<FillVia> =
         board.vias.iter().map(|v| FillVia { net: v.net.clone(), at: pt(v.at), diameter: v.diameter, drill: v.drill, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone(), layer_order: board.layers.clone() }).collect();

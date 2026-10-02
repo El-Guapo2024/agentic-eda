@@ -319,6 +319,20 @@ pub struct DrcBoard {
     pub texts: Vec<Text>,
     pub silk_items: Vec<SilkItem>,
     pub mask: MaskData,
+    /// Copper-layer text (`PCB_TEXT` on a copper layer): non-connected
+    /// copper in `m_CopperItemRTreeCache`.
+    pub copper_graphics: Vec<DrcCopperGraphic>,
+}
+
+/// A non-connected copper graphic (text): `IsConnected()` is false.
+#[derive(Clone)]
+pub struct DrcCopperGraphic {
+    pub id: String,
+    pub desc: String,
+    pub layer: String,
+    pub pos: Point,
+    /// `GetEffectiveShape()` -- the text's strokes.
+    pub shape: Shape,
 }
 
 /// A local-frame `(w, h)` box's axis-aligned board-space extent under a
@@ -756,7 +770,16 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         }
     }
 
-    DrcBoard { layers, outline, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask }
+    let copper_graphics = design
+        .drawings
+        .as_ref()
+        .map(|d| d.copper_texts.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| footprint_text_shape(t).map(|shape| DrcCopperGraphic { id: format!("ctxt{i}"), desc: format!("Text '{}' on {}", t.text.replace('\n', " "), t.layer), layer: t.layer.clone(), pos: t.at, shape }))
+        .collect();
+    DrcBoard { layers, outline, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
 }
 
 impl DrcVia {

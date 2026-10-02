@@ -1891,6 +1891,10 @@ pub struct DrawingsSection {
     /// entries in the silk DRC.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub silk_texts: Vec<FootprintText>,
+    /// Board-level `gr_text` on a copper layer: real copper, clearance-
+    /// checked against other copper and knocked out of zone fills.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copper_texts: Vec<FootprintText>,
 }
 
 /// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no

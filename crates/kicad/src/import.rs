@@ -116,6 +116,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes);
     let (shapes, texts) = import_drawings(root);
     let silk_texts = import_board_silk_texts(root);
+    let copper_texts = import_board_copper_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes);
 
     // The outline override lives on `board` too (used when a downstream
@@ -149,7 +150,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() { None } else { Some(DrawingsSection { shapes, texts, footprint_extras, via_tenting, silk_texts, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, footprint_extras, via_tenting, silk_texts, copper_texts, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     // Every track/via this parse just built, and every shape/text, has no
@@ -1197,6 +1198,22 @@ fn import_board_silk_texts(root: &[Sexpr]) -> Vec<FootprintText> {
     out
 }
 
+/// A board-level `(gr_text ..)` on a copper layer (`PCB_TEXT` is copper there).
+fn import_board_copper_texts(root: &[Sexpr]) -> Vec<FootprintText> {
+    let ident = |p: Point| p;
+    let vars = title_block_vars(root);
+    let mut out = Vec::new();
+    for item in sexpr::find_all(root, "gr_text") {
+        // A hidden text has no copper (`IsVisible()`).
+        if sexpr::find(item, "hide").is_some() || item.iter().any(|c| matches!(c, Sexpr::Atom(a) if a == "hide")) {
+            continue;
+        }
+        let Some(raw) = sexpr::txt(item, 1) else { continue };
+        out.extend(parse_text_on(item, &resolve_text_vars(raw, &vars), &ident, false, &|l| l.ends_with(".Cu")));
+    }
+    out
+}
+
 /// The `(title_block ..)` text variables (`BOARD::GetTextVar`): `TITLE`,
 /// `ISSUE_DATE`, `REVISION`, `COMPANY`, `COMMENT1..9`.
 fn title_block_vars(root: &[Sexpr]) -> Vec<(String, String)> {
@@ -1228,8 +1245,13 @@ fn resolve_text_vars(text: &str, vars: &[(String, String)]) -> String {
 /// `(layer ..)`, `(effects (font (size ..) (thickness ..) bold) (justify ..))`.
 /// Only silkscreen text is kept. `tf` maps the file anchor to board space.
 fn parse_silk_text(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_upright_default: bool) -> Option<FootprintText> {
+    parse_text_on(item, text, tf, keep_upright_default, &|l| l == "F.SilkS" || l == "B.SilkS")
+}
+
+/// [`parse_silk_text`] for any layer `accept` takes.
+fn parse_text_on(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_upright_default: bool, accept: &dyn Fn(&str) -> bool) -> Option<FootprintText> {
     let layer = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1))?;
-    if layer != "F.SilkS" && layer != "B.SilkS" {
+    if !accept(layer) {
         return None;
     }
     // KiCad's lexer turns the two characters `\n` of a quoted string into a newline.

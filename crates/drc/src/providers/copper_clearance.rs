@@ -8,7 +8,7 @@
 //! Generated: `DRCE_CLEARANCE`, `DRCE_HOLE_CLEARANCE`, `DRCE_TRACKS_CROSSING`,
 //! `DRCE_SHORTING_ITEMS`, `DRCE_ZONES_INTERSECT`.
 
-use crate::board::{DrcBoard, DrcPad, DrcTrackSeg, DrcVia, DrcZone};
+use crate::board::{DrcBoard, DrcCopperGraphic, DrcPad, DrcTrackSeg, DrcVia, DrcZone};
 use crate::constraints;
 use crate::fill::FillResults;
 use crate::item::{format_um, DrcRefItem, DrcViolation, ErrorType};
@@ -131,8 +131,10 @@ fn collides_zone_zone(a: &DrcZone, b: &DrcZone, fills: &FillResults, clearance: 
     frags_a.iter().flat_map(|fa| frags_b.iter().filter_map(move |fb| fa.collides(fb, clearance))).min_by_key(|(actual, _)| *actual)
 }
 
+/// `PAD::SameLogicalPadAs`: same footprint, same *non-empty* number --
+/// unnumbered pads (fiducial/target artwork) are each their own pad.
 fn same_logical_pad(a: &DrcPad, b: &DrcPad) -> bool {
-    a.footprint_ref == b.footprint_ref && a.number == b.number
+    a.footprint_ref == b.footprint_ref && !a.number.is_empty() && a.number == b.number
 }
 
 /// `GetDRCEpsilon()` (`ADVANCED_CFG::m_DRCEpsilon`, 0.0005 mm). With this
@@ -180,6 +182,9 @@ enum Item<'a> {
     Track(usize, &'a DrcTrackSeg),
     Via(usize, &'a DrcVia),
     Pad(usize, &'a DrcPad),
+    /// Copper text: not connected (`IsConnected()` false), so its net is
+    /// never equal to any connected item's -- not even net 0's.
+    Graphic(usize, &'a DrcCopperGraphic),
 }
 
 impl<'a> Item<'a> {
@@ -188,7 +193,14 @@ impl<'a> Item<'a> {
             Item::Track(_, t) => t.net.as_deref(),
             Item::Via(_, v) => v.net.as_deref(),
             Item::Pad(_, p) => p.net.as_deref(),
+            Item::Graphic(..) => None,
         }
+    }
+    /// `itemNet == otherNet` with KiCad's `NETINFO_ITEM*`s: a connected
+    /// item always has one (net 0's orphan item included), a graphic none.
+    fn same_net(&self, other: &Item) -> bool {
+        let connected = |i: &Item| !matches!(i, Item::Graphic(..));
+        connected(self) == connected(other) && self.net() == other.net()
     }
     /// Position in `m_board->Tracks()` (tracks then vias) for the
     /// pointer-order pair dedupe, or the pad's own index.
@@ -196,17 +208,18 @@ impl<'a> Item<'a> {
         match self {
             Item::Track(i, _) => *i,
             Item::Via(i, _) => n_tracks + *i,
-            Item::Pad(i, _) => *i,
+            Item::Pad(i, _) | Item::Graphic(i, _) => *i,
         }
     }
     fn is_track_like(&self) -> bool {
-        !matches!(self, Item::Pad(..))
+        matches!(self, Item::Track(..) | Item::Via(..))
     }
     fn reference(&self) -> DrcRefItem {
         match self {
             Item::Track(_, t) => track_ref(t),
             Item::Via(_, v) => via_ref(v),
             Item::Pad(_, p) => pad_ref(p),
+            Item::Graphic(_, g) => ref_item(g.desc.clone(), g.pos, g.id.clone()),
         }
     }
     fn facts(&self, rules: &'a BoardRules, courtyards: &'a CourtyardMembership) -> Facts<'a> {
@@ -214,12 +227,13 @@ impl<'a> Item<'a> {
             Item::Track(_, t) => facts_of_track(rules, t, courtyards),
             Item::Via(_, v) => facts_of_via(rules, v, courtyards),
             Item::Pad(_, p) => facts_of_pad(rules, p, courtyards),
+            Item::Graphic(..) => Facts { item_type: "Text", net_class: "", net_name: "", reference: "", inside_courtyards: NO_COURTYARDS },
         }
     }
     /// `GetEffectiveHoleShape()`, if this item has a hole.
     fn hole(&self) -> Option<Shape> {
         match self {
-            Item::Track(..) => None,
+            Item::Track(..) | Item::Graphic(..) => None,
             Item::Via(_, v) => Some(v.hole()),
             Item::Pad(_, p) => p.hole.clone(),
         }
@@ -250,7 +264,7 @@ fn test_single_layer_item_against_item(ctx: &Ctx, layer: &str, item: Item, item_
     let mut test_clearance = limits.clearance > 0;
     let mut test_shorting = limits.shorting > 0;
     let test_holes = limits.hole > 0;
-    if item.net() == other.net() {
+    if item.same_net(&other) {
         test_clearance = false;
         test_shorting = false;
     }
@@ -264,6 +278,7 @@ fn test_single_layer_item_against_item(ctx: &Ctx, layer: &str, item: Item, item_
         Item::Pad(_, p) => p.copper.clone(),
         Item::Track(_, t) => t.shape(),
         Item::Via(_, v) => v.shape(),
+        Item::Graphic(_, g) => g.shape.clone(),
     };
 
     let mut clearance = -1;
@@ -282,7 +297,7 @@ fn test_single_layer_item_against_item(ctx: &Ctx, layer: &str, item: Item, item_
             }
         }
         if let Some((actual, _pos)) = item_shape.collides(&other_shape, sub_e(clearance)) {
-            if actual == 0 && test_shorting {
+            if actual == 0 && test_shorting && !matches!(other, Item::Graphic(..)) {
                 let name = |n: Option<&str>| n.unwrap_or("<no net>").to_string();
                 limits.report(DrcViolation::new(ErrorType::ShortingItems, format!("(nets {} and {})", name(item.net()), name(other.net())), vec![item.reference(), other.reference()]), out);
                 return false;
@@ -362,6 +377,7 @@ fn test_pad_against_item(ctx: &Ctx, layer: &str, pad: &DrcPad, pad_i: usize, oth
         let c = constraints::clearance_with_custom_rules(ctx.rules, pad.net.as_deref(), other.net(), layer, &facts_of_pad(ctx.rules, pad, ctx.courtyards), &other.facts(ctx.rules, ctx.courtyards), ctx.compiled);
         let other_shape = match other {
             Item::Pad(_, p) => p.copper.clone(),
+            Item::Graphic(_, g) => g.shape.clone(),
             _ => unreachable!("tracks/vias never reach the clearance half"),
         };
         if c > 0 {
@@ -473,12 +489,14 @@ pub fn check_with_fills(board: &DrcBoard, rules: &BoardRules, fills: &FillResult
             items.extend(board.tracks.iter().enumerate().filter(|(_, t)| &t.layer == layer).map(|(i, t)| Item::Track(i, t)));
             items.extend(board.vias.iter().enumerate().filter(|(_, v)| via_on_layer(board, v, layer)).map(|(i, v)| Item::Via(i, v)));
             items.extend(board.pads.iter().enumerate().filter(|(_, p)| p.layers.iter().any(|l| l == layer)).map(|(i, p)| Item::Pad(i, p)));
+            items.extend(board.copper_graphics.iter().enumerate().filter(|(_, g)| &g.layer == layer).map(|(i, g)| Item::Graphic(i, g)));
             let mut tree = crate::rtree::DrcRTree::new(worst_clearance.max(1));
             for (k, it) in items.iter().enumerate() {
                 let bbox = match it {
                     Item::Track(_, t) => t.shape().bbox(0),
                     Item::Via(_, v) => v.shape().bbox(0),
                     Item::Pad(_, p) => p.copper.bbox(0),
+                    Item::Graphic(_, g) => g.shape.bbox(0),
                 };
                 tree.insert(k, bbox);
             }
@@ -495,12 +513,12 @@ pub fn check_with_fills(board: &DrcBoard, rules: &BoardRules, fills: &FillResult
         let item_shape = match item {
             Item::Track(_, t) => t.shape(),
             Item::Via(_, v) => v.shape(),
-            Item::Pad(..) => unreachable!(),
+            _ => unreachable!(),
         };
         let layers: Vec<&str> = match item {
             Item::Track(_, t) => vec![t.layer.as_str()],
             Item::Via(_, v) => board.layers.iter().map(String::as_str).filter(|l| via_on_layer(board, v, l)).collect(),
-            Item::Pad(..) => unreachable!(),
+            _ => unreachable!(),
         };
         for layer in layers {
             let Some(idx) = layer_index.get(layer) else { continue };
@@ -508,7 +526,7 @@ pub fn check_with_fills(board: &DrcBoard, rules: &BoardRules, fills: &FillResult
                 let other = idx.items[k];
                 // Filter: same netcode (net 0 included), and each
                 // track/arc/via pair only once (pointer order).
-                if other.net() == item.net() {
+                if other.same_net(&item) {
                     continue;
                 }
                 if other.is_track_like() && item.order(n_tracks) > other.order(n_tracks) {
@@ -543,6 +561,14 @@ pub fn check_with_fills(board: &DrcBoard, rules: &BoardRules, fills: &FillResult
             for zone in zones_on(board, layer) {
                 test_item_against_zone(&ctx, layer, Item::Pad(pi, pad), &pad.copper, zone, &fills, &mut limits, &mut out);
             }
+        }
+    }
+
+    // ---- testGraphicClearances: copper text against zones (text is
+    // never `testCopperGraphic`'d -- only PCB_SHAPE/barcode are) ----
+    for (gi, g) in board.copper_graphics.iter().enumerate() {
+        for zone in zones_on(board, &g.layer) {
+            test_item_against_zone(&ctx, &g.layer, Item::Graphic(gi, g), &g.shape, zone, fills, &mut limits, &mut out);
         }
     }
 
@@ -607,7 +633,7 @@ mod tests {
     use eda_model::ir::{Point, Side};
 
     fn empty_board(tracks: Vec<DrcTrackSeg>, pads: Vec<DrcPad>) -> DrcBoard {
-        DrcBoard { layers: vec!["F.Cu".into()], outline: vec![], pads, tracks, vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() }
+        DrcBoard { copper_graphics: vec![], layers: vec!["F.Cu".into()], outline: vec![], pads, tracks, vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() }
     }
 
     fn seg(id: &str, net: Option<&str>, a: (i64, i64), b: (i64, i64)) -> DrcTrackSeg {

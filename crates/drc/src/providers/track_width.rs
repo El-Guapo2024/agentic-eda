@@ -78,7 +78,7 @@ mod tests {
         if let Some(name) = net_class {
             rules.net_classes.push(eda_model::NetClass { name: name.into(), nets: vec!["A".into()], track_width: Some(9_999), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
         }
-        let board = DrcBoard {
+        let board = DrcBoard { copper_graphics: vec![],
             layers: vec![],
             outline: vec![],
             pads: vec![],

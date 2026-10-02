@@ -229,7 +229,7 @@ mod tests {
     }
 
     fn board() -> DrcBoard {
-        DrcBoard { layers: vec!["F.Cu".into(), "B.Cu".into()], outline: vec![], pads: vec![], tracks: vec![], vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() }
+        DrcBoard { copper_graphics: vec![], layers: vec!["F.Cu".into(), "B.Cu".into()], outline: vec![], pads: vec![], tracks: vec![], vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() }
     }
 
     fn silk_line(id: &str, a: (i64, i64), b: (i64, i64)) -> DrcSilk {
