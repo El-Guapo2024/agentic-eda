@@ -1583,6 +1583,8 @@ export interface ErcReport {
   violations: ErcViolation[];
   /** Violation count by `check`. */
   counts: Record<string, number>;
+  /** "kicad-cli <version>" when run by kicad-cli (crates/cli/src/kicad_engine.rs `erc`); absent for our own engine. */
+  engine?: string;
 }
 
 /**

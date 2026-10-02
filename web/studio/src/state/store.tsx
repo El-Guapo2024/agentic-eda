@@ -596,6 +596,8 @@ export interface StudioState {
   drc: DrcReport | null;
   /** Live engine (re-run on every board change while the dialog is open) or kicad-cli (run on demand, "Run DRC"). */
   drcEngine: DrcEngine;
+  /** Same choice for ERC (`kicad` runs kicad-cli sch erc on demand). */
+  ercEngine: DrcEngine;
   /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
   drcSelected: number | null;
 
@@ -743,6 +745,7 @@ const initialState: StudioState = {
   ratsnest: null,
   drc: null,
   drcEngine: "eda",
+  ercEngine: "eda",
   drcSelected: null,
   ercDialogOpen: false,
   erc: null,
@@ -768,6 +771,7 @@ export type Action =
   | { type: "VERSION"; version: string }
   | { type: "SET_TAB"; tab: EditorTab }
   | { type: "SET_DRC_ENGINE"; engine: DrcEngine }
+  | { type: "SET_ERC_ENGINE"; engine: DrcEngine }
   | { type: "SET_SHEET_PATH"; path: string[]; /** false = do not push onto the Back/Forward history (Back/Forward themselves). Default true. */ record?: boolean }
   | { type: "SET_SCH_NAV"; nav: NavHistory }
   | { type: "SET_SCH_LINE_MODE"; mode: LineMode }
@@ -1083,6 +1087,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, ratsnest: action.ratsnest };
     case "SET_DRC_ENGINE":
       return { ...state, drcEngine: action.engine, drc: null };
+    case "SET_ERC_ENGINE":
+      return { ...state, ercEngine: action.engine, erc: null };
     case "DRC_OK":
       // A fresh report invalidates any previous selection -- indices (and
       // the violations they pointed at) aren't stable across re-runs.
@@ -1316,7 +1322,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const refreshErc = useCallback(async () => {
     try {
-      const erc = await fetchErc();
+      const erc = await fetchErc(stateRef.current.ercEngine);
       dispatch({ type: "ERC_OK", erc });
     } catch {
       // same reasoning as refreshDrc -- keep the last good report.
@@ -1422,7 +1428,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         // Same reasoning as DRC above -- ERC overlays whichever tab is
         // showing (normally the Schematic one, but nothing stops running
         // it from the PCB tab), gated on the dialog, not a tab.
-        if (stateRef.current.ercDialogOpen && lastErcFetch !== v) {
+        if (stateRef.current.ercDialogOpen && stateRef.current.ercEngine === "eda" && lastErcFetch !== v) {
           lastErcFetch = v;
           await refreshErc();
         }

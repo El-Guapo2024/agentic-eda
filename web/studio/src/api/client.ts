@@ -130,8 +130,8 @@ export async function fetchDrc(engine: DrcEngine = "eda"): Promise<DrcReport> {
 }
 
 /** `eda_kicad::check_erc` (gap #4), run fresh server-side on every call -- same no-caching reasoning as `fetchDrc`. */
-export async function fetchErc(): Promise<ErcReport> {
-  const r = await getJson<ErcReport & { error?: string }>("/api/erc");
+export async function fetchErc(engine: DrcEngine = "eda"): Promise<ErcReport> {
+  const r = await getJson<ErcReport & { error?: string }>(engine === "kicad" ? "/api/erc?engine=kicad" : "/api/erc");
   if (r.error) throw new ApiError(r.error);
   return r;
 }

@@ -25,6 +25,7 @@
 // re-runs GET /api/erc on the next version change while this dialog is
 // open, same as every other Cmd this app sends.
 import { useMemo, useState } from "react";
+import { fetchErc } from "../api/client";
 import type { ErcViolation } from "../api/types";
 import { useStudioDispatch, useStudioState, useStudioApi } from "../state/store";
 import { ercMarkerPosition } from "./schematic/ercMarkerPosition";
@@ -43,6 +44,21 @@ export function ErcDialog() {
   const warnings = useMemo(() => violations.filter((v) => v.severity === "warning"), [violations]);
   const excluded = useMemo(() => violations.filter((v) => v.severity === "excluded"), [violations]);
   const visible = violations.filter((v) => (v.severity === "error" ? showErrors : v.severity === "warning" ? showWarnings : showExcluded));
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  // "Run ERC" (dialog_erc.cpp OnRunERCClick): kicad-cli runs on demand; the
+  // live engine re-runs by itself whenever the design changes.
+  const runErc = async () => {
+    setRunning(true);
+    setRunError(null);
+    try {
+      dispatch({ type: "ERC_OK", erc: await fetchErc(state.ercEngine) });
+    } catch (e) {
+      setRunError(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
 
   if (!state.ercDialogOpen) return null;
   const close = () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: false });
@@ -100,6 +116,18 @@ export function ErcDialog() {
           </span>
         </div>
         <div className="dialog-body" style={{ paddingTop: 10 }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, fontSize: 11 }}>
+            <span style={{ color: "var(--chrome-text-dim)" }}>Engine:</span>
+            <select value={state.ercEngine} onChange={(e) => dispatch({ type: "SET_ERC_ENGINE", engine: e.target.value as "eda" | "kicad" })}>
+              <option value="eda">Live (re-runs on every change)</option>
+              <option value="kicad">KiCad (kicad-cli)</option>
+            </select>
+            <button onClick={runErc} disabled={running}>
+              {running ? "Running…" : "Run ERC"}
+            </button>
+            {state.erc?.engine && <span style={{ color: "var(--chrome-text-dim)" }}>{state.erc.engine}</span>}
+            {runError && <span style={{ color: "var(--chrome-danger)" }}>{runError}</span>}
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, fontSize: 11 }}>
             <span style={{ color: "var(--chrome-text-dim)" }}>Show:</span>
             <label className="toggle">
