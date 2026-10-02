@@ -39,7 +39,7 @@ pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, find_symbol_
 mod erc_style;
 
 mod erc;
-pub use erc::{check_erc, check_erc_excluding, Exclusions};
+pub use erc::{check_erc, check_erc_excluding, default_pin_map, resolve_pin_map, Exclusions};
 
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
@@ -1171,7 +1171,7 @@ mod tests {
             texts: vec![],
             power_symbols: vec![],
             no_connects: vec![], bus_entries: vec![],
-            erc_exclusions: vec![],
+            erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(),
             title_block: None,
             sheets: vec![SheetInstance {
                 id: String::new(),

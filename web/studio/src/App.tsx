@@ -39,6 +39,9 @@ import { SchTextDialog } from "./components/SchTextDialog";
 import { SymbolChooserDialog } from "./components/SymbolChooserDialog";
 import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
+import { SymbolFieldsTableDialog } from "./components/SymbolFieldsTableDialog";
+import { FindReplaceDialog } from "./components/FindReplaceDialog";
+import { SchematicSetupDialog } from "./components/SchematicSetupDialog";
 import { PlotDialog } from "./components/PlotDialog";
 import { GenerateDrillDialog } from "./components/GenerateDrillDialog";
 import { FootprintPositionDialog } from "./components/FootprintPositionDialog";
@@ -198,6 +201,9 @@ function StudioFrame() {
       <SymbolChooserDialog />
       <SymbolPropertiesDialog />
       <AnnotateDialog />
+      <SymbolFieldsTableDialog />
+      <FindReplaceDialog />
+      <SchematicSetupDialog />
       <PlotDialog />
       <GenerateDrillDialog />
       <FootprintPositionDialog />

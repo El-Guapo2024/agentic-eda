@@ -211,6 +211,24 @@ pub struct SchematicSection {
     /// location); see [`ErcExclusion`]'s own doc for why it has no `id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub erc_exclusions: Vec<ErcExclusion>,
+    /// Per-design ERC pin-to-pin conflict matrix override --
+    /// `ERC_SETTINGS::m_PinMap` (`erc_settings.cpp`), edited by
+    /// `panel_setup_pinmap.cpp`. `None` (every design written before this
+    /// existed) means KiCad's own default map (`m_defaultPinMap`), i.e.
+    /// exactly the table `eda_kicad::erc` has always used. See
+    /// [`ErcPinMap`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub erc_pin_map: Option<ErcPinMap>,
+    /// User-defined symbol fields (`SCH_FIELD`s beyond Reference/Value/
+    /// Footprint/Datasheet), edited from the Symbol Fields Table
+    /// (`dialog_symbol_fields_table.cpp`): reference -> (field name ->
+    /// text). Part-wide, keyed by reference, for the same reason
+    /// `value`/`footprint`/`datasheet` are (every unit of a multi-unit
+    /// part shares them). A key with an empty value is a user-added
+    /// column KiCad's `ApplyData` would also create as an empty field
+    /// (`userAdded`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub user_fields: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
     /// Title block. `None` keeps relying on the caller-supplied
     /// `ExportMeta` (title/date) the way every export always has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -531,6 +549,53 @@ pub struct BusAlias {
     pub name: String,
     pub members: Vec<String>,
 }
+
+/// ERC pin-to-pin conflict matrix: `ERC_SETTINGS::m_PinMap`
+/// (`erc_settings.cpp`), serialized the way KiCad's own `pin_map`
+/// project-file entry is -- a 12x12 grid of `PIN_ERROR` ints (0 = OK,
+/// 1 = warning, 2 = error), row/column in `ELECTRICAL_PINTYPE` order
+/// (input, output, bidirectional, tri_state, passive, free, unspecified,
+/// power_in, power_out, open_collector, open_emitter, no_connect).
+/// `eda_kicad::erc` validates the shape and falls back to the default for
+/// anything malformed, like `ERC_SETTINGS`'s own loader (a grid that is
+/// not `ELECTRICAL_PINTYPES_TOTAL` square is ignored).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErcPinMap {
+    pub matrix: Vec<Vec<u8>>,
+}
+
+impl ErcPinMap {
+    /// KiCad's default map as the owned grid this struct stores.
+    pub fn default_matrix() -> Vec<Vec<u8>> {
+        DEFAULT_ERC_PIN_MAP.iter().map(|r| r.to_vec()).collect()
+    }
+}
+
+const OK: u8 = 0;
+const WAR: u8 = 1;
+const ERR: u8 = 2;
+
+/// KiCad's default pin-to-pin conflict matrix (`erc_settings.cpp`'s
+/// `m_defaultPinMap`), transcribed verbatim: row = first pin's type,
+/// column = second pin's type, in `ELECTRICAL_PINTYPE` order. `OK`/`WAR`/
+/// `ERR` = no error / warning / error, exactly as KiCad ships it.
+#[rustfmt::skip]
+pub const DEFAULT_ERC_PIN_MAP: [[u8; 12]; 12] = [
+    /*         In,  Out, Bid, 3S,  Pas, Free,Uns, PwrI,PwrO,OC,  OE,  NC  */
+    /* In  */ [OK,  OK,  OK,  OK,  OK,  OK,  WAR, OK,  OK,  OK,  OK,  ERR],
+    /* Out */ [OK,  ERR, OK,  WAR, OK,  OK,  WAR, OK,  ERR, ERR, ERR, ERR],
+    /* Bid */ [OK,  OK,  OK,  OK,  OK,  OK,  WAR, OK,  WAR, OK,  WAR, ERR],
+    /* 3S  */ [OK,  WAR, OK,  OK,  OK,  OK,  WAR, WAR, ERR, WAR, WAR, ERR],
+    /* Pas */ [OK,  OK,  OK,  OK,  OK,  OK,  WAR, OK,  OK,  OK,  OK,  ERR],
+    /* Free*/ [OK,  OK,  OK,  OK,  OK,  OK,  OK,  OK,  OK,  OK,  OK,  ERR],
+    /* Uns */ [WAR, WAR, WAR, WAR, WAR, OK,  WAR, WAR, WAR, WAR, WAR, ERR],
+    /*PwrI */ [OK,  OK,  OK,  WAR, OK,  OK,  WAR, OK,  OK,  OK,  OK,  ERR],
+    /*PwrO */ [OK,  ERR, WAR, ERR, OK,  OK,  WAR, OK,  ERR, ERR, ERR, ERR],
+    /* OC  */ [OK,  ERR, OK,  WAR, OK,  OK,  WAR, OK,  ERR, OK,  OK,  ERR],
+    /* OE  */ [OK,  ERR, WAR, WAR, OK,  OK,  WAR, OK,  ERR, OK,  OK,  ERR],
+    /* NC  */ [ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR, ERR],
+];
 
 /// An accepted ERC finding (`dialog_erc.cpp`'s own "Exclude this
 /// violation" / `SCHEMATIC::RecordERCExclusions`): `(check, location)`
@@ -2888,7 +2953,7 @@ mod tests {
                 power_symbols: vec![],
                 no_connects: vec![],
                 bus_entries: vec![],
-                erc_exclusions: vec![], imported_from_kicad: false,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![],
@@ -3251,5 +3316,28 @@ mod tests {
         assert!(d.symbol_library.is_none());
         d.assign_missing_ids();
         assert!(d.symbol_library.is_none(), "assign_missing_ids must not create a section that was never there");
+    }
+    /// Additive IR: a `design.json` written before `erc_pin_map` /
+    /// `user_fields` existed still parses (absent = KiCad default / no user
+    /// fields) and re-serializes without them; set values round-trip.
+    #[test]
+    fn erc_pin_map_and_user_fields_are_additive_in_the_json() {
+        let old = r#"{"symbols":[],"wires":[]}"#;
+        let sch: SchematicSection = serde_json::from_str(old).unwrap();
+        assert!(sch.erc_pin_map.is_none());
+        assert!(sch.user_fields.is_empty());
+        let back = serde_json::to_string(&sch).unwrap();
+        assert!(!back.contains("erc_pin_map") && !back.contains("user_fields"), "absent stays absent: {back}");
+
+        let mut sch = sch;
+        let mut matrix = ErcPinMap::default_matrix();
+        matrix[1][1] = 0;
+        sch.erc_pin_map = Some(ErcPinMap { matrix });
+        sch.user_fields.entry("R1".into()).or_default().insert("MPN".into(), "ERJ-3".into());
+        let json = serde_json::to_string(&sch).unwrap();
+        let round: SchematicSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(round.erc_pin_map, sch.erc_pin_map);
+        assert_eq!(round.user_fields, sch.user_fields);
+        assert_eq!(round.erc_pin_map.unwrap().matrix[1][1], 0);
     }
 }

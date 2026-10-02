@@ -242,6 +242,76 @@ explicit-selection scope leaving everything else untouched).
 |---|---|---|
 | Ctrl+Z/Y on the Schematic tab only ever reverts/replays that tab's own edits (a clean no-op once its own stack is empty, never a silent PCB revert) | identical | Internal fix, no KiCad source counterpart (KiCad has genuinely separate editor processes/undo buffers; this app has one shared `design.json`). `crates/ops::Domain` + `Cmd::domain`, `crates/cli/src/board.rs`'s `push_snapshot`/`pop_snapshot`/`restore_domain` (tag each undo-stack entry by domain, splice only that domain's fields back on restore), `POST /api/undo`/`/api/redo`'s new `{"domain": ...}` body, `store.tsx`'s `api.undo`/`redo` (always pass `state.tab`). Proven by `board.rs`'s `undo_redo_are_scoped_to_the_tab_that_asked` test: one PCB edit + one schematic edit, every undo/redo combination checked. `eda board undo`/`redo` (CLI, no tab concept) keep the original unscoped behavior (`scope: None`) |
 
+## 7. Symbol Fields Table (`dialog_symbol_fields_table.cpp`, `fields_data_model.cpp`)
+
+`Tools > Bulk Edit Symbol Fields...` (`eeschema.EditorControl.editSymbolFields`,
+already in `sch_menus.json`/`sch_toolbars.json`, previously disabled) opens
+`SymbolFieldsTableDialog.tsx`. The grid model is ported to Rust
+(`crates/ops/src/fields_table.rs`) and served by `POST /api/sch/fields_table`;
+the staging of edits is a small pure TS module
+(`kicad-port/fieldsTableStage.ts`, tested). KiCad's own source was read from
+the `kicad-src` snapshot (commit `8303b2ad`).
+
+| Action | Status | KiCad file:function ↔ our code |
+|---|---|---|
+| Grid of all symbols × fields (Reference, Qty, Value, Footprint, Datasheet, user fields) | partial — covers the design's symbols (the root sheet's `design.schematic`), no scope selector; no attribute columns | `FIELDS_EDITOR_GRID_DATA_MODEL::RebuildRows`/`GetValue` ↔ `fields_table::build_table`, `POST /api/sch/fields_table` |
+| "Group symbols" + per-column "Group By" (default Value + Footprint = "Grouped By Value and Footprint") | identical | `groupMatch`/`unitMatch`/`BOM_PRESET::GroupedByValueFootprint` ↔ `Model::group_match`, `unit_match`, `TableSpec::default_editing` |
+| Collapsed references `R1-R3, R5` (grid: `", "` / `"-"`; export: configurable) | identical, incl. KiCad's quirks: a run of exactly two is listed (`R1, R2`) not ranged; an empty range delimiter disables ranges; references sorted with `StrNumCmp`; other units of a multi-unit symbol de-duplicated | `SCH_REFERENCE_LIST::Shorthand` ↔ `fields_table::shorthand` (unit tests in `fields_table.rs`) |
+| `${QUANTITY}` column, `${ITEM_NUMBER}`, "-- mixed values --" for a group whose members disagree | identical (Qty column shown by default; Item number is computed server-side but has no default column) | `GetValue(group, ...)`, `INDETERMINATE_STATE` |
+| Expand/collapse a group into its per-symbol rows | identical in effect (child rows are read-edit rows of one symbol) | `ExpandRow`/`CollapseRow` ↔ `TableRow::children` |
+| Show/hide columns, click header to sort, filter box | partial — sort uses a simplified `ValueStringCompare` (leading text, then number with SI suffix incl. `4k7`, then text); the filter is a case-insensitive substring (or `*`/`?` wildcard containment) rather than the full `EDA_COMBINED_MATCHER` | `Sort`/`cmp`/`ValueStringCompare`, `m_filter` ↔ `build_table`, `value_string_compare` |
+| Add / rename / remove user field columns | identical; user fields live in new `SchematicSection::user_fields` (`#[serde(default)]`, reference → name → text, part-wide like Value/Footprint) rather than per placed unit; an added column creates the (empty) field on every symbol (`userAdded`); a removed column erases it everywhere; Reference/Value/Footprint/Datasheet/`${...}` cannot be renamed/removed | `AddColumn`/`RenameColumn`/`RemoveColumn`, `ApplyData` ↔ `fields_table::apply_field_changes` |
+| Inline cell edit (not Reference, not generated columns); editing a group row sets every symbol in it | identical | `FIELDS_EDITOR_GRID_DATA_MODEL::SetValue` ↔ `SymbolFieldsTableDialog.tsx` `commitCell` → `stageEdit` per ref |
+| Staged edits regroup the table before Apply; Apply commits; Close with unapplied edits asks | identical in effect — the server overlays the staged changes on the schematic *without saving* (`m_dataStore` equivalent) | `m_dataStore`, `OnClose`/`HandleUnsavedChanges` ↔ `staged_schematic` in `sch_api.rs`, `window.confirm` |
+| Apply is one undoable step | identical | `ApplyData` + one `SCH_COMMIT` ↔ `Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields }` (applied remove → rename → add → edits; atomic — an invalid part refuses the whole batch). Undo = the existing snapshot undo, schematic scope |
+| Rename / delete a symbol carries its user fields along | identical | `rename_symbol` / `delete_symbol` in `crates/ops` move/drop `user_fields[ref]` |
+| Export tab: format presets CSV / TSV / Semicolons, field/string/reference/range delimiters, keep tabs, keep line breaks, live preview, write file | identical output format (`BOM_FMT_PRESET::CSV()` etc., doubled embedded string delimiters, `\n` after the last shown column, hidden columns omitted, children not exported, mixed values listed comma-separated) | `FIELDS_EDITOR_GRID_DATA_MODEL::Export`, `BOM_FMT_PRESET`, `OnExport` ↔ `fields_table::export_bom`, `BomFmt`, `POST /api/sch/bom_export` (separate from, and richer than, `POST /api/fab/bom`/`eda_fab::bom_csv`, which stays the JLC-style quick BOM) |
+| Export target path | partial — relative to the board directory only (no `..`, no absolute path: a studio served over HTTP must not write anywhere); default `export/<intent>-bom.csv`; no `${VAR}` expansion, no file browser | `OnExport`, `EnsureFileDirectoryExists` ↔ `sch_api::safe_relative` |
+| Attribute columns (`${DNP}`, `${EXCLUDE_FROM_BOM}`, ...), "Exclude DNP" / "Include excluded from BOM" filters, variants | missing — the IR has no DNP / BOM-exclusion attributes or variants | `BOM_PRESET::excludeDNP`, `isAttribute` |
+| Saved view presets ("Grouped By Value" etc.), field name templates sidebar, scope (sheet / recursive), "Add field from library", 'Sidebar' | missing — the view (columns, grouping, sort, filter) resets to the default each time the dialog opens | `BOM_PRESET`, `m_scope` |
+
+## 8. Find / Find and Replace (`sch_find_replace_tool.cpp`, `eda_item.cpp`, `dialog_sch_find.cpp`)
+
+`Ctrl+F` (Find), `Ctrl+Alt+F` (Find and Replace), `F3` / `Shift+F3` (Find
+Next / Previous) -- all four are the hotkeys already in `actions.json`
+(KiCad's real defaults), registered on the Schematic tab only. Note
+`Ctrl+H` is KiCad's *Hierarchy Navigator* (`eeschema.EditorTool.showHierarchy`),
+not Replace, so it is deliberately not rebound. Matching/replacing is Rust
+(`crates/ops/src/search.rs`, `POST /api/sch/find`); cycling is the pure,
+tested `kicad-port/schFind.ts` + `components/schematic/findNavigation.ts`.
+
+| Action | Status | KiCad file:function ↔ our code |
+|---|---|---|
+| Plain / Whole word / Wildcard (`*`, `?`) matching, Match case | identical (word chars = alphanumeric or `_`; wildcard = whole-string `wxString::Matches`; case-insensitive by default via upper-casing both sides) | `EDA_ITEM::Matches( aText, aSearchData )` ↔ `search::matches_text`, `wild_match` |
+| Regex mode, permissive mode | missing — the workspace carries no regex engine (and the eeschema dialog exposes regex only as an optional checkbox) | `EDA_SEARCH_MATCH_MODE::REGEX`/`PERMISSIVE` |
+| Search all fields (hidden fields too) | partial — the IR has no per-field visibility, so KiCad's template defaults apply: Reference/Value visible; Footprint, Datasheet and user fields hidden (found only with the option) | `SCH_FIELD::Matches` (`searchAllFields`) ↔ `search::field_visible` |
+| Reference field matches when its *symbol* matches; skipped in replace mode unless "Replace in references" | identical | `SCH_FIELD::Matches` → `SCH_SYMBOL::Matches`, `replaceReferences` ↔ `search::find_items` |
+| Labels match on their text; net names; free text | partial — a label's net name is its own text here, so "Search net names" only adds *pin* net-name matches (via the intent's nets); `CTX_NETNAME` escaping of find/replace strings is not applied | `SCH_LABEL_BASE::Matches`/`Replace`, `SCH_TEXT` ↔ `search::find_items` |
+| Search pins (name/number) and pin net names; pins never replaceable | identical in effect (pins match only outside replace mode) | `SCH_PIN::Matches`/`Replace` |
+| Sheet names/pins/fields, symbol metadata (library name/description/keywords), "Find Next Marker" | missing | `SCH_SHEET`/`searchMetadata`/`markersOnly` |
+| Match order & cycling: ascending x then y, reverse for Previous; at the end "Reached end of schematic. Find again to wrap around to the start." and the next Find wraps | identical in order and wrap behavior; every field of a symbol sits at the symbol's own position (no per-field position in the IR), ties keep field order | `SCH_FIND_REPLACE_TOOL::nextMatch`/`FindNext` ↔ `find_items`, `pickMatch` |
+| Each hit is selected, highlighted and the view re-centered on it (zoom kept) | identical in spirit (same select + `FocusOnLocation` pair; the "force visible" brightening is the app's existing hot/selection highlight) | `FindNext`: `AddItemToSel`, `BrightenItem`, `FocusOnLocation` ↔ `findNavigation.ts::visitMatch` (the ERC dialog's `jumpTo` pattern) |
+| "Search only selected objects" | identical for find and replace-all (scope = selected owner ids) | `searchSelectedOnly` |
+| "Current sheet only" | not applicable — one sheet's schematic is searched/edited | `searchCurrentSheetOnly` |
+| Replace (current match, then Find Next) / Replace All, undoable | identical; `Cmd::ReplaceText { search, items }` is one verb (all matches → one undo step; one `items` key → "Replace"); a Reference replace renames the symbol with the same cascade as `RenameSymbol`; refused (`ops_nothing_to_replace`) when nothing matched; replacing a label to empty is refused | `ReplaceAndFindNext`, `ReplaceAll`, `EDA_ITEM::Replace` ↔ `Board::replace_text`, `search::replace_text` (case-insensitive search copies the *original* text around hits, as the source does) |
+
+## 9. ERC pin-conflict matrix (`panel_setup_pinmap.cpp`, `erc_settings.cpp`)
+
+`File > Schematic Setup...` (`eeschema.EditorControl.schematicSetup`,
+already in the menu/toolbar, previously disabled) opens
+`SchematicSetupDialog.tsx`, which currently holds the one page that has a
+backing setting: Electrical Rules > Pin Conflicts Map.
+
+| Action | Status | KiCad file:function ↔ our code |
+|---|---|---|
+| The pin map is a per-design setting used by ERC | identical — stored additively as `schematic.erc_pin_map: Option<ErcPinMap>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`; 12×12 `PIN_ERROR` ints like KiCad's `pin_map` project entry); absent = KiCad's default table; a malformed grid is ignored, an out-of-range cell keeps its default | `ERC_SETTINGS::m_PinMap`/`m_defaultPinMap`, `pin_map` loader ↔ `eda_model::ir::ErcPinMap`/`DEFAULT_ERC_PIN_MAP` (the table moved from `erc.rs`'s private `MATRIX` into the IR crate so there is one copy), `eda_kicad::resolve_pin_map`, `check_pin_to_pin` |
+| 11×11 lower-triangle grid (NC excluded: "generates errors separately"), row/column labels | identical | `PANEL_SETUP_PINMAP::reBuildMatrixPanel`, `CommentERC_H/V` ↔ `SchematicSetupDialog.tsx`, `kicad-port/ercPinMap.ts` |
+| Click a cell cycles OK → Warning → Error → OK, symmetric | identical (green ✓ / amber ! / red ×, with the source's tooltips) | `changeErrorLevel` (`( level + 1 ) % 3`, `SetPinMapValue( y, x )` and `( x, y )`) ↔ `Cmd::SetErcPinMapCell { a, b, level }` (undoable, schematic scope) |
+| "Reset to Defaults" | identical (stored as an absent `erc_pin_map`; refused when already default; undoable) | `PANEL_SETUP_PINMAP::ResetPanel`/`ERC_SETTINGS::ResetPinMap` ↔ `Cmd::ResetErcPinMap` |
+| ERC picks it up | identical — an Output↔Output cell set to OK removes the `pin_to_pin` finding, Warning downgrades it (tested in `erc.rs`); the open ERC dialog refreshes through the usual version poll | `ERC_TESTER::TestPinToPin` ↔ `eda_kicad::erc::check_pin_to_pin` |
+| ERC severity per check (Ignore / Warning / Error) | **gap** — does not fall out naturally: `crates/kicad/src/erc.rs` and `erc_style.rs` hard-code each check's `Fail`/`Warn` status inside ~30 separate `check_*` functions with no severity table to override, and `Ignore` has no representation in `CheckStatus`. Needs a per-check severity map in the IR plus a post-pass like `check_erc_excluding`'s | `panel_setup_severities.cpp`, `ERC_SETTINGS::m_ERCSeverities` |
+| Other Schematic Setup pages (general, formatting, annotation, field templates, net classes, text variables, bus aliases, ...) | missing — not shown as dead tabs | `dialog_schematic_setup.cpp` |
+
 ## Manual click-through needed
 
 The in-app browser pane could not be used this session (hidden pane, per
@@ -423,3 +493,47 @@ click through:
     no dot and are not merged onto one net -- this is correct,
     unchanged, real-KiCad-matching behavior, not something this session's
     fix should have altered.
+22. Symbol Fields Table (Tools > Bulk Edit Symbol Fields...) on a board
+    with several same-valued resistors (e.g. R1, R2, R3, R5 all `10k` with
+    the same footprint) and a few other parts. Confirm the grid opens with
+    "Group symbols" on and one row `R1-R3, R5` (Qty 4) -- and that a run of
+    exactly two reads `R1, R2`. Click the `>` to expand the group into its
+    four child rows. Type a new Value into the group row's Value cell and
+    press Enter: the grid should regroup immediately (still unsaved -- the
+    Apply button is now enabled and the schematic canvas behind has NOT
+    changed). Uncheck "Group" on Value/Footprint to see one row per symbol.
+    Type "MPN" into "New field name" and click Add Field, fill a cell, then
+    Apply: confirm the toast, that the canvas/E-dialog shows the new Value,
+    and that ONE Ctrl+Z (Schematic tab) reverts the whole batch (all cell
+    edits and the added MPN column). Rename and Del a user column (Ren /
+    Del buttons), Apply, and confirm the values moved/vanished. Try to edit
+    a Reference or Qty cell (should be read-only). Close with staged edits
+    and confirm the "Discard?" prompt.
+23. Same dialog, Export tab: pick CSV, then TSV, then Semicolons and watch
+    the preview change (CSV quotes every field with `"`, references joined
+    with `,`; TSV has no quotes). Put `-` in "Ref range delimiter" and
+    confirm `R1-R3,R5`. Turn off a column's Show checkbox on the Edit tab
+    and confirm it disappears from the preview. Click Export with the
+    default path and confirm `<board dir>/export/<intent>-bom.csv` exists
+    and matches the preview; type `../x.csv` and confirm it is refused.
+24. Press `Ctrl+F` on the Schematic tab, search `10k`: Find Next should
+    select + re-center on each matching symbol in left-to-right order, and
+    after the last one say "Reached end of schematic. Find again to wrap
+    around to the start." (the next press wraps). `Shift+F3` goes backward
+    and `F3` works with the dialog closed. Search a footprint name: no
+    result until "Search all fields (incl. hidden)" is ticked. Check Whole
+    word (`R1` must not hit `R10`) and Wildcards (`R*`, `?1`). Open
+    `Ctrl+Alt+F`, search `10k` replace `47k`, click Replace (replaces the
+    current match then jumps to the next), then Replace All; confirm the
+    Values changed and that Ctrl+Z reverts the Replace All in one step.
+    Replace `R1` -> `R9` with "Replace in reference designators" off (nothing
+    happens) and on (symbol renamed, wires stay attached).
+25. File > Schematic Setup...: confirm the 11-row triangle with labelled
+    rows/columns and that Output/Output starts as a red `x`. Click it once
+    (-> green check), run ERC on a net joining two output pins: the
+    `pin_to_pin` finding should be gone; click again (amber `!`: warning),
+    again (red: error). Confirm clicking Input/Output mirrors nothing odd
+    (the grid shows only one cell per pair; ERC applies it both ways).
+    "Reset to Defaults" restores the original and is disabled when already
+    default; Ctrl+Z on the Schematic tab undoes a cell click. Reload the page:
+    the customized map persists (`design.json` -> `schematic.erc_pin_map`).

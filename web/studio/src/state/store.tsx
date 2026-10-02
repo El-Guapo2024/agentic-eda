@@ -7,7 +7,8 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import { defaultSearch } from "../kicad-port/schFind";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -30,6 +31,9 @@ export type RightDockTab = "appearance" | "filter" | "activity";
  * this file's -- see that file's own header comment.
  */
 export type EditorTab = "pcb" | "schematic" | "footprint" | "symbol" | "3d";
+
+/** `StudioState.schDialog`: which schematic tool dialog is open (null = none). "find"/"replace" are the same dialog (DIALOG_SCH_FIND) with the replace controls shown or not. */
+export type SchDialog = "fields_table" | "find" | "replace" | "setup" | null;
 
 /**
  * A minimal active-tool state -- just enough to give the status bar's
@@ -464,6 +468,10 @@ export interface StudioState {
   symbolProperties: { id: string; field: "reference" | "value" | "footprint" | "datasheet" | null } | null;
   /** `Ctrl+A`: AnnotateDialog's own open/closed flag (dialog_annotate.cpp's scope/order/reset options). */
   annotateDialogOpen: boolean;
+  /** Which of the Symbol Fields Table / Find / Find and Replace / Schematic Setup dialogs is open (eeschema's editSymbolFields / find / findAndReplace / schematicSetup actions) -- one slot because they are never open together. */
+  schDialog: SchDialog;
+  /** Find / Replace's last search (`SCH_EDIT_FRAME::GetFindReplaceData`) plus its `m_afterItem` cursor (the key of the last visited match) -- shared by the dialog and F3 / Shift+F3 so Find Next works with the dialog closed. */
+  schFind: { search: SchSearchData; cursor: string | null; status: string };
   /** `A`: the symbol SymbolChooserDialog confirmed, waiting for a canvas click to place it (`sch_place_symbol` tool) -- `referencePrefix` seeds `nextReference`'s own next-free-number placement (this app's own choice: a real id immediately, not a "U?" placeholder -- see `Cmd::AddSymbol`'s doc and PARITY-sch.md). `unit`: which unit of a multi-unit symbol to place (the chooser's own unit picker, shown when `SymbolLibraryEntry.unit_count > 1`; omitted/1 for a single-unit part). */
   armedSymbol: { libId: string; referencePrefix: string; unit?: number } | null;
   /** `createNewLabel`'s own "last text used" (`m_lastTextOrientation`-style session memory, see `incrementLabelText`) -- seeds the next LabelDialog with an auto-incremented suggestion instead of starting blank every time, so placing a same-shaped bus of labels (DATA0, DATA1, DATA2...) doesn't mean re-typing the whole name each click. */
@@ -669,6 +677,8 @@ const initialState: StudioState = {
   armedSymbol: null,
   symbolProperties: null,
   annotateDialogOpen: false,
+  schDialog: null,
+  schFind: { search: defaultSearch(), cursor: null, status: "" },
   lastLabelText: "",
   lastPowerLibId: "power:GND",
   view: { scale: 0, x: 0, y: 0 },
@@ -809,6 +819,8 @@ export type Action =
   | { type: "SET_ARMED_SYMBOL"; symbol: StudioState["armedSymbol"] }
   | { type: "SET_SYMBOL_PROPERTIES"; value: StudioState["symbolProperties"] }
   | { type: "SET_ANNOTATE_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_SCH_DIALOG"; dialog: SchDialog }
+  | { type: "SET_SCH_FIND"; find: Partial<StudioState["schFind"]> }
   | { type: "SET_CLIPBOARD"; clipboard: ClipboardContents | null }
   | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
@@ -1093,6 +1105,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, symbolProperties: action.value };
     case "SET_ANNOTATE_DIALOG_OPEN":
       return { ...state, annotateDialogOpen: action.open };
+    case "SET_SCH_DIALOG":
+      return { ...state, schDialog: action.dialog };
+    case "SET_SCH_FIND":
+      return { ...state, schFind: { ...state.schFind, ...action.find } };
     case "SET_CLIPBOARD":
       return { ...state, clipboard: action.clipboard };
     case "SET_MOVE_EXACT_DIALOG_OPEN":
