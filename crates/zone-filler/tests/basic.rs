@@ -117,7 +117,7 @@ fn island_removal_always_drops_the_disconnected_half() {
 #[test]
 fn higher_priority_same_net_zone_takes_its_area() {
     let zone = Zone { priority: 0, ..test_zone("GND", rect_outline(0, 0, 1000, 1000)) };
-    let input = FillInput { other_zones: vec![FillZoneRef { net: Some("GND".into()), layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)), priority: 1 }], ..Default::default() };
+    let input = FillInput { other_zones: vec![FillZoneRef { net: Some("GND".into()), layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)), priority: 1, teardrop: false }], ..Default::default() };
 
     let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
     assert!(!poly_set_contains_pt(&fill, Point64::new(500, 500)), "higher-priority same-net zone should own its area");
@@ -131,7 +131,7 @@ fn different_net_zone_gets_a_clearance_gap_not_an_exact_cut() {
     // `aKnockout->HigherPriority(aZone)` gate) -- equal priority (the
     // default for both zones here otherwise) knocks out neither.
     let zone = Zone { priority: 0, ..test_zone("GND", rect_outline(0, 0, 1000, 1000)) };
-    let input = FillInput { other_zones: vec![FillZoneRef { net: Some("VCC".into()), layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)), priority: 1 }], ..Default::default() };
+    let input = FillInput { other_zones: vec![FillZoneRef { net: Some("VCC".into()), layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)), priority: 1, teardrop: false }], ..Default::default() };
 
     let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
     assert!(!poly_set_contains_pt(&fill, Point64::new(500, 500)));

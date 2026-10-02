@@ -1063,22 +1063,20 @@ fn is_edge_cuts(item: &[Sexpr]) -> bool {
 /// lines/rects/arcs to chain end-to-end into a loop. See [`ImportNotes`]
 /// for which one was used (and whether chaining actually closed).
 fn import_outline(root: &[Sexpr], notes: &mut ImportNotes) -> Vec<Point> {
-    let polys: Vec<&[Sexpr]> = sexpr::find_all(root, "gr_poly").filter(|it| is_edge_cuts(it)).collect();
-    if polys.len() == 1 {
-        if let Some(pts) = poly_points(polys[0]) {
-            notes.outline_source = "poly";
-            return pts;
+    // `BOARD::GetBoardPolygonOutlines`: every closed Edge.Cuts contour is a
+    // candidate, and the board outline is the outer one -- the others are
+    // holes/cutouts inside it. Candidates here: each `gr_poly`, each
+    // `gr_circle`, and the loop chained from `gr_line`/`gr_rect`/`gr_arc`
+    // edges; the largest by area wins.
+    let mut candidates: Vec<(Vec<Point>, &'static str, bool)> = Vec::new();
+    for poly in sexpr::find_all(root, "gr_poly").filter(|it| is_edge_cuts(it)) {
+        if let Some(pts) = poly_points(poly) {
+            candidates.push((pts, "poly", true));
         }
     }
-
-    let circles: Vec<&[Sexpr]> = sexpr::find_all(root, "gr_circle").filter(|it| is_edge_cuts(it)).collect();
-    let any_other = sexpr::find_all(root, "gr_line").any(is_edge_cuts)
-        || sexpr::find_all(root, "gr_rect").any(is_edge_cuts)
-        || sexpr::find_all(root, "gr_arc").any(is_edge_cuts);
-    if circles.len() == 1 && !any_other {
-        if let Some(pts) = circle_points(circles[0]) {
-            notes.outline_source = "circle";
-            return pts;
+    for c in sexpr::find_all(root, "gr_circle").filter(|it| is_edge_cuts(it)) {
+        if let Some(pts) = circle_points(c) {
+            candidates.push((pts, "circle", true));
         }
     }
 
@@ -1101,13 +1099,23 @@ fn import_outline(root: &[Sexpr], notes: &mut ImportNotes) -> Vec<Point> {
             edges.push((s, e));
         }
     }
+    if !edges.is_empty() {
+        let (pts, closed) = chain_edges(&edges);
+        candidates.push((pts, "lines", closed));
+    }
 
-    if edges.is_empty() {
+    let area = |pts: &[Point]| -> f64 {
+        let n = pts.len();
+        if n < 3 {
+            return 0.0;
+        }
+        (0..n).map(|i| (pts[i].x as f64) * (pts[(i + 1) % n].y as f64) - (pts[(i + 1) % n].x as f64) * (pts[i].y as f64)).sum::<f64>().abs() / 2.0
+    };
+    let Some((pts, source, closed)) = candidates.into_iter().max_by(|a, b| area(&a.0).total_cmp(&area(&b.0))) else {
         notes.outline_source = "none";
         return Vec::new();
-    }
-    notes.outline_source = "lines";
-    let (pts, closed) = chain_edges(&edges);
+    };
+    notes.outline_source = source;
     notes.outline_open = !closed;
     pts
 }

@@ -68,6 +68,10 @@ fn parity_drc_cached_counts() {
     let raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(repo_root().join("docs/parity/raw/drc.json")).unwrap()).unwrap();
 
     let mut totals: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    // Sum over boards of per-type |kicad - ours|: unlike the per-type
+    // totals, an over-count on one board can't cancel an under-count on
+    // another.
+    let mut board_level_diff = 0usize;
     let mut board_diffs: Vec<(usize, String, String)> = Vec::new();
     for b in raw["boards"].as_array().unwrap() {
         if b["source"] != "qa" || !b["error"].is_null() {
@@ -104,6 +108,7 @@ fn parity_drc_cached_counts() {
                 detail.push(format!("{t} {k}->{o}"));
             }
         }
+        board_level_diff += diff_sum;
         board_diffs.push((diff_sum, name.to_string(), detail.join(", ")));
     }
 
@@ -115,7 +120,7 @@ fn parity_drc_cached_counts() {
         to += o;
         td += k.abs_diff(*o);
     }
-    println!("{:<34} {tk:>7} {to:>7}   |diff| {td}", "TOTAL");
+    println!("{:<34} {tk:>7} {to:>7}   |diff| {td}  per-board |diff| {board_level_diff}", "TOTAL");
     board_diffs.sort_by(|a, b| b.0.cmp(&a.0));
     println!("\nboards by |diff|:");
     for (d, n, detail) in board_diffs.iter().take(25) {
@@ -161,4 +166,26 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+/// Debug helper: per-zone fill summary for one board.
+///   PARITY_BOARD=issue21482 cargo test ... dump_fills -- --ignored --nocapture
+#[test]
+#[ignore]
+fn dump_fills() {
+    let (Some(qa), Ok(board)) = (std::env::var_os("EDA_KICAD_QA_BOARDS").map(PathBuf::from), std::env::var("PARITY_BOARD")) else {
+        return;
+    };
+    let pcb = walk(&qa).into_iter().find(|p| p.to_string_lossy().contains(&board) && p.extension().is_some_and(|e| e == "kicad_pcb")).expect("board");
+    let (design, model, _) = import_kicad_pcb(&std::fs::read_to_string(&pcb).unwrap()).unwrap();
+    let b = eda_drc::board::build(&design, &model);
+    let fills = eda_drc::fill::fill_all_zones(&b, &model.board);
+    let limit: usize = std::env::var("PARITY_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(10);
+    let xs: Vec<i64> = b.outline.iter().map(|p| p.x).collect();
+    let ys: Vec<i64> = b.outline.iter().map(|p| p.y).collect();
+    println!("outline pts={} bbox=({:?},{:?})-({:?},{:?})", b.outline.len(), xs.iter().min(), ys.iter().min(), xs.iter().max(), ys.iter().max());
+    for z in b.zones.iter().take(limit) {
+        let f = fills.get(&z.id);
+        println!("{} net={:?} layer={} teardrop={} outline_pts={} min_thick={} fill_polys={:?} area={:?}", z.id, z.net, z.layer, z.teardrop, z.outline.len(), z.min_thickness, f.map(|f| f.polys.len()), f.map(|f| f.area()));
+    }
 }

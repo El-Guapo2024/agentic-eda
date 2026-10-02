@@ -91,6 +91,9 @@ pub struct FillZoneRef {
     pub layer: String,
     pub outline: LineChain,
     pub priority: u32,
+    /// `ZONE::IsTeardropArea()`: never subtracted as a higher-priority
+    /// same-net zone (`subtractHigherPriorityZones`).
+    pub teardrop: bool,
 }
 
 /// A rule area (keepout) that disallows copper pours under it
@@ -197,7 +200,8 @@ where
             continue;
         }
 
-        let same_net = zone_net.is_some() && pad.net.as_deref() == zone_net;
+        // `if( !aZone->IsTeardropArea() && aZone->GetNetCode() == 0 ) sameNet = false;`
+        let same_net = pad.net.as_deref() == zone_net && (zone_net.is_some() || zone.teardrop);
 
         if !same_net {
             let gap = clearance_fn(zone_net, pad.net.as_deref()).max(zone.clearance);
@@ -242,7 +246,8 @@ where
         if !bboxes_intersect(tb, zone_bbox) {
             continue;
         }
-        let same_net = zone_net.is_some() && track.net.as_deref() == zone_net;
+        // `if( !aZone->IsTeardropArea() && aZone->GetNetCode() == 0 ) sameNet = false;`
+        let same_net = track.net.as_deref() == zone_net && (zone_net.is_some() || zone.teardrop);
         if !same_net {
             let gap = clearance_fn(zone_net, track.net.as_deref()).max(zone.clearance);
             add_knockout(&mut clearance_holes, &shape, gap, max_error);
@@ -259,7 +264,8 @@ where
         if !bboxes_intersect(vb, zone_bbox) {
             continue;
         }
-        let same_net = zone_net.is_some() && via.net.as_deref() == zone_net;
+        // `if( !aZone->IsTeardropArea() && aZone->GetNetCode() == 0 ) sameNet = false;`
+        let same_net = via.net.as_deref() == zone_net && (zone_net.is_some() || zone.teardrop);
         if !same_net {
             let gap = clearance_fn(zone_net, via.net.as_deref()).max(zone.clearance);
             add_knockout(&mut clearance_holes, &shape, gap, max_error);
@@ -289,7 +295,8 @@ where
         if !bboxes_intersect(ob, zone_bbox) {
             continue;
         }
-        let same_net = zone_net.is_some() && other.net.as_deref() == zone_net;
+        // `ZONE::SameNet`: net-code equality, so two netless zones match.
+        let same_net = other.net.as_deref() == zone_net;
         // `buildDifferentNetZoneClearances`'s `knockoutZoneClearance`:
         // `if (aKnockout->HigherPriority(aZone) && !aKnockout->SameNet(aZone))`
         // -- a zone is only ever knocked out by an *other*, same-layer zone
@@ -302,7 +309,9 @@ where
             continue;
         }
         if same_net {
-            higher_priority_same_net.add_outline(other.outline.clone());
+            if !other.teardrop {
+                higher_priority_same_net.add_outline(other.outline.clone());
+            }
         } else {
             // `knockoutZoneClearance` itself computes just
             // `max(PHYSICAL_CLEARANCE_CONSTRAINT, CLEARANCE_CONSTRAINT)`

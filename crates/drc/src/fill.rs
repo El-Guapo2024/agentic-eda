@@ -115,6 +115,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
             priority: z.priority,
             island_removal_mode: z.island_removal_mode,
             min_island_area: z.min_island_area,
+            teardrop: z.teardrop,
             ..Zone::default()
         };
 
@@ -122,7 +123,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
             .zones
             .iter()
             .filter(|o| !std::ptr::eq(*o, z))
-            .map(|o| FillZoneRef { net: o.net.clone(), layer: o.layer.clone(), outline: o.outline.iter().map(|&p| pt(p)).collect(), priority: o.priority })
+            .map(|o| FillZoneRef { net: o.net.clone(), layer: o.layer.clone(), outline: o.outline.iter().map(|&p| pt(p)).collect(), priority: o.priority, teardrop: o.teardrop })
             .collect();
 
         // Copper-pour keepouts on this zone's own layer (task item 3) --
