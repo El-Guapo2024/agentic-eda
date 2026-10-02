@@ -144,7 +144,9 @@ fn split(chain: &mut Vec<Point>, closed: bool, p: Point) {
         }
     }
     if let Some((d, i)) = best {
-        if d <= 1 {
+        // KiCad `Split`: `Distance < 2` with `Distance = isqrt( sqdist )`
+        // (floor), i.e. squared distance <= 3 (shape_line_chain.cpp:1203-1210).
+        if d <= 3 {
             chain.insert(i + 1, p);
         }
     }
@@ -387,6 +389,61 @@ mod tests {
 
     fn square(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<Point> {
         make_clockwise(vec![Point { x: x0, y: y0 }, Point { x: x1, y: y0 }, Point { x: x1, y: y1 }, Point { x: x0, y: y1 }])
+    }
+
+    /// D3 repro from docs/parity/CODE-COMPARE-router.md: the exit crossing
+    /// used to be dropped, so the path went straight through the hull.
+    #[test]
+    fn walkaround_does_not_cut_through_hull_d3_repro() {
+        let pt = |x, y| Point { x, y };
+        let line = [pt(403, 5139), pt(9992, 5639)];
+        let hull = make_clockwise(vec![pt(5157, 5508), pt(4849, 5386), pt(4717, 5082), pt(4839, 4774), pt(6502, 4054), pt(6810, 4176), pt(6942, 4480), pt(6820, 4788)]);
+        for cw in [true, false] {
+            let path = walkaround(&line, &hull, cw).unwrap();
+            assert!(path.len() > 3, "cw={cw} {path:?}");
+        }
+    }
+
+    /// D3: random chords against random convex octagons must never produce
+    /// a path whose segments run through the hull interior.
+    #[test]
+    fn walkaround_random_chords_never_enter_convex_hull() {
+        let mut seed = 0x1234_5678_9abc_def0u64;
+        let mut rnd = |m: i64| -> i64 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as i64) % m
+        };
+        let mut bad = 0;
+        for _ in 0..3000 {
+            let (cx, cy, r) = (5000 + rnd(1000), 5000 + rnd(1000), 300 + rnd(1500));
+            let k = 0.4142f64;
+            let ro = (r as f64 * k) as i64;
+            let hull = make_clockwise(vec![
+                Point { x: cx + ro, y: cy - r }, Point { x: cx + r, y: cy - ro }, Point { x: cx + r, y: cy + ro }, Point { x: cx + ro, y: cy + r },
+                Point { x: cx - ro, y: cy + r }, Point { x: cx - r, y: cy + ro }, Point { x: cx - r, y: cy - ro }, Point { x: cx - ro, y: cy - r },
+            ]);
+            let line = [Point { x: rnd(3000), y: rnd(10000) }, Point { x: 7000 + rnd(3000), y: rnd(10000) }];
+            for cw in [true, false] {
+                let Some(path) = walkaround(&line, &hull, cw) else { continue };
+                for w in path.windows(2) {
+                    for f in [0.25f64, 0.5, 0.75] {
+                        let (x, y) = (w[0].x as f64 + (w[1].x - w[0].x) as f64 * f, w[0].y as f64 + (w[1].y - w[0].y) as f64 * f);
+                        let depth = (0..hull.len()).map(|i| {
+                            let (a, b) = (hull[i], hull[(i + 1) % hull.len()]);
+                            let (ex, ey) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+                            let cr = ex * (y - a.y as f64) - ey * (x - a.x as f64);
+                            cr / (ex * ex + ey * ey).sqrt()
+                        });
+                        // hull is clockwise (y up): interior has all-negative or all-positive cross; use sign-agnostic min of |.| when same sign
+                        let d: Vec<f64> = depth.collect();
+                        if (d.iter().all(|v| *v < -3.0)) || (d.iter().all(|v| *v > 3.0)) {
+                            bad += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(bad, 0, "walkaround paths entered the hull");
     }
 
     #[test]

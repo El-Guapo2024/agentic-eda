@@ -239,7 +239,7 @@ impl Dragger {
     /// `MarkObstacles` if still colliding). `None` on refusal.
     pub fn finish(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> Option<DragCommit> {
         let preview = self.preview(node, rules, settings, to);
-        if preview.colliding && settings.mode != Mode::MarkObstacles {
+        if preview.colliding && !settings.allow_drc_violations() {
             return None;
         }
         let (_, fanout) = self.candidate(node, to);

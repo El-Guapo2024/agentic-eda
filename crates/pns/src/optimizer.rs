@@ -87,8 +87,11 @@ fn merge_step(pts: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32
     let cost_orig = corner_cost(pts);
     for n in 0..=(seg_count - step - 1) {
         let (p_a, p_b) = (pts[n], pts[n + step + 1]);
-        let mut best: Option<(Vec<eda_model::ir::Point>, i64)> = None;
-        for start_diagonal in [false, true] {
+        // KiCad `mergeStep`: cost[i] = INT_MAX unless the bypass is valid;
+        // each valid candidate is `Simplify2`d before `CornerCost`.
+        let mut path: [Option<Vec<eda_model::ir::Point>>; 2] = [None, None];
+        let mut cost = [i64::MAX; 2];
+        for (i, start_diagonal) in [false, true].into_iter().enumerate() {
             let bypass = Direction45::Undefined.build_initial_trace(p_a, p_b, start_diagonal, CornerMode::Mitered45);
             let mut candidate = pts[..n].to_vec();
             candidate.extend(bypass);
@@ -96,13 +99,16 @@ fn merge_step(pts: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32
             if collides(node, &candidate, layer, width, net, rules, exclude) {
                 continue;
             }
-            let cost = corner_cost(&candidate);
-            if cost < cost_orig && best.as_ref().map(|(_, c)| cost < *c).unwrap_or(true) {
-                best = Some((candidate, cost));
-            }
+            let mut l = Line::from_points(net.clone(), layer, width, candidate);
+            l.simplify(); // `Simplify2`
+            cost[i] = corner_cost(&l.pts);
+            path[i] = Some(l.pts);
         }
-        if let Some((candidate, _)) = best {
-            return Some(candidate);
+        // `cost[0] < cost_orig && cost[0] < cost[1]`, else `cost[1] < cost_orig`.
+        if cost[0] < cost_orig && cost[0] < cost[1] {
+            return path[0].take();
+        } else if cost[1] < cost_orig {
+            return path[1].take();
         }
     }
     None
@@ -195,7 +201,14 @@ fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: 
 }
 
 /// `mergeFull`: the outer shrinking-span loop around [`merge_step`].
-fn merge_full(mut pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> Vec<eda_model::ir::Point> {
+fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> Vec<eda_model::ir::Point> {
+    if pts.len() < 3 {
+        return pts;
+    }
+    // KiCad `mergeFull`: `line.Simplify2()` before the search.
+    let mut simplified = Line::from_points(net.clone(), layer, width, pts);
+    simplified.simplify();
+    let mut pts = simplified.pts;
     if pts.len() < 3 {
         return pts;
     }
@@ -492,6 +505,16 @@ mod tests {
 
     fn rules() -> BoardRules {
         serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap()
+    }
+
+    /// D11: mergeFull Simplify2s its input, so collinear points are gone
+    /// from the result even when nothing else can be merged.
+    #[test]
+    fn merge_full_simplifies_collinear_points() {
+        let node = Node::new();
+        let pt = |x, y| Point { x, y };
+        let out = merge_full(vec![pt(0, 0), pt(500, 0), pt(1000, 0), pt(1000, 1000)], &node, 0, 200, &net_of("SIG"), &rules(), &[]);
+        assert_eq!(out, vec![pt(0, 0), pt(1000, 0), pt(1000, 1000)]);
     }
 
     #[test]

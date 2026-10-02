@@ -229,7 +229,9 @@ impl Router {
         // last point already says exactly where one must be.
         if let Some(s) = self.session() {
             for w in runs.windows(2) {
-                if w[0].last() == w[1].first() {
+                // A real via changes layer; a same-layer shared endpoint is
+                // just an intermediate fix click (D1).
+                if w[0].layer != w[1].layer && w[0].last() == w[1].first() {
                     commit.vias.push(eda_model::ir::Via {
                         id: String::new(),
                         net: net_name.clone(),
@@ -554,6 +556,19 @@ mod tests {
         assert_eq!(commit.tracks[0].layer, "F.Cu");
         assert_eq!(commit.tracks[0].pts.first(), Some(&start_pos));
         assert_eq!(commit.tracks[0].pts.last(), Some(&Point { x: 5175, y: 0 }));
+    }
+
+    /// D1: intermediate fix clicks must not emit vias.
+    #[test]
+    fn multi_click_route_emits_no_fake_vias() {
+        let (design, model) = two_pad_board();
+        let mut router = Router::new(&design, &model);
+        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).unwrap();
+        router.fix(Point { x: 2000, y: 0 });
+        router.fix(Point { x: 2000, y: 1000 });
+        let commit = router.finish(Point { x: 5175, y: 0 }).expect("must finish");
+        assert!(commit.tracks.len() >= 3);
+        assert!(commit.vias.is_empty(), "got vias: {:?}", commit.vias);
     }
 
     #[test]

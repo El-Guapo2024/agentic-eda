@@ -266,6 +266,8 @@ Ordered by impact. "Repro (run)" means the input was executed against the curren
 
 ### D1. Bogus 1 um vias at every intermediate click (router.rs:230-243) -- HIGH, data corruption
 
+**Status: FIXED: `build_commit` only emits a via where consecutive runs change layer (regression test `multi_click_route_emits_no_fake_vias`).**
+
 `Router::build_commit` reconstructs vias from run boundaries: for every window of two consecutive runs with `w[0].last() == w[1].first()` it pushes a `Via` with `diameter: via_diameter.max(1)`, `drill: via_drill.max(1)`. But `LinePlacer::fix` (line_placer.rs:303-318) starts every next head at the previous run's last point on the **same layer**, so every plain intermediate click satisfies the condition.
 
 Repro (run): two-pad board from `router.rs` tests; `start(-825,0)`, `fix((2000,0))`, `fix((2000,1000))`, `finish((5175,0))`. Result: 3 tracks (correct) **and** `vias = [Via{ at:(2000,0), drill:1, diameter:1, F.Cu->F.Cu }, Via{ at:(2000,1000), drill:1, diameter:1, F.Cu->F.Cu }]`. The only existing tests use a single run, which is why this was missed.
@@ -273,6 +275,8 @@ Repro (run): two-pad board from `router.rs` tests; `start(-825,0)`, `fix((2000,0
 Fix: record vias where they are created (`LinePlacer::switch_layer` knows position, diameter, drill and both layers) and emit exactly those; at minimum require `w[0].layer != w[1].layer`.
 
 ### D2. `Node::assemble_line` does not terminate on a closed same-net track loop (node.rs:225-255) -- HIGH, hang + unbounded memory
+
+**Status: FIXED: `assemble_line` ports followLine's guard (stop on return to start anchor, skip backward walk) and the 16384 vertex cap (test `assemble_line_terminates_on_closed_loop`).**
 
 KiCad's `followLine` has `guard` (stop when the walk returns to the start anchor, pns_node.cpp:1100-1107) and `MaxVerts = 16384` (:1131). Ours loops `while let Some(joint) ... next_segment` with neither: in a ring of same-net segments every joint has exactly one other candidate, so `fwd_pts` grows forever.
 
@@ -282,6 +286,8 @@ Fix: port the guard (return to start anchor -> stop and set `guard_hit`, skip th
 
 ### D3. Dropped hull crossing: `Seg::intersect` truncates + `split` tolerance too tight (drc/kimath.rs:176-178, line_walk.rs:147) -- HIGH, wrong geometry
 
+**Status: FIXED: `Seg::intersect` uses KiCad's rounding `rescale` anchored on the other segment; `split` accepts squared distance <= 3. Random-chord probe is now 0 entries (tests `walkaround_random_chords_never_enter_convex_hull`, `walkaround_does_not_cut_through_hull_d3_repro`). Collinear-overlap branch of `intersects` still not ported.**
+
 KiCad rounds the crossing point (`rescale`, round-half-away, anchored on the other segment, seg.cpp:416-423) and `SHAPE_LINE_CHAIN::Split` accepts a point up to squared distance 3 from a segment (`Distance < 2`, shape_line_chain.cpp:1203-1210). Ours truncates toward zero (up to ~1 um per axis, anchored on `self`) and accepts only squared distance <= 1. After the entry crossing is inserted the path's sub-segment is already ~0.5 um off the true line, so the exit crossing, off by another ~0.9 um, fails `split` and is **never inserted into `pnew`**. `LINE::Walkaround` then sees `start (OUTSIDE) -> entry (ON_EDGE) -> end (OUTSIDE)` and jumps from the entry straight to the end, through the hull.
 
 Repro (run): `line = [(403,5139), (9992,5639)]`, `hull = [(5157,5508),(4849,5386),(4717,5082),(4839,4774),(6502,4054),(6810,4176),(6942,4480),(6820,4788)]` (a SegmentHull): `Seg::intersect` finds both crossings, (4843,5371) and (5407,5399), but `walkaround(.., cw)` returns `[(403,5139), (4843,5371), (9992,5639)]` for both windings (the exit crossing is the one lost). Statistics: 20000 random chords x 2 windings (hulls = via octagons and segment hulls, 2- and 3-point lines): the returned path enters the hull interior in 3801/40000 (9.5%) with the code as ported; **0/40000 with only the rounding intersect substituted**; 5/40000 with only the `Split` tolerance changed to squared <= 3; 0 with both. `None` was never returned, i.e. the failure is silent. Downstream the bad path is re-detected as colliding by `first_obstacle`, so walkaround spends its 40 iterations and reports "stuck", and `shove_line_to_hull_set` rejects the attempt in `lines_collide` -- so the symptom is a spurious "no route / shove failed" on roughly one crossing in ten.
@@ -289,6 +295,8 @@ Repro (run): `line = [(403,5139), (9992,5639)]`, `hull = [(5157,5508),(4849,5386
 Fix: in `eda_drc::kimath::Seg::intersect` compute `aSeg.A + rescale( param1, dir2, det )` with KiCad's rounding rescale (and add the collinear-overlap branch); set the `split` acceptance to squared distance <= 3 (and, if any caller needs it, port `Find`'s rounded-norm test and `Contains` <= 3, `Collinear` |det| <= 1). Keep the probe's chord test as a regression test.
 
 ### D4. `convex_hull_octagon` diagonals are too close to the pad (hull.rs:379-393) -- HIGH for rotated/trapezoid pads
+
+**Status: FIXED: `convex_hull_octagon` uses min `LineDistance` over polygon vertices (test `rotated_polygon_pad_hull_keeps_clearance`).**
 
 KiCad's `MoveDiagonal` gets `dist` from `NearestPoint( SEG )` = min over polygon vertices of `SEG::LineDistance` (infinite line). Ours takes the minimum **segment-to-segment** distance between the finite diagonal (length `bh*sqrt2`) and the polygon edges, truncated. When the nearest vertex projects beyond the finite diagonal, ours reports a larger distance, moves the diagonal inward by too much and the hull ends up inside the required clearance.
 
@@ -324,6 +332,8 @@ Fix: port `DM_SEGMENT` + `dragCorner45`, `dragWalkaround`, `SHP_REVERSED` (a `re
 
 ### D8. Committing DRC violations in MarkObstacles mode (line_placer.rs:280-282, dragger.rs:242) -- MEDIUM
 
+**Status: FIXED: `RoutingSettings::can_violate_drc` (default false) + `allow_drc_violations()` gate placer and dragger commits (test `mark_obstacles_commits_collision_only_when_can_violate_drc`).**
+
 `AllowDRCViolations()` is `mode == RM_MarkObstacles && can_violate_drc` and `can_violate_drc` defaults to false (pns_routing_settings.h:117-119, .cpp:48). FixRoute therefore refuses a colliding head in every mode by default. Ours treats MarkObstacles as "allowed". Add an `allow_drc_violations` setting (default false) and gate on `mode == MarkObstacles && allow_drc_violations`.
 
 ### D9. Clearance epsilon 1 um vs KiCad 0.5 um vs project DRC 0 (node.rs:35,373) -- MEDIUM
@@ -339,6 +349,8 @@ Repro (run): GND track (3500,-2000)-(3500,-1000) width 200 + (3500,-1000)-(3500,
 Fix: stop (or split) at width changes as `AssembleLine` does (also honour locked joints/segments).
 
 ### D11. Optimizer: missing `Simplify2` in mergeFull/mergeStep (optimizer.rs:82-109, 198-215) -- MEDIUM
+
+**Status: PARTIALLY FIXED: `merge_full` Simplify2s its input; `merge_step` Simplify2s each candidate before costing and uses KiCad's tie rule (test `merge_full_simplifies_collinear_points`). Still open: collision-checking only the bypass, dropping MERGE_OBTUSE from default, `optimizer_effort`, optimizer over shoved lines.**
 
 31% of random 45-degree staircase paths optimize differently from the KiCad-faithful procedure (details in the D-table row), because corner costs are compared on chains that still contain collinear points. Apply `Simplify2` (dedup + collinear removal, 3-point rule) to the input at the start of `merge_full` and to each candidate before costing; use KiCad's tie rule (`cost[0] < cost_orig && cost[0] < cost[1]`, else `cost[1] < cost_orig`); collision-check only the bypass; drop MERGE_OBTUSE from the default `optimize()` (KiCad never runs it with MERGE_SEGMENTS); read `optimizer_effort`; and run the optimizer over shoved lines (`runOptimizer`, 2 passes).
 

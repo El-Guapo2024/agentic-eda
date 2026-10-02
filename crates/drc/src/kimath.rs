@@ -173,8 +173,16 @@ impl Seg {
             (param2, param1)
         };
         let _ = s;
-        let px = ax + (dir1x * t) / det;
-        let py = ay + (dir1y * t) / det;
+        let _ = t;
+        // KiCad (seg.cpp:416-423): `aSeg.A + rescale( param1, dir2, det )`,
+        // anchored on the *other* segment, with round-half-away `rescale`
+        // (libs/kimath/src/math/util.cpp) -- not truncation.
+        let rescale = |num: i128, val: i128, den: i128| -> i128 {
+            let n = num * val;
+            if (n < 0) ^ (den < 0) { (n - den / 2) / den } else { (n + den / 2) / den }
+        };
+        let px = cx + rescale(param1, dir2x, det);
+        let py = cy + rescale(param1, dir2y, det);
         Some(Point { x: px as Um, y: py as Um })
     }
 }

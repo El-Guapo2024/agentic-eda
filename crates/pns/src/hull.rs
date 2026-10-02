@@ -354,6 +354,29 @@ fn intersect_lines(a: (Point, Point), b: (Point, Point)) -> Option<Point> {
     Some(Point { x: kiround(x1 + t * (x2 - x1)), y: kiround(y1 + t * (y2 - y1)) })
 }
 
+/// `SEG::LineDistance( p )` (seg.cpp:746): `isqrt( rescale( det, det, l ) )`,
+/// i.e. the floor of the rounded squared distance to the infinite line.
+fn line_distance(s: (Point, Point), q: Point) -> Um {
+    let (p, qq) = ((s.0.y - s.1.y) as i128, (s.1.x - s.0.x) as i128);
+    let r = -p * s.0.x as i128 - qq * s.0.y as i128;
+    let l = p * p + qq * qq;
+    let det = p * q.x as i128 + qq * q.y as i128 + r;
+    let dist_sq = if l > 0 {
+        let n = det * det;
+        (n + l / 2) / l
+    } else {
+        0
+    };
+    let mut x = (dist_sq as f64).sqrt() as i128;
+    while x * x > dist_sq {
+        x -= 1;
+    }
+    while (x + 1) * (x + 1) <= dist_sq {
+        x += 1;
+    }
+    x as Um
+}
+
 /// `ConvexHull( SHAPE_SIMPLE, aClearance )`: an octagon of the bbox
 /// (inflated by the clearance) and four 45-degree diagonals moved in to
 /// `aClearance` from the polygon (`MoveDiagonal`).
@@ -371,13 +394,11 @@ pub fn convex_hull_octagon(vertices: &[Point], clearance: Um) -> Vec<Point> {
     let rightline = (p(bx + bw, by + bh), p(bx + bw, by));
     let bottomline = (p(bx + bw, by), p(bx, by));
     let leftline = (p(bx, by), p(bx, by + bh));
-    let seg_dist = |d: (Point, Point)| -> f64 {
-        let n = vertices.len();
-        let s = eda_drc::kimath::Seg::new(d.0, d.1);
-        (0..n).map(|i| (s.sq_distance_to_seg(&eda_drc::kimath::Seg::new(vertices[i], vertices[(i + 1) % n])) as f64).sqrt()).fold(f64::INFINITY, f64::min)
-    };
+    // `SHAPE_LINE_CHAIN::NearestPoint( SEG, dist )`: minimum over the polygon's
+    // *vertices* of `SEG::LineDistance` (distance to the infinite line).
+    let seg_dist = |d: (Point, Point)| -> Um { vertices.iter().map(|&v| line_distance(d, v)).min().unwrap_or(Um::MAX) };
     let mv = |d: (Point, Point)| -> (Point, Point) {
-        let dist = seg_dist(d) as Um;
+        let dist = seg_dist(d);
         let (vx, vy) = (d.0.x - d.1.x, d.0.y - d.1.y);
         let m = resize(-vy, vx, dist - clearance);
         (Point { x: d.0.x + m.0, y: d.0.y + m.1 }, Point { x: d.1.x + m.0, y: d.1.y + m.1 })
@@ -456,6 +477,29 @@ mod kicad_hull_tests {
         // bbox = 300 + 200 on each side.
         assert_eq!(h.iter().map(|p| p.x).max(), Some(500));
         assert_eq!(h.iter().map(|p| p.y).min(), Some(-500));
+    }
+
+    /// D4: a 60-degree rotated 1.0 x 0.6 mm rectangle must keep the hull at
+    /// least `cl` (minus rounding) from every pad edge; the old
+    /// segment-distance version left a 64 um shortfall.
+    #[test]
+    fn rotated_polygon_pad_hull_keeps_clearance() {
+        let (w, h, cl) = (500.0f64, 300.0f64, 300);
+        for deg in [10.0f64, 30.0, 55.0, 60.0, 70.0, 85.0] {
+            let (sn, cs) = deg.to_radians().sin_cos();
+            let poly: Vec<Point> = [(-w, -h), (w, -h), (w, h), (-w, h)].iter().map(|&(x, y)| Point { x: (x * cs - y * sn).round() as Um, y: (x * sn + y * cs).round() as Um }).collect();
+            let hull = convex_hull_octagon(&poly, cl);
+            let mut min_d = f64::INFINITY;
+            for i in 0..hull.len() {
+                let (a, b) = (hull[i], hull[(i + 1) % hull.len()]);
+                for j in 0..4 {
+                    let (c, d) = (poly[j], poly[(j + 1) % 4]);
+                    let sq = eda_drc::kimath::Seg::new(a, b).sq_distance_to_seg(&eda_drc::kimath::Seg::new(c, d));
+                    min_d = min_d.min((sq as f64).sqrt());
+                }
+            }
+            assert!(min_d >= (cl - 2) as f64, "deg {deg}: hull only {min_d} from pad, need {cl}");
+        }
     }
 
     #[test]

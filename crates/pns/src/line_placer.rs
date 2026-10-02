@@ -278,7 +278,7 @@ impl LinePlacer {
     /// "let the user route through a violation and fix it later"), a
     /// still-colliding head must never be committed.
     fn may_commit_despite_collision(settings: &RoutingSettings) -> bool {
-        settings.mode == Mode::MarkObstacles
+        settings.allow_drc_violations()
     }
 
     /// Merge a just-accepted preview's shoved items into this session's
@@ -509,6 +509,21 @@ mod tests {
         let pv = placer.preview(&node, &rules, &settings, Point { x: 5000, y: 0 });
         assert!(!pv.colliding, "walkaround must clear the obstacle");
         assert!(pv.head.point_count() > 2, "must actually detour, not run straight through the pad");
+    }
+
+    /// D8: MarkObstacles refuses a colliding commit unless `can_violate_drc`.
+    #[test]
+    fn mark_obstacles_commits_collision_only_when_can_violate_drc() {
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 1000, y: 0 }, shape: Shape::Circle { c: Point { x: 1000, y: 0 }, r: 500 }, source: "U1.1".into() }));
+        let rules = rules();
+        let mut settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
+        assert!(!settings.can_violate_drc);
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        assert_eq!(placer.fix(&node, &rules, &settings, Point { x: 2000, y: 0 }), FixOutcome::Blocked);
+        assert!(placer.finish(&node, &rules, &settings, Point { x: 2000, y: 0 }).is_none());
+        settings.can_violate_drc = true;
+        assert!(matches!(placer.fix(&node, &rules, &settings, Point { x: 2000, y: 0 }), FixOutcome::Fixed { .. }));
     }
 
     #[test]

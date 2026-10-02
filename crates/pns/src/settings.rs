@@ -74,6 +74,17 @@ pub struct RoutingSettings {
     /// multiple of the direct path's length is accepted outright, instead
     /// of falling back to the cursor-proximity heuristic.
     pub walkaround_hug_length_threshold: f64,
+    /// `CanViolateDRC()` (pns_routing_settings.h:117): only with this set
+    /// does `AllowDRCViolations()` let `MarkObstacles` mode commit a
+    /// colliding head. KiCad's default is `false` (`.cpp:48`).
+    pub can_violate_drc: bool,
+}
+
+impl RoutingSettings {
+    /// `ROUTING_SETTINGS::AllowDRCViolations()`.
+    pub fn allow_drc_violations(&self) -> bool {
+        self.mode == Mode::MarkObstacles && self.can_violate_drc
+    }
 }
 
 impl Default for RoutingSettings {
@@ -90,6 +101,7 @@ impl Default for RoutingSettings {
             via_force_prop_iteration_limit: 40,
             fix_all_segments: true,
             walkaround_hug_length_threshold: 1.5,
+            can_violate_drc: false,
         }
     }
 }

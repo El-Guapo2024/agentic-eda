@@ -34,6 +34,9 @@
 /// See `all_colliding`.
 pub const CLEARANCE_EPSILON: Um = 1;
 
+/// `NODE::AssembleLine`'s `MaxVerts` (1024 * 16): hard cap on a followed line.
+const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
+
 use crate::item::{same_net, Item, ItemId, Kind, Net};
 use crate::joint::{Joint, JointKey};
 use crate::layer::LayerRange;
@@ -222,10 +225,26 @@ impl Node {
         let mut fwd_segs = vec![start];
         let (mut cur, mut cur_end) = (start, seg0.b);
         let mut via_end = None;
+        // `NODE::followLine`'s `guard`: the walk returned to its start
+        // anchor (a closed same-net loop) -- stop, and skip the backward
+        // walk (`AssembleLine`: `if( !guardHit )`). `MaxVerts` caps the walk.
+        let guard = seg0.b;
+        let mut guard_hit = false;
         while let Some(joint) = self.joint_at(cur_end, &net) {
             if let Some(next_id) = self.next_segment(joint, cur, &net, layers) {
                 let Item::Segment(ns) = &self.items[&next_id] else { break };
                 let other_end = if ns.a == cur_end { ns.b } else { ns.a };
+                if next_id == start || other_end == guard || fwd_pts.len() >= ASSEMBLE_MAX_VERTS {
+                    if next_id == start || other_end == guard {
+                        // Close the loop at the guard point (KiCad records
+                        // the re-traversed start segment's corner here).
+                        if fwd_pts.last() != Some(&guard) {
+                            fwd_pts.push(guard);
+                        }
+                        guard_hit = true;
+                    }
+                    break;
+                }
                 fwd_pts.push(other_end);
                 fwd_segs.push(next_id);
                 cur = next_id;
@@ -240,10 +259,14 @@ impl Node {
         let mut back_segs: Vec<ItemId> = Vec::new();
         let (mut cur, mut cur_end) = (start, seg0.a);
         let mut via_start = None;
-        while let Some(joint) = self.joint_at(cur_end, &net) {
+        while !guard_hit {
+            let Some(joint) = self.joint_at(cur_end, &net) else { break };
             if let Some(next_id) = self.next_segment(joint, cur, &net, layers) {
                 let Item::Segment(ns) = &self.items[&next_id] else { break };
                 let other_end = if ns.a == cur_end { ns.b } else { ns.a };
+                if next_id == start || back_pts.len() >= ASSEMBLE_MAX_VERTS {
+                    break;
+                }
                 back_pts.push(other_end);
                 back_segs.push(next_id);
                 cur = next_id;
@@ -254,6 +277,10 @@ impl Node {
             }
         }
 
+        if guard_hit {
+            back_pts.clear();
+            back_segs.clear();
+        }
         back_pts.reverse();
         back_segs.reverse();
         let mut pts = back_pts;
@@ -482,6 +509,26 @@ mod tests {
         assert!(matches!(removed, Item::Segment(_)));
         assert_eq!(n.len(), 0);
         assert!(n.joint_at(p(0, 0), &net_of("GND")).is_none(), "joint must be pruned once empty");
+    }
+
+    /// D2: a closed same-net loop must terminate (followLine's guard).
+    #[test]
+    fn assemble_line_terminates_on_closed_loop() {
+        let mut n = Node::new();
+        let net = net_of("GND");
+        let corners = [p(0, 0), p(1000, 0), p(1000, 1000), p(0, 1000)];
+        let mut ids = vec![];
+        for i in 0..4 {
+            ids.push(n.add(Item::Segment(Segment { net: net.clone(), layer: 0, a: corners[i], b: corners[(i + 1) % 4], width: 200, source_track: None, locked: false })));
+        }
+        let line = n.assemble_line(ids[0]).unwrap();
+        assert_eq!(line.segment_ids.len(), 4);
+        assert_eq!(line.first(), line.last(), "closed loop");
+        assert_eq!(line.pts.len(), 5);
+        // Every start segment terminates too.
+        for id in ids {
+            assert_eq!(n.assemble_line(id).unwrap().segment_ids.len(), 4);
+        }
     }
 
     #[test]
