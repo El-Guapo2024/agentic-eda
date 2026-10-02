@@ -16,10 +16,12 @@ const TOOL_BUTTONS: { id: FpToolId; label: string }[] = [
   { id: "pad", label: "Pad" },
   { id: "draw_segment", label: "Line" },
   { id: "draw_arc", label: "Arc" },
+  { id: "draw_bezier", label: "Bezier" },
   { id: "draw_rect", label: "Rect" },
   { id: "draw_circle", label: "Circle" },
   { id: "draw_polygon", label: "Polygon" },
   { id: "text", label: "Text" },
+  { id: "anchor", label: "Anchor" },
 ];
 
 const GRAPHIC_LAYERS = ["F.SilkS", "F.Fab", "F.CrtYd"];
@@ -150,6 +152,9 @@ export function FootprintEditorView() {
         </button>
         <div style={{ flex: 1 }} />
         <span style={{ padding: "4px 10px", color: "var(--chrome-text-dim)" }}>{state.name ?? "(no footprint open)"}</span>
+        <button className="toolbar-button" onClick={() => void api.newFootprint()} title="New Footprint (Ctrl+N): a new empty SMD footprint called Untitled">
+          New
+        </button>
         <button className="toolbar-button" onClick={() => api.closeFootprint()} disabled={!state.name}>
           Open...
         </button>

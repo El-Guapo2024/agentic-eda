@@ -34,6 +34,16 @@ test("offsetRatsnestForPreview: zero delta is a no-op even for a part move", () 
   assert.deepEqual(result, edges);
 });
 
+test("offsetRatsnestForPreview: Pack and Move -- each part's endpoint takes its own shift on top of the shared one, even at zero shared delta", () => {
+  const edges: RatsnestEdgeLike[] = [{ net: "N1", from: [1100, 1000], to: [5100, 5000] }];
+  const result = offsetRatsnestForPreview(edges, board, { refs: ["U1", "R1"], kind: "part", dxUm: 0, dyUm: 0, perRefOffsetUm: { U1: [200, 0], R1: [-300, 50] } });
+  assert.deepEqual(result[0]!.from, [1300, 1000]);
+  assert.deepEqual(result[0]!.to, [4800, 5050]);
+  const dragged = offsetRatsnestForPreview(edges, board, { refs: ["U1", "R1"], kind: "part", dxUm: 10, dyUm: 10, perRefOffsetUm: { U1: [200, 0] } });
+  assert.deepEqual(dragged[0]!.from, [1310, 1010]);
+  assert.deepEqual(dragged[0]!.to, [5110, 5010], "a part with no own shift just follows the cursor");
+});
+
 test("offsetRatsnestForPreview: both endpoints of an edge move when both their parts are in the preview", () => {
   const edges: RatsnestEdgeLike[] = [{ net: "N1", from: [1100, 1000], to: [5100, 5000] }];
   const result = offsetRatsnestForPreview(edges, board, { refs: ["U1", "R1"], kind: "part", dxUm: 10, dyUm: 10 });

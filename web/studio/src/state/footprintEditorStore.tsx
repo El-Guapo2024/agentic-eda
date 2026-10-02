@@ -10,29 +10,36 @@
 // pad_tool.cpp's own Copy/Paste Pad Properties needs.
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Um } from "../api/types";
-import { downloadFootprintKicadMod, fetchFootprint, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCmd, postRedo, postUndo } from "../api/client";
+import { duplicatePads, uniqueFootprintName } from "../kicad-port/fpEditActions";
+import { highestPadNumber } from "../kicad-port/padNumbering";
 import type { ViewTransform } from "./store";
+import type { ArcGeom } from "../kicad-port/arcGeom";
+import type { BezierGeom } from "../kicad-port/bezierGeom";
 
-export type FpToolId = "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text";
+export type FpToolId = "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor";
 
 export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
   pad: "Pad: click to place, number auto-increments",
   draw_segment: "Line: click start, then end",
-  draw_arc: "Arc: click start, mid, then end",
+  draw_arc: "Arc: click the centre, then the start point, then the end point (/ switches the direction)",
+  draw_bezier: "Bezier: click the start, control 1, the end, then control 2 (the curve then continues from its end); double-click to finish, Esc to cancel",
   draw_rect: "Rectangle: click one corner, then the opposite one",
   draw_circle: "Circle: click center, then a point on the edge",
   draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
   text: "Click to place text",
+  anchor: "Place the footprint anchor: click the new origin of the footprint",
 };
 
-/** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). */
-export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] };
+/** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). `arc`/`bezier`: the construction managers' state, see the PCB tab's `DrawState`. */
+export type FpDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier"; pts: [Um, Um][]; arc?: ArcGeom; bezier?: BezierGeom };
 
 export interface FpMovePreview {
   refs: string[];
-  kind: "pad" | "graphic" | "text";
+  /** The kind of the item a drag started on. Optional because a Duplicate pick-up carries a mixed selection (pads + graphics + text); the commit looks each ref up either way. */
+  kind?: "pad" | "graphic" | "text";
   dxUm: number;
   dyUm: number;
   rotateQuarterTurns?: number;
@@ -62,6 +69,10 @@ export interface FootprintEditorState {
   renumberDialogOpen: boolean;
   /** `pad_tool.cpp`'s Copy Pad Properties (Cmd+C on a selected pad) -- client-side only, same spirit as the PCB tab's own `state.clipboard`. Paste (`pastePadProperties`) applies it to every pad in the current selection via `edit_pad`. */
   copiedPadProps: Partial<LibraryPad> | null;
+  /** `PAD_TOOL::m_lastPadNumber`: the number the last placed (or duplicated-with-increment) pad took, which `Duplicate and Increment` continues from. `null` until one is set -- then the highest-numbered pad stands in (padNumbering.ts's `nextPadNumber`). */
+  lastPadNumber: string | null;
+  /** `EDIT_TOOL::Duplicate` hands the copies straight to `doMoveSelection` and, if that is cancelled, `commit.Revert()`s them: true while the freshly duplicated items are glued to the cursor, so Escape undoes the duplicate and a drop keeps it. */
+  duplicatePending: boolean;
   toast: { message: string; kind: "error" | "info" } | null;
 }
 
@@ -84,6 +95,8 @@ const initialState: FootprintEditorState = {
   footprintPropertiesOpen: false,
   renumberDialogOpen: false,
   copiedPadProps: null,
+  lastPadNumber: null,
+  duplicatePending: false,
   toast: null,
 };
 
@@ -108,6 +121,8 @@ export type FpAction =
   | { type: "SET_FOOTPRINT_PROPERTIES_OPEN"; open: boolean }
   | { type: "SET_RENUMBER_DIALOG_OPEN"; open: boolean }
   | { type: "SET_COPIED_PAD_PROPS"; props: Partial<LibraryPad> | null }
+  | { type: "SET_LAST_PAD_NUMBER"; number: string | null }
+  | { type: "SET_DUPLICATE_PENDING"; pending: boolean }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
@@ -157,6 +172,10 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, renumberDialogOpen: action.open };
     case "SET_COPIED_PAD_PROPS":
       return { ...state, copiedPadProps: action.props };
+    case "SET_LAST_PAD_NUMBER":
+      return { ...state, lastPadNumber: action.number };
+    case "SET_DUPLICATE_PENDING":
+      return { ...state, duplicatePending: action.pending };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":
@@ -167,8 +186,20 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
 }
 
 export interface FootprintEditorApi {
+  /** The current state, read at call time (an action handler registered on another tab's render must not close over a stale one). */
+  getState: () => FootprintEditorState;
   /** Open (or re-open -- a no-op server-side if already open) a footprint by name and start polling it. */
   openFootprint: (name: string) => Promise<void>;
+  /** `pcbnew.ModuleEditor.newFootprint` (Ctrl+N): a new, empty SMD footprint named `Untitled` (made unique), opened in the editor. */
+  newFootprint: () => Promise<void>;
+  /**
+   * `EDIT_TOOL::Duplicate` (Ctrl+D) / `pcbnew.InteractiveEdit.duplicateIncrementPads` (Ctrl+Shift+D, `increment`):
+   * copy the selected pads/graphics/text in place as ONE undo step, select the copies and pick them up with Move
+   * (Escape then reverts the duplicate). With `increment` each pad takes the next free pad number.
+   */
+  duplicateSelection: (increment: boolean) => Promise<void>;
+  /** Commit a finished move (a drag-drop or a Duplicate pick-up) of `refs` by `(dxUm, dyUm)` as ONE undo step -- each ref is looked up, so a mixed selection works. */
+  commitMove: (refs: string[], dxUm: number, dyUm: number) => Promise<void>;
   /** Back to "nothing open" -- leaving the tab, or picking a different footprint before this one loaded. */
   closeFootprint: () => void;
   refresh: () => Promise<void>;
@@ -257,11 +288,81 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
   );
 
   const api: FootprintEditorApi = {
+    getState: () => stateRef.current,
     openFootprint: async (name) => {
       dispatch({ type: "SET_NAME", name });
       await postCmd({ op: "open_footprint_for_edit", name }, false);
       const footprint = await fetchFootprint(name);
       dispatch({ type: "FOOTPRINT_OK", footprint });
+    },
+    newFootprint: async () => {
+      let existing: string[] = [];
+      try {
+        existing = (await fetchFootprintLibraryNames()).names;
+      } catch {
+        /* backend busy: Untitled is still very likely free; the verb refuses a duplicate name anyway */
+      }
+      const name = uniqueFootprintName(existing);
+      const reply = await postCmd({ op: "new_footprint", name }, false);
+      if (!reply.ok) {
+        dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+        return;
+      }
+      dispatch({ type: "SET_NAME", name });
+      dispatch({ type: "FOOTPRINT_OK", footprint: await fetchFootprint(name) });
+    },
+    duplicateSelection: async (increment) => {
+      const st = stateRef.current;
+      const fp = st.footprint;
+      const name = st.name;
+      if (!fp || !name) return;
+      const ids = st.selection;
+      const pads = fp.pads.filter((p) => p.id && ids.has(p.id));
+      const graphics = fp.graphics.filter((g) => g.id && ids.has(g.id));
+      const texts = fp.texts.filter((t) => t.id && ids.has(t.id));
+      if (pads.length + graphics.length + texts.length === 0) return;
+      const { pads: newPads, lastPadNumber } = duplicatePads(fp.pads, pads, increment, st.lastPadNumber ?? highestPadNumber(fp.pads));
+      const before = new Set([...fp.pads.map((p) => p.id), ...fp.graphics.map((g) => g.id), ...fp.texts.map((t) => t.id)]);
+      const cmds: Cmd[] = [
+        ...newPads.map((pad): Cmd => ({ op: "add_pad", footprint: name, pad })),
+        ...graphics.map((g): Cmd => ({ op: "add_footprint_graphic", footprint: name, shape: { ...g, id: undefined } })),
+        ...texts.map((t): Cmd => ({ op: "add_footprint_text", footprint: name, text: { ...t, id: undefined } })),
+      ];
+      const ok = await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+      if (!ok) return;
+      // Read the document straight from the backend: the render that applies `runCmd`'s own refresh may not have happened yet.
+      const after = await fetchFootprint(name);
+      const created = [...after.pads.map((p) => p.id), ...after.graphics.map((g) => g.id), ...after.texts.map((t) => t.id)].filter((id): id is string => !!id && !before.has(id));
+      if (increment) dispatch({ type: "SET_LAST_PAD_NUMBER", number: lastPadNumber });
+      dispatch({ type: "SET_SELECTION", refs: created });
+      // `doMoveSelection( aEvent, &commit, true )`: the copies are glued to the cursor until a click drops them.
+      const at = stateRef.current.cursorUm;
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at });
+      dispatch({ type: "SET_DUPLICATE_PENDING", pending: true });
+      dispatch({ type: "TOAST", message: `Duplicated ${created.length} item(s)`, kind: "info" });
+    },
+    commitMove: async (refs, dxUm, dyUm) => {
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+      dispatch({ type: "SET_DUPLICATE_PENDING", pending: false });
+      const name = stateRef.current.name;
+      if (!name || (dxUm === 0 && dyUm === 0)) return;
+      const cmds: Cmd[] = [];
+      for (const id of refs) {
+        const pad = api.padById(id);
+        if (pad) {
+          cmds.push({ op: "move_pad", footprint: name, id, x: pad.at.x + dxUm, y: pad.at.y + dyUm });
+          continue;
+        }
+        if (api.graphicById(id)) {
+          cmds.push({ op: "move_footprint_graphic", footprint: name, id, dx: dxUm, dy: dyUm });
+          continue;
+        }
+        const text = api.textById(id);
+        if (text) cmds.push({ op: "move_footprint_text", footprint: name, id, x: text.at.x + dxUm, y: text.at.y + dyUm });
+      }
+      if (cmds.length === 0) return;
+      await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }); // one undo step, like one BOARD_COMMIT::Push
     },
     closeFootprint: () => dispatch({ type: "SET_NAME", name: null }),
     refresh,

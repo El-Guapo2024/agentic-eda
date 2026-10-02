@@ -829,6 +829,41 @@ fn add_shape_move_and_delete() {
 }
 
 #[test]
+fn add_shape_accepts_a_bezier_and_moving_it_shifts_all_four_control_points() {
+    // `pcbnew.InteractiveDrawing.bezier` commits one `PCB_SHAPE` of type BEZIER: start, C1, C2, end.
+    let m = net_model();
+    let mut b = board(&m);
+    let curve = Shape::Bezier { id: "ignored".into(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: 0, y: 0 }, c1: Point { x: 0, y: 2000 }, c2: Point { x: 3000, y: 2000 }, end: Point { x: 3000, y: 0 } };
+    b.apply(&Cmd::AddShape { shape: curve }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
+    assert!(id.starts_with("shp_"), "{id}");
+    assert_ne!(id, "ignored");
+
+    b.apply(&Cmd::MoveShape { id: id.clone(), dx: 100, dy: 200 }).unwrap();
+    let s = &b.design().drawings.as_ref().unwrap().shapes[0];
+    assert_eq!(s.points(), vec![Point { x: 100, y: 200 }, Point { x: 100, y: 2200 }, Point { x: 3100, y: 2200 }, Point { x: 3100, y: 200 }]);
+    // the flattened polyline (what DRC/plot use) starts and ends on the curve's own ends
+    let poly = s.bezier_points().unwrap();
+    assert_eq!(poly.first(), Some(&Point { x: 100, y: 200 }));
+    assert_eq!(poly.last(), Some(&Point { x: 3100, y: 200 }));
+    assert!(poly.len() > 3);
+
+    b.apply(&Cmd::EditShape { id, layer: "F.Fab".into(), stroke_width: 200, filled: false }).unwrap();
+    let s = &b.design().drawings.as_ref().unwrap().shapes[0];
+    assert_eq!((s.layer(), s.stroke_width()), ("F.Fab", 200));
+}
+
+#[test]
+fn a_bezier_shape_round_trips_through_json_with_its_tagged_kind() {
+    let curve = Shape::Bezier { id: String::new(), layer: "F.SilkS".into(), stroke_width: 120, filled: false, start: Point { x: 1, y: 2 }, c1: Point { x: 3, y: 4 }, c2: Point { x: 5, y: 6 }, end: Point { x: 7, y: 8 } };
+    let json = serde_json::to_value(&curve).unwrap();
+    assert_eq!(json["kind"], "bezier");
+    assert_eq!(json["c2"]["x"], 5);
+    let back: Shape = serde_json::from_value(json).unwrap();
+    assert_eq!(back, curve);
+}
+
+#[test]
 fn add_shape_rejects_a_short_polygon() {
     let m = net_model();
     let mut b = board(&m);
@@ -1334,6 +1369,31 @@ fn opening_a_new_name_starts_blank_and_is_idempotent() {
     b.apply(&Cmd::AddPad { footprint: "Test:Blank".into(), pad: fp_pad("1", 0, 0) }).unwrap();
     b.apply(&Cmd::OpenFootprintForEdit { name: "Test:Blank".into() }).unwrap();
     assert_eq!(b.design().footprint_library.as_ref().unwrap().by_name("Test:Blank").unwrap().pads.len(), 1);
+}
+
+#[test]
+fn new_footprint_creates_an_empty_smd_footprint_and_refuses_a_name_already_taken() {
+    // `CreateNewFootprint`: `int footprintAttrs = FP_SMD;` and a name the caller made unique first.
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::NewFootprint { name: "Untitled".into() }).unwrap();
+    let fp = b.design().footprint_library.as_ref().unwrap().by_name("Untitled").unwrap();
+    assert!(fp.pads.is_empty() && fp.graphics.is_empty());
+    assert!(fp.attributes.smd && !fp.attributes.through_hole, "a new footprint defaults to SMD");
+    assert!(!fp.published);
+
+    // already in the project library
+    let e = b.apply(&Cmd::NewFootprint { name: "Untitled".into() }).unwrap_err();
+    assert_eq!(e[0].check, "ops_footprint_exists");
+    // already defined by the builtin table
+    let e = b.apply(&Cmd::NewFootprint { name: "0603".into() }).unwrap_err();
+    assert_eq!(e[0].check, "ops_footprint_exists");
+    assert_eq!(b.apply(&Cmd::NewFootprint { name: String::new() }).unwrap_err()[0].check, "ops_bad_footprint");
+    // its own undo domain, like every footprint-editor verb
+    assert_eq!(Cmd::NewFootprint { name: "x".into() }.domain(), Domain::FootprintEditor);
+    // a second "Untitled_1" is fine
+    b.apply(&Cmd::NewFootprint { name: "Untitled_1".into() }).unwrap();
+    assert_eq!(b.design().footprint_library.as_ref().unwrap().footprints.len(), 2);
 }
 
 #[test]

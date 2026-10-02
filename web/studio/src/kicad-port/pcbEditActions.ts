@@ -141,7 +141,7 @@ export interface AnchorBoard {
   parts: readonly { ref: string; placed: boolean; at?: readonly [number, number] }[];
   routing?: { vias: readonly { id: string; x: number; y: number }[] } | null;
   drawings?: {
-    shapes: readonly ({ id: string } & ({ kind: "segment" | "rect" | "arc"; start: readonly [number, number] } | { kind: "circle"; center: readonly [number, number] } | { kind: "polygon"; pts: readonly (readonly [number, number])[] }))[];
+    shapes: readonly ({ id: string } & ({ kind: "segment" | "rect" | "arc" | "bezier"; start: readonly [number, number] } | { kind: "circle"; center: readonly [number, number] } | { kind: "polygon"; pts: readonly (readonly [number, number])[] }))[];
     texts: readonly { id: string; x: number; y: number }[];
   } | null;
 }

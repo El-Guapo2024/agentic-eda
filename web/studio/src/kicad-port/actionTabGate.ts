@@ -15,8 +15,29 @@
 // render: gate on the action name's own module prefix, the established
 // "pcbnew.X"/"eeschema.X"/"common.X" naming convention every action in
 // this table already follows.
+//
+// Two of this app's tabs are not the editor their action prefix names:
+// KiCad has the Footprint Editor and the Symbol Editor as separate frames,
+// whose actions still carry the `pcbnew.`/`eeschema.` prefix (Ctrl+N is
+// `pcbnew.ModuleEditor.newFootprint` in the footprint editor and
+// `eeschema.SymbolLibraryControl.newSymbol` in the symbol editor, next to
+// `common.Control.new` everywhere). Those few actions are listed below by
+// name and gated to their own tab.
+
+/** Footprint-editor-frame-only actions (`FOOTPRINT_EDIT_FRAME`'s tools): enabled on the Footprint tab only. */
+export const FOOTPRINT_EDITOR_ONLY: ReadonlySet<string> = new Set(["pcbnew.ModuleEditor.newFootprint", "pcbnew.InteractiveDrawing.setAnchor"]);
+
+/** Actions the board editor AND the footprint editor both register (`DRAWING_TOOL` / `EDIT_TOOL` run in both frames): enabled on the PCB and Footprint tabs. */
+export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set(["pcbnew.InteractiveDrawing.arcPosture", "pcbnew.InteractiveDrawing.bezier", "pcbnew.InteractiveEdit.duplicateIncrementPads"]);
+
+/** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */
+export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set(["eeschema.SymbolDrawing.placeSymbolPin", "eeschema.SymbolLibraryControl.newSymbol", "eeschema.SymbolLibraryControl.saveLibraryAs"]);
+
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {
   if (!registered) return false;
+  if (FOOTPRINT_EDITOR_ONLY.has(name)) return tab === "footprint";
+  if (SYMBOL_EDITOR_ONLY.has(name)) return tab === "symbol";
+  if (BOARD_AND_FOOTPRINT.has(name)) return tab === "pcb" || tab === "footprint";
   if (name.startsWith("pcbnew.")) return tab === "pcb";
   if (name.startsWith("eeschema.")) return tab === "schematic";
   return true; // common.*, and anything else with no tab of its own

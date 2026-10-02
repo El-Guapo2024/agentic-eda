@@ -177,6 +177,247 @@ pub fn generate_meander(a: Point, b: Point, amplitude_um: Um, spacing_um: Um, ta
     Some(MeanderResult { pts, achieved_length })
 }
 
+/// Drops consecutive duplicate points and every middle point that lies exactly on the straight run
+/// between its neighbours (cross product zero and no reversal), keeping the first and last point
+/// untouched -- a stub and the straight run it joins become one segment.
+pub fn simplify_collinear(pts: Vec<Point>) -> Vec<Point> {
+    let mut deduped: Vec<Point> = Vec::with_capacity(pts.len());
+    for p in pts {
+        if deduped.last() != Some(&p) {
+            deduped.push(p);
+        }
+    }
+    if deduped.len() < 3 {
+        return deduped;
+    }
+    let mut out = vec![deduped[0]];
+    for i in 1..deduped.len() - 1 {
+        let prev = *out.last().expect("out starts non-empty");
+        let (cur, next) = (deduped[i], deduped[i + 1]);
+        let cross = (cur.x - prev.x) as i128 * (next.y - cur.y) as i128 - (cur.y - prev.y) as i128 * (next.x - cur.x) as i128;
+        let dot = (cur.x - prev.x) as i128 * (next.x - cur.x) as i128 + (cur.y - prev.y) as i128 * (next.y - cur.y) as i128;
+        if cross == 0 && dot > 0 {
+            continue; // straight through: this point adds nothing
+        }
+        out.push(cur);
+    }
+    out.push(*deduped.last().expect("len >= 3"));
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Differential-pair ("dual") meander -- `DP_MEANDER_PLACER` (`pns_dp_meander_placer.cpp`).
+// ---------------------------------------------------------------------------------------------
+//
+// Upstream's DP tuner builds one `MEANDERED_LINE( this, true )` ("dual"): the baseline is the midline of the
+// coupled segment pair (`baselineSegment`: the midpoints of the two segments' endpoints), the meander is
+// generated once along it, and each of the pair's two lines is that shape shifted sideways by
+// `(gap + width) / 2` (`SetBaselineOffset`; `pairOrientation` picks which line takes which sign). The two
+// lines are therefore parallel everywhere, with corners mitered -- they differ in length only by what the
+// miters add or take away, and `m_lastLength` reports `max( P, N )`.
+//
+// Same scoping as the single-track tuner above: the baseline is a straight axis-aligned run and the
+// meander is this module's 45-degree trapezoid wave (not upstream's rectangular/rounded bumps). Each line
+// is `offset_polyline` of that centerline by its own signed lateral offset (positive = the direction
+// turned -90 degrees, the convention `crate::diff_pair::offset_polyline` already uses).
+
+/// Why [`generate_dp_meander`] produced nothing, with the sentence a caller shows the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DpMeanderError {
+    /// Not an axis-aligned baseline, non-positive amplitude/spacing, a target that is not longer than the
+    /// baseline, or a baseline too short to fit even a lead-in and a minimal bump.
+    NothingToAdd,
+    /// The shape's two lines (or one of them with itself) would touch: the spacing/amplitude leave no room
+    /// for the pair's own width -- the inner line of a bump folds over itself.
+    Overlap,
+}
+
+impl DpMeanderError {
+    pub fn message(self) -> &'static str {
+        match self {
+            DpMeanderError::NothingToAdd => "can't reach that target length -- it may already be at or below the pair's own straight length, or the amplitude/spacing leave no room on this short a run",
+            DpMeanderError::Overlap => "the pair's two lines would overlap at this amplitude/spacing -- increase the spacing (the straight run at each bump must exceed the pair's width) and retry",
+        }
+    }
+}
+
+/// The tuned lines of a pair, each from its own start to its own end (both run in the baseline's direction).
+#[derive(Debug, Clone)]
+pub struct DpMeanderResult {
+    pub a: Vec<Point>,
+    pub b: Vec<Point>,
+    pub a_length: Um,
+    pub b_length: Um,
+}
+
+fn orient(p: Point, q: Point, r: Point) -> i128 {
+    (q.x - p.x) as i128 * (r.y - p.y) as i128 - (q.y - p.y) as i128 * (r.x - p.x) as i128
+}
+
+fn within_box(p: Point, q: Point, r: Point) -> bool {
+    r.x >= p.x.min(q.x) && r.x <= p.x.max(q.x) && r.y >= p.y.min(q.y) && r.y <= p.y.max(q.y)
+}
+
+/// Do the closed segments `a1-a2` and `b1-b2` share any point (touching and collinear overlap included)?
+fn segments_touch(a1: Point, a2: Point, b1: Point, b2: Point) -> bool {
+    let (o1, o2) = (orient(a1, a2, b1).signum(), orient(a1, a2, b2).signum());
+    let (o3, o4) = (orient(b1, b2, a1).signum(), orient(b1, b2, a2).signum());
+    if o1 != o2 && o3 != o4 {
+        return true;
+    }
+    (o1 == 0 && within_box(a1, a2, b1)) || (o2 == 0 && within_box(a1, a2, b2)) || (o3 == 0 && within_box(b1, b2, a1)) || (o4 == 0 && within_box(b1, b2, a2))
+}
+
+/// Does `a` touch itself (any two non-adjacent segments), `b` itself, or `a` touch `b`?
+fn lines_conflict(a: &[Point], b: &[Point]) -> bool {
+    let own = |p: &[Point]| {
+        let segs: Vec<(Point, Point)> = p.windows(2).filter(|w| w[0] != w[1]).map(|w| (w[0], w[1])).collect();
+        (0..segs.len()).any(|i| (i + 2..segs.len()).any(|j| segments_touch(segs[i].0, segs[i].1, segs[j].0, segs[j].1)))
+    };
+    if own(a) || own(b) {
+        return true;
+    }
+    a.windows(2).any(|sa| b.windows(2).any(|sb| segments_touch(sa[0], sa[1], sb[0], sb[1])))
+}
+
+/// Meander a differential pair along the straight, axis-aligned baseline `base_a`-`base_b` (the midline
+/// between the two coupled lines). `off_a`/`off_b` are the lines' signed lateral offsets from that
+/// baseline (`crate::diff_pair::offset_polyline`'s sign convention); `target_len_um` is the length the
+/// *longer* of the two lines should reach over this stretch (`DP_MEANDER_PLACER` reports `max( P, N )`).
+/// Both lines start and end exactly on the baseline's ends shifted by their own offset, so they stay
+/// joined to whatever the stretch is attached to.
+pub fn generate_dp_meander(base_a: Point, base_b: Point, off_a: Um, off_b: Um, amplitude_um: Um, spacing_um: Um, target_len_um: Um, flip: bool) -> Result<DpMeanderResult, DpMeanderError> {
+    use crate::diff_pair::offset_polyline;
+    let (dx, dy) = (base_b.x - base_a.x, base_b.y - base_a.y);
+    if (dx == 0) == (dy == 0) || amplitude_um <= 0 || spacing_um <= 0 {
+        return Err(DpMeanderError::NothingToAdd);
+    }
+    let len = dx.abs() + dy.abs();
+    let (ux, uy) = (dx.signum(), dy.signum());
+    // A straight lead-in/out keeps the first/last mitered corner (it sits `|off| * tan(22.5 deg)` back from the
+    // diagonal's own vertex on the inside of the turn) inside the stretch, so each line starts exactly at its
+    // own end point instead of backing up past it.
+    let widest = off_a.abs().max(off_b.abs());
+    let lead = (widest as f64 * (std::f64::consts::FRAC_PI_8).tan()).ceil() as Um + 1;
+    if len <= 2 * lead + 2 || target_len_um <= len {
+        return Err(DpMeanderError::NothingToAdd);
+    }
+    let inner_a = Point { x: base_a.x + ux * lead, y: base_a.y + uy * lead };
+    let inner_b = Point { x: base_b.x - ux * lead, y: base_b.y - uy * lead };
+    let inner_len = (len - 2 * lead) as f64;
+    // `MEANDER_SHAPE::MinAmplitude` (`|baselineOffset| + correction`): below the pair's own half-spacing a bump's
+    // inner line would sit on the wrong side of the baseline. `MEANDER_SHAPE::spacing` for a dual meander
+    // (`width + clearance + 2 * |baselineOffset|`): the straight run at each bump never gets shorter than the two
+    // lines' own span.
+    let min_amp = widest + 1;
+    let amp_max = amplitude_um.max(min_amp);
+    let spacing = spacing_um.max(2 * widest);
+
+    // One pass builds the shape for one target elongation of the longer line; that line's real length differs from
+    // the centerline's by whatever the miters add or take away, so correct the elongation by the miss and go again
+    // (a pass or two settles it).
+    let mut want_extra = (target_len_um - len) as f64;
+    let mut best: Option<(Um, DpMeanderResult)> = None;
+    for pass in 0..5 {
+        let Some((count, amp_sum)) = pick_periods(want_extra, inner_len, spacing as f64, amp_max, min_amp) else {
+            if pass == 0 {
+                return Err(DpMeanderError::NothingToAdd);
+            }
+            break;
+        };
+        let Some(zig) = zigzag(inner_a, inner_b, count, amp_sum, spacing, flip) else {
+            if pass == 0 {
+                return Err(DpMeanderError::NothingToAdd);
+            }
+            break;
+        };
+        let mut centerline = Vec::with_capacity(zig.len() + 2);
+        centerline.push(base_a);
+        centerline.extend_from_slice(&zig);
+        centerline.push(base_b);
+        let a = offset_polyline(&centerline, off_a);
+        let b = offset_polyline(&centerline, off_b);
+        if lines_conflict(&a, &b) {
+            return Err(DpMeanderError::Overlap);
+        }
+        let (a_length, b_length) = (polyline_length(&a), polyline_length(&b));
+        let miss = target_len_um - a_length.max(b_length);
+        if best.as_ref().is_none_or(|(m, _)| miss.abs() < *m) {
+            best = Some((miss.abs(), DpMeanderResult { a, b, a_length, b_length }));
+        }
+        if miss.abs() <= 2 {
+            break;
+        }
+        want_extra += miss as f64;
+        if want_extra <= 0.0 {
+            break;
+        }
+    }
+    best.map(|(_, r)| r).ok_or(DpMeanderError::NothingToAdd)
+}
+
+/// How many bumps, and the sum of their amplitudes, give `extra` um of added length over `room` um of straight
+/// run -- the uniform amplitude `MEANDER_PLACER_BASE::tuneLineLength` ends up with (`findAmplitudeForLength` spreads
+/// the elongation evenly over the meanders it keeps) instead of a few full-size bumps and one tiny remainder. One
+/// period of amplitude `a` adds `2 * a * (sqrt 2 - 1)` and uses `2 * a + spacing` of the run, so `n` bumps of
+/// summed amplitude `T` add `2 * (sqrt 2 - 1) * T`, use `2 * T + n * spacing`, and can only be as small as
+/// `n * min_amp` or as large as `n * amp_max`. Every `n` that fits is tried with the summed amplitude closest to
+/// what the target wants; the least miss wins, the fewest bumps (so the biggest amplitude) on a tie. A pick that
+/// misses by more than adding nothing would is no pick (`None`).
+fn pick_periods(extra: f64, room: f64, spacing: f64, amp_max: Um, min_amp: Um) -> Option<(usize, Um)> {
+    if extra <= 0.0 {
+        return None;
+    }
+    let k = 2.0 * DIAGONAL_OVERHEAD;
+    let wanted = (extra / k).round() as Um;
+    let mut best: Option<(f64, usize, Um)> = None;
+    let mut n = 1usize;
+    loop {
+        let lo = n as Um * min_amp;
+        if 2.0 * lo as f64 + n as f64 * spacing > room {
+            break; // even the smallest bumps overrun the run
+        }
+        let by_room = ((room - n as f64 * spacing) / 2.0).floor() as Um;
+        let sum = wanted.clamp(lo, n as Um * amp_max).min(by_room).max(lo);
+        let miss = (k * sum as f64 - extra).abs();
+        if best.is_none_or(|(m, _, _)| miss < m - 1e-9) {
+            best = Some((miss, n, sum));
+        }
+        n += 1;
+    }
+    best.filter(|&(miss, _, _)| miss < extra).map(|(_, n, sum)| (n, sum))
+}
+
+/// `count` trapezoid bumps (45-degree legs, `spacing` straight at the top), alternating sides, along the
+/// axis-aligned run `a`-`b`, from `a` onward; the amplitudes sum to `amp_sum` (as even as whole um allow) and
+/// the rest of the run is straight to `b`. Legs are exactly 45 degrees. `None` when the bumps overrun `b`.
+fn zigzag(a: Point, b: Point, count: usize, amp_sum: Um, spacing: Um, flip: bool) -> Option<Vec<Point>> {
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let (ux, uy) = (dx.signum(), dy.signum());
+    let (nx, ny) = if flip { (-uy, ux) } else { (uy, -ux) };
+    let (base, rem) = (amp_sum / count as Um, (amp_sum % count as Um) as usize);
+    let mut pts = vec![a];
+    let (mut x, mut y) = (a.x, a.y);
+    let mut side = 1;
+    for i in 0..count {
+        let amp = base + Um::from(i < rem);
+        let (sx, sy) = (side * nx, side * ny);
+        let p1 = Point { x: x + amp * (ux + sx), y: y + amp * (uy + sy) };
+        let p2 = Point { x: p1.x + spacing * ux, y: p1.y + spacing * uy };
+        let p3 = Point { x: p2.x + amp * (ux - sx), y: p2.y + amp * (uy - sy) };
+        pts.extend([p1, p2, p3]);
+        (x, y) = (p3.x, p3.y);
+        side = -side;
+    }
+    // along-run progress: the last point must still be short of (or on) `b`
+    if (x - a.x) * ux + (y - a.y) * uy > dx.abs() + dy.abs() {
+        return None;
+    }
+    pts.push(b);
+    pts.dedup();
+    Some(pts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +525,134 @@ mod tests {
         assert!(xs.iter().any(|&x| x > 0), "{xs:?}");
         assert!(xs.iter().any(|&x| x < 0), "{xs:?}");
         assert!((result.achieved_length - target).abs() <= 2, "achieved {}", result.achieved_length);
+    }
+
+    fn p(x: Um, y: Um) -> Point {
+        Point { x, y }
+    }
+
+    /// Distance from `q` to the segment `a`-`b`.
+    fn dist_to_segment(q: Point, a: Point, b: Point) -> f64 {
+        let (abx, aby) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+        let len2 = abx * abx + aby * aby;
+        let t = if len2 == 0.0 { 0.0 } else { ((((q.x - a.x) as f64) * abx + ((q.y - a.y) as f64) * aby) / len2).clamp(0.0, 1.0) };
+        let (cx, cy) = (a.x as f64 + t * abx, a.y as f64 + t * aby);
+        ((q.x as f64 - cx).powi(2) + (q.y as f64 - cy).powi(2)).sqrt()
+    }
+
+    fn min_distance(a: &[Point], b: &[Point]) -> f64 {
+        a.iter().flat_map(|&q| b.windows(2).map(move |s| dist_to_segment(q, s[0], s[1]))).chain(b.iter().flat_map(|&q| a.windows(2).map(move |s| dist_to_segment(q, s[0], s[1])))).fold(f64::MAX, f64::min)
+    }
+
+    #[test]
+    fn dp_meander_lines_start_and_end_on_their_own_offset_baseline_ends_and_reach_the_target() {
+        // Baseline along +x, pair centres 300 um apart: A above (offset +150, since +offset turns the direction -90
+        // degrees, i.e. towards -y), B below.
+        let (a, b) = (p(0, 0), p(20_000, 0));
+        let r = generate_dp_meander(a, b, 150, -150, 400, 800, 23_000, false).expect("room for this");
+        assert_eq!((r.a.first(), r.a.last()), (Some(&p(0, -150)), Some(&p(20_000, -150))));
+        assert_eq!((r.b.first(), r.b.last()), (Some(&p(0, 150)), Some(&p(20_000, 150))));
+        let longest = r.a_length.max(r.b_length);
+        assert!((longest - 23_000).abs() <= 3, "longest line {longest} vs target 23000");
+        // the miters only trade a little length between the lines
+        assert!((r.a_length - r.b_length).abs() < 450, "a {} b {}", r.a_length, r.b_length);
+        assert_eq!(r.a_length, polyline_length(&r.a));
+    }
+
+    #[test]
+    fn dp_meander_lines_stay_one_pair_spacing_apart_everywhere() {
+        let r = generate_dp_meander(p(0, 0), p(20_000, 0), 150, -150, 400, 800, 23_000, false).unwrap();
+        let d = min_distance(&r.a, &r.b);
+        assert!((299.0..=303.0).contains(&d), "closest approach {d} um, expected the 300 um centre spacing");
+    }
+
+    #[test]
+    fn dp_meander_works_down_a_vertical_baseline_and_with_asymmetric_offsets() {
+        // +y baseline: +offset turns the direction (0,1) -90 degrees to (1,0), so A is on the +x side.
+        let r = generate_dp_meander(p(0, 0), p(0, 20_000), 200, -100, 400, 800, 23_000, true).expect("vertical pair");
+        assert_eq!((r.a.first(), r.a.last()), (Some(&p(200, 0)), Some(&p(200, 20_000))));
+        assert_eq!((r.b.first(), r.b.last()), (Some(&p(-100, 0)), Some(&p(-100, 20_000))));
+        assert!((r.a_length.max(r.b_length) - 23_000).abs() <= 3);
+    }
+
+    #[test]
+    fn dp_meander_raises_a_too_small_amplitude_and_spacing_to_what_the_pair_can_fold() {
+        // 2 mm between the lines but only 100 um straight asked for: the dual `spacing()` (2 * |offset| at least) takes
+        // over, and bumps never get shallower than `MinAmplitude` (|offset| + ...), so the lines fold cleanly instead of
+        // overlapping.
+        let r = generate_dp_meander(p(0, 0), p(40_000, 0), 1000, -1000, 1500, 100, 48_000, false).expect("a clean fold");
+        let ys: Vec<Um> = r.a.iter().map(|q| q.y).collect();
+        let swing = ys.iter().max().unwrap() - ys.iter().min().unwrap();
+        assert!(swing >= 2 * 1000, "line A swings {swing} um end to end -- every bump at least |offset| tall each way");
+        assert!(!lines_conflict(&r.a, &r.b));
+        assert!((r.a_length.max(r.b_length) - 48_000).abs() <= 3);
+    }
+
+    #[test]
+    fn lines_conflict_flags_a_crossing_pair_and_a_folded_line() {
+        // two lines that cross
+        assert!(lines_conflict(&[p(0, 0), p(10, 10)], &[p(0, 10), p(10, 0)]));
+        // one line that folds back over itself (a bow-tie)
+        assert!(lines_conflict(&[p(0, 0), p(10, 10), p(10, 0), p(0, 10)], &[p(100, 100), p(110, 100)]));
+        // parallel runs never conflict, and neither does a line meeting its own neighbour at a corner
+        assert!(!lines_conflict(&[p(0, 0), p(10, 0), p(10, 10)], &[p(0, 5), p(5, 5), p(5, 20)]));
+    }
+
+    #[test]
+    fn pick_periods_prefers_the_fewest_biggest_bumps_and_degrades_at_the_edges() {
+        // 4828 um of summed amplitude over 19.8 mm of run with 800 um spacing: 13 full bumps would need 20 mm -- too
+        // long -- so 12 bumps of the full 400 um amplitude come closest (it falls 23 um short).
+        assert_eq!(pick_periods(4000.0, 19_872.0, 800.0, 400, 151), Some((12, 4800)));
+        // plenty of room: the fewest bumps whose amplitude stays within the cap (3000 um extra -> 3622 summed -> 10 bumps)
+        assert_eq!(pick_periods(3000.0, 19_872.0, 800.0, 400, 151), Some((10, 3621)));
+        // less than one minimum-size bump adds, but at least half of it: take the one bump
+        assert_eq!(pick_periods(100.0, 19_872.0, 800.0, 400, 151), Some((1, 151)));
+        // and less than half of it: nothing
+        assert_eq!(pick_periods(40.0, 19_872.0, 800.0, 400, 151), None);
+        assert_eq!(pick_periods(-5.0, 19_872.0, 800.0, 400, 151), None);
+    }
+
+    #[test]
+    fn zigzag_alternates_sides_with_exact_45_degree_legs_and_amplitudes_summing_to_the_request() {
+        let z = zigzag(p(0, 0), p(10_000, 0), 4, 1_002, 500, false).expect("fits");
+        // amplitudes 251, 251, 250, 250 (the remainder goes to the first bumps)
+        assert_eq!(&z[..4], &[p(0, 0), p(251, -251), p(751, -251), p(1_002, 0)]);
+        assert_eq!(z[4], p(1_253, 251), "second bump swings the other way");
+        assert_eq!(z.last(), Some(&p(10_000, 0)));
+        for w in z.windows(2) {
+            let (dx, dy) = ((w[1].x - w[0].x).abs(), (w[1].y - w[0].y).abs());
+            assert!(dx == 0 || dy == 0 || dx == dy, "{w:?} is not axis-aligned or 45 degrees");
+        }
+        // bumps that overrun the run are refused
+        assert!(zigzag(p(0, 0), p(1_000, 0), 4, 1_002, 500, false).is_none());
+    }
+
+    #[test]
+    fn dp_meander_has_nothing_to_add_for_a_diagonal_baseline_or_a_target_that_is_not_longer() {
+        assert_eq!(generate_dp_meander(p(0, 0), p(10_000, 10_000), 150, -150, 400, 800, 30_000, false).unwrap_err(), DpMeanderError::NothingToAdd);
+        assert_eq!(generate_dp_meander(p(0, 0), p(10_000, 0), 150, -150, 400, 800, 10_000, false).unwrap_err(), DpMeanderError::NothingToAdd);
+        assert_eq!(generate_dp_meander(p(0, 0), p(10_000, 0), 150, -150, 0, 800, 12_000, false).unwrap_err(), DpMeanderError::NothingToAdd);
+        // shorter than the lead-in the offset needs
+        assert_eq!(generate_dp_meander(p(0, 0), p(60, 0), 150, -150, 400, 800, 400, false).unwrap_err(), DpMeanderError::NothingToAdd);
+    }
+
+    #[test]
+    fn simplify_collinear_merges_straight_runs_but_keeps_corners_and_reversals() {
+        let pts = vec![p(0, 0), p(0, 0), p(10, 0), p(20, 0), p(20, 10), p(20, 20), p(20, 10)];
+        // (0,0),(0,0) dedup; (10,0) is on the run; (20,0) is a corner; (20,10) is on the run up but the last leg
+        // doubles back, so (20,20) is a real reversal and stays.
+        assert_eq!(simplify_collinear(pts), vec![p(0, 0), p(20, 0), p(20, 20), p(20, 10)]);
+        assert_eq!(simplify_collinear(vec![p(0, 0), p(5, 5)]), vec![p(0, 0), p(5, 5)]);
+        assert_eq!(simplify_collinear(vec![p(1, 1), p(1, 1)]), vec![p(1, 1)]);
+    }
+
+    #[test]
+    fn segments_touch_covers_crossings_endpoint_contact_and_collinear_overlap() {
+        assert!(segments_touch(p(0, 0), p(10, 10), p(0, 10), p(10, 0)), "X crossing");
+        assert!(segments_touch(p(0, 0), p(10, 0), p(10, 0), p(10, 10)), "shared endpoint");
+        assert!(segments_touch(p(0, 0), p(10, 0), p(5, 0), p(15, 0)), "collinear overlap");
+        assert!(!segments_touch(p(0, 0), p(10, 0), p(11, 0), p(20, 0)), "collinear but apart");
+        assert!(!segments_touch(p(0, 0), p(10, 0), p(0, 5), p(10, 5)), "parallel");
+        assert!(!segments_touch(p(0, 0), p(10, 0), p(5, 5), p(5, 1)), "stops short of the line");
     }
 }

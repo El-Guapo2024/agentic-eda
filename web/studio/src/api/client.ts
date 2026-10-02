@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { DrcEngine, BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, Um } from "./types";
+import type { DrcEngine, BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
@@ -272,7 +272,9 @@ export function postSchNetlist(req: SchNetlistRequest): Promise<FabReply> {
 export async function fetchFootprint(name: string): Promise<LibraryFootprint> {
   const f = await getJson<LibraryFootprint & { error?: string }>(`/api/footprint?name=${encodeURIComponent(name)}`);
   if (f.error) throw new ApiError(f.error);
-  return f;
+  // The IR omits an empty `graphics`/`texts`/`fields` list (`skip_serializing_if = "Vec::is_empty"`), so a fresh footprint
+  // (New Footprint, or any one nothing has been drawn in yet) arrives without them -- the editor iterates them unconditionally.
+  return { ...f, pads: f.pads ?? [], graphics: f.graphics ?? [], texts: f.texts ?? [], fields: f.fields ?? [] };
 }
 
 export async function fetchFootprintLibraryNames(): Promise<FootprintLibraryNames> {
@@ -397,17 +399,20 @@ export function routeCancel(): Promise<{ ok: boolean }> {
  * `eda_pns::dragger::Dragger` reuses the exact same walkaround/shove/
  * mark-obstacles modes a route session does. Omit to keep the backend's
  * own default (`Mode::Walkaround`). No `removeLoops` here -- upstream's own
- * `DRAGGER` never calls `removeLoops` either, a route-only concept. */
-export function routeDragStart(x: Um, y: Um, layer: string, mode?: RouteMode): Promise<DragPreview> {
-  return postJson("/api/route/drag_start", { x, y, layer, mode });
+ * `DRAGGER` never calls `removeLoops` either, a route-only concept.
+ * `freeAngle` is `PNS::DM_FREE_ANGLE` (`G`, `pcbnew.InteractiveRouter.DragFreeAngle`):
+ * the drag then only marks obstacles whatever `mode` is (`DRAGGER::Drag`). */
+export function routeDragStart(x: Um, y: Um, layer: string, mode?: RouteMode, freeAngle?: boolean): Promise<DragPreview> {
+  // The backend reads whole micrometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, mode, free_angle: freeAngle ? true : undefined });
 }
 
 export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
-  return postJson("/api/route/drag_move", { x, y });
+  return postJson("/api/route/drag_move", { x: Math.round(x), y: Math.round(y) });
 }
 
 export function routeDragFinish(x: Um, y: Um): Promise<CmdReply> {
-  return postJson("/api/route/drag_finish", { x, y });
+  return postJson("/api/route/drag_finish", { x: Math.round(x), y: Math.round(y) });
 }
 
 // `6`: route a differential pair (gap #7 task item 6) -- wired into
@@ -445,10 +450,14 @@ export interface TuneLengthRequest {
   spacing: Um;
   targetLength: Um;
   flip: boolean;
+  /** `7` single (default), `8` diffpair, `9` skew. */
+  mode?: TuneMode;
+  /** `9`: how much longer than the partner net this line should end up (0: equal length). */
+  targetSkew?: Um;
 }
 
 function tuneLengthBody(req: TuneLengthRequest) {
-  return { track_id: req.trackId, amplitude: req.amplitude, spacing: req.spacing, target_length: req.targetLength, flip: req.flip };
+  return { track_id: req.trackId, amplitude: req.amplitude, spacing: req.spacing, target_length: req.targetLength, flip: req.flip, mode: req.mode ?? "single", target_skew: req.targetSkew ?? 0 };
 }
 
 export function tuneLengthPreview(req: TuneLengthRequest): Promise<TuneLengthReply> {

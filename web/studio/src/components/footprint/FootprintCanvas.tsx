@@ -18,12 +18,20 @@ import { isMac } from "../../platform";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
 import { nextPadNumber } from "../../kicad-port/padNumbering";
+import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { arcClick, arcMotion, arcRemoveLastPoint } from "../../kicad-port/arcGeom";
+import { bezierClick, bezierFinishDouble, bezierMotion, bezierRemoveLastPoint } from "../../kicad-port/bezierGeom";
+import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "../canvas/curveTools";
+
+/** The footprint editor's fixed graphic line width (`footprintToShapeArg`'s own 150 um). */
+const DRAW_STROKE_WIDTH_UM = 150;
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import "../../styles/canvas.css";
 
-const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon">> = {
+const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
   draw_segment: "segment",
   draw_arc: "arc",
+  draw_bezier: "bezier",
   draw_rect: "rect",
   draw_circle: "circle",
   draw_polygon: "polygon",
@@ -105,10 +113,18 @@ function shapePoints(s: CmdShape): [number, number][] {
       ];
     case "polygon":
       return s.pts.map((p) => [p.x, p.y]);
+    case "bezier":
+      return bezierPolyline([s.start.x, s.start.y], [s.c1.x, s.c1.y], [s.c2.x, s.c2.y], [s.end.x, s.end.y], 5);
   }
 }
 
 function graphicHitDistance(s: CmdShape, wx: number, wy: number): number {
+  if (s.kind === "bezier") {
+    const poly = shapePoints(s);
+    let best = Infinity;
+    for (let i = 0; i + 1 < poly.length; i++) best = Math.min(best, distToSegment(wx, wy, poly[i]![0], poly[i]![1], poly[i + 1]![0], poly[i + 1]![1]));
+    return best;
+  }
   if (s.kind === "circle") {
     const r = Math.hypot(s.end.x - s.center.x, s.end.y - s.center.y);
     return Math.abs(Math.hypot(wx - s.center.x, wy - s.center.y) - r);
@@ -136,9 +152,11 @@ type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] }
   | { kind: "move"; refs: string[]; moveKind: "pad" | "graphic" | "text"; startWorld: [number, number] };
 
-function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon", pts: [number, number][], layer: string): CmdShape | null {
+function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier", pts: [number, number][], layer: string): CmdShape | null {
   const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
   switch (kind) {
+    case "bezier":
+      return null; // built from the construction manager's `BezierCurve`, never from a bare point list
     case "segment":
       return pts.length >= 2 ? { kind: "segment", layer, stroke_width: 150, filled: false, start: p(0), end: p(1) } : null;
     case "rect":
@@ -158,7 +176,8 @@ function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "poly
 // false and placement only ever ends on an explicit Enter/double-click
 // (`finishDraw`), same convention zones/polygons use everywhere else in
 // this app.
-const AUTO_FINISH: Partial<Record<"segment" | "rect" | "circle" | "arc" | "polygon", number>> = { segment: 2, rect: 2, circle: 2, arc: 3 };
+// (An arc and a Bezier are not point-counted either: kicad-port/arcGeom.ts / bezierGeom.ts decide when they are complete.)
+const AUTO_FINISH: Partial<Record<"segment" | "rect" | "circle" | "arc" | "polygon" | "bezier", number>> = { segment: 2, rect: 2, circle: 2 };
 
 export function FootprintCanvas() {
   const state = useFpState();
@@ -190,7 +209,14 @@ export function FootprintCanvas() {
   // Canvas.tsx's own board-outline fit uses -- here the "outline" is every
   // pad's bounding box (plus a fallback box for a brand-new, empty
   // footprint, so the view still initializes to something sane).
+  // (`fitName` is the footprint this view was last fitted for. Switching straight from one open footprint to another -- New
+  // Footprint while one is open -- never passes through `fp == null`, so `fp != null` alone would not re-run this.)
+  const fitNameRef = useRef<string | null>(null);
   useEffect(() => {
+    if (fitNameRef.current !== state.name) {
+      fitNameRef.current = state.name;
+      userMovedRef.current = false;
+    }
     if (!fp || userMovedRef.current || containerSize.width < 50 || containerSize.height < 50) return;
     const pts: [number, number][] = [];
     for (const p of fp.pads) {
@@ -207,7 +233,7 @@ export function FootprintCanvas() {
     // Only once per footprint open, not on every pad edit -- see
     // state.name's own SET_NAME reset of viewInitialized.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp != null, containerSize, dispatch]);
+  }, [fp != null, state.name, containerSize, dispatch]);
 
   useEffect(() => {
     userMovedRef.current = false;
@@ -277,10 +303,20 @@ export function FootprintCanvas() {
   const finishDraw = useCallback(() => {
     const draw = state.drawState;
     if (!draw) return;
+    // An arc ends only when its three points are in (ARC_GEOM_MANAGER); Enter / a double-click leave it running.
+    if (draw.shapeKind === "arc") return;
+    if (draw.shapeKind === "bezier") {
+      // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
+      const at = state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, state.gridUm) : draw.bezier?.lastPoint;
+      const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
+      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_UM));
+      dispatch({ type: "SET_DRAW_STATE", draw: null });
+      return;
+    }
     const shape = footprintToShapeArg(draw.shapeKind, draw.pts, state.activeLayer);
     if (shape) void api.addGraphic(shape);
     dispatch({ type: "SET_DRAW_STATE", draw: null });
-  }, [state.drawState, state.activeLayer, api, dispatch]);
+  }, [state.drawState, state.activeLayer, state.cursorUm, state.gridUm, api, dispatch]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
@@ -295,14 +331,47 @@ export function FootprintCanvas() {
 
     const [sx, sy] = snapPoint(wx, wy, state.gridUm);
 
+    // `EDIT_TOOL::doMoveSelection` armed (Duplicate hands its copies straight to it): a click drops them where they are now.
+    if (state.activeTool === "move" && state.duplicatePending) {
+      const mp = state.movePreview;
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      void api.commitMove(mp?.refs ?? [...state.selection], mp?.dxUm ?? 0, mp?.dyUm ?? 0);
+      return;
+    }
+
     if (state.activeTool === "pad" && fp) {
       const number = nextPadNumber(fp.pads);
       const pad: LibraryPad = { ...padTemplateRef.current, number, at: { x: sx, y: sy } };
       void api.addPad(pad);
+      dispatch({ type: "SET_LAST_PAD_NUMBER", number }); // `PAD_PLACER::CreateItem`: `m_padTool->SetLastPadNumber( padNumber )`
+      return;
+    }
+
+    // DRAWING_TOOL::SetAnchor: one click, `footprint->MoveAnchorPosition( footprint->GetPosition() - cursorPos )`
+    // (every pad/graphic/text shifts so the clicked point becomes the origin), then the tool is popped.
+    if (state.activeTool === "anchor") {
+      void api.setAnchor({ x: sx, y: sy });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       return;
     }
 
     const shapeKind = SHAPE_TOOL_KIND[state.activeTool];
+    // DRAWING_TOOL::drawArc: centre, start, end -- ARC_GEOM_MANAGER decides what each click means and when the arc is done.
+    if (shapeKind === "arc") {
+      const prev = state.drawState?.shapeKind === "arc" ? state.drawState.arc : undefined;
+      const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap("45", e));
+      if (arc) void api.addGraphic({ kind: "arc", layer: state.activeLayer, stroke_width: DRAW_STROKE_WIDTH_UM, filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) });
+      dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
+      return;
+    }
+    // DRAWING_TOOL::drawOneBezier (via DrawBezier's chaining loop): start, control 1, end, control 2.
+    if (shapeKind === "bezier") {
+      const prev = state.drawState?.shapeKind === "bezier" ? state.drawState.bezier : undefined;
+      const { geom, curve } = bezierClick(prev, [sx, sy]);
+      if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_UM));
+      dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
+      return;
+    }
     if (shapeKind) {
       const already = state.drawState?.shapeKind === shapeKind ? state.drawState.pts : [];
       const pts: [number, number][] = [...already, [sx, sy]];
@@ -341,6 +410,22 @@ export function FootprintCanvas() {
   const onPointerMove = (e: React.PointerEvent) => {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
+    // `drawArc` / `drawOneBezier`'s motion branch: update the construction manager's geometry (never its step) with the snapped cursor.
+    const draw = state.drawState;
+    if (draw && (draw.arc || draw.bezier)) {
+      const [sx, sy] = snapPoint(wx, wy, state.gridUm);
+      if (draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcMotion(draw.arc, [sx, sy], arcAngleSnap("45", e)) } });
+      else if (draw.bezier) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, bezier: bezierMotion(draw.bezier, [sx, sy]) } });
+    }
+    // The armed Move (a Duplicate's pick-up): the selection follows the snapped cursor from where it was picked up.
+    if (state.activeTool === "move" && state.duplicatePending && state.selection.size > 0) {
+      const [sx, sy] = snapPoint(wx, wy, state.gridUm);
+      // No pointer position was known when the copies were picked up (`doMoveSelection`'s `originalCursorPos`): the first move is it.
+      if (!state.moveOriginUm) dispatch({ type: "SET_MOVE_ORIGIN", at: { x: sx, y: sy } });
+      const origin = state.moveOriginUm ?? { x: sx, y: sy };
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], dxUm: sx - origin.x, dyUm: sy - origin.y } });
+      return;
+    }
     const drag = dragRef.current;
     if (!drag) return;
     if (drag.kind === "pan") {
@@ -358,21 +443,8 @@ export function FootprintCanvas() {
     dragRef.current = null;
     if (!drag) return;
     if (drag.kind === "move" && state.movePreview) {
-      const { refs, kind, dxUm, dyUm } = state.movePreview;
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-      if (dxUm !== 0 || dyUm !== 0) {
-        for (const id of refs) {
-          if (kind === "pad") {
-            const p = api.padById(id);
-            if (p) void api.movePad(id, p.at.x + dxUm, p.at.y + dyUm);
-          } else if (kind === "graphic") {
-            void api.moveGraphic(id, dxUm, dyUm);
-          } else {
-            const t = api.textById(id);
-            if (t) void api.moveText(id, t.at.x + dxUm, t.at.y + dyUm);
-          }
-        }
-      }
+      const { refs, dxUm, dyUm } = state.movePreview;
+      void api.commitMove(refs, dxUm, dyUm); // one undo step for the whole drop
     }
   };
 
@@ -402,7 +474,25 @@ export function FootprintCanvas() {
       return;
     }
     if (e.key === "Escape") {
+      // `EDIT_TOOL::Duplicate`: a cancelled pick-up `commit.Revert()`s the copies -- the duplicate was the last undo step.
+      if (state.duplicatePending) {
+        dispatch({ type: "SET_DUPLICATE_PENDING", pending: false });
+        void api.undo();
+      }
       dispatch({ type: "ESCAPE" });
+      return;
+    }
+    // Backspace mid-draw -> `deleteLastPoint`: the construction manager steps back one point.
+    if (e.key === "Backspace" && state.drawState && (state.drawState.arc || state.drawState.bezier)) {
+      e.preventDefault();
+      const draw = state.drawState;
+      if (draw.arc) {
+        const g = arcRemoveLastPoint(draw.arc);
+        dispatch({ type: "SET_DRAW_STATE", draw: g.step === 0 ? null : { ...draw, arc: g, pts: arcClickPoints(g) } });
+      } else if (draw.bezier) {
+        const g = bezierRemoveLastPoint(draw.bezier);
+        dispatch({ type: "SET_DRAW_STATE", draw: g.step === 0 ? null : { ...draw, bezier: g } });
+      }
       return;
     }
     if ((e.key === "Delete" || e.key === "Backspace") && state.selection.size > 0 && state.activeTool === "select") {
@@ -439,6 +529,8 @@ export function FootprintCanvas() {
     const padRefs = refs.filter((r) => api.padById(r));
     const entries: MenuEntry[] = [
       { label: "Rotate 90° (R)", onSelect: () => padRefs.forEach((id) => void api.rotatePad(id, 1)), disabled: padRefs.length === 0 },
+      { label: "Duplicate (Ctrl+D)", onSelect: () => void api.duplicateSelection(false), disabled: refs.length === 0 },
+      { label: "Duplicate and Increment (Ctrl+Shift+D)", onSelect: () => void api.duplicateSelection(true), disabled: refs.length === 0 },
       { label: "Pad Properties...", onSelect: () => dispatch({ type: "SET_PAD_PROPERTIES_ID", id: padRefs[0]! }), disabled: padRefs.length !== 1 },
       { label: "Copy Pad Properties", onSelect: () => api.copyPadProperties(padRefs[0]!), disabled: padRefs.length !== 1 },
       { label: "Paste Pad Properties", onSelect: () => void api.pastePadProperties(padRefs), disabled: padRefs.length === 0 || !state.copiedPadProps },

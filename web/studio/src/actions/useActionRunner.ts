@@ -50,8 +50,12 @@ import { netAtPoint } from "../kicad-port/schNetAtPoint";
 import { selectConnection, selectNodeAt } from "../kicad-port/schConnection";
 import { goBack, goForward } from "../kicad-port/navHistory";
 import { nextLineMode, LINE_MODE_FREE, LINE_MODE_90, LINE_MODE_45 } from "../kicad-port/schLineMode";
+import { useFpApi, useFpDispatch } from "../state/footprintEditorStore";
+import { arcRemoveLastPoint, arcToggleClockwise } from "../kicad-port/arcGeom";
+import { bezierRemoveLastPoint } from "../kicad-port/bezierGeom";
+import { planPack } from "../kicad-port/packFootprints";
 import { useSymApi } from "../state/symbolEditorStore";
-import { useFpApi } from "../state/footprintEditorStore";
+import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 
@@ -71,6 +75,7 @@ export function useActionRunner() {
   const state = useStudioState();
   const symApi = useSymApi();
   const fpApi = useFpApi();
+  const fpDispatch = useFpDispatch();
   /** `m_afterItem` of find-next-marker (SCH_FIND_REPLACE_TOOL): the last ERC marker visited, so the next press continues from it. */
   const markerCursor = useRef<string | null>(null);
 
@@ -342,20 +347,24 @@ export function useActionRunner() {
     // Refuses while another click-to-place session (route/zone/shape/wire/
     // measure) is already mid-flight (`state.drawState`), same as real
     // pcbnew's tool stack never overlapping two interactive placements.
-    m.set(
-      "pcbnew.InteractiveRouter.Drag45Degree",
-      pcbOnly(() => {
-        if (!state.board || !state.cursorUm || state.drawState) return;
-        const toleranceUm = Math.max(150, 6 / state.view.scale);
-        const onePixelUm = 1 / state.view.scale;
-        const hit = findDraggableAt(state.board, state.selection, state.cursorUm.x, state.cursorUm.y, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
-        if (!hit) {
-          dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
-          return;
-        }
-        void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings.mode, dispatch);
-      })
-    );
+    const startDragAtCursor = (freeAngle: boolean) => () => {
+      if (!state.board || !state.cursorUm || state.drawState) return;
+      const toleranceUm = Math.max(150, 6 / state.view.scale);
+      const onePixelUm = 1 / state.view.scale;
+      const hit = findDraggableAt(state.board, state.selection, state.cursorUm.x, state.cursorUm.y, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+      if (!hit) {
+        dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
+        return;
+      }
+      void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings.mode, dispatch, freeAngle);
+    };
+    m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
+    // `G` (EDIT_TOOL::Drag with `dragFreeAngle` -> `invokeInlineRouter( PNS::DM_ANY | PNS::DM_FREE_ANGLE )`,
+    // router_tool.cpp InlineDrag -> DRAGGER free-angle mode): the same grab as `D`, but the router only
+    // marks obstacles (crates/pns/src/dragger.rs "Free-angle mode"). `CanInlineDrag` refuses footprints for
+    // a free-angle drag ("Footprints cannot be dragged freely"), and `findDraggableAt` only ever finds a
+    // track or via. A selection hover is the same RequestSelection fallback `D` uses.
+    m.set("pcbnew.InteractiveRouter.DragFreeAngle", pcbOnly(startDragAtCursor(true)));
     // `Ctrl+<` (dialog_pns_settings.cpp): mode/remove-redundant-tracks,
     // read fresh by the next `X`/`D` session start -- see
     // `state.routerSettings`'s own doc comment on why this isn't live
@@ -367,14 +376,19 @@ export function useActionRunner() {
     // single straight track selected first (the dialog itself explains
     // this when opened with nothing/the wrong thing selected, same as
     // moveExact's own "only meaningful with something selected" gate).
-    m.set(
-      "pcbnew.LengthTuner.TuneSingleTrack",
+    // `8` / `9` (`PNS::DP_MEANDER_PLACER` / `PNS::MEANDER_SKEW_PLACER`): the same dialog, in pair / skew mode -- the clicked track picks the pair
+    // (`Start( aP, aStartItem )`: "Please select a track whose length you want to tune"), so like `7` they start from the selected -- or, with
+    // nothing selected, the hovered -- track.
+    const startTuner = (mode: "single" | "diffpair" | "skew") =>
       pcbOnly(() => {
-        const refs = [...state.selection];
+        const refs = requestSelection();
         if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
-        dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
-      })
-    );
+        if (state.selection.size === 0) dispatch({ type: "SET_SELECTION", refs });
+        dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true, mode });
+      });
+    m.set("pcbnew.LengthTuner.TuneSingleTrack", startTuner("single"));
+    m.set("pcbnew.LengthTuner.TuneDiffPair", startTuner("diffpair"));
+    m.set("pcbnew.LengthTuner.TuneDiffPairSkew", startTuner("skew"));
     // `tracks_cleaner.cpp` (task item 1): "Cleanup Tracks & Vias..." --
     // see components/CleanupTracksDialog.tsx. No selection gate (unlike
     // LengthTuner above) -- source's own dialog opens unconditionally and
@@ -488,7 +502,12 @@ export function useActionRunner() {
     // own undo domains (footprint_editor / symbol_editor); only the PCB/Schematic/3D tabs use the board's.
     m.set("common.Interactive.undo", () => void (state.tab === "footprint" ? fpApi.undo() : state.tab === "symbol" ? symApi.undo() : api.undo()));
     m.set("common.Interactive.redo", () => void (state.tab === "footprint" ? fpApi.redo() : state.tab === "symbol" ? symApi.redo() : api.redo()));
-    m.set("common.Interactive.duplicate", pcbOnly(() => api.duplicateSelection()));
+    // EDIT_TOOL::Duplicate: the board editor duplicates tracks/vias/zones/shapes/text; the footprint editor
+    // pads/graphics/text (state/footprintEditorStore.tsx `duplicateSelection`).
+    m.set("common.Interactive.duplicate", () => {
+      if (state.tab === "pcb") void api.duplicateSelection();
+      else if (state.tab === "footprint") void fpApi.duplicateSelection(false);
+    });
     m.set("common.Interactive.copy", pcbOnly(() => api.copySelection()));
     m.set("common.Interactive.paste", pcbOnly(() => api.pasteClipboard()));
     // Task item 5: common/tool/group_tool.cpp (Ctrl+G/Ctrl+Shift+G -- see
@@ -1577,7 +1596,7 @@ export function useActionRunner() {
       const ratsnestEdges = state.ratsnest?.edges ?? [];
       const copperLayers = board?.layers ?? [];
       const routing = state.drawState?.kind === "route";
-      const shapeToolActive = state.activeTool === "draw_segment" || state.activeTool === "draw_arc" || state.activeTool === "draw_rect" || state.activeTool === "draw_circle" || state.activeTool === "draw_polygon";
+      const shapeToolActive = state.activeTool === "draw_segment" || state.activeTool === "draw_arc" || state.activeTool === "draw_bezier" || state.activeTool === "draw_rect" || state.activeTool === "draw_circle" || state.activeTool === "draw_polygon";
 
       // ---- toggleLock / lock / unlock -- board_editor_control.cpp BOARD_EDITOR_CONTROL::modifyLockSelected
       const modifyLock = (mode: "toggle" | "on" | "off") =>
@@ -1785,7 +1804,20 @@ export function useActionRunner() {
       if (draw?.kind === "zone" || draw?.kind === "shape") {
         m.set(
           "pcbnew.InteractiveDrawing.deleteLastPoint",
-          pcbOnly(() => dispatch({ type: "SET_DRAW_STATE", draw: draw.pts.length <= 1 ? null : { ...draw, pts: draw.pts.slice(0, -1) } }))
+          pcbOnly(() => {
+            // drawArc / drawOneBezier: `arcManager.RemoveLastPoint()` / `bezierManager.RemoveLastPoint()` -- the construction manager steps back one point.
+            if (draw.kind === "shape" && draw.arc) {
+              const g = arcRemoveLastPoint(draw.arc);
+              dispatch({ type: "SET_DRAW_STATE", draw: g.step === 0 ? null : { ...draw, arc: g, pts: arcClickPoints(g) } });
+              return;
+            }
+            if (draw.kind === "shape" && draw.bezier) {
+              const g = bezierRemoveLastPoint(draw.bezier);
+              dispatch({ type: "SET_DRAW_STATE", draw: g.step === 0 ? null : { ...draw, bezier: g } });
+              return;
+            }
+            dispatch({ type: "SET_DRAW_STATE", draw: draw.pts.length <= 1 ? null : { ...draw, pts: draw.pts.slice(0, -1) } });
+          })
         );
       }
 
@@ -1930,8 +1962,73 @@ export function useActionRunner() {
       }
     }
 
+    // ===================================================================
+    // The pcbnew rows of the hotkeyed-and-missing sweep (docs/parity/
+    // UI-ACTIONS.md): drawing-tool postures and the footprint editor's own
+    // actions. Each cites the KiCad function it ports (pcbnew/tools/*.cpp
+    // at 8303b2ad); the footprint editor is its own store, so those handlers
+    // read it at CALL time through `fpApi.getState()`.
+    // ===================================================================
+    {
+      // `/` (arcPosture) -- DRAWING_TOOL::drawArc: `arcManager.ToggleClockwise()` -- reverse which way round the arc under construction goes (and lock it).
+      // The board tab registers it only while an arc is actually being drawn, so `/` stays free for the router's own posture flip the rest of the time.
+      if (state.tab === "footprint" || (state.tab === "pcb" && state.drawState?.kind === "shape" && state.drawState.arc)) {
+        m.set("pcbnew.InteractiveDrawing.arcPosture", () => {
+          if (state.tab === "pcb") {
+            const draw = state.drawState;
+            if (draw?.kind === "shape" && draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcToggleClockwise(draw.arc) } });
+          } else {
+            const draw = fpApi.getState().drawState;
+            if (draw?.arc) fpDispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcToggleClockwise(draw.arc) } });
+          }
+        });
+      }
+
+      // Ctrl+Shift+B (bezier) -- DRAWING_TOOL::DrawBezier: arm "Draw Bezier Curve" (start, control 1, end, control 2; the curve chains), in either frame.
+      m.set("pcbnew.InteractiveDrawing.bezier", () => {
+        if (state.tab === "pcb") dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_bezier" ? "select" : "draw_bezier" });
+        else if (state.tab === "footprint") fpDispatch({ type: "SET_ACTIVE_TOOL", tool: fpApi.getState().activeTool === "draw_bezier" ? "select" : "draw_bezier" });
+      });
+
+      // Ctrl+Shift+N (setAnchor) -- DRAWING_TOOL::SetAnchor: "Make sense only in FP editor". Arms the anchor tool; its single click
+      // moves the anchor (`footprint->MoveAnchorPosition`, `Cmd::SetFootprintAnchor`) and the tool is popped.
+      m.set("pcbnew.InteractiveDrawing.setAnchor", () => {
+        if (state.tab !== "footprint" || !fpApi.getState().name) return;
+        const fs = fpApi.getState();
+        fpDispatch({ type: "SET_ACTIVE_TOOL", tool: fs.activeTool === "anchor" ? "select" : "anchor" });
+      });
+
+      // Ctrl+N (newFootprint) -- FOOTPRINT_EDITOR_CONTROL::NewFootprint -> PCB_BASE_FRAME::CreateNewFootprint: an empty SMD footprint called Untitled (made unique).
+      m.set("pcbnew.ModuleEditor.newFootprint", () => {
+        if (state.tab === "footprint") void fpApi.newFootprint();
+      });
+
+      // Ctrl+Shift+D (duplicateIncrementPads) -- EDIT_TOOL::Duplicate with `increment`: the footprint editor copies the selected pads (taking the next
+      // pad numbers), graphics and text and picks the copies up; on the board tab the increment only ever applies to pads, so it is a plain Duplicate.
+      m.set("pcbnew.InteractiveEdit.duplicateIncrementPads", () => {
+        if (state.tab === "pcb") void api.duplicateSelection();
+        else if (state.tab === "footprint") void fpApi.duplicateSelection(true);
+      });
+
+      // P (packAndMoveFootprints) -- EDIT_TOOL::PackAndMoveFootprints: the selected footprints (locked ones filtered out; the hovered one when nothing
+      // is selected) are packed by `SpreadFootprints` into a compact, reference-ordered block whose top-left is the selection's own top-left, then the
+      // Move tool picks the whole block up. The packed layout is a preview until the drop (one `move_to` batch = one undo step); Escape reverts it.
+      m.set("pcbnew.InteractiveEdit.packAndMoveFootprints", () => {
+        if (state.tab !== "pcb" || !state.board) return;
+        // `if( isRouterActive() || m_dragging ) { wxBell(); return 0; }`
+        const routing = state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair";
+        if (routing || state.activeTool === "move" || state.armed) return;
+        const plan = planPack(state.board.parts, requestSelection(), new Set(state.board.locked ?? []));
+        if (!plan) return;
+        dispatch({ type: "SET_SELECTION", refs: plan.refs });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: plan.refs, kind: "part", dxUm: 0, dyUm: 0, perRefOffsetUm: plan.offsets } });
+      });
+    }
+
     return m;
-  }, [api, dispatch, state, symApi]);
+  }, [api, dispatch, state, symApi, fpApi, fpDispatch]);
 
   // `registry.has(name)` alone used to be the whole check, but the
   // registry holds EVERY action's handler regardless of tab (every

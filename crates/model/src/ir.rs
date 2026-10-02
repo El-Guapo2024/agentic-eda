@@ -1485,53 +1485,75 @@ pub enum Shape {
         filled: bool,
         pts: Vec<Point>,
     },
+    /// `PCB_SHAPE` of type `BEZIER` (`gr_curve`): a cubic Bezier curve from
+    /// `start` to `end` with control points `c1` (near the start) and `c2`
+    /// (near the end), exactly KiCad's `(gr_curve (pts (xy start) (xy c1)
+    /// (xy c2) (xy end)))` order. Everything downstream that needs a polyline
+    /// (DRC, plot, board edge, export to a plain-geometry consumer) uses
+    /// [`Shape::bezier_points`] -- `BEZIER_POLY::GetPoly` at the board's
+    /// `m_MaxError`, the same flattening KiCad itself does
+    /// (`RebuildBezierToSegmentsPointsList`). Added after the other five
+    /// kinds existed, so nothing already on disk carries it.
+    Bezier {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        layer: String,
+        stroke_width: Um,
+        /// Meaningless for an open curve (KiCad never fills one); carried for schema uniformity, same as `Segment`/`Arc`.
+        #[serde(default)]
+        filled: bool,
+        start: Point,
+        c1: Point,
+        c2: Point,
+        end: Point,
+    },
 }
 
 impl Shape {
     pub fn id(&self) -> &str {
         match self {
-            Shape::Segment { id, .. } | Shape::Arc { id, .. } | Shape::Rect { id, .. } | Shape::Circle { id, .. } | Shape::Polygon { id, .. } => id,
+            Shape::Segment { id, .. } | Shape::Arc { id, .. } | Shape::Rect { id, .. } | Shape::Circle { id, .. } | Shape::Polygon { id, .. } | Shape::Bezier { id, .. } => id,
         }
     }
     pub fn set_id(&mut self, new_id: String) {
         match self {
-            Shape::Segment { id, .. } | Shape::Arc { id, .. } | Shape::Rect { id, .. } | Shape::Circle { id, .. } | Shape::Polygon { id, .. } => *id = new_id,
+            Shape::Segment { id, .. } | Shape::Arc { id, .. } | Shape::Rect { id, .. } | Shape::Circle { id, .. } | Shape::Polygon { id, .. } | Shape::Bezier { id, .. } => *id = new_id,
         }
     }
     pub fn layer(&self) -> &str {
         match self {
-            Shape::Segment { layer, .. } | Shape::Arc { layer, .. } | Shape::Rect { layer, .. } | Shape::Circle { layer, .. } | Shape::Polygon { layer, .. } => layer,
+            Shape::Segment { layer, .. } | Shape::Arc { layer, .. } | Shape::Rect { layer, .. } | Shape::Circle { layer, .. } | Shape::Polygon { layer, .. } | Shape::Bezier { layer, .. } => layer,
         }
     }
     /// `PCB_SHAPE::SetLayer` -- part of `dialog_pcb_shape_properties`'s own
     /// editable field set (GAPS.md #11), via `eda_ops::Cmd::EditShape`.
     pub fn set_layer(&mut self, new_layer: String) {
         match self {
-            Shape::Segment { layer, .. } | Shape::Arc { layer, .. } | Shape::Rect { layer, .. } | Shape::Circle { layer, .. } | Shape::Polygon { layer, .. } => *layer = new_layer,
+            Shape::Segment { layer, .. } | Shape::Arc { layer, .. } | Shape::Rect { layer, .. } | Shape::Circle { layer, .. } | Shape::Polygon { layer, .. } | Shape::Bezier { layer, .. } => *layer = new_layer,
         }
     }
     /// `PCB_SHAPE::SetWidth` (`STROKE_PARAMS`'s width -- see `set_layer`'s doc).
     pub fn set_stroke_width(&mut self, width: Um) {
         match self {
-            Shape::Segment { stroke_width, .. } | Shape::Arc { stroke_width, .. } | Shape::Rect { stroke_width, .. } | Shape::Circle { stroke_width, .. } | Shape::Polygon { stroke_width, .. } => {
+            Shape::Segment { stroke_width, .. } | Shape::Arc { stroke_width, .. } | Shape::Rect { stroke_width, .. } | Shape::Circle { stroke_width, .. } | Shape::Polygon { stroke_width, .. } | Shape::Bezier { stroke_width, .. } => {
                 *stroke_width = width
             }
         }
     }
     pub fn stroke_width(&self) -> Um {
         match self {
-            Shape::Segment { stroke_width, .. } | Shape::Arc { stroke_width, .. } | Shape::Rect { stroke_width, .. } | Shape::Circle { stroke_width, .. } | Shape::Polygon { stroke_width, .. } => *stroke_width,
+            Shape::Segment { stroke_width, .. } | Shape::Arc { stroke_width, .. } | Shape::Rect { stroke_width, .. } | Shape::Circle { stroke_width, .. } | Shape::Polygon { stroke_width, .. } | Shape::Bezier { stroke_width, .. } => *stroke_width,
         }
     }
     pub fn is_filled(&self) -> bool {
         match self {
-            Shape::Segment { filled, .. } | Shape::Arc { filled, .. } | Shape::Rect { filled, .. } | Shape::Circle { filled, .. } | Shape::Polygon { filled, .. } => *filled,
+            Shape::Segment { filled, .. } | Shape::Arc { filled, .. } | Shape::Rect { filled, .. } | Shape::Circle { filled, .. } | Shape::Polygon { filled, .. } | Shape::Bezier { filled, .. } => *filled,
         }
     }
     /// `PCB_SHAPE::SetFilled` (see `set_layer`'s doc).
     pub fn set_filled(&mut self, filled_value: bool) {
         match self {
-            Shape::Segment { filled, .. } | Shape::Arc { filled, .. } | Shape::Rect { filled, .. } | Shape::Circle { filled, .. } | Shape::Polygon { filled, .. } => *filled = filled_value,
+            Shape::Segment { filled, .. } | Shape::Arc { filled, .. } | Shape::Rect { filled, .. } | Shape::Circle { filled, .. } | Shape::Polygon { filled, .. } | Shape::Bezier { filled, .. } => *filled = filled_value,
         }
     }
     /// Every point the geometry is made of, in a stable order -- used both
@@ -1544,6 +1566,16 @@ impl Shape {
             Shape::Rect { start, end, .. } => vec![*start, *end],
             Shape::Circle { center, end, .. } => vec![*center, *end],
             Shape::Polygon { pts, .. } => pts.clone(),
+            Shape::Bezier { start, c1, c2, end, .. } => vec![*start, *c1, *c2, *end],
+        }
+    }
+    /// A `Bezier`'s flattened polyline (`EDA_SHAPE::RebuildBezierToSegmentsPointsList`:
+    /// `BEZIER_POLY::GetPoly` at the board's `m_MaxError`, [`crate::bezier::BEZIER_MAX_ERROR_UM`]);
+    /// `None` for every other kind.
+    pub fn bezier_points(&self) -> Option<Vec<Point>> {
+        match self {
+            Shape::Bezier { start, c1, c2, end, .. } => Some(crate::bezier::bezier_polyline(*start, *c1, *c2, *end, crate::bezier::BEZIER_MAX_ERROR_UM)),
+            _ => None,
         }
     }
     /// Shift every point of the geometry by `(dx, dy)` -- what dragging a
@@ -1570,6 +1602,12 @@ impl Shape {
                 shift(end);
             }
             Shape::Polygon { pts, .. } => pts.iter_mut().for_each(shift),
+            Shape::Bezier { start, c1, c2, end, .. } => {
+                shift(start);
+                shift(c1);
+                shift(c2);
+                shift(end);
+            }
         }
     }
     fn id_seed(&self) -> String {
@@ -1579,6 +1617,7 @@ impl Shape {
             Shape::Rect { .. } => "rect",
             Shape::Circle { .. } => "circle",
             Shape::Polygon { .. } => "polygon",
+            Shape::Bezier { .. } => "bezier",
         };
         let pts: Vec<String> = self.points().iter().map(|p| format!("{},{}", p.x, p.y)).collect();
         format!("{kind}|{}|{}", self.layer(), pts.join(";"))

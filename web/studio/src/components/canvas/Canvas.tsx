@@ -40,6 +40,9 @@ import { openPropertiesFor } from "./properties";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner, removeCorner } from "../../kicad-port/zonePointEditor";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
+import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
+import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
+import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
 import "../../styles/canvas.css";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
@@ -64,23 +67,27 @@ const ANCHOR_SNAP_UM = 500;
 /** No per-board "default graphic line width" setting exists (board_rules only covers track/via) -- a plain 0.15mm default, same order of magnitude as KiCad's own out-of-the-box default (0.15-0.2mm silkscreen line width, by version/theme). */
 // (DEFAULT_STROKE_WIDTH_UM now lives in kicad-port/pcbParityState.ts -- incWidth/decWidth step state.pcbx.drawStrokeWidthUm from it.)
 /** How many points finish a given drawing-tool shape by itself, once reached, without waiting for an explicit Enter/double-click -- a plain 2-point line/rect/circle doesn't need a third confirmation the way a polygon does. Arc is start/mid/end (3); zone/polygon/route have no auto-finish (arbitrary length). */
-function shapeAutoFinishCount(kind: "segment" | "arc" | "rect" | "circle" | "polygon"): number | null {
+type ShapeToolKind = "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
+
+function shapeAutoFinishCount(kind: ShapeToolKind): number | null {
   switch (kind) {
     case "segment":
     case "rect":
     case "circle":
       return 2;
-    case "arc":
-      return 3;
+    case "arc": // not point-counted: kicad-port/arcGeom.ts's ARC_GEOM_MANAGER (centre, start, end) decides when the arc is complete
+    case "bezier": // kicad-port/bezierGeom.ts's BEZIER_GEOM_MANAGER (four points, chained)
     case "polygon":
       return null;
   }
 }
 
 /** `pts` -> the matching `CmdShape` variant for `add_shape`, or null if there aren't enough points yet -- the IR's own point-count floor per kind (a polygon needs 3+, everything else exactly the fixed count `shapeAutoFinishCount` already enforces before this is ever called with too few). */
-function shapeFromPoints(kind: "segment" | "arc" | "rect" | "circle" | "polygon", pts: [number, number][], layer: string, widthUm: number): CmdShape | null {
+function shapeFromPoints(kind: ShapeToolKind, pts: [number, number][], layer: string, widthUm: number): CmdShape | null {
   const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
   switch (kind) {
+    case "bezier":
+      return null; // built from the construction manager's `BezierCurve`, never from a bare point list
     case "segment":
       return pts.length >= 2 ? { kind: "segment", layer, stroke_width: widthUm, filled: false, start: p(0), end: p(1) } : null;
     case "rect":
@@ -94,9 +101,10 @@ function shapeFromPoints(kind: "segment" | "arc" | "rect" | "circle" | "polygon"
   }
 }
 
-const SHAPE_TOOL_KIND: Partial<Record<ToolId, "segment" | "arc" | "rect" | "circle" | "polygon">> = {
+const SHAPE_TOOL_KIND: Partial<Record<ToolId, ShapeToolKind>> = {
   draw_segment: "segment",
   draw_arc: "arc",
+  draw_bezier: "bezier",
   draw_rect: "rect",
   draw_circle: "circle",
   draw_polygon: "polygon",
@@ -457,11 +465,21 @@ export function Canvas() {
       }
       dispatch({ type: "SET_DRAW_STATE", draw: null });
     } else if (draw.kind === "shape") {
+      // An arc ends only when its three points are in (ARC_GEOM_MANAGER); Enter / a double-click leave it running.
+      if (draw.shapeKind === "arc") return;
+      if (draw.shapeKind === "bezier") {
+        // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
+        const at = state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, board?.snap ?? state.gridUm) : draw.bezier?.lastPoint;
+        const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
+        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm) });
+        dispatch({ type: "SET_DRAW_STATE", draw: null });
+        return;
+      }
       const shape = shapeFromPoints(draw.shapeKind, draw.pts, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm);
       if (shape) api.cmd({ op: "add_shape", shape });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
     }
-  }, [state.drawState, state.activeLayer, state.pcbx, api, dispatch]);
+  }, [state.drawState, state.activeLayer, state.cursorUm, state.gridUm, state.pcbx, board, api, dispatch]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     // Throws NotFoundError for a synthesized pointer (common.Control.cursorClick's
@@ -588,6 +606,27 @@ export function Canvas() {
       }
 
       const shapeKind = SHAPE_TOOL_KIND[state.activeTool];
+      // DRAWING_TOOL::drawArc: centre, start, end -- ARC_GEOM_MANAGER decides what each click means and when the arc is done.
+      if (shapeKind === "arc") {
+        const draw = state.drawState;
+        const prev = draw?.kind === "shape" && draw.shapeKind === "arc" ? draw.arc : undefined;
+        const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap(state.pcbx.angleSnapMode, e));
+        if (arc) {
+          const shape: CmdShape = { kind: "arc", layer: state.activeLayer ?? "F.SilkS", stroke_width: state.pcbx.drawStrokeWidthUm, filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) };
+          void api.cmd({ op: "add_shape", shape });
+        }
+        dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
+        return;
+      }
+      // DRAWING_TOOL::drawOneBezier (via DrawBezier's chaining loop): start, control 1, end, control 2.
+      if (shapeKind === "bezier") {
+        const draw = state.drawState;
+        const prev = draw?.kind === "shape" && draw.shapeKind === "bezier" ? draw.bezier : undefined;
+        const { geom, curve } = bezierClick(prev, [sx, sy]);
+        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm) });
+        dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
+        return;
+      }
       if (shapeKind) {
         const draw = state.drawState;
         const already = draw?.kind === "shape" && draw.shapeKind === shapeKind ? draw.pts : [];
@@ -638,7 +677,7 @@ export function Canvas() {
 
     if (moveMode) {
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
-      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped);
+      if (state.movePreview) api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped, state.movePreview.perRefOffsetUm);
       return;
     }
     if (state.armed) {
@@ -807,6 +846,14 @@ export function Canvas() {
       }
     }
 
+    // `drawArc` / `drawOneBezier`'s motion branch: update the construction manager's geometry (never its step) with the snapped cursor.
+    if (board && state.drawState?.kind === "shape" && (state.drawState.arc || state.drawState.bezier)) {
+      const draw = state.drawState;
+      const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+      if (draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcMotion(draw.arc, [sx, sy], arcAngleSnap(state.pcbx.angleSnapMode, e)) } });
+      else if (draw.bezier) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, bezier: bezierMotion(draw.bezier, [sx, sy]) } });
+    }
+
     if (moveMode && state.selection.size > 0) {
       const origin = state.moveOriginUm ?? { x: wx, y: wy };
       const first = [...state.selection][0]!;
@@ -826,8 +873,9 @@ export function Canvas() {
       // Preserve whatever R/Shift+R/F have already accumulated on this
       // same preview (useActionRunner.ts) -- a fresh preview object every
       // pointer-move must not reset the live rotate/flip state.
-      const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns, flipped } });
+      // (`perRefOffsetUm` is Pack and Move's per-footprint packed shift -- it rides along until the drop.)
+      const { rotateQuarterTurns, flipped, perRefOffsetUm } = state.movePreview ?? {};
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetUm } });
       return;
     }
 

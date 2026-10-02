@@ -25,6 +25,23 @@
 //!   while-dragging path is a secondary mode this port doesn't implement;
 //!   `Mode::Shove` is the one that actually keeps the dragged item
 //!   obstacle-free.
+//!
+//! ## Free-angle mode (`DM_FREE_ANGLE`, `G`)
+//!
+//! `pcbnew.InteractiveRouter.DragFreeAngle` starts the same drag with
+//! `DM_ANY | DM_FREE_ANGLE`. In `DRAGGER` that flag (`m_freeAngleMode`)
+//! does exactly two things, both ported here via [`Dragger::free_angle`]:
+//!
+//! 1. `startDragSegment`: a grab in the middle of a segment drags its
+//!    nearer vertex (`DM_CORNER`) instead of sliding the whole segment
+//!    sideways (`DM_SEGMENT`) -- which is what [`Dragger::start`] already
+//!    does for every drag, so this port's corner drag *is* the free-angle
+//!    path (the 45-degree-constrained `dragCorner45` of plain `D` is the
+//!    part this port does not have).
+//! 2. `DRAGGER::Start`/`Drag`: shove is never set up and `Drag()` always
+//!    takes `dragMarkObstacles` -- whatever `Settings().Mode()` says --
+//!    so a free-angle drag only reports collisions, and `FixRoute` refuses
+//!    to commit a colliding result unless `AllowDRCViolations()`.
 
 use crate::item::{Item, ItemId, Net};
 use crate::layer::LayerRange;
@@ -60,6 +77,9 @@ pub struct Dragger {
     pub via_diameter: Um,
     pub via_drill: Um,
     pub source_via: Option<String>,
+    /// `m_freeAngleMode` (`DM_FREE_ANGLE`, the `G` hotkey): see the module
+    /// doc -- never shoves, only marks obstacles.
+    pub free_angle: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -106,9 +126,15 @@ impl Dragger {
     /// if `item_id` names something that can't be dragged (a pad) or
     /// doesn't exist.
     pub fn start(node: &Node, at: Point, item_id: ItemId) -> Option<Dragger> {
+        Self::start_with(node, at, item_id, false)
+    }
+
+    /// [`Self::start`] with `DM_FREE_ANGLE` (`free_angle`) -- `DRAGGER::Start`
+    /// reads it from the drag mode: `m_freeAngleMode = (m_mode & DM_FREE_ANGLE)`.
+    pub fn start_with(node: &Node, at: Point, item_id: ItemId, free_angle: bool) -> Option<Dragger> {
         let item = node.get(item_id)?;
         match item {
-            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: 0, original: Line::new(v.net.clone(), v.layers.start(), 0), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, source_via: v.source_via.clone() }),
+            Item::Via(v) => Some(Dragger { kind: DragKind::Via, net: v.net.clone(), layer: v.layers.start(), width: 0, original: Line::new(v.net.clone(), v.layers.start(), 0), grabbed_index: 0, via_id: Some(item_id), via_pos: v.pos, via_diameter: v.diameter, via_drill: v.drill, source_via: v.source_via.clone(), free_angle }),
             Item::Segment(seg) => {
                 let (seg_a, seg_b) = (seg.a, seg.b);
                 let line = node.assemble_line(item_id)?;
@@ -120,7 +146,7 @@ impl Dragger {
                 let ia = line.pts.iter().position(|&p| p == seg_a)?;
                 let ib = line.pts.iter().position(|&p| p == seg_b)?;
                 let grabbed_index = if dist2(at, line.pts[ia]) <= dist2(at, line.pts[ib]) { ia } else { ib };
-                Some(Dragger { kind: DragKind::Corner, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, source_via: None })
+                Some(Dragger { kind: DragKind::Corner, net: line.net.clone(), layer: line.layer, width: line.width, original: line, grabbed_index, via_id: None, via_pos: Point { x: 0, y: 0 }, via_diameter: 0, via_drill: 0, source_via: None, free_angle })
             }
             _ => None,
         }
@@ -172,7 +198,8 @@ impl Dragger {
         let (main_pts, fanout) = self.candidate(node, to);
         let exclude = self.exclude();
 
-        if settings.mode != Mode::Shove {
+        // `DRAGGER::Drag`: `if( m_freeAngleMode || m_forceMarkObstaclesMode ) dragMarkObstacles`.
+        if settings.mode != Mode::Shove || self.free_angle {
             // MarkObstacles (and Walkaround, simplified to the same thing
             // here -- see the module doc comment): just report collisions.
             let layers = LayerRange::single(self.layer);
@@ -349,6 +376,30 @@ mod tests {
         assert!(!preview.colliding, "shove must clear the crossing track rather than reporting a collision");
         assert_eq!(preview.displaced_lines.len(), 1);
         assert_eq!(preview.displaced_lines[0].source_track.as_deref(), Some("trkB"));
+    }
+
+    #[test]
+    fn free_angle_drag_never_shoves_it_only_reports_the_collision() {
+        let mut node = Node::new();
+        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 1000, y: 0 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 2500, y: -2000 }, b: Point { x: 2500, y: 2000 }, width: 200, source_track: Some(("trkB".into(), 0)), locked: false }));
+        let rules = rules();
+        // Shove mode: a plain drag pushes the crossing track aside ...
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let plain = Dragger::start(&node, Point { x: 1000, y: 0 }, seg_id).unwrap();
+        assert!(!plain.free_angle);
+        assert!(!plain.preview(&node, &rules, &settings, Point { x: 5000, y: 0 }).colliding);
+        // ... but DM_FREE_ANGLE (`G`) always takes `dragMarkObstacles`: nothing is displaced, the collision is reported.
+        let free = Dragger::start_with(&node, Point { x: 1000, y: 0 }, seg_id, true).unwrap();
+        assert!(free.free_angle);
+        let preview = free.preview(&node, &rules, &settings, Point { x: 5000, y: 0 });
+        assert!(preview.colliding, "a free-angle drag must report, not resolve, the collision");
+        assert!(preview.displaced_lines.is_empty());
+        // `FixRoute` refuses the colliding drop (outside MarkObstacles + can_violate_drc) ...
+        assert!(free.finish(&node, &rules, &settings, Point { x: 5000, y: 0 }).is_none());
+        // ... and commits a clear one, free angle included (the grabbed end simply follows the cursor).
+        let commit = free.finish(&node, &rules, &settings, Point { x: 1000, y: 1000 }).expect("a clear free-angle drop commits");
+        assert_eq!(commit.tracks[0].pts, vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 1000 }]);
     }
 
     #[test]

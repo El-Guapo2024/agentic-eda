@@ -42,6 +42,11 @@ export function nextPadNumberAfter(pads: ReadonlyArray<Pick<LibraryPad, "number"
  * Rust port's own doc). `"1"` for an empty footprint.
  */
 export function nextPadNumber(pads: ReadonlyArray<Pick<LibraryPad, "number">>): string {
+  return nextPadNumberAfter(pads, highestPadNumber(pads));
+}
+
+/** The number of the pad whose trailing integer is highest ("0" for none) -- this editor's stand-in for `PAD_TOOL::m_lastPadNumber` (see `nextPadNumber`'s own doc). */
+export function highestPadNumber(pads: ReadonlyArray<Pick<LibraryPad, "number">>): string {
   let bestLast = "0";
   let bestNum = -1;
   for (const p of pads) {
@@ -51,5 +56,5 @@ export function nextPadNumber(pads: ReadonlyArray<Pick<LibraryPad, "number">>): 
       bestLast = p.number;
     }
   }
-  return nextPadNumberAfter(pads, bestLast);
+  return bestLast;
 }

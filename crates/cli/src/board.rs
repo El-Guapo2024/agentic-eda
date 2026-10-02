@@ -824,6 +824,7 @@ fn cmd_line(c: &Cmd) -> String {
         // either (same reasoning the schematic verbs' own comment above
         // gives) -- activity.jsonl's human-readable line only.
         Cmd::OpenFootprintForEdit { name } => format!("footprint open {name:?}"),
+        Cmd::NewFootprint { name } => format!("footprint new {name:?}"),
         Cmd::DeleteLibraryFootprint { name } => format!("footprint delete {name:?}"),
         Cmd::EditFootprintProperties { name, description, .. } => format!("footprint properties {name:?} --description {description:?}"),
         Cmd::SetFootprintAnchor { name, at } => format!("footprint anchor {name:?} --at {},{}", mm(at.x), mm(at.y)),
@@ -871,6 +872,7 @@ fn shape_kind(shape: &Shape) -> &'static str {
         Shape::Rect { .. } => "rect",
         Shape::Circle { .. } => "circle",
         Shape::Polygon { .. } => "polygon",
+        Shape::Bezier { .. } => "bezier",
     }
 }
 
@@ -969,7 +971,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => "schematic-erc-pin-map",
         Cmd::Annotate { .. } => "schematic-annotate",
 
-        Cmd::OpenFootprintForEdit { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
+        Cmd::OpenFootprintForEdit { .. } | Cmd::NewFootprint { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
         Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::RenumberPads { .. } => "pad",
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",

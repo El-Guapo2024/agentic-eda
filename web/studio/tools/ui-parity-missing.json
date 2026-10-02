@@ -1,0 +1,7 @@
+{
+  "pcbnew.InteractiveDrawing.placeDesignBlock": "needs a design-block library (reusable sub-board blocks); this studio has no block library or block IR",
+  "pcbnew.InteractiveDrawing.placeImportedGraphics": "needs a DXF/SVG graphics importer; none exists and no new dependencies are allowed",
+  "pcbnew.TableEditor.editTable": "needs table items (PCB_TABLE); the design IR has no table type",
+  "pcbnew.PadTool.explodePad": "needs custom-shape pads (a pad made of graphic primitives); the footprint IR models only the six standard pad shapes",
+  "pcbnew.PadTool.recombinePad": "needs custom-shape pads (a pad made of graphic primitives); the footprint IR models only the six standard pad shapes"
+}

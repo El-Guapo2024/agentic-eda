@@ -54,6 +54,7 @@ import * as THREE from "three";
 import type { BoardState, BoardText, Part, Shape, Side } from "../../api/types";
 import { layerColor } from "../canvas/layers";
 import { circleThrough, normalizeSweep } from "../canvas/painter";
+import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 
 // ---------------------------------------------------------------------
@@ -598,6 +599,9 @@ function shapePolylinePts(s: Shape): { pts: Array<[number, number]>; closed: boo
       }
       return { pts, closed: false };
     }
+    case "bezier":
+      // `BEZIER_POLY::GetPoly` at the board's max error -- the same flattening the 2D canvas draws.
+      return { pts: bezierPolyline(s.start, s.c1, s.c2, s.end, 5).map(([x, y]) => [mm(x), mm(y)] as [number, number]), closed: false };
   }
 }
 

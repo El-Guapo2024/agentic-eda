@@ -70,6 +70,8 @@ function shapeToCmd(s: Shape): CmdShape {
       return { kind: "circle", ...common, center: pt(s.center), end: pt(s.end) };
     case "polygon":
       return { kind: "polygon", ...common, pts: s.pts.map(pt) };
+    case "bezier":
+      return { kind: "bezier", ...common, start: pt(s.start), c1: pt(s.c1), c2: pt(s.c2), end: pt(s.end) };
   }
 }
 function textToCmd(t: BoardText): CmdText {
