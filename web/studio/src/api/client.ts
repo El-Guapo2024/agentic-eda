@@ -35,7 +35,7 @@ export function fetchView(): Promise<SharedView> {
   return getJson<SharedView>("/api/view");
 }
 
-export function postView(patch: Partial<Pick<SharedView, "tab" | "selection" | "center" | "scale">>): Promise<SharedView> {
+export function postView(patch: Partial<Pick<SharedView, "tab" | "selection" | "center" | "scale">> & { base_rev?: number }): Promise<SharedView> {
   return fetch("/api/view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then((r) => r.json() as Promise<SharedView>);
 }
 

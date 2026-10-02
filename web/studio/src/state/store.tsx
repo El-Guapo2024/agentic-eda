@@ -1373,10 +1373,16 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   // push our own tab/selection/camera back, debounced, as `ui`. Our own
   // revisions are never re-applied, so panning never fights itself.
   const lastViewRev = useRef(0);
+  // What the server's view last held for each field, as far as this page
+  // knows (applied from someone else, or pushed by us). Only fields that
+  // differ are pushed, so a camera move never overwrites a selection an
+  // agent just set (and vice versa).
+  const synced = useRef<{ tab?: string; selection?: string; camera?: string }>({});
   const applyRemoteView = useCallback((v: SharedView) => {
     if (v.rev <= lastViewRev.current) return;
     lastViewRev.current = v.rev;
     if (v.by === "ui" || v.by == null) return;
+    synced.current = { tab: v.tab, selection: JSON.stringify(v.selection ?? []), camera: synced.current.camera };
     const tabs: EditorTab[] = ["pcb", "schematic", "footprint", "symbol", "3d"];
     if (tabs.includes(v.tab as EditorTab) && v.tab !== stateRef.current.tab) dispatch({ type: "SET_TAB", tab: v.tab as EditorTab });
     dispatch({ type: "SET_SELECTION", refs: v.selection ?? [] });
@@ -1402,10 +1408,19 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     const t = setTimeout(() => {
       const s = stateRef.current;
       const rect = document.querySelector(".pcb-canvas-container")?.getBoundingClientRect();
-      const camera = rect && s.view.scale > 0 ? { center: [(rect.width / 2 - s.view.x) / s.view.scale, (rect.height / 2 - s.view.y) / s.view.scale] as [number, number], scale: s.view.scale } : {};
-      postView({ tab: s.tab, selection: [...s.selection], ...camera })
+      const camera = rect && s.view.scale > 0 ? { center: [(rect.width / 2 - s.view.x) / s.view.scale, (rect.height / 2 - s.view.y) / s.view.scale] as [number, number], scale: s.view.scale } : null;
+      const selection = [...s.selection];
+      const patch: Parameters<typeof postView>[0] = {};
+      if (synced.current.tab !== s.tab) patch.tab = s.tab;
+      if (synced.current.selection !== JSON.stringify(selection)) patch.selection = selection;
+      if (camera && synced.current.camera !== JSON.stringify(camera)) Object.assign(patch, camera);
+      if (Object.keys(patch).length === 0) return;
+      synced.current = { tab: s.tab, selection: JSON.stringify(selection), camera: camera ? JSON.stringify(camera) : synced.current.camera };
+      postView({ ...patch, base_rev: lastViewRev.current })
         .then((v) => {
-          if (v.rev > lastViewRev.current) lastViewRev.current = v.rev;
+          // A newer view from someone else won (our update was stale): apply it.
+          if (v.by !== "ui") applyRemoteView(v);
+          else if (v.rev > lastViewRev.current) lastViewRev.current = v.rev;
         })
         .catch(() => {});
     }, 400);

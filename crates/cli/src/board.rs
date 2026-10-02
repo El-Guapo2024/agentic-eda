@@ -220,10 +220,56 @@ fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut Constrain
 pub(crate) fn save(dir: &Path, design: &eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
     let s = serde_json::to_string_pretty(design)
         .map_err(|e| fail("board_encode", "design.json", format!("the design could not be encoded: {e}")))?;
-    std::fs::write(design_path(dir), &s)
+    write_atomic(&design_path(dir), s.as_bytes())
         .map_err(|e| fail("board_write", "design.json", format!("the design could not be written: {e}")))?;
     write_head(dir, s.as_bytes());
     Ok(())
+}
+
+/// Write via a temp file and a rename, so a reader in another process (the
+/// studio's poll, an agent's CLI) sees the old file or the new one, never a
+/// half-written one.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Held for one whole read-modify-write of `design.json` (a command, an
+/// undo/redo, the outside-edit check), so the studio server and a CLI
+/// process editing the same board at the same moment take turns instead of
+/// one silently writing back a design loaded before the other's edit. A
+/// `.history/lock` file made with `create_new`; one left behind by a
+/// crashed process is taken over after `STALE`.
+pub(crate) struct DesignLock(PathBuf);
+
+impl Drop for DesignLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+pub(crate) fn lock(dir: &Path) -> DesignLock {
+    const STALE: std::time::Duration = std::time::Duration::from_secs(10);
+    let _ = std::fs::create_dir_all(history_root(dir));
+    let path = history_root(dir).join("lock");
+    let start = std::time::Instant::now();
+    loop {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = write!(f, "{}", std::process::id());
+                return DesignLock(path);
+            }
+            Err(_) => {
+                let old = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+                if old.is_some_and(|age| age > STALE) || start.elapsed() > STALE {
+                    let _ = std::fs::remove_file(&path);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
 }
 
 /// `.history/head.json`: the design as the last recorded step left it.
@@ -235,7 +281,7 @@ fn head_path(dir: &Path) -> PathBuf {
 
 fn write_head(dir: &Path, bytes: &[u8]) {
     let _ = std::fs::create_dir_all(history_root(dir));
-    let _ = std::fs::write(head_path(dir), bytes);
+    let _ = write_atomic(&head_path(dir), bytes);
 }
 
 /// Record an outside edit of `design.json` as its own history step, tagged
@@ -244,6 +290,11 @@ fn write_head(dir: &Path, bytes: &[u8]) {
 /// a redo brings it back. Called before every command/undo/redo and from
 /// the studio's version poll. Returns whether an outside edit was found.
 pub(crate) fn sync_external_edits(dir: &Path) -> bool {
+    let _lock = lock(dir);
+    sync_external_edits_locked(dir)
+}
+
+fn sync_external_edits_locked(dir: &Path) -> bool {
     let Ok(now) = std::fs::read(design_path(dir)) else { return false };
     let Ok(head) = std::fs::read(head_path(dir)) else {
         write_head(dir, &now); // first sight of this board: nothing to compare against yet
@@ -338,7 +389,8 @@ fn print_fill(design: &eda_model::ir::Design, model: &ConstraintModel, want_zone
 /// stack and clears redo -- the usual "a new edit erases old redos"
 /// rule; a refused command changes nothing, so it pushes nothing.
 pub(crate) fn step(dir: &Path, cmd: Cmd, strict: bool, by: &str) -> Result<String, Vec<CheckResult>> {
-    sync_external_edits(dir);
+    let _lock = lock(dir);
+    sync_external_edits_locked(dir);
     let line = cmd_line(&cmd);
     let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
     let domain = cmd.domain();
@@ -489,7 +541,8 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
 /// routing the same way an unscoped one always did -- if the edit being
 /// undone was itself a route, undo removes the routing along with it.
 pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String, Vec<CheckResult>> {
-    sync_external_edits(dir);
+    let _lock = lock(dir);
+    sync_external_edits_locked(dir);
     let (_, current, _) = load(dir)?;
     let Some(snap) = pop_snapshot(&undo_dir(dir), scope) else {
         let msg = "nothing to undo".to_string();
@@ -511,7 +564,8 @@ pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
 /// domain's -- see its own doc comment), same as any other undo/redo
 /// stack.
 pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String, Vec<CheckResult>> {
-    sync_external_edits(dir);
+    let _lock = lock(dir);
+    sync_external_edits_locked(dir);
     let (_, current, _) = load(dir)?;
     let Some(snap) = pop_snapshot(&redo_dir(dir), scope) else {
         let msg = "nothing to redo".to_string();
@@ -826,6 +880,17 @@ pub(crate) fn route_board(dir: &Path, by: &str) -> Result<String, Vec<CheckResul
             t.elapsed(),
             if fails.is_empty() { String::new() } else { format!("; {} problem(s): {}", fails.len(), reasons(&fails)) }
         );
+        // Routing takes a while; anyone may have edited meanwhile. Keep the
+        // result only if the board is still the one that was routed, so a
+        // route never writes back over someone else's newer edit.
+        let _lock = lock(dir);
+        sync_external_edits_locked(dir);
+        let (_, now, _) = load(dir)?;
+        if serde_json::to_value(&now).ok() != serde_json::to_value(&design).ok() {
+            return Err(fail("board_changed", "route", "the board changed while routing; route again".to_string()));
+        }
+        let _ = push_snapshot_tagged(&undo_dir(dir), &design, domain_tag(Domain::Pcb), by);
+        clear_dir(&redo_dir(dir));
         save(dir, &routed)?;
         Ok(summary)
     })();

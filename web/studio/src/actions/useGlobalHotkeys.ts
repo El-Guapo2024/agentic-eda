@@ -58,6 +58,14 @@ export function useGlobalHotkeys() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
+
+      // DIALOG_SHIM / wxDialog: Escape cancels the open dialog, even from
+      // one of its text fields -- before any editor action sees the key.
+      if (e.key === "Escape" && !e.defaultPrevented && escapeTopDialog()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if (target && TEXT_INPUT_TAGS.has(target.tagName)) return;
 
       // common.Interactive.cancel's extracted hotkey is null (KiCad
@@ -91,4 +99,21 @@ export function useGlobalHotkeys() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [hotkeyIndex, run, isEnabled]);
+}
+
+/**
+ * Escape on an open dialog (`DIALOG_SHIM`'s wxID_CANCEL handling): press the
+ * topmost dialog's Cancel (or Close) button, else click its backdrop, which
+ * is how every dialog here closes without applying. Returns whether a dialog
+ * was open.
+ */
+export function escapeTopDialog(doc: Document = document): boolean {
+  const backdrops = doc.querySelectorAll<HTMLElement>(".dialog-backdrop");
+  const top = backdrops[backdrops.length - 1];
+  if (!top) return false;
+  const buttons = [...top.querySelectorAll<HTMLButtonElement>(".dialog-footer button, .dialog-header button, button")];
+  const cancel = buttons.find((b) => /^\s*cancel\s*$/i.test(b.textContent ?? "")) ?? buttons.find((b) => /^\s*close\s*$/i.test(b.textContent ?? ""));
+  if (cancel) cancel.click();
+  else top.click();
+  return true;
 }

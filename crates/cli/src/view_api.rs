@@ -45,10 +45,22 @@ pub fn set(dir: &Path, patch: &Value, by: &str) -> Value {
     v
 }
 
-/// `POST /api/view` body: a partial view, written as `ui`.
+/// `POST /api/view` body: a partial view, written as `ui`. With `base_rev`
+/// (the revision the page last knew), a change that someone else made
+/// after that revision wins: the page's update is a stale debounce of an
+/// older state, so it is dropped rather than overwriting the newer view.
 pub fn post(dir: &Path, body: &str) -> Value {
     match serde_json::from_str::<Value>(body) {
-        Ok(patch) => set(dir, &patch, "ui"),
+        Ok(patch) => {
+            let current = get(dir);
+            let newer_from_someone_else = patch.get("base_rev").and_then(Value::as_u64).is_some_and(|base| {
+                current.get("rev").and_then(Value::as_u64).unwrap_or(0) > base && current.get("by").and_then(Value::as_str) != Some("ui")
+            });
+            if newer_from_someone_else {
+                return current;
+            }
+            set(dir, &patch, "ui")
+        }
         Err(e) => json!({ "error": format!("bad view json: {e}") }),
     }
 }
@@ -56,6 +68,21 @@ pub fn post(dir: &Path, body: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stale_ui_post_does_not_overwrite_a_newer_agent_view() {
+        let dir = std::env::temp_dir().join(format!("eda-view-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(view_path(&dir));
+        let ui = post(&dir, r#"{"selection":["U1"]}"#);
+        assert_eq!(ui["rev"], 1);
+        set(&dir, &json!({ "selection": ["R1"] }), "agent"); // rev 2
+        let stale = post(&dir, r#"{"selection":[],"base_rev":1}"#);
+        assert_eq!(stale["selection"], json!(["R1"]), "the agent's newer selection wins");
+        let fresh = post(&dir, r#"{"selection":[],"base_rev":2}"#);
+        assert_eq!(fresh["selection"], json!([]), "a page that has seen rev 2 may change it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn set_bumps_rev_and_one_shot_zoom_clears() {

@@ -48,8 +48,14 @@ check("Ctrl+Z undoes the lock", !!unlocked);
 // 5. agent edits via a command while the UI is open -> UI shows the new position
 agent("move", "R1", "--to", "60,40");
 agent("gui", "--select", "R1");
-const pos = await waitFor(async () => (await p.evaluate(() => document.body.innerText)).match(/Reference\s+R1[\s\S]{0,200}?Position\s+([0-9.]+), ([0-9.]+) mm/i), 8000);
-check("agent move shows up live in the UI (Properties: R1 at 60, 40 mm)", !!pos && pos[1] === "60.000" && pos[2] === "40.000", pos ? pos[1] + ", " + pos[2] : "not shown");
+// Wait for the moved position itself: the selection can land a poll before
+// the reloaded design does, briefly showing R1 where it was.
+let pos = null;
+await waitFor(async () => {
+  pos = (await p.evaluate(() => document.body.innerText)).match(/Reference\s+R1[\s\S]{0,200}?Position\s+([0-9.]+), ([0-9.]+) mm/i);
+  return pos && pos[1] === "60.000" && pos[2] === "40.000";
+}, 8000);
+check("agent move shows up live in the UI (Properties: R1 at 60, 40 mm)", !!pos && pos[1] === "60.000" && pos[2] === "40.000", pos ? pos[1] + ", " + pos[2] : "not shown: " + ((await p.evaluate(() => document.body.innerText)).match(/PROPERTIES[\s\S]{0,160}/i)?.[0] ?? "").replace(/\n/g, " | "));
 await shot(process.env.SHOTS ? process.env.SHOTS + "/5-agent-move.png" : "/dev/null");
 
 // 6. hand edit of design.json -> recorded as a 'file' history step
