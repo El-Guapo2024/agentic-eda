@@ -135,6 +135,17 @@ fn same_logical_pad(a: &DrcPad, b: &DrcPad) -> bool {
     a.footprint_ref == b.footprint_ref && a.number == b.number
 }
 
+/// `GetDRCEpsilon()` (`ADVANCED_CFG::m_DRCEpsilon`, 0.0005 mm). With this
+/// IR's whole-µm distances, `actual < clearance - 0.5` is exactly
+/// `actual < clearance`, so the half-micron rounds to 0 here.
+const DRC_EPSILON: i64 = 0;
+
+/// `DRC_TEST_PROVIDER_COPPER_CLEARANCE::sub_e`: every `Collide` against a
+/// clearance uses `max( 0, clearance - epsilon )`.
+fn sub_e(clearance: i64) -> i64 {
+    (clearance - DRC_EPSILON).max(0)
+}
+
 /// `DRC_ENGINE::m_errorLimits` for the types this provider reports:
 /// `RunTests` sets `EXTENDED_ERROR_LIMIT` (499) for `DRCE_CLEARANCE`,
 /// `ERROR_LIMIT` (199) for the rest, and every test gates on
@@ -270,7 +281,7 @@ fn test_single_layer_item_against_item(ctx: &Ctx, layer: &str, item: Item, item_
                 }
             }
         }
-        if let Some((actual, _pos)) = item_shape.collides(&other_shape, clearance) {
+        if let Some((actual, _pos)) = item_shape.collides(&other_shape, sub_e(clearance)) {
             if actual == 0 && test_shorting {
                 let name = |n: Option<&str>| n.unwrap_or("<no net>").to_string();
                 limits.report(DrcViolation::new(ErrorType::ShortingItems, format!("(nets {} and {})", name(item.net()), name(other.net())), vec![item.reference(), other.reference()]), out);
@@ -289,7 +300,7 @@ fn test_single_layer_item_against_item(ctx: &Ctx, layer: &str, item: Item, item_
             // `HOLE_CLEARANCE_CONSTRAINT`, tested "even if clearance is 0,
             // because the item cannot be inside (or intersect) the hole".
             let clearance = constraints::hole_clearance_min(ctx.rules).max(0);
-            if let Some((actual, _)) = a_shape.collides(&hole, clearance) {
+            if let Some((actual, _)) = a_shape.collides(&hole, sub_e(clearance)) {
                 limits.report(DrcViolation::new(ErrorType::HoleClearance, format!("(clearance {}; actual {})", format_um(clearance), format_um(actual)), vec![a.reference(), b.reference()]), out);
                 return false;
             }
@@ -354,7 +365,7 @@ fn test_pad_against_item(ctx: &Ctx, layer: &str, pad: &DrcPad, pad_i: usize, oth
             _ => unreachable!("tracks/vias never reach the clearance half"),
         };
         if c > 0 {
-            if let Some((actual, _)) = pad.copper.collides(&other_shape, c) {
+            if let Some((actual, _)) = pad.copper.collides(&other_shape, sub_e(c)) {
                 if actual == 0 && pad.net.is_some() && other.net().is_some() && test_shorting {
                     limits.report(DrcViolation::new(ErrorType::ShortingItems, format!("(nets {} and {})", pad.net.as_deref().unwrap_or(""), other.net().unwrap_or("")), vec![pad_ref(pad), other.reference()]), out);
                     test_holes = false;
@@ -370,7 +381,7 @@ fn test_pad_against_item(ctx: &Ctx, layer: &str, pad: &DrcPad, pad_i: usize, oth
         let c = constraints::hole_clearance_min(ctx.rules);
         let test_hole = |hole: Shape, clearance: i64, limits: &mut Limits, out: &mut Vec<DrcViolation>| {
             if clearance > 0 {
-                if let Some((actual, _)) = pad.copper.collides(&hole, clearance) {
+                if let Some((actual, _)) = pad.copper.collides(&hole, sub_e(clearance)) {
                     limits.report(DrcViolation::new(ErrorType::HoleClearance, format!("(clearance {}; actual {})", format_um(clearance), format_um(actual)), vec![pad_ref(pad), other.reference()]), out);
                     return true;
                 }
@@ -410,7 +421,7 @@ fn test_item_against_zone(ctx: &Ctx, layer: &str, item: Item, item_shape: &Shape
     if test_clearance {
         let c = constraints::clearance_with_custom_rules(ctx.rules, item.net(), zone.net.as_deref(), layer, &item.facts(ctx.rules, ctx.courtyards), &facts_of_zone(ctx.rules, zone), ctx.compiled);
         if c > 0 {
-            if let Some((actual, _)) = collides_zone(item_shape, zone, fills, c) {
+            if let Some((actual, _)) = collides_zone(item_shape, zone, fills, sub_e(c)) {
                 limits.report(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![item.reference(), zone_ref(zone)]), out);
             }
         }
@@ -419,7 +430,7 @@ fn test_item_against_zone(ctx: &Ctx, layer: &str, item: Item, item_shape: &Shape
         if let Some(hole) = item.hole() {
             let c = constraints::hole_clearance_min(ctx.rules);
             if c > 0 {
-                if let Some((actual, _)) = collides_zone(&hole, zone, fills, c) {
+                if let Some((actual, _)) = collides_zone(&hole, zone, fills, sub_e(c)) {
                     limits.report(DrcViolation::new(ErrorType::HoleClearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![item.reference(), zone_ref(zone)]), out);
                 }
             }
@@ -549,7 +560,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                 } else if limits.clearance > 0 {
                     let c = constraints::clearance_with_custom_rules(rules, a.net.as_deref(), b.net.as_deref(), layer, &facts_of_zone(rules, a), &facts_of_zone(rules, b), &compiled_rules);
                     if c > 0 {
-                        if let Some((actual, _)) = collides_zone_zone(a, b, &fills, c) {
+                        if let Some((actual, _)) = collides_zone_zone(a, b, &fills, sub_e(c)) {
                             limits.report(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![zone_ref(a), zone_ref(b)]), &mut out);
                         }
                     }
@@ -574,7 +585,7 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
             }
             let c = constraints::clearance_with_custom_rules(rules, td.net.as_deref(), zone.net.as_deref(), &td.layer, &facts_of_zone(rules, td), &facts_of_zone(rules, zone), &compiled_rules);
             if c > 0 {
-                if let Some((actual, _)) = td_shapes.iter().filter_map(|s| collides_zone(s, zone, &fills, c)).min_by_key(|(a, _)| *a) {
+                if let Some((actual, _)) = td_shapes.iter().filter_map(|s| collides_zone(s, zone, &fills, sub_e(c))).min_by_key(|(a, _)| *a) {
                     limits.report(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![zone_ref(td), zone_ref(zone)]), &mut out);
                 }
             }

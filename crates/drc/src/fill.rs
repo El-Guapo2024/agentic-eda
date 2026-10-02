@@ -67,11 +67,12 @@ impl FillResults {
     /// raw outline) when there's no fill on record for it (no stable id, or
     /// the zone wasn't included in this `FillResults`).
     pub fn fragments_or(&self, zone_id: &str, fallback: DrcShape) -> Vec<DrcShape> {
+        // A zone that *was* filled but came out empty (every island removed,
+        // or fully knocked out) has no copper to collide with -- `ZONE::
+        // GetFill()` is an empty `SHAPE_POLY_SET`, never the outline.
         match self.get(zone_id) {
-            Some(fill) if !fill.polys.is_empty() => {
-                fill.polys.iter().filter_map(|poly| poly.first()).filter(|c| c.len() >= 3).map(|chain| DrcShape::Polygon { pts: chain.iter().map(|p| Point { x: p.x, y: p.y }).collect() }).collect()
-            }
-            _ => vec![fallback],
+            Some(fill) => fill.polys.iter().filter_map(|poly| poly.first()).filter(|c| c.len() >= 3).map(|chain| DrcShape::Polygon { pts: chain.iter().map(|p| Point { x: p.x, y: p.y }).collect() }).collect(),
+            None => vec![fallback],
         }
     }
 }

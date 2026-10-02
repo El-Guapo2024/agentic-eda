@@ -126,6 +126,8 @@ pub const DEFAULT_MAX_ERROR: i64 = 5;
 
 /// `ADVANCED_CFG::m_ExtraClearance` (0.0005 mm), rounded up to this IR's
 /// whole µm: `zone_filler.cpp` knocks out every item at `gap + extra_margin`.
+/// (A 2 µm margin was measured too: it hides real near-misses KiCad itself
+/// reports on issue22475's board, so 1 it is.)
 pub const EXTRA_MARGIN: i64 = 1;
 
 /// The thermal-relief knockout: the bare thermal gap, as before.
@@ -470,12 +472,18 @@ fn apply_island_removal(fill: &mut ShapePolySet, zone: &Zone, input: &FillInput,
     }
     let zone_net: Option<&str> = if zone.net.is_empty() { None } else { Some(zone.net.as_str()) };
 
+    let islands: Vec<bool> = fill.polys.iter().map(|p| !touches_same_net_item(&p[0], zone_net, input, layer, zone)).collect();
+    // `ZONE_FILLER::Fill`: "If *all* the polygons are islands, do not
+    // remove any of them".
+    if islands.iter().all(|&i| i) {
+        return;
+    }
+
     let mut i = fill.polys.len();
     while i > 0 {
         i -= 1;
         let outline = &fill.polys[i][0];
-        let touches = touches_same_net_item(outline, zone_net, input, layer, zone);
-        if touches {
+        if !islands[i] {
             continue;
         }
         let remove = match zone.island_removal_mode {
