@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, DrcEngine, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, DrcEngine, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import type { LineMode } from "../kicad-port/schLineMode";
@@ -18,6 +18,8 @@ import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import type { ArcGeom } from "../kicad-port/arcGeom";
+import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
 import { symbolBounds } from "../components/schematic/painter";
@@ -62,6 +64,8 @@ export type ToolId =
   | "zone"
   | "draw_segment"
   | "draw_arc"
+  /** `pcbnew.InteractiveDrawing.bezier` (Ctrl+Shift+B): four clicks (start, control 1, end, control 2), chained -- see kicad-port/bezierGeom.ts. */
+  | "draw_bezier"
   | "draw_rect"
   | "draw_circle"
   | "draw_polygon"
@@ -110,7 +114,8 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   via: "Click to place a via",
   zone: "Zone: click to add points, Enter/double-click to finish, Esc to cancel",
   draw_segment: "Line: click start, then end",
-  draw_arc: "Arc: click start, mid, then end",
+  draw_arc: "Arc: click the centre, then the start point, then the end point (/ switches the direction)",
+  draw_bezier: "Bezier: click the start, control 1, the end, then control 2 (the curve then continues from its end); double-click to finish, Esc to cancel",
   draw_rect: "Rectangle: click one corner, then the opposite one",
   draw_circle: "Circle: click center, then a point on the edge",
   draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
@@ -213,7 +218,15 @@ export type DrawState =
       snappedEnd?: boolean;
     }
   | { kind: "zone"; pts: [Um, Um][] }
-  | { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] }
+  | {
+      kind: "shape";
+      shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
+      pts: [Um, Um][];
+      /** `shapeKind === "arc"` only: KIGFX::PREVIEW::ARC_GEOM_MANAGER's state (kicad-port/arcGeom.ts) -- centre, start, end angle, and the `/` posture (clockwise + lock). `pts` then holds just the clicks locked in so far. */
+      arc?: ArcGeom;
+      /** `shapeKind === "bezier"` only: KIGFX::PREVIEW::BEZIER_GEOM_MANAGER's state (kicad-port/bezierGeom.ts). */
+      bezier?: BezierGeom;
+    }
   /** Task item 7: two clicks (start, end) for any of the five dimension
    * kinds -- which one is read from `state.nextDimensionKind` when the
    * second click commits it (same one-shot-flag convention as zones' own
@@ -250,6 +263,13 @@ export interface MovePreview {
    */
   rotateQuarterTurns?: number;
   flipped?: boolean;
+  /**
+   * `P` (`EDIT_TOOL::PackAndMoveFootprints`): SpreadFootprints has already moved every selected footprint
+   * to its packed place *before* the move tool picks the group up, so each ref carries its own extra shift
+   * (um, from where it is on the board to its packed place) on top of the shared `dxUm`/`dyUm`. Only
+   * meaningful for `kind === "part"`; absent for every ordinary move.
+   */
+  perRefOffsetUm?: Record<string, [number, number]>;
 }
 
 /**
@@ -657,8 +677,10 @@ export interface StudioState {
   moveExactDialogOpen: boolean;
   /** `Ctrl+<` "Interactive Router Settings..." (dialog_pns_settings.cpp) -- components/RouterSettingsDialog.tsx. */
   routerSettingsDialogOpen: boolean;
-  /** `7` (pcbnew.LengthTuner.TuneSingleTrack) -- components/LengthTuningDialog.tsx. */
+  /** `7` (pcbnew.LengthTuner.TuneSingleTrack) / `8` (TuneDiffPair) / `9` (TuneDiffPairSkew) -- components/LengthTuningDialog.tsx. */
   lengthTuningDialogOpen: boolean;
+  /** Which of the three tuners the dialog is running. */
+  lengthTuningMode: TuneMode;
   /** The "pcbnew parity" action batch's own state (move-individually queue, zone cutout/similar mode, parity dialogs, angle snap, ...) -- see kicad-port/pcbParityState.ts. Patched by the single `PCBX` action. */
   pcbx: PcbParityState;
   /**
@@ -797,6 +819,7 @@ const initialState: StudioState = {
   moveExactDialogOpen: false,
   routerSettingsDialogOpen: false,
   lengthTuningDialogOpen: false,
+  lengthTuningMode: "single",
   pcbx: DEFAULT_PCB_PARITY,
   nextZoneIsRuleArea: false,
   cleanupTracksDialogOpen: false,
@@ -907,7 +930,7 @@ export type Action =
   | { type: "SET_MOVE_EXACT_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
-  | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean }
+  | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean; mode?: TuneMode }
   | { type: "PCBX"; patch: Partial<PcbParityState> }
   | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
   | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
@@ -1221,7 +1244,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_ROUTER_SETTINGS":
       return { ...state, routerSettings: action.settings };
     case "SET_LENGTH_TUNING_DIALOG_OPEN":
-      return { ...state, lengthTuningDialogOpen: action.open };
+      return { ...state, lengthTuningDialogOpen: action.open, lengthTuningMode: action.mode ?? state.lengthTuningMode };
     case "PCBX":
       return { ...state, pcbx: { ...state.pcbx, ...action.patch } };
     case "SET_NEXT_ZONE_IS_RULE_AREA":
@@ -1259,7 +1282,7 @@ export interface StudioApi {
   /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
   distributeSelection: (axis: "x" | "y", mode: "gaps" | "centers") => Promise<void>;
   /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
-  commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean) => Promise<void>;
+  commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetUm?: MovePreview["perRefOffsetUm"]) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
   /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
   navigateToSheet: (path: string[], record?: boolean) => Promise<void>;
@@ -1770,13 +1793,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       }
       await runBatch(cmds);
     },
-    commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped) => {
+    commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetUm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       const cmds: Cmd[] = [];
       for (const ref of refs) {
         if (kind === "part") {
           const p = api.partByRef(ref);
-          if (p?.placed && p.at) cmds.push({ op: "move_to", part: ref, x: p.at[0] + dxUm, y: p.at[1] + dyUm });
+          // Pack and Move: this ref's own SpreadFootprints shift rides along with the shared drag delta.
+          const own = perRefOffsetUm?.[ref];
+          if (p?.placed && p.at) cmds.push({ op: "move_to", part: ref, x: p.at[0] + dxUm + (own?.[0] ?? 0), y: p.at[1] + dyUm + (own?.[1] ?? 0) });
           // Rotating/flipping about the part's own (already-moved) anchor
           // is exactly what the backend's Rotate/Flip ops do regardless of
           // when they're called, so applying them after the move lands on

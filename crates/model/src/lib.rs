@@ -2,6 +2,7 @@
 //! Coordinates never appear here; they are derived by the engine.
 //! JSON internally, YAML at LLM-facing edges.
 
+pub mod bezier;
 pub mod board;
 pub mod floorplan;
 pub mod footprint;

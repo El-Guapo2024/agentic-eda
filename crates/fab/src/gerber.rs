@@ -796,6 +796,18 @@ fn plot_silk(design: &Design, side: Side, apertures: &mut ApertureList) -> Strin
             Shape::Polygon { stroke_width, filled, pts, .. } => {
                 plot_closed_poly(&mut out, pts, *filled, *stroke_width, &mut cur_dcode, apertures);
             }
+            // A Bezier plots as its flattened polyline (`BEZIER_POLY::GetPoly`) -- kept only so this
+            // interim writer still compiles and never silently drops a curve; kicad-cli is the real plotter.
+            Shape::Bezier { stroke_width, .. } => {
+                let pts = s.bezier_points().unwrap_or_default();
+                if let Some((first, rest)) = pts.split_first() {
+                    select(&mut out, &mut cur_dcode, apertures, *stroke_width);
+                    move_to(&mut out, *first);
+                    for p in rest {
+                        line_to(&mut out, *p);
+                    }
+                }
+            }
         }
     }
 

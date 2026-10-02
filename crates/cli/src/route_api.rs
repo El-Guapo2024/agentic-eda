@@ -228,7 +228,10 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
 /// same `Mode` a route session takes (`mode_of`'s own doc comment) --
 /// `eda_pns::dragger::Dragger` reuses it exactly as upstream's `DRAGGER`
 /// reuses `SHOVE`/`WALKAROUND`; no `remove_loops` here, a route-only
-/// concept upstream's own `DRAGGER` never touches either.
+/// concept upstream's own `DRAGGER` never touches either. `free_angle`
+/// (default false) is `PNS::DM_FREE_ANGLE` -- the `G` hotkey
+/// (`pcbnew.InteractiveRouter.DragFreeAngle`): the drag then only marks
+/// obstacles, whatever `mode` says (`DRAGGER::Drag`).
 pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
@@ -239,7 +242,8 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     router.settings.mode = mode_of(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
-    match router.drag_start(at, layer) {
+    let free_angle = req.get("free_angle").and_then(Value::as_bool).unwrap_or(false);
+    match router.drag_start_with(at, layer, free_angle) {
         Ok(()) => {
             let reply = router.drag_preview(at).map(|p| drag_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);

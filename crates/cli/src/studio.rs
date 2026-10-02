@@ -977,6 +977,11 @@ fn shape_json(s: &Shape) -> Value {
         Shape::Polygon { id, layer, stroke_width, filled, pts } => {
             json!({ "id": id, "kind": "polygon", "layer": layer, "stroke_width": stroke_width, "filled": filled, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>() })
         }
+        // `c1`/`c2` are the curve's own control points (KiCad's `(pts start c1 c2 end)` order); the flattened
+        // polyline the canvas actually draws is computed client-side with the same `BEZIER_POLY` port.
+        Shape::Bezier { id, layer, stroke_width, filled, start, c1, c2, end } => {
+            json!({ "id": id, "kind": "bezier", "layer": layer, "stroke_width": stroke_width, "filled": filled, "start": pt(*start), "c1": pt(*c1), "c2": pt(*c2), "end": pt(*end) })
+        }
     }
 }
 

@@ -17,6 +17,12 @@ import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineUm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
 import { circleThrough, normalizeSweep } from "../canvas/painter";
+import { drawArcPreview } from "../canvas/arcPreview";
+import { drawBezierPreview } from "../canvas/bezierPreview";
+import { BEZIER_MAX_ERROR_UM } from "../canvas/itemHitTest";
+import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import type { ArcGeom } from "../../kicad-port/arcGeom";
+import type { BezierGeom } from "../../kicad-port/bezierGeom";
 import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
 
@@ -229,6 +235,11 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: CmdShape) {
       s.pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
       ctx.closePath();
       break;
+    case "bezier":
+      // `BEZIER_POLY::GetPoly` at the board's max error (an open curve is never filled).
+      bezierPolyline([s.start.x, s.start.y], [s.c1.x, s.c1.y], [s.c2.x, s.c2.y], [s.end.x, s.end.y], BEZIER_MAX_ERROR_UM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.stroke();
+      return;
     case "arc": {
       const a = circleThrough([s.start.x, s.start.y], [s.mid.x, s.mid.y], [s.end.x, s.end.y]);
       if (!a) {
@@ -241,7 +252,7 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: CmdShape) {
       const a0 = Math.atan2(s.start.y - cy, s.start.x - cx);
       const aMid = Math.atan2(s.mid.y - cy, s.mid.x - cx);
       const a1 = Math.atan2(s.end.y - cy, s.end.x - cx);
-      ctx.arc(cx, cy, r, a0, a1, normalizeSweep(a0, aMid, a1));
+      ctx.arc(cx, cy, r, a0, a1, !normalizeSweep(a0, aMid, a1)); // see painter.ts: `normalizeSweep` is true for the INCREASING-angle sweep, `anticlockwise` is its negation
       ctx.stroke();
       return;
     }
@@ -269,8 +280,18 @@ function drawText(ctx: CanvasRenderingContext2D, view: ViewTransform, t: CmdText
 }
 
 /** Rubber-band preview for the graphics tool currently in progress (click-to-add-points, same convention the PCB tab's own `drawInProgress` uses -- including drawing it in the selection color regardless of target layer). */
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] } | null, cursorUm: { x: number; y: number } | null) {
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: FpPaintDrawState | null, cursorUm: { x: number; y: number } | null) {
   if (!draw) return;
+  // `drawArc` / `drawOneBezier`: the construction managers' own geometry, not a polyline through the clicks.
+  const style = { color: layerColor("selection"), hair: (px: number) => hairlineUm(view, px), units: "mm" as const };
+  if (draw.shapeKind === "arc" && draw.arc) {
+    drawArcPreview(ctx, draw.arc, style);
+    return;
+  }
+  if (draw.shapeKind === "bezier" && draw.bezier) {
+    drawBezierPreview(ctx, draw.bezier, style, BEZIER_MAX_ERROR_UM);
+    return;
+  }
   const pts = draw.pts.slice();
   if (cursorUm) pts.push([cursorUm.x, cursorUm.y]);
   if (pts.length < 2) return;
@@ -301,9 +322,17 @@ export interface FpPaintOptions {
   selection: Set<string>;
   gridUm: number;
   gridVisible: boolean;
-  drawState: { shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [Um, Um][] } | null;
+  drawState: FpPaintDrawState | null;
   cursorUm: { x: number; y: number } | null;
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+}
+
+/** The slice of `FpDrawState` the painter reads. */
+export interface FpPaintDrawState {
+  shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
+  pts: [Um, Um][];
+  arc?: ArcGeom;
+  bezier?: BezierGeom;
 }
 
 export function paintFootprint(

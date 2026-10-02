@@ -207,7 +207,7 @@ export interface TeardropSettings {
 // a new Shape/Text back through Cmd is a *different* shape -- see the Cmd
 // section below.
 
-export type ShapeKind = "segment" | "arc" | "rect" | "circle" | "polygon";
+export type ShapeKind = "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
 
 interface ShapeCommon {
   id: string;
@@ -221,7 +221,9 @@ export type Shape =
   | (ShapeCommon & { kind: "arc"; start: [Um, Um]; mid: [Um, Um]; end: [Um, Um] })
   | (ShapeCommon & { kind: "rect"; start: [Um, Um]; end: [Um, Um] })
   | (ShapeCommon & { kind: "circle"; center: [Um, Um]; end: [Um, Um] })
-  | (ShapeCommon & { kind: "polygon"; pts: [Um, Um][] });
+  | (ShapeCommon & { kind: "polygon"; pts: [Um, Um][] })
+  /** `PCB_SHAPE` BEZIER: a cubic from `start` to `end` with control points `c1`/`c2` (KiCad's `gr_curve` order). The canvas flattens it with kicad-port/bezierPoly.ts (`BEZIER_POLY::GetPoly`). */
+  | (ShapeCommon & { kind: "bezier"; start: [Um, Um]; c1: [Um, Um]; c2: [Um, Um]; end: [Um, Um] });
 
 export type TextJustify = "left" | "center" | "right";
 
@@ -595,7 +597,8 @@ export type CmdShape =
   | { kind: "arc"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; mid: PointXY; end: PointXY }
   | { kind: "rect"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; end: PointXY }
   | { kind: "circle"; id?: string; layer: string; stroke_width: Um; filled: boolean; center: PointXY; end: PointXY }
-  | { kind: "polygon"; id?: string; layer: string; stroke_width: Um; filled: boolean; pts: PointXY[] };
+  | { kind: "polygon"; id?: string; layer: string; stroke_width: Um; filled: boolean; pts: PointXY[] }
+  | { kind: "bezier"; id?: string; layer: string; stroke_width: Um; filled: boolean; start: PointXY; c1: PointXY; c2: PointXY; end: PointXY };
 
 /** crates/model/src/ir.rs `Text`, IR field names -- for `add_text` only (`edit_text` takes flat fields instead, see Cmd below). */
 export interface CmdText {
@@ -825,6 +828,8 @@ export type Cmd =
   // `postUndo`/`postRedo` `domain` param) -- its own undo/redo scope,
   // independent of "pcb"/"schematic".
   | { op: "open_footprint_for_edit"; name: string }
+  /** `pcbnew.ModuleEditor.newFootprint`: a fresh SMD footprint; refused when `name` already exists (the caller picks a unique one). */
+  | { op: "new_footprint"; name: string }
   | { op: "delete_library_footprint"; name: string }
   | ({ op: "edit_footprint_properties"; name: string } & FootprintPropertiesFields)
   | { op: "set_footprint_anchor"; name: string; at: PointXY }
@@ -1033,18 +1038,34 @@ export interface DpFixReply {
 export interface TuneLengthReply {
   ok: boolean;
   message?: string;
+  /** Which tuner answered: `7` single track, `8` differential pair, `9` skew. */
+  mode?: TuneMode;
   net?: string;
   layer?: string;
   width?: Um;
-  /** The source track's own straight-line length, before tuning. */
+  /** Single: the source track's own straight-line length, before tuning. Pair (`8`): the pair's length, the longer net's whole routed length. Skew (`9`): the selected net's whole routed length. Also present on a pair/skew *error* reply, so the dialog can offer a sensible default target. */
   original_length?: Um;
   /** The generated meander's real, measured length -- usually within a
    * few um of the requested target when reachable, see that module's own
-   * doc comment on why it isn't always exact to the micrometer. */
+   * doc comment on why it isn't always exact to the micrometer. For a pair
+   * (`8`) it is the pair's length after tuning; for skew (`9`) the selected net's. */
   achieved_length?: Um;
   pts?: [Um, Um][];
   colliding?: boolean;
+  /** `8`/`9`: the complementary net (`BOARD::MatchDpSuffix`). */
+  partner_net?: string;
+  /** `8`: the partner line's own replacement points, and the two lines' centre-to-centre distance (`gap + width`). */
+  partner_pts?: [Um, Um][];
+  pitch?: Um;
+  /** `9`: the partner net's whole routed length (`m_coupledLength`). */
+  partner_length?: Um;
+  /** `8`/`9`: this net minus the partner, before and after tuning (`CurrentSkew`). */
+  skew_before?: Um;
+  skew_after?: Um;
 }
+
+/** `7` / `8` / `9`: which `pcbnew.LengthTuner.*` the dialog is running. */
+export type TuneMode = "single" | "diffpair" | "skew";
 
 /** `dialog_cleanup_tracks_and_vias_base.cpp`'s checkboxes -- see
  * `POST /api/cleanup_tracks/{preview,apply}` and

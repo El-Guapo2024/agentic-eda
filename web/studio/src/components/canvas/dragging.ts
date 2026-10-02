@@ -63,9 +63,11 @@ export function findDraggableAt(
  * named by `hit` no longer exists -- a stale client-side hit against a
  * board that changed a moment ago). `mode` is `state.routerSettings.mode`
  * (`Ctrl+<`'s dialog) -- `Dragger` honors the same walkaround/shove/
- * mark-obstacles choice a route session does. */
-export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, mode: RouteMode, dispatch: Dispatch<Action>): Promise<void> {
-  const preview = await routeDragStart(x, y, hit.layer, mode);
+ * mark-obstacles choice a route session does. `freeAngle` is `G`
+ * (`PCB_ACTIONS::dragFreeAngle` -> `DM_ANY | DM_FREE_ANGLE`): the drag only
+ * marks obstacles, whatever `mode` says. */
+export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, mode: RouteMode, dispatch: Dispatch<Action>, freeAngle = false): Promise<void> {
+  const preview = await routeDragStart(x, y, hit.layer, mode, freeAngle);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Nothing to drag there.", kind: "error" });
     return;

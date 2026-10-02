@@ -1327,7 +1327,7 @@ fn import_fp_graphics(fp: &[Sexpr], inst: &FootprintInstance) -> Vec<FootprintGr
         expand_layer_names(&names, &[])
     };
     let mut out = Vec::new();
-    for tag in ["fp_line", "fp_arc", "fp_circle", "fp_rect", "fp_poly"] {
+    for tag in ["fp_line", "fp_arc", "fp_circle", "fp_rect", "fp_poly", "fp_curve"] {
         for item in sexpr::find_all(fp, tag) {
             let margin = sexpr::find(item, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
             for layer in layers_of(item).into_iter().filter(|l| KEEP.contains(&l.as_str())) {
@@ -1349,6 +1349,11 @@ fn import_fp_graphics(fp: &[Sexpr], inst: &FootprintInstance) -> Vec<FootprintGr
                         let (Some(a), Some(b)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
                         let corners = [Point { x: a.x, y: a.y }, Point { x: b.x, y: a.y }, Point { x: b.x, y: b.y }, Point { x: a.x, y: b.y }];
                         Shape::Polygon { id: String::new(), layer, stroke_width: sw, filled: fl, pts: corners.iter().map(|c| tf(*c)).collect() }
+                    }
+                    "fp_curve" => {
+                        let Some(pts) = poly_points(item) else { continue };
+                        let [start, c1, c2, end] = pts[..] else { continue };
+                        Shape::Bezier { id: String::new(), layer, stroke_width: sw, filled: false, start: tf(start), c1: tf(c1), c2: tf(c2), end: tf(end) }
                     }
                     _ => {
                         let Some(pts) = poly_points(item) else { continue };
@@ -1457,6 +1462,13 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
     for item in sexpr::find_all(root, "gr_poly").filter(|it| !is_edge_cuts(it)) {
         let Some(pts) = poly_points(item) else { continue };
         shapes.push(Shape::Polygon { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), pts });
+    }
+    // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`). A curve on
+    // Edge.Cuts is not chained into the board outline (`import_outline` only walks lines/rects/arcs).
+    for item in sexpr::find_all(root, "gr_curve").filter(|it| !is_edge_cuts(it)) {
+        let Some(pts) = poly_points(item) else { continue };
+        let [start, c1, c2, end] = pts[..] else { continue };
+        shapes.push(Shape::Bezier { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: false, start, c1, c2, end });
     }
 
     let mut texts = Vec::new();
@@ -2247,6 +2259,26 @@ mod tests {
         assert_eq!(t.stroke_width, 150);
         assert_eq!(t.justify, TextJustify::Left);
         assert!(t.mirror);
+    }
+
+    /// `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))` is a cubic Bezier
+    /// (`SHAPE_T::BEZIER`): kept as `Shape::Bezier` with its control points, on
+    /// any layer but Edge.Cuts.
+    #[test]
+    fn imports_a_gr_curve_as_a_bezier_shape() {
+        let text = r#"(kicad_pcb (version 20241229) (generator "eda-kicad")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+            (net 0 "")
+            (net_class "Default" "" (clearance 0.2) (trace_width 0.25) (via_dia 0.6) (via_drill 0.3))
+            (gr_curve (pts (xy 1 1) (xy 1 3) (xy 4 3) (xy 4 1)) (stroke (width 0.15) (type solid)) (layer "F.SilkS") (uuid "c1"))
+        )"#;
+        let (design, _model, _notes) = import_kicad_pcb(text).expect("parses");
+        let dr = design.drawings.expect("the curve must produce a drawings section");
+        assert_eq!(dr.shapes.len(), 1);
+        let Shape::Bezier { layer, stroke_width, start, c1, c2, end, .. } = &dr.shapes[0] else { panic!("{:?}", dr.shapes[0]) };
+        assert_eq!(layer, "F.SilkS");
+        assert_eq!(*stroke_width, 150);
+        assert_eq!((*start, *c1, *c2, *end), (Point { x: 1000, y: 1000 }, Point { x: 1000, y: 3000 }, Point { x: 4000, y: 3000 }, Point { x: 4000, y: 1000 }));
     }
 
     /// `(setup (pad_to_mask_clearance ..) (solder_mask_min_width ..)

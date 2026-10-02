@@ -287,9 +287,16 @@ impl Router {
     /// works same as grabbing its end). Replaces any route *or* drag
     /// already in progress, matching `StopRouting()` + a fresh start.
     pub fn drag_start(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
+        self.drag_start_with(at, layer_name, false)
+    }
+
+    /// [`Self::drag_start`] with `PNS::DM_FREE_ANGLE` (`G`,
+    /// `pcbnew.InteractiveRouter.DragFreeAngle`): see `crate::dragger`'s
+    /// "Free-angle mode" doc.
+    pub fn drag_start_with(&mut self, at: Point, layer_name: &str, free_angle: bool) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
         let item_id = self.world.item_at(at, LayerRange::single(layer), START_SNAP_UM).ok_or("nothing to drag there")?;
-        let dragger = crate::dragger::Dragger::start(&self.world, at, item_id).ok_or("that item can't be dragged (only track segments/corners and vias can)")?;
+        let dragger = crate::dragger::Dragger::start_with(&self.world, at, item_id, free_angle).ok_or("that item can't be dragged (only track segments/corners and vias can)")?;
         self.session = None;
         self.diff = None;
         self.drag = Some(dragger);

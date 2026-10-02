@@ -25,6 +25,7 @@
 //! only place that imports both this crate and `eda_ops`.
 
 pub mod diff_pair;
+pub mod dp_tune;
 pub mod direction45;
 pub mod dragger;
 pub mod from_ir;

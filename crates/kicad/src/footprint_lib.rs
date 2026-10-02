@@ -283,6 +283,11 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
                 }
                 writeln!(out, ") (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))", crate::mm((*stroke_width).max(0)), fp_fill(*filled))
             }
+            Shape::Bezier { stroke_width, start, c1, c2, end, .. } => writeln!(
+                out,
+                "\t(fp_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                crate::mm(start.x), crate::mm(start.y), crate::mm(c1.x), crate::mm(c1.y), crate::mm(c2.x), crate::mm(c2.y), crate::mm(end.x), crate::mm(end.y), crate::mm((*stroke_width).max(0))
+            ),
         }
         .unwrap();
     }

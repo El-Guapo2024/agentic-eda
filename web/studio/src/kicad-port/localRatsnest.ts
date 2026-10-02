@@ -30,6 +30,8 @@ export interface MovePreviewLike {
   kind?: "part" | "via" | "shape" | "text";
   dxUm: number;
   dyUm: number;
+  /** Pack and Move (`P`): each ref's own extra shift, on top of the shared `dxUm`/`dyUm`. */
+  perRefOffsetUm?: Readonly<Record<string, readonly [number, number]>>;
 }
 
 /**
@@ -40,18 +42,24 @@ export interface MovePreviewLike {
  * (new array, same edge objects) when there's no part move in progress.
  */
 export function offsetRatsnestForPreview<E extends RatsnestEdgeLike>(edges: readonly E[], board: RatsnestBoardLike, preview: MovePreviewLike | null): E[] {
-  if (!preview || (preview.kind ?? "part") !== "part" || (preview.dxUm === 0 && preview.dyUm === 0)) return [...edges];
+  if (!preview || (preview.kind ?? "part") !== "part" || (preview.dxUm === 0 && preview.dyUm === 0 && !preview.perRefOffsetUm)) return [...edges];
 
-  const movingPoints = new Set<string>();
+  // Point -> the live delta of the part that owns it (every part shares dxUm/dyUm; a Pack and Move adds its own per-part shift).
+  const movingPoints = new Map<string, [number, number]>();
   for (const ref of preview.refs) {
     const part = board.parts.find((p) => p.ref === ref);
     if (!part) continue;
-    for (const pad of part.pads ?? []) movingPoints.add(`${pad.x},${pad.y}`);
-    if (part.at) movingPoints.add(`${part.at[0]},${part.at[1]}`);
+    const own = preview.perRefOffsetUm?.[ref];
+    const delta: [number, number] = [preview.dxUm + (own?.[0] ?? 0), preview.dyUm + (own?.[1] ?? 0)];
+    for (const pad of part.pads ?? []) movingPoints.set(`${pad.x},${pad.y}`, delta);
+    if (part.at) movingPoints.set(`${part.at[0]},${part.at[1]}`, delta);
   }
   if (movingPoints.size === 0) return [...edges];
 
-  const shift = (pt: readonly [number, number]): [number, number] => (movingPoints.has(`${pt[0]},${pt[1]}`) ? [pt[0] + preview.dxUm, pt[1] + preview.dyUm] : [pt[0], pt[1]]);
+  const shift = (pt: readonly [number, number]): [number, number] => {
+    const d = movingPoints.get(`${pt[0]},${pt[1]}`);
+    return d ? [pt[0] + d[0], pt[1] + d[1]] : [pt[0], pt[1]];
+  };
 
   return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to) }));
 }

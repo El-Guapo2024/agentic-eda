@@ -17,6 +17,10 @@ import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
 import { formatLength, type LengthUnit } from "../../state/units";
+import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { drawArcPreview } from "./arcPreview";
+import { drawBezierPreview } from "./bezierPreview";
+import { BEZIER_MAX_ERROR_UM } from "./itemHitTest";
 
 /**
  * pcb_painter.cpp GetColor's net-highlight branch (see kicad-port/
@@ -47,7 +51,7 @@ export interface PaintOptions {
   highContrast: boolean;
   gridUm: number;
   gridVisible: boolean;
-  movePreview: { refs: string[]; dxUm: number; dyUm: number; rotateQuarterTurns?: number; flipped?: boolean } | null;
+  movePreview: { refs: string[]; dxUm: number; dyUm: number; rotateQuarterTurns?: number; flipped?: boolean; perRefOffsetUm?: Record<string, [number, number]> } | null;
   /** The route/zone/drawing tool currently in progress (Canvas.tsx), and the cursor to rubber-band its next point toward -- null cursor (pointer left the canvas, or hasn't moved yet) just skips the rubber-band, still showing the fixed points so far. */
   drawState: DrawState | null;
   cursorUm: { x: number; y: number } | null;
@@ -129,7 +133,9 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
 
   ctx.save();
   if (preview) {
-    ctx.translate(preview.dxUm, preview.dyUm);
+    // `perRefOffsetUm`: Pack and Move's per-footprint SpreadFootprints shift (absent for every ordinary move).
+    const own = preview.perRefOffsetUm?.[part.ref];
+    ctx.translate(preview.dxUm + (own?.[0] ?? 0), preview.dyUm + (own?.[1] ?? 0));
     // edit_tool.cpp Rotate()/Flip() during an active Move spin the
     // dragged item in place around its own (already-moving) anchor --
     // see useActionRunner.ts's `tryTransformDuringMove` doc comment for
@@ -460,6 +466,12 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape) {
       s.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.closePath();
       break;
+    case "bezier": {
+      // `EDA_SHAPE::RebuildBezierToSegmentsPointsList( m_MaxError )`: the curve as KiCad's own flattened polyline (an open curve is never filled).
+      bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_UM).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.stroke();
+      return;
+    }
     case "arc": {
       // Three points (start/mid/end) on the arc -- the circumcircle
       // through them gives center+radius, then the start/end angles.
@@ -474,9 +486,9 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape) {
       const a0 = Math.atan2(s.start[1] - cy, s.start[0] - cx);
       const aMid = Math.atan2(s.mid[1] - cy, s.mid[0] - cx);
       const a1 = Math.atan2(s.end[1] - cy, s.end[0] - cx);
-      // Pick whichever sweep direction (CW vs CCW) actually passes through `mid`.
-      const ccw = normalizeSweep(a0, aMid, a1);
-      ctx.arc(cx, cy, r, a0, a1, ccw);
+      // Pick whichever sweep direction actually passes through `mid`. `normalizeSweep` is true when the sweep of INCREASING
+      // angle (clockwise on this y-down canvas) does, and `ctx.arc`'s last argument is `anticlockwise` -- so its negation.
+      ctx.arc(cx, cy, r, a0, a1, !normalizeSweep(a0, aMid, a1));
       ctx.stroke();
       return;
     }
@@ -497,7 +509,7 @@ export function circleThrough(a: [number, number], b: [number, number], c: [numb
   return [ux, uy, Math.hypot(a[0] - ux, a[1] - uy)];
 }
 
-/** True (draw counter-clockwise) if sweeping CCW from `a0` reaches `aMid` before `a1` does -- i.e. whichever winding direction actually visits the arc's own recorded midpoint. Exported for viewer3d/scene.ts, see circleThrough above. */
+/** True if sweeping from `a0` in the direction of INCREASING angle reaches `aMid` before `a1` does -- i.e. whichever winding direction actually visits the arc's own recorded midpoint (on the y-down canvas increasing angle is clockwise, so a `ctx.arc` caller passes the negation as its `anticlockwise` flag). Exported for viewer3d/scene.ts, see circleThrough above. */
 export function normalizeSweep(a0: number, aMid: number, a1: number): boolean {
   const twoPi = Math.PI * 2;
   const fwd = (x: number) => ((x % twoPi) + twoPi) % twoPi; // 0..2pi, CCW-positive
@@ -752,6 +764,16 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     return;
   }
 
+  // `drawArc` / `drawOneBezier`: the construction managers' own geometry, not a polyline through the clicks.
+  if (draw.kind === "shape" && draw.shapeKind === "arc" && draw.arc) {
+    drawArcPreview(ctx, draw.arc, { color: layerColor("selection"), hair: (px) => hairlineUm(view, px), units: opts.units });
+    return;
+  }
+  if (draw.kind === "shape" && draw.shapeKind === "bezier" && draw.bezier) {
+    drawBezierPreview(ctx, draw.bezier, { color: layerColor("selection"), hair: (px) => hairlineUm(view, px), units: opts.units }, BEZIER_MAX_ERROR_UM);
+    return;
+  }
+
   const cursor = opts.cursorUm;
   const pts = draw.pts.slice();
   // A finished measurement (2 points already fixed) is a static ruler --
@@ -904,6 +926,8 @@ function shapePointsOf(s: Shape): Array<[number, number]> {
       return [s.center, s.end];
     case "polygon":
       return s.pts;
+    case "bezier":
+      return bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_UM);
   }
 }
 

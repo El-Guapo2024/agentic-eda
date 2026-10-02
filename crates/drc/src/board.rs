@@ -43,6 +43,11 @@ pub fn from_ir_shape(s: &IrShape) -> Shape {
         IrShape::Circle { center, end, stroke_width, .. } => Shape::Circle { c: *center, r: crate::kimath::dist(*center, *end) + stroke_width / 2 },
         IrShape::Arc { start, end, stroke_width, .. } => Shape::Stadium { a: *start, b: *end, r: stroke_width / 2 },
         IrShape::Polygon { pts, .. } => Shape::Polygon { pts: pts.clone() },
+        // `EDA_SHAPE::makeEffectiveShapes` BEZIER: the flattened curve as a stroked polyline.
+        IrShape::Bezier { stroke_width, .. } => {
+            let pts = s.bezier_points().unwrap_or_default();
+            Shape::Strokes { segs: pts.windows(2).map(|w| crate::kimath::Seg::new(w[0], w[1])).collect(), r: stroke_width / 2 }
+        }
     }
 }
 
@@ -104,6 +109,13 @@ pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
                     out.extend(stroke(ring(pts), *stroke_width));
                 }
             }
+        }
+        // `EDA_SHAPE::makeEffectiveShapes` BEZIER: one stroked segment per piece of the flattened curve
+        // (`BEZIER_POLY::GetPoly` at `m_MaxError`); an open curve is never filled.
+        IrShape::Bezier { stroke_width, .. } => {
+            let pts = s.bezier_points().unwrap_or_default();
+            let segs: Vec<_> = pts.windows(2).map(|w| crate::kimath::Seg::new(w[0], w[1])).collect();
+            out.extend(stroke(segs, *stroke_width));
         }
     }
     out

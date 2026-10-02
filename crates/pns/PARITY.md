@@ -242,6 +242,18 @@ attached tracks in real KiCad either -- see `PARITY-pcb.md` section 4's
 "Move: connected track ends follow the dragged footprint" row -- so there
 is no gap here to close, just a premise the task brief got wrong.
 
+**Free-angle drag (`G`, `pcbnew.InteractiveRouter.DragFreeAngle`): done.**
+`DRAGGER` runs `DM_FREE_ANGLE` when the drag is started with `G` instead of
+`D`: this port's corner drag was already free-angle (see above), so the
+only behavioral difference is the one `DRAGGER::Drag` itself has -- a free-
+angle drag always uses `dragMarkObstacles` (a drag is never shoved, it just
+reports what it would hit). `Dragger::free_angle` (set by
+`Router::drag_start_with`, `POST /api/route/drag_start`'s `free_angle`)
+makes `Dragger::preview` mark obstacles even in `Mode::Shove`; the
+studio's `useActionRunner.ts` `G` handler shares `D`'s grab-and-go
+(`startDragAtCursor( freeAngle )`). Test:
+`free_angle_drag_never_shoves_it_only_reports_the_collision`.
+
 ## Stage 6 -- router fidelity gaps (settings dialog, loop removal, highlight-collisions mode)
 
 **"Highlight collisions" mode needed no new backend code at all.** It's
@@ -417,19 +429,59 @@ extensive header comment for the full reasoning; short version:
   `Cmd::CommitRoute` a finished route/drag/diff-pair already uses
   (`tune_api::apply`).
 
-**Not implemented**: diff-pair length tuning (`8`,
-`pcbnew.LengthTuner.TuneDiffPair`) and diff-pair skew tuning (`9`,
-`TuneDiffPairSkew`) -- both would reuse this same `generate_meander`
-primitive (apply it to each of a pair's two lines, e.g. independently
-with the same period timing so parallel lines stay roughly parallel
-rather than crossing) but needed orchestration (picking both tracks,
-matching/offsetting their two lengths or their skew) this task ran out
-of time to build and verify properly; a half-correct coupled-pair
-meander would be worse than clearly marking this not-done. The settings
-dialog's own amplitude/spacing fields (`1`/`2`/`3`/`4` upstream) are
-`LengthTuningDialog.tsx`'s plain number inputs rather than a separate
-`Ctrl+L` settings dialog + live keystroke adjustment -- see that
+The settings dialog's own amplitude/spacing fields (`1`/`2`/`3`/`4`
+upstream) are `LengthTuningDialog.tsx`'s plain number inputs rather than a
+separate `Ctrl+L` settings dialog + live keystroke adjustment -- see that
 component's own header comment.
+
+### Stage 8b -- differential-pair length (`8`) and skew (`9`) tuning
+
+`pns_dp_meander_placer.cpp` / `pns_meander_skew_placer.cpp` ->
+`src/dp_tune.rs` (the pair/skew orchestration) and `src/meander.rs`'s
+`generate_dp_meander` (the dual meander). `tune_api.rs`'s
+`/api/tune_length/{preview,apply}` take a `mode` (`single` | `diffpair` |
+`skew`, default `single`) and `LengthTuningDialog.tsx` is the one dialog
+for all three. Same dialog-driven shape as `7` (no live mouse session) and
+the same scope: both lines of the pair must be a **single straight
+axis-aligned run** (one 2-point track each) side by side on one layer.
+
+- **`8` `DP_MEANDER_PLACER`**: the clicked line's partner is the
+  complementary-net track (`dp_coupled_net_name` = `BOARD::MatchDpSuffix`)
+  that runs alongside it (nearest, then longest overlap).
+  `baselineSegment` -> the midline of the stretch both lines share; one
+  trapezoid meander is built along it and each line is that shape shifted
+  by its own signed lateral offset (`SetBaselineOffset`, `offset_polyline`
+  -- corners mitered), so the lines are parallel at the pair's pitch
+  everywhere. Both lines keep their ends exactly where they were (a
+  straight lead-in/out keeps the first/last mitered corner inside the
+  stretch) and the unshared stubs of a longer line stay. The target is the
+  pair's length, `max( P, N )` over the whole nets (`origPathLength`);
+  `tuneLineLength`'s even spread of the elongation over the bumps is
+  `pick_periods` (fewest bumps at the biggest amplitude that fits, the
+  amplitudes of the bumps differing by at most 1 um so the sum is exact);
+  the longer line's real length after the miters is measured and the
+  elongation corrected (a pass or two). `MEANDER_SHAPE::MinAmplitude`
+  (`|offset|`) and the dual `spacing()` (`2 * |offset|`) floors are
+  enforced rather than letting a bump fold its inner line over itself;
+  `lines_conflict` is the safety net (`Overlap`). Both replaced tracks are
+  one `Cmd::CommitRoute` (one undo step).
+- **`9` `MEANDER_SKEW_PLACER`** is not a pair operation upstream either:
+  the single-line placer lengthening the *selected* line until its length
+  is `m_coupledLength + targetSkew` (the partner net's routed length plus
+  the requested skew, default 0). Same here (`tune_skew` ->
+  `generate_meander`); a line that is already long enough is refused with
+  a message (it only lengthens).
+- **Differences from upstream**: the meander is this module's 45-degree
+  trapezoid wave (not upstream's rectangular/rounded bumps, same as `7`);
+  the pair is tuned across the whole shared stretch, not between a click
+  and the cursor; lengths are routed copper only (no pad-to-die length, no
+  via barrels -- the model has none); a pair that already meanders, bends
+  or has vias is refused (`7`'s straight-run scope).
+- Tests: 19 in `meander.rs`/`dp_tune.rs` (geometry: ends on their pads,
+  pitch preserved to the micrometre, target hit within 3 um, reversed
+  point order, partial overlap, vertical pairs, the refusals) and 5 in
+  `tune_api.rs` (preview/apply/undo through a real project directory,
+  collision flagged for a bump toward the partner).
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 

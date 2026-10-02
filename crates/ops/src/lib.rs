@@ -1001,6 +1001,19 @@ pub enum Cmd {
     /// footprint is already in the library -- re-opening never resets
     /// in-progress edits.
     OpenFootprintForEdit { name: String },
+    /// `pcbnew.ModuleEditor.newFootprint` (Ctrl+N, `FOOTPRINT_EDITOR_CONTROL::
+    /// NewFootprint` -> `PCB_BASE_FRAME::CreateNewFootprint`): a brand-new
+    /// empty footprint called `name` with KiCad's own defaults for one --
+    /// `int footprintAttrs = FP_SMD;` (the library it would be saved into
+    /// offers no other footprint to infer them from here). Unlike
+    /// [`Cmd::OpenFootprintForEdit`] (which re-opens whatever `name` already
+    /// resolves to) this REFUSES a name something already defines -- in the
+    /// project library, the builtin table, an intent declaration or a
+    /// loaded `.kicad_mod` -- because `CreateNewFootprint` makes the name
+    /// unique first (`Untitled`, `Untitled_1`, ...): the caller picks that
+    /// name (the footprint list it needs is the same one the editor's
+    /// picker reads).
+    NewFootprint { name: String },
     /// Remove a footprint definition from the project library entirely.
     /// Never touches a board instance naming it (same "explicit, not
     /// automatic" rule `UpdateFootprintOnBoard` documents) -- an instance
@@ -1237,6 +1250,7 @@ impl Cmd {
             | Cmd::ResetErcPinMap
             | Cmd::Annotate { .. } => Domain::Schematic,
             Cmd::OpenFootprintForEdit { .. }
+            | Cmd::NewFootprint { .. }
             | Cmd::DeleteLibraryFootprint { .. }
             | Cmd::EditFootprintProperties { .. }
             | Cmd::SetFootprintAnchor { .. }
@@ -1351,7 +1365,12 @@ impl Cmd {
             Cmd::ReplaceText { .. } => vec!["replace_text"],
             Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => vec!["erc_pin_map"],
 
-            Cmd::OpenFootprintForEdit { name } | Cmd::DeleteLibraryFootprint { name } | Cmd::EditFootprintProperties { name, .. } | Cmd::SetFootprintAnchor { name, .. } | Cmd::UpdateFootprintOnBoard { name } => {
+            Cmd::OpenFootprintForEdit { name }
+            | Cmd::NewFootprint { name }
+            | Cmd::DeleteLibraryFootprint { name }
+            | Cmd::EditFootprintProperties { name, .. }
+            | Cmd::SetFootprintAnchor { name, .. }
+            | Cmd::UpdateFootprintOnBoard { name } => {
                 vec![name.as_str()]
             }
             Cmd::AddPad { footprint, .. }
@@ -1786,6 +1805,7 @@ impl<'a> Board<'a> {
             Cmd::Annotate { reset_existing, order, ids } => self.annotate(*reset_existing, *order, ids.as_deref()),
 
             Cmd::OpenFootprintForEdit { name } => self.open_footprint_for_edit(name),
+            Cmd::NewFootprint { name } => self.new_footprint(name),
             Cmd::DeleteLibraryFootprint { name } => self.delete_library_footprint(name),
             Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model } => {
                 self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone())
@@ -4061,6 +4081,22 @@ impl<'a> Board<'a> {
             Some(fp) => LibraryFootprint::from_engine_footprint(&fp),
             None => LibraryFootprint::new_empty(name),
         };
+        lib_fp.assign_missing_ids();
+        self.footprint_library_mut().footprints.push(lib_fp);
+        Ok(())
+    }
+
+    /// `PCB_BASE_FRAME::CreateNewFootprint`: a fresh, empty footprint with the
+    /// default attribute `FP_SMD`; the caller already made the name unique.
+    fn new_footprint(&mut self, name: &str) -> Result<(), Vec<CheckResult>> {
+        if name.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_footprint", "footprint", "a footprint needs a name")]);
+        }
+        if self.design.footprint_library.as_ref().and_then(|l| l.by_name(name)).is_some() || self.resolve_named_footprint(name).is_some() {
+            return Err(vec![CheckResult::fail("ops_footprint_exists", name, "a footprint with this name already exists; pick another name")]);
+        }
+        let mut lib_fp = LibraryFootprint::new_empty(name);
+        lib_fp.attributes.smd = true;
         lib_fp.assign_missing_ids();
         self.footprint_library_mut().footprints.push(lib_fp);
         Ok(())
