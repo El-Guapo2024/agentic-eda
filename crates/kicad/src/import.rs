@@ -859,6 +859,7 @@ fn import_footprints(
     // which one it was.
     let raw: Vec<&[Sexpr]> = sexpr::find_all(root, "footprint").chain(sexpr::find_all(root, "module")).collect();
 
+    let mut seen_refs: BTreeMap<String, usize> = BTreeMap::new();
     for (idx, fp) in raw.iter().enumerate() {
         let lib_id = sexpr::txt(fp, 1).unwrap_or("unknown").to_string();
         let layer = sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu");
@@ -875,7 +876,16 @@ fn import_footprints(
         let (x, y) = (mm_to_um(fx), mm_to_um(fy));
         let rot = import_rot_millideg(file_rot);
 
-        let reference = footprint_field(fp, "Reference").filter(|s| !s.is_empty()).unwrap_or_else(|| format!("FP{}", idx + 1));
+        let base_ref = footprint_field(fp, "Reference").filter(|s| !s.is_empty()).unwrap_or_else(|| format!("FP{}", idx + 1));
+        // KiCad allows several footprints to share a reference (an
+        // unannotated "REF**", a duplicate); this IR keys footprints and
+        // their pins by reference, so a repeat gets a "#n" suffix to stay a
+        // distinct footprint with its own pad nets.
+        let reference = {
+            let n = seen_refs.entry(base_ref.clone()).or_insert(0usize);
+            *n += 1;
+            if *n == 1 { base_ref.clone() } else { format!("{base_ref}#{n}") }
+        };
         let value = footprint_field(fp, "Value");
 
         let mut pads = Vec::new();
