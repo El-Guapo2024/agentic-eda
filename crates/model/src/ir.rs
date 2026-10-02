@@ -2137,7 +2137,7 @@ impl LibraryPad {
             LibraryPadShape::RoundRect => (crate::footprint::PadShape::RoundRect, self.roundrect_ratio),
             LibraryPadShape::ChamferedRect => (crate::footprint::PadShape::RoundRect, self.chamfer_ratio),
         };
-        crate::footprint::Pad {
+        crate::footprint::Pad { opposite_side: false,
             number: self.number.clone(),
             at: (self.at.x, self.at.y),
             size: self.size,

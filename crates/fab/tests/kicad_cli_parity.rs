@@ -46,7 +46,7 @@ fn part(reference: &str, footprint: &str, pins: Vec<Pin>) -> Part {
 }
 
 fn pad(number: &str, at: (i64, i64), size: (i64, i64), shape: PadShape, kind: PadKind, drill: Option<i64>, drill_slot: Option<(i64, i64)>) -> Pad {
-    Pad { number: number.into(), at, size, shape, kind, drill, drill_slot, rot: 0, roundrect_ratio: if shape == PadShape::RoundRect { Some(0.25) } else { None } }
+    Pad { opposite_side: false, number: number.into(), at, size, shape, kind, drill, drill_slot, rot: 0, roundrect_ratio: if shape == PadShape::RoundRect { Some(0.25) } else { None } }
 }
 
 /// One footprint exercising all four SMD pad shapes.

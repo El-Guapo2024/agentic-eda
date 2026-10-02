@@ -123,11 +123,11 @@ fn net_of_pin_map(model: &ConstraintModel) -> HashMap<String, String> {
 /// `CN_LIST::Add(PAD*)` only spans the *whole* copper stack for
 /// `PAD_ATTRIB::PTH`; SMD, `NPTH` and `CONN` pads (our `PadKind::Smd` and
 /// `PadKind::NonPlatedHole`) are single-layer, same as an SMD pad.
-fn plated_through_hole_flags(model: &ConstraintModel, part: &Part) -> Vec<bool> {
+fn plated_through_hole_flags(model: &ConstraintModel, part: &Part) -> Vec<(bool, bool)> {
     let Some(fp) = model.footprint_of(part) else { return Vec::new() };
     let mut pads: Vec<&eda_model::footprint::Pad> = fp.pads.iter().collect();
     pads.sort_by(|a, b| a.number.cmp(&b.number));
-    pads.iter().map(|p| p.kind == PadKind::ThroughHole).collect()
+    pads.iter().map(|p| (p.kind == PadKind::ThroughHole, p.opposite_side)).collect()
 }
 
 /// Build every [`CnItem`] on the board: pads (from the placement),
@@ -148,10 +148,10 @@ pub fn build_items(design: &Design, model: &ConstraintModel) -> Vec<CnItem> {
             let full_stack = plated_through_hole_flags(model, part);
             for (i, pad) in pads.into_iter().enumerate() {
                 let net = net_of_pin.get(&format!("{}.{}", fp.id, pad.number)).cloned().unwrap_or_default();
-                let is_pth = full_stack.get(i).copied().unwrap_or(false);
+                let (is_pth, opposite) = full_stack.get(i).copied().unwrap_or((false, false));
                 let (layer_lo, layer_hi) = if is_pth {
                     (0, last_idx)
-                } else if fp.side == eda_model::ir::Side::Top {
+                } else if (fp.side == eda_model::ir::Side::Top) != opposite {
                     (f_cu, f_cu)
                 } else {
                     (b_cu, b_cu)
@@ -271,7 +271,7 @@ mod tests {
         let (design, mut model) = two_pad_model();
         model.footprints.push(eda_model::Footprint {
             name: "THPAD".into(),
-            pads: vec![eda_model::Pad { number: "1".into(), at: (0, 0), size: (1000, 1000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500), drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![eda_model::Pad { opposite_side: false, number: "1".into(), at: (0, 0), size: (1000, 1000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],

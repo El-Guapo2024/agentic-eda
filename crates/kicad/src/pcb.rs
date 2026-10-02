@@ -500,7 +500,7 @@ fn write_footprint(
                 write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
             }
             PadKind::Smd => {
-                let (cu, paste, mask) = if fp.side == Side::Bottom {
+                let (cu, paste, mask) = if pad.on_back(fp.side) {
                     ("B.Cu", "B.Paste", "B.Mask")
                 } else {
                     ("F.Cu", "F.Paste", "F.Mask")

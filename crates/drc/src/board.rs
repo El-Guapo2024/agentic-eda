@@ -332,7 +332,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 let drill_slot = pad.drill_slot.map(|s| rotated_extent_by(pad_rot, s));
                 let net = pin_net.get(&format!("{}.{}", fp.id, pad.number)).cloned();
                 let pad_layers = match pad.kind {
-                    PadKind::Smd => vec![if fp.side == Side::Bottom { "B.Cu".to_string() } else { "F.Cu".to_string() }],
+                    PadKind::Smd => vec![if pad.on_back(fp.side) { "B.Cu".to_string() } else { "F.Cu".to_string() }],
                     PadKind::ThroughHole | PadKind::NonPlatedHole => layers.clone(),
                 };
                 pads.push(DrcPad {

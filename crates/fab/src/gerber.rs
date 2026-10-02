@@ -314,6 +314,8 @@ pub(crate) struct PlacedPadFull {
     pub kind: PadKind,
     pub drill: Option<Um>,
     pub drill_slot: Option<(Um, Um)>,
+    /// `Pad::opposite_side`.
+    pub opposite_side: bool,
 }
 
 /// `rotated_extent_by` (`eda_model::footprint`, private to that crate):
@@ -345,6 +347,7 @@ pub(crate) fn placed_pads_full(model: &ConstraintModel, part: &Part, fp: &Footpr
             kind: p.kind,
             drill: p.drill,
             drill_slot: p.drill_slot.map(|sz| rotated_extent(fp.rot as i64 + p.rot as i64, sz)),
+            opposite_side: p.opposite_side,
         })
         .collect();
     pads.sort_by(|a, b| a.number.cmp(&b.number));
@@ -381,8 +384,8 @@ impl PlacedPadFull {
 /// A pad is on a given side's copper/mask layer if it is through-hole
 /// (plated or not: both get `("*.Cu" "*.Mask")` in `eda_kicad::pcb`'s
 /// writer, i.e. both sides) or an SMD pad on that side.
-fn pad_on_side(kind: PadKind, fp_side: Side, want: Side) -> bool {
-    kind != PadKind::Smd || fp_side == want
+fn pad_on_side(p: &PlacedPadFull, fp_side: Side, want: Side) -> bool {
+    p.kind != PadKind::Smd || (fp_side == want) != p.opposite_side
 }
 
 // --------------------------------------------------------------- layers
@@ -588,8 +591,8 @@ fn plot_pad_only_layer(fp_pads: &[(&FootprintInstance, &Part, Vec<PlacedPadFull>
         let included: Vec<&PlacedPadFull> = pads
             .iter()
             .filter(|p| match kind {
-                PadLayerKind::Mask => pad_on_side(p.kind, fp.side, side),
-                PadLayerKind::Paste => p.kind == PadKind::Smd && fp.side == side,
+                PadLayerKind::Mask => pad_on_side(p, fp.side, side),
+                PadLayerKind::Paste => p.kind == PadKind::Smd && pad_on_side(p, fp.side, side),
             })
             .collect();
         if included.is_empty() {
@@ -641,7 +644,7 @@ fn plot_copper(
     // own hole passes through it at all, regardless of which side the
     // footprint sits on.
     for (fp, _part, pads) in fp_pads {
-        let included: Vec<&PlacedPadFull> = pads.iter().filter(|p| if is_outer { pad_on_side(p.kind, fp.side, side) } else { p.kind != PadKind::Smd }).collect();
+        let included: Vec<&PlacedPadFull> = pads.iter().filter(|p| if is_outer { pad_on_side(p, fp.side, side) } else { p.kind != PadKind::Smd }).collect();
         if included.is_empty() {
             continue;
         }

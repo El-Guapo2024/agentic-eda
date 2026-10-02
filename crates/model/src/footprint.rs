@@ -324,6 +324,20 @@ pub struct Pad {
     /// (fraction of the shorter side). `None` = KiCad's own default, 0.25.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roundrect_ratio: Option<f64>,
+    /// An SMD pad flashed on the *other* outer copper layer than its
+    /// footprint's own side (KiCad allows a front footprint's pad to be
+    /// `(layers "B.Cu")`, e.g. the back-side fingers of a card-edge
+    /// connector). `false` -- the usual case -- means the footprint's side.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub opposite_side: bool,
+}
+
+impl Pad {
+    /// Is this pad's copper on the back (`B.Cu`) when its footprint sits
+    /// on `fp_side`? Only meaningful for an SMD pad.
+    pub fn on_back(&self, fp_side: crate::ir::Side) -> bool {
+        (fp_side == crate::ir::Side::Bottom) != self.opposite_side
+    }
 }
 
 impl Footprint {
@@ -482,7 +496,7 @@ impl Pad {
     /// A pad with no per-pad rotation, no slot drill, and KiCad's default
     /// roundrect ratio -- what every built-in package uses.
     fn simple(number: impl Into<String>, at: (Um, Um), size: (Um, Um), shape: PadShape, kind: PadKind, drill: Option<Um>) -> Self {
-        Pad { number: number.into(), at, size, shape, kind, drill, drill_slot: None, rot: 0, roundrect_ratio: None }
+        Pad { opposite_side: false, number: number.into(), at, size, shape, kind, drill, drill_slot: None, rot: 0, roundrect_ratio: None }
     }
 }
 

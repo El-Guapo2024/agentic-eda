@@ -28,7 +28,7 @@ fn lin(n: usize) -> Footprint {
     Footprint {
         name: format!("LIN{n}"),
         pads: (0..n)
-            .map(|i| Pad { number: (i + 1).to_string(), at: (i as i64 * 1000, 0), size: (500, 500), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None })
+            .map(|i| Pad { opposite_side: false, number: (i + 1).to_string(), at: (i as i64 * 1000, 0), size: (500, 500), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None })
             .collect(),
         courtyard: None,
         model: None,
@@ -47,7 +47,7 @@ fn lin_th(n: usize) -> Footprint {
     Footprint {
         name: format!("LINTH{n}"),
         pads: (0..n)
-            .map(|i| Pad {
+            .map(|i| Pad { opposite_side: false,
                 number: (i + 1).to_string(),
                 at: (i as i64 * 1000, 0),
                 size: (800, 800),

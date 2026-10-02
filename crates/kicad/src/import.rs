@@ -639,11 +639,18 @@ pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, note
     // An absent `(layers ...)` (never real on a board pad, but harmless to
     // tolerate) is not treated as "no copper": only an explicit, entirely
     // non-copper list skips the pad.
+    let mut opposite_side = false;
     if let Some(layers) = sexpr::find(pad, "layers") {
         let names: Vec<&str> = layers.iter().skip(1).filter_map(Sexpr::text).collect();
         if !names.is_empty() && !names.iter().any(|l| *l == "*.Cu" || l.ends_with(".Cu")) {
             notes.non_copper_pads_skipped += 1;
             return None;
+        }
+        // An SMD pad on the other outer layer than its footprint (layers
+        // on file are already flipped for a back-side footprint).
+        if pad_kind == PadKind::Smd {
+            let (f, b) = (names.contains(&"F.Cu"), names.contains(&"B.Cu"));
+            opposite_side = if fp_side == Side::Bottom { f && !b } else { b && !f };
         }
     }
 
@@ -698,7 +705,7 @@ pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, note
 
     let roundrect_ratio = sexpr::find(pad, "roundrect_rratio").and_then(|r| sexpr::num(r, 1));
 
-    Some(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: pad_shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio })
+    Some(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: pad_shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio, opposite_side })
 }
 
 /// The cache key `import_footprints` should use for an instance whose lib id
@@ -1489,8 +1496,8 @@ mod tests {
     #[test]
     fn dedup_footprint_key_gives_mixed_side_instances_of_one_lib_id_separate_slots() {
         let mut explicit: BTreeMap<String, Footprint> = BTreeMap::new();
-        let top_pads = vec![Pad { number: "1".into(), at: (-598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
-        let bottom_pads = vec![Pad { number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let top_pads = vec![Pad { opposite_side: false, number: "1".into(), at: (-598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let bottom_pads = vec![Pad { opposite_side: false, number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
 
         let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
         let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads);

@@ -18,11 +18,11 @@ fn failing_locations(f: &Footprint) -> Vec<String> {
 }
 
 fn smd(number: &str) -> Pad {
-    Pad { number: number.into(), at: (0, 0), size: (1000, 600), shape: Default::default(), kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
+    Pad { opposite_side: false, number: number.into(), at: (0, 0), size: (1000, 600), shape: Default::default(), kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
 }
 
 fn tht(number: &str, drill: Option<i64>) -> Pad {
-    Pad { number: number.into(), at: (0, 0), size: (1600, 1600), shape: Default::default(), kind: PadKind::ThroughHole, drill, drill_slot: None, rot: 0, roundrect_ratio: None }
+    Pad { opposite_side: false, number: number.into(), at: (0, 0), size: (1600, 1600), shape: Default::default(), kind: PadKind::ThroughHole, drill, drill_slot: None, rot: 0, roundrect_ratio: None }
 }
 
 fn fp(pads: Vec<Pad>) -> Footprint {
@@ -77,7 +77,7 @@ fn a_zero_sized_pad_is_rejected() {
 }
 
 fn npth(number: &str, drill: Option<i64>, drill_slot: Option<(i64, i64)>) -> Pad {
-    Pad { number: number.into(), at: (0, 0), size: (650, 650), shape: PadShape::Circle, kind: PadKind::NonPlatedHole, drill, drill_slot, rot: 0, roundrect_ratio: None }
+    Pad { opposite_side: false, number: number.into(), at: (0, 0), size: (650, 650), shape: PadShape::Circle, kind: PadKind::NonPlatedHole, drill, drill_slot, rot: 0, roundrect_ratio: None }
 }
 
 #[test]
