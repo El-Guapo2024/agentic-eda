@@ -9,7 +9,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
-import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, postCmd, postRedo, postRoute, postUndo } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
+import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
@@ -1313,6 +1314,50 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   // version check rather than running their own poll: fetched once on
   // switching to that tab, and again whenever the board changes while
   // it's showing.
+  // Shared view state (view_api.rs): apply a view revision someone else
+  // (an agent, the CLI) wrote -- tab, selection, a one-shot zoom-to -- and
+  // push our own tab/selection/camera back, debounced, as `ui`. Our own
+  // revisions are never re-applied, so panning never fights itself.
+  const lastViewRev = useRef(0);
+  const applyRemoteView = useCallback((v: SharedView) => {
+    if (v.rev <= lastViewRev.current) return;
+    lastViewRev.current = v.rev;
+    if (v.by === "ui" || v.by == null) return;
+    const tabs: EditorTab[] = ["pcb", "schematic", "footprint", "symbol", "3d"];
+    if (tabs.includes(v.tab as EditorTab) && v.tab !== stateRef.current.tab) dispatch({ type: "SET_TAB", tab: v.tab as EditorTab });
+    dispatch({ type: "SET_SELECTION", refs: v.selection ?? [] });
+    const rect = document.querySelector(".pcb-canvas-container")?.getBoundingClientRect();
+    if (!rect) return;
+    if (v.zoom_to && v.zoom_to.length) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const ref of v.zoom_to) {
+        const p = stateRef.current.board?.parts.find((q) => q.ref === ref);
+        if (!p?.placed || !p.courtyard) continue;
+        x0 = Math.min(x0, p.courtyard[0]);
+        y0 = Math.min(y0, p.courtyard[1]);
+        x1 = Math.max(x1, p.courtyard[2]);
+        y1 = Math.max(y1, p.courtyard[3]);
+      }
+      if (x0 < x1) dispatch({ type: "SET_VIEW", view: fitTransform({ minX: x0, minY: y0, maxX: x1, maxY: y1 }, rect.width, rect.height, 80) });
+    } else if (v.center && v.scale) {
+      dispatch({ type: "SET_VIEW", view: { scale: v.scale, x: rect.width / 2 - v.center[0] * v.scale, y: rect.height / 2 - v.center[1] * v.scale } });
+    }
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const s = stateRef.current;
+      const rect = document.querySelector(".pcb-canvas-container")?.getBoundingClientRect();
+      const camera = rect && s.view.scale > 0 ? { center: [(rect.width / 2 - s.view.x) / s.view.scale, (rect.height / 2 - s.view.y) / s.view.scale] as [number, number], scale: s.view.scale } : {};
+      postView({ tab: s.tab, selection: [...s.selection], ...camera })
+        .then((v) => {
+          if (v.rev > lastViewRev.current) lastViewRev.current = v.rev;
+        })
+        .catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [state.tab, state.selection, state.view]);
+
   useEffect(() => {
     let stopped = false;
     let lastVersion: string | null = null;
@@ -1323,6 +1368,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     let lastFillFetch: string | null = null;
     const tick = async () => {
       try {
+        fetchView().then(applyRemoteView).catch(() => {});
         const v = await fetchVersion();
         if (stopped) return;
         if (v !== lastVersion) {
@@ -1373,7 +1419,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       stopped = true;
       clearInterval(id);
     };
-  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc, refreshErc, refreshFill]);
+  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc, refreshErc, refreshFill, applyRemoteView]);
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {

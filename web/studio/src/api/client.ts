@@ -17,6 +17,28 @@ async function getJson<T>(url: string): Promise<T> {
   return (await r.json()) as T;
 }
 
+/** Shared view state (crates/cli/src/view_api.rs): what the person is looking at, or what an agent asked them to look at. */
+export type SharedView = {
+  rev: number;
+  by: string | null;
+  tab: string;
+  selection: string[];
+  /** World point (µm) at the canvas centre. */
+  center: [number, number] | null;
+  /** Screen px per µm. */
+  scale: number | null;
+  /** One-shot "fit these items" request. */
+  zoom_to: string[] | null;
+};
+
+export function fetchView(): Promise<SharedView> {
+  return getJson<SharedView>("/api/view");
+}
+
+export function postView(patch: Partial<Pick<SharedView, "tab" | "selection" | "center" | "scale">>): Promise<SharedView> {
+  return fetch("/api/view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }).then((r) => r.json() as Promise<SharedView>);
+}
+
 /** Changes whenever the board, activity.jsonl, or the routing job does. Poll this; refetch state only when it changes. */
 export function fetchVersion(): Promise<string> {
   return getJson<string>("/api/version");

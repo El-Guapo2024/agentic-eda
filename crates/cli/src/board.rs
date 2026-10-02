@@ -1233,6 +1233,24 @@ pub fn run(
         // studio UI's own `/api/undo`/`/api/redo` (see their own doc).
         "undo" => undo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
         "redo" => redo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
+        // Shared view state (`view_api`): print it, or select / switch tab /
+        // zoom to items in the studio as this actor.
+        "gui" => {
+            let list = |k: &str| flag(rest, k).map(|v| v.split(',').filter(|s| !s.is_empty()).map(str::to_string).collect::<Vec<_>>());
+            let mut patch = serde_json::Map::new();
+            if let Some(sel) = list("--select") {
+                patch.insert("selection".into(), serde_json::json!(sel));
+            }
+            if let Some(tab) = flag(rest, "--tab") {
+                patch.insert("tab".into(), serde_json::json!(tab));
+            }
+            if let Some(z) = list("--zoom-to") {
+                patch.insert("zoom_to".into(), serde_json::json!(z));
+            }
+            let v = if patch.is_empty() { crate::view_api::get(&dir) } else { crate::view_api::set(&dir, &serde_json::Value::Object(patch), &actor()) };
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            Ok(())
+        }
         "serve" => {
             let port = flag(rest, "--port").and_then(|p| p.parse().ok()).unwrap_or(8765);
             let ui = flag(rest, "--ui").map(PathBuf::from);
@@ -1241,7 +1259,7 @@ pub fn run(
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|gui|serve> [-C dir] [--strict]",
         )),
     }
 }

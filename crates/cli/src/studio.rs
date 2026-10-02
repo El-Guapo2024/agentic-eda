@@ -607,6 +607,8 @@ fn handle(
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
+        ("GET", "/api/view") => respond(stream, "200 OK", "application/json", crate::view_api::get(dir).to_string().as_bytes()),
+        ("POST", "/api/view") => respond(stream, "200 OK", "application/json", crate::view_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
         ("POST", "/api/undo") => {
             let scope = request_domain(&body);
             let reply = match board::undo(dir, "ui", scope) {
