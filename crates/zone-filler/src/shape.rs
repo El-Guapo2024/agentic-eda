@@ -121,6 +121,28 @@ pub fn shape_to_polygon(shape: &Shape, gap: i64, max_error: i64) -> LineChain {
     }
 }
 
+/// `TransformShapeToPolygon( ..., aClearance, aError, ERROR_OUTSIDE )` for
+/// the shapes that grow analytically (a circle, an oval/track, a (rounded)
+/// rectangle): the shape is grown by `clearance` first and polygonised
+/// once, with every arc's radius pushed out by `max_error`
+/// (`GetCircleToPolyCorrection`) so no chord ever cuts inside the true
+/// clearance boundary. A general polygon falls back to [`shape_to_polygon`]
+/// with the correction added to the inflate amount.
+pub fn shape_to_polygon_outside(shape: &Shape, clearance: i64, max_error: i64) -> LineChain {
+    let c = clearance.max(0);
+    let grow = c + max_error;
+    match shape {
+        Shape::Circle { c: center, r } => exact_polygon(&Shape::Circle { c: *center, r: r + grow }, max_error),
+        Shape::Stadium { a, b, r } => exact_polygon(&Shape::Stadium { a: *a, b: *b, r: r + grow }, max_error),
+        // `RoundRect`'s corner centres sit `r` inside its bounds, so the
+        // bounds grow with the radius to keep them on the original corners.
+        Shape::Rect { x0, y0, x1, y1 } if c > 0 => exact_polygon(&Shape::RoundRect { x0: x0 - grow, y0: y0 - grow, x1: x1 + grow, y1: y1 + grow, r: grow }, max_error),
+        Shape::Rect { .. } => exact_polygon(shape, max_error),
+        Shape::RoundRect { x0, y0, x1, y1, r } => exact_polygon(&Shape::RoundRect { x0: x0 - grow, y0: y0 - grow, x1: x1 + grow, y1: y1 + grow, r: r + grow }, max_error),
+        Shape::Polygon { .. } => shape_to_polygon(shape, c + max_error, max_error),
+    }
+}
+
 /// The shape's axis-aligned bounding box, `(x0, y0, x1, y1)`.
 pub fn bounds(shape: &Shape) -> (i64, i64, i64, i64) {
     match shape {

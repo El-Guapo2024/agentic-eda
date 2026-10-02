@@ -147,7 +147,7 @@ fn add_thermal_knockout(holes: &mut ShapePolySet, shape: &Shape, gap: i64, max_e
 /// (`GetCircleToPolyCorrection` grows the radius by `aMaxError`), so the
 /// fill never comes closer than the clearance anywhere along a curve.
 fn add_knockout(holes: &mut ShapePolySet, shape: &Shape, gap: i64, max_error: i64) {
-    let poly = shape::shape_to_polygon(shape, gap + EXTRA_MARGIN + max_error, max_error);
+    let poly = shape::shape_to_polygon_outside(shape, gap + EXTRA_MARGIN, max_error);
     if poly.len() >= 3 {
         holes.add_outline(poly);
     }
