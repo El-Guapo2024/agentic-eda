@@ -2535,3 +2535,21 @@ fn zone_cutout_refuses_a_disjoint_cutout_a_degenerate_one_and_an_unknown_zone() 
     assert_eq!(e[0].check, "ops_unknown_zone");
     assert_eq!(b.design().routing.as_ref().unwrap().zones.len(), 1, "a refused cutout leaves the zone alone");
 }
+
+#[test]
+fn batch_applies_every_sub_command_and_rolls_back_whole_on_a_refusal() {
+    let m = model(vec![part("R1", "0603"), part("R2", "0603")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: 10_000, y: 10_000 }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R2".into(), x: 40_000, y: 30_000 }).unwrap();
+    b.apply(&Cmd::Batch { cmds: vec![Cmd::Rotate { part: "R1".into(), quarter_turns: 1 }, Cmd::Rotate { part: "R2".into(), quarter_turns: 1 }] }).unwrap();
+    assert_eq!(b.pose_of("R1").unwrap().rot, b.pose_of("R2").unwrap().rot);
+    let r1 = b.pose_of("R1").unwrap().clone();
+    // second sub-command is refused -> the first one must not stick
+    let e = b.apply(&Cmd::Batch { cmds: vec![Cmd::Rotate { part: "R1".into(), quarter_turns: 1 }, Cmd::Rotate { part: "R9".into(), quarter_turns: 1 }] });
+    assert!(e.is_err());
+    assert_eq!(b.pose_of("R1").unwrap().rot, r1.rot, "a refused batch changes nothing");
+    assert!(Cmd::Batch { cmds: vec![Cmd::Flip { part: "R1".into() }] }.clears_routing());
+    let j: Cmd = serde_json::from_str(r#"{"op":"batch"}"#).unwrap();
+    assert!(matches!(j, Cmd::Batch { ref cmds } if cmds.is_empty()));
+}

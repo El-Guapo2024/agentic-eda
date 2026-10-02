@@ -723,6 +723,19 @@ pub enum Cmd {
     /// selection/UI-origin concept of its own.
     MoveExact { parts: Vec<String>, dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point> },
 
+    /// Apply `cmds` in order as ONE command: one undo step, one activity
+    /// entry, all-or-nothing (the first refused sub-command restores the
+    /// board to how it was before the batch and its refusal is returned).
+    /// KiCad commits a whole multi-item operation (rotate N items, delete
+    /// N items, flip N footprints) with a single `BOARD_COMMIT::Push`;
+    /// without this the studio sent one `/api/cmd` -- and so one undo
+    /// snapshot -- per item. The batch's undo scope (`Cmd::domain`) is its
+    /// first sub-command's, so a batch should stay within one editor.
+    Batch {
+        #[serde(default)]
+        cmds: Vec<Cmd>,
+    },
+
     // ---------------------------------------------------------- eeschema
     //
     // Mirrors the PCB verbs above one-for-one where the shape allows
@@ -1194,6 +1207,7 @@ impl Cmd {
     /// Which editor this command belongs to -- see [`Domain`].
     pub fn domain(&self) -> Domain {
         match self {
+            Cmd::Batch { cmds } => cmds.first().map_or(Domain::Pcb, Cmd::domain),
             Cmd::MoveSymbol { .. }
             | Cmd::DragSymbol { .. }
             | Cmd::RotateSymbol { .. }
@@ -1296,6 +1310,7 @@ impl Cmd {
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } => vec!["paste"],
             Cmd::CommitRoute { .. } => vec!["route"],
+            Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
@@ -1376,6 +1391,9 @@ impl Cmd {
     /// deletes or restyles the copper/graphics themselves and never moves
     /// a part out from under them.
     pub fn clears_routing(&self) -> bool {
+        if let Cmd::Batch { cmds } = self {
+            return cmds.iter().any(Cmd::clears_routing);
+        }
         matches!(
             self,
             Cmd::Place { .. }
@@ -1727,6 +1745,16 @@ impl<'a> Board<'a> {
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
+            Cmd::Batch { cmds } => {
+                let saved = self.design.clone();
+                for c in cmds {
+                    if let Err(e) = self.apply(c) {
+                        self.design = saved;
+                        return Err(e);
+                    }
+                }
+                Ok(())
+            }
 
             Cmd::MoveSymbol { id, x, y, unit } => self.move_symbol(id, *x, *y, *unit),
             Cmd::DragSymbol { id, x, y, attached_wire_endpoints, unit } => self.drag_symbol(id, *x, *y, attached_wire_endpoints, *unit),

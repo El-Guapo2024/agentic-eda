@@ -16,7 +16,7 @@
 import { useCallback, useMemo, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { toCmdDimension } from "../kicad-port/dimensionConvert";
-import type { CmdDimensionKind } from "../api/types";
+import type { Cmd, CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { finishInteractiveRoute, cancelInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
@@ -51,6 +51,9 @@ import { selectConnection, selectNodeAt } from "../kicad-port/schConnection";
 import { goBack, goForward } from "../kicad-port/navHistory";
 import { nextLineMode, LINE_MODE_FREE, LINE_MODE_90, LINE_MODE_45 } from "../kicad-port/schLineMode";
 import { useSymApi } from "../state/symbolEditorStore";
+import { useFpApi } from "../state/footprintEditorStore";
+import { hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
+import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -67,6 +70,7 @@ export function useActionRunner() {
   const dispatch = useStudioDispatch();
   const state = useStudioState();
   const symApi = useSymApi();
+  const fpApi = useFpApi();
   /** `m_afterItem` of find-next-marker (SCH_FIND_REPLACE_TOOL): the last ERC marker visited, so the next press continues from it. */
   const markerCursor = useRef<string | null>(null);
 
@@ -86,6 +90,66 @@ export function useActionRunner() {
       (...args: Args) => {
         if (state.tab === "pcb") fn(...args);
       };
+
+    /** Tabs that have their own pan/zoom view in the shared view state (PCB and Schematic). */
+    const viewTab =
+      <Args extends unknown[]>(fn: (...args: Args) => void) =>
+      (...args: Args) => {
+        if (state.tab === "pcb" || state.tab === "schematic") fn(...args);
+      };
+    const curView = () => (state.tab === "schematic" ? state.schematicView : state.view);
+    const setView = (view: typeof state.view) => dispatch({ type: state.tab === "schematic" ? "SET_SCHEMATIC_VIEW" : "SET_VIEW", view });
+
+    /**
+     * `PCB_SELECTION_TOOL::RequestSelection` / `SCH_SELECTION_TOOL::RequestSelection`: the current
+     * selection, or -- when nothing is selected -- the item under the cursor (`selectPoint`; no
+     * clarification menu, the best candidate wins). Used by every edit hotkey (R/F/M/Del/E/U/Shift+M...)
+     * so hover + key works without a prior click.
+     */
+    const requestSelection = (): string[] => {
+      if (state.selection.size > 0) return [...state.selection];
+      if (!state.cursorUm) return [];
+      if (state.tab === "schematic") {
+        const sch = state.schematic;
+        if (!sch) return [];
+        const sym = hitSymbol(sch, state.cursorUm.x, state.cursorUm.y);
+        if (sym) return [sym];
+        const wire = hitWire(sch, state.cursorUm.x, state.cursorUm.y, 400 / (state.schematicView.scale || 1));
+        return wire ? [wire] : [];
+      }
+      if (state.tab !== "pcb" || !state.board) return [];
+      const toleranceUm = Math.max(150, 6 / state.view.scale);
+      const cands = pickSelectionCandidates(state.board, state.cursorUm.x, state.cursorUm.y, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
+      return cands[0] ? [cands[0].id] : [];
+    };
+    /** RequestSelection for dialog/tool hand-offs that read `state.selection`: adopt the hovered item as the selection first. */
+    const adoptHovered = (): string[] => {
+      const refs = requestSelection();
+      if (state.selection.size === 0 && refs.length > 0) dispatch({ type: "SET_SELECTION", refs });
+      return refs;
+    };
+    /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
+    const deleteRefs = (refs: string[]) => {
+      const cmds: Cmd[] = [];
+      const locked = new Set(state.board?.locked ?? []);
+      for (const id of refs) {
+        if (state.tab === "schematic") {
+          if (api.symbolById(id)) cmds.push({ op: "delete_symbol", id });
+          else if (api.wireById(id)) cmds.push({ op: "delete_wire", id });
+        } else if (state.tab === "pcb") {
+          if (locked.has(id)) continue;
+          if (api.trackById(id)) cmds.push({ op: "delete_track", id });
+          else if (api.viaById(id)) cmds.push({ op: "delete_via", id });
+          else if (api.zoneById(id)) cmds.push({ op: "delete_zone", id });
+          else if (api.shapeById(id)) cmds.push({ op: "delete_shape", id });
+          else if (api.textById(id)) cmds.push({ op: "delete_text", id });
+          else if (api.dimensionById(id)) cmds.push({ op: "delete_dimension", id });
+          else if (api.partByRef(id)?.placed) cmds.push({ op: "rip", part: id });
+        }
+      }
+      dispatch({ type: "CLEAR_SELECTION" });
+      if (cmds.length) void api.cmdBatch(cmds);
+    };
 
     /**
      * edit_tool.cpp Rotate()/Flip()'s own `m_dragging` branch:
@@ -126,13 +190,13 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveEdit.rotateCcw",
       pcbOnly(() => {
-        if (!tryTransformDuringMove(1, false)) api.rotateSelection(1);
+        if (!tryTransformDuringMove(1, false)) void api.rotateSelection(1, requestSelection());
       })
     );
     m.set(
       "pcbnew.InteractiveEdit.rotateCw",
       pcbOnly(() => {
-        if (!tryTransformDuringMove(3, false)) api.rotateSelection(3);
+        if (!tryTransformDuringMove(3, false)) void api.rotateSelection(3, requestSelection());
       })
     );
 
@@ -156,41 +220,25 @@ export function useActionRunner() {
     // exactly that. copySelection is synchronous and reads straight off
     // the current board/selection, so there is no race with the delete
     // that follows it.
+    // common.Interactive.cut (Ctrl+X) -- edit_tool.cpp copyToClipboard(cut) + DeleteItems(isCut):
+    // copies exactly what it then deletes. The clipboard only holds tracks/vias/zones/shapes/text,
+    // so footprints and dimensions are neither copied nor deleted (they used to be destroyed
+    // un-restorably), and locked items are skipped. Copy happens first, delete is one undo step.
     m.set(
       "common.Interactive.cut",
       pcbOnly(() => {
-        api.copySelection();
-        m.get("common.Interactive.delete")?.();
+        const locked = new Set(state.board?.locked ?? []);
+        const refs = requestSelection().filter((id) => !locked.has(id) && Boolean(api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id)));
+        if (refs.length === 0) return;
+        api.copySelection(refs);
+        deleteRefs(refs);
       })
     );
 
+    // Del: RequestSelection (selection, else the item under the cursor), then ONE commit for all of it.
     m.set("common.Interactive.delete", () => {
-      // One selection can only ever be one kind of thing at a time in
-      // practice (Canvas.tsx/SchematicView.tsx's hit-testing always
-      // replaces the selection with a single item; shift-click can still
-      // mix kinds by accumulating them), so this deletes each ref through
-      // whichever Cmd actually matches what it is. Tab-scoped the same
-      // way `common.Interactive.undo`/`redo` are now scoped (GAPS.md
-      // #15): a schematic ref deleted from the PCB tab, or vice versa,
-      // would otherwise be a silent no-op that still cleared the
-      // selection -- same bug shape as the undo one, if either tab's
-      // branch ran unconditionally.
-      const refs = [...state.selection];
-      dispatch({ type: "CLEAR_SELECTION" });
-      for (const id of refs) {
-        if (state.tab === "schematic") {
-          if (api.symbolById(id)) api.deleteSymbol(id);
-          else if (api.wireById(id)) api.cmd({ op: "delete_wire", id });
-        } else if (state.tab === "pcb") {
-          if (api.trackById(id)) api.cmd({ op: "delete_track", id });
-          else if (api.viaById(id)) api.cmd({ op: "delete_via", id });
-          else if (api.zoneById(id)) api.cmd({ op: "delete_zone", id });
-          else if (api.shapeById(id)) api.cmd({ op: "delete_shape", id });
-          else if (api.textById(id)) api.cmd({ op: "delete_text", id });
-          else if (api.dimensionById(id)) api.cmd({ op: "delete_dimension", id });
-          else if (api.partByRef(id)?.placed) api.cmd({ op: "rip", part: id });
-        }
-      }
+      if (state.tab !== "pcb" && state.tab !== "schematic") return;
+      deleteRefs(requestSelection());
     });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
     // AttemptFinish's while actively routing -- KiCad's own tool stack
@@ -241,7 +289,8 @@ export function useActionRunner() {
       // reasonable fixed ladder (see WIDTH_PRESETS_UM below).
       const cycleWidth = (dir: 1 | -1) => {
         const i = WIDTH_PRESETS_UM.findIndex((w) => w >= draw.width);
-        const next = WIDTH_PRESETS_UM[Math.min(WIDTH_PRESETS_UM.length - 1, Math.max(0, (i < 0 ? WIDTH_PRESETS_UM.length - 1 : i) + dir))]!;
+        // board_editor_control.cpp TrackWidthInc/Dec wrap at both ends.
+        const next = WIDTH_PRESETS_UM[wrapStep(i, WIDTH_PRESETS_UM.length, dir)]!;
         dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, width: next } });
         routeMove(cursor.x, cursor.y, undefined, next).then((preview) => {
           if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: drawStateFromPreview({ ...draw, width: next }, preview) });
@@ -273,7 +322,7 @@ export function useActionRunner() {
       m.set(
         "pcbnew.InteractiveEdit.flip",
         pcbOnly(() => {
-          if (!tryTransformDuringMove(0, true)) api.flipSelection();
+          if (!tryTransformDuringMove(0, true)) void api.flipSelection(requestSelection());
         })
       );
     }
@@ -435,8 +484,10 @@ export function useActionRunner() {
       "common.Interactive.measureTool",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "measure" ? "select" : "measure" }))
     );
-    m.set("common.Interactive.undo", () => api.undo());
-    m.set("common.Interactive.redo", () => api.redo());
+    // Undo/Redo run in the active editor's OWN scope: the Footprint and Symbol editors have their
+    // own undo domains (footprint_editor / symbol_editor); only the PCB/Schematic/3D tabs use the board's.
+    m.set("common.Interactive.undo", () => void (state.tab === "footprint" ? fpApi.undo() : state.tab === "symbol" ? symApi.undo() : api.undo()));
+    m.set("common.Interactive.redo", () => void (state.tab === "footprint" ? fpApi.redo() : state.tab === "symbol" ? symApi.redo() : api.redo()));
     m.set("common.Interactive.duplicate", pcbOnly(() => api.duplicateSelection()));
     m.set("common.Interactive.copy", pcbOnly(() => api.copySelection()));
     m.set("common.Interactive.paste", pcbOnly(() => api.pasteClipboard()));
@@ -471,7 +522,7 @@ export function useActionRunner() {
         // footprint, or any of item 7's track/via/zone/shape/text (the
         // dialog itself, MoveExactDialog.tsx, resolves which and reads
         // its own position/bbox fresh when it opens).
-        if (state.selection.size === 0) return;
+        if (adoptHovered().length === 0) return;
         dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true });
       })
     );
@@ -553,11 +604,18 @@ export function useActionRunner() {
       return [...refs];
     }
 
-    const fitToBoard = pcbOnly(() => {
+    const fitToBoard = viewTab(() => {
       const rect = canvasRect();
+      if (!rect) return;
+      if (state.tab === "schematic") {
+        // Schematic: the page frame widened to the content (same bounds as the initial fit).
+        const sb = state.schematic ? boundsOfPoints(schematicBounds(state.schematic)) : null;
+        if (sb) setView(fitTransform(sb, rect.width, rect.height, 80));
+        return;
+      }
       const bounds = state.board?.outline ? boundsOfPoints(state.board.outline) : null;
-      if (!rect || !bounds) return;
-      dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height) });
+      if (!bounds) return;
+      setView(fitTransform(bounds, rect.width, rect.height));
     });
     // common_tools.cpp ZoomFitScreen (ZOOM_FIT_ALL -- the worksheet page,
     // or the edited object if there's no page) vs. ZoomFitObjects
@@ -579,16 +637,16 @@ export function useActionRunner() {
     // back through the CURRENT view gives back the actual screen pixel it
     // was under, since nothing else can have moved the view in between a
     // pointer-move and this hotkey firing synchronously.
-    const zoomAtCenter = pcbOnly((factor: number) => {
+    const zoomAtCenter = viewTab((factor: number) => {
       const rect = canvasRect();
       if (!rect) return;
-      dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, rect.width / 2, rect.height / 2, factor) });
+      setView(zoomAbout(curView(), rect.width / 2, rect.height / 2, factor));
     });
-    const zoomAtCursor = pcbOnly((factor: number) => {
+    const zoomAtCursor = viewTab((factor: number) => {
       const rect = canvasRect();
       if (!rect) return;
-      const [px, py] = state.cursorUm ? worldToScreen(state.view, state.cursorUm.x, state.cursorUm.y) : [rect.width / 2, rect.height / 2];
-      dispatch({ type: "SET_VIEW", view: zoomAbout(state.view, px, py, factor) });
+      const [px, py] = state.cursorUm ? worldToScreen(curView(), state.cursorUm.x, state.cursorUm.y) : [rect.width / 2, rect.height / 2];
+      setView(zoomAbout(curView(), px, py, factor));
     });
     m.set("common.Control.zoomInCenter", () => zoomAtCenter(ZOOM_STEP_FACTOR));
     m.set("common.Control.zoomOutCenter", () => zoomAtCenter(1 / ZOOM_STEP_FACTOR));
@@ -604,11 +662,11 @@ export function useActionRunner() {
     // pointer that stays where it was. See PARITY-pcb.md.
     m.set(
       "common.Control.zoomCenter",
-      pcbOnly(() => {
+      viewTab(() => {
         const rect = canvasRect();
         if (!rect || !state.cursorUm) return;
-        const [centerWx, centerWy] = screenToWorld(state.view, rect.width / 2, rect.height / 2);
-        dispatch({ type: "SET_VIEW", view: panByWorldDelta(state.view, state.cursorUm.x - centerWx, state.cursorUm.y - centerWy) });
+        const [centerWx, centerWy] = screenToWorld(curView(), rect.width / 2, rect.height / 2);
+        setView(panByWorldDelta(curView(), state.cursorUm.x - centerWx, state.cursorUm.y - centerWy));
       })
     );
     // common_tools.cpp ZoomRedraw: `m_frame->HardRedraw()` -- forces a
@@ -637,12 +695,13 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveMove.move",
       pcbOnly(() => {
-        const first = [...state.selection][0];
+        const first = requestSelection()[0];
         if (!first) return;
         // Tracks and zones have no move_* Cmd (api/types.ts) -- nothing
         // for M to do for them, same as they're excluded from dragging
         // in Canvas.tsx's onPointerDown.
         if (api.trackById(first) || api.zoneById(first)) return;
+        adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
       })
@@ -675,7 +734,7 @@ export function useActionRunner() {
         // it keeps the existing footprint-properties dialog's pattern.
         // Shared with Canvas.tsx's double-click (properties.ts) so the
         // two can never disagree.
-        const ref = [...state.selection][0];
+        const ref = requestSelection()[0];
         if (ref) openPropertiesFor(ref, api, dispatch);
       })
     );
@@ -787,21 +846,40 @@ export function useActionRunner() {
       const base = board?.board_rules?.track_width ?? 250;
       return [base, ...(board?.routing?.track_width_presets ?? [])];
     };
+    // board_editor_control.cpp TrackWidthInc/Dec + ViaSizeInc/Dec. Idle (no tool running) with ONLY
+    // tracks/vias selected: each track/via moves to the next larger (smaller) preset above ITS OWN
+    // size, one commit, current width untouched. Otherwise the board's current index steps and WRAPS
+    // (`if (widthIndex >= size) widthIndex = 0` / `if (< 0) widthIndex = size - 1`).
+    const toolIdle = !state.drawState && state.activeTool === "select";
+    const selOnlyTracksVias = (): string[] | null => {
+      const ids = [...state.selection];
+      return ids.length > 0 && ids.every((id) => api.trackById(id) || api.viaById(id)) ? ids : null;
+    };
     const cycleTrackWidth = (dir: 1 | -1) => {
       const list = trackWidthList();
+      const sel = toolIdle ? selOnlyTracksVias() : null;
+      if (sel) {
+        const pick = dir > 0 ? nextLargerPreset : nextSmallerPreset;
+        const cmds: Cmd[] = [];
+        for (const id of sel) {
+          const t = api.trackById(id);
+          if (!t) continue;
+          const w = pick(list, (x) => x, t.width);
+          if (w != null) cmds.push({ op: "set_track_width", id, width: w });
+        }
+        void api.cmdBatch(cmds);
+        return;
+      }
       const cur = state.currentTrackWidthUm ?? list[0]!;
-      const i = list.indexOf(cur);
-      // Source's spin control clamps at the list ends rather than
-      // wrapping (ADVANCED_CFG has no "wrap" setting for this one).
-      const next = list[Math.max(0, Math.min(list.length - 1, (i === -1 ? 0 : i) + dir))]!;
+      const next = list[wrapStep(list.indexOf(cur), list.length, dir)]!;
       dispatch({ type: "SET_CURRENT_TRACK_WIDTH", widthUm: next });
-      for (const id of state.selection) if (api.trackById(id)) api.cmd({ op: "set_track_width", id, width: next });
     };
-    m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleTrackWidth(1)));
-    m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleTrackWidth(-1)));
+    if (state.drawState?.kind !== "route") {
+      m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleTrackWidth(1)));
+      m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleTrackWidth(-1)));
+    }
 
-    // pcbnew.EditorControl.viaSizeInc/Dec ("\\"/unbound): same dual-purpose
-    // idea as the track-width cycle above, for `routing.via_presets`.
+    // pcbnew.EditorControl.viaSizeInc/Dec ("\\"/unbound): same rules for `routing.via_presets`.
     const viaPresetList = (): { diameter: number; drill: number }[] => {
       const board = state.board;
       const base = { diameter: board?.board_rules?.via_diameter ?? 600, drill: board?.board_rules?.via_drill ?? 300 };
@@ -810,11 +888,22 @@ export function useActionRunner() {
     const sameViaPreset = (a: { diameter: number; drill: number }, b: { diameter: number; drill: number }) => a.diameter === b.diameter && a.drill === b.drill;
     const cycleViaPreset = (dir: 1 | -1) => {
       const list = viaPresetList();
+      const sel = toolIdle ? selOnlyTracksVias() : null;
+      if (sel) {
+        const pick = dir > 0 ? nextLargerPreset : nextSmallerPreset;
+        const cmds: Cmd[] = [];
+        for (const id of sel) {
+          const v = api.viaById(id);
+          if (!v) continue;
+          const p = pick(list, (x) => x.diameter, v.d);
+          if (p) cmds.push({ op: "edit_via", id, diameter: p.diameter, drill: p.drill });
+        }
+        void api.cmdBatch(cmds);
+        return;
+      }
       const cur = state.currentViaPreset ?? list[0]!;
-      const i = list.findIndex((p) => sameViaPreset(p, cur));
-      const next = list[Math.max(0, Math.min(list.length - 1, (i === -1 ? 0 : i) + dir))]!;
+      const next = list[wrapStep(list.findIndex((p) => sameViaPreset(p, cur)), list.length, dir)]!;
       dispatch({ type: "SET_CURRENT_VIA_PRESET", preset: next });
-      for (const id of state.selection) if (api.viaById(id)) api.cmd({ op: "edit_via", id, diameter: next.diameter, drill: next.drill });
     };
     m.set("pcbnew.EditorControl.viaSizeInc", pcbOnly(() => cycleViaPreset(1)));
     m.set("pcbnew.EditorControl.viaSizeDec", pcbOnly(() => cycleViaPreset(-1)));
@@ -848,9 +937,10 @@ export function useActionRunner() {
     m.set("pcbnew.EditorControl.generateDrillFiles", pcbOnly(() => dispatch({ type: "SET_GENERATE_DRILL_DIALOG_OPEN", open: true })));
     m.set("pcbnew.EditorControl.generatePosFile", pcbOnly(() => dispatch({ type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN", open: true })));
 
+    // common_tools.cpp GridNext/GridPrev: `currentGrid++; if (>= size) = 0` / `--; if (< 0) = size - 1` -- wraps.
     const cycleGrid = (dir: 1 | -1) => {
       const i = GRID_OPTIONS_UM.indexOf(state.gridUm);
-      const next = GRID_OPTIONS_UM[Math.max(0, Math.min(GRID_OPTIONS_UM.length - 1, (i === -1 ? 0 : i) + dir))]!;
+      const next = GRID_OPTIONS_UM[wrapStep(i, GRID_OPTIONS_UM.length, dir)]!;
       dispatch({ type: "SET_GRID_UM", um: next });
     };
     m.set("common.Control.gridNext", () => cycleGrid(1));
@@ -872,18 +962,17 @@ export function useActionRunner() {
     // Escape does).
     m.set(
       "common.Interactive.selectAll",
-      pcbOnly(() => {
+      viewTab(() => {
+        if (state.tab === "schematic") {
+          // sch_selection_tool.cpp SelectAll: every selectable item on the sheet (symbols + wires here).
+          const sch = state.schematic;
+          if (!sch) return;
+          dispatch({ type: "SET_SELECTION", refs: [...sch.symbols.map((x) => x.id), ...sch.wires.map((w) => w.id).filter(Boolean)] });
+          return;
+        }
         if (!state.board) return;
-        const refs: string[] = [];
-        if (state.selectionFilter.footprints) for (const p of state.board.parts) if (p.placed) refs.push(p.ref);
-        for (const t of state.board.routing?.tracks ?? []) refs.push(t.id);
-        for (const v of state.board.routing?.vias ?? []) refs.push(v.id);
-        for (const z of state.board.routing?.zones ?? []) refs.push(z.id);
-        for (const s of state.board.drawings?.shapes ?? []) refs.push(s.id);
-        for (const t of state.board.drawings?.texts ?? []) refs.push(t.id);
-        // pcb_selection_tool.cpp itemPassesFilter: locked items are skipped unless the "Locked items" filter is on.
-        const locked = new Set(state.board.locked ?? []);
-        dispatch({ type: "SET_SELECTION", refs: state.selectionFilter.lockedItems ? refs : refs.filter((id) => !locked.has(id)) });
+        // pcb_selection_tool.cpp SelectAll: every item passing the FULL selection filter (incl. locked) and layer visibility, added to the selection.
+        dispatch({ type: "SET_SELECTION", refs: selectAllIds(state.board, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection) });
       })
     );
     m.set("common.Interactive.unselectAll", pcbOnly(() => dispatch({ type: "SET_SELECTION", refs: [] })));
@@ -901,8 +990,9 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveMove.move",
       schematicOnly(() => {
-        const first = [...state.selection][0];
+        const first = requestSelection()[0];
         if (!first || !api.symbolById(first)) return;
+        adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
       })
@@ -916,44 +1006,35 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveMove.drag",
       schematicOnly(() => {
-        const first = [...state.selection][0];
+        const refs = requestSelection();
+        const first = refs[0];
         if (!first || !api.symbolById(first) || !state.schematic) return;
+        adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
-        dispatch({ type: "SET_DRAG_ATTACH", attach: computeDragAttachment(state.schematic, [...state.selection]) });
+        dispatch({ type: "SET_DRAG_ATTACH", attach: computeDragAttachment(state.schematic, refs) });
       })
     );
 
+    // sch_edit_tool.cpp Rotate/Mirror: RequestSelection (hover fallback), every selected symbol,
+    // one common point for 2+ items, one undo step.
+    const schSymbols = () => requestSelection().filter((id) => api.symbolById(id));
     m.set(
       "eeschema.InteractiveEdit.rotateCCW",
       schematicOnly(() => {
         if (tryTransformDuringMove(1, false)) return;
-        const id = [...state.selection][0];
-        if (id && api.symbolById(id)) api.rotateSymbol(id, 1);
+        void api.transformSymbols(schSymbols(), { kind: "rotate", quarterTurns: 1 });
       })
     );
     m.set(
       "eeschema.InteractiveEdit.rotateCW",
       schematicOnly(() => {
         if (tryTransformDuringMove(3, false)) return;
-        const id = [...state.selection][0];
-        if (id && api.symbolById(id)) api.rotateSymbol(id, 3);
+        void api.transformSymbols(schSymbols(), { kind: "rotate", quarterTurns: 3 });
       })
     );
-    m.set(
-      "eeschema.InteractiveEdit.mirrorH",
-      schematicOnly(() => {
-        const id = [...state.selection][0];
-        if (id && api.symbolById(id)) api.mirrorSymbol(id);
-      })
-    );
-    m.set(
-      "eeschema.InteractiveEdit.mirrorV",
-      schematicOnly(() => {
-        const id = [...state.selection][0];
-        if (id && api.symbolById(id)) api.mirrorSymbolVertical(id);
-      })
-    );
+    m.set("eeschema.InteractiveEdit.mirrorH", schematicOnly(() => void api.transformSymbols(schSymbols(), { kind: "mirrorH" })));
+    m.set("eeschema.InteractiveEdit.mirrorV", schematicOnly(() => void api.transformSymbols(schSymbols(), { kind: "mirrorV" })));
 
     // `E`/`U`/`V`/`F` (sch_edit_tool.cpp::Properties/EditField): one
     // shared dialog for all four -- see SymbolPropertiesDialog.tsx's own
@@ -961,8 +1042,8 @@ export function useActionRunner() {
     // smaller single-field dialog.
     const openSymbolProperties = (field: "reference" | "value" | "footprint" | "datasheet" | null) =>
       schematicOnly(() => {
-        const id = [...state.selection][0];
-        if (id && api.symbolById(id)) dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id, field } });
+        const id = schSymbols()[0];
+        if (id) dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id, field } });
       });
     m.set("eeschema.InteractiveEdit.properties", openSymbolProperties(null));
     m.set("eeschema.InteractiveEdit.symbolProperties", openSymbolProperties(null));
@@ -1497,15 +1578,6 @@ export function useActionRunner() {
       const copperLayers = board?.layers ?? [];
       const routing = state.drawState?.kind === "route";
       const shapeToolActive = state.activeTool === "draw_segment" || state.activeTool === "draw_arc" || state.activeTool === "draw_rect" || state.activeTool === "draw_circle" || state.activeTool === "draw_polygon";
-
-      /** `PCB_SELECTION_TOOL::RequestSelection`: the current selection, or -- when nothing is selected -- the item under the cursor (`selectPoint`; a clarification menu is not raised, the best candidate wins). */
-      const requestSelection = (): string[] => {
-        if (state.selection.size > 0) return [...state.selection];
-        if (!board || !state.cursorUm) return [];
-        const toleranceUm = Math.max(150, 6 / state.view.scale);
-        const cands = pickSelectionCandidates(board, state.cursorUm.x, state.cursorUm.y, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
-        return cands[0] ? [cands[0].id] : [];
-      };
 
       // ---- toggleLock / lock / unlock -- board_editor_control.cpp BOARD_EDITOR_CONTROL::modifyLockSelected
       const modifyLock = (mode: "toggle" | "on" | "off") =>

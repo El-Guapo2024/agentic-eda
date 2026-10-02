@@ -764,6 +764,8 @@ export type Cmd =
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */
   | { op: "move_exact"; parts: string[]; dx: Um; dy: Um; rotate_millideg: number; pivot: PointXY | null }
+  /** `Cmd::Batch`: the sub-commands as ONE undo step, all-or-nothing. */
+  | { op: "batch"; cmds: Cmd[] }
 
   // -------------------------------------------------------- eeschema
   // crates/ops/src/lib.rs's eeschema `Cmd` variants -- see that enum's

@@ -19,6 +19,9 @@ import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/ca
 import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { movableItem } from "../kicad-port/pcbEditActions";
+import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
+import { symbolBounds } from "../components/schematic/painter";
+import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
 import { alignAxis, alignDeltas, getDeltasForDistributeByGaps, getDeltasForDistributeByPoints, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
@@ -340,6 +343,36 @@ export function selectionBoundsCenter(
     y1 = Math.max(y1, p.courtyard[3]);
   }
   return any ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : null;
+}
+
+/** `selectionBoundsCenter` extended with vias (each contributes its pad circle's box) -- the shared pivot of a mixed footprint + via rotate. */
+export function selectionBoundsCenterWithVias(
+  parts: ReadonlyArray<{ ref: string; placed: boolean; courtyard?: readonly [number, number, number, number] | null }>,
+  vias: ReadonlyArray<{ id: string; x: number; y: number; d: number }>,
+  refs: readonly string[],
+  viaIds: readonly string[]
+): { x: number; y: number } | null {
+  let x0 = Infinity,
+    y0 = Infinity,
+    x1 = -Infinity,
+    y1 = -Infinity;
+  for (const ref of refs) {
+    const p = parts.find((q) => q.ref === ref);
+    if (!p?.placed || !p.courtyard) continue;
+    x0 = Math.min(x0, p.courtyard[0]);
+    y0 = Math.min(y0, p.courtyard[1]);
+    x1 = Math.max(x1, p.courtyard[2]);
+    y1 = Math.max(y1, p.courtyard[3]);
+  }
+  for (const id of viaIds) {
+    const v = vias.find((q) => q.id === id);
+    if (!v) continue;
+    x0 = Math.min(x0, v.x - v.d / 2);
+    y0 = Math.min(y0, v.y - v.d / 2);
+    x1 = Math.max(x1, v.x + v.d / 2);
+    y1 = Math.max(y1, v.y + v.d / 2);
+  }
+  return x0 <= x1 ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : null;
 }
 
 export const DEFAULT_RULE_AREA_SETTINGS: RuleAreaFields = {
@@ -1214,9 +1247,13 @@ function reducer(state: StudioState, action: Action): StudioState {
 export interface StudioApi {
   /** Force an immediate /api/state refetch (after a command, or on demand). */
   refresh: () => Promise<void>;
-  rotateSelection: (quarterTurns: number) => Promise<void>;
+  /** R/Shift+R (edit_tool.cpp Rotate): `refs` defaults to the selection; the caller passes RequestSelection's hover fallback. Footprints and vias rotate; several items share one pivot and commit as ONE undo step. */
+  rotateSelection: (quarterTurns: number, refs?: string[]) => Promise<void>;
   ripSelection: () => Promise<void>;
-  flipSelection: () => Promise<void>;
+  /** F (edit_tool.cpp Flip): footprints, one undo step for the whole selection. */
+  flipSelection: (refs?: string[]) => Promise<void>;
+  /** Several Cmds as ONE undo step (`Cmd::Batch`): all-or-nothing. A single Cmd is sent as itself. Returns whether the backend accepted it. */
+  cmdBatch: (cmds: Cmd[]) => Promise<boolean>;
   /** pcbnew.AlignAndDistribute.align* (no default hotkey in source either -- reached from the right-click menu, Canvas.tsx's onContextMenu). Placed footprints only -- see kicad-port/alignDistribute.ts's own scope note. A no-op under 2 placed parts, same floor source's menu-visibility condition enforces. */
   alignSelection: (edge: AlignEdge) => Promise<void>;
   /** pcbnew.AlignAndDistribute.distribute* -- same placed-footprints-only scope. A no-op under 3 placed parts. */
@@ -1250,6 +1287,8 @@ export interface StudioApi {
   schTextById: (id: string) => SchematicText | undefined;
   /** R/Shift+R on the Schematic tab: rotate a symbol in place (quarterTurns: 1 = CCW/'R', 3 = CW/Shift+R, matching sch_edit_tool.cpp's own default). */
   rotateSymbol: (id: string, quarterTurns: number) => Promise<void>;
+  /** sch_edit_tool.cpp Rotate/Mirror over a multi-selection: one item turns about its own anchor; several share the selection's (grid-snapped) center. One undo step. */
+  transformSymbols: (ids: string[], op: { kind: "rotate"; quarterTurns: number } | { kind: "mirrorH" } | { kind: "mirrorV" }) => Promise<void>;
   /** X on the Schematic tab ("Mirror Horizontally"). */
   mirrorSymbol: (id: string) => Promise<void>;
   /** Y on the Schematic tab ("Mirror Vertically") -- mutually exclusive with `mirrorSymbol` on the backend (Cmd::MirrorSymbolVertical's own doc). */
@@ -1273,7 +1312,8 @@ export interface StudioApi {
   /** Ctrl+Shift+G: dissolve every group named in the current selection, then select their former members. */
   ungroupSelection: () => Promise<void>;
   /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
-  copySelection: () => void;
+  /** `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback. */
+  copySelection: (refs?: readonly string[]) => void;
   /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
   pasteClipboard: () => Promise<void>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
@@ -1501,6 +1541,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     [refresh]
   );
 
+  /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */
+  const runBatch = async (cmds: Cmd[]): Promise<boolean> => {
+    if (cmds.length === 0) return true;
+    return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+  };
+
   /**
    * `EDIT_TOOL::Move`'s moveIndividually hand-off ("if( ++itemIdx <
    * orig_items.size() ) { ...Pick up new item }"): once the dropped item has
@@ -1571,6 +1617,41 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "CLEAR_SELECTION" });
       await runCmd({ op: "delete_symbol", id });
     },
+    transformSymbols: async (ids, op) => {
+      const st = stateRef.current;
+      const sch = st.schematic;
+      const syms = ids.map((id) => sch?.symbols.find((x) => x.id === id)).filter((x): x is SchematicSymbol => Boolean(x));
+      if (syms.length === 0) return;
+      const cmds: Cmd[] = [];
+      let center: { x: number; y: number } | null = null;
+      if (syms.length > 1 && sch) {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const sy of syms) {
+          const b = symbolBounds(sy, sch.lib_symbols);
+          x0 = Math.min(x0, b.minX); y0 = Math.min(y0, b.minY); x1 = Math.max(x1, b.maxX); y1 = Math.max(y1, b.maxY);
+        }
+        // sch_edit_tool.cpp: the shared point is the selection center snapped to the schematic grid (keeps rotated anchors on grid).
+        center = { x: Math.round((x0 + x1) / 2 / SCH_GRID_UM) * SCH_GRID_UM, y: Math.round((y0 + y1) / 2 / SCH_GRID_UM) * SCH_GRID_UM };
+      }
+      for (const sy of syms) {
+        if (op.kind === "rotate") {
+          cmds.push({ op: "rotate_symbol", id: sy.id, quarter_turns: ((op.quarterTurns % 4) + 4) % 4 });
+          if (center) {
+            // symbol rotation +90 maps (x,y) -> (y,-x) (transform.ts "90:none"), i.e. rotateQuarter with the opposite sign.
+            const r = rotateQuarter(sy.at[0], sy.at[1], center.x, center.y, -op.quarterTurns);
+            if (r.x !== sy.at[0] || r.y !== sy.at[1]) cmds.push({ op: "move_symbol", id: sy.id, x: r.x, y: r.y });
+          }
+        } else {
+          cmds.push(op.kind === "mirrorH" ? { op: "mirror_symbol", id: sy.id } : { op: "mirror_symbol_vertical", id: sy.id });
+          if (center) {
+            const x = op.kind === "mirrorH" ? mirrorCoord(sy.at[0], center.x) : sy.at[0];
+            const y = op.kind === "mirrorV" ? mirrorCoord(sy.at[1], center.y) : sy.at[1];
+            if (x !== sy.at[0] || y !== sy.at[1]) cmds.push({ op: "move_symbol", id: sy.id, x, y });
+          }
+        }
+      }
+      await runBatch(cmds);
+    },
     cmd: (c) => runCmd(c),
     advanceMoveQueue: () => advanceMoveQueue(),
     // edit_tool.cpp's real Rotate: a single selected item spins about its
@@ -1584,17 +1665,38 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // place about its own anchor -- see PARITY-pcb.md's "Edit tool"
     // section for why that was a documented simplification, not the real
     // behavior).
-    rotateSelection: async (quarterTurns) => {
-      const refs = [...stateRef.current.selection].filter((r) => api.partByRef(r)?.placed);
-      if (refs.length === 0) return;
-      const rotateMillideg = (((quarterTurns % 4) + 4) % 4) * 90_000;
-      const pivot = refs.length > 1 ? selectionBoundsCenter(stateRef.current.board?.parts ?? [], refs) : null;
-      await runCmd({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
+    rotateSelection: async (quarterTurns, explicit) => {
+      const st = stateRef.current;
+      const given = explicit ?? [...st.selection];
+      const refs = given.filter((r) => api.partByRef(r)?.placed);
+      const viaIds = given.filter((r) => api.viaById(r));
+      if (refs.length + viaIds.length === 0) return;
+      const q = ((quarterTurns % 4) + 4) % 4;
+      const rotateMillideg = q * 90_000;
+      const cmds: Cmd[] = [];
+      if (refs.length + viaIds.length === 1) {
+        // a single item spins about its own anchor
+        if (refs.length) cmds.push({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot: null });
+        return void (await runBatch(cmds)); // a lone via has no orientation: nothing to do
+      }
+      // 2+ items share the selection's bounding-box center (updateModificationPoint / GetCenter)
+      const center = selectionBoundsCenterWithVias(st.board?.parts ?? [], st.board?.routing?.vias ?? [], refs, viaIds);
+      const pivot = center ? { x: Math.round(center.x), y: Math.round(center.y) } : null;
+      if (refs.length) cmds.push({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot });
+      if (pivot) {
+        for (const id of viaIds) {
+          const v = api.viaById(id)!;
+          const r = rotateQuarter(v.x, v.y, pivot.x, pivot.y, q);
+          if (r.x !== v.x || r.y !== v.y) cmds.push({ op: "move_via", id, x: r.x, y: r.y });
+        }
+      }
+      await runBatch(cmds);
     },
+    cmdBatch: (cmds) => runBatch(cmds),
     ripSelection: async () => {
       const refs = [...stateRef.current.selection];
       dispatch({ type: "CLEAR_SELECTION" });
-      for (const ref of refs) await runCmd({ op: "rip", part: ref });
+      await runBatch(refs.map((ref): Cmd => ({ op: "rip", part: ref })));
     },
     // edit_tool.cpp's real Flip: a single item flips about its own anchor
     // (no position change, only `side` toggles -- Cmd::Flip's existing
@@ -1605,18 +1707,20 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // composed client-side as "move to the mirrored X, then flip" per
     // part, the same two-Cmd composition `commitMove` already uses for a
     // single dragged-and-flipped part.
-    flipSelection: async () => {
-      const refs = [...stateRef.current.selection].filter((r) => api.partByRef(r)?.placed);
+    flipSelection: async (explicit) => {
+      const refs = (explicit ?? [...stateRef.current.selection]).filter((r) => api.partByRef(r)?.placed);
       if (refs.length === 0) return;
       const center = refs.length > 1 ? selectionBoundsCenter(stateRef.current.board?.parts ?? [], refs) : null;
+      const cmds: Cmd[] = [];
       for (const ref of refs) {
         if (center) {
           const p = api.partByRef(ref)!;
-          const [x, y] = p.at!;
-          await runCmd({ op: "move_to", part: ref, x: 2 * center.x - x, y });
+          const [x] = p.at!;
+          cmds.push({ op: "move_to", part: ref, x: Math.round(mirrorCoord(x, center.x)), y: p.at![1] });
         }
-        await runCmd({ op: "flip", part: ref });
+        cmds.push({ op: "flip", part: ref });
       }
+      await runBatch(cmds); // one undo step, like source's single BOARD_COMMIT::Push
     },
     alignSelection: async (edge) => {
       const refs = [...stateRef.current.selection].filter((r) => {
@@ -1627,13 +1731,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const boxes: Box[] = refs.map((r) => api.partByRef(r)!.courtyard!);
       const deltas = alignDeltas(boxes, edge);
       const axis = alignAxis(edge);
+      const cmds: Cmd[] = [];
       for (let i = 0; i < refs.length; i++) {
         const d = deltas[i]!;
         if (d === 0) continue;
         const p = api.partByRef(refs[i]!)!;
         const [x, y] = p.at!;
-        await runCmd({ op: "move_to", part: refs[i]!, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
+        cmds.push({ op: "move_to", part: refs[i]!, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
       }
+      await runBatch(cmds);
     },
     distributeSelection: async (axis, mode) => {
       const refs = [...stateRef.current.selection].filter((r) => {
@@ -1654,46 +1760,49 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         mode === "gaps"
           ? getDeltasForDistributeByGaps(sorted.map(({ box }) => (axis === "x" ? [box[0], box[2]] : [box[1], box[3]]) as [number, number]))
           : getDeltasForDistributeByPoints(sorted.map(({ box }) => key(box)));
+      const cmds: Cmd[] = [];
       for (let i = 0; i < sorted.length; i++) {
         const d = deltas[i]!;
         if (d === 0) continue;
         const p = api.partByRef(sorted[i]!.r)!;
         const [x, y] = p.at!;
-        await runCmd({ op: "move_to", part: sorted[i]!.r, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
+        cmds.push({ op: "move_to", part: sorted[i]!.r, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
       }
+      await runBatch(cmds);
     },
     commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+      const cmds: Cmd[] = [];
       for (const ref of refs) {
         if (kind === "part") {
           const p = api.partByRef(ref);
-          if (p?.placed && p.at) await runCmd({ op: "move_to", part: ref, x: p.at[0] + dxUm, y: p.at[1] + dyUm });
+          if (p?.placed && p.at) cmds.push({ op: "move_to", part: ref, x: p.at[0] + dxUm, y: p.at[1] + dyUm });
           // Rotating/flipping about the part's own (already-moved) anchor
           // is exactly what the backend's Rotate/Flip ops do regardless of
           // when they're called, so applying them after the move lands on
           // the same final pose as KiCad's live in-place spin during a
           // single-item drag -- see MovePreview's own doc comment.
-          if (rotateQuarterTurns) await runCmd({ op: "rotate", part: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
-          if (flipped) await runCmd({ op: "flip", part: ref });
+          if (rotateQuarterTurns) cmds.push({ op: "rotate", part: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
+          if (flipped) cmds.push({ op: "flip", part: ref });
         } else if (kind === "via") {
           const v = api.viaById(ref);
-          if (v) await runCmd({ op: "move_via", id: ref, x: v.x + dxUm, y: v.y + dyUm });
+          if (v) cmds.push({ op: "move_via", id: ref, x: v.x + dxUm, y: v.y + dyUm });
         } else if (kind === "shape") {
-          await runCmd({ op: "move_shape", id: ref, dx: dxUm, dy: dyUm });
+          cmds.push({ op: "move_shape", id: ref, dx: dxUm, dy: dyUm });
         } else if (kind === "text") {
           const t = api.textById(ref);
-          if (t) await runCmd({ op: "move_text", id: ref, x: t.x + dxUm, y: t.y + dyUm });
+          if (t) cmds.push({ op: "move_text", id: ref, x: t.x + dxUm, y: t.y + dyUm });
         } else if (kind === "dimension") {
-          await runCmd({ op: "move_dimension", id: ref, dx: dxUm, dy: dyUm });
+          cmds.push({ op: "move_dimension", id: ref, dx: dxUm, dy: dyUm });
         } else if (kind === "symbol") {
           const s = api.symbolById(ref);
-          if (s) await runCmd({ op: "move_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm });
+          if (s) cmds.push({ op: "move_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm });
           // sch_edit_tool.cpp's R/Shift+R-during-move branch (see
           // useActionRunner.ts's tryTransformDuringMove): applied after
           // the move, same reasoning commitMove's own doc comment gives
           // for parts -- rotating about the symbol's own (already-moved)
           // anchor lands on the same final pose as a live in-place spin.
-          if (rotateQuarterTurns) await runCmd({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
+          if (rotateQuarterTurns) cmds.push({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
         } else if (kind === "symbol_drag") {
           // `G`: same as "symbol" above, except the wire endpoints
           // `state.dragAttach` resolved for this ref at drag-start move
@@ -1705,11 +1814,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           const s = api.symbolById(ref);
           if (s) {
             const attached = stateRef.current.dragAttach?.[ref] ?? [];
-            await runCmd({ op: "drag_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm, attached_wire_endpoints: attached });
+            cmds.push({ op: "drag_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm, attached_wire_endpoints: attached });
           }
-          if (rotateQuarterTurns) await runCmd({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
+          if (rotateQuarterTurns) cmds.push({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
         }
       }
+      // One undo step for the whole drop (BOARD_COMMIT::Push once).
+      await runBatch(cmds);
       advanceMoveQueue();
     },
     placeArmedAt: async (xUm, yUm) => {
@@ -1821,10 +1932,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
       if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
     },
-    copySelection: () => {
+    copySelection: (refs) => {
       const board = stateRef.current.board;
       if (!board) return;
-      const clipboard = collectClipboardContents(board, stateRef.current.selection);
+      const clipboard = collectClipboardContents(board, refs ? new Set(refs) : stateRef.current.selection);
       if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard });
     },
     pasteClipboard: async () => {

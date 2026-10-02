@@ -748,6 +748,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SwapChain { parts } => format!("swap-chain {}", parts.join(" ")),
         Cmd::ZoneCutout { id, cutout } => format!("zone cutout {id} --pts \"{}\"", pts(cutout)),
 
+        Cmd::Batch { cmds } => format!("batch [{}]", cmds.iter().map(cmd_line).collect::<Vec<_>>().join("; ")),
         Cmd::Duplicate { ids } => format!("duplicate {}", ids.join(" ")),
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
             format!("paste --tracks {} --vias {} --zones {} --shapes {} --texts {}", tracks.len(), vias.len(), zones.len(), shapes.len(), texts.len())
@@ -937,6 +938,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::ZoneCutout { .. } => "zone",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
+        Cmd::Batch { .. } => "batch",
         Cmd::MoveExact { .. } => "move-exact",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
