@@ -529,14 +529,21 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
         }
     }
 
-    // ---- testZonesToZones, same layer, by real fill ----
+    // ---- testZonesToZones ----
+    // Teardrop areas are tested as tracks, not zones; rule areas never
+    // reach `board.zones`. Same-net pairs only matter at equal priority and
+    // compare *outlines*; different-net pairs compare *fills*.
     for layer in &board.layers {
-        let zones: Vec<&DrcZone> = zones_on(board, layer).collect();
+        let zones: Vec<&DrcZone> = zones_on(board, layer).filter(|z| !z.teardrop).collect();
         for i in 0..zones.len() {
             for j in (i + 1)..zones.len() {
                 let (a, b) = (zones[i], zones[j]);
-                if a.net == b.net {
-                    if collides_zone_zone(a, b, &fills, 0).is_some() {
+                let same_net = a.net == b.net;
+                if same_net && a.priority != b.priority {
+                    continue;
+                }
+                if same_net {
+                    if a.shape().collides(&b.shape(), 0).is_some() {
                         out.push(DrcViolation::new(ErrorType::ZonesIntersect, "(intersecting zones must have distinct priorities)", vec![zone_ref(a), zone_ref(b)]));
                     }
                 } else if limits.clearance > 0 {
@@ -546,6 +553,29 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
                             limits.report(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![zone_ref(a), zone_ref(b)]), &mut out);
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // ---- testTeardropClearances: each teardrop against every other zone on its layer ----
+    for (ti, td) in board.zones.iter().enumerate().filter(|(_, z)| z.teardrop) {
+        let td_shapes = fills.fragments_or(&td.id, td.shape());
+        for (zi, zone) in board.zones.iter().enumerate().filter(|(_, z)| z.layer == td.layer) {
+            if zi == ti || (zone.teardrop && zi < ti) {
+                continue;
+            }
+            // `testItemAgainstZone( teardrop, zone, layer )`: a teardrop has no hole.
+            if zone.net.is_some() && zone.net == td.net {
+                continue;
+            }
+            if limits.clearance <= 0 {
+                break;
+            }
+            let c = constraints::clearance_with_custom_rules(rules, td.net.as_deref(), zone.net.as_deref(), &td.layer, &facts_of_zone(rules, td), &facts_of_zone(rules, zone), &compiled_rules);
+            if c > 0 {
+                if let Some((actual, _)) = td_shapes.iter().filter_map(|s| collides_zone(s, zone, &fills, c)).min_by_key(|(a, _)| *a) {
+                    limits.report(DrcViolation::new(ErrorType::Clearance, format!("(clearance {}; actual {})", format_um(c), format_um(actual)), vec![zone_ref(td), zone_ref(zone)]), &mut out);
                 }
             }
         }

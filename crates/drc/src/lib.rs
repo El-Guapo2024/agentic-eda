@@ -86,7 +86,26 @@ pub fn run(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     out.extend(providers::schematic_parity::check(design, model));
     out.extend(providers::placement_quality::check(design, model));
     apply_rule_severities(&mut out, &rules.rule_severities);
+    apply_error_limits(&mut out);
     out
+}
+
+/// `DRC_ENGINE::RunTests`' `m_errorLimits`: at most `EXTENDED_ERROR_LIMIT`
+/// (499) `clearance`/`unconnected_items` and `ERROR_LIMIT` (199) of every
+/// other type -- each provider stops reporting a type once its limit is
+/// spent (`IsErrorLimitExceeded`), so the first ones generated are kept.
+/// This port's own non-KiCad checks are left uncapped.
+fn apply_error_limits(violations: &mut Vec<DrcViolation>) {
+    let mut seen: std::collections::HashMap<&'static str, usize> = std::collections::HashMap::new();
+    violations.retain(|v| {
+        if v.error_type.starts_with("placement_") || v.error_type == "routing_track_width" {
+            return true;
+        }
+        let limit = if v.error_type == "clearance" || v.error_type == "unconnected_items" { 499 } else { 199 };
+        let n = seen.entry(v.error_type).or_insert(0);
+        *n += 1;
+        *n <= limit
+    });
 }
 
 /// Task item 2: apply an imported `.kicad_pro`'s `rule_severities` the same

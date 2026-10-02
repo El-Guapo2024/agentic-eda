@@ -124,8 +124,25 @@ pub struct FillInput {
 /// coordinate here (micrometers). 5 (0.005 mm) matches KiCad's own default.
 pub const DEFAULT_MAX_ERROR: i64 = 5;
 
-fn add_knockout(holes: &mut ShapePolySet, shape: &Shape, gap: i64, max_error: i64) {
+/// `ADVANCED_CFG::m_ExtraClearance` (0.0005 mm), rounded up to this IR's
+/// whole µm: `zone_filler.cpp` knocks out every item at `gap + extra_margin`.
+pub const EXTRA_MARGIN: i64 = 1;
+
+/// The thermal-relief knockout: the bare thermal gap, as before.
+fn add_thermal_knockout(holes: &mut ShapePolySet, shape: &Shape, gap: i64, max_error: i64) {
     let poly = shape::shape_to_polygon(shape, gap, max_error);
+    if poly.len() >= 3 {
+        holes.add_outline(poly);
+    }
+}
+
+/// A knockout is built `ERROR_OUTSIDE` (`TransformShapeToPolygon( ...,
+/// gap + extra_margin, m_maxError, ERROR_OUTSIDE )`): the polygonal
+/// approximation's error lands *outside* the true clearance boundary
+/// (`GetCircleToPolyCorrection` grows the radius by `aMaxError`), so the
+/// fill never comes closer than the clearance anywhere along a curve.
+fn add_knockout(holes: &mut ShapePolySet, shape: &Shape, gap: i64, max_error: i64) {
+    let poly = shape::shape_to_polygon(shape, gap + EXTRA_MARGIN + max_error, max_error);
     if poly.len() >= 3 {
         holes.add_outline(poly);
     }
@@ -191,7 +208,8 @@ where
 
         match zone.pad_connection {
             PadConnection::Thermal | PadConnection::ThtThermal => {
-                add_knockout(&mut thermal_holes, &pad.copper, zone.thermal_gap, max_error);
+                // `knockoutThermalReliefs`: `addKnockout( pad, aLayer, thermalGap, holes )` -- no extra margin.
+                add_thermal_knockout(&mut thermal_holes, &pad.copper, zone.thermal_gap, max_error);
                 thermal_pads.push((i, pad_bbox));
             }
             PadConnection::Full => { /* no knockout: connects directly */ }

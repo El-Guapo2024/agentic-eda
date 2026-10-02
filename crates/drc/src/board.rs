@@ -111,6 +111,10 @@ pub struct DrcZone {
     pub pad_connection: eda_model::ir::PadConnection,
     pub island_removal_mode: eda_model::ir::IslandRemovalMode,
     pub min_island_area: i64,
+    /// `ZONE::IsTeardropArea()`: tested "as tracks, not zones" -- left out
+    /// of zone-vs-zone and tested against other zones instead
+    /// (`testTeardropClearances`).
+    pub teardrop: bool,
 }
 
 /// A rule area / keepout (`ZONE::GetIsRuleArea`, task item 3) -- kept
@@ -348,6 +352,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 pad_connection: z.pad_connection,
                 island_removal_mode: z.island_removal_mode,
                 min_island_area: z.min_island_area,
+                teardrop: z.teardrop,
             });
         }
     }

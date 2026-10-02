@@ -261,6 +261,7 @@ mod tests {
             pad_connection: eda_model::ir::PadConnection::Full,
             island_removal_mode: eda_model::ir::IslandRemovalMode::Never,
             min_island_area: 0,
+            teardrop: false,
         }];
         // The filler itself already excludes the keepout from this fill
         // (crates/zone-filler's own test covers that in isolation); this

@@ -29,10 +29,9 @@
 //!
 //! What real boards carry that this does not import, and why (see the
 //! task's report for proposed model shapes):
-//! - **Zones/pours**: counted in [`ImportNotes::zones_skipped`], not
-//!   imported. Our `Zone` has no home for KiCad's fill/thermal-relief
-//!   settings, and a zone's real content is its *filled* copper, which we
-//!   do not compute.
+//! - **Footprint-level zones**: counted in [`ImportNotes::zones_skipped`].
+//!   Board-level zones (pours, teardrops, rule areas) are imported by
+//!   [`import_zones`]; their stored fills are not read, fills are derived.
 //! - **Track/board-edge arcs**: KiCad's `(arc ...)`/`(gr_arc ...)` have no
 //!   analogue in our polyline-only `Track`/`outline`; both are tessellated
 //!   into short straight segments (see [`eda_model::ir::tessellate_arc`]), counted in
@@ -54,7 +53,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use eda_model::ir::{Design, DrawingsSection, FootprintInstance, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via};
+use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintInstance, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
 use crate::sexpr::{self, Sexpr};
@@ -116,7 +115,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let outline = import_outline(root, &mut notes);
     let (tracks, vias) = import_routing(root, &net_names, &mut notes);
     let (shapes, texts) = import_drawings(root);
-    notes.zones_skipped = sexpr::find_all(root, "zone").count();
+    let zones = import_zones(root, &net_names, &layers, &mut notes);
 
     // The outline override lives on `board` too (used when a downstream
     // tool re-derives placement); keep it in step with what we actually
@@ -148,7 +147,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         schematic: None,
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
-        routing: if tracks.is_empty() && vias.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
+        routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
         drawings: if shapes.is_empty() && texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
@@ -866,9 +865,8 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
     for seg in sexpr::find_all(root, "segment") {
         let (Some(s), Some(e)) = (sexpr::find(seg, "start").and_then(xy_point), sexpr::find(seg, "end").and_then(xy_point)) else { continue };
         let net = net_of(sexpr::find(seg, "net").and_then(|n| sexpr::num(n, 1)));
-        if net.is_empty() {
-            continue; // KiCad's net 0: not connected to anything our model can name
-        }
+        // Net 0 (no net) stays as an empty `net`: KiCad still checks a
+        // netless track (clearance, shorting, dangling) like any other.
         let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e], arc_mid_offset: None });
@@ -881,9 +879,6 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
             continue;
         };
         let net = net_of(sexpr::find(arc, "net").and_then(|n| sexpr::num(n, 1)));
-        if net.is_empty() {
-            continue;
-        }
         let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         notes.track_arcs_approximated += 1;
@@ -894,9 +889,6 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
     for via in sexpr::find_all(root, "via") {
         let Some(at) = sexpr::find(via, "at").and_then(xy_point) else { continue };
         let net = net_of(sexpr::find(via, "net").and_then(|n| sexpr::num(n, 1)));
-        if net.is_empty() {
-            continue;
-        }
         let dia = sexpr::find(via, "size").and_then(|s| sexpr::num(s, 1)).map(mm_to_um).unwrap_or(600);
         let drill = sexpr::find(via, "drill").and_then(|d| sexpr::num(d, 1)).map(mm_to_um).unwrap_or(300);
         let (from_layer, to_layer) = sexpr::find(via, "layers")
@@ -1038,6 +1030,139 @@ fn import_outline(root: &[Sexpr], notes: &mut ImportNotes) -> Vec<Point> {
     let (pts, closed) = chain_edges(&edges);
     notes.outline_open = !closed;
     pts
+}
+
+// ---------------------------------------------------------------- zones
+
+/// `PCB_IO_KICAD_SEXPR_PARSER::parseZONE`, for board-level `(zone ...)`s:
+/// copper pours, teardrops (`(attr (teardrop ...))`) and rule areas
+/// (`(keepout ...)`/`(placement ...)`). This IR's `Zone` is single-layer
+/// and single-outline, so a zone on several layers (`(layers ...)`) or
+/// with several `(polygon ...)` outlines becomes one `Zone` per
+/// (layer, outline). The stored `(filled_polygon ...)`s are not read --
+/// fills are always derived (`eda_zone_filler`), which is also what
+/// kicad-cli's own `pcb drc --refill-zones` run does. Footprint-level
+/// zones are not imported yet ([`ImportNotes::zones_skipped`]).
+fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes) -> Vec<Zone> {
+    let mut out = Vec::new();
+    for z in sexpr::find_all(root, "zone") {
+        // `SetIslandRemovalMode( ISLAND_REMOVAL_MODE::ALWAYS )` and priority 0 before parsing.
+        let mut zone = Zone::default();
+        // `(net N)` (code) or, in newer files, `(net "name")`; `(net_name ...)` as a fallback.
+        if let Some(n) = sexpr::find(z, "net") {
+            zone.net = match sexpr::num(n, 1) {
+                Some(code) => net_names.get(&(code as i64)).cloned().unwrap_or_default(),
+                None => sexpr::txt(n, 1).unwrap_or("").to_string(),
+            };
+        }
+        if zone.net.is_empty() {
+            if let Some(n) = sexpr::find(z, "net_name") {
+                zone.net = sexpr::txt(n, 1).unwrap_or("").to_string();
+            }
+        }
+        let mut layers: Vec<String> = Vec::new();
+        if let Some(l) = sexpr::find(z, "layer") {
+            layers.extend(sexpr::txt(l, 1).map(str::to_string));
+        }
+        if let Some(l) = sexpr::find(z, "layers") {
+            for i in 1..l.len() {
+                match sexpr::txt(l, i) {
+                    Some("*.Cu") => layers.extend(copper_layers.iter().cloned()),
+                    Some("F&B.Cu") => layers.extend(["F.Cu".to_string(), "B.Cu".to_string()]),
+                    Some(name) => layers.push(name.to_string()),
+                    None => {}
+                }
+            }
+        }
+        if let Some(p) = sexpr::find(z, "priority") {
+            zone.priority = sexpr::num(p, 1).unwrap_or(0.0).max(0.0) as u32;
+        }
+        if let Some(cp) = sexpr::find(z, "connect_pads") {
+            match sexpr::txt(cp, 1) {
+                Some("yes") => zone.pad_connection = PadConnection::Full,
+                Some("no") => zone.pad_connection = PadConnection::None,
+                Some("thru_hole_only") => zone.pad_connection = PadConnection::ThtThermal,
+                _ => {}
+            }
+            if let Some(c) = sexpr::find(cp, "clearance").and_then(|c| sexpr::num(c, 1)) {
+                zone.clearance = mm_to_um(c);
+            }
+        }
+        if let Some(t) = sexpr::find(z, "min_thickness").and_then(|t| sexpr::num(t, 1)) {
+            zone.min_thickness = mm_to_um(t);
+        }
+        if let Some(f) = sexpr::find(z, "fill") {
+            if let Some(m) = sexpr::find(f, "mode") {
+                if sexpr::txt(m, 1) == Some("hatch") {
+                    zone.fill_mode = FillMode::HatchPattern;
+                }
+            }
+            let um = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1)).map(mm_to_um);
+            let raw = |k: &str| sexpr::find(f, k).and_then(|v| sexpr::num(v, 1));
+            if let Some(v) = um("hatch_thickness") {
+                zone.hatch_thickness = v;
+            }
+            if let Some(v) = um("hatch_gap") {
+                zone.hatch_gap = v;
+            }
+            if let Some(v) = raw("hatch_orientation") {
+                zone.hatch_orientation_mdeg = ((v * 1000.0).round() as i64).rem_euclid(360_000) as _;
+            }
+            if let Some(v) = raw("hatch_smoothing_level") {
+                zone.hatch_smoothing_level = v as i32;
+            }
+            if let Some(v) = raw("hatch_smoothing_value") {
+                zone.hatch_smoothing_value = v;
+            }
+            if let Some(v) = raw("hatch_min_hole_area") {
+                zone.hatch_hole_min_area = v;
+            }
+            if let Some(v) = um("thermal_gap") {
+                zone.thermal_gap = v;
+            }
+            if let Some(v) = um("thermal_bridge_width") {
+                zone.thermal_spoke_width = v;
+            }
+            if let Some(v) = raw("island_removal_mode") {
+                zone.island_removal_mode = match v as i64 {
+                    1 => IslandRemovalMode::Never,
+                    2 => IslandRemovalMode::Area,
+                    _ => IslandRemovalMode::Always,
+                };
+            }
+            // `area * pcbIUScale.IU_PER_MM` after `parseBoardUnits`: mm^2 in the file.
+            if let Some(v) = raw("island_area_min") {
+                zone.min_island_area = (v * 1e6).round() as i64;
+            }
+        }
+        if let Some(k) = sexpr::find(z, "keepout") {
+            zone.is_rule_area = true;
+            let not_allowed = |key: &str| sexpr::find(k, key).and_then(|v| sexpr::txt(v, 1)) == Some("not_allowed");
+            zone.keepout_tracks = not_allowed("tracks");
+            zone.keepout_vias = not_allowed("vias");
+            zone.keepout_copper_pour = not_allowed("copperpour");
+            zone.keepout_pads = not_allowed("pads");
+            zone.keepout_footprints = not_allowed("footprints");
+        }
+        if sexpr::find(z, "placement").is_some() {
+            zone.is_rule_area = true;
+        }
+        if let Some(a) = sexpr::find(z, "attr") {
+            zone.teardrop = sexpr::find(a, "teardrop").is_some();
+        }
+
+        let outlines: Vec<Vec<Point>> = sexpr::find_all(z, "polygon").filter_map(poly_points).collect();
+        if outlines.is_empty() || layers.is_empty() {
+            notes.zones_skipped += 1;
+            continue;
+        }
+        for layer in &layers {
+            for outline in &outlines {
+                out.push(Zone { layer: layer.clone(), outline: outline.clone(), ..zone.clone() });
+            }
+        }
+    }
+    out
 }
 
 /// Points of a `gr_poly`'s `(pts ...)` list: `xy` entries verbatim, `arc`
