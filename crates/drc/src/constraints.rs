@@ -262,7 +262,7 @@ pub fn hole_clearance_min(rules: &BoardRules) -> Um {
 /// `RoutingTuning::copper_edge_clearance` (this board's tuning, floored at
 /// KiCad's own 0.5 mm default).
 pub fn edge_clearance_min(rules: &BoardRules) -> Um {
-    rules.tuning.copper_edge_clearance()
+    rules.copper_edge_clearance_um.unwrap_or(eda_model::KICAD_EDGE_CLEARANCE_UM)
 }
 
 /// `bds.m_SilkClearance` -- silk-to-silk, and (via the `silk_clearance.rs`

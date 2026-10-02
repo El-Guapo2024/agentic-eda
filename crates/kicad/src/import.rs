@@ -272,6 +272,10 @@ fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)]) 
 /// member list rather than a glob (an exact list is what KiCad wrote).
 fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
     let mut board = BoardRules { layers: layers.to_vec(), ..BoardRules::default() };
+    // Legacy boards keep the copper-to-edge clearance in `(setup (edge_clearance ..))`.
+    if let Some(v) = sexpr::find(root, "setup").and_then(|st| sexpr::find(st, "edge_clearance")).and_then(|e| sexpr::num(e, 1)) {
+        board.copper_edge_clearance_um = Some(mm_to_um(v));
+    }
     let classes: Vec<&[Sexpr]> = sexpr::find_all(root, "net_class").collect();
     let default_idx = classes.iter().position(|nc| sexpr::txt(nc, 1) == Some("Default")).or(if classes.len() == 1 { Some(0) } else { None });
 
@@ -497,6 +501,9 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     }
     if let Some(v) = mm("min_clearance") {
         b.min_clearance_um = v;
+    }
+    if let Some(v) = mm("min_copper_edge_clearance") {
+        b.copper_edge_clearance_um = Some(v);
     }
     if let Some(v) = mm("min_via_diameter") {
         b.via_diameter_min_um = v;

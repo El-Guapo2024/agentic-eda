@@ -129,6 +129,13 @@ pub struct BoardRules {
     /// `hole_clearance`, default 250 µm).
     #[serde(default = "d_hole_clearance")]
     pub hole_clearance_um: ir::Um,
+    /// `BOARD_DESIGN_SETTINGS::m_CopperEdgeClearance` as DRC checks it
+    /// (`rules.min_copper_edge_clearance` in the `.kicad_pro`, or a legacy
+    /// board's `(setup (edge_clearance ..))`); `None` = KiCad's 0.5 mm
+    /// default. Separate from `tuning.edge_clearance_um`, which is the
+    /// placer/router's own keep-back and stays floored at 0.5 mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copper_edge_clearance_um: Option<ir::Um>,
     /// Minimum silkscreen-to-silkscreen (and silk-to-exposed-copper)
     /// clearance (KiCad's `silk_clearance`, default 0).
     #[serde(default = "d_silk_clearance")]
@@ -632,6 +639,7 @@ impl Default for BoardRules {
             annular_width_min_um: d_annular_width_min(), min_silk_text_height_um: d_min_silk_text_height(), min_silk_text_thickness_um: d_min_silk_text_thickness(),
             track_width_min_um: d_track_width_min(), min_clearance_um: 0, via_diameter_min_um: d_via_diameter_min(), via_drill_min_um: d_via_drill_min(),
             rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(), outline_closed: None,
+            copper_edge_clearance_um: None,
         }
     }
 }
