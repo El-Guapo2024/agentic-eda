@@ -583,12 +583,16 @@ pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
     Ok(msg)
 }
 
-/// Every gate result that bears on this board right now: the placement
-/// gates `Board::checks` already runs, plus the routing gates when there is
-/// any routing to judge. A hand-added track or via goes through
+/// Every in-process gate result that bears on this board right now: the
+/// placement gates `Board::checks` already runs, plus the routing gates when
+/// there is any routing to judge. A hand-added track or via goes through
 /// `check_routing` exactly like the router's own output does -- same
-/// clearance test, same wrong-net test, same function -- so `--strict`
-/// refuses a bad one the same way it refuses a bad placement move.
+/// clearance test, same wrong-net test, same function.
+///
+/// These are cheap (microseconds to milliseconds), so every edit counts them
+/// before and after. KiCad's own gates (courtyard overlap, copper-to-edge
+/// clearance) are kicad-cli's and cost seconds, so only the judges ask for
+/// them: [`judged_checks`], `eda board check`, and `--strict`.
 fn all_checks(board: &Board, model: &ConstraintModel) -> Vec<CheckResult> {
     let mut out = board.checks();
     if board.design().routing.is_some() {
@@ -597,8 +601,20 @@ fn all_checks(board: &Board, model: &ConstraintModel) -> Vec<CheckResult> {
     out
 }
 
+/// [`all_checks`] plus KiCad's gates, from one kicad-cli DRC run on the
+/// board as it is.
+fn judged_checks(board: &Board, model: &ConstraintModel) -> Vec<CheckResult> {
+    let mut out = all_checks(board, model);
+    out.extend(eda_gates::kicad::check(board.design(), model));
+    out
+}
+
+fn failures_in(checks: &[CheckResult]) -> usize {
+    checks.iter().filter(|c| matches!(c.status, CheckStatus::Fail)).count()
+}
+
 fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
-    all_checks(board, model).iter().filter(|c| matches!(c.status, CheckStatus::Fail)).count()
+    failures_in(&all_checks(board, model))
 }
 
 fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckResult>> {
@@ -621,18 +637,28 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckRe
     let after = all_failures(&board, &model);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
-    if strict && after > before {
-        let new: Vec<String> = all_checks(&board, &model)
-            .iter()
-            .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
-            .filter(|c| !all_checks(&was, &model).iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, eda_model::CheckStatus::Fail)))
-            .map(|c| format!("{} @ {}", c.check, c.location.clone().unwrap_or_default()))
-            .collect();
-        return Err(fail(
-            "board_worse",
-            &cmd.subjects().join(","),
-            format!("that move takes the board from {before} failure(s) to {after} ({}); refused because --strict", new.join("; ")),
-        ));
+    if strict {
+        // `--strict` judges with everything, KiCad's gates included: one
+        // kicad-cli run on each side of the move.
+        if eda_kicad_engine::find_cli().is_none() {
+            return Err(fail("kicad_cli_missing", "kicad-cli", "--strict judges a move with KiCad's own gates (courtyard overlap, edge clearance), which need kicad-cli; set EDA_KICAD_CLI or install KiCad"));
+        }
+        let was_all = judged_checks(&was, &model);
+        let now_all = judged_checks(&board, &model);
+        let (strict_before, strict_after) = (failures_in(&was_all), failures_in(&now_all));
+        if strict_after > strict_before {
+            let new: Vec<String> = now_all
+                .iter()
+                .filter(|c| matches!(c.status, CheckStatus::Fail))
+                .filter(|c| !was_all.iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, CheckStatus::Fail)))
+                .map(|c| format!("{} @ {}", c.check, c.location.clone().unwrap_or_default()))
+                .collect();
+            return Err(fail(
+                "board_worse",
+                &cmd.subjects().join(","),
+                format!("that move takes the board from {strict_before} failure(s) to {strict_after} ({}); refused because --strict", new.join("; ")),
+            ));
+        }
     }
 
     let (done, placed, failures) = progress(&board, &model);
@@ -1127,7 +1153,7 @@ pub fn run(
         "check" => {
             let (meta, design, model) = load(&dir)?;
             let board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
-            let checks = all_checks(&board, &model);
+            let checks = judged_checks(&board, &model);
             let failed: Vec<CheckResult> = checks.iter().filter(|c| matches!(c.status, eda_model::CheckStatus::Fail)).cloned().collect();
             for c in &failed {
                 eprintln!("FAIL {} @ {}: {}", c.check, c.location.clone().unwrap_or_default(), c.hint.clone().unwrap_or_default());
@@ -1316,30 +1342,36 @@ pub fn run(
         // studio UI's own `/api/undo`/`/api/redo` (see their own doc).
         "undo" => undo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
         "redo" => redo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
-        // Any kicad-cli `pcb export` kind on the exported board:
-        // `eda board export --kicad gerbers [-- kicad-cli args...]`.
+        // Any kicad-cli export of the current design:
+        // `eda board export --kicad gerbers [-- kicad-cli args...]` (a `pcb
+        // export` kind), `eda board export --kicad-sch netlist` (a `sch
+        // export` kind).
         "export" => {
-            let kind = rest.iter().position(|a| a == "--kicad").and_then(|i| rest.get(i + 1)).ok_or_else(|| fail("board_usage", "export", "usage: eda board export --kicad <gerbers|drill|pos|step|glb|pdf|svg|ipc2581|odb|...> [-- args]"))?;
             let pass: Vec<String> = rest.iter().skip_while(|a| *a != "--").skip(1).cloned().collect();
-            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::export(&dir, kind, &pass)?).unwrap_or_default());
+            let usage = || fail("board_usage", "export", "usage: eda board export --kicad <gerbers|drill|pos|step|glb|pdf|svg|ipc2581|odb|...> | --kicad-sch <netlist|bom|pdf|svg|...> [-- args]");
+            let v = if let Some(kind) = rest.iter().position(|a| a == "--kicad-sch").and_then(|i| rest.get(i + 1)) {
+                crate::kicad_engine::export_sch(&dir, kind, &pass)?
+            } else {
+                let kind = rest.iter().position(|a| a == "--kicad").and_then(|i| rest.get(i + 1)).ok_or_else(usage)?;
+                crate::kicad_engine::export(&dir, kind, &pass)?
+            };
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             Ok(())
         }
-        // ERC through kicad-cli on the exported schematic.
+        // ERC and DRC are kicad-cli's, run on the exported schematic/board
+        // (`--kicad` is accepted and ignored: there is no other engine).
         "erc" => {
-            if !rest.iter().any(|a| a == "--kicad") {
-                return Err(fail("board_usage", "erc", "usage: eda board erc --kicad"));
-            }
             println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::erc(&dir)?).unwrap_or_default());
             Ok(())
         }
-        // DRC: our own engine, or `--kicad` for kicad-cli on the exported board.
         "drc" => {
-            let v = if rest.iter().any(|a| a == "--kicad") { crate::kicad_engine::drc(&dir)? } else {
-                let (_, design, model) = load(&dir)?;
-                let found = eda_connectivity::run_drc(&design, &model);
-                serde_json::json!({ "engine": "eda", "counts": eda_drc::counts_by_type(&found), "violations": found.iter().map(|v| serde_json::json!({ "type": v.error_type, "description": v.description, "items": v.items.iter().map(|i| serde_json::json!({ "id": i.id, "description": i.description, "pos": [i.pos.0, i.pos.1] })).collect::<Vec<_>>() })).collect::<Vec<_>>() })
-            };
-            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc(&dir)?).unwrap_or_default());
+            Ok(())
+        }
+        // Our own checks, the ones KiCad does not have (`eda-lint`):
+        // placement quality, net-class width, schematic readability.
+        "lint" => {
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::lint(&dir)?).unwrap_or_default());
             Ok(())
         }
         // Shared view state (`view_api`): print it, or select / switch tab /
@@ -1368,7 +1400,7 @@ pub fn run(
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|erc|export|gui|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|erc|lint|export|gui|serve> [-C dir] [--strict]",
         )),
     }
 }
