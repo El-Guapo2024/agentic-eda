@@ -43,6 +43,13 @@
 //! interactive phase entirely: only `finish()`'s output ever needs to be
 //! committed anywhere.
 
+/// `LINE_PLACER::rhWalkOnly`/`rhShoveOnly`'s head effort: merge segments,
+/// plus smart pads when enabled (KiCad also requires 45-degree corner mode,
+/// the only mode this router places in).
+fn head_effort(settings: &RoutingSettings) -> u32 {
+    optimizer::effort::MERGE_SEGMENTS | if settings.smart_pads { optimizer::effort::SMART_PADS } else { 0 }
+}
+
 use crate::direction45::{CornerMode, Direction45};
 use crate::item::{Item, ItemId, Net};
 use crate::layer::LayerRange;
@@ -186,7 +193,7 @@ impl LinePlacer {
                 // items' NEW positions as obstacles the optimizer must also
                 // avoid). Safe, at the cost of occasionally leaving a
                 // slightly less-optimized head than upstream would.
-                let optimized = optimizer::optimize(&line, node, rules, &exclude);
+                let optimized = optimizer::optimize_with(&line, node, rules, &exclude, head_effort(settings));
                 return HeadResult { pts: optimized.pts, colliding: false, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias };
             }
         }
@@ -204,7 +211,7 @@ impl LinePlacer {
                 match wr.best() {
                     Some(path) => {
                         let line = Line::from_points(self.net.clone(), self.current_layer, self.width, path.clone());
-                        let optimized = optimizer::optimize(&line, node, rules, &exclude);
+                        let optimized = optimizer::optimize_with(&line, node, rules, &exclude, head_effort(settings));
                         HeadResult { pts: optimized.pts, colliding: false, displaced_lines: Vec::new(), displaced_vias: Vec::new() }
                     }
                     None => HeadResult { pts: raw, colliding: true, displaced_lines: Vec::new(), displaced_vias: Vec::new() }, // ST_STUCK: show the direct line, flagged violating

@@ -220,12 +220,268 @@ fn merge_full(mut pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width
 /// ids, already removed from `node` by the caller before calling this).
 /// Pure function: never mutates `node`.
 pub fn optimize(line: &Line, node: &Node, rules: &BoardRules, exclude: &[ItemId]) -> Line {
+    optimize_with(line, node, rules, exclude, effort::MERGE_SEGMENTS | effort::MERGE_OBTUSE)
+}
+
+/// `OPTIMIZER` effort flags (`pns_optimizer.h`).
+pub mod effort {
+    pub const MERGE_SEGMENTS: u32 = 0x01;
+    pub const SMART_PADS: u32 = 0x02;
+    pub const MERGE_OBTUSE: u32 = 0x04;
+    pub const FANOUT_CLEANUP: u32 = 0x08;
+    pub const MERGE_COLINEAR: u32 = 0x80;
+}
+
+/// `OPTIMIZER::Optimize( const LINE*, LINE*, LINE* )`'s pass order, for
+/// the passes this crate ports: merge segments, merge obtuse, merge
+/// collinear, smart pads, fanout cleanup.
+pub fn optimize_with(line: &Line, node: &Node, rules: &BoardRules, exclude: &[ItemId], flags: u32) -> Line {
     let mut out = line.clone();
     out.clear_links();
-    out.pts = merge_full(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
-    out.pts = merge_obtuse(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
+    if flags & effort::MERGE_SEGMENTS != 0 {
+        out.pts = merge_full(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
+    }
+    if flags & effort::MERGE_OBTUSE != 0 {
+        out.pts = merge_obtuse(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
+    }
+    if flags & effort::MERGE_COLINEAR != 0 {
+        merge_colinear(&mut out.pts);
+    }
+    if flags & effort::SMART_PADS != 0 {
+        run_smart_pads(&mut out, node, rules, exclude);
+    }
+    if flags & effort::FANOUT_CLEANUP != 0 {
+        fanout_cleanup(&mut out, node, rules, exclude);
+    }
     out.simplify();
     out
+}
+
+/// `OPTIMIZER::mergeColinear`: drop the shared vertex of two collinear,
+/// non-degenerate consecutive segments.
+fn merge_colinear(pts: &mut Vec<eda_model::ir::Point>) {
+    let mut i = 0;
+    while i + 2 < pts.len() {
+        let (a, b, c) = (pts[i], pts[i + 1], pts[i + 2]);
+        let degenerate = a == b || b == c;
+        let cross = (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128;
+        if !degenerate && cross == 0 {
+            pts.remove(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// `DIRECTION_45::ANG_ACUTE | ANG_RIGHT | ANG_HALF_FULL | ANG_UNDEFINED`.
+fn forbidden(a: AngleType) -> bool {
+    matches!(a, AngleType::Acute | AngleType::Right | AngleType::HalfFull | AngleType::Undefined)
+}
+
+/// `LINE::CountCorners( forbidden )`.
+fn count_forbidden_corners(pts: &[eda_model::ir::Point]) -> usize {
+    let dirs: Vec<Direction45> = pts.windows(2).filter(|w| w[0] != w[1]).map(|w| Direction45::from_seg(w[0], w[1])).collect();
+    dirs.windows(2).filter(|w| forbidden(w[0].angle_to(&w[1]))).count()
+}
+
+fn chain_len(pts: &[eda_model::ir::Point]) -> i64 {
+    pts.windows(2).map(|w| (((w[1].x - w[0].x) as f64).hypot((w[1].y - w[0].y) as f64)) as i64).sum()
+}
+
+/// `SHAPE_LINE_CHAIN::Append( chain )`: skip a duplicate joining point.
+fn append(v: &mut Vec<eda_model::ir::Point>, more: &[eda_model::ir::Point]) {
+    for &p in more {
+        if v.last() != Some(&p) {
+            v.push(p);
+        }
+    }
+}
+
+/// `OPTIMIZER::computeBreakouts` for a pad: `rectBreakouts` for a plain
+/// rectangle (and an oval, via `ApproximateSegmentAsRect`),
+/// `circleBreakouts` for a circle, `customBreakouts` for a polygon. A
+/// rounded rectangle reaches KiCad's router as a compound shape, which
+/// has no breakouts -- so none here either.
+fn breakouts(width: Um, item: &crate::item::Item) -> Vec<Vec<eda_model::ir::Point>> {
+    use eda_model::ir::Point;
+    let crate::item::Item::Solid(solid) = item else { return Vec::new() };
+    let rect = |x0: Um, y0: Um, x1: Um, y1: Um| -> Vec<Vec<Point>> {
+        let (sx, sy) = (x1 - x0, y1 - y0);
+        let c = Point { x: x0 + sx / 2, y: y0 + sy / 2 };
+        let add = |p: Point, d: (Um, Um)| Point { x: p.x + d.0, y: p.y + d.1 };
+        let d_off = (if sx > sy { (sx - sy) / 2 } else { 0 }, if sx < sy { (sy - sx) / 2 } else { 0 });
+        let neg = |d: (Um, Um)| (-d.0, -d.1);
+        let (dv, dh) = ((0, sy / 2 + width), (sx / 2 + width, 0));
+        let mut out = vec![vec![c, add(c, dh)], vec![c, add(c, neg(dh))], vec![c, add(c, dv)], vec![c, add(c, neg(dv))]];
+        let l = width + sx.min(sy) / 2;
+        let (cp, cm) = (add(c, d_off), add(c, neg(d_off)));
+        if sx >= sy {
+            out.push(vec![c, cp, add(cp, (l, l))]);
+            out.push(vec![c, cp, add(cp, (l, -l))]);
+            out.push(vec![c, cm, add(cm, (-l, l))]);
+            out.push(vec![c, cm, add(cm, (-l, -l))]);
+        } else {
+            out.push(vec![c, cp, add(cp, (l, l))]);
+            out.push(vec![c, cm, add(cm, (l, -l))]);
+            out.push(vec![c, cp, add(cp, (-l, l))]);
+            out.push(vec![c, cm, add(cm, (-l, -l))]);
+        }
+        for b in &mut out {
+            b.dedup();
+        }
+        out
+    };
+    match solid.shape {
+        Shape::Rect { x0, y0, x1, y1 } => rect(x0, y0, x1, y1),
+        Shape::Stadium { a, b, r } => {
+            // `ApproximateSegmentAsRect`.
+            let (p0, p1) = (Point { x: a.x - r, y: a.y - r }, Point { x: b.x + r, y: b.y + r });
+            rect(p0.x.min(p1.x), p0.y.min(p1.y), p0.x.max(p1.x), p0.y.max(p1.y))
+        }
+        Shape::Circle { c, r } => (0..8)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::FRAC_PI_4;
+                let l = r as f64 * std::f64::consts::SQRT_2;
+                vec![c, Point { x: c.x + (l * a.cos()).round() as Um, y: c.y + (l * a.sin()).round() as Um }]
+            })
+            .collect(),
+        Shape::Polygon { ref pts } => {
+            let (x0, x1) = (pts.iter().map(|p| p.x).min().unwrap_or(0), pts.iter().map(|p| p.x).max().unwrap_or(0));
+            let (y0, y1) = (pts.iter().map(|p| p.y).min().unwrap_or(0), pts.iter().map(|p| p.y).max().unwrap_or(0));
+            let p0 = solid.pos;
+            let length = (x1 - x0).max(y1 - y0) / 2 + 1;
+            let n = pts.len();
+            (0..8)
+                .filter_map(|i| {
+                    let a = i as f64 * std::f64::consts::FRAC_PI_4;
+                    let v0 = Point { x: p0.x + (length as f64 * a.cos()).round() as Um, y: p0.y + (length as f64 * a.sin()).round() as Um };
+                    let ray = eda_drc::kimath::Seg::new(p0, v0);
+                    (0..n).find_map(|k| ray.intersect(&eda_drc::kimath::Seg::new(pts[k], pts[(k + 1) % n]))).map(|hit| vec![p0, hit])
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// `OPTIMIZER::findPadOrVia`: the pad or via of this net at `p` on `layer`.
+fn find_pad_or_via<'a>(node: &'a Node, layer: i32, net: &crate::item::Net, p: eda_model::ir::Point) -> Option<&'a crate::item::Item> {
+    let j = node.joint_at(p, net)?;
+    j.links.iter().filter_map(|&id| node.get(id)).find(|it| matches!(it, crate::item::Item::Solid(_) | crate::item::Item::Via(_)) && it.layers().overlaps(&crate::layer::LayerRange::single(layer)))
+}
+
+/// `OPTIMIZER::smartPadsSingle`: try leaving the pad along each breakout,
+/// joined by a 45-degree trace to one of the line's first few vertices, and
+/// keep the cheapest collision-free variant without a forbidden corner
+/// (ties: the longer breakout). Returns the vertex index used, or `None`.
+fn smart_pads_single(line: &mut Line, pad: &crate::item::Item, at_end: bool, end_vertex: usize, node: &Node, rules: &BoardRules, exclude: &[ItemId]) -> Option<usize> {
+    use crate::layer::LayerRange;
+    // "don't do optimization on vias".
+    let crate::item::Item::Solid(solid) = pad else { return None };
+    let bks = breakouts(line.width, pad);
+    let mut pts = line.pts.clone();
+    if at_end {
+        pts.reverse();
+    }
+    let p_end = end_vertex.min(3.min(pts.len().saturating_sub(1)));
+    let mut variants: Vec<(usize, i64, Vec<eda_model::ir::Point>)> = Vec::new();
+    for p in 1..=p_end {
+        let seg = Shape::Stadium { a: pts[0], b: pts[p], r: line.width / 2 };
+        if solid.shape.collides(&seg, 0).is_none() {
+            continue;
+        }
+        for b in &bks {
+            for diag in [true, false] {
+                let Some(&bl) = b.last() else { continue };
+                let connect = Direction45::Undefined.build_initial_trace(bl, pts[p], diag, CornerMode::Mitered45);
+                if connect.len() < 2 || b.len() < 2 {
+                    continue;
+                }
+                let d_bk = Direction45::from_seg(b[b.len() - 2], bl);
+                if forbidden(d_bk.angle_to(&Direction45::from_seg(connect[0], connect[1]))) {
+                    continue;
+                }
+                if chain_len(b) > chain_len(&pts) {
+                    continue;
+                }
+                let mut v = b.clone();
+                append(&mut v, &connect);
+                append(&mut v, &pts[(p + 1)..]);
+                if count_forbidden_corners(&v) == 0 {
+                    if at_end {
+                        v.reverse();
+                    }
+                    let mut tmp = Line::from_points(line.net.clone(), line.layer, line.width, v);
+                    tmp.simplify();
+                    variants.push((p, chain_len(b), tmp.pts));
+                }
+            }
+        }
+    }
+    let mut min_cost = corner_cost(&line.pts);
+    let mut max_len = 0i64;
+    let mut best: Option<(usize, Vec<eda_model::ir::Point>)> = None;
+    for (p, len, v) in variants {
+        let cost = corner_cost(&v);
+        let clear = !v.windows(2).any(|w| {
+            let shape = Shape::Stadium { a: w[0], b: w[1], r: line.width / 2 };
+            node.first_colliding(&shape, &line.net, LayerRange::single(line.layer), rules, exclude).is_some()
+        });
+        if clear && (cost < min_cost || (cost == min_cost && len > max_len)) {
+            if cost <= min_cost {
+                max_len = max_len.max(len);
+            }
+            min_cost = min_cost.min(cost);
+            best = Some((p, v));
+        }
+    }
+    let (p, v) = best?;
+    line.pts = v;
+    Some(p)
+}
+
+/// `OPTIMIZER::runSmartPads`.
+fn run_smart_pads(line: &mut Line, node: &Node, rules: &BoardRules, exclude: &[ItemId]) {
+    if line.pts.len() < 3 {
+        return;
+    }
+    let (p_start, p_end) = (line.pts[0], *line.pts.last().unwrap());
+    let start_pad = find_pad_or_via(node, line.layer, &line.net, p_start).cloned();
+    let end_pad = find_pad_or_via(node, line.layer, &line.net, p_end).cloned();
+    let mut vtx = None;
+    if let Some(sp) = &start_pad {
+        vtx = smart_pads_single(line, sp, false, 3, node, rules, exclude);
+    }
+    if let Some(ep) = &end_pad {
+        let n = line.pts.len() - 1;
+        smart_pads_single(line, ep, true, vtx.map_or(n, |v| n.saturating_sub(v)), node, rules, exclude);
+    }
+    line.simplify();
+}
+
+/// `OPTIMIZER::fanoutCleanup`: a short (< 10 x width) line from a pad/via
+/// to a pad/via (or ending on a via) is replaced by the direct 45-degree
+/// trace when that is clear.
+fn fanout_cleanup(line: &mut Line, node: &Node, rules: &BoardRules, exclude: &[ItemId]) -> bool {
+    if line.pts.len() < 3 {
+        return false;
+    }
+    let (p_start, p_end) = (line.pts[0], *line.pts.last().unwrap());
+    if find_pad_or_via(node, line.layer, &line.net, p_start).is_none() {
+        return false;
+    }
+    let end_match = find_pad_or_via(node, line.layer, &line.net, p_end).is_some() || line.via_at_end.is_some();
+    if !(end_match && chain_len(&line.pts) < line.width * 10) {
+        return false;
+    }
+    for diag in [false, true] {
+        let l2 = Direction45::Undefined.build_initial_trace(p_start, p_end, diag, CornerMode::Mitered45);
+        if !collides(node, &l2, line.layer, line.width, &line.net, rules, exclude) {
+            line.pts = l2;
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -236,6 +492,39 @@ mod tests {
 
     fn rules() -> BoardRules {
         serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap()
+    }
+
+    #[test]
+    fn smart_pads_leaves_a_wide_pad_along_its_long_axis() {
+        use crate::item::{Item, Solid};
+        use crate::layer::LayerRange;
+        let net = net_of("SIG");
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Rect { x0: -1000, y0: -250, x1: 1000, y1: 250 }, source: "U1.1".into() }));
+        // Drawn leaving the pad centre straight down, then across.
+        let line = Line::from_points(net, 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 0, y: 3000 }, Point { x: 5000, y: 3000 }, Point { x: 8000, y: 3000 }]);
+        let out = optimize_with(&line, &node, &rules(), &[], effort::SMART_PADS);
+        assert_eq!(out.pts[0], Point { x: 0, y: 0 });
+        // KiCad prefers the longer breakout on a tie: out along +x (the long axis).
+        assert_eq!(out.pts[1].y, 0, "first leg runs along the pad's long axis: {:?}", out.pts);
+        assert!(out.pts[1].x > 0);
+    }
+
+    #[test]
+    fn merge_colinear_drops_a_midpoint() {
+        let mut v = vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 500 }];
+        merge_colinear(&mut v);
+        assert_eq!(v.len(), 3);
+    }
+
+    #[test]
+    fn rect_pad_has_eight_breakouts_and_circle_eight() {
+        use crate::item::{Item, Solid};
+        use crate::layer::LayerRange;
+        let rect = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Rect { x0: -500, y0: -250, x1: 500, y1: 250 }, source: "U1.1".into() });
+        assert_eq!(breakouts(200, &rect).len(), 8);
+        let circ = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 300 }, source: "U1.2".into() });
+        assert_eq!(breakouts(200, &circ).len(), 8);
     }
 
     #[test]
