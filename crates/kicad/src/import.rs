@@ -1511,6 +1511,36 @@ fn import_outline(root: &[Sexpr], notes: &mut ImportNotes) -> Vec<Point> {
             edges.push((s, e));
         }
     }
+    // Footprint Edge.Cuts graphics count too (`BuildBoardPolygonOutlines`
+    // collects every Edge.Cuts shape, footprints' included -- e.g. a card-
+    // edge connector's tab). They are stored in footprint-local
+    // coordinates: board = position + RotatePoint( local, orientation ).
+    for fp in sexpr::find_all(root, "footprint").chain(sexpr::find_all(root, "module")) {
+        let Some(at) = sexpr::find(fp, "at") else { continue };
+        let (Some(fx), Some(fy)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
+        let (sin, cos) = sexpr::num(at, 3).unwrap_or(0.0).to_radians().sin_cos();
+        let (ox, oy) = (mm_to_um(fx), mm_to_um(fy));
+        let to_board = |p: Point| -> Point {
+            let (x, y) = (p.x as f64, p.y as f64);
+            Point { x: ox + (x * cos + y * sin).round() as i64, y: oy + (-x * sin + y * cos).round() as i64 }
+        };
+        for l in sexpr::find_all(fp, "fp_line").chain(sexpr::find_all(fp, "fp_arc")).filter(|it| is_edge_cuts(it)) {
+            if let (Some(s), Some(e)) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point)) {
+                edges.push((to_board(s), to_board(e)));
+            }
+        }
+        for r in sexpr::find_all(fp, "fp_rect").filter(|it| is_edge_cuts(it)) {
+            if let (Some(a), Some(b)) = (sexpr::find(r, "start").and_then(xy_point), sexpr::find(r, "end").and_then(xy_point)) {
+                let c = [a, Point { x: b.x, y: a.y }, b, Point { x: a.x, y: b.y }].map(to_board);
+                edges.extend([(c[0], c[1]), (c[1], c[2]), (c[2], c[3]), (c[3], c[0])]);
+            }
+        }
+        for poly in sexpr::find_all(fp, "fp_poly").filter(|it| is_edge_cuts(it)) {
+            if let Some(pts) = poly_points(poly) {
+                candidates.push((pts.into_iter().map(to_board).collect(), "poly", true));
+            }
+        }
+    }
     if !edges.is_empty() {
         let (pts, closed) = chain_edges(&edges);
         candidates.push((pts, "lines", closed));
@@ -1733,6 +1763,9 @@ fn circle_points(c: &[Sexpr]) -> Option<Vec<Point>> {
 /// is the one this heuristic keeps). Tries every edge as a chain start,
 /// which is quadratic in edge count -- fine for the dozens of segments a
 /// real board outline has.
+/// `DEFAULT_CHAINING_EPSILON_MM` (board.h): 0.01 mm.
+const CHAINING_EPSILON: i64 = 10;
+
 fn chain_edges(edges: &[(Point, Point)]) -> (Vec<Point>, bool) {
     let mut by_point: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
     for (i, (a, b)) in edges.iter().enumerate() {
@@ -1748,15 +1781,25 @@ fn chain_edges(edges: &[(Point, Point)]) -> (Vec<Point>, bool) {
         let (a0, b0) = edges[start_idx];
         let mut chain = vec![a0, b0];
         let mut cur = b0;
+        let close = |p: Point, q: Point| (p.x - q.x).pow(2) + (p.y - q.y).pow(2) <= CHAINING_EPSILON * CHAINING_EPSILON;
         let closed = loop {
-            if cur == a0 && chain.len() > 2 {
+            if close(cur, a0) && chain.len() > 2 {
                 break true;
             }
-            let Some(candidates) = by_point.get(&(cur.x, cur.y)) else { break false };
-            let Some(&ei) = candidates.iter().find(|&&i| !used[i]) else { break false };
+            // Exact match first, else the nearest free endpoint within
+            // KiCad's chaining epsilon (`close_enough`/`closer_to_first`).
+            let exact = by_point.get(&(cur.x, cur.y)).and_then(|c| c.iter().copied().find(|&i| !used[i]));
+            let ei = match exact {
+                Some(i) => i,
+                None => {
+                    let d = |p: Point| (p.x - cur.x).pow(2) + (p.y - cur.y).pow(2);
+                    let Some(i) = (0..edges.len()).filter(|&i| !used[i] && (close(edges[i].0, cur) || close(edges[i].1, cur))).min_by_key(|&i| d(edges[i].0).min(d(edges[i].1))) else { break false };
+                    i
+                }
+            };
             used[ei] = true;
             let (a, b) = edges[ei];
-            cur = if a == cur { b } else { a };
+            cur = if (a.x - cur.x).pow(2) + (a.y - cur.y).pow(2) <= (b.x - cur.x).pow(2) + (b.y - cur.y).pow(2) { b } else { a };
             chain.push(cur);
         };
         let pts = if closed { chain[..chain.len() - 1].to_vec() } else { chain };
@@ -1782,11 +1825,25 @@ mod tests {
     #[test]
     fn chains_a_rectangle_regardless_of_edge_order() {
         let a = Point { x: 0, y: 0 };
-        let b = Point { x: 10, y: 0 };
-        let c = Point { x: 10, y: 10 };
-        let d = Point { x: 0, y: 10 };
+        let b = Point { x: 10_000, y: 0 };
+        let c = Point { x: 10_000, y: 10_000 };
+        let d = Point { x: 0, y: 10_000 };
         // Deliberately out of geometric order and reversed on one edge.
         let edges = vec![(c, d), (a, b), (d, a), (c, b)];
+        let (pts, closed) = chain_edges(&edges);
+        assert!(closed);
+        assert_eq!(pts.len(), 4);
+    }
+
+    #[test]
+    fn chains_endpoints_within_kicads_chaining_epsilon() {
+        // `issue22826`: a board line ending at 145.000675 mm meets a
+        // footprint Edge.Cuts line at 145 mm.
+        let a = Point { x: 0, y: 0 };
+        let b = Point { x: 10_000, y: 0 };
+        let c = Point { x: 10_000, y: 10_000 };
+        let d = Point { x: 0, y: 10_000 };
+        let edges = vec![(a, b), (Point { x: 10_001, y: 0 }, c), (c, d), (d, a)];
         let (pts, closed) = chain_edges(&edges);
         assert!(closed);
         assert_eq!(pts.len(), 4);

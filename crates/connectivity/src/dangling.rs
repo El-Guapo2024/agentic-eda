@@ -61,7 +61,8 @@ fn item_hits_point(other: &crate::items::CnItem, p: Point, accuracy: f64) -> boo
         ItemShape::Pad(pad) => pad.signed_distance(p) <= accuracy,
         ItemShape::Via { center, radius } => geom::dist(p, *center) <= radius + accuracy,
         ItemShape::Segment { a, b, half_width } => geom::point_seg_distance(p, *a, *b) <= half_width + accuracy,
-        ItemShape::Zone { outline } => geom::point_in_polygon(p, outline),
+        // `rtree->QueryColliding( SHAPE_CIRCLE( p, accuracy ) )` on the fill.
+        ItemShape::Zone { outline } => geom::zone_hits_point(outline, p, accuracy),
     }
 }
 

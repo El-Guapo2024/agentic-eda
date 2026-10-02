@@ -193,8 +193,8 @@ pub fn bbox_of(points: &[Point]) -> (Um, Um, Um, Um) {
 pub fn touches(a: &ItemShape, a_anchors: &[Point], b: &ItemShape, b_anchors: &[Point]) -> bool {
     match (a, b) {
         (ItemShape::Zone { outline: oa }, ItemShape::Zone { outline: ob }) => polygons_overlap(oa, ob),
-        (ItemShape::Zone { outline }, _) => b_anchors.iter().any(|&p| point_in_polygon(p, outline)),
-        (_, ItemShape::Zone { outline }) => a_anchors.iter().any(|&p| point_in_polygon(p, outline)),
+        (ItemShape::Zone { outline }, other) => zone_item_touch(outline, other, b_anchors),
+        (other, ItemShape::Zone { outline }) => zone_item_touch(outline, other, a_anchors),
 
         (ItemShape::Pad(pa), ItemShape::Pad(pb)) => pad_pad_distance(pa, pb) <= 0.0,
 
@@ -216,9 +216,66 @@ pub fn touches(a: &ItemShape, a_anchors: &[Point], b: &ItemShape, b_anchors: &[P
     }
 }
 
+/// Distance from `p` to the nearest edge of the closed polygon `poly`.
+pub fn polygon_edge_distance(p: Point, poly: &[Point]) -> f64 {
+    let n = poly.len();
+    (0..n).map(|i| point_seg_distance(p, poly[i], poly[(i + 1) % n])).fold(f64::INFINITY, f64::min)
+}
+
+/// `SHAPE::Collide( p, accuracy )` against a zone fill fragment: inside it,
+/// or within `accuracy` of its edge.
+pub fn zone_hits_point(poly: &[Point], p: Point, accuracy: f64) -> bool {
+    point_in_polygon(p, poly) || (accuracy > 0.0 && polygon_edge_distance(p, poly) <= accuracy)
+}
+
+/// `CN_VISITOR::checkZoneItemConnection`: an anchor inside the fill
+/// (`ContainsPoint`), else the item's full effective shape colliding with
+/// it (`aZoneLayer->Collide( item->GetEffectiveShape( layer ) )`).
+fn zone_item_touch(poly: &[Point], item: &ItemShape, anchors: &[Point]) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
+    if anchors.iter().any(|&p| point_in_polygon(p, poly)) {
+        return true;
+    }
+    let n = poly.len();
+    match item {
+        ItemShape::Zone { .. } => false,
+        ItemShape::Via { center, radius } => zone_hits_point(poly, *center, *radius),
+        ItemShape::Segment { a, b, half_width } => {
+            point_in_polygon(*a, poly) || point_in_polygon(*b, poly) || (0..n).any(|i| seg_seg_distance(*a, *b, poly[i], poly[(i + 1) % n]) <= *half_width)
+        }
+        ItemShape::Pad(pad) => {
+            point_in_polygon(pad.center, poly)
+                || poly.iter().any(|&v| pad.signed_distance(v) <= 0.0)
+                || (0..n).any(|i| {
+                    let (p0, p1) = (poly[i], poly[(i + 1) % n]);
+                    let c = closest_point_on_segment((pad.center.x as f64, pad.center.y as f64), (p0.x as f64, p0.y as f64), (p1.x as f64, p1.y as f64));
+                    pad.signed_distance(Point { x: c.0.round() as Um, y: c.1.round() as Um }) <= 0.0
+                })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_segment_crossing_a_zone_without_an_anchor_inside_touches_it() {
+        let sq = [Point { x: 0, y: 0 }, Point { x: 100, y: 0 }, Point { x: 100, y: 100 }, Point { x: 0, y: 100 }];
+        let seg = ItemShape::Segment { a: Point { x: -50, y: 50 }, b: Point { x: 150, y: 50 }, half_width: 5.0 };
+        assert!(touches(&ItemShape::Zone { outline: sq.to_vec() }, &[], &seg, &[Point { x: -50, y: 50 }, Point { x: 150, y: 50 }]));
+        let far = ItemShape::Segment { a: Point { x: -50, y: 150 }, b: Point { x: 150, y: 150 }, half_width: 5.0 };
+        assert!(!touches(&ItemShape::Zone { outline: sq.to_vec() }, &[], &far, &[]));
+    }
+
+    #[test]
+    fn a_point_on_the_zone_edge_within_accuracy_hits() {
+        let sq = [Point { x: 0, y: 0 }, Point { x: 100, y: 0 }, Point { x: 100, y: 100 }, Point { x: 0, y: 100 }];
+        assert!(zone_hits_point(&sq, Point { x: 50, y: 103 }, 5.0));
+        assert!(!zone_hits_point(&sq, Point { x: 50, y: 110 }, 5.0));
+    }
 
     #[test]
     fn point_in_square() {
