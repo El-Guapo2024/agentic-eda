@@ -192,3 +192,282 @@ mod tests {
         assert_eq!(hull.len(), 2);
     }
 }
+
+// ---------------------------------------------------------------------
+// Ports of KiCad's router hulls (`pns_utils.cpp`, `pns_via.cpp`,
+// `pns_solid.cpp`). KiCad's router walks around *octagons*, not rounded
+// outlines: these decide where a walked/shoved track ends up. Every hull
+// is returned clockwise in KiCad's sense (a positive shoelace sum in
+// raw, y-down coordinates), which `LINE::Walkaround` relies on.
+// ---------------------------------------------------------------------
+
+/// KiCad builds hulls in nm, where rounding a vertex loses under 1 nm; at
+/// this IR's whole-µm resolution it can lose up to ~1 µm, enough for a
+/// hull-hugging path to sit 1 µm inside the rule. Every router hull is
+/// grown by this much so its output still meets clearance exactly.
+pub const HULL_ROUNDING_GUARD: Um = 1;
+
+fn kiround(v: f64) -> Um {
+    v.round() as Um
+}
+
+/// `VECTOR2I::Resize` (integral): same direction, length `len`.
+fn resize(x: Um, y: Um, len: Um) -> (Um, Um) {
+    if x == 0 && y == 0 {
+        return (0, 0);
+    }
+    let (nx, ny) = if x.abs() == y.abs() {
+        let v = (len.abs() as f64) * std::f64::consts::FRAC_1_SQRT_2;
+        (v, v)
+    } else {
+        let (xs, ys) = ((x as f64).powi(2), (y as f64).powi(2));
+        let l = xs + ys;
+        let n = (len as f64).powi(2);
+        ((n * xs / l).sqrt(), (n * ys / l).sqrt())
+    };
+    let s = len.signum();
+    ((if x < 0 { -kiround(nx) } else { kiround(nx) }) * s, (if y < 0 { -kiround(ny) } else { kiround(ny) }) * s)
+}
+
+fn shoelace(pts: &[Point]) -> i128 {
+    let n = pts.len();
+    (0..n).map(|i| pts[i].x as i128 * pts[(i + 1) % n].y as i128 - pts[(i + 1) % n].x as i128 * pts[i].y as i128).sum()
+}
+
+/// Reverse `pts` if needed so it winds clockwise in KiCad's sense.
+pub fn make_clockwise(mut pts: Vec<Point>) -> Vec<Point> {
+    if shoelace(&pts) < 0 {
+        pts.reverse();
+    }
+    pts
+}
+
+/// `OctagonalHull( aP0, aSize, aClearance, aChamfer )`.
+pub fn octagonal_hull(p0: Point, size: (Um, Um), cl: Um, chamfer: Um) -> Vec<Point> {
+    let p = |x, y| Point { x, y };
+    let mut s = vec![p(p0.x - cl, p0.y - cl + chamfer)];
+    if chamfer != 0 {
+        s.push(p(p0.x - cl + chamfer, p0.y - cl));
+    }
+    s.push(p(p0.x + size.0 + cl - chamfer, p0.y - cl));
+    if chamfer != 0 {
+        s.push(p(p0.x + size.0 + cl, p0.y - cl + chamfer));
+    }
+    s.push(p(p0.x + size.0 + cl, p0.y + size.1 + cl - chamfer));
+    if chamfer != 0 {
+        s.push(p(p0.x + size.0 + cl - chamfer, p0.y + size.1 + cl));
+    }
+    s.push(p(p0.x - cl + chamfer, p0.y + size.1 + cl));
+    if chamfer != 0 {
+        s.push(p(p0.x - cl, p0.y + size.1 + cl - chamfer));
+    }
+    s
+}
+
+fn is_45(dx: Um, dy: Um) -> bool {
+    dx == 0 || dy == 0 || dx.abs() == dy.abs()
+}
+
+/// `SegmentHull( aSeg, aClearance, aWalkaroundThickness )`.
+pub fn segment_hull(a: Point, b0: Point, width: Um, clearance: Um, walk: Um) -> Vec<Point> {
+    let kink = clearance / 10;
+    let mut cl = clearance + walk / 2;
+    let mut b = b0;
+    let len = (((b.x - a.x) as f64).powi(2) + ((b.y - a.y) as f64).powi(2)).sqrt() as Um;
+    let (mut w, mut h) = (b.x - a.x, b.y - a.y);
+    if a != b {
+        if !is_45(w, h) {
+            if len <= kink && len > 0 {
+                let ll = w.abs().max(h.abs());
+                b = Point { x: a.x + w.signum() * ll, y: a.y + h.signum() * ll };
+            }
+        } else if len <= kink {
+            let delta45 = (w.abs() - h.abs()).abs();
+            if w.abs() <= 1 {
+                w = 0;
+                cl += 1;
+            } else if h.abs() <= 1 {
+                h = 0;
+                cl += 1;
+            } else if delta45 <= 2 {
+                let m = w.abs().max(h.abs());
+                w = w.signum() * m;
+                h = h.signum() * m;
+                cl += 2;
+            }
+            b = Point { x: a.x + w, y: a.y + h };
+        }
+    }
+    let d = width as f64 / 2.0 + cl as f64;
+    if a == b {
+        let xx2 = kiround(2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * d);
+        return make_clockwise(octagonal_hull(Point { x: a.x - width / 2, y: a.y - width / 2 }, (width, width), cl, xx2));
+    }
+    let x = 2.0 / (1.0 + std::f64::consts::SQRT_2) * d;
+    let dr = kiround(d);
+    let xr2 = kiround(x / 2.0);
+    let (dx, dy) = (b.x - a.x, b.y - a.y);
+    let (px, py) = (-dy, dx); // Perpendicular()
+    let p0 = resize(px, py, dr);
+    let ds = resize(px, py, xr2);
+    let pd = resize(dx, dy, xr2);
+    let dp = resize(dx, dy, dr);
+    let add = |p: Point, v: (Um, Um)| Point { x: p.x + v.0, y: p.y + v.1 };
+    let neg = |v: (Um, Um)| (-v.0, -v.1);
+    let sum = |u: (Um, Um), v: (Um, Um)| (u.0 + v.0, u.1 + v.1);
+    let s = vec![
+        add(b, sum(p0, pd)),
+        add(b, sum(dp, ds)),
+        add(b, sum(dp, neg(ds))),
+        add(b, sum(neg(p0), pd)),
+        add(a, sum(neg(p0), neg(pd))),
+        add(a, sum(neg(dp), neg(ds))),
+        add(a, sum(neg(dp), ds)),
+        add(a, sum(p0, neg(pd))),
+    ];
+    // "make sure the hull outline is always clockwise": s.CSegment(0).Side(a) < 0 -> reverse.
+    let (s0, s1) = (s[0], s[1]);
+    let side = (s1.x - s0.x) as i128 * (a.y - s0.y) as i128 - (s1.y - s0.y) as i128 * (a.x - s0.x) as i128;
+    if side < 0 {
+        s.into_iter().rev().collect()
+    } else {
+        s
+    }
+}
+
+/// `VIA::Hull`: an equilateral octagon.
+pub fn via_hull(pos: Point, diameter: Um, clearance: Um, walk: Um) -> Vec<Point> {
+    let cl = clearance + walk / 2;
+    let chamfer = ((2 * cl + diameter) as f64 * (1.0 - std::f64::consts::FRAC_1_SQRT_2)) as Um;
+    octagonal_hull(Point { x: pos.x - diameter / 2, y: pos.y - diameter / 2 }, (diameter, diameter), cl, chamfer)
+}
+
+/// Line-line intersection (`SEG::IntersectLines`).
+fn intersect_lines(a: (Point, Point), b: (Point, Point)) -> Option<Point> {
+    let (x1, y1, x2, y2) = (a.0.x as f64, a.0.y as f64, a.1.x as f64, a.1.y as f64);
+    let (x3, y3, x4, y4) = (b.0.x as f64, b.0.y as f64, b.1.x as f64, b.1.y as f64);
+    let den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if den == 0.0 {
+        return None;
+    }
+    let t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+    Some(Point { x: kiround(x1 + t * (x2 - x1)), y: kiround(y1 + t * (y2 - y1)) })
+}
+
+/// `ConvexHull( SHAPE_SIMPLE, aClearance )`: an octagon of the bbox
+/// (inflated by the clearance) and four 45-degree diagonals moved in to
+/// `aClearance` from the polygon (`MoveDiagonal`).
+pub fn convex_hull_octagon(vertices: &[Point], clearance: Um) -> Vec<Point> {
+    let (mut x0, mut y0, mut x1, mut y1) = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
+    for p in vertices {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    let (bx, by, bw, bh) = (x0 - clearance, y0 - clearance, x1 - x0 + 2 * clearance, y1 - y0 + 2 * clearance);
+    let p = |x, y| Point { x, y };
+    let topline = (p(bx, by + bh), p(bx + bw, by + bh));
+    let rightline = (p(bx + bw, by + bh), p(bx + bw, by));
+    let bottomline = (p(bx + bw, by), p(bx, by));
+    let leftline = (p(bx, by), p(bx, by + bh));
+    let seg_dist = |d: (Point, Point)| -> f64 {
+        let n = vertices.len();
+        let s = eda_drc::kimath::Seg::new(d.0, d.1);
+        (0..n).map(|i| (s.sq_distance_to_seg(&eda_drc::kimath::Seg::new(vertices[i], vertices[(i + 1) % n])) as f64).sqrt()).fold(f64::INFINITY, f64::min)
+    };
+    let mv = |d: (Point, Point)| -> (Point, Point) {
+        let dist = seg_dist(d) as Um;
+        let (vx, vy) = (d.0.x - d.1.x, d.0.y - d.1.y);
+        let m = resize(-vy, vx, dist - clearance);
+        (Point { x: d.0.x + m.0, y: d.0.y + m.1 }, Point { x: d.1.x + m.0, y: d.1.y + m.1 })
+    };
+    let c = p(bx + bw, by + bh);
+    let tr = mv((c, p(c.x + bh, c.y - bh)));
+    let c = p(bx + bw, by);
+    let br = mv((p(c.x + bh, c.y + bh), c));
+    let c = p(bx, by);
+    let bl = mv((c, p(c.x - bh, c.y + bh)));
+    let c = p(bx, by + bh);
+    let tl = mv((p(c.x - bh, c.y - bh), c));
+    let pts: Vec<Point> = [(leftline, bl), (bottomline, bl), (bottomline, br), (rightline, br), (rightline, tr), (topline, tr), (topline, tl), (leftline, tl)].iter().filter_map(|&(a, b)| intersect_lines(a, b)).collect();
+    make_clockwise(pts)
+}
+
+/// `BuildHullForPrimitiveShape` + `SOLID::Hull`'s compound union, for the
+/// shapes this crate's items carry. A rounded rectangle is KiCad's
+/// compound (inner rect + one segment per edge, `PAD::buildEffectiveShape`),
+/// hulled per primitive and unioned.
+pub fn primitive_hull(shape: &Shape, clearance: Um, walk: Um) -> Vec<Point> {
+    let cl = clearance + (walk + 1) / 2;
+    match *shape {
+        Shape::Circle { c, r } => make_clockwise(octagonal_hull(Point { x: c.x - r, y: c.y - r }, (2 * r, 2 * r), cl, (2.0 * (1.0 - std::f64::consts::FRAC_1_SQRT_2) * (r + cl) as f64) as Um)),
+        Shape::Stadium { a, b, r } => segment_hull(a, b, 2 * r, clearance, walk),
+        Shape::Rect { x0, y0, x1, y1 } => make_clockwise(octagonal_hull(Point { x: x0, y: y0 }, (x1 - x0, y1 - y0), cl, 0)),
+        Shape::RoundRect { x0, y0, x1, y1, r } => {
+            let (ix0, iy0, ix1, iy1) = (x0 + r, y0 + r, x1 - r, y1 - r);
+            if ix1 - ix0 <= 0 && iy1 - iy0 <= 0 {
+                let c = Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+                return primitive_hull(&Shape::Circle { c, r }, clearance, walk);
+            }
+            let corners = [Point { x: ix0, y: iy1 }, Point { x: ix1, y: iy1 }, Point { x: ix1, y: iy0 }, Point { x: ix0, y: iy0 }];
+            let mut hulls = vec![make_clockwise(octagonal_hull(Point { x: ix0, y: iy0 }, (ix1 - ix0, iy1 - iy0), cl, 0))];
+            for i in 0..4 {
+                hulls.push(segment_hull(corners[i], corners[(i + 1) % 4], 2 * r, clearance, walk));
+            }
+            union_outline(&hulls)
+        }
+        Shape::Polygon { ref pts } => convex_hull_octagon(pts, cl),
+        _ => hull_of(shape, clearance, walk),
+    }
+}
+
+/// `SHAPE_POLY_SET::Simplify()` of several hulls, then `Outline( 0 )`.
+fn union_outline(hulls: &[Vec<Point>]) -> Vec<Point> {
+    use eda_shape_poly_set::ShapePolySet;
+    let mut set = ShapePolySet::default();
+    for h in hulls.iter().filter(|h| h.len() >= 3) {
+        set.add_outline(h.iter().map(|p| eda_clipper2::Point64::new(p.x, p.y)).collect());
+    }
+    set.simplify();
+    let out: Vec<Point> = set.polys.first().and_then(|p| p.first()).map(|c| c.iter().map(|q| Point { x: q.x, y: q.y }).collect()).unwrap_or_default();
+    make_clockwise(out)
+}
+
+#[cfg(test)]
+mod kicad_hull_tests {
+    use super::*;
+
+    #[test]
+    fn segment_hull_is_a_clockwise_octagon_at_the_right_offset() {
+        // Horizontal 1 mm segment, width 200, clearance 100, walk 0:
+        // d = 100 + 100 = 200 -> the long edges sit at y = +-200.
+        let h = segment_hull(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, 200, 100, 0);
+        assert_eq!(h.len(), 8);
+        assert!(shoelace(&h) > 0, "clockwise in KiCad's sense");
+        assert!(h.iter().any(|p| p.y == 200) && h.iter().any(|p| p.y == -200));
+        assert!(h.iter().any(|p| p.x == 1200) && h.iter().any(|p| p.x == -200));
+    }
+
+    #[test]
+    fn via_hull_is_an_equilateral_octagon() {
+        let h = via_hull(Point { x: 0, y: 0 }, 600, 200, 0);
+        assert_eq!(h.len(), 8);
+        // bbox = 300 + 200 on each side.
+        assert_eq!(h.iter().map(|p| p.x).max(), Some(500));
+        assert_eq!(h.iter().map(|p| p.y).min(), Some(-500));
+    }
+
+    #[test]
+    fn rect_pad_hull_has_square_corners() {
+        let h = primitive_hull(&Shape::Rect { x0: 0, y0: 0, x1: 1000, y1: 500 }, 100, 0);
+        assert_eq!(h.len(), 4);
+    }
+
+    #[test]
+    fn roundrect_hull_is_one_outline_around_the_pad() {
+        let h = primitive_hull(&Shape::RoundRect { x0: 0, y0: 0, x1: 1000, y1: 600, r: 150 }, 100, 0);
+        assert!(h.len() >= 8);
+        assert!(h.iter().map(|p| p.x).max().unwrap() >= 1100);
+    }
+}

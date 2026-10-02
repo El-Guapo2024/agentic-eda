@@ -14,7 +14,22 @@ use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, Point, Zone};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Our exporter writes the KiCad 9 file format; an older kicad-cli (e.g.
+/// Ubuntu's 7.0) refuses to open it, so it can't serve as the oracle.
+fn kicad_cli_reads_our_format(cli: &Path) -> bool {
+    let v = Command::new(cli).arg("version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let major: u32 = v.split('.').next().and_then(|m| m.parse().ok()).unwrap_or(0);
+    if major < 9 {
+        eprintln!("kicad-cli {v} is older than the KiCad 9 format we export; skipping");
+    }
+    major >= 9
+}
+
 fn find_kicad_cli() -> Option<PathBuf> {
+    find_kicad_cli_any().filter(|p| kicad_cli_reads_our_format(p))
+}
+
+fn find_kicad_cli_any() -> Option<PathBuf> {
     if let Ok(out) = Command::new("which").arg("kicad-cli").output() {
         if out.status.success() {
             let p = String::from_utf8_lossy(&out.stdout).trim().to_string();

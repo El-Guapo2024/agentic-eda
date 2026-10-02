@@ -41,4 +41,5 @@ pub mod optimizer;
 pub mod router;
 pub mod settings;
 pub mod shove;
+pub mod line_walk;
 pub mod walkaround;

@@ -31,6 +31,9 @@
 //! `AssembleLine` bidirectional joint walk, the obstacle search -- follows
 //! `pns_node.cpp` directly.
 
+/// See `all_colliding`.
+pub const CLEARANCE_EPSILON: Um = 1;
+
 use crate::item::{same_net, Item, ItemId, Kind, Net};
 use crate::joint::{Joint, JointKey};
 use crate::layer::LayerRange;
@@ -361,7 +364,13 @@ impl Node {
             if same_net(item.net(), net) {
                 continue;
             }
+            // `COLLISION_SEARCH_OPTIONS::m_useClearanceEpsilon` (default on):
+            // `rv - m_clearanceEpsilon`, the board's DRC epsilon (0.5 µm).
+            // Hull vertices here are rounded to whole µm (KiCad: nm), so the
+            // epsilon is one µm -- the same "a hull-hugging path is not a
+            // collision" tolerance at this IR's resolution.
             let clearance = Self::clearance(rules, net, item.net());
+            let clearance = if clearance > 0 { (clearance - CLEARANCE_EPSILON).max(0) } else { clearance };
             // A multilayer item (a via) may present a different shape per
             // layer in a fuller port; this one shape per item is exact for
             // every kind we construct (see `Item::shape`'s own doc note).

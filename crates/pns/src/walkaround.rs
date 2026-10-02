@@ -89,6 +89,15 @@ fn hull_arc(hull: &[Point], from_edge: usize, to_edge: usize, forward: bool) -> 
 /// starts inside the hull (KiCad: "you cannot walk around an obstacle you
 /// already start inside of") or the walk cannot close.
 pub fn walk_around_hull(path: &[Point], hull: &[Point], forward: bool) -> Option<Vec<Point>> {
+    // `LINE::Walkaround` proper (crate::line_walk), on a clockwise hull.
+    let cw_hull = crate::hull::make_clockwise(hull.to_vec());
+    crate::line_walk::walkaround(path, &cw_hull, forward)
+}
+
+/// The previous, simplified hull walk (entry/exit crossing + hull arc),
+/// kept for reference and its own tests.
+#[allow(dead_code)]
+fn walk_around_hull_simple(path: &[Point], hull: &[Point], forward: bool) -> Option<Vec<Point>> {
     if path.len() < 2 || hull.len() < 3 {
         return None;
     }

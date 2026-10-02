@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 eda-model = { path = "../model" }
 eda-drc = { path = "../drc" }
+eda-shape-poly-set = { path = "../shape-poly-set" }
+eda-clipper2 = { path = "../clipper2" }
 
 [dev-dependencies]
 serde_yaml = { workspace = true }

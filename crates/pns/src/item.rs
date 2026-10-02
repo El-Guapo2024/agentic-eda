@@ -167,7 +167,13 @@ impl Item {
     /// `crate::hull` for the construction. Used only by WALKAROUND/
     /// OPTIMIZER (path shaping), never by the exact collision test.
     pub fn hull(&self, clearance: Um, walkaround_width: Um, layer: i32) -> Vec<Point> {
-        hull::hull_of(&self.shape(layer), clearance, walkaround_width)
+        let clearance = clearance + hull::HULL_ROUNDING_GUARD;
+        match self {
+            // `SEGMENT::Hull` -> `SegmentHull`, `VIA::Hull`, `SOLID::Hull`.
+            Item::Segment(s) => hull::segment_hull(s.a, s.b, s.width, clearance, walkaround_width),
+            Item::Via(v) => hull::make_clockwise(hull::via_hull(v.pos, v.diameter, clearance, walkaround_width)),
+            Item::Solid(_) => hull::primitive_hull(&self.shape(layer), clearance, walkaround_width),
+        }
     }
 
     /// `ITEM::Anchor(n)`/`AnchorCount()` -- connection points a `JOINT` can

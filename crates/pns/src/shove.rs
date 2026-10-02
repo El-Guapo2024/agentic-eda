@@ -55,7 +55,6 @@ use crate::line::Line;
 use crate::node::Node;
 use crate::settings::RoutingSettings;
 use crate::walkaround;
-use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Um};
 use eda_model::BoardRules;
 use std::collections::HashMap;
@@ -232,7 +231,7 @@ fn push_line(node: &Node, pusher: &Line, obstacle: &Line, rules: &BoardRules) ->
     for attempt in 0..3 {
         let hulls: Vec<Vec<Point>> = pusher
             .segs()
-            .map(|(a, b)| crate::hull::hull_of(&Shape::Stadium { a, b, r: pusher.width / 2 }, clearance + extra, obstacle.width))
+            .map(|(a, b)| crate::hull::segment_hull(a, b, pusher.width, clearance + extra + crate::hull::HULL_ROUNDING_GUARD, obstacle.width))
             .filter(|h| h.len() >= 3)
             .collect();
         let (adj_start, adj_end) = (attempt >= 2 && !voe_start, attempt >= 2 && !voe_end);
@@ -366,6 +365,7 @@ pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_drc::kimath::Shape;
     use crate::item::{net_of, Segment};
     use crate::layer::LayerRange;
     use eda_model::ir::Point;
