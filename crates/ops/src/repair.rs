@@ -132,6 +132,34 @@ fn distances(board: &Board, model: &ConstraintModel, a: &str, b: &str) -> Option
     Some((apart, allowed))
 }
 
+/// Pairs of placed courtyards that overlap on one side of the board.
+///
+/// Repair moves parts that are already down, and moving is the one thing
+/// that can land a part on a neighbour: `Board::place_*` keep clear of every
+/// keepout, but `Nudge`, `Rotate` and `Swap` do not look. Whether courtyards
+/// may overlap at all is KiCad's call (`courtyards_overlap`, answered by
+/// kicad-cli in `eda_gates::kicad`); the in-process gates do not measure it.
+/// This only stops a repair move from leaving more overlaps than it found.
+pub(crate) fn courtyard_overlaps(board: &Board) -> usize {
+    let model = board.model();
+    let Some(pl) = board.design().placement.as_ref() else { return 0 };
+    let rects: Vec<(eda_model::ir::Side, (i64, i64, i64, i64))> = pl
+        .footprints
+        .iter()
+        .filter_map(|fp| Some((fp.side, eda_model::footprint::placed_courtyard(model, model.part(&fp.id)?, fp)?)))
+        .collect();
+    let mut n = 0;
+    for i in 0..rects.len() {
+        for j in i + 1..rects.len() {
+            let ((sa, a), (sb, b)) = (rects[i], rects[j]);
+            if sa == sb && a.0 < b.2 && b.0 < a.2 && a.1 < b.3 && b.1 < a.3 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
 /// Walk `mover` toward `toward`, keeping only what the gates approve.
 ///
 /// Greedy and deliberately simple: step along whichever axis is furthest
@@ -159,7 +187,7 @@ pub fn apply_fix(board: &mut Board, fix: &Fix, max_steps: u32) -> bool {
         if trial.apply(&Cmd::Nudge { part: fix.mover.clone(), dir, steps: 1 }).is_err() {
             break;
         }
-        if trial.failures() > before {
+        if trial.failures() > before || courtyard_overlaps(&trial) > courtyard_overlaps(board) {
             break; // this step made things worse; stop here
         }
         let helped = trial.failures() < before;
@@ -290,9 +318,13 @@ fn uncross(board: &mut Board, model: &ConstraintModel) -> bool {
                 })
             }));
         let mut best: Option<(Board, (usize, usize), Vec<Cmd>)> = None;
+        let overlaps_now = courtyard_overlaps(board);
         for cmds in moves {
             let mut trial = board.fork();
             if cmds.iter().any(|c| trial.apply(c).is_err()) {
+                continue;
+            }
+            if courtyard_overlaps(&trial) > overlaps_now {
                 continue;
             }
             let (f, p) = crossing_pairs(&trial);

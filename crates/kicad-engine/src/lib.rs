@@ -69,19 +69,6 @@ pub fn cli_version(cli: &Path) -> String {
     per_cli(&CACHE, cli, || Command::new(cli).arg("version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default())
 }
 
-/// Whether this kicad-cli has `pcb drc --refill-zones` (nightly does, 9.0
-/// does not). Without it KiCad checks the fills our exporter wrote.
-fn supports_refill(cli: &Path) -> bool {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
-    per_cli(&CACHE, cli, || {
-        Command::new(cli)
-            .args(["pcb", "drc", "--help"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains("--refill-zones") || String::from_utf8_lossy(&o.stderr).contains("--refill-zones"))
-            .unwrap_or(false)
-    })
-}
-
 // ----------------------------------------------------------- the derived files
 
 fn work_dir(work: &Path) -> Result<(), Vec<CheckResult>> {
@@ -256,22 +243,33 @@ fn run_report(mut cmd: Command, report: &Path, what: &str) -> Result<Value, Vec<
 }
 
 /// `kicad-cli pcb drc` on `design` as it is. Zones are refilled first, as
-/// KiCad's own DRC dialog does, when this kicad-cli can.
+/// KiCad's own DRC dialog does, when this kicad-cli can (nightly can; 9.0
+/// rejects `--refill-zones`, in which case KiCad checks the fills our
+/// exporter wrote). Every kicad-cli start costs a third of a second, so
+/// this neither asks for its version nor probes its options: it tries the
+/// refill and falls back, and reads the version off the report.
 pub fn drc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<DrcReport, Vec<CheckResult>> {
     let cli = need_cli()?;
     let (pcb, map) = export_board(design, model, work)?;
     let report = work.join("drc.json");
-    let refill = supports_refill(&cli);
-    let mut cmd = Command::new(&cli);
-    cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
-    if refill {
-        cmd.arg("--refill-zones");
-    }
-    cmd.arg("-o").arg(&report).arg(&pcb);
-    let raw = run_report(cmd, &report, "drc")?;
+    let run = |refill: bool| {
+        let mut cmd = Command::new(&cli);
+        cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
+        if refill {
+            cmd.arg("--refill-zones");
+        }
+        cmd.arg("-o").arg(&report).arg(&pcb);
+        run_report(cmd, &report, "drc")
+    };
+    let (raw, refill) = match run(true) {
+        Ok(raw) => (raw, true),
+        Err(e) if e.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("refill-zones"))) => (run(false)?, false),
+        Err(e) => return Err(e),
+    };
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
     let read = |key: &str| -> Vec<Violation> { raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default() };
-    Ok(DrcReport { engine: format!("kicad-cli {}", cli_version(&cli)), zones_refilled_by_kicad: refill, violations: read("violations"), unconnected_items: read("unconnected_items") })
+    let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
+    Ok(DrcReport { engine: format!("kicad-cli {version}"), zones_refilled_by_kicad: refill, violations: read("violations"), unconnected_items: read("unconnected_items") })
 }
 
 /// [`drc`] in a throwaway directory -- for a design that only exists in
@@ -333,7 +331,8 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
             violations.push(Violation::from_json(v, &map, units_mm));
         }
     }
-    Ok(ErcReport { engine: format!("kicad-cli {}", cli_version(&cli)), violations })
+    let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
+    Ok(ErcReport { engine: format!("kicad-cli {version}"), violations })
 }
 
 // --------------------------------------------------------------------- exports

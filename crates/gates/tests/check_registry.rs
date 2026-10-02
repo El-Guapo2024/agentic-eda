@@ -50,9 +50,9 @@ const REGISTERED: &[&str] = &[
     "routing_unnecessary_via",
     "routing_via_in_pad",
     "routing_within_outline",
-    // Schematic checks moved to `eda_kicad::check_erc` (see that crate's
-    // own `tests/erc_check_registry.rs`) -- this crate no longer emits any
-    // `schematic_*` check.
+    // Schematic readability checks live in `eda-lint` (its own
+    // `tests/check_registry.rs`); electrical ones are kicad-cli's ERC --
+    // this crate emits no `schematic_*` check.
 ];
 
 /// Scrape check-name literals out of the crate source.
@@ -63,7 +63,7 @@ const REGISTERED: &[&str] = &[
 /// job is to notice a *registered* gate vanishing, and a convention-based
 /// scrape is enough for that.
 fn emitted() -> BTreeSet<String> {
-    const SOURCES: &[&str] = &[include_str!("../src/lib.rs"), include_str!("../src/pcb.rs")];
+    const SOURCES: &[&str] = &[include_str!("../src/lib.rs"), include_str!("../src/pcb.rs"), include_str!("../src/kicad.rs")];
     const PREFIXES: &[&str] = &["placement_", "routing_"];
     let mut found = BTreeSet::new();
     for src in SOURCES {

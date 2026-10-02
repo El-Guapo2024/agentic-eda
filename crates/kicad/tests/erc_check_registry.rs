@@ -52,30 +52,6 @@ const REGISTERED: &[&str] = &[
     // -- buses, GAPS.md #20 (bus.rs::check_bus) --
     "bus_to_net_conflict",
     "net_not_bus_member",
-    // -- readability/style (erc_style.rs) -----------------------------
-    "schematic_cluster_split",
-    "schematic_column_overflow",
-    "schematic_content_in_bounds",
-    "schematic_flag_adjacent",
-    "schematic_flow_direction",
-    "schematic_label_far_from_part",
-    "schematic_label_in_symbol",
-    "schematic_label_over_wire",
-    "schematic_missing_junction",
-    "schematic_offgrid",
-    "schematic_power_net_as_wire",
-    "schematic_sheet_aspect",
-    "schematic_sheet_density",
-    "schematic_symbol_overlap",
-    "schematic_text_overlap",
-    "schematic_wire_crossing_count",
-    "schematic_wire_detour",
-    "schematic_wire_endpoint_off_pin",
-    "schematic_wire_ink",
-    "schematic_wire_length",
-    "schematic_wire_not_orthogonal",
-    "schematic_wire_overlap",
-    "schematic_wire_through_symbol",
 ];
 
 /// Scrape check-name literals out of the crate source. Deliberately crude
@@ -84,14 +60,14 @@ const REGISTERED: &[&str] = &[
 /// `lib_symbol_*`/`*_dangling`/`*_reference` electrical check name, or
 /// carries the `schematic_` style-check prefix.
 fn emitted() -> BTreeSet<String> {
-    const SOURCES: &[&str] = &[include_str!("../src/erc.rs"), include_str!("../src/erc_style.rs"), include_str!("../src/bus.rs")];
+    const SOURCES: &[&str] = &[include_str!("../src/erc.rs"), include_str!("../src/bus.rs")];
     let mut found = BTreeSet::new();
     for src in SOURCES {
         for (i, _) in src.match_indices('"') {
             let rest = &src[i + 1..];
             let Some(end) = rest.find('"') else { continue };
             let tok = &rest[..end];
-            let is_candidate = tok.starts_with("schematic_") || REGISTERED.contains(&tok);
+            let is_candidate = REGISTERED.contains(&tok);
             if is_candidate && tok.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
                 found.insert(tok.to_string());
             }

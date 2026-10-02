@@ -80,6 +80,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         (38, "B.Mask", "user"),
         (39, "F.Mask", "user"),
         (44, "Edge.Cuts", "user"),
+        (46, "B.CrtYd", "user"),
+        (47, "F.CrtYd", "user"),
         (49, "F.Fab", "user"),
         (50, "B.Fab", "user"),
     ] {
@@ -379,8 +381,17 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     // behind a hole on this board, so it is what the hole-clearance floor
     // should ask for, never more.
     let min_hole_clearance = model.board.clearance;
+    // Per-type DRC severities: the imported project's own, plus "ignore" for
+    // the two library-link checks -- every footprint here is embedded in the
+    // board file (`eda:<name>`), so there is no library for KiCad to compare
+    // it against and each one would report a meaningless warning.
+    let mut severities: BTreeMap<&str, &str> = BTreeMap::from([("lib_footprint_issues", "ignore"), ("lib_footprint_mismatch", "ignore")]);
+    for (key, value) in &model.board.rule_severities {
+        severities.insert(key.as_str(), value.as_str());
+    }
     format!(
-        "{{\n  \"board\": {{\n    \"design_settings\": {{\n      \"rules\": {{\n        \"min_clearance\": {},\n        \"min_track_width\": {},\n        \"min_via_annular_width\": 0.1,\n        \"min_via_diameter\": 0.3,\n        \"min_hole_clearance\": {},\n        \"min_hole_to_hole\": 0.25,\n        \"min_through_hole_diameter\": 0.2,\n        \"min_microvia_diameter\": 0.2,\n        \"min_microvia_drill\": 0.1\n      }}\n    }}\n  }}\n}}\n",
+        "{{\n  \"board\": {{\n    \"design_settings\": {{\n      \"rule_severities\": {},\n      \"rules\": {{\n        \"min_clearance\": {},\n        \"min_track_width\": {},\n        \"min_via_annular_width\": 0.1,\n        \"min_via_diameter\": 0.3,\n        \"min_hole_clearance\": {},\n        \"min_hole_to_hole\": 0.25,\n        \"min_through_hole_diameter\": 0.2,\n        \"min_microvia_diameter\": 0.2,\n        \"min_microvia_drill\": 0.1\n      }}\n    }}\n  }}\n}}\n",
+        serde_json::to_string(&severities).unwrap_or_else(|_| "{}".into()),
         mm(min_clearance),
         mm(min_track_width),
         mm(min_hole_clearance),
@@ -529,6 +540,35 @@ fn write_footprint(
             }
         }
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
+    }
+
+    // The courtyard, on the footprint's own side: what KiCad's DRC reads for
+    // `courtyards_overlap`, `pth_inside_courtyard` and `npth_inside_courtyard`
+    // (the gates that call kicad-cli for those get nothing to judge from a
+    // footprint with none). The real outlines when the library footprint has
+    // them (x mirrored for a bottom-side part, like a pad's), else the box
+    // `Footprint::courtyard_half` derives -- the same one the placer keeps
+    // clear.
+    let crtyd_layer = if fp.side == Side::Bottom { "B.CrtYd" } else { "F.CrtYd" };
+    if footprint.courtyard_outlines.is_empty() {
+        let (hw, hh) = footprint.courtyard_half();
+        let uuid = crate::duid_for(&format!("footprint:{}:crtyd", fp.id), &fp.id);
+        writeln!(
+            out,
+            "\t\t(fp_rect (start {} {}) (end {} {}) (stroke (width 0.05) (type solid)) (fill no) (layer {}) (uuid \"{uuid}\"))",
+            mm(-hw),
+            mm(-hh),
+            mm(hw),
+            mm(hh),
+            sexpr_str(crtyd_layer)
+        )
+        .unwrap();
+    } else {
+        for (i, outline) in footprint.courtyard_outlines.iter().enumerate() {
+            let pts: Vec<String> = outline.iter().map(|&(x, y)| format!("(xy {} {})", mm(if fp.side == Side::Bottom { -x } else { x }), mm(y))).collect();
+            let uuid = crate::duid_for(&format!("footprint:{}:crtyd:{i}", fp.id), &fp.id);
+            writeln!(out, "\t\t(fp_poly (pts {}) (stroke (width 0.05) (type solid)) (fill no) (layer {}) (uuid \"{uuid}\"))", pts.join(" "), sexpr_str(crtyd_layer)).unwrap();
+        }
     }
 
     // 3D model reference, identity offset/scale/rotate -- this app has no

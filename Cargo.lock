@@ -501,6 +501,7 @@ dependencies = [
  "eda-gates",
  "eda-judge",
  "eda-kicad",
+ "eda-kicad-engine",
  "eda-lint",
  "eda-model",
  "eda-ops",
@@ -597,8 +598,8 @@ dependencies = [
 name = "eda-gates"
 version = "0.1.0"
 dependencies = [
- "eda-drc",
  "eda-engine",
+ "eda-kicad-engine",
  "eda-layout",
  "eda-lint",
  "eda-model",

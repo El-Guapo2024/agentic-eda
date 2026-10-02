@@ -190,14 +190,17 @@ mod tests {
 
     #[test]
     fn a_geometric_failure_is_caught_immediately() {
-        // Two parts stacked on the same spot is wrong the moment it
-        // happens, and is exactly what early feedback is for.
+        // A part hanging off the board is wrong the moment it happens, and
+        // is exactly what early feedback is for. (Two parts stacked on one
+        // spot is wrong too, but that is KiCad's `courtyards_overlap`:
+        // kicad-cli answers it, in `crate::kicad`, not in this per-step
+        // gate.)
         let m = model_of(&["U1", "U2", "U3"], &[], vec![]);
-        let d = design_with(vec![fp("U1", 10_000, 10_000), fp("U2", 10_000, 10_000)]);
+        let d = design_with(vec![fp("U1", 10_000, 10_000), fp("U2", 100, 100)]);
         let checks = check_placement_partial(&d, &m);
         assert!(
-            checks.iter().any(|c| matches!(c.status, eda_model::CheckStatus::Fail)),
-            "an overlap among placed parts must fail now, not at the end: {checks:?}"
+            checks.iter().any(|c| c.check == "placement_within_outline" && matches!(c.status, eda_model::CheckStatus::Fail)),
+            "a part off the board must fail now, not at the end: {checks:?}"
         );
     }
 
