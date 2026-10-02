@@ -21,6 +21,7 @@
 // Save/Delete Marker have no backing concept (nothing persists a marker
 // to exclude or delete) and are left out rather than wired to a no-op.
 import { useMemo, useState } from "react";
+import { fetchDrc } from "../api/client";
 import type { DrcViolation } from "../api/types";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
@@ -28,7 +29,6 @@ import { boundsOfPoints, fitTransform } from "./canvas/view";
 type DrcTab = "violations" | "unconnected" | "parity" | "ignored";
 
 const STUB_TABS: Array<{ id: DrcTab; label: string }> = [
-  { id: "unconnected", label: "Unconnected Items" },
   { id: "parity", label: "Schematic Parity" },
   { id: "ignored", label: "Ignored Tests" },
 ];
@@ -49,6 +49,22 @@ export function DrcDialog() {
   const errors = useMemo(() => violations.filter((v) => v.severity === "error"), [violations]);
   const warnings = useMemo(() => violations.filter((v) => v.severity === "warning"), [violations]);
   const visible = violations.filter((v) => (v.severity === "error" ? showErrors : showWarnings));
+  const unconnected = state.drc?.unconnected_items ?? [];
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  // "Run DRC" (dialog_drc.cpp OnRunDRCClick) -- the kicad-cli engine runs on
+  // demand; the live engine re-runs on its own whenever the board changes.
+  const runDrc = async () => {
+    setRunning(true);
+    setRunError(null);
+    try {
+      dispatch({ type: "DRC_OK", drc: await fetchDrc(state.drcEngine) });
+    } catch (e) {
+      setRunError(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
 
   if (!state.drcDialogOpen) return null;
   const close = () => dispatch({ type: "SET_DRC_OPEN", open: false });
@@ -64,7 +80,7 @@ export function DrcDialog() {
    */
   const jumpTo = (v: DrcViolation, index: number) => {
     dispatch({ type: "SET_DRC_SELECTED", index });
-    const refs = v.items.map((it) => baseRef(it.id));
+    const refs = v.items.flatMap((it) => (it.id ? [baseRef(it.id)] : []));
     dispatch({ type: "SET_SELECTION", refs });
     dispatch({ type: "SET_HOT", refs });
 
@@ -93,9 +109,21 @@ export function DrcDialog() {
           </span>
         </div>
         <div className="dialog-body" style={{ paddingTop: 10 }}>
-          <div style={{ display: "flex", gap: 18, marginBottom: 10, opacity: 0.45 }} title="eda_drc runs fresh on every open/board-change -- there's no separate 'run DRC' step or progress phase to show.">
+          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, fontSize: 11 }}>
+            <span style={{ color: "var(--chrome-text-dim)" }}>Engine:</span>
+            <select value={state.drcEngine} onChange={(e) => dispatch({ type: "SET_DRC_ENGINE", engine: e.target.value as "eda" | "kicad" })}>
+              <option value="eda">Live (re-runs on every change)</option>
+              <option value="kicad">KiCad (kicad-cli)</option>
+            </select>
+            <button onClick={runDrc} disabled={running}>
+              {running ? "Running…" : "Run DRC"}
+            </button>
+            {state.drc?.engine && <span style={{ color: "var(--chrome-text-dim)" }}>{state.drc.engine}</span>}
+            {runError && <span style={{ color: "var(--chrome-danger)" }}>{runError}</span>}
+          </div>
+          <div style={{ display: "flex", gap: 18, marginBottom: 10, opacity: 0.45 }}>
             <label className="toggle">
-              <input type="checkbox" checked readOnly disabled />
+              <input type="checkbox" checked={state.drcEngine === "eda" || state.drc?.zones_refilled_by_kicad !== false} readOnly disabled />
               Refill all zones before performing DRC
             </label>
             <label className="toggle">
@@ -108,6 +136,9 @@ export function DrcDialog() {
             <div className={`dock-tab${tab === "violations" ? " active" : ""}`} onClick={() => setTab("violations")}>
               Violations ({violations.length})
             </div>
+            <div className={`dock-tab${tab === "unconnected" ? " active" : ""}`} onClick={() => setTab("unconnected")}>
+              Unconnected Items ({unconnected.length})
+            </div>
             {STUB_TABS.map((t) => (
               <div key={t.id} className={`dock-tab${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>
                 {t.label}
@@ -115,7 +146,18 @@ export function DrcDialog() {
             ))}
           </div>
 
-          {tab !== "violations" && <div className="panel-empty">Not available: no backend data for this tab yet.</div>}
+          {tab === "unconnected" &&
+            (unconnected.length === 0 ? (
+              <div className="panel-empty">{state.drcEngine === "kicad" ? "No unconnected items." : "Unconnected items come from the KiCad engine (Run DRC with KiCad)."}</div>
+            ) : (
+              unconnected.map((v, i) => (
+                <div key={i} className="problem-row" onClick={() => jumpTo(v, -1)}>
+                  <b>{v.type.replace(/_/g, " ")}</b> <span>{v.description}</span>
+                  {v.items.length > 0 && <small>{v.items.map((it) => it.description).join(", ")}</small>}
+                </div>
+              ))
+            ))}
+          {tab !== "violations" && tab !== "unconnected" && <div className="panel-empty">Not available: no backend data for this tab yet.</div>}
 
           {tab === "violations" && (
             <>

@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, Um } from "./types";
+import type { DrcEngine, BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
@@ -123,8 +123,8 @@ export async function fetchRatsnest(): Promise<Ratsnest> {
 }
 
 /** The ported KiCad DRC engine (crates/drc), run fresh server-side on every call -- no caching, matching studio.rs's own doc comment on why (cheap enough on these board sizes). */
-export async function fetchDrc(): Promise<DrcReport> {
-  const r = await getJson<DrcReport & { error?: string }>("/api/drc");
+export async function fetchDrc(engine: DrcEngine = "eda"): Promise<DrcReport> {
+  const r = await getJson<DrcReport & { error?: string }>(engine === "kicad" ? "/api/drc?engine=kicad" : "/api/drc");
   if (r.error) throw new ApiError(r.error);
   return r;
 }

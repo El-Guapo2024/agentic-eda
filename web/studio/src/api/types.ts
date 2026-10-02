@@ -1500,8 +1500,8 @@ export interface DrcItem {
   description: string;
   /** Board-space um, like every other position in this file -- *not* kicad-cli's own mm. */
   pos: [Um, Um];
-  /** Stable id of the referenced item (track/via/zone id, or `<ref>.<pad>`/`<ref>` for a footprint/pad) -- enough to select it without re-matching on position. */
-  id: string;
+  /** Stable id of the referenced item (track/via/zone id, or `<ref>.<pad>`/`<ref>` for a footprint/pad) -- enough to select it without re-matching on position. `null` from the kicad-cli engine for an item that isn't one of ours (e.g. a fill polygon KiCad computed). */
+  id: string | null;
 }
 
 /** `crates/drc::FixHint` -- this workspace's own agent-repair metadata, no real-KiCad equivalent. Absent (not null -- `#[serde(skip_serializing_if = "Option::is_none")]`) when a violation has no computed fix; the `?? null` this file's other optional fields already use handles either. */
@@ -1528,7 +1528,16 @@ export interface DrcReport {
   violations: DrcViolation[];
   /** Violation count by `type`. */
   counts: Record<string, number>;
+  /** "eda" (our live engine) or "kicad-cli <version>" (crates/cli/src/kicad_engine.rs). */
+  engine?: string;
+  /** kicad-cli only: the ratsnest it reports as `unconnected_items`. */
+  unconnected_items?: DrcViolation[];
+  /** kicad-cli only: whether kicad-cli refilled zones itself (`--refill-zones`). */
+  zones_refilled_by_kicad?: boolean;
 }
+
+/** Which engine runs DRC: our live in-process port, or real kicad-cli on the exported board. */
+export type DrcEngine = "eda" | "kicad";
 
 // ---------------------------------------------------------------- ERC
 //

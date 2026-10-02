@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, DrcEngine, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
@@ -586,6 +586,8 @@ export interface StudioState {
    * violation markers while that dialog is up).
    */
   drc: DrcReport | null;
+  /** Live engine (re-run on every board change while the dialog is open) or kicad-cli (run on demand, "Run DRC"). */
+  drcEngine: DrcEngine;
   /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
   drcSelected: number | null;
 
@@ -729,6 +731,7 @@ const initialState: StudioState = {
   schematicError: null,
   ratsnest: null,
   drc: null,
+  drcEngine: "eda",
   drcSelected: null,
   ercDialogOpen: false,
   erc: null,
@@ -753,6 +756,7 @@ export type Action =
   | { type: "BOARD_ERR"; message: string }
   | { type: "VERSION"; version: string }
   | { type: "SET_TAB"; tab: EditorTab }
+  | { type: "SET_DRC_ENGINE"; engine: DrcEngine }
   | { type: "SET_SHEET_PATH"; path: string[] }
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
@@ -1057,6 +1061,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":
       return { ...state, ratsnest: action.ratsnest };
+    case "SET_DRC_ENGINE":
+      return { ...state, drcEngine: action.engine, drc: null };
     case "DRC_OK":
       // A fresh report invalidates any previous selection -- indices (and
       // the violations they pointed at) aren't stable across re-runs.
@@ -1281,7 +1287,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const refreshDrc = useCallback(async () => {
     try {
-      const drc = await fetchDrc();
+      const drc = await fetchDrc(stateRef.current.drcEngine);
       dispatch({ type: "DRC_OK", drc });
     } catch {
       // same reasoning as refreshRatsnest -- keep the last good report.
@@ -1388,7 +1394,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         // its own (it overlays whichever tab is showing), and running
         // the DRC engine on every tick regardless of whether anyone's
         // looking at it would be pure waste.
-        if (stateRef.current.drcDialogOpen && lastDrcFetch !== v) {
+        // kicad-cli runs on demand ("Run DRC"), like KiCad's own dialog.
+        if (stateRef.current.drcDialogOpen && stateRef.current.drcEngine === "eda" && lastDrcFetch !== v) {
           lastDrcFetch = v;
           await refreshDrc();
         }
