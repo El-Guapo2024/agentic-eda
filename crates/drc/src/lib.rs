@@ -36,9 +36,13 @@
 //!
 //! See the task report for the full fidelity/gap list; the short version:
 //! there is no `.kicad_dru` custom-rule support, and a handful of KiCad
-//! features this workspace's own model has no fields for (net ties, diff
-//! pairs, creepage, blind/buried vias, per-item solder-mask overrides) are
-//! out of scope.
+//! features this workspace's own model has no fields for (diff pairs,
+//! creepage, blind/buried vias) are out of scope. Solder mask and silk are
+//! the exception: `providers::solder_mask` / `providers::silk_mask` port
+//! `drc_test_provider_solder_mask.cpp` / `drc_test_provider_silk_clearance.cpp`
+//! on top of the per-pad, per-footprint, per-via mask data and the
+//! footprint silk/mask graphics the `.kicad_pcb` importer carries in
+//! `DrawingsSection::footprint_extras` (see `board::MaskData`).
 //!
 //! [`fill::fill_all_zones`] runs the real `eda_zone_filler` port (zone
 //! outlines are no longer used as a stand-in for their fill -- that was
@@ -89,7 +93,9 @@ pub fn run_with(design: &Design, model: &ConstraintModel, dangling: Option<Dangl
     let rules = &model.board;
 
     let mut out = Vec::new();
-    out.extend(providers::copper_clearance::check(&b, rules));
+    // One zone-fill pass, shared by the copper-clearance and solder-mask providers.
+    let fills = fill::fill_all_zones(&b, rules);
+    out.extend(providers::copper_clearance::check_with_fills(&b, rules, &fills));
     out.extend(providers::track_width::check(&b, rules));
     out.extend(providers::track_width::check_netclass_conformance(&b, rules));
     out.extend(providers::annular_via::check(&b, rules));
@@ -97,6 +103,7 @@ pub fn run_with(design: &Design, model: &ConstraintModel, dangling: Option<Dangl
     out.extend(providers::edge_clearance::check(&b, rules));
     out.extend(providers::courtyard::check(&b));
     out.extend(providers::silk_mask::check(&b, rules));
+    out.extend(providers::solder_mask::check(&b, rules, &fills));
     out.extend(providers::text_dims::check(&b, rules));
     match dangling {
         Some(f) => out.extend(f(design, model)),

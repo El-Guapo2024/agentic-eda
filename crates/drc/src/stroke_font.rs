@@ -263,6 +263,201 @@ pub fn layout_strokes_vcenter(text: &str, anchor: Point, size_um: Um, rot_millid
     layout_strokes_anchored(text, anchor, size_um, rot_millideg, mirror, justify, VAnchor::Center)
 }
 
+/// Inputs to [`kicad_text_segments`]: one `EDA_TEXT`'s layout attributes.
+pub struct TextLayout<'a> {
+    pub text: &'a str,
+    /// `GetDrawPos()`, board space.
+    pub pos: Point,
+    /// Glyph (width, height).
+    pub size: (Um, Um),
+    /// The file's pen thickness (`TEXT_ATTRIBUTES::m_StrokeWidth`).
+    pub thickness: Um,
+    /// `GetDrawRotation()`, KiCad's sign convention (counter-clockwise
+    /// positive), degrees.
+    pub angle_deg: f64,
+    pub mirror: bool,
+    /// `-1` left, `0` centre, `1` right.
+    pub halign: i8,
+    /// `-1` top, `0` centre, `1` bottom.
+    pub valign: i8,
+}
+
+/// `EDA_TEXT::GetEffectiveTextPenWidth`: the pen width the glyph strokes
+/// are inflated by.
+pub fn effective_pen_width(thickness: Um, size: (Um, Um), bold: bool) -> Um {
+    let mut pen = thickness;
+    if pen <= 1 {
+        let w = size.0 as f64;
+        pen = if bold { (w / 5.0).round() as Um } else { (w / 8.0).round() as Um };
+    }
+    // `ClampTextPenSize`: at most a quarter of the smaller glyph dimension.
+    let max = ((size.0.abs().min(size.1.abs())) as f64 * 0.25).round() as Um;
+    pen.min(max)
+}
+
+/// One run of marked-up text: `~{overbar}`, `_{subscript}`, `^{superscript}`
+/// (`MARKUP::MARKUP_PARSER`). `${VAR}` references are copied through
+/// literally (an unresolved variable is drawn as written).
+struct Run {
+    text: String,
+    sub: bool,
+    sup: bool,
+    over: bool,
+}
+
+fn parse_markup(line: &str) -> Vec<Run> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut runs: Vec<Run> = Vec::new();
+    let mut stack: Vec<char> = Vec::new();
+    let mut cur = String::new();
+    let flush = |cur: &mut String, stack: &Vec<char>, runs: &mut Vec<Run>| {
+        if !cur.is_empty() {
+            runs.push(Run { text: std::mem::take(cur), sub: stack.contains(&'_'), sup: stack.contains(&'^'), over: stack.contains(&'~') });
+        }
+    };
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        if (c == '~' || c == '^' || c == '_') && next == Some('{') {
+            flush(&mut cur, &stack, &mut runs);
+            stack.push(c);
+            i += 2;
+            continue;
+        }
+        if c == '$' && next == Some('{') {
+            while i < chars.len() {
+                cur.push(chars[i]);
+                if chars[i] == '}' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if c == '}' && !stack.is_empty() {
+            flush(&mut cur, &stack, &mut runs);
+            stack.pop();
+            i += 1;
+            continue;
+        }
+        cur.push(c);
+        i += 1;
+    }
+    flush(&mut cur, &stack, &mut runs);
+    runs
+}
+
+/// The pen-stroke segments `FONT::Draw` (with `STROKE_FONT::GetTextAsGlyphs`
+/// and `FONT::getLinePositions`) produces for a stroke-font text: line
+/// layout with the 6.0-compatibility fudge factors (`size.y * 1.17` first
+/// line height, `thickness / 1.52` x offset, `thickness * 0.052` y offset),
+/// per-glyph rounded advances, `~{}`/`_{}`/`^{}` markup (overbars,
+/// sub/superscripts at 0.8 scale), mirror about the anchor and rotation
+/// about the anchor. Italics are not drawn.
+pub fn kicad_text_segments(t: &TextLayout) -> Vec<Seg> {
+    let lines: Vec<&str> = t.text.split('\n').collect();
+    let (sx, sy) = (t.size.0 as f64, t.size.1 as f64);
+    let space_width = get_glyph(' ' as u32).width;
+    // `GetInterline( size.y ) * LEGACY_FACTOR * m_LineSpacing`, truncated to int.
+    let interline = (sy * 1.68 * 0.9583) as i64;
+
+    // A placed glyph / bar, relative to its line origin: (x cursor, y offset, glyph size, glyph).
+    struct Placed {
+        x: i64,
+        y: f64,
+        sx: f64,
+        sy: f64,
+        glyph: Glyph,
+    }
+    struct Bar {
+        x0: i64,
+        x1: i64,
+        y: f64,
+        trim: f64,
+    }
+    struct Line {
+        glyphs: Vec<Placed>,
+        bars: Vec<Bar>,
+        width: i64,
+    }
+    let mut laid: Vec<Line> = Vec::new();
+    for line in &lines {
+        let mut cursor: i64 = 0;
+        let mut glyphs = Vec::new();
+        let mut bars = Vec::new();
+        for run in parse_markup(line) {
+            let (gsx, gsy, yoff) = if run.sub || run.sup {
+                let (a, b) = (sx * 0.8, sy * 0.8);
+                (a, b, if run.sub { b * 0.15 } else { -b * 0.35 })
+            } else {
+                (sx, sy, 0.0)
+            };
+            let start = cursor;
+            for ch in run.text.chars() {
+                if ch == ' ' {
+                    cursor += (gsx * space_width).round() as i64;
+                } else {
+                    let g = get_glyph(ch as u32);
+                    let adv = (g.width * gsx).round() as i64;
+                    glyphs.push(Placed { x: cursor, y: yoff, sx: gsx, sy: gsy, glyph: g });
+                    cursor += adv;
+                }
+            }
+            if run.over {
+                // `drawMarkup`'s overbar: shortened by 10% of the glyph width at each end,
+                // `GetOverbarVerticalPosition` above the baseline.
+                bars.push(Bar { x0: start, x1: cursor, y: yoff - gsy * 1.23, trim: gsx * 0.1 });
+            }
+        }
+        laid.push(Line { glyphs, bars, width: cursor });
+    }
+
+    // `getLinePositions`
+    let mut height = 0.0f64;
+    for i in 0..laid.len() {
+        height += if i == 0 { sy * 1.17 } else { interline as f64 };
+    }
+    let th = t.thickness as f64;
+    let off_x = th / 1.52;
+    let mut off_y = sy - th * 0.052;
+    match t.valign {
+        -1 => {}
+        0 => off_y -= (height / 2.0).trunc(),
+        _ => off_y -= height.trunc(),
+    }
+    let (sin, cos) = (t.angle_deg.to_radians()).sin_cos();
+    let origin = (t.pos.x as f64, t.pos.y as f64);
+    let xf = |x: f64, y: f64| -> Point {
+        let x = if t.mirror { origin.0 - (x - origin.0) } else { x };
+        let (dx, dy) = (x - origin.0, y - origin.1);
+        Point { x: (origin.0 + dx * cos + dy * sin).round() as Um, y: (origin.1 - dx * sin + dy * cos).round() as Um }
+    };
+    let mut segs = Vec::new();
+    for (i, line) in laid.iter().enumerate() {
+        let line_off_x = match t.halign {
+            -1 => off_x,
+            0 => -(line.width as f64) / 2.0,
+            _ => -(line.width as f64 + off_x),
+        };
+        let line_off_y = off_y + (i as i64 * interline) as f64;
+        let (lx, ly) = (origin.0 + line_off_x.trunc(), origin.1 + line_off_y.trunc());
+        for p in &line.glyphs {
+            for stroke in &p.glyph.strokes {
+                let pts: Vec<Point> = stroke.iter().map(|&(px, py)| xf(px * p.sx + lx + p.x as f64, py * p.sy + ly + p.y)).collect();
+                for w in pts.windows(2) {
+                    segs.push(Seg::new(w[0], w[1]));
+                }
+            }
+        }
+        for b in &line.bars {
+            segs.push(Seg::new(xf(lx + b.x0 as f64 + b.trim, ly + b.y), xf(lx + b.x1 as f64 - b.trim, ly + b.y)));
+        }
+    }
+    segs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +498,23 @@ mod tests {
         let a = layout_strokes("\u{1F600}", Point { x: 0, y: 0 }, 1000, 0, false, TextJustify::Left);
         let b = layout_strokes("?", Point { x: 0, y: 0 }, 1000, 0, false, TextJustify::Left);
         assert_eq!(a.map(|s| s.len()), b.map(|s| s.len()));
+    }
+
+    #[test]
+    fn overbar_markup_drops_the_braces_and_adds_a_bar() {
+        let plain = kicad_text_segments(&TextLayout { text: "AB", pos: Point { x: 0, y: 0 }, size: (1000, 1000), thickness: 150, angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
+        let barred = kicad_text_segments(&TextLayout { text: "~{AB}", pos: Point { x: 0, y: 0 }, size: (1000, 1000), thickness: 150, angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
+        // Same glyph strokes plus exactly one horizontal bar above them.
+        assert_eq!(barred.len(), plain.len() + 1);
+        let bar = barred.last().unwrap();
+        assert_eq!(bar.a.y, bar.b.y);
+        assert!(bar.a.y < plain.iter().map(|s| s.a.y.min(s.b.y)).min().unwrap());
+    }
+
+    #[test]
+    fn centred_text_is_centred_on_its_anchor() {
+        let segs = kicad_text_segments(&TextLayout { text: "HELLO", pos: Point { x: 10_000, y: 20_000 }, size: (1000, 1000), thickness: 150, angle_deg: 0.0, mirror: false, halign: 0, valign: 0 });
+        let (x0, x1) = (segs.iter().map(|s| s.a.x.min(s.b.x)).min().unwrap(), segs.iter().map(|s| s.a.x.max(s.b.x)).max().unwrap());
+        assert!(((x0 + x1) / 2 - 10_000).abs() < 400, "{x0} {x1}");
     }
 }

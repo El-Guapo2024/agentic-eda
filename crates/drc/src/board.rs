@@ -46,6 +46,69 @@ pub fn from_ir_shape(s: &IrShape) -> Shape {
     }
 }
 
+/// `EDA_SHAPE::makeEffectiveShapes` for a graphic: the compound a
+/// `PCB_SHAPE::GetEffectiveShape` returns (a filled outline as a solid
+/// polygon plus its stroked edge, or the stroked edge alone).
+pub fn effective_shapes(s: &IrShape) -> Vec<Shape> {
+    let stroke = |segs: Vec<crate::kimath::Seg>, w: Um| -> Option<Shape> {
+        if segs.is_empty() {
+            None
+        } else {
+            Some(Shape::Strokes { segs, r: w / 2 })
+        }
+    };
+    let ring = |pts: &[Point]| -> Vec<crate::kimath::Seg> {
+        let n = pts.len();
+        (0..n).map(|i| crate::kimath::Seg::new(pts[i], pts[(i + 1) % n])).collect()
+    };
+    let mut out = Vec::new();
+    match s {
+        IrShape::Segment { start, end, stroke_width, .. } => out.push(Shape::Stadium { a: *start, b: *end, r: stroke_width / 2 }),
+        IrShape::Arc { start, mid, end, stroke_width, .. } => {
+            let pts = arc_polyline(*start, *mid, *end, ARC_HIGH_DEF);
+            let segs: Vec<_> = pts.windows(2).map(|w| crate::kimath::Seg::new(w[0], w[1])).collect();
+            out.extend(stroke(segs, *stroke_width));
+        }
+        IrShape::Rect { start, end, stroke_width, filled, .. } => {
+            let pts = [*start, Point { x: end.x, y: start.y }, *end, Point { x: start.x, y: end.y }];
+            if *filled {
+                out.push(Shape::Polygon { pts: pts.to_vec() });
+            }
+            if *stroke_width > 0 || !*filled {
+                out.extend(stroke(ring(&pts), *stroke_width));
+            }
+        }
+        IrShape::Circle { center, end, stroke_width, filled, .. } => {
+            let r = crate::kimath::dist(*center, *end);
+            if *filled {
+                out.push(Shape::Circle { c: *center, r });
+            }
+            if *stroke_width > 0 || !*filled {
+                // `SHAPE_ARC( center, end, ANGLE_360, width )`
+                let n = if r as f64 > ARC_HIGH_DEF { ((std::f64::consts::PI / (1.0 - ARC_HIGH_DEF / r as f64).acos()).ceil() as usize).clamp(8, 4096) } else { 8 };
+                let pts: Vec<Point> = (0..n)
+                    .map(|i| {
+                        let a = std::f64::consts::TAU * i as f64 / n as f64;
+                        Point { x: center.x + (r as f64 * a.cos()).round() as Um, y: center.y + (r as f64 * a.sin()).round() as Um }
+                    })
+                    .collect();
+                out.extend(stroke(ring(&pts), *stroke_width));
+            }
+        }
+        IrShape::Polygon { pts, stroke_width, filled, .. } => {
+            if pts.len() >= 2 {
+                if *filled && pts.len() >= 3 {
+                    out.push(Shape::Polygon { pts: pts.clone() });
+                }
+                if *stroke_width > 0 || !*filled {
+                    out.extend(stroke(ring(pts), *stroke_width));
+                }
+            }
+        }
+    }
+    out
+}
+
 pub struct DrcPad {
     /// `"<footprint-ref>.<pad-number>"`, unique per physical pad (pad
     /// numbers repeat within a footprint -- see `footprint::PlacedPad`).
@@ -146,6 +209,103 @@ pub struct DrcFootprint {
     pub outlines: Vec<Vec<Point>>,
 }
 
+/// Solder-mask / silk facts `drc_test_provider_solder_mask.cpp` and
+/// `drc_test_provider_silk_clearance.cpp` need that the per-item structs
+/// above have no field for. Kept as one side structure (parallel `Vec`s
+/// indexed like `pads`/`vias`; a shorter-than-`pads` `pads` vec means "no
+/// import data, derive from the pad kind") so every other provider's
+/// view of `DrcPad`/`DrcVia` is unchanged.
+#[derive(Default)]
+pub struct MaskData {
+    pub rules: eda_model::SolderMaskRules,
+    /// Parallel to `DrcBoard::pads`.
+    pub pads: Vec<DrcPadMask>,
+    /// Parallel to `DrcBoard::vias`.
+    pub vias: Vec<DrcViaMask>,
+    pub footprints: Vec<DrcFpMask>,
+    /// Footprint- and board-level graphics on the mask and silk layers
+    /// (plus mask-only aperture pads).
+    pub graphics: Vec<DrcGraphic>,
+    /// Silkscreen items that are not pads: footprint/board graphics and text
+    /// (`drc_test_provider_silk_clearance.cpp`'s silk tree).
+    pub silk: Vec<DrcSilk>,
+    /// `true` when `silk` was built from imported footprint silk (as opposed
+    /// to this workspace's own exported refdes-label approximation).
+    pub has_footprint_silk: bool,
+}
+
+/// A silkscreen `PCB_SHAPE` or text.
+#[derive(Clone)]
+pub struct DrcSilk {
+    pub fp: Option<usize>,
+    pub id: String,
+    pub desc: String,
+    pub pos: Point,
+    pub layer: String,
+    /// `GetEffectiveShape` -- a compound's children.
+    pub shapes: Vec<Shape>,
+    /// `Type() == PCB_SHAPE_T` (vs. text).
+    pub is_shape: bool,
+}
+
+#[derive(Clone)]
+pub struct DrcPadMask {
+    /// Index into `MaskData::footprints`.
+    pub fp: Option<usize>,
+    /// The pad's full layer set (`PAD::GetLayerSet`); empty = derive from kind.
+    pub layers: Vec<String>,
+    /// `PADSTACK::SolderMaskMargin` -- `None` inherits.
+    pub margin: Option<Um>,
+    pub tent_front: Option<bool>,
+    pub tent_back: Option<bool>,
+    pub pin_type: String,
+    pub shape: PadShape,
+    /// The pad's local (unrotated) size.
+    pub size: (Um, Um),
+}
+
+#[derive(Clone, Default)]
+pub struct DrcViaMask {
+    pub tent_front: Option<bool>,
+    pub tent_back: Option<bool>,
+}
+
+#[derive(Clone)]
+pub struct DrcFpMask {
+    pub id: String,
+    /// `FOOTPRINT::GetLocalSolderMaskMargin`.
+    pub margin: Option<Um>,
+    /// `FOOTPRINT::AllowSolderMaskBridges`.
+    pub allow_bridges: bool,
+    /// `FOOTPRINT::m_netTiePadGroups`, verbatim.
+    pub net_tie_groups: Vec<String>,
+}
+
+/// A mask/silk-layer `PCB_SHAPE` (or a mask-only `PAD`).
+#[derive(Clone)]
+pub struct DrcGraphic {
+    pub fp: Option<usize>,
+    pub id: String,
+    pub desc: String,
+    pub pos: Point,
+    pub layer: String,
+    /// `GetEffectiveShape` -- a `SHAPE_COMPOUND`'s children.
+    pub shapes: Vec<Shape>,
+    /// `m_solderMaskMargin`.
+    pub margin: Option<Um>,
+    pub filled: bool,
+    pub width: Um,
+    /// `Some` for a mask-only pad (`PCB_PAD_T`).
+    pub pad: Option<DrcGraphicPad>,
+}
+
+#[derive(Clone)]
+pub struct DrcGraphicPad {
+    pub number: String,
+    pub net: Option<String>,
+    pub pin_type: String,
+}
+
 pub struct DrcBoard {
     pub layers: Vec<String>,
     pub outline: Vec<Point>,
@@ -158,6 +318,7 @@ pub struct DrcBoard {
     pub shapes: Vec<IrShape>,
     pub texts: Vec<Text>,
     pub silk_items: Vec<SilkItem>,
+    pub mask: MaskData,
 }
 
 /// A local-frame `(w, h)` box's axis-aligned board-space extent under a
@@ -305,6 +466,40 @@ fn pad_hole_shape(center: Point, pad: &Pad, board_rot: i64) -> Option<Shape> {
     None
 }
 
+fn shape_anchor(s: &Shape) -> Point {
+    let (x0, y0, x1, y1) = s.bbox(0);
+    Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
+}
+
+/// A footprint text's `GetEffectiveShape`: its stroke-font glyph segments,
+/// inflated by half the effective pen width.
+fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<Shape> {
+    // `PCB_TEXT::GetDrawRotation`: footprint text that keeps itself upright is
+    // folded into (-90, 90] degrees, any other text is normalised.
+    let mut rot = t.angle_file_mdeg as f64 / 1000.0;
+    if t.keep_upright {
+        rot = rot.rem_euclid(360.0);
+        if rot > 180.0 {
+            rot -= 360.0;
+        }
+        while rot > 90.0 {
+            rot -= 180.0;
+        }
+        while rot <= -90.0 {
+            rot += 180.0;
+        }
+    } else {
+        rot = rot.rem_euclid(360.0);
+    }
+    let pen = crate::stroke_font::effective_pen_width(t.thickness, t.size, t.bold);
+    let segs = crate::stroke_font::kicad_text_segments(&crate::stroke_font::TextLayout { text: &t.text, pos: t.at, size: t.size, thickness: t.thickness, angle_deg: rot, mirror: t.mirror, halign: t.halign, valign: t.valign });
+    if segs.is_empty() {
+        None
+    } else {
+        Some(Shape::Strokes { segs, r: pen / 2 })
+    }
+}
+
 pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     let outline = design.placement.as_ref().map(|p| p.outline.clone()).unwrap_or_default();
     let layers = model.board.layers.clone();
@@ -314,16 +509,60 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
 
     let mut pads = Vec::new();
     let mut footprints = Vec::new();
+    let mut mask = MaskData { rules: model.board.solder_mask.clone(), ..Default::default() };
+    let extras: HashMap<&str, &eda_model::ir::FootprintExtra> = design.drawings.as_ref().map(|d| d.footprint_extras.iter().map(|e| (e.id.as_str(), e)).collect()).unwrap_or_default();
     if let Some(pl) = &design.placement {
         for fp in &pl.footprints {
             let Some(part) = model.part(&fp.id) else { continue };
             let Some(footprint) = model.footprint_of(part) else { continue };
+            let extra = extras.get(fp.id.as_str()).copied();
+            let fp_mask_idx = mask.footprints.len();
+            mask.footprints.push(DrcFpMask {
+                id: fp.id.clone(),
+                margin: extra.and_then(|e| e.solder_mask_margin),
+                allow_bridges: extra.is_some_and(|e| e.allow_soldermask_bridges),
+                net_tie_groups: extra.map(|e| e.net_tie_pad_groups.clone()).unwrap_or_default(),
+            });
+            if let Some(e) = extra {
+                mask.has_footprint_silk = true;
+                for t in &e.texts {
+                    let shape = footprint_text_shape(t);
+                    if let Some(shape) = shape {
+                        let pos = t.at;
+                        mask.silk.push(DrcSilk { fp: Some(fp_mask_idx), id: format!("{}.t{}", fp.id, mask.silk.len()), desc: format!("Footprint text '{}' of {}", t.text, fp.id), pos, layer: t.layer.clone(), shapes: vec![shape], is_shape: false });
+                    }
+                }
+                for g in &e.graphics {
+                    let (layer, pos) = (g.shape.layer().to_string(), g.shape.points().first().copied().unwrap_or(Point { x: 0, y: 0 }));
+                    let pad = g.pad_number.as_ref().map(|n| DrcGraphicPad { number: n.clone(), net: if g.net.is_empty() { None } else { Some(g.net.clone()) }, pin_type: g.pin_type.clone() });
+                    let desc = match &g.pad_number {
+                        Some(n) => format!("Pad {} of {}", n, fp.id),
+                        None => format!("Graphic on {} of {}", layer, fp.id),
+                    };
+                    if layer.ends_with(".SilkS") {
+                        mask.silk.push(DrcSilk { fp: Some(fp_mask_idx), id: format!("{}.s{}", fp.id, mask.silk.len()), desc: format!("Graphic on {} of {}", layer, fp.id), pos, layer, shapes: effective_shapes(&g.shape), is_shape: true });
+                        continue;
+                    }
+                    mask.graphics.push(DrcGraphic {
+                        fp: Some(fp_mask_idx),
+                        id: format!("{}.g{}", fp.id, mask.graphics.len()),
+                        desc,
+                        pos,
+                        layer,
+                        shapes: effective_shapes(&g.shape),
+                        margin: g.solder_mask_margin,
+                        filled: g.shape.is_filled(),
+                        width: g.shape.stroke_width(),
+                        pad,
+                    });
+                }
+            }
             if let Some(c) = placed_courtyard(model, part, fp) {
                 let outlines = footprint.courtyard_outlines.iter().map(|o| o.iter().map(|&p| pad_center(fp, p)).collect()).collect();
                 footprints.push(DrcFootprint { id: fp.id.clone(), side: fp.side, courtyard: c, outlines });
             }
             let board_rot = fp.rot as i64;
-            for pad in &footprint.pads {
+            for (pad_idx, pad) in footprint.pads.iter().enumerate() {
                 let center = pad_center(fp, pad.at);
                 let pad_rot = board_rot + pad.rot as i64;
                 let size = rotated_extent_by(pad_rot, pad.size);
@@ -335,6 +574,17 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     PadKind::Smd => vec![if pad.on_back(fp.side) { "B.Cu".to_string() } else { "F.Cu".to_string() }],
                     PadKind::ThroughHole | PadKind::NonPlatedHole => layers.clone(),
                 };
+                let pmask = extra.and_then(|e| if e.pads.len() == footprint.pads.len() { e.pads.get(pad_idx) } else { None });
+                mask.pads.push(DrcPadMask {
+                    fp: Some(fp_mask_idx),
+                    layers: pmask.map(|m| m.layers.clone()).unwrap_or_default(),
+                    margin: pmask.and_then(|m| m.solder_mask_margin),
+                    tent_front: pmask.and_then(|m| m.tent_front),
+                    tent_back: pmask.and_then(|m| m.tent_back),
+                    pin_type: pmask.map(|m| m.pin_type.clone()).unwrap_or_default(),
+                    shape: pad.shape,
+                    size: pad.size,
+                });
                 pads.push(DrcPad {
                     id: format!("{}.{}", fp.id, pad.number),
                     footprint_ref: fp.id.clone(),
@@ -368,7 +618,10 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 tracks.push(DrcTrackSeg { id: format!("{}#{i}", t.id), net: net.clone(), layer: t.layer.clone(), width: t.width, a: w[0], b: w[1], arc_mid: None });
             }
         }
+        let tenting: HashMap<(i64, i64, &str), &eda_model::ir::ViaTenting> = design.drawings.as_ref().map(|d| d.via_tenting.iter().map(|t| ((t.at.x, t.at.y, t.net.as_str()), t)).collect()).unwrap_or_default();
         for v in &rt.vias {
+            let t = tenting.get(&(v.at.x, v.at.y, v.net.as_str()));
+            mask.vias.push(DrcViaMask { tent_front: t.and_then(|t| t.front), tent_back: t.and_then(|t| t.back) });
             let net = if v.net.is_empty() { None } else { Some(v.net.clone()) };
             vias.push(DrcVia { id: v.id.clone(), net, at: v.at, drill: v.drill, diameter: v.diameter, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone() });
         }
@@ -415,6 +668,64 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
 
     let (shapes, texts) = design.drawings.as_ref().map(|d| (d.shapes.clone(), d.texts.clone())).unwrap_or_default();
 
+    // Board-level graphics on the mask layers (`PCB_SHAPE` parented to the
+    // board, so `GetParentFootprint()` is null).
+    for s in &shapes {
+        if s.layer() == "F.Mask" || s.layer() == "B.Mask" {
+            mask.graphics.push(DrcGraphic {
+                fp: None,
+                id: s.id().to_string(),
+                desc: format!("Graphic on {}", s.layer()),
+                pos: s.points().first().copied().unwrap_or(Point { x: 0, y: 0 }),
+                layer: s.layer().to_string(),
+                shapes: effective_shapes(s),
+                margin: None,
+                filled: s.is_filled(),
+                width: s.stroke_width(),
+                pad: None,
+            });
+        }
+    }
+
+    for s in &shapes {
+        if s.layer() == "F.SilkS" || s.layer() == "B.SilkS" {
+            mask.silk.push(DrcSilk {
+                fp: None,
+                id: s.id().to_string(),
+                desc: format!("Graphic on {}", s.layer()),
+                pos: s.points().first().copied().unwrap_or(Point { x: 0, y: 0 }),
+                layer: s.layer().to_string(),
+                shapes: effective_shapes(s),
+                is_shape: true,
+            });
+        }
+    }
+    // Board-level silk text: the imported layout attributes when present, else
+    // the plain `Text` (centred, square glyphs).
+    let imported_silk_texts: &[eda_model::ir::FootprintText] = design.drawings.as_ref().map(|d| d.silk_texts.as_slice()).unwrap_or(&[]);
+    for t in imported_silk_texts {
+        if let Some(shape) = footprint_text_shape(t) {
+            mask.silk.push(DrcSilk { fp: None, id: format!("txt{}", mask.silk.len()), desc: format!("Text '{}' on {}", t.text, t.layer), pos: t.at, layer: t.layer.clone(), shapes: vec![shape], is_shape: false });
+        }
+    }
+    for t in texts.iter().filter(|_| imported_silk_texts.is_empty()) {
+        if t.layer == "F.SilkS" || t.layer == "B.SilkS" {
+            // A free `PCB_TEXT`: vertically centred unless a justify said otherwise (not
+            // imported), never kept upright (`GetParentFootprint()` is null).
+            let size = (t.size_um, t.size_um);
+            let pen = crate::stroke_font::effective_pen_width(t.stroke_width, size, false);
+            let halign = match t.justify {
+                eda_model::ir::TextJustify::Left => -1,
+                eda_model::ir::TextJustify::Center => 0,
+                eda_model::ir::TextJustify::Right => 1,
+            };
+            let segs = crate::stroke_font::kicad_text_segments(&crate::stroke_font::TextLayout { text: &t.content, pos: t.at, size, thickness: t.stroke_width, angle_deg: (t.angle as f64 / 1000.0).rem_euclid(360.0), mirror: t.mirror, halign, valign: 0 });
+            if !segs.is_empty() {
+                mask.silk.push(DrcSilk { fp: None, id: t.id.clone(), desc: format!("Text '{}' on {}", t.content, t.layer), pos: t.at, layer: t.layer.clone(), shapes: vec![Shape::Strokes { segs, r: pen / 2 }], is_shape: false });
+            }
+        }
+    }
+
     let mut silk_items = Vec::new();
     for s in &shapes {
         if s.layer() == "F.SilkS" || s.layer() == "B.SilkS" {
@@ -434,12 +745,18 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             let Some(part) = model.part(&fp.id) else { continue };
             if let Some(shape) = exported_refdes_shape(model, part, fp) {
                 let layer = if fp.side == Side::Bottom { "B.SilkS" } else { "F.SilkS" };
+                // A footprint that came from a `.kicad_pcb` has its real silk text (see
+                // `FootprintExtra::texts`); only this workspace's own footprints fall back
+                // to the exported-label approximation.
+                if !extras.contains_key(fp.id.as_str()) {
+                    mask.silk.push(DrcSilk { fp: None, id: format!("{}.ref", fp.id), desc: format!("Reference of {}", fp.id), pos: shape_anchor(&shape), layer: layer.to_string(), shapes: vec![shape.clone()], is_shape: false });
+                }
                 silk_items.push(SilkItem { id: format!("{}.ref", fp.id), desc: format!("Reference of {}", fp.id), layer: layer.to_string(), shape });
             }
         }
     }
 
-    DrcBoard { layers, outline, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items }
+    DrcBoard { layers, outline, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask }
 }
 
 impl DrcVia {

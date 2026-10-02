@@ -53,7 +53,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintInstance, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
+use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
 use crate::sexpr::{self, Sexpr};
@@ -110,11 +110,12 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let net_names = import_net_names(root);
     let mut board = import_board_rules(root, &layers);
 
-    let (footprints_ir, parts, explicit_footprints, pin_nets) = import_footprints(root, &net_names, &mut notes)?;
+    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras) = import_footprints(root, &net_names, &layers, &mut notes)?;
     let nets = build_nets(&net_names, &pin_nets);
     let outline = import_outline(root, &mut notes);
-    let (tracks, vias) = import_routing(root, &net_names, &mut notes);
+    let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes);
     let (shapes, texts) = import_drawings(root);
+    let silk_texts = import_board_silk_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes);
 
     // The outline override lives on `board` too (used when a downstream
@@ -148,7 +149,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() { None } else { Some(DrawingsSection { shapes, texts, footprint_extras, via_tenting, silk_texts, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     // Every track/via this parse just built, and every shape/text, has no
@@ -313,7 +314,66 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
         })
         .collect();
     import_legacy_setup_minimums(root, &mut board);
+    import_solder_mask_setup(root, &mut board);
     board
+}
+
+/// `(front yes) (back no)` / legacy bare `front back none` tenting list, as
+/// `PCB_IO_KICAD_SEXPR_PARSER::parseFrontBackOptBool( true )` reads it:
+/// `None` for "none"/absent.
+fn front_back_opt_bool(list: &[Sexpr]) -> (Option<bool>, Option<bool>) {
+    let (mut front, mut back) = (None, None);
+    for it in list.iter().skip(1) {
+        match it {
+            Sexpr::List(l) => {
+                let v = match sexpr::txt(l, 1) {
+                    Some("yes") => Some(true),
+                    Some("no") => Some(false),
+                    _ => None,
+                };
+                match sexpr::tag(l) {
+                    Some("front") => front = v,
+                    Some("back") => back = v,
+                    _ => {}
+                }
+            }
+            Sexpr::Atom(a) => match a.as_str() {
+                "front" => front = Some(true),
+                "back" => back = Some(true),
+                "none" => {
+                    front = None;
+                    back = None;
+                }
+                _ => {}
+            },
+        }
+    }
+    (front, back)
+}
+
+/// `(setup (pad_to_mask_clearance ..) (solder_mask_min_width ..)
+/// (allow_soldermask_bridges_in_footprints ..) (tenting ..))` --
+/// `PCB_IO_KICAD_SEXPR_PARSER::parseSetup`'s `T_pad_to_mask_clearance`/
+/// `T_solder_mask_min_width`/`T_allow_soldermask_bridges_in_footprints`/
+/// `T_tenting` cases. Tenting defaults to "tented both sides"
+/// (`BOARD_DESIGN_SETTINGS`'s constructor) and, when a `(tenting ..)` form
+/// is present, to `false` for a side it does not name (`front.value_or( false )`).
+fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
+    let Some(setup) = sexpr::find(root, "setup") else { return };
+    if let Some(v) = sexpr::find(setup, "pad_to_mask_clearance").and_then(|f| sexpr::num(f, 1)) {
+        board.solder_mask.expansion_um = mm_to_um(v);
+    }
+    if let Some(v) = sexpr::find(setup, "solder_mask_min_width").and_then(|f| sexpr::num(f, 1)) {
+        board.solder_mask.min_width_um = mm_to_um(v);
+    }
+    if let Some(v) = sexpr::find(setup, "allow_soldermask_bridges_in_footprints").and_then(|f| sexpr::txt(f, 1)) {
+        board.solder_mask.allow_bridges_in_footprints = v == "yes";
+    }
+    if let Some(t) = sexpr::find(setup, "tenting") {
+        let (front, back) = front_back_opt_bool(t);
+        board.solder_mask.tent_vias_front = front.unwrap_or(false);
+        board.solder_mask.tent_vias_back = back.unwrap_or(false);
+    }
 }
 
 /// Board-wide *minimum* constraints (`BOARD_DESIGN_SETTINGS`'s `rules.min_*`
@@ -529,6 +589,10 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     if let Some(v) = mm("min_text_thickness") {
         b.min_silk_text_thickness_um = v;
     }
+    // `m_SolderMaskToCopperClearance` lives only in the project file.
+    if let Some(v) = mm("solder_mask_to_copper_clearance") {
+        b.solder_mask.to_copper_clearance_um = v;
+    }
 }
 
 /// A `.kicad_pro`'s `board.design_settings.rule_severities` -- KiCad 7+'s
@@ -612,6 +676,13 @@ fn footprint_field(fp: &[Sexpr], field: &str) -> Option<String> {
 /// (see `pad_rot_from_file`). `None` for a pad this reader cannot place at
 /// all (no `at`/`size`).
 pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, notes: &mut ImportNotes) -> Option<Pad> {
+    parse_pad_geometry_opt(pad, fp_side, fp_rot, notes, false)
+}
+
+/// [`parse_pad_geometry`], optionally keeping a pad whose `(layers ..)` name
+/// no copper layer (a mask-only aperture pad) instead of dropping it -- the
+/// solder-mask DRC needs those as `PCB_PAD_T` mask apertures.
+pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, notes: &mut ImportNotes, keep_non_copper: bool) -> Option<Pad> {
     let number = sexpr::txt(pad, 1).unwrap_or("").to_string();
     let kind_tok = sexpr::txt(pad, 2).unwrap_or("");
     let pad_kind = match kind_tok {
@@ -642,7 +713,7 @@ pub(crate) fn parse_pad_geometry(pad: &[Sexpr], fp_side: Side, fp_rot: u32, note
     let mut opposite_side = false;
     if let Some(layers) = sexpr::find(pad, "layers") {
         let names: Vec<&str> = layers.iter().skip(1).filter_map(Sexpr::text).collect();
-        if !names.is_empty() && !names.iter().any(|l| *l == "*.Cu" || l.ends_with(".Cu")) {
+        if !names.is_empty() && !names.iter().any(|l| *l == "*.Cu" || l.ends_with(".Cu")) && !keep_non_copper {
             notes.non_copper_pads_skipped += 1;
             return None;
         }
@@ -860,8 +931,12 @@ fn footprint_courtyard_half(fp: &[Sexpr], side: Side) -> Option<(i64, i64)> {
 fn import_footprints(
     root: &[Sexpr],
     net_names: &BTreeMap<i64, String>,
+    layers: &[String],
     notes: &mut ImportNotes,
-) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>), Vec<CheckResult>> {
+) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>, Vec<FootprintExtra>), Vec<CheckResult>> {
+    let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
+    let mut extras: Vec<FootprintExtra> = Vec::new();
+    let title_vars = title_block_vars(root);
     let mut footprints_ir = Vec::new();
     let mut parts = Vec::new();
     let mut explicit: BTreeMap<String, Footprint> = BTreeMap::new();
@@ -904,8 +979,16 @@ fn import_footprints(
 
         let mut pads = Vec::new();
         let mut pins = Vec::new();
+        let fp_inst = FootprintInstance { id: reference.clone(), at: Point { x, y }, rot, side, label: Default::default() };
+        let mut extra = footprint_extra_header(fp, &reference, file_version);
         for pad in sexpr::find_all(fp, "pad") {
-            let Some(p) = parse_pad_geometry(pad, side, rot, notes) else { continue };
+            let Some(p) = parse_pad_geometry(pad, side, rot, notes) else {
+                if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
+                    extra.graphics.extend(g);
+                }
+                continue;
+            };
+            extra.pads.push(pad_mask_info(pad, layers, file_version));
 
             // A non-plated hole is mechanical, not electrical: it has no
             // net and is not a schematic pin (nothing a symbol would draw
@@ -946,6 +1029,9 @@ fn import_footprints(
         // geometry, so `model.footprint_of` -- a plain name lookup with no
         // side of its own to disambiguate by -- still resolves to the right
         // one for every instance.
+        extra.graphics.extend(import_fp_graphics(fp, &fp_inst));
+        extra.texts = import_fp_texts(fp, &fp_inst, &reference, value.as_deref().unwrap_or(""), &title_vars);
+        extras.push(extra);
         let key = dedup_footprint_key(&mut explicit, &lib_id, &pads);
         let courtyard = footprint_courtyard_half(fp, side);
         let courtyard_outlines = footprint_courtyard_outlines(fp, side);
@@ -958,12 +1044,305 @@ fn import_footprints(
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok((footprints_ir, parts, explicit, pin_nets))
+    Ok((footprints_ir, parts, explicit, pin_nets, extras))
+}
+
+/// Footprint-level solder-mask facts: `(solder_mask_margin ..)` (pre-9.0
+/// files: 0 meant "inherit"), `(attr .. allow_soldermask_bridges)`,
+/// `(net_tie_pad_groups ..)`.
+fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> FootprintExtra {
+    let mut e = FootprintExtra { id: reference.to_string(), ..Default::default() };
+    if let Some(m) = sexpr::find(fp, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
+        let m = mm_to_um(m);
+        e.solder_mask_margin = if file_version <= 20240201 && m == 0 { None } else { Some(m) };
+    }
+    if let Some(attr) = sexpr::find(fp, "attr") {
+        e.allow_soldermask_bridges = attr.iter().skip(1).filter_map(Sexpr::text).any(|t| t == "allow_soldermask_bridges");
+    }
+    if let Some(g) = sexpr::find(fp, "net_tie_pad_groups") {
+        e.net_tie_pad_groups = g.iter().skip(1).filter_map(Sexpr::text).map(String::from).collect();
+    }
+    e
+}
+
+/// A pad's `(layers ..)` with wildcards expanded against the board's copper
+/// layers (`*.Cu`, `F&B.Cu`, `*.Mask`, ...).
+fn expand_layer_names(names: &[&str], copper: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in names {
+        match *n {
+            "*.Cu" => out.extend(copper.iter().cloned()),
+            "F&B.Cu" => out.extend(["F.Cu".to_string(), "B.Cu".to_string()]),
+            w if w.starts_with("*.") => {
+                out.push(format!("F.{}", &w[2..]));
+                out.push(format!("B.{}", &w[2..]));
+            }
+            other => out.push(other.to_string()),
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// `PADSTACK` facts beyond geometry: layer set, `(solder_mask_margin ..)`
+/// (pre-9.0: 0 = inherit), `(tenting ..)`, `(pintype ..)`.
+fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64) -> PadMaskInfo {
+    let mut info = PadMaskInfo::default();
+    if let Some(l) = sexpr::find(pad, "layers") {
+        let names: Vec<&str> = l.iter().skip(1).filter_map(Sexpr::text).collect();
+        info.layers = expand_layer_names(&names, copper);
+    }
+    if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
+        let m = mm_to_um(m);
+        info.solder_mask_margin = if file_version <= 20240201 && m == 0 { None } else { Some(m) };
+    }
+    if let Some(t) = sexpr::find(pad, "tenting") {
+        let (f, b) = front_back_opt_bool(t);
+        info.tent_front = f;
+        info.tent_back = b;
+    }
+    if let Some(t) = sexpr::find(pad, "pintype").and_then(|f| sexpr::txt(f, 1)) {
+        info.pin_type = t.to_string();
+    }
+    info
+}
+
+fn rotated_extent(rot_millideg: i64, size: (i64, i64)) -> (i64, i64) {
+    let rad = (rot_millideg as f64) / 1000.0 * std::f64::consts::PI / 180.0;
+    let (sin, cos) = rad.sin_cos();
+    let (w, h) = (size.0 as f64, size.1 as f64);
+    ((w * cos.abs() + h * sin.abs()).round() as i64, (w * sin.abs() + h * cos.abs()).round() as i64)
+}
+
+/// A pad with no copper layer but a mask layer is a pure mask aperture
+/// (`isMaskAperture`'s `maskLayers.count() > 0 && copperLayers.count() == 0`),
+/// still a `PCB_PAD_T` for the solder-mask provider. Reduced to the same
+/// axis-aligned board-space shape every other pad here gets.
+fn mask_only_pad_graphics(pad: &[Sexpr], fp: &FootprintInstance, fp_rot: u32, net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes) -> Option<Vec<FootprintGraphic>> {
+    let names: Vec<&str> = sexpr::find(pad, "layers")?.iter().skip(1).filter_map(Sexpr::text).collect();
+    let mask_layers: Vec<String> = expand_layer_names(&names, &[]).into_iter().filter(|l| l == "F.Mask" || l == "B.Mask").collect();
+    if mask_layers.is_empty() {
+        return None;
+    }
+    let p = parse_pad_geometry_opt(pad, fp.side, fp_rot, notes, true)?;
+    let center = eda_model::footprint::to_board(fp, p.at);
+    let (w, h) = rotated_extent(fp.rot as i64 + p.rot as i64, p.size);
+    let net = net_ref(sexpr::find(pad, "net"), net_names);
+    let pin_type = sexpr::find(pad, "pintype").and_then(|f| sexpr::txt(f, 1)).unwrap_or("").to_string();
+    let mut out = Vec::new();
+    for layer in mask_layers {
+        let shape = match p.shape {
+            PadShape::Circle => Shape::Circle { id: String::new(), layer, stroke_width: 0, filled: true, center, end: Point { x: center.x + w.max(h) / 2, y: center.y } },
+            PadShape::Oval => {
+                let (a, b, sw) = if w >= h {
+                    (Point { x: center.x - (w - h) / 2, y: center.y }, Point { x: center.x + (w - h) / 2, y: center.y }, h)
+                } else {
+                    (Point { x: center.x, y: center.y - (h - w) / 2 }, Point { x: center.x, y: center.y + (h - w) / 2 }, w)
+                };
+                Shape::Segment { id: String::new(), layer, stroke_width: sw, filled: true, start: a, end: b }
+            }
+            _ => Shape::Polygon {
+                id: String::new(),
+                layer,
+                stroke_width: 0,
+                filled: true,
+                pts: vec![Point { x: center.x - w / 2, y: center.y - h / 2 }, Point { x: center.x + w / 2, y: center.y - h / 2 }, Point { x: center.x + w / 2, y: center.y + h / 2 }, Point { x: center.x - w / 2, y: center.y + h / 2 }],
+            },
+        };
+        out.push(FootprintGraphic { shape, solder_mask_margin: None, pad_number: Some(p.number.clone()), net: net.clone(), pin_type: pin_type.clone() });
+    }
+    Some(out)
+}
+
+/// `(hide yes)` / legacy bare `hide`, directly on `item` or inside its `(effects ..)`.
+fn is_hidden(item: &[Sexpr]) -> bool {
+    let direct = |l: &[Sexpr]| l.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "hide")) || sexpr::find(l, "hide").is_some_and(|h| sexpr::txt(h, 1).map_or(true, |v| v == "yes"));
+    direct(item) || sexpr::find(item, "effects").is_some_and(direct)
+}
+
+/// A footprint's visible silkscreen text: `(property ..)` fields and
+/// `(fp_text ..)` items (`parsePCB_TEXT` / `parsePCB_TEXT_effects`): the
+/// anchor is relative to the footprint (un-mirrored for a back footprint
+/// like a pad's `(at ..)`), the angle is absolute, footprint text keeps
+/// itself upright unless `unlocked`.
+fn import_fp_texts(fp: &[Sexpr], inst: &FootprintInstance, reference: &str, value: &str, vars: &[(String, String)]) -> Vec<FootprintText> {
+    let tf = |p: Point| -> Point { eda_model::footprint::to_board(inst, (if inst.side == Side::Bottom { -p.x } else { p.x }, p.y)) };
+    let mut out = Vec::new();
+    for item in fp.iter().filter_map(Sexpr::as_list) {
+        let tag = sexpr::tag(item);
+        if tag != Some("property") && tag != Some("fp_text") {
+            continue;
+        }
+        let Some(raw) = sexpr::txt(item, 2) else { continue };
+        if is_hidden(item) {
+            continue;
+        }
+        let text = raw.replace("${REFERENCE}", reference).replace("${VALUE}", value).replace("%R", reference).replace("%V", value);
+        out.extend(parse_silk_text(item, &resolve_text_vars(&text, vars), &tf, true));
+    }
+    out
+}
+
+/// A board-level `(gr_text ..)` on a silkscreen layer, laid out like a
+/// footprint text (board-level text is never kept upright).
+fn import_board_silk_texts(root: &[Sexpr]) -> Vec<FootprintText> {
+    let ident = |p: Point| p;
+    let vars = title_block_vars(root);
+    let mut out = Vec::new();
+    for item in sexpr::find_all(root, "gr_text") {
+        let Some(raw) = sexpr::txt(item, 1) else { continue };
+        out.extend(parse_silk_text(item, &resolve_text_vars(raw, &vars), &ident, false));
+    }
+    out
+}
+
+/// The `(title_block ..)` text variables (`BOARD::GetTextVar`): `TITLE`,
+/// `ISSUE_DATE`, `REVISION`, `COMPANY`, `COMMENT1..9`.
+fn title_block_vars(root: &[Sexpr]) -> Vec<(String, String)> {
+    let mut v = Vec::new();
+    let Some(tb) = sexpr::find(root, "title_block") else { return v };
+    for (tag, name) in [("title", "TITLE"), ("date", "ISSUE_DATE"), ("rev", "REVISION"), ("company", "COMPANY")] {
+        if let Some(t) = sexpr::find(tb, tag).and_then(|f| sexpr::txt(f, 1)) {
+            v.push((name.to_string(), t.to_string()));
+        }
+    }
+    for c in sexpr::find_all(tb, "comment") {
+        if let (Some(n), Some(t)) = (sexpr::num(c, 1), sexpr::txt(c, 2)) {
+            v.push((format!("COMMENT{}", n as i64), t.to_string()));
+        }
+    }
+    v
+}
+
+/// `${NAME}` -> value for every known variable; an unknown one stays as written.
+fn resolve_text_vars(text: &str, vars: &[(String, String)]) -> String {
+    let mut out = text.to_string();
+    for (k, v) in vars {
+        out = out.replace(&format!("${{{k}}}"), v);
+    }
+    out
+}
+
+/// The shared tail of `parsePCB_TEXT` / `parsePCB_TEXT_effects`: `(at x y [angle])`,
+/// `(layer ..)`, `(effects (font (size ..) (thickness ..) bold) (justify ..))`.
+/// Only silkscreen text is kept. `tf` maps the file anchor to board space.
+fn parse_silk_text(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_upright_default: bool) -> Option<FootprintText> {
+    let layer = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1))?;
+    if layer != "F.SilkS" && layer != "B.SilkS" {
+        return None;
+    }
+    // KiCad's lexer turns the two characters `\n` of a quoted string into a newline.
+    let text = text.replace("\\n", "\n");
+    if text.is_empty() {
+        return None;
+    }
+    let at = sexpr::find(item, "at")?;
+    let (x, y) = (sexpr::num(at, 1)?, sexpr::num(at, 2)?);
+    let angle = sexpr::num(at, 3).unwrap_or(0.0);
+    let unlocked_legacy = at.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "unlocked"));
+    let unlocked = unlocked_legacy || sexpr::find(item, "unlocked").is_some_and(|u| sexpr::txt(u, 1).map_or(true, |v| v == "yes"));
+    let effects = sexpr::find(item, "effects");
+    let font = effects.and_then(|e| sexpr::find(e, "font"));
+    let size = font.and_then(|f| sexpr::find(f, "size")).map(|s| (mm_to_um(sexpr::num(s, 1).unwrap_or(1.0)), mm_to_um(sexpr::num(s, 2).unwrap_or(1.0)))).unwrap_or((1000, 1000));
+    let thickness = font.and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(mm_to_um).unwrap_or(0);
+    let bold = font.is_some_and(|f| f.iter().skip(1).any(|c| matches!(c, Sexpr::Atom(a) if a == "bold")) || sexpr::find(f, "bold").is_some_and(|b| sexpr::txt(b, 1).map_or(true, |v| v == "yes")));
+    let (mut halign, mut valign, mut mirror) = (0i8, 0i8, false);
+    if let Some(j) = effects.and_then(|e| sexpr::find(e, "justify")) {
+        for tok in j.iter().skip(1).filter_map(Sexpr::text) {
+            match tok {
+                "left" => halign = -1,
+                "right" => halign = 1,
+                "top" => valign = -1,
+                "bottom" => valign = 1,
+                "mirror" => mirror = true,
+                _ => {}
+            }
+        }
+    }
+    Some(FootprintText {
+        text,
+        layer: layer.to_string(),
+        at: tf(Point { x: mm_to_um(x), y: mm_to_um(y) }),
+        angle_file_mdeg: (angle * 1000.0).round() as i64,
+        size,
+        thickness,
+        halign,
+        valign,
+        mirror,
+        keep_upright: keep_upright_default && !unlocked,
+        bold,
+    })
+}
+
+/// A footprint's `fp_line`/`fp_arc`/`fp_circle`/`fp_rect`/`fp_poly` on the
+/// silkscreen and solder-mask layers, in board space (the same
+/// un-mirror-then-`to_board` convention a pad's `(at ..)` uses -- see
+/// [`parse_pad_geometry_opt`]).
+fn import_fp_graphics(fp: &[Sexpr], inst: &FootprintInstance) -> Vec<FootprintGraphic> {
+    const KEEP: [&str; 4] = ["F.SilkS", "B.SilkS", "F.Mask", "B.Mask"];
+    let tf = |p: Point| -> Point { eda_model::footprint::to_board(inst, (if inst.side == Side::Bottom { -p.x } else { p.x }, p.y)) };
+    let pt = |item: &[Sexpr], key: &str| -> Option<Point> { sexpr::find(item, key).and_then(xy_point).map(tf) };
+    let stroke_width = |item: &[Sexpr]| -> i64 {
+        sexpr::find(item, "stroke")
+            .and_then(|s| sexpr::find(s, "width"))
+            .and_then(|w| sexpr::num(w, 1))
+            .or_else(|| sexpr::find(item, "width").and_then(|w| sexpr::num(w, 1)))
+            .map(mm_to_um)
+            .unwrap_or(0)
+    };
+    let filled = |item: &[Sexpr]| -> bool {
+        match sexpr::find(item, "fill") {
+            Some(f) => sexpr::txt(f, 1).is_some_and(|s| s == "yes" || s == "solid"),
+            None => false,
+        }
+    };
+    let layers_of = |item: &[Sexpr]| -> Vec<String> {
+        if let Some(l) = sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)) {
+            return vec![l.to_string()];
+        }
+        let names: Vec<&str> = sexpr::find(item, "layers").map(|l| l.iter().skip(1).filter_map(Sexpr::text).collect()).unwrap_or_default();
+        expand_layer_names(&names, &[])
+    };
+    let mut out = Vec::new();
+    for tag in ["fp_line", "fp_arc", "fp_circle", "fp_rect", "fp_poly"] {
+        for item in sexpr::find_all(fp, tag) {
+            let margin = sexpr::find(item, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+            for layer in layers_of(item).into_iter().filter(|l| KEEP.contains(&l.as_str())) {
+                let (sw, fl) = (stroke_width(item), filled(item));
+                let shape = match tag {
+                    "fp_line" => match (pt(item, "start"), pt(item, "end")) {
+                        (Some(start), Some(end)) => Shape::Segment { id: String::new(), layer, stroke_width: sw, filled: false, start, end },
+                        _ => continue,
+                    },
+                    "fp_arc" => match (pt(item, "start"), pt(item, "mid"), pt(item, "end")) {
+                        (Some(start), Some(mid), Some(end)) => Shape::Arc { id: String::new(), layer, stroke_width: sw, filled: fl, start, mid, end },
+                        _ => continue,
+                    },
+                    "fp_circle" => match (pt(item, "center"), pt(item, "end")) {
+                        (Some(center), Some(end)) => Shape::Circle { id: String::new(), layer, stroke_width: sw, filled: fl, center, end },
+                        _ => continue,
+                    },
+                    "fp_rect" => {
+                        let (Some(a), Some(b)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
+                        let corners = [Point { x: a.x, y: a.y }, Point { x: b.x, y: a.y }, Point { x: b.x, y: b.y }, Point { x: a.x, y: b.y }];
+                        Shape::Polygon { id: String::new(), layer, stroke_width: sw, filled: fl, pts: corners.iter().map(|c| tf(*c)).collect() }
+                    }
+                    _ => {
+                        let Some(pts) = poly_points(item) else { continue };
+                        Shape::Polygon { id: String::new(), layer, stroke_width: sw, filled: fl, pts: pts.into_iter().map(tf).collect() }
+                    }
+                };
+                out.push(FootprintGraphic { shape, solder_mask_margin: margin, pad_number: None, net: String::new(), pin_type: String::new() });
+            }
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------- routing
 
-fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes) -> (Vec<Track>, Vec<Via>) {
+fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>) {
 
     let mut tracks = Vec::new();
     for seg in sexpr::find_all(root, "segment") {
@@ -990,6 +1369,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
     }
 
     let mut vias = Vec::new();
+    let mut via_tenting = Vec::new();
     for via in sexpr::find_all(root, "via") {
         let Some(at) = sexpr::find(via, "at").and_then(xy_point) else { continue };
         let net = net_ref(sexpr::find(via, "net"), net_names);
@@ -998,10 +1378,18 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let (from_layer, to_layer) = sexpr::find(via, "layers")
             .map(|l| (sexpr::txt(l, 1).unwrap_or("F.Cu").to_string(), sexpr::txt(l, 2).unwrap_or("B.Cu").to_string()))
             .unwrap_or_else(|| ("F.Cu".into(), "B.Cu".into()));
+        // `(tenting ..)`: an explicit per-via override of the board's via
+        // tenting (`PCB_VIA::IsTented`); `none` inherits the board setting.
+        if let Some(t) = sexpr::find(via, "tenting") {
+            let (front, back) = front_back_opt_bool(t);
+            if front.is_some() || back.is_some() {
+                via_tenting.push(ViaTenting { at, net: net.clone(), front, back });
+            }
+        }
         vias.push(Via { id: String::new(), net, at, drill, diameter: dia, from_layer, to_layer });
     }
 
-    (tracks, vias)
+    (tracks, vias, via_tenting)
 }
 
 // Track arcs go through `Track::new_arc` (eda_model), which keeps the true
@@ -1780,5 +2168,119 @@ mod tests {
         assert_eq!(t.stroke_width, 150);
         assert_eq!(t.justify, TextJustify::Left);
         assert!(t.mirror);
+    }
+
+    /// `(setup (pad_to_mask_clearance ..) (solder_mask_min_width ..)
+    /// (allow_soldermask_bridges_in_footprints ..) (tenting ..))`, in both the
+    /// KiCad 9 `(front yes)` and the legacy bare-token tenting grammar, plus
+    /// the project file's `solder_mask_to_copper_clearance`.
+    #[test]
+    fn imports_board_solder_mask_settings() {
+        let text = |tenting: &str| {
+            format!(
+                r#"(kicad_pcb (version 20241229) (generator "eda-kicad")
+                (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+                (setup (pad_to_mask_clearance 0.05) (solder_mask_min_width 0.1) (allow_soldermask_bridges_in_footprints yes) {tenting})
+            )"#
+            )
+        };
+        let (_, model, _) = import_kicad_pcb(&text("(tenting (front yes) (back no))")).expect("parses");
+        let m = &model.board.solder_mask;
+        assert_eq!((m.expansion_um, m.min_width_um), (50, 100));
+        assert!(m.allow_bridges_in_footprints);
+        assert!(m.tent_vias_front && !m.tent_vias_back);
+
+        let (_, legacy, _) = import_kicad_pcb(&text("(tenting front)")).expect("parses");
+        assert!(legacy.board.solder_mask.tent_vias_front && !legacy.board.solder_mask.tent_vias_back);
+
+        // No (tenting ..) at all: KiCad's factory default tents both sides.
+        let (_, none, _) = import_kicad_pcb(r#"(kicad_pcb (version 20241229) (layers (0 "F.Cu" signal) (31 "B.Cu" signal)))"#).expect("parses");
+        assert!(none.board.solder_mask.is_default());
+
+        let (_, mut with_pro, _) = import_kicad_pcb(&text("(tenting (front yes) (back yes))")).expect("parses");
+        merge_project_design_rules(&mut with_pro, r#"{"board":{"design_settings":{"rules":{"solder_mask_to_copper_clearance":0.07}}}}"#);
+        assert_eq!(with_pro.board.solder_mask.to_copper_clearance_um, 70);
+    }
+
+    /// Per-pad layer sets and mask margins, footprint margin / allow-bridges /
+    /// net-tie groups, via tenting, footprint silk+mask graphics (in board
+    /// space) and mask-only aperture pads.
+    #[test]
+    fn imports_pad_footprint_via_and_graphic_mask_facts() {
+        let text = r#"(kicad_pcb (version 20241229) (generator "eda-kicad")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (net 0 "") (net 1 "A") (net 2 "B")
+            (footprint "lib:fp" (layer "F.Cu") (uuid "u1") (at 10 20 90)
+                (solder_mask_margin 0.03)
+                (attr smd allow_soldermask_bridges)
+                (net_tie_pad_groups "1, 2")
+                (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+                (fp_line (start -1 0) (end 1 0) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+                (fp_rect (start 0 0) (end 2 1) (stroke (width 0.1) (type solid)) (fill yes) (layer "F.Mask"))
+                (fp_line (start 0 0) (end 1 0) (stroke (width 0.1) (type solid)) (layer "F.Fab"))
+                (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.SilkS") (solder_mask_margin 0.02) (net 1 "A"))
+                (pad "2" thru_hole circle (at 1 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 2 "B"))
+                (pad "3" smd circle (at 3 0) (size 1 1) (layers "F.Mask") (pintype "free")))
+            (via (at 5 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (tenting (front no) (back none)) (net 1))
+            (via (at 6 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (tenting none) (net 1))
+        )"#;
+        let (design, _model, notes) = import_kicad_pcb(text).expect("parses");
+        // The mask-only pad is not copper: counted as skipped, kept as an aperture.
+        assert_eq!(notes.non_copper_pads_skipped, 1);
+        let dr = design.drawings.expect("drawings");
+        let fp = dr.footprint_extras.iter().find(|e| e.id == "U1").expect("extra for U1");
+        assert_eq!(fp.solder_mask_margin, Some(30));
+        assert!(fp.allow_soldermask_bridges);
+        assert_eq!(fp.net_tie_pad_groups, vec!["1, 2".to_string()]);
+        assert_eq!(fp.pads.len(), 2);
+        assert_eq!(fp.pads[0].solder_mask_margin, Some(20));
+        assert_eq!(fp.pads[0].layers, vec!["F.Cu".to_string(), "F.Mask".to_string(), "F.SilkS".to_string()]);
+        assert_eq!(fp.pads[1].layers, vec!["B.Cu".to_string(), "B.Mask".to_string(), "F.Cu".to_string(), "F.Mask".to_string()]);
+        assert_eq!(fp.pads[1].solder_mask_margin, None);
+
+        // Silk line and mask rect only (the F.Fab line is not kept), rotated 90 deg
+        // (file angle 90 = counter-clockwise) about (10, 20): local (-1, 0) -> (10, 21).
+        assert_eq!(fp.graphics.iter().filter(|g| g.pad_number.is_none()).count(), 2);
+        let silk = fp.graphics.iter().find(|g| g.shape.layer() == "F.SilkS").expect("silk line");
+        let pts = silk.shape.points();
+        assert_eq!(pts, vec![Point { x: 10_000, y: 21_000 }, Point { x: 10_000, y: 19_000 }]);
+        let mask = fp.graphics.iter().find(|g| g.shape.layer() == "F.Mask" && g.pad_number.is_none()).expect("mask rect");
+        assert!(matches!(&mask.shape, Shape::Polygon { filled: true, pts, .. } if pts.len() == 4));
+        let aperture = fp.graphics.iter().find(|g| g.pad_number.as_deref() == Some("3")).expect("aperture pad");
+        assert_eq!(aperture.pin_type, "free");
+        assert_eq!(aperture.shape.layer(), "F.Mask");
+
+        // Via tenting: an explicit `no` is kept, `none` inherits (no entry).
+        assert_eq!(dr.via_tenting.len(), 1);
+        assert_eq!((dr.via_tenting[0].at, dr.via_tenting[0].front, dr.via_tenting[0].back), (Point { x: 5000, y: 5000 }, Some(false), None));
+    }
+
+    /// Visible footprint text and `gr_text` on silk: variables resolved,
+    /// `\n` a newline, hidden fields dropped, back-side anchor un-mirrored.
+    #[test]
+    fn imports_silk_text_with_layout_attributes() {
+        let text = r#"(kicad_pcb (version 20241229) (generator "eda-kicad")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (title_block (rev "v2"))
+            (net 0 "")
+            (footprint "lib:fp" (layer "B.Cu") (uuid "u1") (at 10 10)
+                (property "Reference" "TP4" (at 0 1 180) (layer "B.Fab") (hide yes))
+                (property "Value" "~{CLK}" (at 3.7 0 180) (layer "B.SilkS") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)))
+                (property "Datasheet" "" (at 0 0 0) (layer "B.Fab") (hide yes)))
+            (gr_text "REV ${REVISION}\nline2" (at 5 5 90) (layer "F.SilkS") (effects (font (size 1.5 1.2) (thickness 0.2) bold) (justify left bottom)))
+        )"#;
+        let (design, _model, _notes) = import_kicad_pcb(text).expect("parses");
+        let dr = design.drawings.expect("drawings");
+        let fp = &dr.footprint_extras[0];
+        assert_eq!(fp.texts.len(), 1, "{:?}", fp.texts);
+        let t = &fp.texts[0];
+        assert_eq!((t.text.as_str(), t.layer.as_str(), t.mirror, t.keep_upright, t.angle_file_mdeg), ("~{CLK}", "B.SilkS", true, true, 180_000));
+        // Back footprint: the file's local x is already mirrored, so +3.7 lands to the right.
+        assert_eq!(t.at, Point { x: 13_700, y: 10_000 });
+        assert_eq!(dr.silk_texts.len(), 1);
+        let g = &dr.silk_texts[0];
+        assert_eq!(g.text, "REV v2\nline2");
+        assert_eq!((g.size, g.thickness, g.halign, g.valign, g.keep_upright, g.bold), ((1500, 1200), 200, -1, 1, false, true));
+        assert_eq!(g.angle_file_mdeg, 90_000);
     }
 }

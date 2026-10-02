@@ -90,6 +90,7 @@ mod tests {
             shapes: vec![],
             texts: vec![],
             silk_items: vec![],
+            mask: Default::default(),
         };
         (board, rules)
     }

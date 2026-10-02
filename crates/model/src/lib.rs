@@ -249,6 +249,55 @@ pub struct BoardRules {
     /// geometrically indistinguishable from the point list by itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outline_closed: Option<bool>,
+    /// Board-level solder-mask settings (`BOARD_DESIGN_SETTINGS`'s
+    /// `m_SolderMaskExpansion`/`m_SolderMaskMinWidth`/
+    /// `m_SolderMaskToCopperClearance`/`m_AllowSoldermaskBridgesInFPs`/
+    /// `m_TentVias*`), read by `eda_drc`'s solder-mask provider.
+    #[serde(default, skip_serializing_if = "SolderMaskRules::is_default")]
+    pub solder_mask: SolderMaskRules,
+}
+
+/// The board-wide solder-mask settings `drc_test_provider_solder_mask.cpp`
+/// consumes. Defaults are KiCad's factory values (all margins 0, vias
+/// tented on both sides -- `BOARD_DESIGN_SETTINGS::BOARD_DESIGN_SETTINGS`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SolderMaskRules {
+    /// `m_SolderMaskExpansion`: `(setup (pad_to_mask_clearance ..))`.
+    #[serde(default)]
+    pub expansion_um: ir::Um,
+    /// `m_SolderMaskMinWidth`: `(setup (solder_mask_min_width ..))` -- the
+    /// "web width" the bridge test and whole-board-mask silk test use.
+    #[serde(default)]
+    pub min_width_um: ir::Um,
+    /// `m_SolderMaskToCopperClearance`: `.kicad_pro`
+    /// `rules.solder_mask_to_copper_clearance`.
+    #[serde(default)]
+    pub to_copper_clearance_um: ir::Um,
+    /// `m_AllowSoldermaskBridgesInFPs`.
+    #[serde(default)]
+    pub allow_bridges_in_footprints: bool,
+    /// `m_TentViasFront` / `m_TentViasBack` (default true).
+    #[serde(default = "d_true")]
+    pub tent_vias_front: bool,
+    #[serde(default = "d_true")]
+    pub tent_vias_back: bool,
+}
+
+fn d_true() -> bool {
+    true
+}
+
+impl Default for SolderMaskRules {
+    fn default() -> Self {
+        SolderMaskRules { expansion_um: 0, min_width_um: 0, to_copper_clearance_um: 0, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true }
+    }
+}
+
+impl SolderMaskRules {
+    pub fn is_default(&self) -> bool {
+        *self == SolderMaskRules::default()
+    }
 }
 
 /// One `(rule ...)` block from a `.kicad_dru` file
@@ -639,7 +688,7 @@ impl Default for BoardRules {
             annular_width_min_um: d_annular_width_min(), min_silk_text_height_um: d_min_silk_text_height(), min_silk_text_thickness_um: d_min_silk_text_thickness(),
             track_width_min_um: d_track_width_min(), min_clearance_um: 0, via_diameter_min_um: d_via_diameter_min(), via_drill_min_um: d_via_drill_min(),
             rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(), outline_closed: None,
-            copper_edge_clearance_um: None,
+            copper_edge_clearance_um: None, solder_mask: SolderMaskRules::default(),
         }
     }
 }

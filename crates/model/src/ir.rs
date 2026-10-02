@@ -1518,6 +1518,16 @@ impl Shape {
             }
         }
     }
+    pub fn stroke_width(&self) -> Um {
+        match self {
+            Shape::Segment { stroke_width, .. } | Shape::Arc { stroke_width, .. } | Shape::Rect { stroke_width, .. } | Shape::Circle { stroke_width, .. } | Shape::Polygon { stroke_width, .. } => *stroke_width,
+        }
+    }
+    pub fn is_filled(&self) -> bool {
+        match self {
+            Shape::Segment { filled, .. } | Shape::Arc { filled, .. } | Shape::Rect { filled, .. } | Shape::Circle { filled, .. } | Shape::Polygon { filled, .. } => *filled,
+        }
+    }
     /// `PCB_SHAPE::SetFilled` (see `set_layer`'s doc).
     pub fn set_filled(&mut self, filled_value: bool) {
         match self {
@@ -1863,6 +1873,132 @@ pub struct DrawingsSection {
     /// re-applied automatically, matching source).
     #[serde(default)]
     pub dimension_settings: DimensionSettings,
+    /// Per-placed-footprint solder-mask/silk facts an imported board needs
+    /// but a library [`crate::Footprint`] + [`FootprintInstance`] cannot
+    /// carry (pad layer sets and mask margins, footprint graphics on the
+    /// silk/mask layers, net-tie groups, `allow_soldermask_bridges`). Read
+    /// only by `eda_drc`'s silk/solder-mask providers; empty for a design
+    /// that did not come from a `.kicad_pcb`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint_extras: Vec<FootprintExtra>,
+    /// Explicit per-via tenting overrides (`(via ... (tenting ..))`), looked
+    /// up by position+net; a via with no entry follows the board setting.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_tenting: Vec<ViaTenting>,
+    /// Board-level `gr_text` on a silkscreen layer with its full layout
+    /// attributes (vertical justification, glyph width/height), imported
+    /// from a `.kicad_pcb`. When non-empty these replace `texts`' silkscreen
+    /// entries in the silk DRC.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub silk_texts: Vec<FootprintText>,
+}
+
+/// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no
+/// field for. One entry per retained pad, in the same order as the
+/// footprint's `pads`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadMaskInfo {
+    /// Every layer named in the pad's `(layers ..)`, wildcards expanded
+    /// (`*.Cu` -> every copper layer, `*.Mask` -> `F.Mask`+`B.Mask`).
+    #[serde(default)]
+    pub layers: Vec<String>,
+    /// `(solder_mask_margin ..)`: the pad's own margin override
+    /// (`PADSTACK::SolderMaskMargin`); `None` inherits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solder_mask_margin: Option<Um>,
+    /// `(tenting ..)` per outer side (`PADSTACK::*OuterLayers().has_solder_mask`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tent_front: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tent_back: Option<bool>,
+    /// `(pintype "..")`, e.g. `"free"` (see `PAD::IsFreePad`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pin_type: String,
+}
+
+/// A footprint-owned graphic (or mask-only pad) in board space.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintGraphic {
+    pub shape: Shape,
+    /// `PCB_SHAPE::m_solderMaskMargin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solder_mask_margin: Option<Um>,
+    /// `Some(number)` when this is really a pad that has no copper layer
+    /// (a mask-only aperture pad), which KiCad models as `PCB_PAD_T`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pad_number: Option<String>,
+    /// Net of a mask-only pad (empty = none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub net: String,
+    /// `(pintype ..)` of a mask-only pad.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pin_type: String,
+}
+
+/// See [`DrawingsSection::footprint_extras`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintExtra {
+    /// The footprint instance's reference designator.
+    pub id: String,
+    /// Footprint-level `(solder_mask_margin ..)` (`GetLocalSolderMaskMargin`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solder_mask_margin: Option<Um>,
+    /// `(attr .. allow_soldermask_bridges)`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_soldermask_bridges: bool,
+    /// `(net_tie_pad_groups "1,2" "3")`, verbatim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub net_tie_pad_groups: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pads: Vec<PadMaskInfo>,
+    /// Footprint graphics on silk/mask layers, board space.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub graphics: Vec<FootprintGraphic>,
+    /// Visible footprint text (reference/value/user) on silk layers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<FootprintText>,
+}
+
+/// A visible footprint text item (`PCB_FIELD`/`PCB_TEXT` parented to a
+/// footprint) on a silkscreen layer, with everything `EDA_TEXT::
+/// GetEffectiveTextShape` needs to lay out its stroke-font glyphs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintText {
+    /// Shown text, `${REFERENCE}`/`${VALUE}` already resolved.
+    pub text: String,
+    pub layer: String,
+    /// Anchor in board space.
+    pub at: Point,
+    /// The file's absolute angle, KiCad's sign convention (counter-clockwise
+    /// positive), millidegrees.
+    pub angle_file_mdeg: i64,
+    pub size: (Um, Um),
+    /// `(thickness ..)` as written (0 = unset).
+    pub thickness: Um,
+    /// `-1` left, `0` centre, `1` right.
+    pub halign: i8,
+    /// `-1` top, `0` centre, `1` bottom.
+    pub valign: i8,
+    pub mirror: bool,
+    /// `PCB_TEXT::IsKeepUpright` (footprint text default).
+    pub keep_upright: bool,
+    pub bold: bool,
+}
+
+/// See [`DrawingsSection::via_tenting`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViaTenting {
+    pub at: Point,
+    pub net: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub front: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub back: Option<bool>,
 }
 
 impl DrawingsSection {

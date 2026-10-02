@@ -122,7 +122,7 @@ mod tests {
     }
 
     fn empty_board() -> DrcBoard {
-        DrcBoard { layers: vec![], outline: vec![], pads: vec![], tracks: vec![], vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![] }
+        DrcBoard { layers: vec![], outline: vec![], pads: vec![], tracks: vec![], vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() }
     }
 
     #[test]

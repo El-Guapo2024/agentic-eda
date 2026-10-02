@@ -233,7 +233,7 @@ mod tests {
     use eda_model::PadKind;
 
     fn empty_board() -> DrcBoard {
-        DrcBoard { layers: vec!["F.Cu".into(), "B.Cu".into()], outline: vec![], pads: vec![], tracks: vec![], vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![] }
+        DrcBoard { layers: vec!["F.Cu".into(), "B.Cu".into()], outline: vec![], pads: vec![], tracks: vec![], vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() }
     }
 
     fn rect_keepout(id: &str, layer: &str, x0: i64, y0: i64, x1: i64, y1: i64) -> DrcKeepout {

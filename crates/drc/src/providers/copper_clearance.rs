@@ -439,6 +439,13 @@ fn test_item_against_zone(ctx: &Ctx, layer: &str, item: Item, item_shape: &Shape
 }
 
 pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
+    let fills = crate::fill::fill_all_zones(board, rules);
+    check_with_fills(board, rules, &fills)
+}
+
+/// [`check`] with the zone fills already computed (`run_with` shares one
+/// `fill_all_zones` pass between this provider and the solder-mask one).
+pub fn check_with_fills(board: &DrcBoard, rules: &BoardRules, fills: &FillResults) -> Vec<DrcViolation> {
     let mut out = Vec::new();
     let mut limits = Limits::new();
     // `DRC_RTREE` queries are bounded by one run-wide worst-case clearance
@@ -446,7 +453,6 @@ pub fn check(board: &DrcBoard, rules: &BoardRules) -> Vec<DrcViolation> {
     // worst_case_clearance`'s doc comment) -- the exact-pair clearance is
     // still resolved per pair.
     let worst_clearance = constraints::worst_case_clearance(rules);
-    let fills = crate::fill::fill_all_zones(board, rules);
     // Compiled once per board, reused for every pair -- see
     // `constraints::CompiledClearanceRules`'s doc comment.
     let compiled_rules = constraints::CompiledClearanceRules::new(rules);
@@ -601,7 +607,7 @@ mod tests {
     use eda_model::ir::{Point, Side};
 
     fn empty_board(tracks: Vec<DrcTrackSeg>, pads: Vec<DrcPad>) -> DrcBoard {
-        DrcBoard { layers: vec!["F.Cu".into()], outline: vec![], pads, tracks, vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![] }
+        DrcBoard { layers: vec!["F.Cu".into()], outline: vec![], pads, tracks, vias: vec![], zones: vec![], keepouts: vec![], footprints: vec![], shapes: vec![], texts: vec![], silk_items: vec![], mask: Default::default() }
     }
 
     fn seg(id: &str, net: Option<&str>, a: (i64, i64), b: (i64, i64)) -> DrcTrackSeg {
