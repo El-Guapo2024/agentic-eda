@@ -803,7 +803,14 @@ export function useActionRunner() {
     // is pcbnew's plain "Plot..." menu item, which opens the same dialog
     // generateGerbers does in real KiCad.
     m.set("pcbnew.EditorControl.generateGerbers", pcbOnly(() => dispatch({ type: "SET_PLOT_DIALOG_OPEN", open: true })));
-    m.set("common.Control.plot", pcbOnly(() => dispatch({ type: "SET_PLOT_DIALOG_OPEN", open: true })));
+    // `common.Control.plot` (ACTIONS::plot) is shared by both editors' File
+    // menus, so it is tab-dispatched: the Gerber Plot dialog on the PCB tab,
+    // eeschema's DIALOG_PLOT_SCHEMATIC (PlotSchematicDialog.tsx) on the
+    // Schematic tab. The other tabs have no plot.
+    m.set("common.Control.plot", () => {
+      if (state.tab === "pcb") dispatch({ type: "SET_PLOT_DIALOG_OPEN", open: true });
+      else if (state.tab === "schematic") dispatch({ type: "SET_SCH_PLOT_DIALOG_OPEN", open: true });
+    });
     m.set("pcbnew.EditorControl.generateDrillFiles", pcbOnly(() => dispatch({ type: "SET_GENERATE_DRILL_DIALOG_OPEN", open: true })));
     m.set("pcbnew.EditorControl.generatePosFile", pcbOnly(() => dispatch({ type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN", open: true })));
 
@@ -943,6 +950,8 @@ export function useActionRunner() {
     // `Ctrl+A`: opens AnnotateDialog.tsx (scope/order/reset options) --
     // the dialog itself issues the real `annotate` Cmd on confirm.
     m.set("eeschema.EditorControl.annotate", schematicOnly(() => dispatch({ type: "SET_ANNOTATE_DIALOG_OPEN", open: true })));
+    // File > Export > Netlist... -- DIALOG_EXPORT_NETLIST, see ExportNetlistDialog.tsx.
+    m.set("eeschema.EditorControl.exportNetlist", schematicOnly(() => dispatch({ type: "SET_EXPORT_NETLIST_DIALOG_OPEN", open: true })));
 
     // Symbol Fields Table (`editSymbolFields`), Schematic Setup > ERC pin
     // map (`schematicSetup`) and Find / Find and Replace / Find Next /

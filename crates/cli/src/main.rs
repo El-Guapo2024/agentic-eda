@@ -24,6 +24,7 @@ mod sch_api;
 mod fab_cmd;
 mod import_kicad;
 mod route_api;
+mod sch_output_api;
 mod studio;
 mod tune_api;
 

@@ -45,6 +45,8 @@ import { SymbolFieldsTableDialog } from "./components/SymbolFieldsTableDialog";
 import { FindReplaceDialog } from "./components/FindReplaceDialog";
 import { SchematicSetupDialog } from "./components/SchematicSetupDialog";
 import { PlotDialog } from "./components/PlotDialog";
+import { PlotSchematicDialog } from "./components/PlotSchematicDialog";
+import { ExportNetlistDialog } from "./components/ExportNetlistDialog";
 import { GenerateDrillDialog } from "./components/GenerateDrillDialog";
 import { FootprintPositionDialog } from "./components/FootprintPositionDialog";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
@@ -209,6 +211,8 @@ function StudioFrame() {
       <FindReplaceDialog />
       <SchematicSetupDialog />
       <PlotDialog />
+      <PlotSchematicDialog />
+      <ExportNetlistDialog />
       <GenerateDrillDialog />
       <FootprintPositionDialog />
     </div>
