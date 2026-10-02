@@ -379,14 +379,29 @@ pub fn resolve_library_symbols(model: &mut ConstraintModel, lib_root: &Path) -> 
 /// style's own sub-block rather than left out, so it actually appears
 /// under whichever alternate style(s) exist.
 pub fn export_kicad_sym(sym: &eda_model::ir::LibrarySymbol) -> String {
+    export_kicad_sym_library(&[sym])
+}
+
+/// The whole project symbol library as one `.kicad_sym` (`eeschema.SymbolLibraryControl.saveLibraryAs`, Ctrl+Shift+S):
+/// one `(kicad_symbol_lib ...)` holding every symbol, each written exactly as [`export_kicad_sym`] writes a single one.
+pub fn export_kicad_sym_library(syms: &[&eda_model::ir::LibrarySymbol]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    writeln!(out, "(kicad_symbol_lib (version 20231120) (generator \"eda\") (generator_version \"1.0\")").unwrap();
+    for sym in syms {
+        write_symbol(&mut out, sym);
+    }
+    writeln!(out, ")").unwrap();
+    out
+}
+
+fn write_symbol(out: &mut String, sym: &eda_model::ir::LibrarySymbol) {
     use std::fmt::Write as _;
 
     let bare_name = sym.lib_id.rsplit(':').next().unwrap_or(sym.lib_id.as_str());
     let yn = |b: bool| if b { "yes" } else { "no" };
     let max_style: u32 = if sym.has_alternate_body_style { 2 } else { 1 };
 
-    let mut out = String::new();
-    writeln!(out, "(kicad_symbol_lib (version 20231120) (generator \"eda\") (generator_version \"1.0\")").unwrap();
     writeln!(out, "\t(symbol {}", crate::sexpr_str(bare_name)).unwrap();
     writeln!(out, "\t\t(pin_numbers (hide {}))", yn(sym.pin_numbers_hidden)).unwrap();
     writeln!(out, "\t\t(pin_names (offset {}) (hide {}))", crate::fmt_mm_f(sym.pin_name_offset_mm), yn(sym.pin_names_hidden)).unwrap();
@@ -402,18 +417,18 @@ pub fn export_kicad_sym(sym: &eda_model::ir::LibrarySymbol) -> String {
         }
         writeln!(out, ")").unwrap();
     };
-    prop(&mut out, "Reference", if sym.reference_prefix.is_empty() { "U" } else { &sym.reference_prefix }, 5.08, false);
-    prop(&mut out, "Value", bare_name, 2.54, false);
-    prop(&mut out, "Footprint", "", 0.0, true);
-    prop(&mut out, "Datasheet", &sym.datasheet, 0.0, true);
+    prop(out, "Reference", if sym.reference_prefix.is_empty() { "U" } else { &sym.reference_prefix }, 5.08, false);
+    prop(out, "Value", bare_name, 2.54, false);
+    prop(out, "Footprint", "", 0.0, true);
+    prop(out, "Datasheet", &sym.datasheet, 0.0, true);
     if !sym.description.is_empty() {
-        prop(&mut out, "Description", &sym.description, 0.0, true);
+        prop(out, "Description", &sym.description, 0.0, true);
     }
     if !sym.keywords.is_empty() {
-        prop(&mut out, "ki_keywords", &sym.keywords, 0.0, true);
+        prop(out, "ki_keywords", &sym.keywords, 0.0, true);
     }
     if !sym.footprint_filters.is_empty() {
-        prop(&mut out, "ki_fp_filters", &sym.footprint_filters.join(" "), 0.0, true);
+        prop(out, "ki_fp_filters", &sym.footprint_filters.join(" "), 0.0, true);
     }
 
     for style in 1..=max_style {
@@ -427,18 +442,16 @@ pub fn export_kicad_sym(sym: &eda_model::ir::LibrarySymbol) -> String {
         for unit in units {
             writeln!(out, "\t\t(symbol \"{bare_name}_{unit}_{style}\"").unwrap();
             for g in sym.graphics.iter().filter(|g| g.unit() == unit && (g.body_style() == 0 || g.body_style() == style)) {
-                write_symbol_graphic(&mut out, g);
+                write_symbol_graphic(out, g);
             }
             for p in sym.pins.iter().filter(|p| p.unit == unit && (p.body_style == 0 || p.body_style == style)) {
-                write_symbol_pin(&mut out, p);
+                write_symbol_pin(out, p);
             }
             writeln!(out, "\t\t)").unwrap();
         }
     }
 
     writeln!(out, "\t)").unwrap();
-    writeln!(out, ")").unwrap();
-    out
 }
 
 fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic) {
@@ -735,6 +748,39 @@ mod tests {
         assert_eq!(back.description, "a test symbol");
         assert_eq!(back.graphics.len(), 1, "the shared (unit 0) rectangle");
         assert!(matches!(back.graphics[0], eda_model::symbol::SymbolGraphic::Rectangle { .. }));
+    }
+
+    #[test]
+    fn export_kicad_sym_library_writes_every_symbol_into_one_file_that_parses_back() {
+        let mk = |lib_id: &str, pin: &str| eda_model::ir::LibrarySymbol {
+            lib_id: lib_id.into(),
+            reference_prefix: "U".into(),
+            description: String::new(),
+            keywords: String::new(),
+            datasheet: String::new(),
+            power: false,
+            in_bom: true,
+            on_board: true,
+            pin_numbers_hidden: false,
+            pin_names_hidden: false,
+            pin_name_offset_mm: 0.508,
+            unit_count: 1,
+            has_alternate_body_style: false,
+            footprint_filters: vec![],
+            graphics: vec![],
+            pins: vec![lib_pin(pin, 1, 1, 0.0, 5.08, false)],
+            published: false,
+        };
+        let (a, b) = (mk("eda:Alpha", "1"), mk("eda:Beta", "7"));
+        let text = export_kicad_sym_library(&[&a, &b]);
+        assert_eq!(text.matches("(kicad_symbol_lib").count(), 1, "one library header, not one per symbol");
+        let table = parse_symbol_library(&text).expect("the library file parses");
+        assert!(table.get("Alpha").unwrap().pins.iter().any(|p| p.number == "1"));
+        assert!(table.get("Beta").unwrap().pins.iter().any(|p| p.number == "7"));
+        // one symbol alone is the same text as before
+        assert_eq!(export_kicad_sym(&a), export_kicad_sym_library(&[&a]));
+        // an empty library is a valid, empty file
+        assert!(parse_symbol_library(&export_kicad_sym_library(&[])).expect("empty library parses").is_empty());
     }
 
     #[test]

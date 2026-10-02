@@ -214,7 +214,8 @@ fn visit(design: &Design, model: &ConstraintModel, sch: &SchematicSection, path:
         }
     }
 
-    let nets = reconcile_sheet(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects);
+    let junction_points: Vec<Point> = sch.junctions.iter().map(|j| j.at).collect();
+    let nets = reconcile_sheet(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
     // Which net each child sheet's own pin landed on, read straight off the
     // now-reconciled geometry (`net_at_point`, shared with
@@ -257,7 +258,7 @@ fn visit(design: &Design, model: &ConstraintModel, sch: &SchematicSection, path:
             user_fields: sch.user_fields.clone(),
             title_block: sch.title_block.clone(),
             sheets: sch.sheets.clone(),
-            instance_overrides: Vec::new(),
+            instance_overrides: Vec::new(), junctions: Vec::new(), lines: Vec::new(),
             imported_from_kicad: sch.imported_from_kicad,
         },
         nets,
@@ -471,7 +472,7 @@ pub fn flatten(design: &Design, model: &ConstraintModel) -> Option<(SchematicSec
         user_fields: root.user_fields.clone(),
         title_block: root.title_block.clone(),
         sheets: root.sheets.clone(),
-        instance_overrides: Vec::new(),
+        instance_overrides: Vec::new(), junctions: Vec::new(), lines: Vec::new(),
         imported_from_kicad: root.imported_from_kicad,
     };
     for v in visited {
@@ -514,7 +515,7 @@ mod tests {
     }
 
     fn empty_sch(symbols: Vec<SymbolInstance>) -> SchematicSection {
-        SchematicSection { symbols, wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
+        SchematicSection { symbols, wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }
     }
 
     fn design_with(root: SchematicSection, screens: Map<String, SchematicSection>) -> Design {

@@ -92,6 +92,20 @@ symbol opens it in the Symbol Editor -- confirmed against
 `pcbnew`'s unrelated "Edit Footprint"; this task's own brief said Ctrl+E,
 corrected here against source).
 
+## Hotkeyed actions wired in the eeschema sweep (`docs/parity/UI-ACTIONS.md`)
+
+Three of the Symbol Editor's hotkeyed actions were unwired; all three are now
+registered in `useActionRunner.ts` (Symbol tab only) and checked in the browser pane:
+
+| Action | Status | KiCad file:function |
+|---|---|---|
+| `P` Place Pin (`eeschema.SymbolDrawing.placeSymbolPin`) | identical: arms the Pin tool (the hotkey again leaves it); each click places a pin whose number is the next free one after the pin just placed (`IncrementString`; a quick second click no longer re-reads a stale document and repeats the number -- `SymbolEditorCanvas.tsx` carries `lastPlacedPinRef` like the C++ tool's `m_lastPin`), the template (name, type, shape, length, orientation) carries from the last pin edited | `symbol_editor_pin_tool.cpp::PlacePin`, `SYMBOL_EDITOR_DRAWING_TOOLS` |
+| Ctrl+N New Symbol (`eeschema.SymbolLibraryControl.newSymbol`) | partial: an empty symbol is created in the project library and opened, named `Untitled` (`Untitled_1`, ... until unused) with no name dialog -- the project library is the only destination this studio has, so `DIALOG_LIB_NEW_SYMBOL` has nothing to ask. A name that is already taken is refused (`new_symbol` verb, undoable). Registered on the Symbol tab only, so it does not shadow `common.Control.new` | `symbol_editor/symbol_editor.cpp::SYMBOL_EDIT_FRAME::CreateNewSymbol` (`kicad-port/symEditActions.ts`); `Cmd::NewSymbol` |
+| Ctrl+Shift+S Save Library As (`eeschema.SymbolLibraryControl.saveLibraryAs`) | partial: downloads the whole project library as one derived `.kicad_sym` (`GET /api/symbol_library/export`, `eda_kicad::export_kicad_sym_library`); no file chooser, no library-table entry. Read-only like the single-symbol export, so no verb and no undo entry. `kicad-cli` loads the file the same way as any `.kicad_sym` | `symbol_editor/symbol_editor.cpp::SYMBOL_EDIT_FRAME::saveLibrary( aLibrary, aNewFile )` via `symbol_editor_control.cpp::Save` |
+
+Fixed on the way: `GET /api/symbol?lib_id=...` did not percent-decode `lib_id`, so a symbol could never be shown (`Device%3AR` matched nothing) -- the studio's Symbol tab now loads symbols
+(`crates/cli/src/studio.rs::query_value`).
+
 ## Known gaps (not fixed, scope-bounded)
 
 - DeMorgan alternate body style is authorable and exports correctly to

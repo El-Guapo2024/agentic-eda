@@ -54,9 +54,13 @@ import { useFpApi, useFpDispatch } from "../state/footprintEditorStore";
 import { arcRemoveLastPoint, arcToggleClockwise } from "../kicad-port/arcGeom";
 import { bezierRemoveLastPoint } from "../kicad-port/bezierGeom";
 import { planPack } from "../kicad-port/packFootprints";
-import { useSymApi } from "../state/symbolEditorStore";
+import { netNavigatorItems, stepNetItem, type NavSchematic } from "../kicad-port/netNavigator";
+import { repeatCmds } from "../kicad-port/schRepeat";
+import { nextReference } from "../kicad-port/nextReference";
+import { refDesPrefix } from "../kicad-port/packFootprints";
+import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
-import { hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
+import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 
 function canvasRect(): DOMRect | null {
@@ -74,10 +78,13 @@ export function useActionRunner() {
   const dispatch = useStudioDispatch();
   const state = useStudioState();
   const symApi = useSymApi();
+  const symDispatch = useSymDispatch();
   const fpApi = useFpApi();
   const fpDispatch = useFpDispatch();
   /** `m_afterItem` of find-next-marker (SCH_FIND_REPLACE_TOOL): the last ERC marker visited, so the next press continues from it. */
   const markerCursor = useRef<string | null>(null);
+  /** The net navigator's own tree selection (`m_netNavigator->GetSelection()`): which item of the highlighted net Tab/Shift+Tab last landed on. */
+  const netNavKey = useRef<string | null>(null);
 
   const registry = useMemo(() => {
     const m = new Map<string, () => void>();
@@ -141,6 +148,8 @@ export function useActionRunner() {
         if (state.tab === "schematic") {
           if (api.symbolById(id)) cmds.push({ op: "delete_symbol", id });
           else if (api.wireById(id)) cmds.push({ op: "delete_wire", id });
+          else if (state.schematic?.junctions?.some((j) => j.id === id)) cmds.push({ op: "delete_junction", id });
+          else if (state.schematic?.lines?.some((l) => l.id === id)) cmds.push({ op: "delete_sch_line", id });
         } else if (state.tab === "pcb") {
           if (locked.has(id)) continue;
           if (api.trackById(id)) cmds.push({ op: "delete_track", id });
@@ -2027,8 +2036,107 @@ export function useActionRunner() {
       });
     }
 
+    // ===================================================================
+    // The eeschema rows of the hotkeyed-and-missing sweep (docs/parity/
+    // UI-ACTIONS.md): net-item navigation, the schematic drawing/edit tools
+    // that were missing, and the Symbol Editor's own actions. Each cites the
+    // KiCad function it ports (eeschema/ at 8303b2ad). The Simulation rows,
+    // Import Graphics, Place Design Block and Autoplace Fields are recorded
+    // in tools/ui-parity-missing.json with the subsystem they need.
+    // ===================================================================
+    {
+      // Tab / Shift+Tab (nextNetItem / previousNetItem) -- SCH_SELECTION_TOOL::SelectNext/SelectPrevious -> SCH_EDIT_FRAME::SelectNextPrevNetNavigatorItem:
+      // only with a net highlighted and the selected item on it (`IsBrightened()`); selects the next/previous of the net's items, wrapping.
+      const stepNetNavigator = (forward: boolean) => () => {
+        if (state.tab !== "schematic" || !state.schematic || !state.netHighlight || state.selection.size === 0) return;
+        const s = state.schematic;
+        const nav: NavSchematic = {
+          pins: s.symbols.flatMap((sym) => (resolveLibSymbol(sym, s.lib_symbols)?.pins ?? []).map((p) => ({ ref: sym.id, number: p.pin.number, name: p.pin.name, tip: p.tip }))),
+          wires: s.wires,
+          labels: s.labels,
+          powerSymbols: s.power_symbols,
+          noConnects: s.no_connects,
+        };
+        const items = netNavigatorItems(nav, state.netHighlight, state.units);
+        const first = [...state.selection][0]!;
+        if (!items.some((it) => it.owner === first)) return;
+        const next = stepNetItem(items, netNavKey.current, first, forward);
+        if (!next) return;
+        netNavKey.current = next.key;
+        dispatch({ type: "SET_SELECTION", refs: [next.owner] });
+      };
+      m.set("eeschema.EditorControl.nextNetItem", stepNetNavigator(true));
+      m.set("eeschema.EditorControl.previousNetItem", stepNetNavigator(false));
+
+      // J (placeJunction) / I (drawLines) / S (drawSheet): arm the tool; SchematicView.tsx's onPointerDown owns the click behaviour.
+      m.set("eeschema.InteractiveDrawing.placeJunction", toggleSchTool("sch_junction"));
+      m.set("eeschema.InteractiveDrawingLineWireBus.drawLines", toggleSchTool("sch_line"));
+      m.set("eeschema.InteractiveDrawing.drawSheet", toggleSchTool("sch_sheet"));
+
+      // C (unfoldBus) -- SCH_LINE_WIRE_BUS_TOOL::UnfoldBus: with the cursor on a bus, pick one of its member nets (`BUS_UNFOLD_MENU`, a dialog here);
+      // a bus entry then roots on the bus at the cursor and a wire is drawn from its far end, the member's label going on the wire's end.
+      m.set(
+        "eeschema.InteractiveDrawingLineWireBus.unfoldBus",
+        schematicOnly(() => {
+          const c = state.cursorUm;
+          if (!sch || !c) return;
+          const bus = hitBus(sch, c.x, c.y, 10 / (state.schematicView.scale || 1), cursorSnapped() ?? undefined);
+          if (!bus) {
+            dispatch({ type: "TOAST", message: "Unfold from Bus: put the cursor on a bus first.", kind: "info" });
+            return;
+          }
+          if (bus.members.length === 0) {
+            dispatch({ type: "TOAST", message: `${bus.net} has no member nets to unfold.`, kind: "info" });
+            return;
+          }
+          dispatch({ type: "SET_BUS_UNFOLD_PICKER", picker: { bus: bus.net, entryAt: bus.at, members: bus.members } });
+        })
+      );
+
+      // Alt+S (swap) -- SCH_EDIT_TOOL::Swap: positions (and, for two instances of one library symbol, orientations) of the selected items are exchanged
+      // pairwise in selection order -- a Batch of `swap_sch_items`, one undo step.
+      m.set(
+        "eeschema.InteractiveEdit.swap",
+        schematicOnly(() => {
+          if (!sch) return;
+          const swappable = (id: string) => Boolean(api.symbolById(id) || sch.labels.some((l) => l.id === id) || sch.texts.some((t) => t.id === id) || sch.power_symbols.some((p) => p.id === id));
+          const ids = [...state.selection].filter(swappable);
+          if (ids.length < 2) return;
+          void api.cmdBatch(ids.slice(0, -1).map((a, i) => ({ op: "swap_sch_items" as const, a, b: ids[i + 1]! })));
+        })
+      );
+
+      // F1 (Insert off macOS) (repeatDrawItem) -- SCH_EDIT_TOOL::RepeatDrawItem: place another copy of what was last placed (see kicad-port/schRepeat.ts).
+      m.set(
+        "eeschema.InteractiveEdit.repeatDrawItem",
+        schematicOnly(() => {
+          if (!sch || state.schRepeat.length === 0) return;
+          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id)) });
+          if (cmds.length > 0) void api.cmdBatch(cmds);
+        })
+      );
+
+      // P (placeSymbolPin) -- SYMBOL_EDITOR_PIN_TOOL / SYMBOL_EDITOR_DRAWING_TOOLS::PlacePin: arms the Symbol Editor's pin tool (a click places a pin whose number
+      // and name take the next value, `IncrementString`); the hotkey again leaves it.
+      m.set("eeschema.SymbolDrawing.placeSymbolPin", () => {
+        if (state.tab !== "symbol") return;
+        symDispatch({ type: "SET_ACTIVE_TOOL", tool: symApi.getState().activeTool === "pin" ? "select" : "pin" });
+      });
+
+      // Ctrl+N (newSymbol) -- SYMBOL_EDIT_FRAME::CreateNewSymbol: an empty symbol, "Untitled" made unique, opened in the editor.
+      m.set("eeschema.SymbolLibraryControl.newSymbol", () => {
+        if (state.tab === "symbol") void symApi.newSymbol();
+      });
+
+      // Ctrl+Shift+S (saveLibraryAs) -- SYMBOL_EDIT_FRAME::saveLibrary( ..., aNewFile ): the library as a new `.kicad_sym`, here a download of the
+      // whole project library.
+      m.set("eeschema.SymbolLibraryControl.saveLibraryAs", () => {
+        if (state.tab === "symbol") void symApi.exportLibraryKicadSym();
+      });
+    }
+
     return m;
-  }, [api, dispatch, state, symApi, fpApi, fpDispatch]);
+  }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch]);
 
   // `registry.has(name)` alone used to be the whole check, but the
   // registry holds EVERY action's handler regardless of tab (every

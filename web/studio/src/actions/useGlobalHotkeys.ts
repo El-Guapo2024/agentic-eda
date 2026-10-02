@@ -50,6 +50,9 @@ export function useGlobalHotkeys() {
     // macOS arm (F1, which on every other platform is zoomIn's). Insert is the
     // real non-Mac default.
     add("Insert", "pcbnew.PointEditor.addCorner");
+    // eeschema.InteractiveEdit.repeatDrawItem: `#ifdef __WXMAC__ WXK_F1 #else WXK_INSERT` -- the extractor kept the macOS arm
+    // (F1, which off macOS is zoomIn's); Insert is the real non-Mac default (macOS keeps F1 from the table).
+    add("Insert", "eeschema.InteractiveEdit.repeatDrawItem");
     add("Ctrl+G", "common.Interactive.group");
     add("Ctrl+Shift+G", "common.Interactive.ungroup");
     return idx;

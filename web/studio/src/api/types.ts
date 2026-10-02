@@ -794,6 +794,16 @@ export type Cmd =
   | { op: "delete_no_connect"; id: string }
   | { op: "add_bus_entry"; at: PointXY; size: PointXY }
   | { op: "delete_bus_entry"; id: string }
+  /** `J` (eeschema.InteractiveDrawing.placeJunction): an explicit junction -- the item that joins wires which merely cross. */
+  | { op: "add_junction"; at: PointXY }
+  | { op: "delete_junction"; id: string }
+  /** `I` (eeschema.InteractiveDrawingLineWireBus.drawLines): a graphic polyline on the notes layer, never a wire. */
+  | { op: "add_sch_line"; pts: PointXY[]; width_um?: Um }
+  | { op: "delete_sch_line"; id: string }
+  /** `S` (eeschema.InteractiveDrawing.drawSheet): a hierarchical sheet symbol; `file` is a bare `.kicad_sch` name (extension added when missing). */
+  | { op: "add_sheet"; name: string; file: string; at: PointXY; size: [Um, Um] }
+  /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
+  | { op: "swap_sch_items"; a: string; b: string }
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
@@ -830,6 +840,8 @@ export type Cmd =
   | { op: "open_footprint_for_edit"; name: string }
   /** `pcbnew.ModuleEditor.newFootprint`: a fresh SMD footprint; refused when `name` already exists (the caller picks a unique one). */
   | { op: "new_footprint"; name: string }
+  /** `eeschema.SymbolLibraryControl.newSymbol`: a new, empty symbol in the project library (refused when the lib_id is taken). */
+  | { op: "new_symbol"; lib_id: string }
   | { op: "delete_library_footprint"; name: string }
   | ({ op: "edit_footprint_properties"; name: string } & FootprintPropertiesFields)
   | { op: "set_footprint_anchor"; name: string; at: PointXY }
@@ -1304,6 +1316,19 @@ export interface NoConnect {
   at: [Um, Um];
 }
 
+/** An explicit junction (`SCH_JUNCTION`, the `J` tool): joins every wire passing through or ending at `at`. */
+export interface SchJunction {
+  id: string;
+  at: [Um, Um];
+}
+
+/** A graphic polyline on the schematic's notes layer (`SCH_LINE` on `LAYER_NOTES`, the `I` tool): decoration, never part of a net. `width_um` 0 is the default line width. */
+export interface SchLine {
+  id: string;
+  pts: [Um, Um][];
+  width_um: Um;
+}
+
 export type LabelScope = "local" | "global" | "hierarchical";
 /** eeschema's LABEL_FLAG_SHAPE -- which outline the label's text sits inside. Meaningful for "global"/"hierarchical" only; a "local" label has no outline. */
 export type LabelShape = "input" | "output" | "bidirectional" | "tri_state" | "passive";
@@ -1317,6 +1342,8 @@ export interface SchematicWire {
   pts: [Um, Um][];
   /** True for a bus wire (GAPS.md #20) -- KiCad's `LAYER_BUS` vs `LAYER_WIRE`, same shape either way. */
   bus: boolean;
+  /** A bus's member nets (`D[0..3]` -> D0..D3, aliases and groups expanded) -- only sent for a bus wire; what the Unfold from Bus menu lists. */
+  members?: string[];
 }
 
 /** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
@@ -1392,6 +1419,10 @@ export interface Schematic {
   title_block: TitleBlock | null;
   /** Bus entries (GAPS.md #20) -- see `BusEntry`'s own doc. */
   bus_entries: BusEntry[];
+  /** Explicit junctions (`J`) -- see `SchJunction`. Absent from a backend built before they existed. */
+  junctions?: SchJunction[];
+  /** Graphic lines on the notes layer (`I`) -- see `SchLine`. Absent from a backend built before they existed. */
+  lines?: SchLine[];
   /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */

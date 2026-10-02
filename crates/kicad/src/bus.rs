@@ -303,7 +303,7 @@ mod tests {
         eda_model::ir::NetLabel { id: String::new(), net: net.into(), at, kind: eda_model::ir::LabelKind::Local }
     }
     fn empty_sch() -> SchematicSection {
-        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }
     }
 
     /// A plain wire whose endpoint coincides with a bus wire's endpoint,

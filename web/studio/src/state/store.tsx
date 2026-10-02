@@ -21,6 +21,7 @@ import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParity
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
+import { repeatSource } from "../kicad-port/schRepeat";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -101,6 +102,12 @@ export type ToolId =
    * so an imported file's own entry in any of the 4 diagonal quadrants
    * still round-trips/renders correctly). */
   | "sch_bus_entry"
+  /** `J` (eeschema.InteractiveDrawing.placeJunction): each click places an explicit junction where wires/pins meet -- see kicad-port/schJunction.ts. */
+  | "sch_junction"
+  /** `I` (eeschema.InteractiveDrawingLineWireBus.drawLines): the wire tool's click-to-add-point state machine, committing a graphic notes-layer line (`add_sch_line`) instead of a wire. */
+  | "sch_line"
+  /** `S` (eeschema.InteractiveDrawing.drawSheet): two clicks (opposite corners) size a hierarchical sheet, then its properties dialog names it. */
+  | "sch_sheet"
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
   | "sch_place_symbol"
   /** `common.Control.zoomTool` (Ctrl+F5, zoom_tool.cpp): drag a rectangle to zoom to it -- see components/ZoomAreaOverlay.tsx. */
@@ -131,6 +138,9 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_text: "Text: click where to place it",
   sch_no_connect: "No Connect: click a pin to flag it unconnected",
   sch_bus_entry: "Bus Entry: click a point on a bus to tap a wire into it",
+  sch_junction: "Junction: click where wires/pins meet (three or more directions) to join them, Esc to finish",
+  sch_line: "Line: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
+  sch_sheet: "Hierarchical Sheet: click one corner, then the opposite one, then name the sheet. Esc to cancel",
   sch_place_symbol: "Place Symbol: click where to place it",
   zoom_area: "Zoom to Selection Area: drag a rectangle (left button zooms in, right button zooms out), Esc to cancel",
 };
@@ -145,6 +155,8 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
  * is just the CURRENT segment's points since the last via/start.
  */
 export type DrawState =
+  /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
+  | { kind: "sheet"; start: [Um, Um] }
   | {
       kind: "route";
       net: string;
@@ -525,6 +537,14 @@ export interface StudioState {
   textDialog: { mode: "add"; at: [Um, Um] } | { mode: "edit"; id: string } | null;
   /** `L`/Ctrl+`L`/`H`: a just-clicked point waiting for LabelDialog to confirm its text (and, for global/hierarchical, its shape) before `add_label` commits -- same "draw/click first, dialog last" shape as `zonePending`. */
   schLabelPending: { at: [Um, Um]; scope: LabelScope } | null;
+  /** `S`: a sheet's two corners, waiting for SheetDialog to name it before `add_sheet` commits. */
+  schSheetPending: { at: [Um, Um]; size: [Um, Um] } | null;
+  /** `C` (`SCH_LINE_WIRE_BUS_TOOL::UnfoldBus`): the bus member chosen to break out of a bus -- the bus entry sits at `entryAt` and the wire being drawn from its far end takes a label of `net` when it finishes. */
+  busUnfold: { net: string; entryAt: [Um, Um]; size: [Um, Um] } | null;
+  /** `C`: the member nets of the bus under the cursor, waiting for BusUnfoldDialog to pick one (`BUS_UNFOLD_MENU`); `entryAt` is where the bus entry will root on the bus. */
+  busUnfoldPicker: { bus: string; entryAt: [Um, Um]; members: string[] } | null;
+  /** `F1`/Insert (`SCH_FRAME::m_items_to_repeat`): the Cmd(s) of the last thing placed, so "Repeat Last Item" can place a copy. */
+  schRepeat: Cmd[];
   /** `P`: a just-clicked point (already pin-snapped, see SchematicView.tsx's `pinSnapPoints`) waiting for PowerSymbolDialog to confirm which rail. */
   schPowerPending: { at: [Um, Um] } | null;
   /** `T`: a just-clicked point waiting for SchTextDialog to confirm the content. */
@@ -759,6 +779,10 @@ const initialState: StudioState = {
   currentViaPreset: null,
   textDialog: null,
   schLabelPending: null,
+  schSheetPending: null,
+  busUnfold: null,
+  busUnfoldPicker: null,
+  schRepeat: [],
   schPowerPending: null,
   schTextPending: null,
   symbolChooserOpen: false,
@@ -914,6 +938,10 @@ export type Action =
   | { type: "SET_CURRENT_VIA_PRESET"; preset: ViaPreset }
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
   | { type: "SET_SCH_LABEL_PENDING"; pending: StudioState["schLabelPending"] }
+  | { type: "SET_SCH_SHEET_PENDING"; pending: StudioState["schSheetPending"] }
+  | { type: "SET_BUS_UNFOLD"; unfold: StudioState["busUnfold"] }
+  | { type: "SET_BUS_UNFOLD_PICKER"; picker: StudioState["busUnfoldPicker"] }
+  | { type: "SET_SCH_REPEAT"; cmds: Cmd[] }
   | { type: "SET_SCH_POWER_PENDING"; pending: StudioState["schPowerPending"] }
   | { type: "SET_SCH_TEXT_PENDING"; pending: StudioState["schTextPending"] }
   | { type: "SET_LAST_LABEL_TEXT"; text: string }
@@ -1025,6 +1053,9 @@ function reducer(state: StudioState, action: Action): StudioState {
         textDialog: null,
         itemPropertiesId: null,
         schLabelPending: null,
+        schSheetPending: null,
+        busUnfold: null,
+        busUnfoldPicker: null,
         schPowerPending: null,
         schTextPending: null,
         armedSymbol: null,
@@ -1054,6 +1085,9 @@ function reducer(state: StudioState, action: Action): StudioState {
           dimensionEditId: null,
           textDialog: null,
           schLabelPending: null,
+          schSheetPending: null,
+          busUnfold: null,
+          busUnfoldPicker: null,
           schPowerPending: null,
           schTextPending: null,
           armedSymbol: null,
@@ -1209,6 +1243,14 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, currentViaPreset: action.preset };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.dialog };
+    case "SET_SCH_SHEET_PENDING":
+      return { ...state, schSheetPending: action.pending };
+    case "SET_BUS_UNFOLD":
+      return { ...state, busUnfold: action.unfold };
+    case "SET_BUS_UNFOLD_PICKER":
+      return { ...state, busUnfoldPicker: action.picker };
+    case "SET_SCH_REPEAT":
+      return { ...state, schRepeat: action.cmds };
     case "SET_SCH_LABEL_PENDING":
       return { ...state, schLabelPending: action.pending };
     case "SET_SCH_POWER_PENDING":
@@ -1558,6 +1600,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     async (cmd: Parameters<typeof postCmd>[0]) => {
       const reply = await postCmd(cmd, stateRef.current.strict);
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+      // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
+      if (reply.ok && stateRef.current.tab === "schematic") {
+        const source = repeatSource(cmd);
+        if (source) dispatch({ type: "SET_SCH_REPEAT", cmds: source });
+      }
       await refresh();
       return reply.ok;
     },

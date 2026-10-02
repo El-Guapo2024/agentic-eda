@@ -35,7 +35,10 @@ import { computeDragAttachment } from "./schematic/wireAttachment";
 import { nextReference } from "../kicad-port/nextReference";
 import { wireTail } from "../kicad-port/schLineMode";
 import { collectBoxSelection } from "./schematic/boxSelection";
-import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
+import { hitJunction, hitSchLine, hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
+import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
+import { sheetSize } from "../kicad-port/schSheet";
+import type { Cmd } from "../api/types";
 import "../styles/canvas.css";
 
 type DragState =
@@ -85,6 +88,16 @@ function pinSnapPoints(sch: Schematic): Array<[number, number]> {
   }
   for (const ps of sch.power_symbols) pts.push(ps.at);
   return pts;
+}
+
+/** The junction analysis's view of the sheet (`JUNCTION_HELPERS::AnalyzePoint`'s inputs): wire/bus polylines, pin tips (and power symbols), labels, bus entries. */
+function junctionModel(sch: Schematic): JunctionSchematic {
+  return {
+    wires: sch.wires.map((w) => ({ bus: w.bus, pts: w.pts })),
+    pinTips: pinSnapPoints(sch),
+    labels: sch.labels.map((l) => l.at),
+    busEntries: sch.bus_entries.map((be) => ({ a: be.at, b: [be.at[0] + be.size[0], be.at[1] + be.size[1]] as [number, number] })),
+  };
 }
 
 function nearestSnapPoint(pts: Array<[number, number]>, xUm: number, yUm: number, thresholdUm: number): [number, number] | null {
@@ -246,11 +259,31 @@ export function SchematicView() {
       }
       // GAPS.md #20: the bus tool shares this exact preview (same
       // `DrawState` kind), colored to match whichever is actually armed.
-      ctx.strokeStyle = layerColor(state.activeTool === "bus" ? "LAYER_BUS" : "LAYER_WIRE");
+      ctx.strokeStyle = layerColor(state.activeTool === "bus" ? "LAYER_BUS" : state.activeTool === "sch_line" ? "LAYER_NOTES" : "LAYER_WIRE");
       ctx.lineWidth = Math.max(150, (1 / state.schematicView.scale) * 1.5);
       ctx.beginPath();
       pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.stroke();
+      // `C` (Unfold from Bus): the bus entry already sits at its root and the wire runs from its far end -- show the stub too.
+      const unfold = state.busUnfold;
+      if (unfold) {
+        ctx.strokeStyle = layerColor("LAYER_BUS");
+        ctx.beginPath();
+        ctx.moveTo(unfold.entryAt[0], unfold.entryAt[1]);
+        ctx.lineTo(unfold.entryAt[0] + unfold.size[0], unfold.entryAt[1] + unfold.size[1]);
+        ctx.stroke();
+      }
+    }
+    // `S`: the sheet being sized, from its first corner to the (grid-snapped) cursor.
+    if (state.drawState?.kind === "sheet" && state.cursorUm) {
+      const start = state.drawState.start;
+      const c = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false });
+      const [w, h] = sheetSize(start, [c.x, c.y], GRID);
+      ctx.strokeStyle = layerColor("LAYER_SHEET");
+      ctx.lineWidth = Math.max(150, (1 / state.schematicView.scale) * 1.5);
+      ctx.setLineDash([4 / state.schematicView.scale, 3 / state.schematicView.scale]);
+      ctx.strokeRect(start[0], start[1], w, h);
+      ctx.setLineDash([]);
     }
     if (marquee) {
       const x0 = (marquee.x0 - state.schematicView.x) / state.schematicView.scale;
@@ -282,6 +315,37 @@ export function SchematicView() {
     return [p.x, p.y];
   };
 
+  /**
+   * Commit a finished click-to-add-point polyline: a wire or bus (`add_wire`), or -- with the Draw Lines tool -- a graphic line
+   * (`add_sch_line`). A wire drawn out of an "Unfold from Bus" (`C`, SCH_LINE_WIRE_BUS_TOOL::UnfoldBus) goes in with its bus entry
+   * and the member's label at the far end as ONE undo step, like the C++'s single commit.
+   */
+  const commitDrawn = (rawPts: readonly [number, number][]) => {
+    // A double-click lands its point twice (once per pointer-down); `SCH_LINE_WIRE_BUS_TOOL::finishSegments` drops the resulting
+    // zero-length segments (`IsNull()`), so collapse consecutive duplicates before committing.
+    const pts = rawPts.filter((p, i) => i === 0 || p[0] !== rawPts[i - 1]![0] || p[1] !== rawPts[i - 1]![1]);
+    if (pts.length < 2) return;
+    const points = pts.map(([x, y]) => ({ x, y }));
+    if (state.activeTool === "sch_line") {
+      void api.cmd({ op: "add_sch_line", pts: points });
+      return;
+    }
+    const wire: Cmd = { op: "add_wire", pts: points, bus: state.activeTool === "bus" };
+    const unfold = state.busUnfold;
+    if (!unfold) {
+      void api.cmd(wire);
+      return;
+    }
+    const end = points[points.length - 1]!;
+    void api.cmdBatch([
+      { op: "add_bus_entry", at: { x: unfold.entryAt[0], y: unfold.entryAt[1] }, size: { x: unfold.size[0], y: unfold.size[1] } },
+      wire,
+      { op: "add_label", net: unfold.net, at: end, kind: { scope: "local" } },
+    ]);
+    dispatch({ type: "SET_BUS_UNFOLD", unfold: null });
+    dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+  };
+
   return (
     <div
       ref={containerRef}
@@ -307,9 +371,13 @@ export function SchematicView() {
         if (e.button !== 0) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
 
-        if (state.activeTool === "wire" || state.activeTool === "bus") {
+        // `I` (Draw Lines) shares this exact click-to-add-point state machine with the wire and bus tools -- it differs only in
+        // what it commits (a graphic notes-layer line) and in connecting to nothing: no pin snap, no auto-finish on a pin
+        // (`GRID_GRAPHICS` instead of `GRID_WIRES` in `SCH_LINE_WIRE_BUS_TOOL::DrawSegments`).
+        if (state.activeTool === "wire" || state.activeTool === "bus" || state.activeTool === "sch_line") {
+          const isLine = state.activeTool === "sch_line";
           const thresholdUm = 400 / state.schematicView.scale;
-          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, thresholdUm) ?? snapToGrid(wx, wy);
+          const snapped = (isLine ? null : nearestSnapPoint(pinSnapPoints(sch), wx, wy, thresholdUm)) ?? snapToGrid(wx, wy);
           const draw = state.drawState;
           if (draw?.kind !== "wire") {
             dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [snapped] } });
@@ -322,13 +390,42 @@ export function SchematicView() {
           // pin auto-finishes the wire, same as a real click on a pin/
           // junction/other wire does in source -- this app only checks
           // the pin case (see this file's header comment for the rest).
-          const onPin = pinSnapPoints(sch).some(([px, py]) => px === snapped[0] && py === snapped[1]);
+          const onPin = !isLine && pinSnapPoints(sch).some(([px, py]) => px === snapped[0] && py === snapped[1]);
           if (onPin && next.pts.length >= 2) {
-            if (next.pts.length >= 2) api.cmd({ op: "add_wire", pts: next.pts.map(([x, y]) => ({ x, y })), bus: state.activeTool === "bus" });
+            commitDrawn(next.pts);
             dispatch({ type: "SET_DRAW_STATE", draw: null });
           } else {
             dispatch({ type: "SET_DRAW_STATE", draw: next });
           }
+          return;
+        }
+
+        // `J` (SCH_DRAWING_TOOLS::SingleClickPlace, SCH_JUNCTION_T): snaps to a wire vertex, a pin or a crossing; refuses a point where
+        // fewer than three directions meet ("Junction location contains no joinable wires and/or pins."); a click on an existing
+        // junction does nothing. The tool stays armed for the next one.
+        if (state.activeTool === "sch_junction") {
+          const model = junctionModel(sch);
+          const snapped = nearestSnapPoint(junctionCandidates(model) as Array<[number, number]>, wx, wy, 12 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          if ((sch.junctions ?? []).some((j) => j.at[0] === snapped[0] && j.at[1] === snapped[1])) return;
+          if (!isExplicitJunctionAllowed(model, snapped)) {
+            dispatch({ type: "TOAST", message: "Junction location contains no joinable wires and/or pins.", kind: "error" });
+            return;
+          }
+          void api.cmd({ op: "add_junction", at: { x: snapped[0], y: snapped[1] } });
+          return;
+        }
+
+        // `S` (SCH_DRAWING_TOOLS::DrawSheet): the first click is the sheet's top-left corner, the second sizes it (`sizeSheet`) and opens
+        // the properties dialog (SheetDialog.tsx).
+        if (state.activeTool === "sch_sheet") {
+          const c = snapToGrid(wx, wy);
+          const draw = state.drawState;
+          if (draw?.kind !== "sheet") {
+            dispatch({ type: "SET_DRAW_STATE", draw: { kind: "sheet", start: c } });
+            return;
+          }
+          dispatch({ type: "SET_DRAW_STATE", draw: null });
+          dispatch({ type: "SET_SCH_SHEET_PENDING", pending: { at: draw.start, size: sheetSize(draw.start, c, GRID) } });
           return;
         }
 
@@ -437,6 +534,15 @@ export function SchematicView() {
           return;
         }
         const thresholdUm = 400 / state.schematicView.scale;
+        // An explicit junction or a graphic line is selectable by a plain click (for Del) -- unlike a wire it has no net a plain click
+        // could highlight instead.
+        // Tight, screen-sized radii (the wire/net threshold above is a loose 400 px): a near miss must still reach the wire under it.
+        const placedItem = hitJunction(sch, wx, wy, Math.max(450, 8 / state.schematicView.scale)) ?? hitSchLine(sch, wx, wy, 6 / state.schematicView.scale);
+        if (placedItem) {
+          dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, placedItem, modifiers) });
+          dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
+          return;
+        }
         const wireId = hitWire(sch, wx, wy, thresholdUm);
         if (wireId && hasModifier(modifiers)) {
           // A modified click on a wire selects it (for Del) rather than
@@ -507,7 +613,7 @@ export function SchematicView() {
       onDoubleClick={() => {
         const draw = state.drawState;
         if (draw?.kind !== "wire") return;
-        if (draw.pts.length >= 2) api.cmd({ op: "add_wire", pts: draw.pts.map(([x, y]) => ({ x, y })), bus: state.activeTool === "bus" });
+        commitDrawn(draw.pts);
         dispatch({ type: "SET_DRAW_STATE", draw: null });
       }}
       onPointerUp={(e) => {

@@ -85,6 +85,8 @@ export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Sch
     sheets: s.sheets ?? [],
     sheet_path: s.sheet_path ?? [],
     bus_entries: s.bus_entries ?? [],
+    junctions: s.junctions ?? [],
+    lines: s.lines ?? [],
     // `bus` is new (GAPS.md #20) -- a wire from a backend built before it
     // existed has no such field at all, not even `false`.
     wires: (s.wires ?? []).map((w) => ({ ...w, bus: w.bus ?? false })),
@@ -330,12 +332,24 @@ export async function downloadSymbolKicadSym(libId: string): Promise<void> {
   const r = await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(libId)}`, { cache: "no-store" });
   if (!r.ok) throw new ApiError(await r.text());
   const text = await r.text();
+  const fileName = libId.includes(":") ? libId.split(":").slice(1).join(":") : libId;
+  saveTextAs(text, `${fileName}.kicad_sym`);
+}
+
+/** `Save Library As...`: every symbol of the project library in one `.kicad_sym` (`GET /api/symbol_library/export`). */
+export async function downloadSymbolLibraryKicadSym(): Promise<void> {
+  const r = await fetch("/api/symbol_library/export", { cache: "no-store" });
+  if (!r.ok) throw new ApiError(await r.text());
+  saveTextAs(await r.text(), "eda.kicad_sym");
+}
+
+/** A browser download of `text` as `fileName` (the web equivalent of a native Save dialog). */
+function saveTextAs(text: string, fileName: string): void {
   const blob = new Blob([text], { type: "text/plain" });
   const url = URL.createObjectURL(blob);
-  const fileName = libId.includes(":") ? libId.split(":").slice(1).join(":") : libId;
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${fileName}.kicad_sym`;
+  a.download = fileName;
   document.body.appendChild(a);
   a.click();
   a.remove();

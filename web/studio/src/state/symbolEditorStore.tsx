@@ -23,7 +23,8 @@
 // take plain mm numbers, matching the wire format directly).
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
-import { downloadSymbolKicadSym, fetchLibrarySymbol, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchLibrarySymbol, fetchSymbolEditorNames, postCmd, postRedo, postUndo } from "../api/client";
+import { uniqueSymbolLibId } from "../kicad-port/symEditActions";
 import type { ViewTransform } from "./store";
 
 export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text";
@@ -179,8 +180,12 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
 }
 
 export interface SymbolEditorApi {
+  /** The live state, read at call time (a hotkey handler's closure may be a render behind). */
+  getState: () => SymbolEditorState;
   /** Open (or re-open -- a no-op server-side if already open) a symbol by lib_id and start polling it. */
   openSymbol: (libId: string) => Promise<void>;
+  /** `eeschema.SymbolLibraryControl.newSymbol` (Ctrl+N): a new, empty symbol in the project library named `Untitled` (made unique), opened in the editor. */
+  newSymbol: () => Promise<void>;
   closeSymbol: () => void;
   refresh: () => Promise<void>;
   /** Any Cmd this file doesn't have a named wrapper for. Returns whether the backend accepted it. */
@@ -204,6 +209,8 @@ export interface SymbolEditorApi {
   updateOnBoard: () => Promise<void>;
   deleteSymbol: () => Promise<void>;
   exportKicadSym: () => Promise<void>;
+  /** `eeschema.SymbolLibraryControl.saveLibraryAs` (Ctrl+Shift+S): the whole project symbol library as one `.kicad_sym` download. */
+  exportLibraryKicadSym: () => Promise<void>;
 }
 
 const SymStateContext = createContext<SymbolEditorState | null>(null);
@@ -253,11 +260,28 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
   );
 
   const api: SymbolEditorApi = {
+    getState: () => stateRef.current,
     openSymbol: async (libId) => {
       dispatch({ type: "SET_LIB_ID", libId });
       await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
       const symbol = await fetchLibrarySymbol(libId);
       dispatch({ type: "SYMBOL_OK", symbol });
+    },
+    newSymbol: async () => {
+      let existing: string[] = [];
+      try {
+        existing = (await fetchSymbolEditorNames()).names;
+      } catch {
+        /* backend busy: Untitled is still very likely free; the verb refuses a duplicate name anyway */
+      }
+      const libId = uniqueSymbolLibId(existing);
+      const reply = await postCmd({ op: "new_symbol", lib_id: libId }, false);
+      if (!reply.ok) {
+        dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+        return;
+      }
+      dispatch({ type: "SET_LIB_ID", libId });
+      dispatch({ type: "SYMBOL_OK", symbol: await fetchLibrarySymbol(libId) });
     },
     closeSymbol: () => dispatch({ type: "SET_LIB_ID", libId: null }),
     refresh,
@@ -350,6 +374,13 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       if (!libId) return;
       try {
         await downloadSymbolKicadSym(libId);
+      } catch (e) {
+        dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
+      }
+    },
+    exportLibraryKicadSym: async () => {
+      try {
+        await downloadSymbolLibraryKicadSym();
       } catch (e) {
         dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
       }
