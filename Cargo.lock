@@ -501,6 +501,7 @@ dependencies = [
  "eda-gates",
  "eda-judge",
  "eda-kicad",
+ "eda-lint",
  "eda-model",
  "eda-ops",
  "eda-pns",
@@ -599,6 +600,7 @@ dependencies = [
  "eda-drc",
  "eda-engine",
  "eda-layout",
+ "eda-lint",
  "eda-model",
  "serde_json",
  "serde_yaml",
@@ -657,6 +659,7 @@ dependencies = [
  "eda-engine",
  "eda-freeroute",
  "eda-layout",
+ "eda-lint",
  "eda-model",
  "eda-place",
  "eda-render",
@@ -668,11 +671,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "eda-kicad-engine"
+version = "0.1.0"
+dependencies = [
+ "eda-kicad",
+ "eda-model",
+ "serde_json",
+]
+
+[[package]]
 name = "eda-layout"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "eda-lint"
+version = "0.1.0"
+dependencies = [
+ "eda-engine",
+ "eda-layout",
+ "eda-model",
+ "eda-render",
+ "serde",
 ]
 
 [[package]]

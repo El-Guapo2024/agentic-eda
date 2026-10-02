@@ -36,8 +36,6 @@ pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_f
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
-mod erc_style;
-
 mod erc;
 pub use erc::{check_erc, check_erc_excluding, default_pin_map, resolve_pin_map, Exclusions};
 

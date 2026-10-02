@@ -9,6 +9,7 @@ eda-model = { path = "../model" }
 eda-engine = { path = "../engine" }
 eda-layout = { path = "../layout" }
 eda-drc = { path = "../drc" }
+eda-lint = { path = "../lint" }
 
 [dev-dependencies]
 serde_yaml = { workspace = true }

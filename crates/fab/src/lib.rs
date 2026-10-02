@@ -118,82 +118,11 @@ pub fn cpl_csv(design: &Design) -> Result<String, Vec<CheckResult>> {
     Ok(out)
 }
 
-/// Gate the package before it is offered as one.
-///
-/// These are the defects a board house finds after you have paid: a
-/// placement with no part number is a line item the assembler cannot
-/// source, and a part number on nothing is a reel that arrives for a
-/// board with nowhere to put it. DRC cannot see either, because neither
-/// is geometry. Fails, it does not warn -- an unsourceable placement is
-/// not a note on an otherwise good order.
-pub fn check_fab(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
-    let mut out = Vec::new();
-    let Some(pl) = &design.placement else {
-        return vec![CheckResult::fail("fab_placement", "placement", "no placement: nothing to fabricate")];
-    };
-    for f in &pl.footprints {
-        match model.part(&f.id) {
-            None => out.push(CheckResult::fail(
-                "fab_unknown_part",
-                f.id.clone(),
-                format!("{} is placed on the board but is not in the netlist; the assembler has a position and no part", f.id),
-            )),
-            Some(p) => {
-                let has_mpn = p.mpn.as_deref().is_some_and(|m| !m.trim().is_empty());
-                if !has_mpn {
-                    out.push(CheckResult::fail(
-                        "fab_no_mpn",
-                        f.id.clone(),
-                        format!(
-                            "{} has no manufacturer part number, so nothing says what to solder there. \
-                             A value alone ({}) names a quantity, not a part you can order.",
-                            f.id,
-                            p.value.as_deref().unwrap_or("unset")
-                        ),
-                    ));
-                }
-                // Warn, not fail: JLCPCB can still be asked to source a
-                // part from its MPN by hand, so a missing LCSC number does
-                // not make the board unbuildable the way a missing MPN
-                // does. It does leave a blank "LCSC Part #" cell in the
-                // generated BOM, which is worth a flag before ordering.
-                let has_lcsc = p.lcsc.as_deref().is_some_and(|c| !c.trim().is_empty());
-                if !has_lcsc {
-                    out.push(CheckResult {
-                        check: "fab_no_lcsc".into(),
-                        status: eda_model::CheckStatus::Warn,
-                        location: Some(f.id.clone()),
-                        hint: Some(format!(
-                            "{} has no LCSC part number, so its \"LCSC Part #\" cell in the JLCPCB BOM will be blank; \
-                             look one up on jlcpcb.com before ordering{}.",
-                            f.id,
-                            p.mpn.as_deref().map(|m| format!(" (mpn {m})")).unwrap_or_default()
-                        )),
-                        detail: None,
-                    });
-                }
-            }
-        }
-    }
-    let placed: std::collections::HashSet<&str> = pl.footprints.iter().map(|f| f.id.as_str()).collect();
-    for p in &model.parts {
-        if !placed.contains(p.reference.as_str()) {
-            out.push(CheckResult::fail(
-                "fab_unplaced_part",
-                p.reference.clone(),
-                format!("{} is in the netlist but was never placed; it would be ordered and have nowhere to go", p.reference),
-            ));
-        }
-    }
-    out.sort_by(|a, b| (&a.check, &a.location).cmp(&(&b.check, &b.location)));
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use eda_model::ir::{FootprintInstance, PlacementSection, Point, Provenance};
-    use eda_model::{CheckStatus, Part};
+    use eda_model::Part;
 
     fn part(reference: &str, mpn: Option<&str>) -> Part {
         Part {
@@ -231,66 +160,6 @@ mod tests {
             drawings: None,
         };
         (design, model)
-    }
-
-    fn fails(c: &[CheckResult]) -> Vec<String> {
-        c.iter().filter(|c| c.status == CheckStatus::Fail).map(|c| c.check.clone()).collect()
-    }
-
-    #[test]
-    fn a_complete_package_passes() {
-        let (design, model) = fixture();
-        assert!(check_fab(&design, &model).is_empty());
-    }
-
-    #[test]
-    fn a_placement_with_no_part_number_fails() {
-        // The defect a board house finds after you have paid.
-        let (design, mut model) = fixture();
-        model.parts[0].mpn = None;
-        assert_eq!(fails(&check_fab(&design, &model)), vec!["fab_no_mpn"]);
-    }
-
-    #[test]
-    fn a_blank_part_number_fails_like_a_missing_one() {
-        let (design, mut model) = fixture();
-        model.parts[0].mpn = Some("   ".into());
-        assert_eq!(fails(&check_fab(&design, &model)), vec!["fab_no_mpn"]);
-    }
-
-    #[test]
-    fn a_missing_lcsc_number_warns_but_does_not_fail() {
-        // Unlike a missing mpn, a missing LCSC number does not make the
-        // board unbuildable -- JLCPCB can still be asked to source it by
-        // hand -- so it is a warning, not a blocker for the rest of the
-        // package.
-        let (design, mut model) = fixture();
-        model.parts[0].lcsc = None;
-        let checks = check_fab(&design, &model);
-        assert!(fails(&checks).is_empty(), "{checks:?}");
-        let warns: Vec<_> = checks.iter().filter(|c| c.status == CheckStatus::Warn).map(|c| c.check.as_str()).collect();
-        assert_eq!(warns, vec!["fab_no_lcsc"]);
-    }
-
-    #[test]
-    fn a_part_that_was_never_placed_fails() {
-        // It would be ordered and have nowhere to go.
-        let (design, mut model) = fixture();
-        model.parts.push(part("R3", Some("RC0402")));
-        assert_eq!(fails(&check_fab(&design, &model)), vec!["fab_unplaced_part"]);
-    }
-
-    #[test]
-    fn a_placement_with_no_part_fails() {
-        let (mut design, model) = fixture();
-        design.placement.as_mut().unwrap().footprints.push(FootprintInstance {
-            id: "R99".into(),
-            at: Point { x: 0, y: 0 },
-            rot: 0,
-            side: Side::Top,
-            label: Default::default(),
-        });
-        assert_eq!(fails(&check_fab(&design, &model)), vec!["fab_unknown_part"]);
     }
 
     #[test]

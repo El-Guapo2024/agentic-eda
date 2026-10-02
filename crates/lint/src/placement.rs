@@ -1,28 +1,17 @@
-//! Placement-quality checks with no KiCad equivalent, ported in from
-//! `eda_gates::pcb` (`placement_proximity`, `placement_decoupling`,
-//! `placement_stub_crossings`, `placement_board_use`,
-//! `placement_net_compactness`, `placement_edge_connector`,
-//! `placement_refdes_clear`) so this crate is the single design-rule
-//! authority the coordinator asked for, rather than splitting judgement
-//! between two engines. See the task report's gates-mapping table for the
-//! full (a)/(b)/(c) classification this was drawn from.
+//! Placement-quality checks. None of these has a KiCad equivalent:
+//! `placement_proximity`, `placement_decoupling`, `placement_stub_crossings`,
+//! `placement_board_use`, `placement_net_compactness`,
+//! `placement_edge_connector`, `placement_refdes_clear`. They read only the
+//! placement (courtyards, pad centres, the nets and rules in the model),
+//! never copper, so they are cheap enough to run on every step of the
+//! constructive placer and on every studio refresh.
 //!
-//! Kept under their original `eda_gates` check-name strings (as
-//! `ErrorType::key()`) on purpose: a future `eda_gates::pcb` compatibility
-//! shim can translate a [`crate::DrcViolation`] straight back into a
-//! `CheckResult` with the same name, so nothing downstream that filters on
-//! it (the repair loop, tests, the AI placer) has to change. Such a shim
-//! was built and reverted -- see this crate's top-level doc comment -- so
-//! `eda_gates::pcb` still carries its own, independent copy of this logic
-//! today; these providers are available to call directly (`eda check
-//! --drc`, `GET /api/drc`) but are not yet what `check_placement` uses.
-//!
-//! Every numeric threshold (`EDGE_CONNECTOR_MAX_GAP_UM`,
-//! `BOARD_USE_MAX_IMBALANCE`, etc.) is copied verbatim from
-//! `eda_gates::pcb`, not re-derived, so behaviour is identical to before
-//! the move.
+//! The check names, thresholds, messages and fix hints are the ones
+//! `eda_gates::pcb` has always used (the gates filter on the names); this
+//! module moved here from the DRC crate unchanged so nothing downstream
+//! notices.
 
-use crate::item::{DrcRefItem, DrcViolation, ErrorType, FixHint};
+use crate::finding::{Check, Finding, FixHint, Item};
 use eda_model::footprint::{edge_connector_gap, is_edge_connector};
 use eda_model::ir::{Design, Point, Um};
 use eda_model::{is_free_two_pin, ConstraintModel, PlacementRule};
@@ -48,28 +37,58 @@ fn orient(a: Point, b: Point, c: Point) -> i128 {
     (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128
 }
 
+/// Max gap, µm, between an edge connector's courtyard and the nearest
+/// board edge. The placer keeps a 600 µm routing margin around every
+/// courtyard, so a connector it pushes flush sits ~600 µm in.
 pub const EDGE_CONNECTOR_MAX_GAP_UM: i64 = 1500;
+/// Board-use limits: the union of all courtyards must be centred to
+/// within this fraction of the board dimension (|left − right| ≤ f·W) …
 pub const BOARD_USE_MAX_IMBALANCE: f64 = 0.15;
+/// … and must span at least this fraction of each board dimension.
 pub const BOARD_USE_MIN_SPAN: f64 = 0.5;
+/// Least share of the board the parts' own courtyards may cover, as a
+/// fraction of `solver.fit_board_utilization`. Span and imbalance only ask
+/// whether the parts are centred and spread; a board three times larger
+/// than it needs passes both, because shelf packing spreads parts right
+/// across it. This asks the remaining question -- whether the board was
+/// actually fitted to the parts -- and only where the intent asked for a
+/// fit. A board whose outline is fixed by an enclosure sets
+/// `fit_board_utilization: 0` and is exempt.
 pub const BOARD_USE_MIN_DENSITY_FRACTION: f64 = 0.5;
+/// See [`eda_model::DECOUPLING_MAX_GAP_UM`].
 pub const DECOUPLING_MAX_GAP_UM: i64 = eda_model::DECOUPLING_MAX_GAP_UM;
+/// A net's pad bounding-box half-perimeter may not exceed this multiple of
+/// its lower bound, `2·sqrt(Σ member courtyard areas)` — roughly the HPWL
+/// the net would have with its members packed touching.
 pub const NET_COMPACTNESS_MAX_RATIO: f64 = 1.6;
+/// Nets whose HPWL is below this, µm, are never called spread out.
 pub const NET_COMPACTNESS_FLOOR_UM: i64 = 6000;
+/// Nets with more members than this (GND, rails) are plane/fill nets that
+/// legitimately span the board; compactness is not judged on them. Nor is
+/// it judged on nets touching an edge connector: where those run is set
+/// by which edge the connector took (`placement_edge_connector`).
 pub const NET_COMPACTNESS_MAX_MEMBERS: usize = 6;
+/// Max number of crossing pairs of 2-pin nets (straight pad-to-pad
+/// stubs), as a fraction of the 2-pin net count, counting only pairs
+/// where *both* stubs end on a free 2-pin part (R/C/D/L…) — the crossing
+/// a reviewer sees as "swap those two parts", which trading the two free
+/// parts' places always removes. A stub between an IC and a connector, or
+/// to a pin on the far column of an IC, may have no crossing-free spot
+/// left once the IC's decoupling ring is placed; that is a two-layer
+/// routing matter, not a placement defect.
 pub const STUB_CROSSING_MAX_RATIO: f64 = 0.0;
 
-fn item(desc: impl Into<String>, pos: Point, id: impl Into<String>) -> DrcRefItem {
-    DrcRefItem { description: desc.into(), pos: (pos.x, pos.y), id: id.into() }
+fn item(desc: impl Into<String>, pos: Point, id: impl Into<String>) -> Item {
+    Item { description: desc.into(), pos: (pos.x, pos.y), id: id.into() }
 }
 fn center(r: &Rect) -> Point {
     Point { x: (r.0 + r.2) / 2, y: (r.1 + r.3) / 2 }
 }
 
-/// Every ported placement-quality check, run over `design`/`model`
-/// directly (courtyards are cheap enough to recompute here rather than
-/// widen [`crate::board::DrcBoard`] for a handful of placement-only
-/// consumers).
-pub fn check(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
+/// Every placement-quality check over `design`/`model`. Only the
+/// placement section is read, so a routed design costs no more than a
+/// placement-only one.
+pub fn check(design: &Design, model: &ConstraintModel) -> Vec<Finding> {
     let mut out = Vec::new();
     let Some(pl) = design.placement.as_ref() else { return out };
     if pl.outline.len() < 3 {
@@ -102,7 +121,7 @@ pub fn check(design: &Design, model: &ConstraintModel) -> Vec<DrcViolation> {
     out
 }
 
-fn proximity(model: &ConstraintModel, courtyards: &BTreeMap<String, (Rect, eda_model::ir::Side)>, out: &mut Vec<DrcViolation>) {
+fn proximity(model: &ConstraintModel, courtyards: &BTreeMap<String, (Rect, eda_model::ir::Side)>, out: &mut Vec<Finding>) {
     for rule in &model.placement_rules {
         let PlacementRule::Proximity { a, b, max_mm, reason } = rule else { continue };
         let (Some((ra, _)), Some((rb, _))) = (courtyards.get(a), courtyards.get(b)) else { continue };
@@ -115,13 +134,13 @@ fn proximity(model: &ConstraintModel, courtyards: &BTreeMap<String, (Rect, eda_m
                 "far miss: the pair cannot get closer under the other rules. Move one of the two parts in the intent, drop what sits between them, or relax the rule's max_mm"
             };
             let reason_suffix = reason.as_deref().map(|r| format!("; {r}")).unwrap_or_default();
-            let v = DrcViolation::new(ErrorType::PlacementProximity, format!("{d:.2} mm apart, rule allows {max_mm} mm{reason_suffix}"), vec![item(a, center(ra), a.clone()), item(b, center(rb), b.clone())]);
+            let v = Finding::new(Check::PlacementProximity, format!("{d:.2} mm apart, rule allows {max_mm} mm{reason_suffix}"), vec![item(a, center(ra), a.clone()), item(b, center(rb), b.clone())]);
             out.push(v.with_fix(FixHint { mover: b.clone(), toward: a.clone(), distance_to_close_um: (over * 1000.0).round() as Um, suggested_command: suggest.into() }));
         }
     }
 }
 
-fn refdes_clear(model: &ConstraintModel, pl: &eda_model::ir::PlacementSection, courtyards: &BTreeMap<String, (Rect, eda_model::ir::Side)>, out: &mut Vec<DrcViolation>) {
+fn refdes_clear(model: &ConstraintModel, pl: &eda_model::ir::PlacementSection, courtyards: &BTreeMap<String, (Rect, eda_model::ir::Side)>, out: &mut Vec<Finding>) {
     for fp in &pl.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
         let Some((x0, y0, x1, y1)) = eda_model::footprint::placed_refdes_box(model, &pl.outline, part, fp) else { continue };
@@ -132,8 +151,8 @@ fn refdes_clear(model: &ConstraintModel, pl: &eda_model::ir::PlacementSection, c
             }
             let ov = bx.overlap_area(r);
             if ov > 0 {
-                out.push(DrcViolation::new(
-                    ErrorType::PlacementRefdesClear,
+                out.push(Finding::new(
+                    Check::PlacementRefdesClear,
                     format!("refdes label of {} overlaps the courtyard of {} by {} \u{b5}m\u{b2}", fp.id, id, ov),
                     vec![item(format!("Reference of {}", fp.id), center(&bx), format!("{}.ref", fp.id)), item(format!("Footprint {id}"), center(r), id.clone())],
                 ));
@@ -142,7 +161,7 @@ fn refdes_clear(model: &ConstraintModel, pl: &eda_model::ir::PlacementSection, c
     }
 }
 
-fn edge_connector(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), out: &mut Vec<DrcViolation>) {
+fn edge_connector(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), out: &mut Vec<Finding>) {
     for part in &model.parts {
         if !is_edge_connector(part) {
             continue;
@@ -150,8 +169,8 @@ fn edge_connector(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, 
         let Some(r) = courtyards.get(&part.reference) else { continue };
         let gap = edge_connector_gap((r.0, r.1, r.2, r.3), bb);
         if gap > EDGE_CONNECTOR_MAX_GAP_UM {
-            let v = DrcViolation::new(
-                ErrorType::PlacementEdgeConnector,
+            let v = Finding::new(
+                Check::PlacementEdgeConnector,
                 format!("connector courtyard is {gap} \u{b5}m from the nearest board edge (max {EDGE_CONNECTOR_MAX_GAP_UM} \u{b5}m)"),
                 vec![item(&part.reference, center(r), part.reference.clone())],
             );
@@ -165,7 +184,7 @@ fn edge_connector(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, 
     }
 }
 
-fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), fit_target: f64, out: &mut Vec<DrcViolation>) {
+fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), fit_target: f64, out: &mut Vec<Finding>) {
     if courtyards.len() < 2 {
         return;
     }
@@ -181,8 +200,8 @@ fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), fit_targ
     let (span_x, span_y) = ((u.2 - u.0) as f64 / w, (u.3 - u.1) as f64 / h);
     let board_center = Point { x: (bb.0 + bb.2) / 2, y: (bb.1 + bb.3) / 2 };
     if imb_x > BOARD_USE_MAX_IMBALANCE || imb_y > BOARD_USE_MAX_IMBALANCE {
-        out.push(DrcViolation::new(
-            ErrorType::PlacementBoardUse,
+        out.push(Finding::new(
+            Check::PlacementBoardUse,
             format!("parts are off-centre: margins left {l:.0}/right {r:.0}, top {t:.0}/bottom {b:.0} \u{b5}m (imbalance x {imb_x:.2}, y {imb_y:.2}; max {BOARD_USE_MAX_IMBALANCE})"),
             vec![item("board", board_center, "board")],
         ));
@@ -192,23 +211,23 @@ fn board_use(courtyards: &BTreeMap<String, Rect>, bb: (Um, Um, Um, Um), fit_targ
         let density = parts_area / (w * h);
         let floor = fit_target * BOARD_USE_MIN_DENSITY_FRACTION;
         if density < floor {
-            out.push(DrcViolation::new(
-                ErrorType::PlacementBoardUse,
+            out.push(Finding::new(
+                Check::PlacementBoardUse,
                 format!("parts cover {:.0}% of the board; the intent asked it fitted to {:.0}%, so anything under {:.0}% is board nobody needs", density * 100.0, fit_target * 100.0, floor * 100.0),
                 vec![item("board", board_center, "board")],
             ));
         }
     }
     if span_x < BOARD_USE_MIN_SPAN || span_y < BOARD_USE_MIN_SPAN {
-        out.push(DrcViolation::new(
-            ErrorType::PlacementBoardUse,
+        out.push(Finding::new(
+            Check::PlacementBoardUse,
             format!("parts span only {span_x:.2} \u{d7} {span_y:.2} of the board (min {BOARD_USE_MIN_SPAN} each way)"),
             vec![item("board", board_center, "board")],
         ));
     }
 }
 
-fn decoupling(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out: &mut Vec<DrcViolation>) {
+fn decoupling(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out: &mut Vec<Finding>) {
     let pairs = eda_model::decoupling_pairs(model);
     let caps: std::collections::BTreeSet<&str> = pairs.iter().map(|(c, _)| c.as_str()).collect();
     let ruled = |c: &str| model.placement_rules.iter().any(|r| matches!(r, PlacementRule::Proximity { a, b, .. } if a == c || b == c));
@@ -228,8 +247,8 @@ fn decoupling(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out:
         if let Some((d, u)) = best {
             if d > DECOUPLING_MAX_GAP_UM as f64 {
                 let ru = courtyards[u];
-                let v = DrcViolation::new(
-                    ErrorType::PlacementDecoupling,
+                let v = Finding::new(
+                    Check::PlacementDecoupling,
                     format!("decoupling capacitor is {d:.0} \u{b5}m from the IC it decouples (max {DECOUPLING_MAX_GAP_UM} \u{b5}m)"),
                     vec![item(c, center(rc), c.to_string()), item(u, center(&ru), u.to_string())],
                 );
@@ -239,7 +258,7 @@ fn decoupling(model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out:
     }
 }
 
-fn net_compactness(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out: &mut Vec<DrcViolation>) {
+fn net_compactness(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel, courtyards: &BTreeMap<String, Rect>, out: &mut Vec<Finding>) {
     let mut centers: HashMap<String, Point> = HashMap::new();
     for fp in &pl.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
@@ -278,8 +297,8 @@ fn net_compactness(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel
         let ratio = hpwl as f64 / bound.max(1.0);
         if hpwl > NET_COMPACTNESS_FLOOR_UM && ratio > NET_COMPACTNESS_MAX_RATIO {
             let anchor = pts[0];
-            out.push(DrcViolation::new(
-                ErrorType::PlacementNetCompactness,
+            out.push(Finding::new(
+                Check::PlacementNetCompactness,
                 format!("net spans {hpwl} \u{b5}m HPWL over {} parts, {ratio:.2}x its packed bound {bound:.0} \u{b5}m (max {NET_COMPACTNESS_MAX_RATIO}x)", members.len()),
                 vec![item(&net.name, anchor, net.name.clone())],
             ));
@@ -287,7 +306,7 @@ fn net_compactness(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel
     }
 }
 
-fn stub_crossings(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel, out: &mut Vec<DrcViolation>) {
+fn stub_crossings(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel, out: &mut Vec<Finding>) {
     let mut centers: HashMap<String, Point> = HashMap::new();
     for fp in &pl.footprints {
         let Some(part) = model.part(&fp.id) else { continue };
@@ -327,10 +346,10 @@ fn stub_crossings(pl: &eda_model::ir::PlacementSection, model: &ConstraintModel,
     if crossings.len() > allowed {
         let names = crossings.iter().map(|(a, b, _)| format!("{a}\u{d7}{b}")).collect::<Vec<_>>().join(",");
         let anchor = crossings.first().map(|(_, _, p)| *p).unwrap_or(Point { x: 0, y: 0 });
-        out.push(DrcViolation::new(
-            ErrorType::PlacementStubCrossings,
+        out.push(Finding::new(
+            Check::PlacementStubCrossings,
             format!("{} crossing pair(s) of 2-pin net stubs among {} nets (max {allowed})", crossings.len(), stubs.len()),
-            vec![item(names, anchor, "stub_crossings")],
+            vec![item(names.clone(), anchor, names)],
         ));
     }
 }
@@ -370,7 +389,7 @@ mod tests {
         };
         let d = design(vec![fp("U1", 5_000, 5_000), fp("C1", 20_000, 5_000)]); // 15mm apart, way over 3mm
         let v = check(&d, &model);
-        let hit = v.iter().find(|x| x.error_type == "placement_proximity").expect("proximity violation");
+        let hit = v.iter().find(|x| x.check == "placement_proximity").expect("proximity violation");
         let fix = hit.fix.as_ref().expect("fix hint");
         assert_eq!(fix.mover, "C1");
         assert_eq!(fix.toward, "U1");
@@ -386,6 +405,6 @@ mod tests {
         };
         let d = design(vec![fp("U1", 5_000, 5_000), fp("C1", 6_000, 5_000)]);
         let v = check(&d, &model);
-        assert!(v.iter().all(|x| x.error_type != "placement_proximity"), "{v:#?}");
+        assert!(v.iter().all(|x| x.check != "placement_proximity"), "{v:#?}");
     }
 }

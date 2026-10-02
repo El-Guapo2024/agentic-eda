@@ -97,7 +97,6 @@ pub fn run_with(design: &Design, model: &ConstraintModel, dangling: Option<Dangl
     let fills = fill::fill_all_zones(&b, rules);
     out.extend(providers::copper_clearance::check_with_fills(&b, rules, &fills));
     out.extend(providers::track_width::check(&b, rules));
-    out.extend(providers::track_width::check_netclass_conformance(&b, rules));
     out.extend(providers::annular_via::check(&b, rules));
     out.extend(providers::hole::check(&b, rules));
     out.extend(providers::edge_clearance::check(&b, rules));
@@ -114,7 +113,6 @@ pub fn run_with(design: &Design, model: &ConstraintModel, dangling: Option<Dangl
     if test_footprints {
         out.extend(providers::schematic_parity::check(design, model));
     }
-    out.extend(providers::placement_quality::check(design, model));
     apply_rule_severities(&mut out, &rules.rule_severities);
     apply_error_limits(&mut out);
     out

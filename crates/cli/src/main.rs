@@ -919,7 +919,7 @@ fn find_kicad_cli() -> Option<std::path::PathBuf> {
 /// assembler cannot fill. Getting that back from the factory costs days;
 /// getting it back from here costs nothing.
 fn export_fab(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
-    let checks = eda_fab::check_fab(design, &cx.model);
+    let checks = eda_lint::fab::check(design, &cx.model);
     if !print_checks("fab gates", &checks) {
         return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
     }

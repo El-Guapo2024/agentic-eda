@@ -376,7 +376,7 @@ fn native_imported_pin_at(sch: &eda_model::ir::SchematicSection, sym: &eda_model
 }
 
 /// Runs every ERC check this module implements — the pin-electrical checks
-/// below, *and* [`crate::erc_style::check_style`]'s readability/style
+/// below, *and* [`eda_lint::check_schematic`]'s readability/style
 /// checks (grid, orthogonality, label placement, sheet density, ...),
 /// ported in from the former `eda-gates::check_schematic` so this one
 /// function is the whole engine a schematic is judged by, the same way
@@ -387,7 +387,7 @@ fn native_imported_pin_at(sch: &eda_model::ir::SchematicSection, sym: &eda_model
 pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     if design.schematic.is_none() {
         let mut out = vec![CheckResult::fail("lib_symbol_issues", "design", "design has no schematic section")];
-        out.extend(crate::erc_style::check_style(design, model));
+        out.extend(eda_lint::check_schematic(design, model));
         return out;
     };
 
@@ -436,7 +436,7 @@ pub fn check_erc(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     check_multi_unit_symbols(sch, model, &mut out);
     check_hierarchy(design, &mut out);
     crate::bus::check_bus(original_design, &mut out);
-    out.extend(crate::erc_style::check_style(design, model));
+    out.extend(eda_lint::check_schematic(design, model));
     out
 }
 

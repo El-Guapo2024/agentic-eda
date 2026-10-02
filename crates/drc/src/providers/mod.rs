@@ -6,7 +6,6 @@ pub mod disallow;
 pub mod edge_clearance;
 pub mod hole;
 pub mod outline;
-pub mod placement_quality;
 pub mod schematic_parity;
 pub mod silk_mask;
 pub mod solder_mask;

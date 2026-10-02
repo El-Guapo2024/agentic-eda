@@ -1,0 +1,10 @@
+[package]
+name = "eda-kicad-engine"
+version = "0.1.0"
+edition = "2021"
+description = "kicad-cli as the batch engine: DRC, ERC and every export, run on the current design.json revision and mapped back to our item ids."
+
+[dependencies]
+serde_json = { workspace = true }
+eda-model = { path = "../model" }
+eda-kicad = { path = "../kicad" }
