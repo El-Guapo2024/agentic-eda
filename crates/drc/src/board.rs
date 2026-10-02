@@ -244,6 +244,54 @@ fn exported_refdes_shape(model: &ConstraintModel, part: &eda_model::Part, fp: &e
     Some(Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 })
 }
 
+/// A pad-frame offset `(x, y)` to board space: the pad's own rotation,
+/// then the footprint's mirror (bottom side) and rotation -- the same
+/// composition `to_board` applies to the pad's position.
+fn pad_frame_to_board(fp: &eda_model::ir::FootprintInstance, pad_rot_mdeg: i64, v: (f64, f64)) -> (f64, f64) {
+    let rot = |a_mdeg: i64, (x, y): (f64, f64)| {
+        let (s, c) = ((a_mdeg as f64) / 1000.0 * std::f64::consts::PI / 180.0).sin_cos();
+        (x * c - y * s, x * s + y * c)
+    };
+    let (x, y) = rot(pad_rot_mdeg, v);
+    let x = if fp.side == Side::Bottom { -x } else { x };
+    rot(fp.rot as i64, (x, y))
+}
+
+/// `PAD::GetEffectiveShape` for a pad whose board rotation is *not* a
+/// multiple of 90 degrees: the true rotated outline (a rotated rectangle or
+/// rounded rectangle as a polygon, an oval as a rotated stadium) instead of
+/// the axis-aligned box around it, which over-reports clearance and
+/// shorts between neighbouring pads of a 45-degree footprint.
+fn rotated_pad_shape(fp: &eda_model::ir::FootprintInstance, pad: &Pad, center: Point) -> Shape {
+    let (w, h) = (pad.size.0 as f64, pad.size.1 as f64);
+    let to_pt = |v: (f64, f64)| {
+        let (dx, dy) = pad_frame_to_board(fp, pad.rot as i64, v);
+        Point { x: center.x + dx.round() as Um, y: center.y + dy.round() as Um }
+    };
+    match pad.shape {
+        PadShape::Circle => Shape::Circle { c: center, r: pad.size.0.max(pad.size.1) / 2 },
+        PadShape::Oval => {
+            let r = (w.min(h) / 2.0).round() as Um;
+            let f = (w.max(h) - w.min(h)) / 2.0;
+            let axis = if w >= h { (f, 0.0) } else { (0.0, f) };
+            Shape::Stadium { a: to_pt((-axis.0, -axis.1)), b: to_pt(axis), r }
+        }
+        PadShape::Rect => Shape::Polygon { pts: [(-w / 2.0, -h / 2.0), (w / 2.0, -h / 2.0), (w / 2.0, h / 2.0), (-w / 2.0, h / 2.0)].into_iter().map(to_pt).collect() },
+        PadShape::RoundRect => {
+            let r = pad.roundrect_ratio.unwrap_or(0.25) * w.min(h);
+            let (ix, iy) = (w / 2.0 - r, h / 2.0 - r);
+            let mut pts = Vec::new();
+            for (cx, cy, a0) in [(ix, iy, 0.0f64), (-ix, iy, 90.0), (-ix, -iy, 180.0), (ix, -iy, 270.0)] {
+                for k in 0..=8 {
+                    let a = (a0 + 90.0 * k as f64 / 8.0).to_radians();
+                    pts.push(to_pt((cx + r * a.cos(), cy + r * a.sin())));
+                }
+            }
+            Shape::Polygon { pts }
+        }
+    }
+}
+
 fn pad_hole_shape(center: Point, pad: &Pad, board_rot: i64) -> Option<Shape> {
     if let Some(d) = pad.drill {
         return Some(Shape::Circle { c: center, r: d / 2 });
@@ -277,7 +325,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 let center = pad_center(fp, pad.at);
                 let pad_rot = board_rot + pad.rot as i64;
                 let size = rotated_extent_by(pad_rot, pad.size);
-                let copper = shape_of(center, size, pad.shape, pad.roundrect_ratio);
+                let copper = if pad_rot.rem_euclid(90_000) == 0 { shape_of(center, size, pad.shape, pad.roundrect_ratio) } else { rotated_pad_shape(fp, pad, center) };
                 let hole = pad_hole_shape(center, pad, pad_rot);
                 let drill_slot = pad.drill_slot.map(|s| rotated_extent_by(pad_rot, s));
                 let net = pin_net.get(&format!("{}.{}", fp.id, pad.number)).cloned();
