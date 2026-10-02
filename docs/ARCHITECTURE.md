@@ -34,7 +34,7 @@ never edited as masters.
 
 ## Engines
 
-- **kicad-cli is the main engine** for batch work it already does exactly:
+- **kicad-cli is the only engine** for batch work it already does exactly:
   DRC, ERC, plots, Gerber/drill/position/STEP exports, netlist, BOM. The
   backend exports the current `design.json` revision, runs kicad-cli, and
   maps the report back to our item ids (`crates/cli/src/kicad_engine.rs`,
@@ -50,5 +50,21 @@ never edited as masters.
   - the editor UI, tools, dialogs and hotkeys (KiCad look and feel),
   - live connectivity / ratsnest / zone fill while editing,
   - our own additions: intent, placement, schematic derivation.
-- The existing Rust DRC/ERC ports stay as fast in-browser previews; DRC
-  count-parity work against KiCad is no longer a goal in itself.
+- **Never duplicate kicad-cli in Rust**, not even as a faster version
+  (decided later on 2026-10-02, replacing "the Rust DRC/ERC ports stay as
+  fast previews"). One answer per question, no parity work. A kicad-cli
+  DRC run takes about 3.5 s on a 30-part board, which is fine for the
+  dialogs, the canvas markers and the placement gates.
+  - **To delete** (cleanup in progress): the Rust DRC rule providers
+    (`crates/drc/src/providers/`), the KiCad ERC port
+    (`crates/kicad/src/erc.rs`), `crates/fab` (Gerber/drill/position), and
+    the plot/netlist/BOM exporters in `crates/kicad`, except any part a
+    live feature needs (on-screen rendering, live connectivity, the
+    schematic-to-PCB sync).
+  - **To keep**: the geometry core in `crates/drc` (shapes, clearance
+    rules, rule expressions, rtree, zone fill, stroke font). The router,
+    zone filler and renderer are built on it.
+  - **Our own checks** that KiCad does not have (placement quality,
+    schematic readability, dangling detection for live connectivity) live
+    in a separate fast checker, `lint`. It is never named DRC or ERC and
+    never holds a copy of a KiCad rule.
