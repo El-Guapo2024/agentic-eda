@@ -406,15 +406,19 @@ pub fn custom_erc_pin_map(design: &Design) -> Option<Vec<Vec<u8>>> {
     (m.len() == 12 && m.iter().all(|r| r.len() == 12 && r.iter().all(|&c| c <= 2))).then(|| m.clone())
 }
 
-/// [`export_kicad_pro`] plus the schematic side of the project: the design's
-/// own ERC pin map (`erc.pin_map`), so kicad-cli's ERC judges pin conflicts by
-/// the matrix the user set up and not only by KiCad's default.
+/// [`export_kicad_pro`] plus the schematic side of the project (`erc`): the
+/// design's own pin map, so kicad-cli's ERC judges pin conflicts by the matrix
+/// the user set up and not only by KiCad's default; and the two library-link
+/// checks ignored (every symbol is embedded in the derived schematic, so
+/// there is no library for KiCad to compare it against and each one would
+/// report a meaningless `lib_symbol_mismatch`).
 pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String {
     let base = export_kicad_pro(model);
-    match custom_erc_pin_map(design) {
-        Some(m) => base.replacen("{\n", &format!("{{\n  \"erc\": {{\n    \"pin_map\": {}\n  }},\n", serde_json::to_string(&m).unwrap_or_else(|_| "[]".into())), 1),
-        None => base,
+    let mut erc = serde_json::json!({ "rule_severities": { "lib_symbol_issues": "ignore", "lib_symbol_mismatch": "ignore" } });
+    if let Some(m) = custom_erc_pin_map(design) {
+        erc["pin_map"] = serde_json::json!(m);
     }
+    base.replacen("{\n", &format!("{{\n  \"erc\": {},\n", serde_json::to_string(&erc).unwrap_or_else(|_| "{}".into())), 1)
 }
 
 fn write_footprint(
@@ -789,10 +793,12 @@ mod tests {
     }
 
     #[test]
-    fn the_project_carries_the_designs_own_erc_pin_map_and_only_that() {
+    fn the_project_carries_the_designs_own_erc_pin_map_and_the_embedded_library_severities() {
         let (mut design, model) = fixture();
-        let plain = export_kicad_pro_for(&design, &model);
-        assert_eq!(plain, export_kicad_pro(&model), "no custom map: KiCad's own default applies, nothing is written");
+        let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
+        assert!(plain["erc"]["pin_map"].is_null(), "no custom map: KiCad's own default applies, nothing is written");
+        assert_eq!(plain["erc"]["rule_severities"]["lib_symbol_mismatch"], "ignore");
+        assert_eq!(plain["erc"]["rule_severities"]["lib_symbol_issues"], "ignore");
         design.schematic = Some(eda_model::ir::SchematicSection {
             symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![],
             erc_pin_map: Some(eda_model::ir::ErcPinMap { matrix: { let mut m = eda_model::ir::ErcPinMap::default_matrix(); m[1][1] = 0; m } }),
@@ -802,10 +808,12 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&custom).expect("valid json");
         assert_eq!(json["erc"]["pin_map"][1][1], 0, "{custom}");
         assert_eq!(json["erc"]["pin_map"].as_array().map(Vec::len), Some(12));
+        assert_eq!(json["erc"]["rule_severities"]["lib_symbol_mismatch"], "ignore");
         assert!(json["board"]["design_settings"]["rules"]["min_clearance"].is_number(), "the board half is untouched");
         // A malformed matrix is ignored wholesale, like KiCad's own loader.
         design.schematic.as_mut().unwrap().erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix: vec![vec![0; 3]; 3] });
-        assert_eq!(export_kicad_pro_for(&design, &model), plain);
+        let bad: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
+        assert!(bad["erc"]["pin_map"].is_null());
     }
 
     #[test]

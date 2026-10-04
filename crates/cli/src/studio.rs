@@ -20,7 +20,6 @@
 //! was fixed to run in the background instead.
 
 use crate::board;
-use crate::board_stats;
 use crate::cleanup_api;
 use crate::fab_api;
 use crate::route_api;
@@ -693,7 +692,7 @@ fn handle(
         // "Board Statistics..." (task item 8): read-only, same stateless
         // no-Cmd shape as fab_api::bom below (nothing to undo -- it never
         // touches design.json).
-        ("POST", "/api/board_stats") => respond(stream, "200 OK", "application/json", board_stats::compute(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/board_stats") => respond(stream, "200 OK", "application/json", crate::kicad_engine::board_stats(dir, &body).to_string().as_bytes()),
         // Fabrication and schematic outputs (Plot / Generate Drill Files /
         // Footprint Position Files / Plot Schematic / Export Netlist): each
         // dialog's JSON becomes kicad-cli arguments (`crate::fab_api`,

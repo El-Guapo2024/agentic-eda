@@ -346,6 +346,41 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     Ok(ErcReport { engine: format!("kicad-cli {version}"), violations })
 }
 
+// ------------------------------------------------------------------ statistics
+
+/// `kicad-cli pcb export stats` options -- the Board Statistics dialog's three
+/// checkboxes, plus the report's length unit.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StatsOptions {
+    pub exclude_footprints_without_pads: bool,
+    pub subtract_holes_from_board: bool,
+    pub subtract_holes_from_copper: bool,
+    /// Lengths in inches (kicad-cli has `mm` and `in`); default millimetres.
+    pub inches: bool,
+}
+
+/// `kicad-cli pcb export stats` on `design`: the JSON report (`json`) or the
+/// text report KiCad's own dialog saves (`!json`), as text.
+pub fn stats(design: &Design, model: &ConstraintModel, work: &Path, opts: StatsOptions, json: bool) -> Result<String, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (pcb, _) = export_board(design, model, work)?;
+    let out_file = work.join(if json { "stats.json" } else { "stats.txt" });
+    let _ = std::fs::remove_file(&out_file);
+    let mut cmd = Command::new(&cli);
+    cmd.args(["pcb", "export", "stats", "--format", if json { "json" } else { "report" }, "--units", if opts.inches { "in" } else { "mm" }]);
+    if opts.exclude_footprints_without_pads {
+        cmd.arg("--exclude-footprints-without-pads");
+    }
+    if opts.subtract_holes_from_board {
+        cmd.arg("--subtract-holes-from-board");
+    }
+    if opts.subtract_holes_from_copper {
+        cmd.arg("--subtract-holes-from-copper");
+    }
+    let out = cmd.arg("-o").arg(&out_file).arg(&pcb).output().map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
+    std::fs::read_to_string(&out_file).map_err(|_| fail("kicad_cli_stats", "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))
+}
+
 // --------------------------------------------------------------------- exports
 
 /// kicad-cli `pcb export` subcommands that write a directory of files; every
