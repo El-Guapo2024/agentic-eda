@@ -470,6 +470,7 @@ dependencies = [
  "eda-interchange",
  "eda-kicad",
  "eda-layout",
+ "eda-lint",
  "eda-logger",
  "eda-model",
  "eda-place",
@@ -497,7 +498,6 @@ dependencies = [
  "eda-clipper2",
  "eda-connectivity",
  "eda-drc",
- "eda-fab",
  "eda-gates",
  "eda-judge",
  "eda-kicad",
@@ -550,17 +550,11 @@ name = "eda-drc"
 version = "0.1.0"
 dependencies = [
  "eda-clipper2",
- "eda-connectivity",
- "eda-engine",
- "eda-freeroute",
- "eda-kicad",
  "eda-model",
- "eda-place",
  "eda-shape-poly-set",
  "eda-zone-filler",
  "serde",
  "serde_json",
- "serde_yaml",
 ]
 
 [[package]]
@@ -569,19 +563,6 @@ version = "0.1.0"
 dependencies = [
  "eda-layout",
  "eda-model",
- "serde_json",
-]
-
-[[package]]
-name = "eda-fab"
-version = "0.1.0"
-dependencies = [
- "eda-drc",
- "eda-kicad",
- "eda-model",
- "eda-shape-poly-set",
- "eda-zone-filler",
- "serde",
  "serde_json",
 ]
 
@@ -660,10 +641,8 @@ dependencies = [
  "eda-engine",
  "eda-freeroute",
  "eda-layout",
- "eda-lint",
  "eda-model",
  "eda-place",
- "eda-render",
  "eda-zone-filler",
  "serde",
  "serde_json",

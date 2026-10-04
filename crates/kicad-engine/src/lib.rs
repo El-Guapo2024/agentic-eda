@@ -16,7 +16,7 @@
 //! on in-memory designs, use [`drc_scratch`] (a fresh temp directory,
 //! removed afterwards).
 
-use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro, export_kicad_sch_mapped, ExportMeta};
+use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro_for, export_kicad_sch_mapped, ExportMeta};
 use eda_model::ir::Design;
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
@@ -94,11 +94,12 @@ fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// The project file next to the derived board/schematic: our design rules,
-/// plus the custom-rule file an imported project carried, so kicad-cli
-/// judges against this board's own rules and not its hard-coded floors.
-fn write_project(work: &Path, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> {
-    write_file(&work.join("board.kicad_pro"), export_kicad_pro(model))?;
+/// The project file next to the derived board/schematic: our design rules
+/// and ERC pin map, plus the custom-rule file an imported project carried,
+/// so kicad-cli judges against this design's own rules and not its
+/// hard-coded floors.
+fn write_project(work: &Path, design: &Design, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> {
+    write_file(&work.join("board.kicad_pro"), export_kicad_pro_for(design, model))?;
     let dru = work.join("board.kicad_dru");
     match model.board.custom_rules_text.as_deref() {
         Some(text) => write_file(&dru, text)?,
@@ -117,7 +118,7 @@ fn export_board(design: &Design, model: &ConstraintModel, work: &Path) -> Result
     let (pcb, map) = export_kicad_pcb_mapped(design, model, &ExportMeta { date: &date, title: "board" })?;
     let path = work.join("board.kicad_pcb");
     write_file(&path, pcb)?;
-    write_project(work, model)?;
+    write_project(work, design, model)?;
     Ok((path, map))
 }
 
@@ -128,7 +129,7 @@ fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path) -> Re
     let (sch, map) = export_kicad_sch_mapped(design, model, &ExportMeta { date: &date, title: "board" })?;
     let path = work.join("board.kicad_sch");
     write_file(&path, sch)?;
-    write_project(work, model)?;
+    write_project(work, design, model)?;
     Ok((path, map))
 }
 

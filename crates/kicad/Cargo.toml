@@ -11,10 +11,8 @@ thiserror = { workspace = true }
 eda-model = { path = "../model" }
 eda-layout = { path = "../layout" }
 eda-engine = { path = "../engine" }
-eda-render = { path = "../render" }
 eda-drc = { path = "../drc" }
 eda-zone-filler = { path = "../zone-filler" }
-eda-lint = { path = "../lint" }
 blake3 = { workspace = true }
 
 [dev-dependencies]

@@ -21,7 +21,7 @@ use eda_model::ir::{Design, NetLabel, NoConnect, PowerSymbol, SchematicText, Sym
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
-pub use pcb::{export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro};
+pub use pcb::{custom_erc_pin_map, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
 mod import;
@@ -36,25 +36,8 @@ pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_f
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
-mod erc;
-pub use erc::{check_erc, check_erc_excluding, default_pin_map, resolve_pin_map, Exclusions};
-
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
-
-mod hierarchy;
-pub use hierarchy::flatten as flatten_hierarchy;
-
-mod bus;
-pub use bus::{expand_bus_members, is_bus_name};
-
-pub mod plotter;
-
-mod sch_plot;
-pub use sch_plot::{plot_schematic, sheet_list, LibResolver, PageSizeSelect, PlotFile, PlotFormat, PlotMeta, SchPlotOpts, SheetEntry};
-
-mod netlist;
-pub use netlist::{export_netlist, NetlistFormat, NetlistMeta};
 
 const STUB_MM: f64 = 1.27;
 
