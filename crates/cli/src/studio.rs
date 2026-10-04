@@ -542,7 +542,9 @@ fn handle(
         // state. Our own checks, the ones KiCad does not have, are
         // `/api/lint`: cheap and in-process, refreshed on every change.
         ("GET", "/api/drc") => {
-            let v = crate::kicad_engine::drc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `?refill_zones=1`: the DRC dialog's "Refill all zones before performing DRC".
+            let refill = target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "refill_zones=1");
+            let v = crate::kicad_engine::drc(dir, refill).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/erc") => {

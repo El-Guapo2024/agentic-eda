@@ -242,13 +242,19 @@ fn run_report(mut cmd: Command, report: &Path, what: &str) -> Result<Value, Vec<
     serde_json::from_str(&text).map_err(|e| fail(&format!("kicad_cli_{what}"), &report.display().to_string(), e.to_string()))
 }
 
-/// `kicad-cli pcb drc` on `design` as it is. Zones are refilled first, as
-/// KiCad's own DRC dialog does, when this kicad-cli can (nightly can; 9.0
-/// rejects `--refill-zones`, in which case KiCad checks the fills our
-/// exporter wrote). Every kicad-cli start costs a third of a second, so
-/// this neither asks for its version nor probes its options: it tries the
-/// refill and falls back, and reads the version off the report.
-pub fn drc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<DrcReport, Vec<CheckResult>> {
+/// `kicad-cli pcb drc` on `design` as it is.
+///
+/// `refill_zones` (KiCad's "Refill all zones before performing DRC") is
+/// opt-in. By default KiCad judges the fills the exported board already
+/// carries -- the ones our own filler computed and the studio shows -- and
+/// that matters: kicad-cli 10.99 skips the courtyard checks
+/// (`courtyards_overlap`, `pth_inside_courtyard`, ...) on a run that
+/// refills, so a default refill would silently turn the placement gates off.
+/// A kicad-cli without `--refill-zones` (9.0) falls back to the same
+/// no-refill run. Every kicad-cli start costs a third of a second, so this
+/// neither asks for its version nor probes its options: the version comes
+/// off the report.
+pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: bool) -> Result<DrcReport, Vec<CheckResult>> {
     let cli = need_cli()?;
     let (pcb, map) = export_board(design, model, work)?;
     let report = work.join("drc.json");
@@ -261,21 +267,25 @@ pub fn drc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<DrcR
         cmd.arg("-o").arg(&report).arg(&pcb);
         run_report(cmd, &report, "drc")
     };
-    let (raw, refill) = match run(true) {
-        Ok(raw) => (raw, true),
-        Err(e) if e.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("refill-zones"))) => (run(false)?, false),
-        Err(e) => return Err(e),
+    let (raw, refilled) = if refill_zones {
+        match run(true) {
+            Ok(raw) => (raw, true),
+            Err(e) if e.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("refill-zones"))) => (run(false)?, false),
+            Err(e) => return Err(e),
+        }
+    } else {
+        (run(false)?, false)
     };
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
     let read = |key: &str| -> Vec<Violation> { raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default() };
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
-    Ok(DrcReport { engine: format!("kicad-cli {version}"), zones_refilled_by_kicad: refill, violations: read("violations"), unconnected_items: read("unconnected_items") })
+    Ok(DrcReport { engine: format!("kicad-cli {version}"), zones_refilled_by_kicad: refilled, violations: read("violations"), unconnected_items: read("unconnected_items") })
 }
 
 /// [`drc`] in a throwaway directory -- for a design that only exists in
 /// memory (the gates).
 pub fn drc_scratch(design: &Design, model: &ConstraintModel) -> Result<DrcReport, Vec<CheckResult>> {
-    with_scratch(|work| drc(design, model, work))
+    with_scratch(|work| drc(design, model, work, false))
 }
 
 /// `kicad-cli sch erc` on one design revision, violations from every sheet

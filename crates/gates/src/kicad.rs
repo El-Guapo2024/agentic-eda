@@ -27,27 +27,37 @@ use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 /// One KiCad violation as the gate result for `check_name`. `location`
 /// joins every item's id (our own id where kicad-cli's uuid maps back to
 /// one, else KiCad's own description of it), mirroring the "A/B" pair
-/// convention every gate here uses; `hint` is KiCad's own description.
-/// KiCad's severity carries over: an error fails the gate, a warning warns.
+/// convention every gate here uses -- sorted, because KiCad's item order is
+/// its own and a location is how `--strict` tells a new failure from an old
+/// one; the board outline (`outline`) is dropped when another item is named,
+/// so a pad too close to the edge is located at the pad. `hint` is KiCad's
+/// own description. KiCad's severity carries over: an error fails the gate,
+/// a warning warns.
 fn gate_of(v: &Violation, check_name: &str) -> Option<CheckResult> {
     let status = match v.severity.as_str() {
         "error" => CheckStatus::Fail,
         "warning" => CheckStatus::Warn,
         _ => return None,
     };
-    let location = v.items.iter().map(|it| it.id.clone().unwrap_or_else(|| it.description.clone())).collect::<Vec<_>>().join("/");
+    let mut ids: Vec<String> = v.items.iter().map(|it| it.id.clone().unwrap_or_else(|| it.description.clone())).collect();
+    if ids.len() > 1 {
+        ids.retain(|id| id != "outline");
+    }
+    ids.sort();
+    let location = ids.join("/");
     Some(CheckResult { check: check_name.to_string(), status, location: Some(location), hint: Some(v.description.clone()), detail: None })
 }
 
-/// Whether a violation's first item is a track or a via (as opposed to a
-/// pad, a zone or a footprint). kicad-cli names items "Track [net] on
-/// F.Cu, ...", "Via [net] ...", "Pad 1 [net] of R1 ...".
-fn first_item_is_track_or_via(v: &Violation) -> bool {
-    v.items.first().is_some_and(|it| it.description.starts_with("Track ") || it.description.starts_with("Via "))
+/// The copper item of an edge-clearance violation. kicad-cli names two items,
+/// the Edge.Cuts segment ("Segment on Edge.Cuts") and the copper too close to
+/// it ("Pad 1 [net] of R1 ...", "Track [net] on F.Cu ...", "Via [net] ..."),
+/// in either order.
+fn copper_item(v: &Violation) -> Option<&eda_kicad_engine::Item> {
+    v.items.iter().find(|it| !it.description.contains("Edge.Cuts"))
 }
 
-fn first_item_is_zone(v: &Violation) -> bool {
-    v.items.first().is_some_and(|it| it.description.starts_with("Zone "))
+fn copper_is(v: &Violation, prefixes: &[&str]) -> bool {
+    copper_item(v).is_some_and(|it| prefixes.iter().any(|p| it.description.starts_with(p)))
 }
 
 /// The violations of one KiCad type that `keep` accepts, as gate results
@@ -70,7 +80,7 @@ fn gate(report: &DrcReport, kind: &str, check_name: &str, keep: impl Fn(&Violati
 /// and courtyard overlap.
 pub fn placement_from(report: &DrcReport) -> Vec<CheckResult> {
     let mut out = Vec::new();
-    gate(report, "copper_edge_clearance", "placement_pad_edge_clearance", |v| !first_item_is_track_or_via(v) && !first_item_is_zone(v), &mut out);
+    gate(report, "copper_edge_clearance", "placement_pad_edge_clearance", |v| copper_is(v, &["Pad "]), &mut out);
     gate(report, "courtyards_overlap", "placement_courtyard_overlap", |_| true, &mut out);
     out
 }
@@ -79,7 +89,7 @@ pub fn placement_from(report: &DrcReport) -> Vec<CheckResult> {
 /// close to the board outline.
 pub fn routing_from(report: &DrcReport) -> Vec<CheckResult> {
     let mut out = Vec::new();
-    gate(report, "copper_edge_clearance", "routing_edge_clearance", first_item_is_track_or_via, &mut out);
+    gate(report, "copper_edge_clearance", "routing_edge_clearance", |v| copper_is(v, &["Track ", "Via "]), &mut out);
     out
 }
 
@@ -128,25 +138,39 @@ mod tests {
         Violation { kind: kind.into(), description: format!("{kind} description"), severity: severity.into(), items: vec![Item { description: first_item.into(), pos: (0, 0), id: id.map(str::to_string), uuid: "u".into() }] }
     }
 
+    /// kicad-cli's edge-clearance shape: the Edge.Cuts segment and the copper, in either order.
+    fn edge_violation(copper: &str, id: &str, edge_first: bool) -> Violation {
+        let mut v = violation("copper_edge_clearance", "error", copper, Some(id));
+        let edge = Item { description: "Segment on Edge.Cuts".into(), pos: (0, 0), id: Some("outline".into()), uuid: "e".into() };
+        if edge_first {
+            v.items.insert(0, edge);
+        } else {
+            v.items.push(edge);
+        }
+        v
+    }
+
     fn report(violations: Vec<Violation>) -> DrcReport {
         DrcReport { engine: "kicad-cli test".into(), zones_refilled_by_kicad: false, violations, unconnected_items: vec![] }
     }
 
     #[test]
-    fn edge_clearance_splits_by_what_the_first_item_is() {
+    fn edge_clearance_splits_by_what_the_copper_item_is() {
         let r = report(vec![
-            violation("copper_edge_clearance", "error", "Pad 1 [GND] of R1 on F.Cu", Some("R1.1")),
-            violation("copper_edge_clearance", "error", "Track [GND] on F.Cu, length 3 mm", Some("t1#0")),
-            violation("copper_edge_clearance", "error", "Via [GND] on F.Cu - B.Cu", Some("v1")),
-            violation("copper_edge_clearance", "error", "Zone [GND] on F.Cu", Some("z1")),
+            edge_violation("Pad 1 [GND] of R1 on F.Cu", "R1.1", true),
+            edge_violation("Track [GND] on F.Cu, length 3 mm", "t1#0", true),
+            edge_violation("Via [GND] on F.Cu - B.Cu", "v1", false),
+            edge_violation("Zone [GND] on F.Cu", "z1", true),
         ]);
         let place = placement_from(&r);
         let pad: Vec<_> = place.iter().filter(|c| c.check == "placement_pad_edge_clearance").collect();
-        assert_eq!(pad.len(), 1, "{place:?}");
-        assert_eq!(pad[0].location.as_deref(), Some("R1.1"));
+        assert_eq!(pad.len(), 1, "only the pad is the placement gate's: {place:?}");
+        assert_eq!(pad[0].location.as_deref(), Some("R1.1"), "located at the pad, not at the outline");
         assert_eq!(pad[0].status, CheckStatus::Fail);
         let route = routing_from(&r);
-        assert_eq!(route.iter().filter(|c| c.status == CheckStatus::Fail).count(), 2, "{route:?}");
+        let mut at: Vec<_> = route.iter().filter(|c| c.status == CheckStatus::Fail).map(|c| c.location.clone().unwrap_or_default()).collect();
+        at.sort();
+        assert_eq!(at, vec!["t1#0", "v1"], "{route:?}");
     }
 
     #[test]
@@ -170,6 +194,55 @@ mod tests {
         let overlaps: Vec<_> = out.iter().filter(|c| c.check == "placement_courtyard_overlap").collect();
         assert_eq!(overlaps.len(), 1, "{out:?}");
         assert_eq!(overlaps[0].status, CheckStatus::Warn);
+    }
+
+    /// The whole path against the real kicad-cli (skipped when there is none):
+    /// the exporter writes the courtyards, kicad-cli judges them, the gate
+    /// reports. Two parts stacked on one spot fail `placement_courtyard_overlap`;
+    /// moved apart they pass. Guards the one way this gate could silently
+    /// stop firing -- an export kicad-cli cannot read courtyards from.
+    #[test]
+    fn stacked_parts_fail_the_courtyard_gate_through_kicad_cli() {
+        use eda_model::ir::{FootprintInstance, PlacementSection, Point, Provenance, Side};
+        use eda_model::{BoardRules, Net, Part, Pin, PinKind};
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let part = |r: &str| Part {
+            reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0805".into()), footprint: None,
+            pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }],
+            body_um: None, symbol: None, datasheet: None, edge: None,
+        };
+        let model = ConstraintModel {
+            parts: vec![part("R1"), part("R2")],
+            nets: vec![Net { name: "A".into(), pins: vec!["R1.1".into(), "R2.1".into()] }],
+            board: BoardRules { layers: vec!["F.Cu".into(), "B.Cu".into()], ..Default::default() },
+            ..Default::default()
+        };
+        let design = |second_x: i64| Design {
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
+            schema: 1,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None, nets: None,
+            placement: Some(PlacementSection {
+                outline: vec![Point { x: 0, y: 0 }, Point { x: 40_000, y: 0 }, Point { x: 40_000, y: 40_000 }, Point { x: 0, y: 40_000 }],
+                footprints: vec![
+                    FootprintInstance { id: "R1".into(), at: Point { x: 10_000, y: 20_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                    FootprintInstance { id: "R2".into(), at: Point { x: second_x, y: 20_000 }, rot: 0, side: Side::Top, label: Default::default() },
+                ],
+                modules: vec![],
+            }),
+            routing: None,
+            drawings: None,
+        };
+        let overlap = |checks: &[CheckResult]| checks.iter().filter(|c| c.check == "placement_courtyard_overlap" && c.status == CheckStatus::Fail).count();
+        let stacked = check_placement(&design(10_000), &model);
+        assert_eq!(overlap(&stacked), 1, "{stacked:?}");
+        assert_eq!(stacked.iter().find(|c| c.check == "placement_courtyard_overlap").and_then(|c| c.location.as_deref()), Some("R1/R2"), "the report maps back to our own part ids: {stacked:?}");
+        let apart = check_placement(&design(25_000), &model);
+        assert_eq!(overlap(&apart), 0, "{apart:?}");
+        assert!(apart.iter().any(|c| c.check == "placement_courtyard_overlap" && c.status == CheckStatus::Pass), "{apart:?}");
     }
 
     #[test]

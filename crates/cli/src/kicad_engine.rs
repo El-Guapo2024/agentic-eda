@@ -32,10 +32,12 @@ pub fn load_with_schematic(dir: &Path) -> Result<(Design, ConstraintModel), Vec<
 }
 
 /// `kicad-cli pcb drc` on the current design: `{ engine, violations,
-/// unconnected_items, counts }`.
-pub fn drc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+/// unconnected_items, counts }`. `refill_zones`: see
+/// [`eda_kicad_engine::drc`] (off by default; kicad-cli drops its courtyard
+/// checks when it refills).
+pub fn drc(dir: &Path, refill_zones: bool) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    Ok(eda_kicad_engine::drc(&design, &model, &work(dir))?.to_json())
+    Ok(eda_kicad_engine::drc(&design, &model, &work(dir), refill_zones)?.to_json())
 }
 
 /// `kicad-cli sch erc` on the current schematic, in the studio's ERC shape

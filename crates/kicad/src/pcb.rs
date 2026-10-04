@@ -555,7 +555,7 @@ fn write_footprint(
         let uuid = crate::duid_for(&format!("footprint:{}:crtyd", fp.id), &fp.id);
         writeln!(
             out,
-            "\t\t(fp_rect (start {} {}) (end {} {}) (stroke (width 0.05) (type solid)) (fill no) (layer {}) (uuid \"{uuid}\"))",
+            "\t\t(fp_rect (start {} {}) (end {} {}) (stroke (width 0.05) (type solid)) (fill none) (layer {}) (uuid \"{uuid}\"))",
             mm(-hw),
             mm(-hh),
             mm(hw),
@@ -567,7 +567,7 @@ fn write_footprint(
         for (i, outline) in footprint.courtyard_outlines.iter().enumerate() {
             let pts: Vec<String> = outline.iter().map(|&(x, y)| format!("(xy {} {})", mm(if fp.side == Side::Bottom { -x } else { x }), mm(y))).collect();
             let uuid = crate::duid_for(&format!("footprint:{}:crtyd:{i}", fp.id), &fp.id);
-            writeln!(out, "\t\t(fp_poly (pts {}) (stroke (width 0.05) (type solid)) (fill no) (layer {}) (uuid \"{uuid}\"))", pts.join(" "), sexpr_str(crtyd_layer)).unwrap();
+            writeln!(out, "\t\t(fp_poly (pts {}) (stroke (width 0.05) (type solid)) (fill none) (layer {}) (uuid \"{uuid}\"))", pts.join(" "), sexpr_str(crtyd_layer)).unwrap();
         }
     }
 
@@ -750,6 +750,23 @@ mod tests {
         let a = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let b = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn every_footprint_exports_its_courtyard_on_its_own_side() {
+        // kicad-cli judges `courtyards_overlap` from F.CrtYd/B.CrtYd graphics;
+        // a footprint with none gives the gates that ask it nothing to see.
+        // `(fill none)`, not `(fill no)`: kicad-cli reads the latter as no
+        // courtyard at all (found the hard way -- every overlap went unreported).
+        let (design, model) = fixture();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let fps = &design.placement.as_ref().unwrap().footprints;
+        let (top, bottom) = (fps.iter().filter(|f| f.side == Side::Top).count(), fps.iter().filter(|f| f.side == Side::Bottom).count());
+        assert!(top > 0 && bottom > 0, "the fixture has parts on both sides");
+        assert_eq!(out.matches("(layer \"F.CrtYd\")").count(), top, "one courtyard per top-side footprint");
+        assert_eq!(out.matches("(layer \"B.CrtYd\")").count(), bottom, "a bottom-side footprint's courtyard is on B.CrtYd");
+        assert!(out.contains("(fp_rect (start ") && out.contains("(fill none) (layer \"F.CrtYd\")"), "{out}");
+        assert!(out.contains("(46 \"B.CrtYd\" user)") && out.contains("(47 \"F.CrtYd\" user)"), "both courtyard layers declared");
     }
 
     #[test]

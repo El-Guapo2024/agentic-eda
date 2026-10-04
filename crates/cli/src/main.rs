@@ -114,7 +114,7 @@ fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
 /// item does not fail the run (KiCad's own default severities); an `error`
 /// does.
 fn print_drc(d: &eda_model::ir::Design, model: &ConstraintModel, work: &Path) -> Result<bool, Vec<CheckResult>> {
-    let report = eda_kicad_engine::drc(d, model, work)?;
+    let report = eda_kicad_engine::drc(d, model, work, false)?;
     let all: Vec<_> = report.violations.iter().chain(report.unconnected_items.iter()).collect();
     let errors = all.iter().filter(|v| v.severity == "error").count();
     let warnings = all.iter().filter(|v| v.severity == "warning").count();

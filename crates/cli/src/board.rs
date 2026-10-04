@@ -1365,7 +1365,7 @@ pub fn run(
             Ok(())
         }
         "drc" => {
-            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc(&dir)?).unwrap_or_default());
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc(&dir, has(rest, "--refill-zones"))?).unwrap_or_default());
             Ok(())
         }
         // Our own checks, the ones KiCad does not have (`eda-lint`):
