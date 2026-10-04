@@ -55,7 +55,7 @@ fn export_board(dir: &Path) -> Result<(PathBuf, std::collections::HashMap<String
     Ok((pcb_path, map))
 }
 
-fn chrono_like_today() -> String {
+pub(crate) fn chrono_like_today() -> String {
     // YYYY-MM-DD from the system clock (civil-from-days, no extra crate).
     let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() / 86_400).unwrap_or(0) as i64;
     let z = days + 719_468;

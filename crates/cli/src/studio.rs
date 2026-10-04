@@ -530,6 +530,15 @@ fn handle(
             let v = schematic_json(dir, sheet_path).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        // File > Save As... (`common.Control.saveAs`): the design as the derived KiCad files, for the browser to save.
+        ("GET", "/api/board.kicad_pcb") => match kicad_pcb_text(dir) {
+            Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
+            Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
+        },
+        ("GET", "/api/schematic.kicad_sch") => {
+            let v = kicad_sch_files_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("GET", "/api/symbol_library") => {
             let v = symbol_library_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -1678,6 +1687,27 @@ fn footprint_kicad_mod(dir: &Path, name: &str) -> Result<String, Vec<CheckResult
         .and_then(|l| l.by_name(name))
         .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
     Ok(eda_kicad::export_kicad_mod(fp))
+}
+
+/// `GET /api/board.kicad_pcb` -- the design as a derived `.kicad_pcb` (File > Save As... on the PCB tab). `design.json` stays the
+/// only master; this is the same derived file every kicad-cli run is fed, just handed to the browser to save.
+fn kicad_pcb_text(dir: &Path) -> Result<String, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: &crate::kicad_engine::chrono_like_today(), title: "board" })
+}
+
+/// `GET /api/schematic.kicad_sch` -- the schematic as derived `.kicad_sch` files (File > Save As... on the Schematic tab):
+/// `{"files": [{"name", "text"}]}`, the root sheet first (named `board.kicad_sch`; the client renames it after the board) and
+/// then one file per sub-sheet screen, so a hierarchical design saves whole.
+fn kicad_sch_files_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (meta, mut design, model) = board::load(dir)?;
+    // A board with no stored schematic shows (and saves) the one derived from its intent, like every other schematic output.
+    if design.schematic.is_none() {
+        design = eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?;
+    }
+    let project = PathBuf::from(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: &crate::kicad_engine::chrono_like_today(), title: &project }, "board.kicad_sch")?;
+    Ok(json!({ "files": files.into_iter().map(|(name, text)| json!({ "name": name, "text": text })).collect::<Vec<_>>() }))
 }
 
 /// The percent-decoded value of query parameter `key` in a request target (`/api/symbol?lib_id=Device%3AR` -> `Device:R`),

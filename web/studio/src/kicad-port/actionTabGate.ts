@@ -33,10 +33,17 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set(["pcbnew.Interac
 /** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */
 export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set(["eeschema.SymbolDrawing.placeSymbolPin", "eeschema.SymbolLibraryControl.newSymbol", "eeschema.SymbolLibraryControl.saveLibraryAs"]);
 
+/**
+ * `common.*` actions that act on a whole document and exist for the two document editors only: the board editor and
+ * the schematic editor. The Symbol Editor's Ctrl+Shift+S is `saveLibraryAs` (above), so Save As must not be live there.
+ */
+export const BOARD_AND_SCHEMATIC_ONLY: ReadonlySet<string> = new Set(["common.Control.saveAs", "common.Control.updatePcbFromSchematic"]);
+
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {
   if (!registered) return false;
   if (FOOTPRINT_EDITOR_ONLY.has(name)) return tab === "footprint";
   if (SYMBOL_EDITOR_ONLY.has(name)) return tab === "symbol";
+  if (BOARD_AND_SCHEMATIC_ONLY.has(name)) return tab === "pcb" || tab === "schematic";
   if (BOARD_AND_FOOTPRINT.has(name)) return tab === "pcb" || tab === "footprint";
   if (name.startsWith("pcbnew.")) return tab === "pcb";
   if (name.startsWith("eeschema.")) return tab === "schematic";
