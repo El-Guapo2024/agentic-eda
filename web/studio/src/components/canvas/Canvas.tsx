@@ -5,7 +5,8 @@
 //     Ctrl+wheel pans horizontally, Shift/Alt+wheel pans vertically);
 //     middle- and right-drag both pan (KiCad's own drag_middle/drag_right
 //     defaults), edge auto-pan while dragging (off by default, same as
-//     KiCad -- state.autoPanEnabled).
+//     KiCad -- state.prefs.autoPan; the wheel assignment and zoom speed are
+//     Preferences > Mouse and Touchpad's, see kicad-port/preferences.ts).
 //   - click to select (Shift adds); drag from empty space box-selects,
 //     left-to-right = window (fully enclosed), right-to-left = crossing
 //     (touching) -- crates/ops/src/view.rs has no notion of this, it's
@@ -32,7 +33,7 @@ import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./dif
 import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
-import { pickDefaultZoomController, type ZoomController } from "../../kicad-port/zoomController";
+import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { isMac } from "../../platform";
 import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
 import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
@@ -165,7 +166,8 @@ export function Canvas() {
   // direction to decide whether to accelerate) -- one instance per
   // mount, picked once for this platform, not reconstructed per wheel
   // event.
-  const zoomControllerRef = useRef<ZoomController>(pickDefaultZoomController(isMac()));
+  // Preferences > Mouse and Touchpad: the wheel assignment and the zoom controller (rebuilt only when zoom speed/acceleration change).
+  const wheelPrefs = useWheelPrefs();
   // Autopan (view_controls.cpp handleAutoPanning/onTimer) needs the
   // latest state/cursor position inside a self-scheduling
   // requestAnimationFrame loop without restarting that loop on every
@@ -218,8 +220,8 @@ export function Canvas() {
   // wx_view_controls.cpp handleAutoPanning/onTimer: while the cursor sits
   // in the border near a canvas edge DURING an active drag/draw
   // interaction, pan every frame, accelerating with how far past the
-  // border it is. Off entirely unless state.autoPanEnabled (KiCad's own
-  // default, see store.tsx) -- a persistent rAF loop rather than
+  // border it is. Off entirely unless state.prefs.autoPan (KiCad's own
+  // default, see store.tsx; speed from Preferences) -- a persistent rAF loop rather than
   // per-dependency effect restarts, so it reads refs fresh each frame
   // instead of needing to be re-created on every state change.
   useEffect(() => {
@@ -227,7 +229,7 @@ export function Canvas() {
     const tick = () => {
       raf = requestAnimationFrame(tick);
       const s = stateRef.current;
-      if (!s.autoPanEnabled) return;
+      if (!s.prefs.autoPan) return;
       // Only while an interactive tool is actually running -- a box
       // select or move drag in progress, or a route/zone/shape tool
       // mid-click-sequence -- matching source's per-tool SetAutoPan(true)
@@ -239,7 +241,7 @@ export function Canvas() {
       if (!interactive || !pointer) return;
       const screenSize = containerSizeRef.current;
       const dir = computeAutoPanDirection(pointer, screenSize, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin);
-      const step = computeAutoPanStep(dir, screenSize, s.view.scale, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanAcceleration);
+      const step = computeAutoPanStep(dir, screenSize, s.view.scale, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin, s.prefs.autoPanAcceleration);
       if (!step) return;
       dispatch({ type: "SET_VIEW", view: panByWorldDelta(s.view, step.x, step.y) });
     };
@@ -974,7 +976,7 @@ export function Canvas() {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     };
-    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, DEFAULT_VIEW_CONTROL_SETTINGS, zoomControllerRef.current);
+    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
   };
 

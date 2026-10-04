@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchematicSection, SchematicText, Shape, Side, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -839,6 +839,34 @@ pub enum Cmd {
     AddBusEntry { at: Point, size: Point },
     DeleteBusEntry { id: String },
 
+    /// `J` (`eeschema.InteractiveDrawing.placeJunction`, `SCH_DRAWING_TOOLS::SingleClickPlace` ->
+    /// `SCH_LINE_WIRE_BUS_TOOL::AddJunction`): an explicit junction at `at` -- the item that joins wires
+    /// which merely cross (see `eda_model::ir::Junction`). The caller has already checked the point is
+    /// joinable (`IsExplicitJunctionAllowed`: three or more directions meet there); this verb only refuses a
+    /// point that already has one (a click on an existing junction does nothing in source either).
+    AddJunction { at: Point },
+    DeleteJunction { id: String },
+    /// `I` (`eeschema.InteractiveDrawingLineWireBus.drawLines`, `SCH_LINE_WIRE_BUS_TOOL::DrawSegments` on
+    /// `LAYER_NOTES`): a graphic polyline of at least two points, decoration only (see `eda_model::ir::SchLine`).
+    /// `width_um` 0 is the default line width.
+    AddSchLine {
+        pts: Vec<Point>,
+        #[serde(default)]
+        width_um: Um,
+    },
+    DeleteSchLine { id: String },
+    /// `S` (`eeschema.InteractiveDrawing.drawSheet`, `SCH_DRAWING_TOOLS::DrawSheet`): place a hierarchical sheet
+    /// symbol of `size` at `at`, showing the screen in `file` (a bare `*.kicad_sch` name; `.kicad_sch` is added
+    /// when missing). A `file` no sheet uses yet gets a new, empty screen; one that exists is shared
+    /// (`EditSheetProperties`' "use the existing file" case). Refused for an empty or already-used sheet name
+    /// ("A sheet named ... already exists"), a name with a path separator, or a non-positive size.
+    AddSheet { name: String, file: String, at: Point, size: (Um, Um) },
+    /// Alt+S (`eeschema.InteractiveEdit.swap`, `SCH_EDIT_TOOL::Swap`): exchange the positions of two schematic
+    /// items -- symbols (placed or power), labels and free texts, found by id -- and, for two symbols of the
+    /// same library symbol, their orientations. A selection of more than two is a Batch of these in selection
+    /// order, which `Swap`'s own loop (`sorted[i]` with `sorted[i + 1]`) turns into a rotation of the positions.
+    SwapSchItems { a: String, b: String },
+
     /// `dialog_erc.cpp`'s own "Exclude this violation" (right-click a
     /// finding, or the dialog's own Exclude button): accepts one ERC
     /// finding by its own `(check, location)` key -- the same shape
@@ -1122,6 +1150,12 @@ pub enum Cmd {
     /// the same verb here, same precedent `OpenFootprintForEdit`'s own doc
     /// sets). A no-op, not an error, if already open.
     OpenSymbolForEdit { lib_id: String },
+    /// Ctrl+N in the Symbol Editor (`eeschema.SymbolLibraryControl.newSymbol`, `SYMBOL_EDIT_FRAME::CreateNewSymbol`):
+    /// a brand-new, empty symbol in the project library. Unlike `OpenSymbolForEdit` (which opens whatever
+    /// resolves, falling back to a blank symbol) this *refuses* a `lib_id` that is already taken -- in the
+    /// project library or resolvable to a library/builtin symbol -- the way `DIALOG_LIB_NEW_SYMBOL` refuses
+    /// a name the library already has.
+    NewSymbol { lib_id: String },
     /// Remove a symbol definition from the project library entirely.
     /// Never touches a placed instance naming it -- same "explicit, not
     /// automatic" rule `DeleteLibraryFootprint` documents.
@@ -1192,6 +1226,29 @@ pub enum Cmd {
     EditSymbolText { lib_id: String, id: String, text: String, angle_deg: f64, size_mm: f64 },
 }
 
+/// A schematic with nothing on it: what the first schematic verb creates, and the screen a new
+/// hierarchical sheet starts with.
+fn empty_schematic_section() -> SchematicSection {
+    SchematicSection {
+        symbols: vec![],
+        wires: vec![],
+        labels: vec![],
+        texts: vec![],
+        power_symbols: vec![],
+        no_connects: vec![],
+        bus_entries: vec![],
+        junctions: vec![],
+        lines: vec![],
+        erc_exclusions: vec![],
+        erc_pin_map: None,
+        user_fields: Default::default(),
+        imported_from_kicad: false,
+        title_block: None,
+        sheets: vec![],
+        instance_overrides: vec![],
+    }
+}
+
 /// Which editor a `Cmd` belongs to -- `eeschema`'s `design.schematic`, or
 /// everything pcbnew touches (`placement`/`routing`/`drawings`). Two uses:
 /// `crates/cli/src/board.rs`'s undo/redo scopes a stack entry by this (see
@@ -1233,6 +1290,12 @@ impl Cmd {
             | Cmd::DeleteNoConnect { .. }
             | Cmd::AddBusEntry { .. }
             | Cmd::DeleteBusEntry { .. }
+            | Cmd::AddJunction { .. }
+            | Cmd::DeleteJunction { .. }
+            | Cmd::AddSchLine { .. }
+            | Cmd::DeleteSchLine { .. }
+            | Cmd::AddSheet { .. }
+            | Cmd::SwapSchItems { .. }
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
             | Cmd::AddLabel { .. }
@@ -1271,6 +1334,7 @@ impl Cmd {
             | Cmd::DeleteFootprintText { .. }
             | Cmd::MoveFootprintText { .. } => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
+            | Cmd::NewSymbol { .. }
             | Cmd::DeleteLibrarySymbol { .. }
             | Cmd::EditSymbolProperties { .. }
             | Cmd::UpdateSymbolOnBoard { .. }
@@ -1353,9 +1417,20 @@ impl Cmd {
             | Cmd::EditSymbolFields { id, .. }
             | Cmd::RenameSymbol { id, .. } => vec![id],
             Cmd::AddWire { .. } => vec!["wire"],
-            Cmd::DeleteWire { id } | Cmd::DeleteNoConnect { id } | Cmd::DeleteLabel { id } | Cmd::DeletePowerSymbol { id } | Cmd::DeleteSchText { id } | Cmd::DeleteBusEntry { id } => vec![id],
+            Cmd::DeleteWire { id }
+            | Cmd::DeleteNoConnect { id }
+            | Cmd::DeleteLabel { id }
+            | Cmd::DeletePowerSymbol { id }
+            | Cmd::DeleteSchText { id }
+            | Cmd::DeleteBusEntry { id }
+            | Cmd::DeleteJunction { id }
+            | Cmd::DeleteSchLine { id } => vec![id],
             Cmd::AddNoConnect { .. } => vec!["no_connect"],
             Cmd::AddBusEntry { .. } => vec!["bus_entry"],
+            Cmd::AddJunction { .. } => vec!["junction"],
+            Cmd::AddSchLine { .. } => vec!["sch_line"],
+            Cmd::AddSheet { name, .. } => vec![name.as_str()],
+            Cmd::SwapSchItems { a, b } => vec![a, b],
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
@@ -1389,7 +1464,7 @@ impl Cmd {
             | Cmd::DeleteFootprintText { footprint, .. }
             | Cmd::MoveFootprintText { footprint, .. } => vec![footprint.as_str()],
 
-            Cmd::OpenSymbolForEdit { lib_id } | Cmd::DeleteLibrarySymbol { lib_id } | Cmd::EditSymbolProperties { lib_id, .. } | Cmd::UpdateSymbolOnBoard { lib_id } => vec![lib_id.as_str()],
+            Cmd::OpenSymbolForEdit { lib_id } | Cmd::NewSymbol { lib_id } | Cmd::DeleteLibrarySymbol { lib_id } | Cmd::EditSymbolProperties { lib_id, .. } | Cmd::UpdateSymbolOnBoard { lib_id } => vec![lib_id.as_str()],
             Cmd::AddSymbolPin { lib_id, .. }
             | Cmd::MoveSymbolPin { lib_id, .. }
             | Cmd::DeleteSymbolPin { lib_id, .. }
@@ -1786,6 +1861,12 @@ impl<'a> Board<'a> {
             Cmd::AddNoConnect { at } => self.add_no_connect(*at),
             Cmd::AddBusEntry { at, size } => self.add_bus_entry(*at, *size),
             Cmd::DeleteBusEntry { id } => self.delete_bus_entry(id),
+            Cmd::AddJunction { at } => self.add_junction(*at),
+            Cmd::DeleteJunction { id } => self.delete_junction(id),
+            Cmd::AddSchLine { pts, width_um } => self.add_sch_line(pts.clone(), *width_um),
+            Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
+            Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
+            Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
             Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
             Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
@@ -1806,6 +1887,7 @@ impl<'a> Board<'a> {
 
             Cmd::OpenFootprintForEdit { name } => self.open_footprint_for_edit(name),
             Cmd::NewFootprint { name } => self.new_footprint(name),
+            Cmd::NewSymbol { lib_id } => self.new_symbol(lib_id),
             Cmd::DeleteLibraryFootprint { name } => self.delete_library_footprint(name),
             Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model } => {
                 self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone())
@@ -3527,7 +3609,7 @@ impl<'a> Board<'a> {
     /// `derive_schematic` never ran); everything else targets an id that
     /// can only already exist inside a section that is already there.
     fn schematic_mut_or_create(&mut self) -> &mut SchematicSection {
-        self.design.schematic.get_or_insert_with(|| SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![] })
+        self.design.schematic.get_or_insert_with(empty_schematic_section)
     }
 
     fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {
@@ -3684,6 +3766,142 @@ impl<'a> Board<'a> {
         sch.bus_entries.retain(|be| be.id != id);
         if sch.bus_entries.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_bus_entry", id, "no bus entry with this id")]);
+        }
+        Ok(())
+    }
+
+    /// `J`: an explicit junction. A second one at the same point is refused (a click on an existing junction
+    /// does nothing in `SingleClickPlace`), so the undo stack never records a step that changed nothing.
+    fn add_junction(&mut self, at: Point) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut_or_create();
+        if sch.junctions.iter().any(|j| j.at == at) {
+            return Err(vec![CheckResult::fail("ops_junction_exists", "junction", "there is already a junction at this point")]);
+        }
+        sch.junctions.push(Junction { id: String::new(), at });
+        sch.junctions.sort_by_key(|j| j.at);
+        sch.assign_missing_ids();
+        Ok(())
+    }
+
+    fn delete_junction(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.junctions.len();
+        sch.junctions.retain(|j| j.id != id);
+        if sch.junctions.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_junction", id, "no junction with this id")]);
+        }
+        Ok(())
+    }
+
+    /// `I`: a graphic line on the notes layer.
+    fn add_sch_line(&mut self, mut pts: Vec<Point>, width_um: Um) -> Result<(), Vec<CheckResult>> {
+        // A zero-length segment is dropped (`SCH_LINE_WIRE_BUS_TOOL::finishSegments` deletes null lines): a double-click lands its point twice.
+        pts.dedup();
+        if pts.len() < 2 {
+            return Err(vec![CheckResult::fail("ops_bad_line", "line", "a line needs at least two points")]);
+        }
+        if width_um < 0 {
+            return Err(vec![CheckResult::fail("ops_bad_line", "line", "a line width cannot be negative")]);
+        }
+        let sch = self.schematic_mut_or_create();
+        sch.lines.push(SchLine { id: String::new(), pts, width_um });
+        sch.assign_missing_ids();
+        Ok(())
+    }
+
+    fn delete_sch_line(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        let before = sch.lines.len();
+        sch.lines.retain(|l| l.id != id);
+        if sch.lines.len() == before {
+            return Err(vec![CheckResult::fail("ops_unknown_line", id, "no graphic line with this id")]);
+        }
+        Ok(())
+    }
+
+    /// `S`: a hierarchical sheet symbol. See `Cmd::AddSheet`.
+    fn add_sheet(&mut self, name: &str, file: &str, at: Point, size: (Um, Um)) -> Result<(), Vec<CheckResult>> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_sheet", "sheet", "a sheet needs a name")]);
+        }
+        let file = file.trim();
+        if file.is_empty() || file.contains('/') || file.contains('\\') {
+            return Err(vec![CheckResult::fail("ops_bad_sheet", file, "a sheet file is a bare file name (no folders)")]);
+        }
+        let file = if file.ends_with(".kicad_sch") { file.to_string() } else { format!("{file}.kicad_sch") };
+        if size.0 <= 0 || size.1 <= 0 {
+            return Err(vec![CheckResult::fail("ops_bad_sheet", name, "a sheet needs a positive size")]);
+        }
+        let sch = self.schematic_mut_or_create();
+        if sch.sheets.iter().any(|s| s.name == name) {
+            return Err(vec![CheckResult::fail("ops_sheet_name_taken", name, format!("a sheet named '{name}' already exists on this sheet"))]);
+        }
+        sch.sheets.push(SheetInstance { id: String::new(), name: name.to_string(), file: file.clone(), at, size, pins: vec![] });
+        sch.assign_missing_ids();
+        // a file nothing uses yet gets its own empty screen; one that is already there is shared
+        self.design.sheet_contents.get_or_insert_with(BTreeMap::new).entry(file).or_insert_with(empty_schematic_section);
+        Ok(())
+    }
+
+    /// Alt+S: see `Cmd::SwapSchItems`.
+    fn swap_sch_items(&mut self, a: &str, b: &str) -> Result<(), Vec<CheckResult>> {
+        #[derive(Clone, Copy)]
+        enum Slot {
+            Symbol(usize),
+            Power(usize),
+            Label(usize),
+            Text(usize),
+        }
+        if a == b {
+            return Err(vec![CheckResult::fail("ops_bad_swap", a, "a swap needs two different items")]);
+        }
+        let sch = self.schematic_mut()?;
+        let find = |id: &str| -> Result<Slot, Vec<CheckResult>> {
+            let symbols: Vec<usize> = sch.symbols.iter().enumerate().filter(|(_, s)| s.id == id).map(|(i, _)| i).collect();
+            match symbols.len() {
+                1 => return Ok(Slot::Symbol(symbols[0])),
+                0 => {}
+                n => return Err(vec![CheckResult::fail("ops_ambiguous_symbol", id, format!("reference '{id}' has {n} placed units -- a swap needs one"))]),
+            }
+            if let Some(i) = sch.power_symbols.iter().position(|p| p.id == id) {
+                return Ok(Slot::Power(i));
+            }
+            if let Some(i) = sch.labels.iter().position(|l| l.id == id) {
+                return Ok(Slot::Label(i));
+            }
+            if let Some(i) = sch.texts.iter().position(|t| t.id == id) {
+                return Ok(Slot::Text(i));
+            }
+            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label or text with this id to swap")])
+        };
+        let (sa, sb) = (find(a)?, find(b)?);
+        let at_of = |s: Slot| match s {
+            Slot::Symbol(i) => sch.symbols[i].at,
+            Slot::Power(i) => sch.power_symbols[i].at,
+            Slot::Label(i) => sch.labels[i].at,
+            Slot::Text(i) => sch.texts[i].at,
+        };
+        let (pa, pb) = (at_of(sa), at_of(sb));
+        let mut set_at = |s: Slot, p: Point| match s {
+            Slot::Symbol(i) => sch.symbols[i].at = p,
+            Slot::Power(i) => sch.power_symbols[i].at = p,
+            Slot::Label(i) => sch.labels[i].at = p,
+            Slot::Text(i) => sch.texts[i].at = p,
+        };
+        set_at(sa, pb);
+        set_at(sb, pa);
+        // "Only swap orientations when both symbols are the same library symbol" -- a resistor and an LED have different default orientations
+        if let (Slot::Symbol(i), Slot::Symbol(j)) = (sa, sb) {
+            if sch.symbols[i].lib_id == sch.symbols[j].lib_id {
+                let (rot, mir, mir_y) = (sch.symbols[i].rot, sch.symbols[i].mirrored, sch.symbols[i].mirror_y);
+                sch.symbols[i].rot = sch.symbols[j].rot;
+                sch.symbols[i].mirrored = sch.symbols[j].mirrored;
+                sch.symbols[i].mirror_y = sch.symbols[j].mirror_y;
+                sch.symbols[j].rot = rot;
+                sch.symbols[j].mirrored = mir;
+                sch.symbols[j].mirror_y = mir_y;
+            }
         }
         Ok(())
     }
@@ -4430,6 +4648,20 @@ impl<'a> Board<'a> {
             Some(sym) => LibrarySymbol::from_engine_symbol(&sym),
             None => LibrarySymbol::new_empty(lib_id),
         };
+        lib_sym.assign_missing_ids();
+        self.symbol_library_mut().symbols.push(lib_sym);
+        Ok(())
+    }
+
+    /// `SYMBOL_EDIT_FRAME::CreateNewSymbol`: see `Cmd::NewSymbol`.
+    fn new_symbol(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
+        if lib_id.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_symbol", "symbol", "a symbol needs a lib_id")]);
+        }
+        if self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)).is_some() || self.model.symbol_of(lib_id).is_some() {
+            return Err(vec![CheckResult::fail("ops_symbol_exists", lib_id, "a symbol with this name already exists; pick another name")]);
+        }
+        let mut lib_sym = LibrarySymbol::new_empty(lib_id);
         lib_sym.assign_missing_ids();
         self.symbol_library_mut().symbols.push(lib_sym);
         Ok(())

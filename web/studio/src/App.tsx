@@ -18,6 +18,7 @@ import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
 import { ErcDialog } from "./components/ErcDialog";
 import { HotkeysDialog } from "./components/HotkeysDialog";
+import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
@@ -37,6 +38,8 @@ import { CreateArrayDialog } from "./components/CreateArrayDialog";
 import { DimensionPropertiesDialog } from "./components/DimensionPropertiesDialog";
 import { BoardSetupDialog } from "./components/BoardSetupDialog";
 import { LabelDialog } from "./components/LabelDialog";
+import { SheetDialog } from "./components/SheetDialog";
+import { BusUnfoldDialog } from "./components/BusUnfoldDialog";
 import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
 import { SchTextDialog } from "./components/SchTextDialog";
 import { SymbolChooserDialog } from "./components/SymbolChooserDialog";
@@ -188,6 +191,7 @@ function StudioFrame() {
       <DrcDialog />
       <ErcDialog />
       <HotkeysDialog />
+      <PreferencesDialog />
       <ZoomAreaOverlay />
       <FootprintPropertiesDialog />
       <NetInspectorDialog />
@@ -207,6 +211,8 @@ function StudioFrame() {
       <DimensionPropertiesDialog />
       <BoardSetupDialog />
       <LabelDialog />
+      <SheetDialog />
+      <BusUnfoldDialog />
       <PowerSymbolDialog />
       <SchTextDialog />
       <SymbolChooserDialog />

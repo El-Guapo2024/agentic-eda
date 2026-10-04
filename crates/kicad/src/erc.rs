@@ -1692,7 +1692,7 @@ mod tests {
         Design {
             schema: 1,
             provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
-            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }),
+            schematic: Some(SchematicSection { symbols, wires: vec![], labels, texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }),
             nets: None,
             placement: None,
             routing: None,

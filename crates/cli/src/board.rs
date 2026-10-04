@@ -213,7 +213,8 @@ fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut Constrain
         }
     }
 
-    let nets = eda_kicad::reconcile(&pin_world, &mut sch.wires, &sch.labels, &mut sch.power_symbols, &mut sch.no_connects);
+    let junctions: Vec<Point> = sch.junctions.iter().map(|j| j.at).collect();
+    let nets = eda_kicad::reconcile(&pin_world, &mut sch.wires, &sch.labels, &mut sch.power_symbols, &mut sch.no_connects, &junctions);
     design.nets = Some(nets);
 }
 
@@ -787,6 +788,12 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteNoConnect { id } => format!("schematic delete-no-connect {id}"),
         Cmd::AddBusEntry { at, size } => format!("schematic bus-entry --at {},{} --size {},{}", mm(at.x), mm(at.y), mm(size.x), mm(size.y)),
         Cmd::DeleteBusEntry { id } => format!("schematic delete-bus-entry {id}"),
+        Cmd::AddJunction { at } => format!("schematic junction --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::DeleteJunction { id } => format!("schematic delete-junction {id}"),
+        Cmd::AddSchLine { pts, .. } => format!("schematic line --points {}", pts.len()),
+        Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
+        Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::SwapSchItems { a, b } => format!("schematic swap {a} {b}"),
         Cmd::AddErcExclusion { check, location } => format!("schematic erc-exclude {check:?} {location:?}"),
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
@@ -825,6 +832,7 @@ fn cmd_line(c: &Cmd) -> String {
         // gives) -- activity.jsonl's human-readable line only.
         Cmd::OpenFootprintForEdit { name } => format!("footprint open {name:?}"),
         Cmd::NewFootprint { name } => format!("footprint new {name:?}"),
+        Cmd::NewSymbol { lib_id } => format!("symbol new {lib_id:?}"),
         Cmd::DeleteLibraryFootprint { name } => format!("footprint delete {name:?}"),
         Cmd::EditFootprintProperties { name, description, .. } => format!("footprint properties {name:?} --description {description:?}"),
         Cmd::SetFootprintAnchor { name, at } => format!("footprint anchor {name:?} --at {},{}", mm(at.x), mm(at.y)),
@@ -959,6 +967,10 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddWire { .. } | Cmd::DeleteWire { .. } => "schematic-wire",
         Cmd::AddNoConnect { .. } | Cmd::DeleteNoConnect { .. } => "schematic-no-connect",
         Cmd::AddBusEntry { .. } | Cmd::DeleteBusEntry { .. } => "schematic-bus-entry",
+        Cmd::AddJunction { .. } | Cmd::DeleteJunction { .. } => "schematic-junction",
+        Cmd::AddSchLine { .. } | Cmd::DeleteSchLine { .. } => "schematic-line",
+        Cmd::AddSheet { .. } => "schematic-sheet",
+        Cmd::SwapSchItems { .. } => "schematic-swap",
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } => "schematic-erc-exclusion",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
@@ -976,7 +988,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
 
-        Cmd::OpenSymbolForEdit { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
+        Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
         Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } => "symbol-shape",
         Cmd::EditSymbolText { .. } => "symbol-text",
@@ -1587,7 +1599,7 @@ mod tests {
                 erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
-                instance_overrides: vec![],
+                instance_overrides: vec![], junctions: vec![], lines: vec![],
             }),
             nets: None,
             // `Board` (crates/ops) always expects a placement section to

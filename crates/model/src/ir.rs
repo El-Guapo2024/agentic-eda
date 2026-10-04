@@ -206,6 +206,12 @@ pub struct SchematicSection {
     /// Bus entries (GAPS.md #20) — see [`BusEntry`]'s own doc.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bus_entries: Vec<BusEntry>,
+    /// Explicit junctions (`J`) -- see [`Junction`]. Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub junctions: Vec<Junction>,
+    /// Graphic lines on the notes layer (`I`) -- see [`SchLine`]. Additive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<SchLine>,
     /// Accepted ("excluded") ERC findings -- `dialog_erc.cpp`'s own
     /// per-sheet `SCHEMATIC::RecordERCExclusions`. Sorted by (check,
     /// location); see [`ErcExclusion`]'s own doc for why it has no `id`.
@@ -528,6 +534,52 @@ impl BusEntry {
     }
 }
 
+/// An explicit junction (`SCH_JUNCTION`, the `J` tool): joins every wire that passes through or ends
+/// at `at`, which is what turns two wires that merely *cross* into one net -- wires that end on each
+/// other, or an end landing on another wire's middle, already join by geometry without one. It is
+/// written to the `.kicad_sch` as a `(junction ...)` item and read back from one. Additive: absent
+/// from every design that never placed one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Junction {
+    /// Stable id (`jct_xxxxxxxxxxxx`) -- see `Wire::id`'s doc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub at: Point,
+}
+
+impl Junction {
+    fn id_seed(&self) -> String {
+        format!("{},{}", self.at.x, self.at.y)
+    }
+}
+
+/// A graphic polyline on the schematic's notes layer (`SCH_LINE` on `LAYER_NOTES`, drawn by the
+/// `Draw Lines` tool, `I`): decoration with no electrical meaning -- never part of any net, never a
+/// connection point. Written to the `.kicad_sch` as a `(polyline ...)` item and read back from one.
+/// `width_um` 0 means the default line width. Additive: absent from every design with none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchLine {
+    /// Stable id (`sln_xxxxxxxxxxxx`) -- see `Wire::id`'s doc.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    pub pts: Vec<Point>,
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub width_um: Um,
+}
+
+fn is_zero_um(v: &Um) -> bool {
+    *v == 0
+}
+
+impl SchLine {
+    fn id_seed(&self) -> String {
+        let pts: Vec<String> = self.pts.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
+        pts.join(";")
+    }
+}
+
 /// A project-scoped bus alias (`BUS_ALIAS`, GAPS.md #20): a name that
 /// stands in for a fixed list of member net names anywhere a bus vector/
 /// group name could otherwise be written (`{MY_ALIAS}`) or, bare, as a bus
@@ -735,6 +787,8 @@ impl SchematicSection {
             .chain(self.texts.iter().map(|t| &t.id))
             .chain(self.no_connects.iter().map(|nc| &nc.id))
             .chain(self.bus_entries.iter().map(|be| &be.id))
+            .chain(self.junctions.iter().map(|j| &j.id))
+            .chain(self.lines.iter().map(|l| &l.id))
             .filter(|s| !s.is_empty())
             .cloned()
             .collect();
@@ -786,6 +840,26 @@ impl SchematicSection {
                 let id = next_item_id("bent", &self.bus_entries[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.bus_entries[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.junctions.len()).collect();
+        order.sort_by(|&a, &b| self.junctions[a].at.cmp(&self.junctions[b].at));
+        for i in order {
+            if self.junctions[i].id.is_empty() {
+                let id = next_item_id("jct", &self.junctions[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.junctions[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.lines.len()).collect();
+        order.sort_by(|&a, &b| self.lines[a].pts.first().cmp(&self.lines[b].pts.first()));
+        for i in order {
+            if self.lines[i].id.is_empty() {
+                let id = next_item_id("sln", &self.lines[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.lines[i].id = id;
             }
         }
 
@@ -3235,6 +3309,8 @@ mod tests {
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![],
+                junctions: vec![],
+                lines: vec![],
             }),
             nets: None,
             placement: None,

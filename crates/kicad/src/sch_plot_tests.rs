@@ -108,7 +108,7 @@ pub(crate) fn hierarchical() -> (Design, ConstraintModel) {
             size: (30_000, 20_000),
             pins: vec![SheetPin { id: String::new(), name: "SIG".into(), shape: eda_model::ir::LabelShape::Passive, at: Point { x: 20_000, y: 30_000 } }],
         }],
-        instance_overrides: vec![],
+        instance_overrides: vec![], junctions: vec![], lines: vec![],
         imported_from_kicad: false,
     };
     let mut screens = BTreeMap::new();
