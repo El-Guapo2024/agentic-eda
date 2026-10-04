@@ -22,6 +22,7 @@ import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
 import { repeatSource } from "../kicad-port/schRepeat";
+import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -644,13 +645,13 @@ export interface StudioState {
    */
   localOriginUm: { x: number; y: number };
   /**
-   * view_controls.cpp VC_SETTINGS::m_autoPanSettingEnabled -- edge
-   * auto-pan while dragging/drawing near the canvas border. KiCad ships
-   * with this OFF (input.auto_pan defaults false; Preferences > Mouse and
-   * Touchpad turns it on) -- same default here, see kicad-port/
-   * viewControls.ts.
+   * Preferences > Mouse and Touchpad (`common.SuiteControl.openPreferences`, kicad-port/preferences.ts): the wheel
+   * gestures, the zoom speed/acceleration and `prefs.autoPan` -- view_controls.cpp VC_SETTINGS::m_autoPanSettingEnabled,
+   * edge auto-pan while dragging/drawing near the canvas border. KiCad ships with this OFF (input.auto_pan defaults
+   * false) -- same default here. Saved in the browser's local storage (see StudioProvider).
    */
-  autoPanEnabled: boolean;
+  prefs: Preferences;
+  preferencesDialogOpen: boolean;
 
   /**
    * GET /api/schematic (structured symbols/wires/labels, see studio.rs),
@@ -743,6 +744,15 @@ export interface StudioState {
   routerSettings: { mode: RouteMode; removeLoops: boolean };
 }
 
+/** The browser's local storage, or null where it is absent or reading it throws (private windows, blocked site data, node tests). */
+function browserStorage(): Storage | null {
+  try {
+    return typeof window !== "undefined" ? window.localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
 const initialState: StudioState = {
   board: null,
   boardError: null,
@@ -828,7 +838,8 @@ const initialState: StudioState = {
   moveOriginUm: null,
   dragAttach: null,
   localOriginUm: { x: 0, y: 0 },
-  autoPanEnabled: false,
+  prefs: loadPreferences(browserStorage()),
+  preferencesDialogOpen: false,
   schematic: null,
   schematicError: null,
   ratsnest: null,
@@ -913,6 +924,8 @@ export type Action =
   | { type: "SET_DRAG_ATTACH"; attach: Record<string, [number, number][]> | null }
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
   | { type: "TOGGLE_AUTO_PAN" }
+  | { type: "SET_PREFERENCES"; prefs: Preferences }
+  | { type: "SET_PREFERENCES_DIALOG_OPEN"; open: boolean }
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
   | { type: "SCHEMATIC_ERR"; message: string }
   | { type: "RATSNEST_OK"; ratsnest: Ratsnest }
@@ -1185,7 +1198,11 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_LOCAL_ORIGIN":
       return { ...state, localOriginUm: action.at };
     case "TOGGLE_AUTO_PAN":
-      return { ...state, autoPanEnabled: !state.autoPanEnabled };
+      return { ...state, prefs: { ...state.prefs, autoPan: !state.prefs.autoPan } };
+    case "SET_PREFERENCES":
+      return { ...state, prefs: action.prefs };
+    case "SET_PREFERENCES_DIALOG_OPEN":
+      return { ...state, preferencesDialogOpen: action.open };
     case "SCHEMATIC_OK":
       return { ...state, schematic: action.schematic, schematicError: null };
     case "SCHEMATIC_ERR":
@@ -1312,6 +1329,8 @@ function reducer(state: StudioState, action: Action): StudioState {
 export interface StudioApi {
   /** Force an immediate /api/state refetch (after a command, or on demand). */
   refresh: () => Promise<void>;
+  /** The store's latest state -- unlike the `useStudioState()` snapshot a handler closed over, it includes what an `await`ed refetch just loaded. */
+  getState: () => StudioState;
   /** R/Shift+R (edit_tool.cpp Rotate): `refs` defaults to the selection; the caller passes RequestSelection's hover fallback. Footprints and vias rotate; several items share one pivot and commit as ONE undo step. */
   rotateSelection: (quarterTurns: number, refs?: string[]) => Promise<void>;
   ripSelection: () => Promise<void>;
@@ -1407,6 +1426,10 @@ const StudioApiContext = createContext<StudioApi | null>(null);
 
 export function StudioProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  // Preferences persist in the browser (the studio's equivalent of KiCad's common.json) -- UI settings, not design data.
+  useEffect(() => {
+    savePreferences(browserStorage(), state.prefs);
+  }, [state.prefs]);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -1653,6 +1676,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const api: StudioApi = {
     refresh,
+    getState: () => stateRef.current,
     partByRef: (ref) => stateRef.current.board?.parts.find((p) => p.ref === ref),
     trackById: (id) => stateRef.current.board?.routing?.tracks.find((t) => t.id === id),
     viaById: (id) => stateRef.current.board?.routing?.vias.find((v) => v.id === id),

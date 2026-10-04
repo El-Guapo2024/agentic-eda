@@ -22,7 +22,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { LabelScope, Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
-import { boundsOfPoints, fitTransform, zoomAbout } from "./canvas/view";
+import { boundsOfPoints, fitTransform } from "./canvas/view";
+import { handleWheel, type WheelInput } from "../kicad-port/viewControls";
+import { useWheelPrefs } from "../actions/useWheelPrefs";
 import { paintSchematic } from "./schematic/painter";
 import { resolveLibSymbol } from "./schematic/libSymbol";
 import { GRID } from "./schematic/layout";
@@ -159,6 +161,7 @@ export function SchematicView() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
+  const wheelPrefs = useWheelPrefs();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -352,13 +355,24 @@ export function SchematicView() {
       className="pcb-canvas-container"
       style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
       onWheel={(e) => {
-        if (!sch) return;
+        // Before the first fit the view has no scale yet (0): panning by 1/scale would make it NaN.
+        if (!sch || !(state.schematicView.scale > 0)) return;
         e.preventDefault();
         userMovedRef.current = true;
+        // wx_view_controls.cpp onWheel via handleWheel, the same as the PCB and library canvases: the wheel gestures and zoom speed
+        // are Preferences > Mouse and Touchpad's.
         const rect = containerRef.current!.getBoundingClientRect();
-        const px = e.clientX - rect.left,
-          py = e.clientY - rect.top;
-        dispatch({ type: "SET_SCHEMATIC_VIEW", view: zoomAbout(state.schematicView, px, py, Math.exp(-e.deltaY * 0.0015)) });
+        const input: WheelInput = {
+          deltaX: e.deltaX,
+          deltaY: e.deltaY,
+          shiftKey: e.shiftKey,
+          ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+          altKey: e.altKey,
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top,
+        };
+        const result = handleWheel(state.schematicView, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
+        if (result.kind !== "unhandled") dispatch({ type: "SET_SCHEMATIC_VIEW", view: result.view });
       }}
       onPointerDown={(e) => {
         if (!sch) return;

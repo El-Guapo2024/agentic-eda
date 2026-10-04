@@ -20,7 +20,7 @@ import type { Cmd, CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { finishInteractiveRoute, cancelInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
-import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel } from "../api/client";
+import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic } from "../api/client";
 import { formatLength } from "../state/units";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, gridPresetIndex, fastGridCycleTarget, DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2, type CursorDir } from "../kicad-port/cursorControl";
@@ -58,6 +58,7 @@ import { netNavigatorItems, stepNetItem, type NavSchematic } from "../kicad-port
 import { repeatCmds } from "../kicad-port/schRepeat";
 import { nextReference } from "../kicad-port/nextReference";
 import { refDesPrefix } from "../kicad-port/packFootprints";
+import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
@@ -962,6 +963,27 @@ export function useActionRunner() {
       if (state.tab === "pcb") dispatch({ type: "SET_PLOT_DIALOG_OPEN", open: true });
       else if (state.tab === "schematic") dispatch({ type: "SET_SCH_PLOT_DIALOG_OPEN", open: true });
     });
+    // `common.SuiteControl.openPreferences` (ACTIONS::openPreferences, Ctrl+,): the Preferences dialog; the one page the studio can back
+    // is Mouse and Touchpad (PreferencesDialog.tsx, kicad-port/preferences.ts) -- every canvas reads what it saves.
+    m.set("common.SuiteControl.openPreferences", () => dispatch({ type: "SET_PREFERENCES_DIALOG_OPEN", open: true }));
+    // `common.Control.updatePcbFromSchematic` (F8): see kicad-port/updatePcb.ts -- the board is re-derived from the schematic on
+    // every schematic edit, so this refetches the design and reports what an update would leave (nothing to apply).
+    m.set("common.Control.updatePcbFromSchematic", () => {
+      void api.refresh().then(() => {
+        const parts = api.getState().board?.parts ?? [];
+        dispatch({ type: "TOAST", message: updatePcbMessage(parts), kind: "info" });
+      });
+    });
+    // `common.Control.saveAs` (ACTIONS::saveAs, Ctrl+Shift+S): "Save current document to another location". design.json is the only
+    // master, so what is saved is the editor's derived KiCad file(s) -- `.kicad_pcb`, or the `.kicad_sch` (+ one per sub-sheet) --
+    // handed to the browser's Save (kicad-port/saveAs.ts). Not live on the library editors (tab gate).
+    m.set("common.Control.saveAs", () => {
+      const name = state.board?.name ?? "board";
+      const saved = (files: string[]) => dispatch({ type: "TOAST", message: `Saved ${files.join(", ")} (derived from design.json).`, kind: "info" });
+      const failed = (e: unknown) => dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
+      if (state.tab === "pcb") downloadKicadPcb(name).then((f) => saved([f])).catch(failed);
+      else if (state.tab === "schematic") downloadKicadSchematic(name).then(saved).catch(failed);
+    });
     m.set("pcbnew.EditorControl.generateDrillFiles", pcbOnly(() => dispatch({ type: "SET_GENERATE_DRILL_DIALOG_OPEN", open: true })));
     m.set("pcbnew.EditorControl.generatePosFile", pcbOnly(() => dispatch({ type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN", open: true })));
 
@@ -1345,10 +1367,11 @@ export function useActionRunner() {
     // print status, datasheet, copy-as-text, find-next-marker, library
     // search focus. Each registration cites its KiCad source function.
     // Pure math lives in kicad-port/cursorControl.ts, markerNav.ts and
-    // itemText.ts (unit tested). Not ported (no subsystem behind them):
-    // open/new/saveAs, toggleGridOverrides, updatePcbFromSchematic,
-    // pasteSpecial, cycleArcEditMode, openPreferences -- see
-    // docs/parity/UI-ACTIONS.md notes.
+    // itemText.ts (unit tested). saveAs, updatePcbFromSchematic and
+    // openPreferences are registered further down (kicad-port/saveAs.ts,
+    // updatePcb.ts, preferences.ts). Not ported (no subsystem behind
+    // them; tools/ui-parity-missing.json holds the reasons): new, open,
+    // toggleGridOverrides, pasteSpecial, cycleArcEditMode.
     // ===================================================================
     const onCanvasTab = state.tab === "pcb" || state.tab === "schematic";
     const canvasOnly =

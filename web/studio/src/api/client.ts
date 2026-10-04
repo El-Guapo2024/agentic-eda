@@ -8,6 +8,7 @@ import type { DrcEngine, BoardGlbResult, BoardState, BoardStatsOptions, BoardSta
 import type { LengthUnit } from "../state/units";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
+import { fileStem, schematicSaveNames } from "../kicad-port/saveAs";
 
 export class ApiError extends Error {}
 
@@ -341,6 +342,38 @@ export async function downloadSymbolLibraryKicadSym(): Promise<void> {
   const r = await fetch("/api/symbol_library/export", { cache: "no-store" });
   if (!r.ok) throw new ApiError(await r.text());
   saveTextAs(await r.text(), "eda.kicad_sym");
+}
+
+/**
+ * File > Save As... on the PCB tab (`common.Control.saveAs`): the design as a derived `.kicad_pcb`
+ * (`GET /api/board.kicad_pcb`), saved as `<board>.kicad_pcb`. Resolves to the file name.
+ */
+export async function downloadKicadPcb(boardName: string): Promise<string> {
+  const r = await fetch("/api/board.kicad_pcb", { cache: "no-store" });
+  if (!r.ok) throw new ApiError(await r.text());
+  const fileName = `${fileStem(boardName)}.kicad_pcb`;
+  saveTextAs(await r.text(), fileName);
+  return fileName;
+}
+
+/**
+ * ... and on the Schematic tab: the derived `.kicad_sch` files (`GET /api/schematic.kicad_sch`) -- the root sheet
+ * as `<board>.kicad_sch`, then each sub-sheet's own file, so a hierarchical design saves whole. Resolves to the file names.
+ */
+export async function downloadKicadSchematic(boardName: string): Promise<string[]> {
+  const r = await fetch("/api/schematic.kicad_sch", { cache: "no-store" });
+  const j = (await r.json()) as { files?: Array<{ name: string; text: string }>; error?: string };
+  if (j.error || !j.files || j.files.length === 0) throw new ApiError(j.error ?? "there is no schematic to save");
+  const names = schematicSaveNames(
+    j.files.map((f) => f.name),
+    boardName
+  );
+  for (const [i, f] of j.files.entries()) {
+    // one download per file; a short gap keeps the browser from folding them into one
+    if (i > 0) await new Promise((resolve) => setTimeout(resolve, 250));
+    saveTextAs(f.text, names[i]!);
+  }
+  return names;
 }
 
 /** A browser download of `text` as `fileName` (the web equivalent of a native Save dialog). */
