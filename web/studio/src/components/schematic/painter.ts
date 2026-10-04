@@ -78,6 +78,8 @@ const VALUE_FONT = 1.4;
 const PIN_FONT = 1.1;
 /** eeschema/default_values.h DEFAULT_JUNCTION_DIAM (36 mils) -- radius, um. A schematic can override this per-file (KiCad's own `(junction (diameter ...))`), which this app's backend doesn't expose yet, so this is the factory default only. */
 const JUNCTION_RADIUS_UM = 457.2;
+/** eeschema `default_line_thickness` (6 mil) -- um, the width of a graphic line with none of its own. */
+const NOTES_LINE_UM = 152.4;
 /** eeschema/default_values.h DEFAULT_NOCONNECT_SIZE (48 mils, the marker's full width) -- half-width, um, i.e. how far each arm of the top-level `no_connects[]` X reaches from center. Read directly from sch_painter.cpp: `d = max(m_size, 3*defaultPen)/2 = max(48,18)/2 = 24 mil`. */
 const NOCONNECT_HALF_UM = 609.6;
 /** Radius, um, of an ERC marker's circle -- not a KiCad constant (real KiCad's MARKER_BASE is a small fixed-pixel icon, screen-space-constant regardless of zoom; this canvas has no such primitive, so markers scale with the sheet like everything else here). Sized against this file's own JUNCTION_RADIUS_UM/NOCONNECT_HALF_UM just above rather than canvas/painter.ts's PCB-scale DRC_MARKER_RADIUS_UM (300) -- a schematic's own features already read larger at a normal working zoom, so a marker sized to match sits comfortably between the two. */
@@ -876,6 +878,25 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.beginPath();
     ctx.arc(x, y, Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
     ctx.fill();
+  }
+  // Explicit junctions (`J`, `SCH_JUNCTION`): the same dot, drawn wherever one was placed -- on a crossing it is what joins the two
+  // wires. A selected one is drawn in the selection color.
+  for (const j of sch.junctions ?? []) {
+    ctx.fillStyle = layerColor(opts.selection.has(j.id) ? "LAYER_SELECTION_SHADOWS" : "LAYER_JUNCTION");
+    ctx.beginPath();
+    ctx.arc(j.at[0], j.at[1], Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Graphic lines on the notes layer (`I`, `SCH_LINE` on `LAYER_NOTES`): decoration, no electrical meaning. KiCad's default line
+  // thickness (`default_line_thickness`, 6 mil) when none was set.
+  for (const l of sch.lines ?? []) {
+    const on = opts.selection.has(l.id);
+    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOTES");
+    ctx.lineWidth = Math.max(l.width_um > 0 ? l.width_um : NOTES_LINE_UM, hair * (on ? 2.5 : 1));
+    ctx.beginPath();
+    l.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.stroke();
   }
 
   // Hierarchical sheets (GAPS.md #6) -- drawn early, like the wires/

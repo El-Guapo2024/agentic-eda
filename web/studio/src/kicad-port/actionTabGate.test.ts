@@ -50,6 +50,19 @@ test("isActionEnabledForTab: symbol-editor-frame actions are enabled on the symb
   }
 });
 
+test("isActionEnabledForTab: Save As and Update PCB from Schematic exist for the board and schematic editors only, so Ctrl+Shift+S on the Symbol tab reaches saveLibraryAs", () => {
+  for (const name of ["common.Control.saveAs", "common.Control.updatePcbFromSchematic"]) {
+    assert.equal(isActionEnabledForTab(name, "pcb", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "schematic", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "symbol", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "footprint", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "3d", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "pcb", false), false, "unregistered stays disabled");
+  }
+  const onSymbol = ["common.Control.saveAs", "eeschema.SymbolLibraryControl.saveLibraryAs"].find((n) => isActionEnabledForTab(n, "symbol", true));
+  assert.equal(onSymbol, "eeschema.SymbolLibraryControl.saveLibraryAs");
+});
+
 test("isActionEnabledForTab: Ctrl+N -- the editor-specific actions are enabled only on their own tab (common.Control.new is only registered on the pcb/schematic tabs, so exactly one is live per tab)", () => {
   assert.equal(isActionEnabledForTab("pcbnew.ModuleEditor.newFootprint", "pcb", true), false);
   assert.equal(isActionEnabledForTab("eeschema.SymbolLibraryControl.newSymbol", "schematic", true), false);

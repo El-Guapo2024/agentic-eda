@@ -262,6 +262,26 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::mm_to_um(size.0), y: crate::import::mm_to_um(size.1) } });
     }
 
+    // `(junction (at x y) ...)`: an explicit junction (`SCH_JUNCTION`) -- the only thing that joins two wires that merely cross
+    // (see `Junction`; `reconcile` seeds it). Junctions the writer derives from geometry (`wire_junction_points`) come back as
+    // explicit ones too: harmless, they sit where the wires already join.
+    let mut junctions: Vec<eda_model::ir::Junction> = Vec::new();
+    for j in sexpr::find_all(root, "junction") {
+        let Some(at) = sexpr::find(j, "at").and_then(point_mm) else { continue };
+        let at = mm_point_to_um(at);
+        if !junctions.iter().any(|x| x.at == at) {
+            junctions.push(eda_model::ir::Junction { id: String::new(), at });
+        }
+    }
+    // `(polyline (pts ...) (stroke (width w) ...))`: a graphic line on the notes layer (`SchLine`).
+    let mut lines: Vec<eda_model::ir::SchLine> = Vec::new();
+    for pl in sexpr::find_all(root, "polyline") {
+        if let Some(pts) = import_pts(pl).filter(|p| p.len() >= 2) {
+            let width_um = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
+            lines.push(eda_model::ir::SchLine { id: String::new(), pts, width_um });
+        }
+    }
+
     // `(bus_alias "NAME" (members "A" "B"))` (GAPS.md #20): real modern
     // KiCad only *writes* these into the `.kicad_pro` project file this
     // project has no reader/writer for at all -- this legacy per-screen
@@ -337,9 +357,10 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         notes.sheets_not_descended += 1;
     }
 
-    let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects);
+    let junction_points: Vec<Point> = junctions.iter().map(|j| j.at).collect();
+    let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -619,7 +640,7 @@ impl RoundToUnit for f64 {
 /// rebuilt net list and, in the same pass, backfills every `Wire::net`/
 /// `Wire::pins`, `PowerSymbol::pin` and `NoConnect::pin` this reader could
 /// not know until connectivity was resolved.
-pub fn reconcile(pin_world: &BTreeMap<String, Point>, wires: &mut [Wire], labels: &[eda_model::ir::NetLabel], power_symbols: &mut [PowerSymbol], no_connects: &mut [NoConnect]) -> Vec<Net> {
+pub fn reconcile(pin_world: &BTreeMap<String, Point>, wires: &mut [Wire], labels: &[eda_model::ir::NetLabel], power_symbols: &mut [PowerSymbol], no_connects: &mut [NoConnect], junctions: &[Point]) -> Vec<Net> {
     let mut point_id: BTreeMap<Point, usize> = BTreeMap::new();
     let mut parent: Vec<usize> = Vec::new();
     let id_of = |p: Point, point_id: &mut BTreeMap<Point, usize>, parent: &mut Vec<usize>| -> usize {
@@ -659,6 +680,11 @@ pub fn reconcile(pin_world: &BTreeMap<String, Point>, wires: &mut [Wire], labels
     }
     for nc in no_connects.iter() {
         id_of(nc.at, &mut point_id, &mut parent);
+    }
+    // An explicit junction (`SCH_JUNCTION`) is a seeded point like any other: the T-junction step below then
+    // joins it to every wire passing through it, which is what makes two wires that merely cross one net.
+    for &j in junctions {
+        id_of(j, &mut point_id, &mut parent);
     }
 
     // Chain each wire's own polyline together.
@@ -1047,7 +1073,7 @@ mod tests {
             no_connects: vec![], bus_entries: vec![],
             erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(),
             title_block: None,
-            sheets: vec![], instance_overrides: vec![],
+            sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![],
             imported_from_kicad: false,
         };
         let design = Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None };
@@ -1173,7 +1199,7 @@ mod tests {
             wires: vec![Wire { id: String::new(), net: "DATA[0..3]".into(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, bus_pt], bus: true }],
             bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540, y: 2_540 } }],
             labels: vec![eda_model::ir::NetLabel { id: String::new(), net: "DATA2".into(), at: net_pt, kind: LabelKind::Local }],
-            ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false }
+            ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }
         };
         let design = Design {
             schema: 1,
@@ -1202,5 +1228,60 @@ mod tests {
         assert_eq!(reimported.bus_aliases.len(), 1);
         assert_eq!(reimported.bus_aliases[0].name, "USB");
         assert_eq!(reimported.bus_aliases[0].members, vec!["D+".to_string(), "D-".to_string()]);
+    }
+
+    /// Two wires that cross (neither ends on the other) are two nets -- until an explicit junction (`J`,
+    /// `SCH_JUNCTION`) sits at the crossing. The junction and a notes-layer line survive the file round trip.
+    #[test]
+    fn an_explicit_junction_joins_crossing_wires_and_junctions_and_graphic_lines_round_trip() {
+        let cross = Point { x: 10_000, y: 10_000 };
+        let build = |junctions: Vec<eda_model::ir::Junction>| {
+            let sch = SchematicSection {
+                wires: vec![
+                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, Point { x: 20_000, y: 10_000 }], bus: false },
+                    Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 20_000 }], bus: false },
+                ],
+                labels: vec![
+                    eda_model::ir::NetLabel { id: String::new(), net: "H".into(), at: Point { x: 0, y: 10_000 }, kind: LabelKind::Local },
+                    eda_model::ir::NetLabel { id: String::new(), net: "V".into(), at: Point { x: 10_000, y: 0 }, kind: LabelKind::Local },
+                ],
+                junctions,
+                lines: vec![eda_model::ir::SchLine { id: String::new(), pts: vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }], width_um: 254 }],
+                ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }
+            };
+            let design = Design {
+                schema: 1,
+                provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+                schematic: Some(sch),
+                nets: None,
+                placement: None,
+                routing: None,
+                drawings: None,
+                footprint_library: None,
+                sheet_contents: None,
+                bus_aliases: vec![],
+                symbol_library: None,
+            };
+            let text = crate::export_kicad_sch(&design, &ConstraintModel::default(), &crate::ExportMeta { date: "2026-01-01", title: "junction test" }).expect("exports cleanly with zero symbols");
+            let (reimported, _model, _notes) = import_kicad_sch(&text).expect("re-imports cleanly");
+            (text, reimported.schematic.expect("schematic present"))
+        };
+
+        let (_, apart) = build(vec![]);
+        let net_of = |sch: &SchematicSection, first: Point| sch.wires.iter().find(|w| w.pts[0] == first).unwrap().net.clone();
+        assert_ne!(net_of(&apart, Point { x: 0, y: 10_000 }), net_of(&apart, Point { x: 10_000, y: 0 }), "crossing wires with no junction stay two nets");
+        assert!(apart.junctions.is_empty(), "no junction written or read back");
+
+        let (text, joined) = build(vec![eda_model::ir::Junction { id: String::new(), at: cross }]);
+        assert_eq!(net_of(&joined, Point { x: 0, y: 10_000 }), net_of(&joined, Point { x: 10_000, y: 0 }), "the junction joins them");
+        assert!(text.contains("(junction (at 10 10)"), "{text}");
+        assert_eq!(joined.junctions.len(), 1);
+        assert_eq!(joined.junctions[0].at, cross);
+
+        assert!(text.contains("(polyline"), "{text}");
+        assert_eq!(joined.lines.len(), 1);
+        assert_eq!(joined.lines[0].pts, vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }]);
+        assert_eq!(joined.lines[0].width_um, 254);
+        assert_eq!(joined.wires.len(), 2, "a graphic line is never read back as a wire");
     }
 }

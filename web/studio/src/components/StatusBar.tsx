@@ -63,7 +63,7 @@ export function StatusBar() {
       </label>
       {onPcb && (
         <label className="toggle" title="Pan the view when the cursor nears the canvas edge while dragging (view_controls.cpp's auto-pan; off by default in KiCad too)">
-          <input type="checkbox" checked={state.autoPanEnabled} onChange={() => dispatch({ type: "TOGGLE_AUTO_PAN" })} />
+          <input type="checkbox" checked={state.prefs.autoPan} onChange={() => dispatch({ type: "TOGGLE_AUTO_PAN" })} />
           autopan
         </label>
       )}

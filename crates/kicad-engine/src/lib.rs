@@ -79,8 +79,9 @@ fn write_file(path: &Path, bytes: impl AsRef<[u8]>) -> Result<(), Vec<CheckResul
     std::fs::write(path, bytes).map_err(|e| fail("kicad_engine_write", &path.display().to_string(), e.to_string()))
 }
 
-fn today() -> String {
-    // YYYY-MM-DD from the system clock (civil-from-days, no extra crate).
+/// Today's date as `YYYY-MM-DD` from the system clock (civil-from-days, no
+/// extra crate) -- the date stamped into every derived KiCad file.
+pub fn today() -> String {
     let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() / 86_400).unwrap_or(0) as i64;
     let z = days + 719_468;
     let era = z.div_euclid(146_097);

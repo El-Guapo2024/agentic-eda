@@ -802,7 +802,7 @@ mod tests {
         design.schematic = Some(eda_model::ir::SchematicSection {
             symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![],
             erc_pin_map: Some(eda_model::ir::ErcPinMap { matrix: { let mut m = eda_model::ir::ErcPinMap::default_matrix(); m[1][1] = 0; m } }),
-            user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], imported_from_kicad: false,
+            user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false,
         });
         let custom = export_kicad_pro_for(&design, &model);
         let json: serde_json::Value = serde_json::from_str(&custom).expect("valid json");

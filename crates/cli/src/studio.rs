@@ -529,6 +529,15 @@ fn handle(
             let v = schematic_json(dir, sheet_path).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        // File > Save As... (`common.Control.saveAs`): the design as the derived KiCad files, for the browser to save.
+        ("GET", "/api/board.kicad_pcb") => match kicad_pcb_text(dir) {
+            Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
+            Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
+        },
+        ("GET", "/api/schematic.kicad_sch") => {
+            let v = kicad_sch_files_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
         ("GET", "/api/symbol_library") => {
             let v = symbol_library_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -585,9 +594,9 @@ fn handle(
         // Editor section just above already has (one document, one name
         // list, one derived-file export) -- see each function's own doc.
         ("GET", "/api/symbol") => {
-            let query = target.split('?').nth(1).unwrap_or("");
-            let lib_id = query.split('&').find_map(|kv| kv.strip_prefix("lib_id=")).unwrap_or("");
-            let v = symbol_edit_json(dir, lib_id).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // A lib_id is `Library:Name`; the client sends it `encodeURIComponent`-escaped (`Device%3AR`).
+            let lib_id = query_value(target, "lib_id");
+            let v = symbol_edit_json(dir, &lib_id).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/symbol_editor/names") => {
@@ -595,13 +604,16 @@ fn handle(
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/symbol/export") => {
-            let query = target.split('?').nth(1).unwrap_or("");
-            let lib_id = query.split('&').find_map(|kv| kv.strip_prefix("lib_id=")).unwrap_or("");
-            match symbol_kicad_sym(dir, lib_id) {
+            let lib_id = query_value(target, "lib_id");
+            match symbol_kicad_sym(dir, &lib_id) {
                 Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
                 Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
             }
         }
+        ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
+            Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
+            Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
+        },
         ("GET", "/api/fill") => {
             let v = fill_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -1130,7 +1142,7 @@ fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model
         imported_from_kicad: false,
         title_block: None,
         sheets: vec![],
-        instance_overrides: vec![],
+        instance_overrides: vec![], junctions: vec![], lines: vec![],
         symbols: Vec::new(),
         wires: Vec::new(),
         labels: Vec::new(),
@@ -1168,7 +1180,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
-                instance_overrides: vec![],
+                instance_overrides: vec![], junctions: vec![], lines: vec![],
                 symbols: Vec::new(),
                 wires: Vec::new(),
                 labels: Vec::new(),
@@ -1236,7 +1248,21 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
             })
         })
         .collect();
-    let wires: Vec<Value> = sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus })).collect();
+    let wires: Vec<Value> = sch
+        .wires
+        .iter()
+        .map(|w| {
+            let mut v = json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus });
+            // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias name expansion (`eda_kicad::expand_bus_members`).
+            if w.bus {
+                v["members"] = json!(eda_kicad::expand_bus_members(&w.net, &design.bus_aliases).unwrap_or_default());
+            }
+            v
+        })
+        .collect();
+    // Explicit junctions (`J`) and graphic lines on the notes layer (`I`) -- see `eda_model::ir::Junction`/`SchLine`.
+    let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y] })).collect();
+    let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um })).collect();
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y] })).collect();
@@ -1314,6 +1340,8 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "power_symbols": power_symbols,
         "no_connects": no_connects,
         "bus_entries": bus_entries,
+        "junctions": junctions,
+        "lines": lines,
         "title_block": title_block,
         "lib_symbols": lib_symbols,
         "sheets": sheets,
@@ -1567,6 +1595,58 @@ fn footprint_kicad_mod(dir: &Path, name: &str) -> Result<String, Vec<CheckResult
     Ok(eda_kicad::export_kicad_mod(fp))
 }
 
+/// `GET /api/board.kicad_pcb` -- the design as a derived `.kicad_pcb` (File > Save As... on the PCB tab). `design.json` stays the
+/// only master; this is the same derived file every kicad-cli run is fed, just handed to the browser to save.
+fn kicad_pcb_text(dir: &Path) -> Result<String, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: &crate::kicad_engine::chrono_like_today(), title: "board" })
+}
+
+/// `GET /api/schematic.kicad_sch` -- the schematic as derived `.kicad_sch` files (File > Save As... on the Schematic tab):
+/// `{"files": [{"name", "text"}]}`, the root sheet first (named `board.kicad_sch`; the client renames it after the board) and
+/// then one file per sub-sheet screen, so a hierarchical design saves whole.
+fn kicad_sch_files_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (meta, mut design, model) = board::load(dir)?;
+    // A board with no stored schematic shows (and saves) the one derived from its intent, like every other schematic output.
+    if design.schematic.is_none() {
+        design = eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?;
+    }
+    let project = PathBuf::from(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
+    let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: &crate::kicad_engine::chrono_like_today(), title: &project }, "board.kicad_sch")?;
+    Ok(json!({ "files": files.into_iter().map(|(name, text)| json!({ "name": name, "text": text })).collect::<Vec<_>>() }))
+}
+
+/// The percent-decoded value of query parameter `key` in a request target (`/api/symbol?lib_id=Device%3AR` -> `Device:R`),
+/// "" when the parameter is absent.
+fn query_value(target: &str, key: &str) -> String {
+    let query = target.split('?').nth(1).unwrap_or("");
+    let raw = query.split('&').find_map(|kv| kv.strip_prefix(key).and_then(|rest| rest.strip_prefix('='))).unwrap_or("");
+    percent_decode(raw)
+}
+
+/// `%XX` escapes to their bytes (a malformed escape is kept literally); `+` is left alone -- `encodeURIComponent` never emits it.
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%' && i + 2 < bytes.len())
+            .then(|| std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()))
+            .flatten();
+        match escaped {
+            Some(b) => {
+                out.push(b);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// `GET /api/symbol?lib_id=<id>` -- the Symbol Editor's own open document,
 /// serialized exactly as `design.symbol_library` stores it, same
 /// "no second hand-built shape" contract `footprint_json`'s own doc
@@ -1613,6 +1693,15 @@ fn symbol_kicad_sym(dir: &Path, lib_id: &str) -> Result<String, Vec<CheckResult>
         .and_then(|l| l.by_lib_id(lib_id))
         .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])?;
     Ok(eda_kicad::export_kicad_sym(sym))
+}
+
+/// `GET /api/symbol_library/export` -- every symbol of the project library in one derived `.kicad_sym`
+/// (Symbol Editor's "Save Library As...", Ctrl+Shift+S), the whole-library sibling of [`symbol_kicad_sym`].
+fn symbol_library_kicad_sym(dir: &Path) -> Result<String, Vec<CheckResult>> {
+    let (_, design, _) = board::load(dir)?;
+    let lib = design.symbol_library.as_ref().filter(|l| !l.symbols.is_empty()).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", "symbol_library", "the project symbol library has no symbols yet -- open or create one in the Symbol Editor first")])?;
+    let syms: Vec<&eda_model::ir::LibrarySymbol> = lib.symbols.iter().collect();
+    Ok(eda_kicad::export_kicad_sym_library(&syms))
 }
 
 /// `GET /api/ratsnest`: the board's airwires for the React view's ratsnest
@@ -1664,7 +1753,7 @@ mod tests {
     use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
 
     fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
-        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], imported_from_kicad: false }
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }
     }
 
     fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {
@@ -1680,6 +1769,18 @@ mod tests {
             sheet_contents: (!screens.is_empty()).then_some(screens),
             bus_aliases: vec![], symbol_library: None,
         }
+    }
+
+    #[test]
+    fn a_lib_id_query_value_is_percent_decoded() {
+        assert_eq!(query_value("/api/symbol?lib_id=Device%3AR", "lib_id"), "Device:R");
+        assert_eq!(query_value("/api/symbol?x=1&lib_id=eda%3AMy%20Part", "lib_id"), "eda:My Part");
+        assert_eq!(query_value("/api/symbol?lib_id=Device:R", "lib_id"), "Device:R", "an unescaped colon still works");
+        assert_eq!(query_value("/api/symbol?lib_idx=1", "lib_id"), "", "a longer key is not the key");
+        assert_eq!(query_value("/api/symbol", "lib_id"), "");
+        assert_eq!(percent_decode("100%"), "100%", "a trailing or malformed escape is kept literally");
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");
+        assert_eq!(percent_decode("%C3%A9"), "\u{e9}");
     }
 
     #[test]

@@ -778,3 +778,29 @@ and Move of six footprints (ordered columns, follows the cursor, one undo step
 reverts all six, Escape leaves the board untouched); `8` on a 20 mm pair
 (23 mm result within 1 um of target, both nets 23000 um, one undo step) and `9`
 (a 4 mm short line matched to within 1 um).
+
+## 21. Hotkeyed-and-missing sweep: the 8 common actions
+
+The third group of `docs/parity/UI-ACTIONS.md`'s hotkeyed-and-missing list (the eeschema group is section 11 of
+`PARITY-sch.md`, the Symbol Editor's part in `PARITY-symedit.md`). Same rule: ported from the KiCad source
+(`common/tool/actions.cpp`, `common/dialogs/panel_mouse_settings.cpp`, `common/view/wx_view_controls.cpp`) or recorded in
+`tools/ui-parity-missing.json` as `missing: <reason>`, no fake handler.
+
+| Action (hotkey) | Status | KiCad file:function and what was ported |
+|---|---|---|
+| `common.Control.saveAs` (`Ctrl+Shift+S`) | **done, adapted**, PCB and Schematic tabs | `ACTIONS::saveAs`, "Save current document to another location". `design.json` is the only master, so what is saved is the editor's derived KiCad file, handed to the browser's Save: `GET /api/board.kicad_pcb` -> `<board>.kicad_pcb`; `GET /api/schematic.kicad_sch` -> `<board>.kicad_sch` plus each sub-sheet's own file (derived from the intent when the board stores no schematic, as every schematic output does). The PCB route refuses, with the exporter's reasons, a board KiCad would import wrongly (a track on a net that is not in the netlist). Not live on the Symbol tab (there the same key is `saveLibraryAs`; `kicad-port/actionTabGate.ts`) or the Footprint tab (it has Export .kicad_mod). `kicad-port/saveAs.ts` |
+| `common.Control.updatePcbFromSchematic` (`F8`) | **done, adapted**, PCB and Schematic tabs | `DIALOG_UPDATE_PCB` / `SCH_EDITOR_CONTROL::UpdatePCB`. KiCad keeps two documents and pushes the netlist across; here every schematic edit re-derives the board's parts and nets in the same step (`reconcile_schematic`, `crates/cli/src/board.rs`), so there is nothing left to apply. F8 refetches the design and reports what an update would leave (the dialog's summary): the footprint count and which still wait to be placed (the ones an update would have added at the origin). Orphan footprints (a part whose symbol was deleted) are not listed: parts come from the intent, which no verb edits. `kicad-port/updatePcb.ts` |
+| `common.SuiteControl.openPreferences` (`Ctrl+,`) | **done**: the Mouse and Touchpad page | `PANEL_MOUSE_SETTINGS` (`PreferencesDialog.tsx`, `kicad-port/preferences.ts`, 8 tests): the scroll-gesture grid (zoom / pan up-down / pan left-right x none, Ctrl, Shift, Alt) with `OnScrollRadioButton`'s one-action-per-column rule, the warning and refused OK for a remaining clash, Reset to Mouse/Trackpad Defaults, Reverse for zoom and left/right pan, "Automatically pan while moving object" and its speed, "Use zoom acceleration", zoom speed with Automatic (`WX_VIEW_CONTROLS::LoadSettings` picks the controller). Saved in the browser's local storage (UI settings, not design data) and read by every canvas: the PCB, footprint and symbol canvases already used `handleWheel`, the Schematic canvas now does too (its wheel used its own constant, so its zoom step changes to KiCad's). The status bar's autopan box is the same setting. Not offered, not a dead control: center-and-warp cursor on zoom (it moves the real pointer), the drag gestures, pan-on-movement key, and "pan left/right with horizontal movement" (KiCad stores it and never reads it) |
+| `common.Control.new` (`Ctrl+N`), `common.Control.open` (`Ctrl+O`) | **missing: needs project management** | the studio serves the one project directory it was launched on and has no verb to create, open or switch projects |
+| `common.Control.toggleGridOverrides` (`Ctrl+Shift+G`) | **missing: needs per-item-type grid overrides** | `PCB_GRID_HELPER::GetGridSize` consults five category grids (connected items, wires, vias, text, graphics), set in the Edit Grids dialog; the studio has neither that dialog nor category-aware snapping, so the toggle would switch off nothing. `Ctrl+Shift+G` stays Ungroup here (an earlier brief's binding; KiCad leaves Ungroup unbound) |
+| `common.Interactive.cycleArcEditMode` (`Ctrl+Space`) | **missing: needs the arc point editor** | `PCB_POINT_EDITOR::changeArcEditMode` only switches how arc handles behave; the studio's point editor drags zone corners only |
+| `common.Interactive.pasteSpecial` (`Ctrl+Shift+V`) | **missing: nothing to special-case yet** | `PCB_CONTROL::Paste`'s dialog offers annotation modes for pasted footprints and clearing pasted nets; the clipboard holds no footprints (tracks, vias, zones, shapes, text only), copper must name a net, and the schematic has no copy/paste |
+
+Counts after this section: 3 of the 8 are wired, the other 5 carry a reason. Across the three groups: 23 of the 43
+hotkeyed-and-missing actions are wired (pcbnew 9, eeschema 11, common 3) and 20 are recorded with reasons (5, 10, 5).
+Verified in the browser (port 8786, a scratch board, real pointer never touched): Save As on the PCB tab (request,
+toast with the file name), on the Schematic tab (one file; with a sub-sheet the route returns a second, checked with curl), and Ctrl+Shift+S on the Symbol
+tab reaching Save Library As instead; F8 on a board with six unplaced footprints; Preferences: Reset to Trackpad
+Defaults, a clash giving the warning and a disabled OK, persistence across a reload, and the wheel on the PCB and
+Schematic canvases (plain scroll pans up/down, Ctrl/Cmd+scroll zooms, Shift+scroll pans left/right; with a manual
+zoom speed of 1 a 20-unit tick zooms by exactly 1.02).

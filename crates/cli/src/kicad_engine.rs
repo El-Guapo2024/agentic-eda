@@ -50,6 +50,12 @@ pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     Ok(eda_kicad_engine::erc(&design, &model, &work(dir))?.to_json(&exclusions))
 }
 
+/// Today's date (`YYYY-MM-DD`), for the derived-file header the studio's
+/// "Save As" routes write; the one clock helper lives in the engine crate.
+pub(crate) fn chrono_like_today() -> String {
+    eda_kicad_engine::today()
+}
+
 /// The board's project name: its intent's file stem, as every file written for
 /// it has always been named.
 fn project_name(dir: &Path) -> String {

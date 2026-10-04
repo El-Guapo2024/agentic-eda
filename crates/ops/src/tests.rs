@@ -1756,6 +1756,156 @@ fn edit_and_rename_apply_to_every_unit_together() {
     assert_eq!(units, std::collections::BTreeSet::from([1, 2]));
 }
 
+// ------------------------------------------------------------ eeschema hotkey sweep: junction, lines, sheet, swap
+
+fn p(x: Um, y: Um) -> Point {
+    Point { x, y }
+}
+
+#[test]
+fn a_junction_is_added_once_per_point_deleted_by_id_and_belongs_to_the_schematic_domain() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    assert_eq!(Cmd::AddJunction { at: p(0, 0) }.domain(), Domain::Schematic);
+    assert_eq!(Cmd::DeleteJunction { id: "x".into() }.domain(), Domain::Schematic);
+    b.apply(&Cmd::AddJunction { at: p(2_540, 5_080) }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.junctions.len(), 1);
+    assert!(sch.junctions[0].id.starts_with("jct_"), "{}", sch.junctions[0].id);
+    // a second one at the same point is a no-op in source (a click on a junction does nothing): refused here so undo never records nothing
+    assert_eq!(b.apply(&Cmd::AddJunction { at: p(2_540, 5_080) }).unwrap_err()[0].check, "ops_junction_exists");
+    b.apply(&Cmd::AddJunction { at: p(0, 0) }).unwrap();
+    let id = b.design().schematic.as_ref().unwrap().junctions.iter().find(|j| j.at == p(2_540, 5_080)).unwrap().id.clone();
+    b.apply(&Cmd::DeleteJunction { id: id.clone() }).unwrap();
+    assert_eq!(b.design().schematic.as_ref().unwrap().junctions.len(), 1);
+    assert_eq!(b.apply(&Cmd::DeleteJunction { id }).unwrap_err()[0].check, "ops_unknown_junction");
+}
+
+#[test]
+fn a_graphic_line_needs_two_points_and_a_sane_width() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0)], width_um: 0 }).unwrap_err()[0].check, "ops_bad_line");
+    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0), p(10, 0)], width_um: -1 }).unwrap_err()[0].check, "ops_bad_line");
+    // a line whose points all coincide has no segment left once zero-length ones are dropped
+    assert_eq!(b.apply(&Cmd::AddSchLine { pts: vec![p(5, 5), p(5, 5)], width_um: 0 }).unwrap_err()[0].check, "ops_bad_line");
+    // a double-click lands its last point twice: the repeat is dropped
+    b.apply(&Cmd::AddSchLine { pts: vec![p(0, 0), p(10_000, 0), p(10_000, 5_000), p(10_000, 5_000)], width_um: 254 }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.lines.len(), 1);
+    assert_eq!(sch.lines[0].pts.len(), 3);
+    assert_eq!(sch.lines[0].width_um, 254);
+    assert!(sch.lines[0].id.starts_with("sln_"), "{}", sch.lines[0].id);
+    assert!(sch.wires.is_empty(), "a notes-layer line is never a wire");
+    let id = sch.lines[0].id.clone();
+    b.apply(&Cmd::DeleteSchLine { id: id.clone() }).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().lines.is_empty());
+    assert_eq!(b.apply(&Cmd::DeleteSchLine { id }).unwrap_err()[0].check, "ops_unknown_line");
+}
+
+#[test]
+fn a_new_sheet_gets_its_own_empty_screen_and_a_shared_file_is_reused() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::AddSheet { name: "Power".into(), file: "power".into(), at: p(10_000, 10_000), size: (30_000, 20_000) }).unwrap();
+    let d = b.design();
+    let sheet = &d.schematic.as_ref().unwrap().sheets[0];
+    assert_eq!((sheet.name.as_str(), sheet.file.as_str(), sheet.size), ("Power", "power.kicad_sch", (30_000, 20_000)), "the extension is added");
+    assert!(sheet.id.starts_with("sheet_"), "{}", sheet.id);
+    let screens = d.sheet_contents.as_ref().expect("a screen for the new file");
+    assert!(screens.get("power.kicad_sch").unwrap().symbols.is_empty());
+
+    // a second placement of the same file shares the screen (and keeps what is already drawn on it)
+    b.apply(&Cmd::AddSheet { name: "Power 2".into(), file: "power.kicad_sch".into(), at: p(50_000, 10_000), size: (30_000, 20_000) }).unwrap();
+    assert_eq!(b.design().sheet_contents.as_ref().unwrap().len(), 1, "same file, same screen");
+    assert_eq!(b.design().schematic.as_ref().unwrap().sheets.len(), 2);
+}
+
+#[test]
+fn a_sheet_is_refused_without_a_name_with_a_folder_in_its_file_with_a_taken_name_or_with_no_size() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    let add = |name: &str, file: &str, size: (Um, Um)| Cmd::AddSheet { name: name.into(), file: file.into(), at: p(0, 0), size };
+    assert_eq!(b.apply(&add("", "a", (1, 1))).unwrap_err()[0].check, "ops_bad_sheet");
+    assert_eq!(b.apply(&add("S", "", (1, 1))).unwrap_err()[0].check, "ops_bad_sheet");
+    assert_eq!(b.apply(&add("S", "sub/a.kicad_sch", (1, 1))).unwrap_err()[0].check, "ops_bad_sheet");
+    assert_eq!(b.apply(&add("S", "a", (0, 5_000))).unwrap_err()[0].check, "ops_bad_sheet");
+    b.apply(&add("S", "a", (5_000, 5_000))).unwrap();
+    assert_eq!(b.apply(&add("S", "b", (5_000, 5_000))).unwrap_err()[0].check, "ops_sheet_name_taken");
+}
+
+fn place_sym(b: &mut Board<'_>, id: &str, lib_id: &str, at: Point, rot: Millideg) {
+    b.apply(&Cmd::AddSymbol { id: id.into(), lib_id: lib_id.into(), at, rot_millideg: rot, value: String::new(), footprint: String::new(), unit: 1 }).unwrap();
+}
+
+#[test]
+fn swap_exchanges_positions_and_the_orientation_only_for_the_same_library_symbol() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    place_sym(&mut b, "R1", "Device:R", p(10_000, 10_000), 0);
+    place_sym(&mut b, "R2", "Device:R", p(30_000, 20_000), 90_000);
+    place_sym(&mut b, "D1", "Device:LED", p(50_000, 30_000), 180_000);
+    b.apply(&Cmd::SwapSchItems { a: "R1".into(), b: "R2".into() }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let get = |id: &str| sch.symbols.iter().find(|s| s.id == id).unwrap();
+    assert_eq!((get("R1").at, get("R1").rot), (p(30_000, 20_000), 90_000), "R1 takes R2's place and orientation");
+    assert_eq!((get("R2").at, get("R2").rot), (p(10_000, 10_000), 0));
+    // a resistor and an LED: positions swap, orientations stay (different default orientations)
+    b.apply(&Cmd::SwapSchItems { a: "R2".into(), b: "D1".into() }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let get = |id: &str| sch.symbols.iter().find(|s| s.id == id).unwrap();
+    assert_eq!((get("R2").at, get("R2").rot), (p(50_000, 30_000), 0));
+    assert_eq!((get("D1").at, get("D1").rot), (p(10_000, 10_000), 180_000));
+}
+
+#[test]
+fn swap_reaches_labels_texts_and_power_symbols_and_a_chain_rotates_the_positions() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::AddLabel { net: "A".into(), at: p(1_000, 1_000), kind: LabelKind::Local }).unwrap();
+    b.apply(&Cmd::AddSchText { content: "note".into(), at: p(2_000, 2_000), angle_millideg: 0, size_um: 1_270 }).unwrap();
+    b.apply(&Cmd::AddPowerSymbol { lib_id: "power:GND".into(), at: p(3_000, 3_000), rot_millideg: 0, net: "GND".into(), pin: "1".into() }).unwrap();
+    // labels and texts get their ids when the design is next loaded (`board::load`'s back-fill) -- do that here
+    let mut d = b.into_design();
+    d.assign_missing_ids();
+    let mut b = Board::new(d, &m, 100, 300);
+    let sch = b.design().schematic.as_ref().unwrap();
+    let (lbl, txt, pwr) = (sch.labels[0].id.clone(), sch.texts[0].id.clone(), sch.power_symbols[0].id.clone());
+    // sorted = [label, text, power]: swap(label, text), then swap(text, power) -- Swap's own loop over `sorted[i]`, `sorted[i + 1]`
+    b.apply(&Cmd::Batch { cmds: vec![Cmd::SwapSchItems { a: lbl.clone(), b: txt.clone() }, Cmd::SwapSchItems { a: txt.clone(), b: pwr.clone() }] }).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(sch.labels[0].at, p(2_000, 2_000), "label takes the text's place");
+    assert_eq!(sch.texts[0].at, p(3_000, 3_000), "text takes the power symbol's");
+    assert_eq!(sch.power_symbols[0].at, p(1_000, 1_000), "power symbol ends where the label started");
+}
+
+#[test]
+fn swap_refuses_the_same_item_twice_unknown_ids_and_an_ambiguous_multi_unit_reference() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    add_unit(&mut b, "U1", 1, 0);
+    add_unit(&mut b, "U1", 2, 50_000);
+    place_sym(&mut b, "R1", "Device:R", p(1, 1), 0);
+    assert_eq!(b.apply(&Cmd::SwapSchItems { a: "R1".into(), b: "R1".into() }).unwrap_err()[0].check, "ops_bad_swap");
+    assert_eq!(b.apply(&Cmd::SwapSchItems { a: "R1".into(), b: "nope".into() }).unwrap_err()[0].check, "ops_unknown_item");
+    assert_eq!(b.apply(&Cmd::SwapSchItems { a: "R1".into(), b: "U1".into() }).unwrap_err()[0].check, "ops_ambiguous_symbol");
+}
+
+#[test]
+fn a_new_symbol_is_an_empty_project_library_entry_and_a_taken_name_is_refused() {
+    let m = model(vec![], &[], vec![]);
+    let mut b = board(&m);
+    assert_eq!(Cmd::NewSymbol { lib_id: "eda:Untitled".into() }.domain(), Domain::SymbolEditor);
+    b.apply(&Cmd::NewSymbol { lib_id: "eda:Untitled".into() }).unwrap();
+    let lib = b.design().symbol_library.as_ref().unwrap();
+    let sym = lib.by_lib_id("eda:Untitled").expect("created");
+    assert!(sym.pins.is_empty() && sym.graphics.is_empty());
+    assert_eq!(b.apply(&Cmd::NewSymbol { lib_id: "eda:Untitled".into() }).unwrap_err()[0].check, "ops_symbol_exists");
+    assert_eq!(b.apply(&Cmd::NewSymbol { lib_id: String::new() }).unwrap_err()[0].check, "ops_bad_symbol");
+    // a name a builtin library symbol already answers to is taken too
+    assert_eq!(b.apply(&Cmd::NewSymbol { lib_id: "Device:R".into() }).unwrap_err()[0].check, "ops_symbol_exists");
+}
+
 // ------------------------------------------------------------ create array (task item 6)
 
 fn add_via_at(b: &mut Board<'_>, x: Um, y: Um) -> String {

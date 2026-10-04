@@ -19,8 +19,8 @@ import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/vi
 import { paintSymbol, mmPointToUm, umPointToMm, toLibPin, IDENTITY } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
 import { snapPoint } from "../canvas/gridHelper";
-import { handleWheel, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
-import { pickDefaultZoomController, type ZoomController } from "../../kicad-port/zoomController";
+import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
+import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { isMac } from "../../platform";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
@@ -134,9 +134,11 @@ export function SymbolEditorCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const pinTemplateRef = useRef<Omit<LibrarySymbolPin, "id" | "number" | "at" | "unit" | "body_style">>(DEFAULT_PIN_TEMPLATE);
+  /** The number the Pin tool gave its latest pin, per open symbol -- see the pin-tool branch of onPointerDown. */
+  const lastPlacedPinRef = useRef<{ libId: string | null; number: string } | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
-  const zoomControllerRef = useRef<ZoomController>(pickDefaultZoomController(isMac()));
+  const wheelPrefs = useWheelPrefs();
   const userMovedRef = useRef(false);
 
   const sym = state.symbol;
@@ -256,7 +258,11 @@ export function SymbolEditorCanvas() {
     const [sx, sy] = snapPoint(wx, wy, state.gridUm);
 
     if (state.activeTool === "pin" && sym) {
-      const number = nextPinNumber(sym.pins);
+      // The pin just placed may not be in `sym.pins` yet (the document is re-polled after the round trip), so seed from it too:
+      // a quick second click must get the NEXT number, as the C++ tool's `m_lastPin` carry does.
+      const last = lastPlacedPinRef.current;
+      const number = nextPinNumber(last && last.libId === state.libId ? [...sym.pins, { number: last.number }] : sym.pins);
+      lastPlacedPinRef.current = { libId: state.libId, number };
       const pin: LibrarySymbolPin = { ...pinTemplateRef.current, number, unit: state.activeUnit, body_style: state.activeBodyStyle, at: umPointToMm(sx, sy) };
       void api.addPin(pin);
       return;
@@ -340,7 +346,7 @@ export function SymbolEditorCanvas() {
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
     const input: WheelInput = { deltaX: e.deltaX, deltaY: e.deltaY, shiftKey: e.shiftKey, ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey, altKey: e.altKey, x: e.clientX - rect.left, y: e.clientY - rect.top };
-    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, DEFAULT_VIEW_CONTROL_SETTINGS, zoomControllerRef.current);
+    const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
   };
 

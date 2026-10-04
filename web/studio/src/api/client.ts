@@ -8,6 +8,7 @@ import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, Bo
 import type { LengthUnit } from "../state/units";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
+import { fileStem, schematicSaveNames } from "../kicad-port/saveAs";
 
 export class ApiError extends Error {}
 
@@ -85,6 +86,8 @@ export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Sch
     sheets: s.sheets ?? [],
     sheet_path: s.sheet_path ?? [],
     bus_entries: s.bus_entries ?? [],
+    junctions: s.junctions ?? [],
+    lines: s.lines ?? [],
     // `bus` is new (GAPS.md #20) -- a wire from a backend built before it
     // existed has no such field at all, not even `false`.
     wires: (s.wires ?? []).map((w) => ({ ...w, bus: w.bus ?? false })),
@@ -347,12 +350,56 @@ export async function downloadSymbolKicadSym(libId: string): Promise<void> {
   const r = await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(libId)}`, { cache: "no-store" });
   if (!r.ok) throw new ApiError(await r.text());
   const text = await r.text();
+  const fileName = libId.includes(":") ? libId.split(":").slice(1).join(":") : libId;
+  saveTextAs(text, `${fileName}.kicad_sym`);
+}
+
+/** `Save Library As...`: every symbol of the project library in one `.kicad_sym` (`GET /api/symbol_library/export`). */
+export async function downloadSymbolLibraryKicadSym(): Promise<void> {
+  const r = await fetch("/api/symbol_library/export", { cache: "no-store" });
+  if (!r.ok) throw new ApiError(await r.text());
+  saveTextAs(await r.text(), "eda.kicad_sym");
+}
+
+/**
+ * File > Save As... on the PCB tab (`common.Control.saveAs`): the design as a derived `.kicad_pcb`
+ * (`GET /api/board.kicad_pcb`), saved as `<board>.kicad_pcb`. Resolves to the file name.
+ */
+export async function downloadKicadPcb(boardName: string): Promise<string> {
+  const r = await fetch("/api/board.kicad_pcb", { cache: "no-store" });
+  if (!r.ok) throw new ApiError(await r.text());
+  const fileName = `${fileStem(boardName)}.kicad_pcb`;
+  saveTextAs(await r.text(), fileName);
+  return fileName;
+}
+
+/**
+ * ... and on the Schematic tab: the derived `.kicad_sch` files (`GET /api/schematic.kicad_sch`) -- the root sheet
+ * as `<board>.kicad_sch`, then each sub-sheet's own file, so a hierarchical design saves whole. Resolves to the file names.
+ */
+export async function downloadKicadSchematic(boardName: string): Promise<string[]> {
+  const r = await fetch("/api/schematic.kicad_sch", { cache: "no-store" });
+  const j = (await r.json()) as { files?: Array<{ name: string; text: string }>; error?: string };
+  if (j.error || !j.files || j.files.length === 0) throw new ApiError(j.error ?? "there is no schematic to save");
+  const names = schematicSaveNames(
+    j.files.map((f) => f.name),
+    boardName
+  );
+  for (const [i, f] of j.files.entries()) {
+    // one download per file; a short gap keeps the browser from folding them into one
+    if (i > 0) await new Promise((resolve) => setTimeout(resolve, 250));
+    saveTextAs(f.text, names[i]!);
+  }
+  return names;
+}
+
+/** A browser download of `text` as `fileName` (the web equivalent of a native Save dialog). */
+function saveTextAs(text: string, fileName: string): void {
   const blob = new Blob([text], { type: "text/plain" });
   const url = URL.createObjectURL(blob);
-  const fileName = libId.includes(":") ? libId.split(":").slice(1).join(":") : libId;
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${fileName}.kicad_sym`;
+  a.download = fileName;
   document.body.appendChild(a);
   a.click();
   a.remove();

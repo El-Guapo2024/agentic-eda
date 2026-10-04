@@ -34,7 +34,10 @@ mod footprint_lib;
 pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
 
 mod symbol_lib;
-pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+
+mod bus;
+pub use bus::expand_bus_members;
 
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
@@ -301,11 +304,36 @@ pub fn export_kicad_sch(
     // connection real KiCad accepts silently, left with no dot marking it.
     // Net-scoped (not just by point), so two different nets whose wires
     // happen to cross at the same coordinate never draw a false short.
-    for (net, pt) in eda_engine::geometry::wire_junction_points(&sch.wires) {
+    let derived_junctions = eda_engine::geometry::wire_junction_points(&sch.wires);
+    for (net, pt) in &derived_junctions {
         let x = mm(pt.x);
         let y = mm(pt.y);
         let uuid = duid(&format!("junction:{net}:{}:{}", pt.x, pt.y));
         writeln!(out, "\t(junction (at {x} {y}) (diameter 0) (color 0 0 0 0)").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+    // Explicit junctions (`J`, `Junction`): a crossing joined on purpose. Skipped where a derived one above already marks the point.
+    let mut explicit: Vec<&eda_model::ir::Junction> = sch.junctions.iter().filter(|j| !derived_junctions.iter().any(|(_, pt)| *pt == j.at)).collect();
+    explicit.sort_by_key(|j| j.at);
+    for j in explicit {
+        let x = mm(j.at.x);
+        let y = mm(j.at.y);
+        let uuid = duid_for(&format!("junction:{}:{}", j.at.x, j.at.y), &j.id);
+        writeln!(out, "\t(junction (at {x} {y}) (diameter 0) (color 0 0 0 0)").unwrap();
+        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        writeln!(out, "\t)").unwrap();
+    }
+    // Graphic lines on the notes layer (`I`, `SchLine`): `(polyline ...)`, decoration with no net.
+    let mut lines: Vec<&eda_model::ir::SchLine> = sch.lines.iter().filter(|l| l.pts.len() >= 2).collect();
+    lines.sort_by(|a, b| a.pts.cmp(&b.pts));
+    for l in lines {
+        let pts: String = l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
+        let width = mm(l.width_um);
+        let uuid = duid_for(&format!("sch_line:{pts}"), &l.id);
+        writeln!(out, "\t(polyline").unwrap();
+        writeln!(out, "\t\t(pts{pts})").unwrap();
+        writeln!(out, "\t\t(stroke (width {width}) (type default))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         writeln!(out, "\t)").unwrap();
     }
@@ -828,12 +856,11 @@ fn resolve_pin_electrical_type(pin: &eda_model::Pin, resolved: Option<&eda_model
 /// `Power`-kind pin whose name reads as an output (a regulator's own
 /// VOUT) maps to `power_out`, not `power_in` — the one place this coarse
 /// mapping needs to distinguish a rail's source from its sinks, since
-/// `power_pin_not_driven` (see `eda_kicad::erc`) requires *some*
+/// `power_pin_not_driven` (kicad-cli's ERC) requires *some*
 /// `power_out` pin on every power net, and nothing else in this project's
 /// model says which `Power`-kind pin, if any, plays that role. Kept in
-/// lockstep with `eda_kicad::erc::ElectricalPinType::from_pin_kind` and
-/// with `eda_engine::derive_schematic`'s own `PWR_FLAG` decision, which
-/// uses the exact same name convention.
+/// lockstep with `eda_engine::derive_schematic`'s own `PWR_FLAG` decision,
+/// which uses the exact same name convention.
 fn electrical_type(kind: PinKind, name: Option<&str>) -> &'static str {
     match kind {
         PinKind::Power if name.unwrap_or("").to_ascii_uppercase().contains("OUT") => "power_out",
@@ -1209,7 +1236,7 @@ mod tests {
                 size: (20_000, 20_000),
                 pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000, y: 30_000 } }],
             }],
-            instance_overrides: vec![],
+            instance_overrides: vec![], junctions: vec![], lines: vec![],
             imported_from_kicad: false,
         };
         let mut screens = std::collections::BTreeMap::new();
