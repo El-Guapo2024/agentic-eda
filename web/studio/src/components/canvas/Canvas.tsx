@@ -5,7 +5,8 @@
 //     Ctrl+wheel pans horizontally, Shift/Alt+wheel pans vertically);
 //     middle- and right-drag both pan (KiCad's own drag_middle/drag_right
 //     defaults), edge auto-pan while dragging (off by default, same as
-//     KiCad -- state.autoPanEnabled).
+//     KiCad -- state.prefs.autoPan; the wheel assignment and zoom speed are
+//     Preferences > Mouse and Touchpad's, see kicad-port/preferences.ts).
 //   - click to select (Shift adds); drag from empty space box-selects,
 //     left-to-right = window (fully enclosed), right-to-left = crossing
 //     (touching) -- crates/ops/src/view.rs has no notion of this, it's
