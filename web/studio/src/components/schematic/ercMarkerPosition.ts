@@ -1,34 +1,32 @@
 // `ErcViolation.location`-string parsing, shared by SchematicView.tsx's
 // ERC canvas markers (painter.ts's `drawErcMarkers`) and ErcDialog.tsx's
-// cross-probe (`jumpTo`) -- the one place this app reasons about
-// `eda_kicad::erc`'s several distinct `CheckResult::location` shapes
-// (crates/kicad/src/erc.rs, read directly: every `location: Some(format!(...))`
-// call in that file), so a canvas marker and a dialog row's click-to-jump
-// can never disagree about where a given finding lives. See types.ts's
-// `ErcViolation.location` doc for the enumerated shapes this resolves.
+// cross-probe (`jumpTo`) -- the one place this app turns a violation's
+// `location` back into something on the canvas, so a canvas marker and a
+// dialog row's click-to-jump can never disagree about where a given
+// finding lives. See types.ts's `ErcViolation.location` doc.
+//
+// Two producers feed it:
+//   * kicad-cli's ERC (GET /api/erc): `location` is OUR id for the first
+//     item the violation names -- a symbol "REF", a pin "REF.PIN" (PIN is a
+//     pin *number*), a power symbol, a wire, a label, a no-connect or a text
+//     id.
+//   * crates/lint's schematic readability checks (GET /api/lint), whose
+//     locations keep the shapes those checks have always used: "x,y",
+//     "NET:x,y", "NET:REF.PIN", "NET:ID", a bare net name, ...
 //
 // Tried in order, most structurally specific first:
-//   1. A literal "x,y" point (after stripping an optional "NET:" prefix) --
-//      no_connect_connected/no_connect_dangling's bare form, or
-//      unconnected_wire_endpoint's net-prefixed one.
-//   2. "REF.PIN" (after stripping an optional "NET:" prefix) -- REF is a
-//      symbol id, PIN is a pin *number* (`ResolvedPin::pin_ref`, not a pin
-//      name) -- pin_not_connected, or pin_to_pin/pin_not_driven/
-//      power_pin_not_driven when the flagged net member is a real pin.
-//   3. "NET:ID" where ID has no dot -- same two net checks, when the
-//      flagged member is a power symbol instead: ID is a `PowerSymbol.id`.
-//   4. A bare symbol ref -- not emitted by any check in this file today,
-//      kept for forward compatibility (a future check naming just a
-//      symbol, the same way DrcViolation items already can).
-//   5. A bare net name -- wire_dangling: resolved to the first anchor
-//      point this app can find for that net (a label, then a power
-//      symbol, then a wire endpoint) since there is no single "right"
-//      point for a whole net the way every other shape above names one
-//      specific item.
-// Anything none of the above resolves (a dangling ref/net the schematic
-// no longer has, or a genuinely unrecognized shape) returns `null` -- the
-// dialog still shows/selects the row, it just can't additionally re-frame
-// the canvas on it.
+//   1. A literal "x,y" point (after stripping an optional "NET:" prefix).
+//   2. "REF.PIN" (after stripping an optional "NET:" prefix).
+//   3. "NET:ID" where ID has no dot -- a power symbol's own `PowerSymbol.id`.
+//   4. A bare symbol ref.
+//   5. A bare id of a power symbol, wire, label, no-connect or text.
+//   6. A bare net name -- resolved to the first anchor point this app can
+//      find for that net (a label, then a power symbol, then a wire
+//      endpoint) since there is no single "right" point for a whole net.
+// Anything none of the above resolves (an item the schematic no longer
+// has, or a genuinely unrecognized shape) returns `null` -- the dialog
+// still shows/selects the row, it just can't additionally re-frame the
+// canvas on it.
 import type { LibSymbols, Schematic } from "../../api/types";
 import { resolveLibSymbol, symbolBounds } from "./libSymbol";
 
@@ -69,6 +67,21 @@ function resolvePowerSymbolId(id: string, sch: Schematic): ErcLocationResolution
   return ps ? { at: ps.at, refs: [] } : null;
 }
 
+/** An id of a power symbol, wire, label, no-connect or text -- what kicad-cli's ERC reports for those items. A wire resolves to its first point. */
+function resolveItemId(id: string, sch: Schematic): ErcLocationResolution | null {
+  const ps = sch.power_symbols.find((p) => p.id === id);
+  if (ps) return { at: ps.at, refs: [] };
+  const wire = sch.wires.find((w) => w.id === id);
+  if (wire && wire.pts.length > 0) return { at: wire.pts[0]!, refs: [] };
+  const label = sch.labels.find((l) => l.id === id);
+  if (label) return { at: label.at, refs: [] };
+  const nc = sch.no_connects.find((n) => n.id === id);
+  if (nc) return { at: nc.at, refs: [] };
+  const text = sch.texts.find((t) => t.id === id);
+  if (text) return { at: text.at, refs: [] };
+  return null;
+}
+
 /** The first anchor point this app can find for `net` -- a label, then a power symbol, then a wire endpoint, in that order (an arbitrary but stable tie-break; `wire_dangling` names a whole net, not one item, so there is no single "right" point the way every other shape above has). */
 function firstAnchorForNet(net: string, sch: Schematic): [number, number] | null {
   const label = sch.labels.find((l) => l.net === net);
@@ -107,6 +120,9 @@ export function ercMarkerPosition(location: string | null | undefined, sch: Sche
 
   const byRef = symbolCenter(rest, sch, lib);
   if (byRef) return byRef;
+
+  const byItem = resolveItemId(rest, sch);
+  if (byItem) return byItem;
 
   const anchor = firstAnchorForNet(net ?? location, sch);
   return anchor ? { at: anchor, refs: [] } : null;

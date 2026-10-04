@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { DrcEngine, BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
@@ -122,16 +122,30 @@ export async function fetchRatsnest(): Promise<Ratsnest> {
   return r;
 }
 
-/** The ported KiCad DRC engine (crates/drc), run fresh server-side on every call -- no caching, matching studio.rs's own doc comment on why (cheap enough on these board sizes). */
-export async function fetchDrc(engine: DrcEngine = "eda"): Promise<DrcReport> {
-  const r = await getJson<DrcReport & { error?: string }>(engine === "kicad" ? "/api/drc?engine=kicad" : "/api/drc");
+/**
+ * `kicad-cli pcb drc` on the current design (crates/cli/src/kicad_engine.rs),
+ * run fresh server-side on every call. It takes seconds (about 4 s on a
+ * 30-part board) and the server answers one request at a time, so callers
+ * run it on demand and show a running state (store.tsx's `runDrc`).
+ * `refillZones` is KiCad's "Refill all zones before performing DRC" -- off by
+ * default, because kicad-cli 10.99 skips its courtyard checks when it refills.
+ */
+export async function fetchDrc(refillZones = false): Promise<DrcReport> {
+  const r = await getJson<DrcReport & { error?: string }>(refillZones ? "/api/drc?refill_zones=1" : "/api/drc");
   if (r.error) throw new ApiError(r.error);
   return r;
 }
 
-/** `eda_kicad::check_erc` (gap #4), run fresh server-side on every call -- same no-caching reasoning as `fetchDrc`. */
-export async function fetchErc(engine: DrcEngine = "eda"): Promise<ErcReport> {
-  const r = await getJson<ErcReport & { error?: string }>(engine === "kicad" ? "/api/erc?engine=kicad" : "/api/erc");
+/** `kicad-cli sch erc` on the current schematic -- same on-demand, seconds-long contract as `fetchDrc`. */
+export async function fetchErc(): Promise<ErcReport> {
+  const r = await getJson<ErcReport & { error?: string }>("/api/erc");
+  if (r.error) throw new ApiError(r.error);
+  return r;
+}
+
+/** Our own checks, the ones KiCad does not have (crates/lint): in-process and cheap, safe to refetch on every board change. */
+export async function fetchLint(): Promise<LintReport> {
+  const r = await getJson<LintReport & { error?: string }>("/api/lint");
   if (r.error) throw new ApiError(r.error);
   return r;
 }
@@ -210,10 +224,11 @@ export async function postRedo(domain: "pcb" | "schematic" | "footprint_editor" 
 // ------------------------------------------------------- fabrication outputs
 //
 // crates/cli/src/fab_api.rs, backing the Plot / Generate Drill Files /
-// Footprint Position Files dialogs (see those components) -- each runs the
-// matching `eda_fab` writer (ported from KiCad; see crates/fab/src/
-// gerber.rs/drill.rs/position.rs) and writes into the board directory's
-// own `export/` folder, returning the paths written.
+// Footprint Position Files dialogs (see those components) -- each turns the
+// dialog's options into kicad-cli arguments and runs `kicad-cli pcb export`
+// on the current design (nothing here writes a Gerber or a drill file
+// itself), into the board directory's own `export/kicad/<kind>/` folder,
+// returning the paths written.
 
 /** Shared reply shape for every `/api/fab/*` endpoint. */
 export interface FabReply {
@@ -249,11 +264,13 @@ export function postFabBom(): Promise<FabReply> {
 
 // ------------------------------------------------------- schematic outputs
 //
-// crates/cli/src/sch_api.rs, backing File > Plot... (PlotSchematicDialog)
+// crates/cli/src/sch_output_api.rs, backing File > Plot... (PlotSchematicDialog)
 // and File > Export > Netlist... (ExportNetlistDialog) on the Schematic
-// tab. Read-only exports -- they write into the board directory's `export/`
-// folder and never touch design.json, so there is no /api/cmd verb or undo
-// entry. Same reply shape as the fabrication endpoints above.
+// tab: `kicad-cli sch export svg|pdf|netlist` on the current schematic.
+// Read-only exports -- they write into the board directory's
+// `export/kicad/` folder and never touch design.json, so there is no
+// /api/cmd verb or undo entry. Same reply shape as the fabrication endpoints
+// above.
 
 export function postSchPlot(req: SchPlotRequest): Promise<FabReply> {
   return postJson<FabReply>("/api/sch/plot", req);

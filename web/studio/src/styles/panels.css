@@ -146,9 +146,51 @@
   border-left-color: var(--chrome-text-dim);
   opacity: 0.7;
 }
+.problem-row.lint {
+  border-left-color: var(--chrome-accent, #4ea1ff);
+}
+.problem-row.selected {
+  outline: 1px solid var(--chrome-accent, #4ea1ff);
+}
 .problem-row small {
   display: block;
   color: var(--chrome-text-dim);
+}
+
+/* A kicad-cli run is on its way (DRC/ERC dialogs): an indeterminate bar and a line saying what is happening. */
+.run-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border-radius: 5px;
+  background: var(--chrome-hover);
+  font-size: 11px;
+  color: var(--chrome-text-dim);
+}
+.run-banner .bar {
+  position: relative;
+  flex: 0 0 90px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--chrome-active);
+  overflow: hidden;
+}
+.run-banner .bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -40%;
+  width: 40%;
+  background: var(--chrome-accent, #4ea1ff);
+  animation: run-banner-slide 1.1s ease-in-out infinite;
+}
+@keyframes run-banner-slide {
+  to {
+    left: 100%;
+  }
 }
 
 .unplaced-row {

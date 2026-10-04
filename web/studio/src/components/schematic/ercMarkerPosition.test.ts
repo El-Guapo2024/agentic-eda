@@ -129,3 +129,27 @@ test("ercMarkerPosition: an unresolvable location (no matching symbol, power sym
   assert.equal(ercMarkerPosition("NOPE", sch), null);
   assert.equal(ercMarkerPosition("NET:NOPE", sch), null);
 });
+
+test("ercMarkerPosition: kicad-cli's ids -- a bare power symbol, wire, label, no-connect or text id", () => {
+  const sch = schematic({
+    power_symbols: [powerSymbol("pwr_1", "GND", [3000, 4000])],
+    wires: [wire("wire_1", "VIN", [[100, 200], [900, 200]])],
+    labels: [label("lbl_1", "VIN", [500, 600])],
+    no_connects: [{ id: "nc_1", at: [700, 800] }],
+    texts: [{ id: "txt_1", content: "note", at: [1100, 1200] } as unknown as Schematic["texts"][number]],
+  });
+  assert.deepEqual(ercMarkerPosition("pwr_1", sch), { at: [3000, 4000], refs: [] });
+  assert.deepEqual(ercMarkerPosition("wire_1", sch), { at: [100, 200], refs: [] }, "a wire resolves to its first point");
+  assert.deepEqual(ercMarkerPosition("lbl_1", sch), { at: [500, 600], refs: [] });
+  assert.deepEqual(ercMarkerPosition("nc_1", sch), { at: [700, 800], refs: [] });
+  assert.deepEqual(ercMarkerPosition("txt_1", sch), { at: [1100, 1200], refs: [] });
+  assert.equal(ercMarkerPosition("wire_gone", sch), null, "an id the schematic no longer has resolves to nothing");
+});
+
+test("ercMarkerPosition: kicad-cli's 'REF' and 'REF.PIN' ids select the symbol", () => {
+  const sch = schematic({ symbols: [resistor("R1", [10_000, 10_000])] });
+  const pin = ercMarkerPosition("R1.1", sch);
+  assert.deepEqual(pin?.refs, ["R1"]);
+  const sym = ercMarkerPosition("R1", sch);
+  assert.deepEqual(sym?.refs, ["R1"]);
+});

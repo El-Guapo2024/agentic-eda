@@ -2,7 +2,8 @@
 // in a real browser: agent drives the view (eda board gui), UI pushes its
 // view back, hotkeys go through undoable /api/cmd verbs, agent edits show up
 // live, a hand edit of design.json becomes a 'file' history step, and the
-// DRC dialog runs kicad-cli. Usage:
+// DRC dialog runs kicad-cli (the only DRC engine; opening the dialog runs it
+// and shows a running state) next to a Lint tab of our own checks. Usage:
 //   eda board serve -C <board> --port 8811 --ui web/studio/dist &
 //   BOARD=<board> EDA_BIN=<path to eda> node web/studio/e2e/collab.e2e.mjs
 // The board must have placed parts U1 and R1. Modifies the board.
@@ -67,15 +68,18 @@ const acts = (await api("/api/state")).activity || [];
 const bys = [...new Set(acts.map((a) => a.by))];
 check("shared history has ui + agent + file authors", ["ui", "agent", "file"].every((x) => bys.includes(x)), bys.join(","));
 
-// 7. DRC dialog with the KiCad engine
+// 7. DRC dialog: kicad-cli is the only engine. Opening the dialog on a board it has
+// not judged yet runs it (a few seconds, with a visible running state), there is no
+// engine switch, and our own checks have a Lint tab of their own.
 await p.getByText("Inspect", { exact: true }).first().click();
 await p.getByText(/Design Rules Checker/).first().click();
-await p.waitForTimeout(500);
-await p.locator("select").filter({ hasText: "KiCad" }).first().selectOption("kicad");
-await p.getByRole("button", { name: "Run DRC" }).click();
-const engine = await waitFor(async () => (await p.evaluate(() => document.body.innerText)).match(/kicad-cli [0-9.]+/)?.[0], 20000);
+const sawRunning = await waitFor(async () => /kicad-cli is checking the board/.test(await p.evaluate(() => document.body.innerText)), 3000);
+const engine = await waitFor(async () => (await p.evaluate(() => document.body.innerText)).match(/kicad-cli [0-9.]+/)?.[0], 40000);
 const uncon = await p.evaluate(() => document.body.innerText.match(/Unconnected Items \((\d+)\)/)?.[1]);
-check("DRC dialog runs kicad-cli and shows results", !!engine, `${engine}, unconnected=${uncon}`);
+check("DRC dialog runs kicad-cli on open and shows a running state", !!engine && !!sawRunning, `${engine}, running state seen: ${!!sawRunning}, unconnected=${uncon}`);
+check("DRC dialog has no engine switch", (await p.locator("select").filter({ hasText: "KiCad" }).count()) === 0);
+const lintCount = await p.evaluate(() => document.body.innerText.match(/Lint \((\d+)\)/)?.[1]);
+check("DRC dialog has a Lint tab for our own checks", lintCount !== undefined, `lint findings: ${lintCount}`);
 await shot(process.env.SHOTS ? process.env.SHOTS + "/7-drc-kicad.png" : "/dev/null");
 
 // 8. no errors at the end

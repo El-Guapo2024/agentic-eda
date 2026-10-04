@@ -316,7 +316,7 @@ impl ErcReport {
                 let item_desc: Vec<&str> = v.items.iter().map(|i| i.description.as_str()).filter(|d| !d.is_empty()).collect();
                 json!({
                     "check": v.kind,
-                    "severity": if excluded { "excluded" } else { v.severity.as_str() },
+                    "severity": if excluded || v.severity == "exclusion" { "excluded" } else { v.severity.as_str() },
                     "location": location,
                     "hint": format!("{}{}{}", v.description, if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
                     "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),

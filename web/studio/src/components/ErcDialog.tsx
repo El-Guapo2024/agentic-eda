@@ -4,37 +4,49 @@
 // row, a flat RC_TREE_MODEL list (one row per marker, in sheet order --
 // not grouped under a severity/sheet header), and a cross-probe that pans/
 // selects the offending item on click. Cloned from DrcDialog.tsx's own
-// structure (same task note that suggested it).
+// structure.
 //
-// Violations come from GET /api/erc -- crates/kicad's `check_erc`/
-// `check_erc_excluding` (gap #4 in GAPS.md: "ERC engine built, zero UI
-// exposure" when first written; exclusions followed in a later session).
-// Unlike DrcDialog's violations, `check_erc`'s own `CheckResult` shape
-// carries no ready-made canvas position -- `location` is one of several
-// id-ish strings, not a point (see types.ts's `ErcViolation.location` doc)
-// -- so `ercMarkerPosition` (components/schematic/ercMarkerPosition.ts,
-// also used by SchematicView.tsx's own canvas markers) resolves it back
-// to a point/refs here instead of reading one straight off the violation
-// the way DrcDialog's `jumpTo` can.
+// The violations ARE kicad-cli's: GET /api/erc exports the current schematic
+// to a derived .kicad_sch, runs `kicad-cli sch erc` on it (with the design's
+// own ERC pin map in the project file), and points each reported item back
+// at our own id (crates/cli/src/kicad_engine.rs). There is no other ERC
+// engine and no engine switch. It takes seconds, so it runs on demand --
+// when the dialog opens on a schematic kicad-cli has not judged yet, and on
+// "Run ERC" -- with a visible running state, never on every change.
+//
+// Each violation's `location` is our id for its first item (a symbol, a
+// pin "REF.PIN", a power symbol, a wire, a label, a no-connect, a text), not
+// a point: `ercMarkerPosition` (components/schematic/ercMarkerPosition.ts,
+// also used by SchematicView.tsx's own canvas markers) resolves it back to a
+// point/refs here instead of reading one straight off the violation the way
+// DrcDialog's `jumpTo` can.
+//
+// "Lint" is a tab of its own: crates/lint's schematic readability checks
+// (grid, wire length and overlap, label placement, sheet density), which
+// KiCad's ERC does not have. In-process and cheap, so it follows the
+// schematic live while the dialog is open; it never mixes into kicad-cli's
+// list.
 //
 // "Exclude this violation"/un-exclude (dialog_erc.cpp's own right-click
 // menu item, here a plain per-row button since this clone has no
 // context menu) persists to `design.schematic.erc_exclusions` via
-// `add_erc_exclusion`/`delete_erc_exclusion` -- the dialog doesn't
-// manually re-fetch afterward; store.tsx's existing poll loop already
-// re-runs GET /api/erc on the next version change while this dialog is
-// open, same as every other Cmd this app sends.
-import { useMemo, useState } from "react";
-import { fetchErc } from "../api/client";
+// `add_erc_exclusion`/`delete_erc_exclusion`; the report on screen is
+// patched in place (no new kicad-cli run for a waiver).
+import { useEffect, useMemo, useState } from "react";
+import { fetchVersion } from "../api/client";
 import type { ErcViolation } from "../api/types";
 import { useStudioDispatch, useStudioState, useStudioApi } from "../state/store";
 import { ercMarkerPosition } from "./schematic/ercMarkerPosition";
 import { fitTransform } from "./canvas/view";
 
+type ErcTab = "erc" | "lint";
+
 export function ErcDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
+  const open = state.ercDialogOpen;
+  const [tab, setTab] = useState<ErcTab>("erc");
   const [showErrors, setShowErrors] = useState(true);
   const [showWarnings, setShowWarnings] = useState(true);
   const [showExcluded, setShowExcluded] = useState(true);
@@ -44,23 +56,19 @@ export function ErcDialog() {
   const warnings = useMemo(() => violations.filter((v) => v.severity === "warning"), [violations]);
   const excluded = useMemo(() => violations.filter((v) => v.severity === "excluded"), [violations]);
   const visible = violations.filter((v) => (v.severity === "error" ? showErrors : v.severity === "warning" ? showWarnings : showExcluded));
-  const [running, setRunning] = useState(false);
-  const [runError, setRunError] = useState<string | null>(null);
-  // "Run ERC" (dialog_erc.cpp OnRunERCClick): kicad-cli runs on demand; the
-  // live engine re-runs by itself whenever the design changes.
-  const runErc = async () => {
-    setRunning(true);
-    setRunError(null);
-    try {
-      dispatch({ type: "ERC_OK", erc: await fetchErc(state.ercEngine) });
-    } catch (e) {
-      setRunError(String(e));
-    } finally {
-      setRunning(false);
-    }
-  };
+  const lint = state.lint?.schematic.violations ?? [];
+  const running = state.ercRunning;
+  const stale = state.erc !== null && !running && state.ercVersion !== state.version;
 
-  if (!state.ercDialogOpen) return null;
+  // Opening the dialog on a schematic kicad-cli has not judged yet runs it
+  // (the running state below shows meanwhile); one it already judged keeps
+  // its report until "Run ERC".
+  useEffect(() => {
+    if (open && state.version !== null && !state.ercRunning && (state.erc === null || state.ercVersion !== state.version)) void api.runErc();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, state.version === null]);
+
+  if (!open) return null;
   const close = () => dispatch({ type: "SET_ERC_DIALOG_OPEN", open: false });
 
   /**
@@ -70,13 +78,12 @@ export function ErcDialog() {
    * read directly off the live container's own size, the same
    * `.pcb-canvas-container` class name SchematicView.tsx's own container
    * uses (shared layout class, not PCB-specific -- see that file). A
-   * location `ercMarkerPosition` can't resolve (a dangling ref/net, or a
-   * genuinely unrecognized shape) still selects the row and switches tabs,
-   * it just can't additionally re-frame the view -- a known, smaller gap
-   * than DRC's own, since the dangling case is rare in practice.
+   * location `ercMarkerPosition` can't resolve (an item the schematic
+   * no longer has, or a genuinely unrecognized shape) still selects the
+   * row and switches tabs, it just can't additionally re-frame the view.
    */
-  const jumpTo = (v: ErcViolation, index: number) => {
-    dispatch({ type: "SET_ERC_SELECTED", index });
+  const jumpTo = (v: ErcViolation, index: number, lintRow: boolean) => {
+    dispatch(lintRow ? { type: "SET_ERC_LINT_SELECTED", index } : { type: "SET_ERC_SELECTED", index });
     const resolved = ercMarkerPosition(v.location, state.schematic);
     if (resolved) {
       if (resolved.refs.length > 0) {
@@ -99,9 +106,41 @@ export function ErcDialog() {
     dispatch({ type: "SET_TAB", tab: "schematic" });
   };
 
-  const toggleExclusion = (v: ErcViolation) => {
+  const toggleExclusion = async (v: ErcViolation) => {
     if (!v.location) return;
-    void api.cmd(v.severity === "excluded" ? { op: "delete_erc_exclusion", check: v.check, location: v.location } : { op: "add_erc_exclusion", check: v.check, location: v.location });
+    const wasExcluded = v.severity === "excluded";
+    const ok = await api.cmd(wasExcluded ? { op: "delete_erc_exclusion", check: v.check, location: v.location } : { op: "add_erc_exclusion", check: v.check, location: v.location });
+    if (!ok) return;
+    // The report on screen is patched in place; `version` is the board
+    // version after the Cmd, so the waiver does not make the run look out of date.
+    const version = await fetchVersion().catch(() => null);
+    dispatch({ type: "ERC_MARK_EXCLUDED", check: v.check, location: v.location, excluded: !wasExcluded, version });
+  };
+
+  const row = (v: ErcViolation, index: number, lintRow: boolean, selected: boolean) => {
+    const isExcluded = v.severity === "excluded";
+    return (
+      <div key={index} className={`problem-row${v.severity === "warning" ? " warn" : ""}${isExcluded ? " excluded" : ""}${lintRow ? " lint" : ""}${selected ? " selected" : ""}`} onClick={() => jumpTo(v, index, lintRow)}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+          <span>
+            <b>{v.check.replace(/_/g, " ")}</b> {v.location && <span>{v.location}</span>}
+          </span>
+          {!lintRow && v.location && (
+            <button
+              style={{ fontSize: 10, padding: "1px 6px", flexShrink: 0 }}
+              title={isExcluded ? "Un-exclude: report this violation again" : "Exclude: stop reporting this exact violation"}
+              onClick={(e) => {
+                e.stopPropagation();
+                void toggleExclusion(v);
+              }}
+            >
+              {isExcluded ? "Un-exclude" : "Exclude"}
+            </button>
+          )}
+        </div>
+        {v.hint && <small>{v.hint}</small>}
+      </div>
+    );
   };
 
   return (
@@ -117,62 +156,69 @@ export function ErcDialog() {
         </div>
         <div className="dialog-body" style={{ paddingTop: 10 }}>
           <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, fontSize: 11 }}>
-            <span style={{ color: "var(--chrome-text-dim)" }}>Engine:</span>
-            <select value={state.ercEngine} onChange={(e) => dispatch({ type: "SET_ERC_ENGINE", engine: e.target.value as "eda" | "kicad" })}>
-              <option value="eda">Live (re-runs on every change)</option>
-              <option value="kicad">KiCad (kicad-cli)</option>
-            </select>
-            <button onClick={runErc} disabled={running}>
+            <button onClick={() => void api.runErc()} disabled={running}>
               {running ? "Running…" : "Run ERC"}
             </button>
             {state.erc?.engine && <span style={{ color: "var(--chrome-text-dim)" }}>{state.erc.engine}</span>}
-            {runError && <span style={{ color: "var(--chrome-danger)" }}>{runError}</span>}
+            {stale && <span style={{ color: "var(--chrome-warn)" }}>The schematic changed since this run -- Run ERC again to refresh.</span>}
+            {state.ercError && <span style={{ color: "var(--chrome-danger)" }}>{state.ercError}</span>}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, fontSize: 11 }}>
-            <span style={{ color: "var(--chrome-text-dim)" }}>Show:</span>
-            <label className="toggle">
-              <input type="checkbox" checked={showErrors} onChange={(e) => setShowErrors(e.target.checked)} />
-              Errors ({errors.length})
-            </label>
-            <label className="toggle">
-              <input type="checkbox" checked={showWarnings} onChange={(e) => setShowWarnings(e.target.checked)} />
-              Warnings ({warnings.length})
-            </label>
-            <label className="toggle">
-              <input type="checkbox" checked={showExcluded} onChange={(e) => setShowExcluded(e.target.checked)} />
-              Exclusions ({excluded.length})
-            </label>
+          {running && (
+            <div className="run-banner" role="status">
+              <span className="bar" />
+              <span>kicad-cli is checking the schematic (a few seconds). Edits wait until it is done.</span>
+            </div>
+          )}
+
+          <div className="dock-tabs" style={{ marginBottom: 10 }}>
+            <div className={`dock-tab${tab === "erc" ? " active" : ""}`} onClick={() => setTab("erc")}>
+              Violations ({violations.length - excluded.length})
+            </div>
+            <div className={`dock-tab${tab === "lint" ? " active" : ""}`} onClick={() => setTab("lint")} title="Our own readability checks, the ones KiCad does not have">
+              Lint ({lint.length})
+            </div>
           </div>
 
-          {!state.erc && <div className="panel-empty">Running ERC…</div>}
-          {state.erc && violations.length === 0 && <div className="panel-empty">No violations.</div>}
-          {state.erc && violations.length > 0 && visible.length === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
-          {visible.map((v) => {
-            const index = violations.indexOf(v);
-            const isExcluded = v.severity === "excluded";
-            return (
-              <div key={index} className={`problem-row${v.severity === "warning" ? " warn" : ""}${isExcluded ? " excluded" : ""}`} onClick={() => jumpTo(v, index)}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-                  <span>
-                    <b>{v.check.replace(/_/g, " ")}</b> {v.location && <span>{v.location}</span>}
-                  </span>
-                  {v.location && (
-                    <button
-                      style={{ fontSize: 10, padding: "1px 6px", flexShrink: 0 }}
-                      title={isExcluded ? "Un-exclude: report this violation again" : "Exclude: stop reporting this exact violation"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        toggleExclusion(v);
-                      }}
-                    >
-                      {isExcluded ? "Un-exclude" : "Exclude"}
-                    </button>
-                  )}
+          <div style={{ opacity: running ? 0.5 : 1 }}>
+            {tab === "erc" && (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, fontSize: 11 }}>
+                  <span style={{ color: "var(--chrome-text-dim)" }}>Show:</span>
+                  <label className="toggle">
+                    <input type="checkbox" checked={showErrors} onChange={(e) => setShowErrors(e.target.checked)} />
+                    Errors ({errors.length})
+                  </label>
+                  <label className="toggle">
+                    <input type="checkbox" checked={showWarnings} onChange={(e) => setShowWarnings(e.target.checked)} />
+                    Warnings ({warnings.length})
+                  </label>
+                  <label className="toggle">
+                    <input type="checkbox" checked={showExcluded} onChange={(e) => setShowExcluded(e.target.checked)} />
+                    Exclusions ({excluded.length})
+                  </label>
                 </div>
-                {v.hint && <small>{v.hint}</small>}
-              </div>
-            );
-          })}
+
+                {!state.erc && <div className="panel-empty">{running ? "Running ERC…" : "Run ERC to check the schematic."}</div>}
+                {state.erc && violations.length === 0 && <div className="panel-empty">No violations.</div>}
+                {state.erc && violations.length > 0 && visible.length === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
+                {visible.map((v) => {
+                  const index = violations.indexOf(v);
+                  return row(v, index, false, state.ercSelected === index);
+                })}
+              </>
+            )}
+
+            {tab === "lint" && (
+              <>
+                <div className="panel-empty" style={{ textAlign: "left", marginBottom: 6 }}>
+                  Our own readability checks (grid, wire length and overlap, label placement, sheet density). KiCad's ERC has no equivalent; its rules are in Violations.
+                </div>
+                {!state.lint && <div className="panel-empty">Loading…</div>}
+                {state.lint && lint.length === 0 && <div className="panel-empty">No findings.</div>}
+                {lint.map((v, i) => row(v, i, true, state.ercLintSelected === i))}
+              </>
+            )}
+          </div>
         </div>
         <div className="dialog-footer">
           <button className="primary" onClick={close}>
