@@ -1716,7 +1716,7 @@ mod tests {
 
     /// The hard rule this task was built around: "there must be one
     /// netlist." Drawing a wire between two previously-unconnected pins
-    /// must merge them into the same net *in the model `check_erc`/the PCB
+    /// must merge them into the same net *in the model the ERC export/the PCB
     /// ratsnest read* -- not just in the schematic's own drawing -- and
     /// deleting that wire must split them back apart. Exercises `AddWire`
     /// and `DeleteWire` end to end: `step` -> `reconcile_schematic` (fired

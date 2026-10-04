@@ -1,10 +1,9 @@
 // dialog_gen_footprint_position.cpp ("Generate Placement Files", File >
 // Fabrication Outputs > Component Placement...): format, side and unit
-// radios plus the SMD-only / exclude-through-hole filters. Backed by
-// eda_fab::position -- a port of KiCad's own PLACE_FILE_EXPORTER, not the
-// JLCPCB-template CPL this app already writes for `eda ... --fab`
-// (crates/fab/src/lib.rs's cpl_csv) -- see position.rs's own doc comment
-// for why those are two separate writers.
+// radios plus the SMD-only / exclude-through-hole filters. POSTs to
+// /api/fab/pos (crates/cli/src/fab_api.rs), which turns them into
+// `kicad-cli pcb export pos` arguments and runs it on the exported board --
+// KiCad's own PLACE_FILE_EXPORTER, not a Rust port.
 import { useState } from "react";
 import { postFabPos, type FabPosOptions } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
@@ -81,8 +80,7 @@ export function FootprintPositionDialog() {
             </label>
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)" }}>
-            Output directory: <code>export/</code>. KiCad's own column layout (<code>Ref,Val,Package,PosX,PosY,Rot,Side</code>), checked byte-for-byte against
-            `kicad-cli pcb export pos` (PARITY.md).
+            Output directory: <code>export/kicad/pos/</code>. Written by <code>kicad-cli pcb export pos</code>, so it is KiCad's own file.
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>

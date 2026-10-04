@@ -50,17 +50,23 @@ pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     Ok(eda_kicad_engine::erc(&design, &model, &work(dir))?.to_json(&exclusions))
 }
 
+/// The board's project name: its intent's file stem, as every file written for
+/// it has always been named.
+fn project_name(dir: &Path) -> String {
+    board::load(dir).ok().and_then(|(meta, _, _)| Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).map(str::to_string)).unwrap_or_else(|| "board".to_string())
+}
+
 /// `kicad-cli pcb export <kind> [args...]`: `{ ok, engine, files }`.
 pub fn export(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    eda_kicad_engine::export_pcb(&design, &model, &work(dir), dir, kind, args)
+    eda_kicad_engine::export_pcb(&design, &model, &work(dir), dir, &project_name(dir), kind, args)
 }
 
 /// `kicad-cli sch export <kind> [args...]` (`netlist`, `bom`, `pdf`, `svg`,
 /// `dxf`, `ps`, `png`): `{ ok, engine, files }`.
 pub fn export_sch(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
     let (design, model) = load_with_schematic(dir)?;
-    eda_kicad_engine::export_sch(&design, &model, &work(dir), dir, kind, args)
+    eda_kicad_engine::export_sch(&design, &model, &work(dir), dir, &project_name(dir), kind, args)
 }
 
 /// Our own checks, the ones KiCad does not have: `{ pcb: { violations,

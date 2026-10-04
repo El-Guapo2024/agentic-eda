@@ -485,8 +485,8 @@ same split section 12's cleanup dialog uses) in
 ## 14. Rule areas (keepout zones)
 
 Port of `pcbnew/zone.cpp`'s `ZONE::GetIsRuleArea()`/`GetDoNotAllow*()`
-flags (task item 3) and `pcbnew/drc/drc_test_provider_disallow.cpp`'s
-keepout half. A rule area shares `Zone`'s own IR struct, outline-drawing
+flags (task item 3); the keepout DRC (`drc_test_provider_disallow.cpp`) is
+kicad-cli's. A rule area shares `Zone`'s own IR struct, outline-drawing
 tool and properties dialog with a copper-pour zone -- same single-dialog-
 two-panels shape source itself uses -- rather than being a separate type.
 
@@ -497,8 +497,7 @@ two-panels shape source itself uses -- rather than being a separate type.
 | Drawing: outline-drawn with the same tool as a copper-pour zone | ported, one hotkey/menu difference from source rather than a separate tool -- `pcbnew.InteractiveDrawing.ruleArea` (Ctrl+Shift+K) arms the identical outline tool as `.zone`; `state.nextZoneIsRuleArea` is the one bit telling `ZoneDialog.tsx` to pre-check "Rule area" for *this* entry's outline, same end result (draw outline, dialog opens, Rule Area already ticked) with no second drawing-tool code path to maintain | `tools/drawing_tool.cpp`'s zone/keepout entry points, which upstream also funnel through one outline-drawing loop |
 | Properties dialog: "Rule area" checkbox swaps the panel between fill settings and the 5 keepout checkboxes | identical in effect | `dialog_copper_zones.cpp`'s `IsRuleArea()` branch -- `ZoneDialog.tsx` |
 | Zone filler honors a copper-pour keepout: every other zone's fill excludes it, any net, any priority | identical in effect | `ZONE_FILLER::fillCopperZone`'s keepout knockout -- `crates/zone-filler`'s new `FillInput::keepouts`/`FillKeepout`, 2 new tests. Previously an explicit, named gap in that crate's own doc comment ("Not ported: ... keepout zones") |
-| DRC: track/via/pad/footprint landing inside a matching keepout is reported (`items_not_allowed`) | ported for the explicit-keepout-zone path; a track/via/pad is layer-matched exactly, a footprint ignores the keepout's own layer (a component exclusion zone's layer is cosmetic -- see below) | `drc_test_provider_disallow.cpp`'s `DISALLOW_CONSTRAINT`/`antiTrackKeepouts` paths -- new `crates/drc/src/providers/disallow.rs`, 8 tests |
-| DRC: copper-pour-in-keepout cross-check (belt-and-suspenders over the filler's own exclusion) | ported, with the same epsilon-deflate trick source's own `query_areas` uses -- otherwise the filler's own zero-gap cut would always register as "touching" and false-positive | `drc_test_provider_disallow.cpp`'s `query_areas` cached-intersection test |
+| DRC: track/via/pad/footprint landing inside a matching keepout is reported (`items_not_allowed`), and a copper pour inside one | KiCad's own, by running it: the exported rule area is a `(zone (keepout ...))` and kicad-cli's DRC reports `items_not_allowed` (2026-10-03; the Rust `disallow` provider is deleted, so there is nothing to keep in parity) | `drc_test_provider_disallow.cpp` (kicad-cli's) |
 | Multi-layer rule areas (one outline, several layers); custom `(disallow ...)` DRC rules on non-keepout items; `DRCE_TEXT_ON_EDGECUTS` (a different, unrelated half of the same KiCad source file) | not ported -- this model's `Zone` is single-layer only (an existing, documented limitation predating this item), has no custom-rule language (GAPS.md #10), and text-on-Edge.Cuts is a separate check | `ZONE::GetLayerSet()`, `panel_setup_rules.cpp`, `drc_test_provider_disallow.cpp`'s `checkTextOnEdgeCuts` |
 | `.kicad_pcb` export of a rule area | not ported -- `crates/kicad`'s exporter was out of this item's explicit scope; a rule area round-tripped through export today would still be written as (and read back as) a zone, net/fill fields included, which is not what a real `.kicad_pcb`'s `(zone (keepout ...))` block looks like | `crates/kicad/src/pcb.rs`'s zone writer -- flagged here for a follow-up, not silently dropped |
 | Canvas rendering: a rule area draws as a dashed outline with a diagonal hatch and a restriction label ("Keepout: Tracks/Vias"), never a solid fill (it never has one) | ported, a simplified stand-in for source's real cross-hatch keepout rendering | `pcb_painter.cpp`'s zone paint, keepout branch -- `painter.ts`'s new `drawRuleArea` |
@@ -507,13 +506,11 @@ Rust: `crates/model/src/ir.rs` (`Zone`'s 6 new fields), `crates/ops/src/lib.rs`
 (`Cmd::EditZone` carries them; `add_zone`/`edit_zone` allow an empty net),
 2 new `crates/ops/src/tests.rs` tests. `crates/zone-filler/src/lib.rs`
 (`FillKeepout`, the knockout pass), 2 new tests. `crates/drc`: `DrcKeepout`
-(`board.rs`, kept entirely separate from `DrcZone`/`board.zones` so every
-*other* existing provider -- `copper_clearance` in particular -- keeps
-treating `board.zones` as "real copper only", unaffected by rule areas
-coming into existence as a concept); `ErrorType::ItemsNotAllowed`
-(`item.rs`, appended, matching KiCad's own `items_not_allowed` settings
-key); the new `providers/disallow.rs` (8 tests); one new line in `lib.rs`'s
-`run()` registering it. Frontend: `RuleAreaFields`/`Zone`/`CmdZone` in
+(`board.rs`, kept entirely separate from `DrcZone`/`board.zones` so the
+filler and router keep treating `board.zones` as "real copper only",
+unaffected by rule areas coming into existence as a concept); the DRC
+provider that read it (`disallow.rs`) is gone, kicad-cli reports
+`items_not_allowed` itself. Frontend: `RuleAreaFields`/`Zone`/`CmdZone` in
 `api/types.ts`, `ZoneDialog.tsx`'s rule-area panel, `clipboard.ts`'s
 `zoneToCmd` (copy/paste/duplicate fidelity), `painter.ts`'s `drawRuleArea`,
 `useActionRunner.ts`'s `ruleArea` action, `state.nextZoneIsRuleArea`
@@ -713,43 +710,23 @@ hotkeys for these two are null, same gap already noted there for Escape),
 
 ## 19. Board Statistics and Swap Layers
 
-Verified line-by-line against the KiCad source snapshot (`8303b2ad`):
-`pcbnew/board_statistics_report.cpp` (`ComputeBoardStatistics`,
-`FormatBoardStatisticsReport`, `appendTable`), `pcbnew/board_statistics.cpp`
-(`CollectDrillLineItems`), `pcbnew/dialogs/dialog_board_statistics.cpp`,
-`common/eda_units.cpp` (`MessageTextFromValue`), `pcbnew/dialogs/
-dialog_swap_layers.cpp` and `pcbnew/tools/global_edit_tool.cpp`
-(`SwapLayers`, `swapBoardItem`).
+**Board Statistics is kicad-cli's** (2026-10-03): `POST /api/board_stats` runs `kicad-cli pcb export stats` (JSON for the numbers, the text report for "Generate Report File...") on the exported board and maps it to the dialog's shape (`crates/cli/src/kicad_engine.rs`, `board_stats`); the 870-line Rust port of `ComputeBoardStatistics`/`FormatBoardStatisticsReport` is deleted, so the rows that measured it against the source are gone with it. The three checkboxes are kicad-cli's own flags (`--exclude-footprints-without-pads`, `--subtract-holes-from-board`, `--subtract-holes-from-copper`). Swap Layers is ours (below).
 
 | Behavior | Status | KiCad file:function |
 |---|---|---|
-| Footprint counts THT/SMD/Unspecified x front/back, "Exclude footprints with no pads" | identical logic; type comes from pad composition, since placed parts carry no `FP_THROUGH_HOLE`/`FP_SMD` attribute in this IR | `ComputeBoardStatistics` footprint loop |
-| Pad counts (Through hole/SMD/Connector/NPTH + Castellated/Press-fit) | identical; Connector/Castellated/Press-fit always 0 (not in the IR) | `updatePadCounts` |
-| Via counts by type (through/blind/buried/micro) | identical from each via's layer pair; no microvia flag in the IR | `viaEntries` loop |
-| Min track width (straight tracks only) | identical | `track->Type() == PCB_TRACE_T` |
-| Min track clearance: every ordered track/via pair on the same `GetLayer()` (a via's is its top layer), different nets, effective shapes, clamped at 0 | identical (was tracks-only and unclamped before this pass) | `trackShapeA->Collide( ..., &actual )` |
-| Unset minimums print as INT_MAX nm (`2147.4836 mm`) | identical, kept on purpose | `std::numeric_limits<int>::max()` |
-| Drill table: pads (footprint order) then vias, grouped, sorted by count descending | identical, stable for ties (was hash-map order before) | `CollectDrillLineItems`, `COMPARE( COL_COUNT, false )` |
-| Min drill = smallest round drill | identical | `drill.shape == PAD_DRILL_SHAPE::CIRCLE` |
-| Board area/size from the outline; "Subtract holes from board area" removes pad holes (`len*w + pi/4 w^2`) and via drills | identical; Edge.Cuts interior cutouts don't exist in this IR | `GetBoardPolygonOutlines` block |
-| Footprint (courtyard) area: courtyards + PTH pads inflated by the default clearance + NPTH holes, both sides, `Simplify()`d union | identical algorithm; courtyards are this IR's courtyard box | `frontShapesForArea`/`Simplify()` |
-| Copper area: every pad/track/via/copper graphic/**zone fill** on F.Cu/B.Cu, plain `Area()` sum (overlaps double-count); "Subtract holes from copper areas" unions via `BooleanSubtract` | identical, including the double-count quirk (was simple-shape formulas without zones before) | `RunOnChildren` + `BooleanSubtract` |
-| Board thickness from stackup, default 1.6 mm | identical | `GetStackupOrDefault().BuildBoardThicknessFromStackup()` |
-| Number formatting (`%.4f`/`%.3f` + 2.5-digit trim for mm areas, `%.3e` fallback, ` mils`/` in` labels, `²`) | identical, both in Rust (report) and TS (`kicad-port/messageText.ts`, dialog) | `MessageTextFromValue`, `GetText` |
 | Dialog: General page (Components/Pads/Vias/Board grids), Drill Holes page with header-click sort toggling asc/desc, three checkboxes re-running on click, session-persistent checkbox state, Close (not Cancel) | identical | `DIALOG_BOARD_STATISTICS` -- `BoardStatisticsDialog.tsx` |
-| Generate Report File... -> `<board>_report.txt` with source's exact text layout | identical text; saved through a browser download instead of a native Save dialog | `saveReportClicked`, `FormatBoardStatisticsReport` |
-| JSON report (`FormatBoardStatisticsJson`) | missing -- only the kicad-cli path uses it | `FormatBoardStatisticsJson` |
+| Every number | KiCad's own (kicad-cli computes it) | `ComputeBoardStatistics` |
+| Number formatting (`%.4f`/`%.3f` + 2.5-digit trim for mm areas, `%.3e` fallback, ` mils`/` in` labels, `²`) | identical, in the dialog (`kicad-port/messageText.ts`) from the micrometre values the backend sends | `MessageTextFromValue`, `GetText` |
+| Generate Report File... -> `<board>_report.txt` | kicad-cli's own text report (its length unit is `mm` or `in`; mils show as inches); saved through a browser download instead of a native Save dialog | `saveReportClicked`, `FormatBoardStatisticsReport` |
 | Swap Layers: one row per copper layer in UI order, defaulting to itself; destination picker copper-only; map applied simultaneously (so a two-way swap works); one undo step; nothing committed when every row is identity | identical | `DIALOG_SWAP_LAYERS`, `GLOBAL_EDIT_TOOL::SwapLayers` -- `SwapLayersDialog.tsx`, `Cmd::SwapLayers` |
 | Swap Layers on vias: through vias skipped, blind/buried vias get their layer pair remapped | identical (vias were never remapped before this pass) | `via->GetViaType() == VIATYPE::THROUGH`, `SetLayerPair` |
 
-Rust: `crates/cli/src/board_stats.rs` (rewritten on `eda_drc::board::build`
-+ `eda_drc::fill::fill_all_zones` + `eda_shape_poly_set`, 11 tests),
-`POST /api/board_stats` now takes the three options plus `report`/`units`/
-`date`. `crates/ops/src/lib.rs` `swap_layers` via handling + 1 new test.
-UI: `BoardStatisticsDialog.tsx`, `SwapLayersDialog.tsx`,
-`kicad-port/messageText.ts` (+ test), wired to the existing
-`pcbnew.InspectionTool.ShowBoardStatistics` / `pcbnew.GlobalEdit.swapLayers`
-menu actions.
+Rust: `crates/cli/src/kicad_engine.rs` (`board_stats`, 2 tests on the
+kicad-cli JSON mapping), `crates/kicad-engine` (`stats`). `crates/ops/src/lib.rs`
+`swap_layers` via handling + 1 new test. UI: `BoardStatisticsDialog.tsx`,
+`SwapLayersDialog.tsx`, `kicad-port/messageText.ts` (+ test), wired to the
+existing `pcbnew.InspectionTool.ShowBoardStatistics` /
+`pcbnew.GlobalEdit.swapLayers` menu actions.
 
 Click-through:
 1. Inspect > Show Board Statistics on a routed board with a zone. Check

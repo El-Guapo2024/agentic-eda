@@ -8,11 +8,10 @@
 // The bodies are exactly what crates/cli/src/sch_api.rs reads: `plot`
 // takes SCH_PLOT_OPTS' fields by name (m_plotAll -> plot_all,
 // m_plotDrawingSheet -> plot_drawing_sheet, m_blackAndWhite -> !color,
-// m_useBackgroundColor -> background, m_pageSizeSelect -> page_size), and
+// m_useBackgroundColor -> background), and
 // `netlist` takes the exporter flavour.
 
 export type SchPlotFormat = "svg" | "pdf";
-export type SchPlotPageSize = "auto" | "a4" | "a";
 export type SchPlotScope = "all" | "current";
 export type SchNetlistFormat = "kicad" | "xml";
 
@@ -23,7 +22,6 @@ export interface SchPlotForm {
   color: boolean;
   plotDrawingSheet: boolean;
   useBackgroundColor: boolean;
-  pageSize: SchPlotPageSize;
   /** "Plot all pages" vs "Plot current page only" (`m_plotAll`). */
   scope: SchPlotScope;
   /** Placement ids from the root down to the sheet being viewed (`Schematic.sheet_path`), used for scope `current`. */
@@ -36,7 +34,6 @@ export const DEFAULT_SCH_PLOT_FORM: SchPlotForm = {
   color: true,
   plotDrawingSheet: true,
   useBackgroundColor: true,
-  pageSize: "auto",
   scope: "all",
   currentSheetIds: [],
 };
@@ -50,7 +47,6 @@ export interface SchPlotRequest {
   plot_all: boolean;
   /** `"<id>/<id>/..."` -- only meaningful when `plot_all` is false; empty = the root sheet. */
   sheet_path: string;
-  page_size: SchPlotPageSize;
 }
 
 export function buildSchPlotRequest(form: SchPlotForm): SchPlotRequest {
@@ -63,7 +59,6 @@ export function buildSchPlotRequest(form: SchPlotForm): SchPlotRequest {
     background: form.useBackgroundColor,
     plot_all: plotAll,
     sheet_path: plotAll ? "" : form.currentSheetIds.join("/"),
-    page_size: form.pageSize,
   };
 }
 

@@ -57,8 +57,7 @@ export function ExportNetlistDialog() {
             ))}
           </fieldset>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
-            Output directory: <code>export/</code> (inside this board's own directory). Nets are numbered in KiCad's own order (sorted by name, nodes by reference then pin); power symbols and
-            <code> #</code> references are left out.
+            Output directory: <code>export/kicad/sch-netlist/</code> (inside this board's own directory). Written by <code>kicad-cli sch export netlist</code>, so the nets are numbered and ordered the way KiCad does it.
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>

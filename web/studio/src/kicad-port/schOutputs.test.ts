@@ -10,16 +10,14 @@ test("buildSchPlotRequest: defaults mirror SCH_PLOT_OPTS (colour, drawing sheet,
     background: true,
     plot_all: true,
     sheet_path: "",
-    page_size: "auto",
   });
 });
 
-test("buildSchPlotRequest: black and white PDF on A4 without the drawing sheet", () => {
-  const body = buildSchPlotRequest({ ...DEFAULT_SCH_PLOT_FORM, format: "pdf", color: false, plotDrawingSheet: false, pageSize: "a4" });
+test("buildSchPlotRequest: black and white PDF without the drawing sheet", () => {
+  const body = buildSchPlotRequest({ ...DEFAULT_SCH_PLOT_FORM, format: "pdf", color: false, plotDrawingSheet: false });
   assert.equal(body.format, "pdf");
   assert.equal(body.color, false);
   assert.equal(body.plot_drawing_sheet, false);
-  assert.equal(body.page_size, "a4");
 });
 
 test("buildSchPlotRequest: 'current page only' sends the viewed sheet's placement path, 'all' never does", () => {

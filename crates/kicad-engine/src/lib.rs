@@ -98,9 +98,9 @@ fn today() -> String {
 /// and ERC pin map, plus the custom-rule file an imported project carried,
 /// so kicad-cli judges against this design's own rules and not its
 /// hard-coded floors.
-fn write_project(work: &Path, design: &Design, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> {
-    write_file(&work.join("board.kicad_pro"), export_kicad_pro_for(design, model))?;
-    let dru = work.join("board.kicad_dru");
+fn write_project(work: &Path, stem: &str, design: &Design, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> {
+    write_file(&work.join(format!("{stem}.kicad_pro")), export_kicad_pro_for(design, model))?;
+    let dru = work.join(format!("{stem}.kicad_dru"));
     match model.board.custom_rules_text.as_deref() {
         Some(text) => write_file(&dru, text)?,
         None => {
@@ -110,26 +110,34 @@ fn write_project(work: &Path, design: &Design, model: &ConstraintModel) -> Resul
     Ok(())
 }
 
-/// Export the design as `board.kicad_pcb` (+ project); returns the pcb path
+/// A file stem for the derived files: the project's own name, so the plots,
+/// Gerbers and position files kicad-cli writes carry it (`<stem>-F_Cu.gtl`);
+/// anything that is not a plain file-name character becomes `_`.
+fn file_stem(name: &str) -> String {
+    let s: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' }).collect();
+    if s.is_empty() || s.starts_with('.') { "board".to_string() } else { s }
+}
+
+/// Export the design as `<stem>.kicad_pcb` (+ project); returns the pcb path
 /// and the uuid -> our id map.
-fn export_board(design: &Design, model: &ConstraintModel, work: &Path) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
+fn export_board(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
     let date = today();
-    let (pcb, map) = export_kicad_pcb_mapped(design, model, &ExportMeta { date: &date, title: "board" })?;
-    let path = work.join("board.kicad_pcb");
+    let (pcb, map) = export_kicad_pcb_mapped(design, model, &ExportMeta { date: &date, title: stem })?;
+    let path = work.join(format!("{stem}.kicad_pcb"));
     write_file(&path, pcb)?;
-    write_project(work, design, model)?;
+    write_project(work, stem, design, model)?;
     Ok((path, map))
 }
 
-/// Export the design's schematic as `board.kicad_sch` (+ project).
-fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
+/// Export the design's schematic as `<stem>.kicad_sch` (+ project).
+fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
     let date = today();
-    let (sch, map) = export_kicad_sch_mapped(design, model, &ExportMeta { date: &date, title: "board" })?;
-    let path = work.join("board.kicad_sch");
+    let (sch, map) = export_kicad_sch_mapped(design, model, &ExportMeta { date: &date, title: stem })?;
+    let path = work.join(format!("{stem}.kicad_sch"));
     write_file(&path, sch)?;
-    write_project(work, design, model)?;
+    write_project(work, stem, design, model)?;
     Ok((path, map))
 }
 
@@ -257,7 +265,7 @@ fn run_report(mut cmd: Command, report: &Path, what: &str) -> Result<Value, Vec<
 /// off the report.
 pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: bool) -> Result<DrcReport, Vec<CheckResult>> {
     let cli = need_cli()?;
-    let (pcb, map) = export_board(design, model, work)?;
+    let (pcb, map) = export_board(design, model, work, "board")?;
     let report = work.join("drc.json");
     let run = |refill: bool| {
         let mut cmd = Command::new(&cli);
@@ -330,7 +338,7 @@ impl ErcReport {
 /// `kicad-cli sch erc` on `design`'s schematic.
 pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcReport, Vec<CheckResult>> {
     let cli = need_cli()?;
-    let (sch, map) = export_schematic(design, model, work)?;
+    let (sch, map) = export_schematic(design, model, work, "board")?;
     let report = work.join("erc.json");
     let mut cmd = Command::new(&cli);
     cmd.args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(&sch);
@@ -363,7 +371,7 @@ pub struct StatsOptions {
 /// text report KiCad's own dialog saves (`!json`), as text.
 pub fn stats(design: &Design, model: &ConstraintModel, work: &Path, opts: StatsOptions, json: bool) -> Result<String, Vec<CheckResult>> {
     let cli = need_cli()?;
-    let (pcb, _) = export_board(design, model, work)?;
+    let (pcb, _) = export_board(design, model, work, "board")?;
     let out_file = work.join(if json { "stats.json" } else { "stats.txt" });
     let _ = std::fs::remove_file(&out_file);
     let mut cmd = Command::new(&cli);
@@ -431,10 +439,11 @@ fn sch_ext(kind: &str) -> &'static str {
 const SCH_DIR_KINDS: &[&str] = &["svg", "dxf", "png", "ps"];
 
 /// A kicad-cli export that wrote files: their paths relative to `root`.
-fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path, out_dir: &Path, dir_kind: bool, ext: &str, root: &Path) -> Result<Value, Vec<CheckResult>> {
+#[allow(clippy::too_many_arguments)]
+fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path, out_dir: &Path, dir_kind: bool, ext: &str, stem: &str, root: &Path) -> Result<Value, Vec<CheckResult>> {
     std::fs::create_dir_all(out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
     let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
-    let target = if dir_kind { out_dir.to_path_buf() } else { out_dir.join(format!("board.{ext}")) };
+    let target = if dir_kind { out_dir.to_path_buf() } else { out_dir.join(format!("{stem}.{ext}")) };
     let mut out_arg = target.to_string_lossy().to_string();
     if dir_kind && !out_arg.ends_with('/') {
         out_arg.push('/');
@@ -465,26 +474,30 @@ fn check_kind(kind: &str) -> Result<(), Vec<CheckResult>> {
 }
 
 /// `kicad-cli pcb export <kind> [args...]` on `design`, into
-/// `<root>/export/kicad/<kind>/`. `args` are passed through (e.g. `--layers
+/// `<root>/export/kicad/<kind>/`. `name` is the project's name: the derived
+/// board is written under it, so kicad-cli names its files after it
+/// (`<name>-F_Cu.gtl`, `<name>.pos`). `args` are passed through (e.g. `--layers
 /// F.Cu,B.Cu`, `--format csv`). Returns `{ ok, engine, files }`, files
 /// relative to `root`.
-pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
     check_kind(kind)?;
     let cli = need_cli()?;
-    let (pcb, _) = export_board(design, model, work)?;
+    let stem = file_stem(name);
+    let (pcb, _) = export_board(design, model, work, &stem)?;
     let out_dir = root.join("export").join("kicad").join(kind);
-    run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext(kind), root)
+    run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext(kind), &stem, root)
 }
 
 /// `kicad-cli sch export <kind> [args...]` on `design`'s schematic, into
 /// `<root>/export/kicad/sch-<kind>/` (kinds: `netlist`, `bom`, `pdf`, `svg`,
-/// `dxf`, `ps`, `png`).
-pub fn export_sch(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+/// `dxf`, `ps`, `png`), named after the project like [`export_pcb`].
+pub fn export_sch(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
     check_kind(kind)?;
     let cli = need_cli()?;
-    let (sch, _) = export_schematic(design, model, work)?;
+    let stem = file_stem(name);
+    let (sch, _) = export_schematic(design, model, work, &stem)?;
     let out_dir = root.join("export").join("kicad").join(format!("sch-{kind}"));
-    run_export(&cli, "sch", kind, args, &sch, &out_dir, SCH_DIR_KINDS.contains(&kind), sch_ext(kind), root)
+    run_export(&cli, "sch", kind, args, &sch, &out_dir, SCH_DIR_KINDS.contains(&kind), sch_ext(kind), &stem, root)
 }
 
 #[cfg(test)]
@@ -502,6 +515,14 @@ mod tests {
         assert_eq!(m["items"][0]["id"], "trk_1#2");
         assert_eq!(m["items"][0]["pos"], json!([1500, -2000]));
         assert!(m["items"][1]["id"].is_null());
+    }
+
+    #[test]
+    fn the_derived_files_are_named_after_the_project_with_safe_characters() {
+        assert_eq!(file_stem("mcu_board_30plus"), "mcu_board_30plus");
+        assert_eq!(file_stem("my board/v2"), "my_board_v2");
+        assert_eq!(file_stem(""), "board");
+        assert_eq!(file_stem(".hidden"), "board");
     }
 
     #[test]

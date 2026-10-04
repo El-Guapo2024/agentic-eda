@@ -316,7 +316,7 @@ Fix: implement the pre-pass (`walkaround::route` restricted to `Item::Solid`) be
 
 KiCad pushes by the MTV (`clearance + w/2 + r - dist`), epsilon-free. Ours: `max(needed - actual, 1) + diameter/2` with `needed` already reduced by the 1 um epsilon and `actual` clamped at 0.
 
-Repro (run): via (600 dia) at (2500, 100) vs track (0,0)-(5000,0) width 200 clearance 200: result (2500, 599): centre-to-centreline 599, edge gap 199 < 200 (violation of 1 um under this project's DRC, epsilon 0). Via exactly on the centreline (2500, 0): first iteration pushes 499, the loop pushes again, final (2500, 899) where KiCad ends at 600 (299 um of needless displacement of a neighbour's via).
+Repro (run): via (600 dia) at (2500, 100) vs track (0,0)-(5000,0) width 200 clearance 200: result (2500, 599): centre-to-centreline 599, edge gap 199 < 200 (violation of 1 um under KiCad's DRC, which has no epsilon). Via exactly on the centreline (2500, 0): first iteration pushes 499, the loop pushes again, final (2500, 899) where KiCad ends at 600 (299 um of needless displacement of a neighbour's via).
 
 Fix: compute the MTV from the shapes with the un-reduced clearance (`Node::clearance`) and `+1` um margin, and add the "do not land on an existing joint" loop. Re-shape the attached fan-out with a 45-degree `DragCorner` instead of replacing the end vertex (shove.rs:319-326), otherwise the fan-out tracks leave at arbitrary angles.
 
@@ -336,9 +336,9 @@ Fix: port `DM_SEGMENT` + `dragCorner45`, `dragWalkaround`, `SHP_REVERSED` (a `re
 
 `AllowDRCViolations()` is `mode == RM_MarkObstacles && can_violate_drc` and `can_violate_drc` defaults to false (pns_routing_settings.h:117-119, .cpp:48). FixRoute therefore refuses a colliding head in every mode by default. Ours treats MarkObstacles as "allowed". Add an `allow_drc_violations` setting (default false) and gate on `mode == MarkObstacles && allow_drc_violations`.
 
-### D9. Clearance epsilon 1 um vs KiCad 0.5 um vs project DRC 0 (node.rs:35,373) -- MEDIUM
+### D9. Clearance epsilon 1 um vs KiCad 0.5 um vs KiCad's DRC 0 (node.rs:35,373) -- MEDIUM
 
-See table row (section E). Either pick epsilon 0 for the router (the project's DRC has none, so a router-accepted route can never be a DRC violation) or give the DRC the same epsilon; today the router can leave 1 um gaps the DRC reports (D6 shows one). The `HULL_ROUNDING_GUARD` already compensates for hull-hugging paths, so epsilon 0 plus the guard is consistent.
+See table row (section E). Pick epsilon 0 for the router (KiCad's DRC, which kicad-cli runs, has none, so a router-accepted route can never be a DRC violation); today the router can leave 1 um gaps kicad-cli's DRC reports (D6 shows one). The `HULL_ROUNDING_GUARD` already compensates for hull-hugging paths, so epsilon 0 plus the guard is consistent.
 
 ### D10. `assemble_line` normalizes widths silently (node.rs:214-270, shove.rs:336-346) -- MEDIUM, data-altering
 
