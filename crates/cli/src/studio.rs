@@ -674,6 +674,7 @@ fn handle(
         ("POST", "/api/route/via") => respond(stream, "200 OK", "application/json", route_api::via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/cancel") => respond(stream, "200 OK", "application/json", route_api::cancel(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/mode") => respond(stream, "200 OK", "application/json", route_api::set_mode(route_session, &body).to_string().as_bytes()),
         // D (stage 5): drag an existing track segment/corner or via,
         // keeping its connections -- shares `route_session` with the
         // route endpoints above (see route_api::drag_start's doc comment).
@@ -844,6 +845,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "tracks": r.tracks.iter().map(|t| json!({
                 "id": t.id, "net": t.net, "layer": t.layer, "width": t.width,
                 "pts": t.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+                // The arc's mid point when this track is a KiCad arc (`Track::arc`), so an edit that re-sends the track keeps it an arc.
+                "arc_mid": t.arc().map(|(_, m, _)| [m.x, m.y]),
             })).collect::<Vec<_>>(),
             "vias": r.vias.iter().map(|v| json!({
                 "id": v.id, "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter,

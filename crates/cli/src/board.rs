@@ -755,6 +755,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
         Cmd::SetLocked { ids, locked } => format!("{} {}", if *locked { "lock" } else { "unlock" }, ids.join(" ")),
         Cmd::SwapChain { parts } => format!("swap-chain {}", parts.join(" ")),
+        Cmd::BooleanShapes { operation, ids } => format!("shape boolean {} {}", serde_json::to_value(operation).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(), ids.join(" ")),
         Cmd::ZoneCutout { id, cutout } => format!("zone cutout {id} --pts \"{}\"", pts(cutout)),
 
         Cmd::Batch { cmds } => format!("batch [{}]", cmds.iter().map(cmd_line).collect::<Vec<_>>().join("; ")),
@@ -953,6 +954,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SwapLayers { .. } => "swap-layers",
         Cmd::SetLocked { .. } => "lock",
         Cmd::SwapChain { .. } => "swap",
+        Cmd::BooleanShapes { .. } => "shape",
         Cmd::ZoneCutout { .. } => "zone",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",

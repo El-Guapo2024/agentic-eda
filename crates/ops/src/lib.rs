@@ -46,6 +46,7 @@ use eda_model::ir::{
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+pub use pcb_edit::BooleanOp;
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
@@ -595,6 +596,12 @@ pub enum Cmd {
     /// second's pose, ..., the last on the first's. Two parts is a plain
     /// pose swap. One Cmd so the whole chain is one undo step.
     SwapChain { parts: Vec<String> },
+    /// `EDIT_TOOL::BooleanPolygons` (Merge / Subtract / Intersect Polygons,
+    /// `item_modification_routine.cpp`): `ids` are rectangles, circles and
+    /// polygons in the order the routine takes them (the first is the base
+    /// and the donor of layer/width/fill). The consumed shapes are deleted
+    /// and the result added as polygons -- see [`pcb_edit::boolean_shapes`].
+    BooleanShapes { operation: BooleanOp, ids: Vec<String> },
     /// `ZONE_CREATE_HELPER::performZoneCutout` (`Shift+C`, "Add a Zone
     /// Cutout"): subtract the closed polygon `cutout` from zone `id`'s
     /// outline (`SHAPE_POLY_SET::BooleanSubtract`) and replace the zone by
@@ -1405,6 +1412,7 @@ impl Cmd {
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
+            Cmd::BooleanShapes { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::ZoneCutout { id, .. } => vec![id.as_str()],
 
             Cmd::MoveSymbol { id, .. }
@@ -1761,6 +1769,7 @@ impl<'a> Board<'a> {
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
+            Cmd::BooleanShapes { operation, ids } => pcb_edit::boolean_shapes(self.drawings_mut(), *operation, ids),
             Cmd::ZoneCutout { id, cutout } => self.zone_cutout(id, cutout),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
@@ -4913,6 +4922,7 @@ mod tests;
 
 pub mod build;
 pub mod fields_table;
+pub mod pcb_edit;
 pub mod search;
 pub mod repair;
 pub mod view;
