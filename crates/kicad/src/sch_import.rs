@@ -28,6 +28,7 @@ use eda_model::ir::{Design, LabelKind, LabelShape, Millideg, NoConnect, Point, P
 use eda_model::symbol::{LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
+use crate::sch_extras_io::parse_bool;
 use crate::sexpr::{self, Sexpr};
 use crate::symbol_lib::build_symbol_table;
 
@@ -72,9 +73,13 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     // just "passive" whether or not a given pin is actually used -- see
     // `pin_kind_from_electrical_type`'s own doc.
     let mut no_connects: Vec<NoConnect> = Vec::new();
+    // `(locked yes)` of each item, parallel to the vector it was read into -- resolved to ids once ids exist (see below).
+    let is_locked = |node: &[Sexpr]| parse_bool(node, "locked").unwrap_or(false);
+    let mut nc_locked: Vec<bool> = Vec::new();
     for nc in sexpr::find_all(root, "no_connect") {
         if let Some(at) = sexpr::find(nc, "at").and_then(point_mm) {
             no_connects.push(NoConnect { id: String::new(), at: mm_point_to_um(at), pin: String::new() });
+            nc_locked.push(is_locked(nc));
         }
     }
     let nc_points: std::collections::BTreeSet<Point> = no_connects.iter().map(|nc| nc.at).collect();
@@ -101,6 +106,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         datasheet: String,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
+    let mut locked_refs: BTreeSet<String> = BTreeSet::new();
     // `SCH_SYMBOL_INSTANCE`-style per-sheet-instance overrides -- only ever
     // non-empty when this screen is placed by more than one `SheetInstance`
     // (see `SymbolPathOverride`'s own doc). Parsed unconditionally here
@@ -141,6 +147,9 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         let footprint = property_text(item, "Footprint").unwrap_or_default();
         let datasheet = property_text(item, "Datasheet").unwrap_or_default();
 
+        if is_locked(item) {
+            locked_refs.insert(reference.clone());
+        }
         if resolved.power {
             let pin_local = resolved.pins.first().map(|p| p.at).unwrap_or(SPoint::new(0.0, 0.0));
             let world = transform_local_point(pin_local, angle_deg, mirrored, mirror_y);
@@ -240,9 +249,11 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     }
 
     let mut wires: Vec<Wire> = Vec::new();
+    let mut wire_locked: Vec<bool> = Vec::new();
     for w in sexpr::find_all(root, "wire") {
         if let Some(pts) = import_pts(w) {
             wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: false });
+            wire_locked.push(is_locked(w));
         }
     }
     // `(bus ...)` (GAPS.md #20): the exact same `SCH_LINE`/`(pts ...)` shape
@@ -251,34 +262,46 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     for b in sexpr::find_all(root, "bus") {
         if let Some(pts) = import_pts(b) {
             wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: true });
+            wire_locked.push(is_locked(b));
         }
     }
 
     let mut bus_entries: Vec<eda_model::ir::BusEntry> = Vec::new();
+    let mut be_locked: Vec<bool> = Vec::new();
     for be in sexpr::find_all(root, "bus_entry") {
         let Some(at) = sexpr::find(be, "at").and_then(point_mm) else { continue };
         let Some(size) = sexpr::find(be, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))) else { continue };
         let id = sexpr::find(be, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::mm_to_um(size.0), y: crate::import::mm_to_um(size.1) } });
+        be_locked.push(is_locked(be));
     }
 
     // `(junction (at x y) ...)`: an explicit junction (`SCH_JUNCTION`) -- the only thing that joins two wires that merely cross
     // (see `Junction`; `reconcile` seeds it). Junctions the writer derives from geometry (`wire_junction_points`) come back as
     // explicit ones too: harmless, they sit where the wires already join.
     let mut junctions: Vec<eda_model::ir::Junction> = Vec::new();
+    let mut junction_locked: Vec<bool> = Vec::new();
     for j in sexpr::find_all(root, "junction") {
         let Some(at) = sexpr::find(j, "at").and_then(point_mm) else { continue };
         let at = mm_point_to_um(at);
         if !junctions.iter().any(|x| x.at == at) {
             junctions.push(eda_model::ir::Junction { id: String::new(), at });
+            junction_locked.push(is_locked(j));
         }
     }
     // `(polyline (pts ...) (stroke (width w) ...))`: a graphic line on the notes layer (`SchLine`).
     let mut lines: Vec<eda_model::ir::SchLine> = Vec::new();
+    let mut line_locked: Vec<bool> = Vec::new();
     for pl in sexpr::find_all(root, "polyline") {
+        // A filled polyline is a polygon shape (`SchGraphic`), read below with the other shapes.
+        let filled = sexpr::find(pl, "fill").and_then(|f| sexpr::find(f, "type")).and_then(|t| sexpr::txt(t, 1)).is_some_and(|t| t != "none");
+        if filled {
+            continue;
+        }
         if let Some(pts) = import_pts(pl).filter(|p| p.len() >= 2) {
             let width_um = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
             lines.push(eda_model::ir::SchLine { id: String::new(), pts, width_um });
+            line_locked.push(is_locked(pl));
         }
     }
 
@@ -304,6 +327,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     }
 
     let mut labels: Vec<eda_model::ir::NetLabel> = Vec::new();
+    let mut label_locked: Vec<bool> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
         for l in sexpr::find_all(root, tag) {
             let Some(net) = sexpr::txt(l, 1).map(String::from) else { continue };
@@ -315,6 +339,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
                 Some(false) => LabelKind::Hierarchical { shape },
             };
             labels.push(eda_model::ir::NetLabel { id: String::new(), net, at: mm_point_to_um(at), kind });
+            label_locked.push(is_locked(l));
         }
     }
 
@@ -322,6 +347,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     // a label, its content is purely cosmetic, so it never feeds `reconcile`
     // below.
     let mut texts: Vec<SchematicText> = Vec::new();
+    let mut text_locked: Vec<bool> = Vec::new();
     for t in sexpr::find_all(root, "text") {
         let Some(content) = sexpr::txt(t, 1).map(String::from) else { continue };
         let Some(at) = sexpr::find(t, "at") else { continue };
@@ -335,9 +361,11 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
             angle: import_rot_millideg_sch(angle_deg),
             size_um: crate::import::mm_to_um(size_mm),
         });
+        text_locked.push(is_locked(t));
     }
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
+    let mut sheet_locked: Vec<bool> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
@@ -354,6 +382,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
             })
             .collect();
         sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)), pins });
+        sheet_locked.push(is_locked(s));
         notes.sheets_not_descended += 1;
     }
 
@@ -372,6 +401,28 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         footprint_library: None, sheet_contents: None, bus_aliases, symbol_library: None,
     };
     design.assign_missing_ids();
+    // Drawn graphics (shapes, text boxes, rule areas, directive labels) and every item's `(locked yes)`, now that ids exist.
+    if let Some(sch) = design.schematic.as_mut() {
+        let graphics = crate::sch_extras_io::read_graphics(root);
+        let graphic_locked: Vec<bool> = graphics.iter().map(|g| g.locked).collect();
+        sch.extras.graphics = graphics.into_iter().map(|g| g.graphic).collect();
+        sch.assign_missing_ids();
+        let mut locked: Vec<String> = Vec::new();
+        let mut take = |ids: Vec<&str>, flags: &[bool]| locked.extend(ids.into_iter().zip(flags).filter(|(_, l)| **l).map(|(id, _)| id.to_string()));
+        take(sch.wires.iter().map(|w| w.id.as_str()).collect(), &wire_locked);
+        take(sch.labels.iter().map(|l| l.id.as_str()).collect(), &label_locked);
+        take(sch.texts.iter().map(|t| t.id.as_str()).collect(), &text_locked);
+        take(sch.no_connects.iter().map(|n| n.id.as_str()).collect(), &nc_locked);
+        take(sch.bus_entries.iter().map(|b| b.id.as_str()).collect(), &be_locked);
+        take(sch.junctions.iter().map(|j| j.id.as_str()).collect(), &junction_locked);
+        take(sch.lines.iter().map(|l| l.id.as_str()).collect(), &line_locked);
+        take(sch.sheets.iter().map(|s| s.id.as_str()).collect(), &sheet_locked);
+        take(sch.extras.graphics.iter().map(|g| g.id.as_str()).collect(), &graphic_locked);
+        locked.extend(locked_refs);
+        for id in locked.into_iter().filter(|id| !id.is_empty()) {
+            sch.extras.set_locked(&id, true);
+        }
+    }
 
     let model = ConstraintModel { parts, nets, symbols: lib_table.into_values().collect(), ..Default::default() };
     Ok((design, model, notes))
@@ -1283,5 +1334,56 @@ mod tests {
         assert_eq!(joined.lines[0].pts, vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }]);
         assert_eq!(joined.lines[0].width_um, 254);
         assert_eq!(joined.wires.len(), 2, "a graphic line is never read back as a wire");
+    }
+
+    /// Shapes, text boxes, rule areas, directive labels and every item's lock survive the `.kicad_sch` round trip.
+    #[test]
+    fn drawn_graphics_and_locks_round_trip_through_a_kicad_sch_file() {
+        use eda_model::sch_extras::{DirectiveShape, SchFill, SchGraphic, SchGraphicKind, SchHAlign, SchVAlign};
+        let p = |x: i64, y: i64| Point { x, y };
+        let mut sch = SchematicSection::default();
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000, 0)], bus: false });
+        sch.texts.push(SchematicText { id: String::new(), content: "note".into(), at: p(5_000, 5_000), angle: 0, size_um: 1_270 });
+        let mut rect = SchGraphic::new(SchGraphicKind::Rectangle { start: p(0, 10_000), end: p(20_000, 30_000), corner_radius_um: 0 });
+        rect.fill = SchFill::Background;
+        sch.extras.graphics = vec![
+            rect,
+            SchGraphic::new(SchGraphicKind::TextBox { start: p(0, 40_000), end: p(30_000, 50_000), text: "boxed".into(), angle: 0, size_um: 1_270, bold: false, italic: true, h_align: SchHAlign::Left, v_align: SchVAlign::Top, margin_um: 0 }),
+            SchGraphic::new(SchGraphicKind::RuleArea { pts: vec![p(0, 60_000), p(10_000, 60_000), p(10_000, 70_000)], exclude_from_sim: false, exclude_from_bom: false, exclude_from_board: false, dnp: true }),
+            SchGraphic::new(SchGraphicKind::Directive { at: p(20_000, 0), orientation: 0, shape: DirectiveShape::Round, pin_length_um: 2_540, netclass: "Power".into(), component_class: String::new() }),
+        ];
+        sch.assign_missing_ids();
+        let wire_id = sch.wires[0].id.clone();
+        let text_id = sch.texts[0].id.clone();
+        let rect_id = sch.extras.graphics[0].id.clone();
+        for id in [&wire_id, &text_id, &rect_id] {
+            sch.extras.set_locked(id, true);
+        }
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(sch.clone()),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+        };
+        let text = crate::export_kicad_sch(&design, &ConstraintModel::default(), &crate::ExportMeta { date: "2026-01-01", title: "graphics" }).expect("exports");
+        for token in ["(rectangle", "(text_box \"boxed\"", "(rule_area", "(netclass_flag", "(locked yes)"] {
+            assert!(text.contains(token), "{token} in\n{text}");
+        }
+        let (back, _model, _notes) = import_kicad_sch(&text).expect("re-imports");
+        let back = back.schematic.expect("schematic");
+        let mut kinds_before: Vec<&str> = sch.extras.graphics.iter().map(|g| g.shape.id_prefix()).collect();
+        let mut kinds_after: Vec<&str> = back.extras.graphics.iter().map(|g| g.shape.id_prefix()).collect();
+        kinds_before.sort();
+        kinds_after.sort();
+        assert_eq!(kinds_before, kinds_after, "every graphic comes back");
+        assert_eq!(back.extras.locked, sch.extras.locked, "the same three items are locked: {:?}", back.extras.locked);
+        assert!(matches!(back.extras.graphics.iter().find(|g| g.shape.id_prefix() == "rarea").map(|g| &g.shape), Some(SchGraphicKind::RuleArea { dnp: true, .. })));
     }
 }

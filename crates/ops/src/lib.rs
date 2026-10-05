@@ -866,6 +866,9 @@ pub enum Cmd {
     /// same library symbol, their orientations. A selection of more than two is a Batch of these in selection
     /// order, which `Swap`'s own loop (`sorted[i]` with `sorted[i + 1]`) turns into a rotation of the positions.
     SwapSchItems { a: String, b: String },
+    /// The schematic editor's other edit and drawing tools (lock, break, convert text type, shapes, sheet pins,
+    /// ...), one verb family -- see [`sch_edit::SchCmd`]. On the wire: `{"op": "sch_edit", "verb": "...", ...}`.
+    SchEdit(sch_edit::SchCmd),
 
     /// `dialog_erc.cpp`'s own "Exclude this violation" (right-click a
     /// finding, or the dialog's own Exclude button): accepts one ERC
@@ -1296,6 +1299,7 @@ impl Cmd {
             | Cmd::DeleteSchLine { .. }
             | Cmd::AddSheet { .. }
             | Cmd::SwapSchItems { .. }
+            | Cmd::SchEdit(_)
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
             | Cmd::AddLabel { .. }
@@ -1431,6 +1435,7 @@ impl Cmd {
             Cmd::AddSchLine { .. } => vec!["sch_line"],
             Cmd::AddSheet { name, .. } => vec![name.as_str()],
             Cmd::SwapSchItems { a, b } => vec![a, b],
+            Cmd::SchEdit(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
@@ -1867,6 +1872,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
+            Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
             Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
             Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
@@ -4953,3 +4959,4 @@ pub mod repair;
 pub mod view;
 pub mod episode;
 pub mod flash;
+pub mod sch_edit;

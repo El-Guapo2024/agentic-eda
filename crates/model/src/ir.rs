@@ -173,7 +173,7 @@ pub enum Stage {
 
 // ---------- stage 1: schematic ----------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchematicSection {
     /// Sorted by `(id, unit)`. Several entries can share one `id`: a
