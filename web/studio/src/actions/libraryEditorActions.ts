@@ -11,7 +11,7 @@
 // `eeschema.SymbolDrawing.drawSymbolTextBox`.
 import type { Dispatch } from "react";
 import type { Action as StudioAction } from "../state/store";
-import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
+import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import * as fpLib from "./footprintLibraryOps";
 import * as symLib from "./symbolLibraryOps";
@@ -69,6 +69,23 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   );
   // Repair Footprint -- RepairFootprint.
   m.set("pcbnew.ModuleEditor.repairFootprint", fpTab(() => fpLib.repairFootprint(fpc)));
+  // Place > Line / Arc / Rectangle / Circle / Polygon / Text of the Footprint Editor's menu are the board editor's `DRAWING_TOOL` actions (the same
+  // tool class runs in both frames): on the Footprint tab they arm this editor's own tool, on the PCB tab they stay what the board registered.
+  const armShapeOnFootprintTab = (name: string, tool: FpToolId) => {
+    const board = m.get(name);
+    m.set(name, () => {
+      if (ctx.tab !== "footprint") return board?.();
+      const st = ctx.fpApi.getState();
+      if (!st.name) return fpToast("Open a footprint first.");
+      void ctx.fpApi.setTool(st.activeTool === tool ? "select" : tool);
+    });
+  };
+  armShapeOnFootprintTab("pcbnew.InteractiveDrawing.line", "draw_segment");
+  armShapeOnFootprintTab("pcbnew.InteractiveDrawing.arc", "draw_arc");
+  armShapeOnFootprintTab("pcbnew.InteractiveDrawing.rectangle", "draw_rect");
+  armShapeOnFootprintTab("pcbnew.InteractiveDrawing.circle", "draw_circle");
+  armShapeOnFootprintTab("pcbnew.InteractiveDrawing.graphicPolygon", "draw_polygon");
+  armShapeOnFootprintTab("pcbnew.InteractiveDrawing.text", "text");
   // Load footprint from current PCB -- FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard: pick a board footprint by reference (`SelectFootprintFromBoard`).
   m.set("pcbnew.ModuleEditor.loadFootprintFromBoard", fpTab(() => (ctx.boardParts.some((p) => p.footprint) ? ctx.fpDispatch({ type: "SET_LOAD_FROM_BOARD_OPEN", open: true }) : fpToast("The board has no footprint to load."))));
   // Insert footprint into PCB -- FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard.
@@ -173,6 +190,25 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   // symbol's dialog) stays what it is there; on the Symbol tab it is the open symbol's library properties.
   const placedSymbolProperties = m.get("eeschema.InteractiveEdit.symbolProperties");
   m.set("eeschema.InteractiveEdit.symbolProperties", () => (ctx.tab === "symbol" ? void symLib.symbolProperties(sc) : placedSymbolProperties?.()));
+  // Pin Table... (Edit menu) -- SYMBOL_EDITOR_EDIT_TOOL::PinTable (DIALOG_LIB_EDIT_PIN_TABLE): the open symbol's pins in a table. Registered on the Symbol tab only, so
+  // the schematic's own Edit menu does not show a live entry that does nothing there.
+  if (ctx.tab === "symbol") {
+    m.set("eeschema.InteractiveEdit.pinTable", () => (ctx.symApi.getState().symbol ? ctx.symDispatch({ type: "SET_PIN_TABLE_OPEN", open: true }) : symToast("Open a symbol first.")));
+  }
+  // Place > Rectangle / Circle / Arc of the Symbol Editor's menu are the schematic's `drawRectangle` / `drawCircle` / `drawArc` actions: on the
+  // Symbol tab they arm this editor's own shape tool (the same action, the same tool in KiCad -- `SYMBOL_EDITOR_DRAWING_TOOLS::DrawShape`).
+  const armShapeOnSymbolTab = (name: string, tool: "draw_rect" | "draw_circle" | "draw_arc") => {
+    const schematic = m.get(name);
+    m.set(name, () => {
+      if (ctx.tab !== "symbol") return schematic?.();
+      const st = ctx.symApi.getState();
+      if (!st.symbol) return symToast("Open a symbol first.");
+      ctx.symDispatch({ type: "SET_ACTIVE_TOOL", tool: st.activeTool === tool ? "select" : tool });
+    });
+  };
+  armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawRectangle", "draw_rect");
+  armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawCircle", "draw_circle");
+  armShapeOnSymbolTab("eeschema.InteractiveDrawing.drawArc", "draw_arc");
 
   // Push Pin Length / Name Size / Number Size -- SYMBOL_EDITOR_PIN_TOOL::PushPinProperties: from the one selected pin to every other pin.
   const pushPin = (field: "length" | "name_size" | "number_size") =>

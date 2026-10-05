@@ -92,10 +92,20 @@ test("isActionEnabledForTab: the library editors' own tool groups are live on th
   }
 });
 
-test("isActionEnabledForTab: Symbol Properties is the schematic's and the symbol editor's", () => {
-  const name = "eeschema.InteractiveEdit.symbolProperties";
-  assert.equal(isActionEnabledForTab(name, "schematic", true), true);
-  assert.equal(isActionEnabledForTab(name, "symbol", true), true);
-  assert.equal(isActionEnabledForTab(name, "pcb", true), false);
-  assert.equal(isActionEnabledForTab(name, "footprint", true), false);
+test("isActionEnabledForTab: the footprint editor's Place menu drives the board's drawing actions on its own tab", () => {
+  for (const name of ["pcbnew.InteractiveDrawing.line", "pcbnew.InteractiveDrawing.arc", "pcbnew.InteractiveDrawing.rectangle", "pcbnew.InteractiveDrawing.circle", "pcbnew.InteractiveDrawing.graphicPolygon", "pcbnew.InteractiveDrawing.text"]) {
+    assert.equal(isActionEnabledForTab(name, "pcb", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "footprint", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "symbol", true), false, name);
+  }
+});
+
+test("isActionEnabledForTab: Symbol Properties, Pin Table and the shape tools are the schematic's and the symbol editor's", () => {
+  for (const name of ["eeschema.InteractiveEdit.symbolProperties", "eeschema.InteractiveEdit.pinTable", "eeschema.InteractiveDrawing.drawRectangle", "eeschema.InteractiveDrawing.drawCircle", "eeschema.InteractiveDrawing.drawArc"]) {
+    assert.equal(isActionEnabledForTab(name, "schematic", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "footprint", true), false, name);
+  }
 });
