@@ -188,7 +188,10 @@ export function paintSymbol(
     ctx.save();
     if (mv) ctx.translate(mv.dxUm, mv.dyUm);
     const selected = opts.selection.has(g.id ?? "");
-    drawRealGraphic(ctx, resolveGraphic(g), selected ? layerColor("selection") : strokeColor);
+    const color = selected ? layerColor("selection") : strokeColor;
+    // `drawRealGraphic` strokes with whatever `strokeStyle` is current (a placed symbol's painter sets it first); left alone it is the canvas default, black.
+    ctx.strokeStyle = color;
+    drawRealGraphic(ctx, resolveGraphic(g), color);
     ctx.restore();
   }
 

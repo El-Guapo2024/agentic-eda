@@ -416,13 +416,15 @@ export function SymbolEditorCanvas() {
       if (dxUm !== 0 || dyUm !== 0) {
         const dxMm = dxUm / 1000;
         const dyMm = -dyUm / 1000;
-        for (const id of refs) {
-          if (kind === "pin") {
+        if (kind === "pin") {
+          // One undo step for the whole drop; in Synchronized Pins Mode the matching pins of the other units travel with them (`SYMBOL_EDITOR_MOVE_TOOL::Main`).
+          const moves = refs.flatMap((id) => {
             const p = api.pinById(id);
-            if (p) void api.movePin(id, p.at.x + dxMm, p.at.y + dyMm);
-          } else {
-            void api.moveGraphic(id, dxMm, dyMm);
-          }
+            return p ? [{ id, x: p.at.x + dxMm, y: p.at.y + dyMm }] : [];
+          });
+          void api.movePins(moves);
+        } else {
+          for (const id of refs) void api.moveGraphic(id, dxMm, dyMm);
         }
       }
     }
@@ -499,6 +501,14 @@ export function SymbolEditorCanvas() {
     const entries: MenuEntry[] = [
       { label: "Rotate CCW (R)", onSelect: () => rotatePinSelection(true), disabled: pinRefs.length === 0 },
       { label: "Pin Properties...", onSelect: () => dispatch({ type: "SET_PIN_PROPERTIES_ID", id: pinRefs[0]! }), disabled: pinRefs.length !== 1 },
+      // `SYMBOL_EDITOR_PIN_TOOL::Init`: with a single pin selected (`singlePinCondition`) the menu offers to push its length / sizes to every other pin.
+      ...(refs.length === 1 && pinRefs.length === 1
+        ? ([
+            { label: "Push Pin Length", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "length") },
+            { label: "Push Pin Name Size", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "name_size") },
+            { label: "Push Pin Number Size", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "number_size") },
+          ] as MenuEntry[])
+        : []),
       { label: "Delete (Del)", onSelect: () => refs.forEach((id) => (api.pinById(id) ? void api.deletePin(id) : void api.deleteGraphic(id))), disabled: refs.length === 0 },
     ];
     setContextMenu({ x: e.clientX, y: e.clientY, entries });
