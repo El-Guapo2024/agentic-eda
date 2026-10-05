@@ -36,6 +36,10 @@ export interface SchSelectionSummary {
   sameReferenceUnits: number;
   /** Selected pins (pin selection is not part of this studio's schematic yet: always 0 there). */
   pins: number;
+  /** The one selected polygon or rule area has its outline under the cursor (`SCH_POINT_EDITOR::addCornerCondition`). */
+  canAddCorner: boolean;
+  /** ... and a corner of it is under the cursor, leaving enough corners (`removeCornerCondition`). */
+  canRemoveCorner: boolean;
 }
 
 export function emptySummary(): SchSelectionSummary {
@@ -63,6 +67,8 @@ export function emptySummary(): SchSelectionSummary {
     sheetHasUndefinedPins: false,
     sameReferenceUnits: 0,
     pins: 0,
+    canAddCorner: false,
+    canRemoveCorner: false,
   };
 }
 
@@ -129,6 +135,8 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   }
   add(s.pins > 1 && item("eeschema.InteractiveEdit.swapPinLabels"), s.sameReferenceUnits > 1 && item("eeschema.InteractiveEdit.swapUnitLabels"), s.pins > 1 && item("eeschema.InteractiveEdit.swapPins"));
   add(connected && item("eeschema.InteractiveEdit.assignNetclass"), connected && item("eeschema.InteractiveEdit.findNetInInspector"));
+  // `SCH_POINT_EDITOR::Init`: Count( 1 ) && addCornerCondition / removeCornerCondition.
+  add(single && s.canAddCorner && item("eeschema.PointEditor.addCorner"), single && s.canRemoveCorner && item("eeschema.PointEditor.removeCorner"));
 
   // The Locking submenu (`LOCK_CONTEXT_MENU`): Lock when anything is unlocked, Unlock when anything is locked, Toggle always.
   if (s.total > 0) {

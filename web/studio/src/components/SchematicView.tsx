@@ -692,13 +692,14 @@ export function SchematicView() {
         if (hit && !state.selection.has(hit)) ids = [hit];
         else if (!hit && ids.length > 0) ids = [];
         if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
-        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids)) });
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale)) });
       }}
-      onDoubleClick={() => {
+      onDoubleClick={(e) => {
         const draw = state.drawState;
-        // `IsDblClick( BUT_LEFT )` in DrawShape / DrawRuleArea: finish the shape as it stands.
-        if (draw?.kind === "sch_shape" && sch && state.cursorUm) {
-          finishShapeDraw({ tool: state.activeTool, draw, sch, lineMode: state.schLineMode, dispatch, api }, shapeSnap(state.cursorUm.x, state.cursorUm.y));
+        // `IsDblClick( BUT_LEFT )` in DrawShape / DrawRuleArea: finish the shape as it stands, at the point that was clicked.
+        if (draw?.kind === "sch_shape" && sch) {
+          const [wx, wy] = toWorld(e.clientX, e.clientY);
+          finishShapeDraw({ tool: state.activeTool, draw, sch, lineMode: state.schLineMode, dispatch, api }, shapeSnap(wx, wy));
           return;
         }
         if (draw?.kind !== "wire") return;

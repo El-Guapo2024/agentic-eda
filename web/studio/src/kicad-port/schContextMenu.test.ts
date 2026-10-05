@@ -70,6 +70,17 @@ test("a single sheet offers its pin tools; Cleanup Sheet Pins only when it has u
   assert.ok(actionsOf(schContextMenu(sel({ sheets: 1, sheetHasUndefinedPins: true }))).includes("eeschema.InteractiveEdit.cleanupSheetPins"));
 });
 
+test("a selected polygon or rule area offers Create / Remove Corner only under the pointer conditions", () => {
+  const none = actionsOf(schContextMenu(sel({ ruleAreas: 1 })));
+  assert.equal(none.includes("eeschema.PointEditor.addCorner") || none.includes("eeschema.PointEditor.removeCorner"), false);
+  const onEdge = actionsOf(schContextMenu(sel({ ruleAreas: 1, canAddCorner: true })));
+  assert.ok(onEdge.includes("eeschema.PointEditor.addCorner") && !onEdge.includes("eeschema.PointEditor.removeCorner"));
+  const onCorner = actionsOf(schContextMenu(sel({ shapes: 1, canAddCorner: true, canRemoveCorner: true })));
+  assert.ok(onCorner.includes("eeschema.PointEditor.addCorner") && onCorner.includes("eeschema.PointEditor.removeCorner"));
+  // Count( 1 ): not with several items selected.
+  assert.equal(actionsOf(schContextMenu(sel({ ruleAreas: 2, canAddCorner: true }))).includes("eeschema.PointEditor.addCorner"), false);
+});
+
 test("an empty selection offers Select All and nothing about an item", () => {
   const a = actionsOf(schContextMenu(sel({})));
   assert.deepEqual(a, ["common.Interactive.selectAll"]);

@@ -1,8 +1,18 @@
 // What a schematic selection is made of, in the terms `SCH_SELECTION_TOOL`'s menu conditions use (kicad-port/schContextMenu.ts).
 import type { Schematic } from "../../api/types";
 import { emptySummary, type SchSelectionSummary } from "../../kicad-port/schContextMenu";
+import { canAddCorner, canRemoveCorner, type P, type PolyKind } from "../../kicad-port/schPolyCorners";
 
-export function summarizeSelection(sch: Schematic, ids: readonly string[]): SchSelectionSummary {
+/** The outline of a drawn polygon or rule area, or null for anything else. */
+export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pts: P[] } | null {
+  const g = (sch.graphics ?? []).find((x) => x.id === id);
+  if (g?.shape.type === "polygon") return { kind: "polygon", pts: g.shape.pts.map((p): P => [p.x, p.y]) };
+  if (g?.shape.type === "rule_area") return { kind: "rule_area", pts: g.shape.pts.map((p): P => [p.x, p.y]) };
+  return null;
+}
+
+/** `cursor` (um) and `tolUm` (the point editor's handle size at this zoom) decide the corner entries, which depend on where the pointer is. */
+export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolUm = 0): SchSelectionSummary {
   const s = emptySummary();
   const locked = new Set(sch.locked ?? []);
   const wire = new Map(sch.wires.map((w) => [w.id, w]));
@@ -49,6 +59,12 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[]): SchS
   }
   // `GetSameSymbolMultiUnitSelection`: one reference selected, with several placed units.
   if (symbolIds.length === 1) s.sameReferenceUnits = symbolUnits.get(symbolIds[0]!) ?? 0;
+  // The point editor's corner entries: one selected polygon or rule area, the pointer on its outline (create) or on one of its corners (remove).
+  const poly = ids.length === 1 && cursor ? polygonOutline(sch, ids[0]!) : null;
+  if (poly && cursor) {
+    s.canAddCorner = canAddCorner(poly.pts, cursor, tolUm);
+    s.canRemoveCorner = canRemoveCorner(poly.kind, poly.pts, cursor, tolUm);
+  }
   // `SCH_SHEET::HasUndefinedPins` needs the sheet's own file (read when the action runs); a sheet with at least one pin may have an unreferenced one, so Cleanup Sheet Pins is offered for it.
   if (s.sheets === 1) {
     const sheet = sch.sheets.find((x) => ids.includes(x.id));
