@@ -99,7 +99,7 @@ pub(crate) fn model_from(root: &[Sexpr]) -> Option<String> {
 /// symmetric box that contains it, not represented exactly. `None` when
 /// the footprint has no courtyard layer at all -- callers fall back to the
 /// pad-bounding-box derivation the same as any other footprint with none.
-fn courtyard_from(root: &[Sexpr]) -> Option<(Um, Um)> {
+pub(crate) fn courtyard_from(root: &[Sexpr]) -> Option<(Um, Um)> {
     let on_crtyd = |item: &[Sexpr]| matches!(sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"));
     let mm_to_um = crate::import::mm_to_um;
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);

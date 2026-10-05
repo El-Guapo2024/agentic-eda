@@ -605,6 +605,9 @@ fn handle(
                 Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
             }
         }
+        // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
+        ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
+        ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
         ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
