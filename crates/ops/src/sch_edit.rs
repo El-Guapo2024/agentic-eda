@@ -7,7 +7,7 @@
 //! cites the KiCad function it ports (eeschema at 8303b2ad).
 
 use crate::{Board, Cmd};
-use eda_model::ir::{Point, SchematicSection};
+use eda_model::ir::{LabelShape, Point, SchematicSection, SheetInstance, SheetPin};
 use eda_model::sch_extras::{SchGraphic, SchGraphicKind};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,24 @@ pub enum SchCmd {
     /// Delete a placed hierarchical sheet (`SCH_EDIT_TOOL::DoDelete` on a `SCH_SHEET`): the sheet symbol and its
     /// pins go; the file's content stays in the project (another sheet may use it, or it may be placed again).
     DeleteSheet { id: String },
+    /// Put a pin on a placed sheet's border (`SCH_SHEET::AddPin`, as `SCH_DRAWING_TOOLS::TwoClickPlace` and
+    /// `AutoPlaceAllSheetPins` do): `name` is the hierarchical label it stands for in the sheet's file, `at` a
+    /// point on the sheet's border (`SCH_SHEET_PIN::ConstrainOnEdge` is the caller's). An empty name, an unknown
+    /// sheet or a point off the border is refused.
+    AddSheetPin { sheet: String, name: String, shape: LabelShape, at: Point },
+    /// Delete one sheet pin (`SCH_EDIT_TOOL::DoDelete` on a pin; what `CleanupSheetPins` and the sync dialog send).
+    DeleteSheetPin { id: String },
+    /// Rename, reshape or move one sheet pin (`SCH_SHEET_PIN` properties and the sync dialog's "update"); a field left
+    /// out is unchanged. The new position must still be on the border.
+    EditSheetPin {
+        id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        shape: Option<LabelShape>,
+        #[serde(default)]
+        at: Option<Point>,
+    },
 }
 
 impl SchCmd {
@@ -43,7 +61,8 @@ impl SchCmd {
         match self {
             SchCmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddGraphic { .. } => vec!["graphic"],
-            SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } => vec![id.as_str()],
+            SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } => vec![id.as_str()],
+            SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
         }
     }
 
@@ -55,6 +74,9 @@ impl SchCmd {
             SchCmd::DeleteGraphic { id } => format!("schematic delete-graphic {id}"),
             SchCmd::EditGraphic { id, .. } => format!("schematic edit-graphic {id}"),
             SchCmd::DeleteSheet { id } => format!("schematic delete-sheet {id}"),
+            SchCmd::AddSheetPin { sheet, name, .. } => format!("schematic sheet-pin add {sheet} {name}"),
+            SchCmd::DeleteSheetPin { id } => format!("schematic sheet-pin delete {id}"),
+            SchCmd::EditSheetPin { id, .. } => format!("schematic sheet-pin edit {id}"),
         }
     }
 
@@ -63,7 +85,7 @@ impl SchCmd {
         match self {
             SchCmd::SetLocked { .. } => "schematic-lock",
             SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } => "schematic-graphic",
-            SchCmd::DeleteSheet { .. } => "schematic-sheet",
+            SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
         }
     }
 }
@@ -77,6 +99,9 @@ impl<'a> Board<'a> {
             SchCmd::DeleteGraphic { id } => delete_graphic(self.schematic_mut()?, id),
             SchCmd::EditGraphic { id, graphic } => edit_graphic(self.schematic_mut()?, id, graphic.clone()),
             SchCmd::DeleteSheet { id } => delete_sheet(self.schematic_mut()?, id),
+            SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
+            SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
+            SchCmd::EditSheetPin { id, name, shape, at } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at),
         }
     }
 }
@@ -203,6 +228,75 @@ fn delete_sheet(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckRes
     Ok(())
 }
 
+/// Is `at` on the border of the sheet rectangle (`SCH_SHEET_PIN` is always `ConstrainOnEdge`-clamped there)?
+fn on_sheet_border(sheet: &SheetInstance, at: Point) -> bool {
+    let (w, h) = sheet.size;
+    let (left, top, right, bottom) = (sheet.at.x, sheet.at.y, sheet.at.x + w, sheet.at.y + h);
+    let in_x = (left..=right).contains(&at.x);
+    let in_y = (top..=bottom).contains(&at.y);
+    (in_y && (at.x == left || at.x == right)) || (in_x && (at.y == top || at.y == bottom))
+}
+
+fn add_sheet_pin(sch: &mut SchematicSection, sheet: &str, name: &str, shape: LabelShape, at: Point) -> Result<(), Vec<CheckResult>> {
+    if name.trim().is_empty() {
+        return Err(vec![CheckResult::fail("ops_bad_sheet_pin", sheet, "a sheet pin needs a name")]);
+    }
+    let Some(s) = sch.sheets.iter_mut().find(|s| s.id == sheet) else {
+        return Err(vec![CheckResult::fail("ops_unknown_sheet", sheet, "no sheet with this id")]);
+    };
+    if !on_sheet_border(s, at) {
+        return Err(vec![CheckResult::fail("ops_sheet_pin_off_border", sheet, "a sheet pin sits on the border of its sheet")]);
+    }
+    s.pins.push(SheetPin { id: String::new(), name: name.to_string(), shape, at });
+    sch.assign_missing_ids();
+    Ok(())
+}
+
+fn find_sheet_pin<'a>(sch: &'a mut SchematicSection, id: &str) -> Result<(&'a mut SheetInstance, usize), Vec<CheckResult>> {
+    for s in sch.sheets.iter_mut() {
+        if let Some(i) = s.pins.iter().position(|p| p.id == id) {
+            return Ok((s, i));
+        }
+    }
+    Err(vec![CheckResult::fail("ops_unknown_sheet_pin", id, "no sheet pin with this id")])
+}
+
+fn delete_sheet_pin(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckResult>> {
+    let (s, i) = find_sheet_pin(sch, id)?;
+    s.pins.remove(i);
+    Ok(())
+}
+
+fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shape: Option<LabelShape>, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
+    if name.is_some_and(|n| n.trim().is_empty()) {
+        return Err(vec![CheckResult::fail("ops_bad_sheet_pin", id, "a sheet pin needs a name")]);
+    }
+    let (s, i) = find_sheet_pin(sch, id)?;
+    if let Some(p) = at {
+        if !on_sheet_border(s, p) {
+            return Err(vec![CheckResult::fail("ops_sheet_pin_off_border", id, "a sheet pin sits on the border of its sheet")]);
+        }
+    }
+    let pin = &mut s.pins[i];
+    let before = pin.clone();
+    if let Some(n) = name {
+        pin.name = n.to_string();
+    }
+    if let Some(sh) = shape {
+        pin.shape = sh;
+    }
+    if let Some(p) = at {
+        pin.at = p;
+    }
+    if pin.name == before.name && pin.shape == before.shape && pin.at == before.at {
+        return Err(vec![CheckResult::fail("ops_sheet_pin_unchanged", id, "the pin already has these properties")]);
+    }
+    // The id follows the pin's name and place (`SheetPin::id_seed`): a renamed or moved pin gets the id its new content hashes to.
+    pin.id = String::new();
+    sch.assign_missing_ids();
+    Ok(())
+}
+
 /// Every item id of this sheet that Lock can act on (everything but pins and fields; sheet pins are listed
 /// separately because they are accepted-and-ignored).
 fn lockable_ids(sch: &SchematicSection) -> BTreeSet<&str> {
@@ -251,6 +345,7 @@ fn set_locked(sch: &mut SchematicSection, ids: &[String], locked: bool) -> Resul
 mod tests {
     use super::*;
     use eda_model::ir::{Design, Provenance, SchematicText, Wire};
+    use eda_model::ir::{LabelShape, SheetInstance};
     use eda_model::sch_extras::SchFill;
     use eda_model::ConstraintModel;
 
@@ -366,6 +461,46 @@ mod tests {
         assert!(b.design().schematic.as_ref().unwrap().sheets.is_empty());
         assert!(b.design().sheet_contents.as_ref().unwrap().contains_key("a.kicad_sch"));
         assert_eq!(b.apply(&Cmd::sch(SchCmd::DeleteSheet { id: "sheet_a".into() })).unwrap_err()[0].check, "ops_unknown_sheet");
+    }
+
+    fn board_with_sheet() -> (ConstraintModel, Design) {
+        let mut sch = empty_sheet();
+        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(10_000, 10_000), size: (20_000, 10_000), pins: vec![] });
+        (ConstraintModel::default(), design_with_schematic(sch))
+    }
+
+    #[test]
+    fn sheet_pins_are_added_on_the_border_edited_and_deleted() {
+        let (model, design) = board_with_sheet();
+        let mut b = Board::new(design, &model, 100, 300);
+        // On the left edge, on the top edge (a corner counts for both).
+        b.apply(&Cmd::sch(SchCmd::AddSheetPin { sheet: "sheet_a".into(), name: "VIN".into(), shape: LabelShape::Input, at: p(10_000, 15_000) })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::AddSheetPin { sheet: "sheet_a".into(), name: "CLK".into(), shape: LabelShape::Output, at: p(25_000, 10_000) })).unwrap();
+        let pins = b.design().schematic.as_ref().unwrap().sheets[0].pins.clone();
+        assert_eq!(pins.len(), 2);
+        assert!(pins.iter().all(|pin| pin.id.starts_with("shpin_")));
+        let vin = pins.iter().find(|pin| pin.name == "VIN").unwrap().clone();
+
+        // Off the border, an empty name and an unknown sheet are refused.
+        let add = |b: &mut Board, sheet: &str, name: &str, at: Point| b.apply(&Cmd::sch(SchCmd::AddSheetPin { sheet: sheet.into(), name: name.into(), shape: LabelShape::Passive, at })).unwrap_err()[0].check.clone();
+        assert_eq!(add(&mut b, "sheet_a", "X", p(15_000, 15_000)), "ops_sheet_pin_off_border");
+        assert_eq!(add(&mut b, "sheet_a", " ", p(10_000, 12_000)), "ops_bad_sheet_pin");
+        assert_eq!(add(&mut b, "nope", "X", p(10_000, 12_000)), "ops_unknown_sheet");
+
+        // Renaming and reshaping, then a move along the edge; a no-op is refused.
+        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: vin.id.clone(), name: Some("VBUS".into()), shape: Some(LabelShape::Bidirectional), at: None })).unwrap();
+        let renamed = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
+        assert_eq!(renamed.shape, LabelShape::Bidirectional);
+        assert_ne!(renamed.id, vin.id, "the id follows the pin's name and place");
+        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: renamed.id.clone(), name: None, shape: None, at: Some(p(10_000, 18_000)) })).unwrap();
+        let moved = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
+        assert_eq!(moved.at, p(10_000, 18_000));
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: Some("VBUS".into()), shape: None, at: None })).unwrap_err()[0].check, "ops_sheet_pin_unchanged");
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: None, shape: None, at: Some(p(12_000, 12_000)) })).unwrap_err()[0].check, "ops_sheet_pin_off_border");
+
+        b.apply(&Cmd::sch(SchCmd::DeleteSheetPin { id: moved.id.clone() })).unwrap();
+        assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].pins.len(), 1);
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::DeleteSheetPin { id: moved.id })).unwrap_err()[0].check, "ops_unknown_sheet_pin");
     }
 
     #[test]
