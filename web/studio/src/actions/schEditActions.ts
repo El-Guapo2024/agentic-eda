@@ -11,9 +11,11 @@ import { measureStrokeText } from "../components/text/strokeFont";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
+import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
 import { deleteLastPoint, finishShapeDraw } from "../components/schematic/schShapeTools";
 import type { BreakMode } from "../kicad-port/schBreak";
+import { nextUnitToPlace, unitCountOf } from "../kicad-port/schUnits";
 import type { Action, StudioApi, StudioState, ToolId } from "../state/store";
 import type { SymbolEditorApi, SymAction } from "../state/symbolEditorStore";
 
@@ -92,6 +94,25 @@ export function registerSchEditActions(m: Map<string, () => void>, ctx: SchEditC
   m.set("eeschema.InteractiveDrawing.drawRuleArea", arm("sch_rule_area"));
   m.set("eeschema.InteractiveDrawing.placeClassLabel", arm("sch_directive"));
 
+  // Place Next Symbol Unit -- SCH_DRAWING_TOOLS::PlaceNextSymbolUnit: one selected multi-unit symbol; the lowest unit of it not yet on the sheet is armed for placement under the
+  // same reference, value and footprint (kicad-port/schUnits.ts); anything else says why not (the info-bar messages).
+  m.set(
+    "eeschema.InteractiveDrawing.placeNextSymbolUnit",
+    schematicOnly(() => {
+      if (!sch) return;
+      const ids = requestSelection().filter((id) => sch.symbols.some((s) => s.id === id));
+      const info = (message: string) => ctx.dispatch({ type: "TOAST", message, kind: "info" });
+      if (ids.length !== 1) return info("Select a single symbol to place the next unit.");
+      const placed = sch.symbols.filter((s) => s.id === ids[0]);
+      const first = placed[0];
+      if (!first?.lib_id) return;
+      const next = nextUnitToPlace(unitCountOf(sch.lib_symbols[first.lib_id]), placed.map((s) => s.unit));
+      if (!next.ok) return info(next.message);
+      ctx.dispatch({ type: "SET_ARMED_SYMBOL", symbol: { libId: first.lib_id, referencePrefix: "", unit: next.unit, ref: first.id, value: first.value ?? undefined, footprint: first.footprint ?? undefined } });
+      ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_place_symbol" });
+    })
+  );
+
   // Break and Slice -- SCH_MOVE_TOOL in BREAK / SLICE mode: the selected wires, buses and lines are cut at the cursor (one) or at their midpoints (several) and the new end
   // follows the cursor until the click that drops it (components/schematic/schBreakTool.ts).
   const startBreakTool = (mode: BreakMode) =>
@@ -119,6 +140,8 @@ export function registerSchEditActions(m: Map<string, () => void>, ctx: SchEditC
     );
   }
   if (draw?.poly) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
+
+  registerSchSheetPinActions(m, ctx);
 }
 
 /** The labels, texts, text boxes and directive labels among `ids`, as the conversion's sources (a label's spin is read off its wire, as the painter does). */

@@ -29,6 +29,7 @@ import type { SchToolDialog } from "../api/schEditTypes";
 import type { ShapeEdit } from "../kicad-port/schShapeEdit";
 import type { PolyGeom } from "../kicad-port/polygonGeom";
 import type { BreakState } from "../kicad-port/schBreak";
+import type { PinPlacement } from "../components/schematic/schPinTool";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -127,6 +128,8 @@ export type ToolId =
   | "sch_directive"
   /** Break / Slice (`SCH_MOVE_TOOL`'s `BREAK` / `SLICE` modes): the cut wire's new end follows the cursor until the click that drops it -- kicad-port/schBreak.ts. */
   | "sch_break"
+  /** Place Pins from Sheet (`TwoClickPlace` with `placeSheetPin`): each click drops the next hierarchical label of the sheet's file as a pin on its border -- components/schematic/schPinTool.ts. */
+  | "sch_sheet_pin"
   /** `common.Control.zoomTool` (Ctrl+F5, zoom_tool.cpp): drag a rectangle to zoom to it -- see components/ZoomAreaOverlay.tsx. */
   | "zoom_area";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
@@ -167,6 +170,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_rule_area: "Rule Area: click the corners, double-click or press End to close it, Backspace to remove the last corner. Esc to cancel",
   sch_directive: "Directive Label: click where to place it",
   sch_break: "Break / Slice: move the new end of the wire, click to drop it, Esc to cancel",
+  sch_sheet_pin: "Place Pins from Sheet: click over a sheet, then click along its border to drop each pin. Esc to cancel",
   zoom_area: "Zoom to Selection Area: drag a rectangle (left button zooms in, right button zooms out), Esc to cancel",
 };
 
@@ -183,7 +187,7 @@ export type DrawState =
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
   | { kind: "sheet"; start: [Um, Um] }
   /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, arc, Bezier curve or text box, `poly` for a rule area; `brk` is a Break / Slice waiting for its drop. */
-  | { kind: "sch_shape"; shape?: ShapeEdit; poly?: PolyGeom; brk?: BreakState }
+  | { kind: "sch_shape"; shape?: ShapeEdit; poly?: PolyGeom; brk?: BreakState; pin?: PinPlacement }
   | {
       kind: "route";
       net: string;
@@ -593,7 +597,7 @@ export interface StudioState {
   /** Schematic tab's File > Export > Netlist... (`eeschema.EditorControl.exportNetlist`, DIALOG_EXPORT_NETLIST), see ExportNetlistDialog.tsx. */
   exportNetlistDialogOpen: boolean;
   /** `A`: the symbol SymbolChooserDialog confirmed, waiting for a canvas click to place it (`sch_place_symbol` tool) -- `referencePrefix` seeds `nextReference`'s own next-free-number placement (this app's own choice: a real id immediately, not a "U?" placeholder -- see `Cmd::AddSymbol`'s doc and PARITY-sch.md). `unit`: which unit of a multi-unit symbol to place (the chooser's own unit picker, shown when `SymbolLibraryEntry.unit_count > 1`; omitted/1 for a single-unit part). */
-  armedSymbol: { libId: string; referencePrefix: string; unit?: number } | null;
+  armedSymbol: { libId: string; referencePrefix: string; unit?: number; /** Place Next Symbol Unit: the unit goes in under this existing reference (and value/footprint), once, instead of taking the next free reference. */ ref?: string; value?: string; footprint?: string } | null;
   /** `createNewLabel`'s own "last text used" (`m_lastTextOrientation`-style session memory, see `incrementLabelText`) -- seeds the next LabelDialog with an auto-incremented suggestion instead of starting blank every time, so placing a same-shaped bus of labels (DATA0, DATA1, DATA2...) doesn't mean re-typing the whole name each click. */
   lastLabelText: string;
   /** `P`'s own last-chosen rail (e.g. "power:GND") -- seeds PowerSymbolDialog so placing several of the same rail in a row (common -- a row of decoupling caps all going to GND) only needs one pick. */

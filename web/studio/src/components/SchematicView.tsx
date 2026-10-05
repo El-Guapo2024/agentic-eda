@@ -43,6 +43,7 @@ import { schContextMenu } from "../kicad-port/schContextMenu";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } from "./schematic/schShapeTools";
 import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
+import { paintPinPreview, placePinClick } from "./schematic/schPinTool";
 import type { MenuNode } from "../kicad/types";
 import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
@@ -298,6 +299,8 @@ export function SchematicView() {
     // The shape or rule area being drawn (kicad-port/schShapeEdit.ts, polygonGeom.ts), rubber-banded to the cursor.
     if (state.drawState?.kind === "sch_shape" && state.cursorUm) {
       paintShapePreview(ctx, state.schematicView, state.drawState, shapeSnap(state.cursorUm.x, state.cursorUm.y), state.schLineMode);
+      // The sheet pin the next click would drop.
+      if (state.drawState.pin) paintPinPreview(ctx, state.schematicView, sch, state.drawState.pin, shapeSnap(state.cursorUm.x, state.cursorUm.y));
     }
     // `S`: the sheet being sized, from its first corner to the (grid-snapped) cursor.
     if (state.drawState?.kind === "sheet" && state.cursorUm) {
@@ -411,6 +414,13 @@ export function SchematicView() {
         if (e.button !== 0) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
 
+        // Place Pins from Sheet: pick the sheet, then drop each pin on its border.
+        if (state.activeTool === "sch_sheet_pin") {
+          const placement = state.drawState?.kind === "sch_shape" && state.drawState.pin ? state.drawState.pin : { sheetId: null, queue: [] };
+          void placePinClick({ sch, placement, path: state.currentSheetPath, dispatch, api }, snapToGrid(wx, wy), 6 / state.schematicView.scale);
+          return;
+        }
+
         // Break / Slice: the click that drops the new end of the cut wire.
         if (state.activeTool === "sch_break" && state.drawState?.kind === "sch_shape" && state.drawState.brk) {
           commitBreak(state.drawState.brk, snapToGrid(wx, wy), dispatch, api);
@@ -523,11 +533,16 @@ export function SchematicView() {
         // "R"), matching what a real library's own default Value usually
         // is for a part this simple.
         if (state.activeTool === "sch_place_symbol" && state.armedSymbol) {
-          const { libId, referencePrefix, unit } = state.armedSymbol;
-          const id = nextReference(sch.symbols, referencePrefix || "U");
-          const value = libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId;
+          const { libId, referencePrefix, unit, ref } = state.armedSymbol;
+          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U");
+          const value = state.armedSymbol.value ?? (libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId);
           const [sx, sy] = snapToGrid(wx, wy);
-          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: "", unit });
+          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: state.armedSymbol.footprint ?? "", unit });
+          // `PlaceNextSymbolUnit` hands the tool one symbol -- "place that and get out of the placement tool" (`placeOneOnly`).
+          if (ref) {
+            dispatch({ type: "SET_ARMED_SYMBOL", symbol: null });
+            dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+          }
           return;
         }
 

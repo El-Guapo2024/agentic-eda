@@ -1,8 +1,10 @@
 // The small dialogs the schematic edit and drawing tools open (`StudioState.schToolDialog`): a drawn text box's text and look
 // (`DIALOG_TEXT_PROPERTIES` as `DrawShape` opens it), a directive label's fields (`DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it).
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { DirectiveShape, SchFill, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { SchDialogShell } from "./SchDialogShell";
+import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { commitGraphic } from "./schematic/schShapeTools";
 
 const DEFAULT_TEXT_SIZE_UM = 1270; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
@@ -13,30 +15,26 @@ export function SchToolDialogs() {
   const dialog = state.schToolDialog;
   if (!dialog || !state.schematic) return null;
   // Keyed so a second text box or label starts from the defaults again rather than from the last one's fields.
-  const key = dialog.kind === "text_box" ? `tb:${dialog.start.x},${dialog.start.y},${dialog.end.x},${dialog.end.y}` : `dl:${dialog.at.x},${dialog.at.y}`;
-  return dialog.kind === "text_box" ? <TextBoxDialog key={key} dialog={dialog} /> : <DirectiveDialog key={key} dialog={dialog} />;
+  switch (dialog.kind) {
+    case "text_box":
+      return <TextBoxDialog key={`tb:${dialog.start.x},${dialog.start.y},${dialog.end.x},${dialog.end.y}`} dialog={dialog} />;
+    case "directive":
+      return <DirectiveDialog key={`dl:${dialog.at.x},${dialog.at.y}`} dialog={dialog} />;
+    case "cleanup_pins":
+      return <CleanupPinsDialog key={`cp:${dialog.sheetId}`} dialog={dialog} />;
+    case "sync_pins":
+      return <SyncPinsDialog key={`sp:${dialog.sheetIds.join(",")}`} dialog={dialog} />;
+  }
 }
 
-function Shell({ title, onCancel, onOk, okLabel, canOk, children }: { title: string; onCancel: () => void; onOk: () => void; okLabel: string; canOk: boolean; children: React.ReactNode }) {
+/** The label/value grid the property dialogs lay their fields out in. */
+function Shell({ title, onCancel, onOk, okLabel, canOk, children }: { title: string; onCancel: () => void; onOk: () => void; okLabel: string; canOk: boolean; children: ReactNode }) {
   return (
-    <div className="dialog-backdrop" onClick={onCancel}>
-      <div className="dialog" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>
-        <div className="dialog-header">
-          <span>{title}</span>
-        </div>
-        <div className="dialog-body">
-          <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr" }}>
-            {children}
-          </div>
-        </div>
-        <div className="dialog-footer">
-          <button onClick={onCancel}>Cancel</button>
-          <button className="primary" disabled={!canOk} onClick={onOk}>
-            {okLabel}
-          </button>
-        </div>
+    <SchDialogShell title={title} onCancel={onCancel} onOk={onOk} okLabel={okLabel} canOk={canOk}>
+      <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr" }}>
+        {children}
       </div>
-    </div>
+    </SchDialogShell>
   );
 }
 

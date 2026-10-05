@@ -1,6 +1,6 @@
 // The schematic editor's tool verbs and drawn items -- mirrors crates/model/src/sch_extras.rs (SchGraphic) and
 // crates/ops/src/sch_edit.rs (SchCmd, sent as `{ op: "sch_edit", verb: ..., ... }`).
-import type { PointXY, Um } from "./types";
+import type { LabelShape, PointXY, Um } from "./types";
 
 /** Stroke style of a graphic (`LINE_STYLE`); `default` follows the sheet's own default. */
 export type SchLineStyle = "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
@@ -74,7 +74,11 @@ export type SchToolDialog =
   /** A drawn text box waiting for its text (`DrawShape` -> `DIALOG_TEXT_PROPERTIES`). */
   | { kind: "text_box"; start: PointXY; end: PointXY }
   /** A directive label waiting for its fields (`createNewLabel` -> `DIALOG_LABEL_PROPERTIES`). */
-  | { kind: "directive"; at: PointXY };
+  | { kind: "directive"; at: PointXY }
+  /** Cleanup Sheet Pins asking before it deletes the unreferenced pins of a sheet (`IsOK`). */
+  | { kind: "cleanup_pins"; sheetId: string; sheetName: string; pins: Array<{ id: string; name: string }> }
+  /** The Sync Sheet Pins dialog (`DIALOG_SYNC_SHEET_PINS`) for these sheets, `first` the one whose page opens. */
+  | { kind: "sync_pins"; sheetIds: string[]; first?: string };
 
 export type SchEditCmd =
   /** Lock / Unlock / Toggle Lock (`SCH_EDIT_TOOL::modifyLockSelected`). */
@@ -85,4 +89,9 @@ export type SchEditCmd =
   /** Replace a graphic in place (keeps its id, drawing order and lock). */
   | { verb: "edit_graphic"; id: string; graphic: SchGraphicInput }
   /** Delete a placed sheet (symbol and pins; the file's content stays in the project). */
-  | { verb: "delete_sheet"; id: string };
+  | { verb: "delete_sheet"; id: string }
+  /** Put a pin on a sheet's border (`SCH_SHEET::AddPin`); `at` must be on the border (kicad-port/schSheetPins.ts `constrainOnEdge`). */
+  | { verb: "add_sheet_pin"; sheet: string; name: string; shape: LabelShape; at: PointXY }
+  | { verb: "delete_sheet_pin"; id: string }
+  /** Rename, reshape or move a sheet pin; a field left out is unchanged. */
+  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY };

@@ -49,5 +49,10 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[]): SchS
   }
   // `GetSameSymbolMultiUnitSelection`: one reference selected, with several placed units.
   if (symbolIds.length === 1) s.sameReferenceUnits = symbolUnits.get(symbolIds[0]!) ?? 0;
+  // `SCH_SHEET::HasUndefinedPins` needs the sheet's own file (read when the action runs); a sheet with at least one pin may have an unreferenced one, so Cleanup Sheet Pins is offered for it.
+  if (s.sheets === 1) {
+    const sheet = sch.sheets.find((x) => ids.includes(x.id));
+    s.sheetHasUndefinedPins = (sheet?.pins.length ?? 0) > 0;
+  }
   return s;
 }
