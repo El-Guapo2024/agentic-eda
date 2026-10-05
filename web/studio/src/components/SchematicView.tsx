@@ -42,6 +42,7 @@ import { summarizeSelection } from "./schematic/schSelectionSummary";
 import { schContextMenu } from "../kicad-port/schContextMenu";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } from "./schematic/schShapeTools";
+import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
 import type { MenuNode } from "../kicad/types";
 import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
@@ -220,13 +221,19 @@ export function SchematicView() {
   // shifts whichever wire endpoints state.dragAttach resolved for this
   // drag, for the live rubber-band -- shiftAttachedWires's own doc.
   const dragPreviewActive = sch != null && state.movePreview != null && (state.movePreview.kind === "symbol" || state.movePreview.kind === "symbol_drag");
+  // A Break / Slice in progress shows the cut lines as their pieces, the new end at the (grid-snapped) cursor (kicad-port/schBreak.ts).
+  const breaking = state.drawState?.kind === "sch_shape" ? state.drawState.brk : undefined;
+  const breakSnap = breaking && state.cursorUm ? alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false }) : null;
+  const breakCursor: [number, number] | null = breakSnap ? [breakSnap.x, breakSnap.y] : null;
   const displaySch: Schematic | null = dragPreviewActive
     ? {
         ...sch!,
         symbols: sch!.symbols.map((s) => (state.movePreview!.refs.includes(s.id) ? { ...s, at: [s.at[0] + state.movePreview!.dxUm, s.at[1] + state.movePreview!.dyUm] as [number, number] } : s)),
         wires: state.movePreview!.kind === "symbol_drag" ? shiftAttachedWires(sch!.wires, state.dragAttach, state.movePreview!.refs, state.movePreview!.dxUm, state.movePreview!.dyUm) : sch!.wires,
       }
-    : sch;
+    : sch && breaking && breakCursor
+      ? breakPreviewSheet(sch, breaking, breakCursor)
+      : sch;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -403,6 +410,12 @@ export function SchematicView() {
         }
         if (e.button !== 0) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
+
+        // Break / Slice: the click that drops the new end of the cut wire.
+        if (state.activeTool === "sch_break" && state.drawState?.kind === "sch_shape" && state.drawState.brk) {
+          commitBreak(state.drawState.brk, snapToGrid(wx, wy), dispatch, api);
+          return;
+        }
 
         // `I` (Draw Lines) shares this exact click-to-add-point state machine with the wire and bus tools -- it differs only in
         // what it commits (a graphic notes-layer line) and in connecting to nothing: no pin snap, no auto-finish on a pin
@@ -656,6 +669,8 @@ export function SchematicView() {
         // `SCH_SELECTION_TOOL`: a right-click on an item that is not selected selects it first, on empty space clears the selection; then the
         // menu for whatever is selected (kicad-port/schContextMenu.ts).
         const [wx, wy] = toWorld(e.clientX, e.clientY);
+        // The menu opens at the cursor, which is where the actions it offers (Break, Slice, ...) read their position from.
+        dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
         const scale = state.schematicView.scale || 1;
         const hit = pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
         let ids = [...state.selection];

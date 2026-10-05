@@ -11,7 +11,9 @@ import { measureStrokeText } from "../components/text/strokeFont";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
+import { beginBreak } from "../components/schematic/schBreakTool";
 import { deleteLastPoint, finishShapeDraw } from "../components/schematic/schShapeTools";
+import type { BreakMode } from "../kicad-port/schBreak";
 import type { Action, StudioApi, StudioState, ToolId } from "../state/store";
 import type { SymbolEditorApi, SymAction } from "../state/symbolEditorStore";
 
@@ -89,6 +91,20 @@ export function registerSchEditActions(m: Map<string, () => void>, ctx: SchEditC
   m.set("eeschema.InteractiveDrawing.drawTextBox", arm("sch_textbox"));
   m.set("eeschema.InteractiveDrawing.drawRuleArea", arm("sch_rule_area"));
   m.set("eeschema.InteractiveDrawing.placeClassLabel", arm("sch_directive"));
+
+  // Break and Slice -- SCH_MOVE_TOOL in BREAK / SLICE mode: the selected wires, buses and lines are cut at the cursor (one) or at their midpoints (several) and the new end
+  // follows the cursor until the click that drops it (components/schematic/schBreakTool.ts).
+  const startBreakTool = (mode: BreakMode) =>
+    schematicOnly(() => {
+      const at = ctx.cursorSnapped();
+      if (!sch || !at) return;
+      const brk = beginBreak(sch, requestSelection(), mode, at);
+      if (!brk) return;
+      ctx.dispatch({ type: "SET_DRAW_STATE", draw: { kind: "sch_shape", brk } });
+      ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_break" });
+    });
+  m.set("eeschema.InteractiveEdit.breakWire", startBreakTool("break"));
+  m.set("eeschema.InteractiveEdit.slice", startBreakTool("slice"));
 
   // Close Outline (End) and Delete Last Point (Backspace) -- DrawRuleArea's loop: `closeOutline` finishes the polygon as a double-click does, `deleteLastPoint`
   // (also Delete and Undo while drawing) drops the last corner and cancels the rule area when none is left.
