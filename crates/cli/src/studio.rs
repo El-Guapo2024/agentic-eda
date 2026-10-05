@@ -751,6 +751,19 @@ fn handle(
         ("POST", "/api/fab/bom") => offload(stream, lane, dir, job, path, &body, |dir, _| fab_api::bom(dir)),
         ("POST", "/api/sch/plot") => offload(stream, lane, dir, job, path, &body, sch_output_api::plot),
         ("POST", "/api/sch/netlist") => offload(stream, lane, dir, job, path, &body, sch_output_api::netlist),
+        // The other Export / Fabrication Outputs dialogs kicad-cli has a command for (STEP and the 3D formats, VRML,
+        // GenCAD, IPC-D-356, IPC-2581, ODB++, the board's BOM): `crate::board_output_api`, off the loop like the rest.
+        ("POST", "/api/fab/3d") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::three_d),
+        ("POST", "/api/fab/vrml") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::vrml),
+        ("POST", "/api/fab/gencad") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::gencad),
+        ("POST", "/api/fab/ipcd356") => offload(stream, lane, dir, job, path, &body, |dir, _| crate::board_output_api::ipcd356(dir)),
+        ("POST", "/api/fab/ipc2581") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::ipc2581),
+        ("POST", "/api/fab/odb") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::odb),
+        ("POST", "/api/fab/pcb_bom") => offload(stream, lane, dir, job, path, &body, |dir, _| crate::board_output_api::pcb_bom(dir)),
+        // Board control that is not a kicad-cli run (`crate::board_control_api`): cheap, answered on the loop.
+        ("POST", "/api/repair_board") => respond(stream, "200 OK", "application/json", crate::board_control_api::repair_board(dir).to_string().as_bytes()),
+        ("GET", "/api/footprint_associations") => respond(stream, "200 OK", "application/json", crate::board_control_api::footprint_associations(dir, &query_value(target, "ref")).to_string().as_bytes()),
+        ("POST", "/api/fab/cmp") => respond(stream, "200 OK", "application/json", crate::board_control_api::export_cmp(dir).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }

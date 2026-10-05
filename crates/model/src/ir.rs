@@ -2016,6 +2016,14 @@ pub struct DrawingsSection {
     /// absent in an older `design.json` reads as "nothing locked".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locked_ids: Vec<String>,
+    /// `BOARD_DESIGN_SETTINGS::GetAuxOrigin()`: the drill/place file origin
+    /// (`pcbnew.EditorControl.drillOrigin`), the point drill files, position
+    /// files and the Gerber plots measure from when they ask for it. `None` is
+    /// KiCad's default, (0, 0). Written to the derived `.kicad_pcb` as
+    /// `(aux_axis_origin x y)`. Additive: absent in an older `design.json`
+    /// reads as "no origin set".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aux_origin: Option<Point>,
 }
 
 /// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no

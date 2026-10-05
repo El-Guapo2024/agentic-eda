@@ -537,6 +537,22 @@ fn pcb_ext(kind: &str) -> &'static str {
     }
 }
 
+/// The extension kicad-cli's output carries for these arguments. ODB++ and IPC-2581 are named by the compression asked
+/// for, since kicad-cli writes whatever name it is given: an ODB++ is a `.zip` or a `.tgz`, or (`--compression none`) a
+/// folder with no extension; an IPC-2581 is an `.xml`, or a `.zip` when compressed.
+fn pcb_ext_for(kind: &str, args: &[String]) -> &'static str {
+    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
+    match kind {
+        "odb" => match value("--compression") {
+            Some("tgz") => "tgz",
+            Some("none") => "",
+            _ => "zip",
+        },
+        "ipc2581" if args.iter().any(|a| a == "--compress") => "zip",
+        _ => pcb_ext(kind),
+    }
+}
+
 fn sch_ext(kind: &str) -> &'static str {
     match kind {
         "netlist" => "net",
@@ -558,7 +574,16 @@ const SCH_DIR_KINDS: &[&str] = &["svg", "dxf", "png", "ps"];
 fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path, out_dir: &Path, dir_kind: bool, ext: &str, stem: &str, root: &Path) -> Result<Value, Vec<CheckResult>> {
     std::fs::create_dir_all(out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
     let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
-    let target = if dir_kind { out_dir.to_path_buf() } else { out_dir.join(format!("{stem}.{ext}")) };
+    // An output with no extension is a folder kicad-cli creates itself (ODB++, uncompressed): one left by the last run is cleared first.
+    let target = if dir_kind {
+        out_dir.to_path_buf()
+    } else if ext.is_empty() {
+        let folder = out_dir.join(stem);
+        let _ = std::fs::remove_dir_all(&folder);
+        folder
+    } else {
+        out_dir.join(format!("{stem}.{ext}"))
+    };
     let mut out_arg = target.to_string_lossy().to_string();
     if dir_kind && !out_arg.ends_with('/') {
         out_arg.push('/');
@@ -602,7 +627,7 @@ pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &
     let stem = file_stem(name);
     let (pcb, _) = export_board(design, model, work, &stem)?;
     let out_dir = root.join("export").join("kicad").join(kind);
-    run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext(kind), &stem, root)
+    run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext_for(kind, args), &stem, root)
 }
 
 /// `kicad-cli sch export <kind> [args...]` on `design`'s schematic, into
@@ -678,6 +703,19 @@ mod tests {
     }
 
     // ---------------------------------------------------------- the time limit
+
+    #[test]
+    fn odb_and_ipc2581_outputs_are_named_by_the_compression_asked_for() {
+        let a = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(pcb_ext_for("odb", &a(&[])), "zip");
+        assert_eq!(pcb_ext_for("odb", &a(&["--compression", "zip"])), "zip");
+        assert_eq!(pcb_ext_for("odb", &a(&["--compression", "tgz"])), "tgz");
+        assert_eq!(pcb_ext_for("odb", &a(&["--units", "mm", "--compression", "none"])), "", "a folder: no extension");
+        assert_eq!(pcb_ext_for("ipc2581", &a(&[])), "xml");
+        assert_eq!(pcb_ext_for("ipc2581", &a(&["--units", "in", "--compress"])), "zip");
+        assert_eq!(pcb_ext_for("step", &a(&["--compress"])), "step", "only those two are named by their options");
+        assert_eq!(pcb_ext_for("gencad", &a(&[])), "cad");
+    }
 
     #[test]
     fn the_limits_are_two_minutes_for_a_report_and_five_for_an_export() {
