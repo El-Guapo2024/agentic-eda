@@ -65,6 +65,26 @@ export function symbolLibIdError(libId: string): string | null {
   return c ? `A symbol name cannot contain ${show(c)}.` : null;
 }
 
+/** `EscapeString( name, CTX_LIBID )` (common/string_utils.cpp): the characters a library item name may not hold become `{backslash}`, `{lt}`, `{gt}`, `{colon}` and `{dblquote}`; line breaks are dropped. */
+export function escapeLibIdName(name: string): string {
+  let out = "";
+  for (const c of name) {
+    if (c === "\\") out += "{backslash}";
+    else if (c === "<") out += "{lt}";
+    else if (c === ">") out += "{gt}";
+    else if (c === ":") out += "{colon}";
+    else if (c === '"') out += "{dblquote}";
+    else if (c === "\n" || c === "\r") continue;
+    else out += c;
+  }
+  return out;
+}
+
+/** `SAVE_SYMBOL_AS_DIALOG::getSymbolName`: the typed name is trimmed, its spaces become underscores, and it is escaped for a `LIB_ID`. */
+export function saveAsSymbolName(typed: string): string {
+  return escapeLibIdName(typed.trim().replace(/ /g, "_"));
+}
+
 /**
  * `SYMBOL_EDIT_FRAME::ensureUniqueName` and `FOOTPRINT_EDIT_FRAME::DuplicateFootprint`: keep `name` when it is free,
  * else append `_1`, `_2`, ... to the original name until the result is unused

@@ -77,3 +77,25 @@ test("isActionEnabledForTab: the R-key collision this module exists for -- only 
   assert.equal(onPcb, "pcbnew.InteractiveEdit.rotateCcw", "the PCB tab must resolve R to its own rotate, not have it shadowed by eeschema's same-keyed action coming first in the list");
   assert.equal(onSchematic, "eeschema.InteractiveEdit.rotateCCW");
 });
+
+test("isActionEnabledForTab: the library editors' own tool groups are live on their own tab only", () => {
+  for (const name of ["pcbnew.ModuleEditor.copyFootprint", "pcbnew.ModuleEditor.padTable", "pcbnew.PadTool.placePad", "pcbnew.PadTool.PushPadSettings"]) {
+    assert.equal(isActionEnabledForTab(name, "footprint", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "symbol", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "footprint", false), false, "unregistered stays disabled");
+  }
+  for (const name of ["eeschema.SymbolLibraryControl.deleteSymbol", "eeschema.SymbolDrawing.drawSymbolLines", "eeschema.PinEditing.pushPinLength", "eeschema.SymbolLibraryControl.renameFootprint"]) {
+    assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "footprint", true), false, name);
+  }
+});
+
+test("isActionEnabledForTab: Symbol Properties is the schematic's and the symbol editor's", () => {
+  const name = "eeschema.InteractiveEdit.symbolProperties";
+  assert.equal(isActionEnabledForTab(name, "schematic", true), true);
+  assert.equal(isActionEnabledForTab(name, "symbol", true), true);
+  assert.equal(isActionEnabledForTab(name, "pcb", true), false);
+  assert.equal(isActionEnabledForTab(name, "footprint", true), false);
+});

@@ -115,7 +115,7 @@ export function sweepPoints(prev: { x: number; y: number } | null, cur: { x: num
  * The pads to number for one mouse event: the numberable pads under each test point of the sweep, in sweep order, with a pad
  * listed twice in a row only once (`selectedPads.unique()` removes consecutive duplicates only).
  */
-export function padsUnderSweep<P extends { id: string }>(pads: readonly P[], points: readonly { x: number; y: number }[], contains: (pad: P, x: number, y: number) => boolean): P[] {
+export function padsUnderSweep<P extends { id?: string }>(pads: readonly P[], points: readonly { x: number; y: number }[], contains: (pad: P, x: number, y: number) => boolean): P[] {
   const hits: P[] = [];
   for (const pt of points) {
     for (const pad of pads) {

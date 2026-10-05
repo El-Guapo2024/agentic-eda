@@ -39,10 +39,24 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set(["eeschema.Symbol
  */
 export const BOARD_AND_SCHEMATIC_ONLY: ReadonlySet<string> = new Set(["common.Control.saveAs", "common.Control.updatePcbFromSchematic"]);
 
+/**
+ * The tool groups that exist for one library editor only: `FOOTPRINT_EDITOR_CONTROL` (`pcbnew.ModuleEditor.*`) and `PAD_TOOL` (`pcbnew.PadTool.*`,
+ * which edits pads, and the studio's board has no pads of its own to edit), and `SYMBOL_EDITOR_CONTROL` (`eeschema.SymbolLibraryControl.*`),
+ * `SYMBOL_EDITOR_DRAWING_TOOLS` (`eeschema.SymbolDrawing.*`) and `SYMBOL_EDITOR_PIN_TOOL` (`eeschema.PinEditing.*`).
+ */
+export const FOOTPRINT_EDITOR_TOOL_PREFIXES: readonly string[] = ["pcbnew.ModuleEditor.", "pcbnew.PadTool."];
+export const SYMBOL_EDITOR_TOOL_PREFIXES: readonly string[] = ["eeschema.SymbolLibraryControl.", "eeschema.SymbolDrawing.", "eeschema.PinEditing."];
+
+/** Actions the schematic editor and the symbol editor both register (`symbolProperties` is in `SCH_EDIT_TOOL` and `SYMBOL_EDITOR_EDIT_TOOL`): enabled on the Schematic and Symbol tabs. */
+export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set(["eeschema.InteractiveEdit.symbolProperties"]);
+
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {
   if (!registered) return false;
   if (FOOTPRINT_EDITOR_ONLY.has(name)) return tab === "footprint";
   if (SYMBOL_EDITOR_ONLY.has(name)) return tab === "symbol";
+  if (FOOTPRINT_EDITOR_TOOL_PREFIXES.some((p) => name.startsWith(p))) return tab === "footprint";
+  if (SYMBOL_EDITOR_TOOL_PREFIXES.some((p) => name.startsWith(p))) return tab === "symbol";
+  if (SCHEMATIC_AND_SYMBOL_EDITOR.has(name)) return tab === "schematic" || tab === "symbol";
   if (BOARD_AND_SCHEMATIC_ONLY.has(name)) return tab === "pcb" || tab === "schematic";
   if (BOARD_AND_FOOTPRINT.has(name)) return tab === "pcb" || tab === "footprint";
   if (name.startsWith("pcbnew.")) return tab === "pcb";

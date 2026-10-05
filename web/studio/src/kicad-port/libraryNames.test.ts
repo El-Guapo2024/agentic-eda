@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ensureUniqueLibId, ensureUniqueName, footprintNameError, joinLibName, libraryGroups, pastedFootprintName, splitLibName, symbolLibIdError } from "./libraryNames";
+import { ensureUniqueLibId, ensureUniqueName, escapeLibIdName, footprintNameError, joinLibName, libraryGroups, pastedFootprintName, saveAsSymbolName, splitLibName, symbolLibIdError } from "./libraryNames";
 
 test("splitLibName: only the first colon separates the nickname", () => {
   assert.deepEqual(splitLibName("Device:R"), { lib: "Device", item: "R" });
@@ -57,4 +57,17 @@ test("libraryGroups groups by nickname, bare names under the project library, so
     g.find((x) => x.lib === "eda")!.items.map((i) => i.name),
     ["Untitled", "Untitled_1"]
   );
+});
+
+test("escapeLibIdName: EscapeString( CTX_LIBID ) -- the five illegal characters become tokens, line breaks vanish", () => {
+  assert.equal(escapeLibIdName('a:b<c>d"e\\f'), "a{colon}b{lt}c{gt}d{dblquote}e{backslash}f");
+  assert.equal(escapeLibIdName("a\nb\r"), "ab");
+  assert.equal(escapeLibIdName("R_0603/x y"), "R_0603/x y", "a slash and a space are left alone");
+});
+
+test("saveAsSymbolName: trimmed, spaces become underscores, then escaped", () => {
+  assert.equal(saveAsSymbolName("  My Part 2  "), "My_Part_2");
+  assert.equal(saveAsSymbolName("a:b"), "a{colon}b");
+  assert.equal(symbolLibIdError("eda:" + saveAsSymbolName("a:b c")), null, "the escaped name is a legal symbol name");
+  assert.equal(saveAsSymbolName("   "), "");
 });
