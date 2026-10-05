@@ -1,0 +1,326 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": null,
+    "extractedAt": "2026-10-05T01:42:46.674Z",
+    "sourceFiles": [
+      "eeschema/symbol_editor/menubar_symbol_editor.cpp",
+      "pcbnew/tools/pcb_actions.cpp",
+      "common/tool/actions.cpp",
+      "pcbnew/router/router_tool.cpp",
+      "common/hotkey_store.cpp",
+      "eeschema/tools/sch_actions.cpp"
+    ],
+    "note": "textual scan does not evaluate C++ conditionals; items added by id (not a TOOL_ACTION), AddClose, the language list and the Help menu are not captured"
+  },
+  "menus": [
+    {
+      "label": "File",
+      "items": [
+        {
+          "type": "item",
+          "action": "common.Control.newLibrary"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.addLibrary"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolLibraryControl.saveLibraryAs"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolLibraryControl.newSymbol"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.EditorControl.editLibSymbolWithSymbolEditor"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.save"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolLibraryControl.saveSymbolAs"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolLibraryControl.saveSymbolCopyAs"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.saveAll"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.revert"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "submenu",
+          "label": "Import",
+          "items": [
+            {
+              "type": "item",
+              "action": "eeschema.SymbolLibraryControl.importSymbol"
+            },
+            {
+              "type": "item",
+              "action": "eeschema.EditorControl.importGraphics"
+            }
+          ]
+        },
+        {
+          "type": "submenu",
+          "label": "Export",
+          "items": [
+            {
+              "type": "item",
+              "action": "eeschema.SymbolLibraryControl.exportSymbol"
+            },
+            {
+              "type": "item",
+              "action": "eeschema.SymbolLibraryControl.exportSymbolView"
+            },
+            {
+              "type": "item",
+              "action": "eeschema.SymbolLibraryControl.exportSymbolAsSVG"
+            }
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.InteractiveEdit.symbolProperties"
+        },
+        {
+          "type": "separator"
+        }
+      ]
+    },
+    {
+      "label": "Edit",
+      "items": [
+        {
+          "type": "item",
+          "action": "common.Interactive.undo"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.redo"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.cut"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.copy"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.copyAsText"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.paste"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.delete"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.duplicate"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.selectAll"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.unselectAll"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.find"
+        },
+        {
+          "type": "item",
+          "action": "common.Interactive.findAndReplace"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.InteractiveEdit.pinTable"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolLibraryControl.updateSymbolFields"
+        }
+      ]
+    },
+    {
+      "label": "View",
+      "items": [
+        {
+          "type": "submenu",
+          "label": "Panels",
+          "items": [
+            {
+              "type": "item",
+              "action": "common.Control.showProperties"
+            },
+            {
+              "type": "item",
+              "action": "common.Control.showLibraryTree"
+            }
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.showSymbolBrowser"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomInCenter"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomOutCenter"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomFitScreen"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomTool"
+        },
+        {
+          "type": "item",
+          "action": "common.Control.zoomRedraw"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolLibraryControl.showHiddenPins"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolLibraryControl.showHiddenFields"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.EditorControl.togglePinAltIcons"
+        }
+      ]
+    },
+    {
+      "label": "Place",
+      "items": [
+        {
+          "type": "item",
+          "action": "eeschema.SymbolDrawing.placeSymbolPin"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolDrawing.placeSymbolText"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolDrawing.drawSymbolTextBox"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.InteractiveDrawing.drawRectangle"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.InteractiveDrawing.drawCircle"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.InteractiveDrawing.drawArc"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.InteractiveDrawing.drawBezier"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolDrawing.drawSymbolLines"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.SymbolDrawing.drawSymbolPolygon"
+        }
+      ]
+    },
+    {
+      "label": "Inspect",
+      "items": [
+        {
+          "type": "item",
+          "action": "common.Control.showDatasheet"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "item",
+          "action": "eeschema.InspectionTool.checkSymbol"
+        }
+      ]
+    },
+    {
+      "label": "Preferences",
+      "items": [
+        {
+          "type": "item",
+          "action": "common.SuiteControl.configurePaths"
+        },
+        {
+          "type": "item",
+          "action": "common.SuiteControl.showSymbolLibTable"
+        },
+        {
+          "type": "item",
+          "action": "common.SuiteControl.openPreferences"
+        },
+        {
+          "type": "separator"
+        }
+      ]
+    }
+  ]
+}
