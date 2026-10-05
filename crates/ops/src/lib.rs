@@ -1238,7 +1238,7 @@ fn empty_schematic_section() -> SchematicSection {
         no_connects: vec![],
         bus_entries: vec![],
         junctions: vec![],
-        lines: vec![],
+        lines: vec![], extras: Default::default(),
         erc_exclusions: vec![],
         erc_pin_map: None,
         user_fields: Default::default(),

@@ -1236,7 +1236,7 @@ mod tests {
                 size: (20_000, 20_000),
                 pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000, y: 30_000 } }],
             }],
-            instance_overrides: vec![], junctions: vec![], lines: vec![],
+            instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
             imported_from_kicad: false,
         };
         let mut screens = std::collections::BTreeMap::new();

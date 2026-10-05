@@ -1142,7 +1142,7 @@ fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model
         imported_from_kicad: false,
         title_block: None,
         sheets: vec![],
-        instance_overrides: vec![], junctions: vec![], lines: vec![],
+        instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
         symbols: Vec::new(),
         wires: Vec::new(),
         labels: Vec::new(),
@@ -1180,7 +1180,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
-                instance_overrides: vec![], junctions: vec![], lines: vec![],
+                instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
                 symbols: Vec::new(),
                 wires: Vec::new(),
                 labels: Vec::new(),
@@ -1753,7 +1753,7 @@ mod tests {
     use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
 
     fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
-        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
     }
 
     fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {

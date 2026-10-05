@@ -1690,7 +1690,7 @@ mod tests {
                 erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
-                instance_overrides: vec![], junctions: vec![], lines: vec![],
+                instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
             }),
             nets: None,
             // `Board` (crates/ops) always expects a placement section to
