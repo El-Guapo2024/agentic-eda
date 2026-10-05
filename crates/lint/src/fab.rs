@@ -94,8 +94,7 @@ mod tests {
     }
 
     fn fixture() -> (Design, ConstraintModel) {
-        let mut model = ConstraintModel::default();
-        model.parts = vec![part("R1", Some("RC0402")), part("R10", Some("RC0402")), part("R2", Some("RC0402"))];
+        let model = ConstraintModel { parts: vec![part("R1", Some("RC0402")), part("R10", Some("RC0402")), part("R2", Some("RC0402"))], ..Default::default() };
         let placement = PlacementSection {
             outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }],
             footprints: vec![
