@@ -80,6 +80,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         (38, "B.Mask", "user"),
         (39, "F.Mask", "user"),
         (44, "Edge.Cuts", "user"),
+        (46, "B.CrtYd", "user"),
+        (47, "F.CrtYd", "user"),
         (49, "F.Fab", "user"),
         (50, "B.Fab", "user"),
     ] {
@@ -379,12 +381,44 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     // behind a hole on this board, so it is what the hole-clearance floor
     // should ask for, never more.
     let min_hole_clearance = model.board.clearance;
+    // Per-type DRC severities: the imported project's own, plus "ignore" for
+    // the two library-link checks -- every footprint here is embedded in the
+    // board file (`eda:<name>`), so there is no library for KiCad to compare
+    // it against and each one would report a meaningless warning.
+    let mut severities: BTreeMap<&str, &str> = BTreeMap::from([("lib_footprint_issues", "ignore"), ("lib_footprint_mismatch", "ignore")]);
+    for (key, value) in &model.board.rule_severities {
+        severities.insert(key.as_str(), value.as_str());
+    }
     format!(
-        "{{\n  \"board\": {{\n    \"design_settings\": {{\n      \"rules\": {{\n        \"min_clearance\": {},\n        \"min_track_width\": {},\n        \"min_via_annular_width\": 0.1,\n        \"min_via_diameter\": 0.3,\n        \"min_hole_clearance\": {},\n        \"min_hole_to_hole\": 0.25,\n        \"min_through_hole_diameter\": 0.2,\n        \"min_microvia_diameter\": 0.2,\n        \"min_microvia_drill\": 0.1\n      }}\n    }}\n  }}\n}}\n",
+        "{{\n  \"board\": {{\n    \"design_settings\": {{\n      \"rule_severities\": {},\n      \"rules\": {{\n        \"min_clearance\": {},\n        \"min_track_width\": {},\n        \"min_via_annular_width\": 0.1,\n        \"min_via_diameter\": 0.3,\n        \"min_hole_clearance\": {},\n        \"min_hole_to_hole\": 0.25,\n        \"min_through_hole_diameter\": 0.2,\n        \"min_microvia_diameter\": 0.2,\n        \"min_microvia_drill\": 0.1\n      }}\n    }}\n  }}\n}}\n",
+        serde_json::to_string(&severities).unwrap_or_else(|_| "{}".into()),
         mm(min_clearance),
         mm(min_track_width),
         mm(min_hole_clearance),
     )
+}
+
+/// The design's own ERC pin-to-pin conflict matrix (Schematic Setup > ERC
+/// pin map) when it stores a usable one -- 12 x 12, every cell 0 (ok), 1
+/// (warning) or 2 (error) -- else `None`, and KiCad's own default applies.
+pub fn custom_erc_pin_map(design: &Design) -> Option<Vec<Vec<u8>>> {
+    let m = &design.schematic.as_ref()?.erc_pin_map.as_ref()?.matrix;
+    (m.len() == 12 && m.iter().all(|r| r.len() == 12 && r.iter().all(|&c| c <= 2))).then(|| m.clone())
+}
+
+/// [`export_kicad_pro`] plus the schematic side of the project (`erc`): the
+/// design's own pin map, so kicad-cli's ERC judges pin conflicts by the matrix
+/// the user set up and not only by KiCad's default; and the two library-link
+/// checks ignored (every symbol is embedded in the derived schematic, so
+/// there is no library for KiCad to compare it against and each one would
+/// report a meaningless `lib_symbol_mismatch`).
+pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String {
+    let base = export_kicad_pro(model);
+    let mut erc = serde_json::json!({ "rule_severities": { "lib_symbol_issues": "ignore", "lib_symbol_mismatch": "ignore" } });
+    if let Some(m) = custom_erc_pin_map(design) {
+        erc["pin_map"] = serde_json::json!(m);
+    }
+    base.replacen("{\n", &format!("{{\n  \"erc\": {},\n", serde_json::to_string(&erc).unwrap_or_else(|_| "{}".into())), 1)
 }
 
 fn write_footprint(
@@ -529,6 +563,35 @@ fn write_footprint(
             }
         }
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
+    }
+
+    // The courtyard, on the footprint's own side: what KiCad's DRC reads for
+    // `courtyards_overlap`, `pth_inside_courtyard` and `npth_inside_courtyard`
+    // (the gates that call kicad-cli for those get nothing to judge from a
+    // footprint with none). The real outlines when the library footprint has
+    // them (x mirrored for a bottom-side part, like a pad's), else the box
+    // `Footprint::courtyard_half` derives -- the same one the placer keeps
+    // clear.
+    let crtyd_layer = if fp.side == Side::Bottom { "B.CrtYd" } else { "F.CrtYd" };
+    if footprint.courtyard_outlines.is_empty() {
+        let (hw, hh) = footprint.courtyard_half();
+        let uuid = crate::duid_for(&format!("footprint:{}:crtyd", fp.id), &fp.id);
+        writeln!(
+            out,
+            "\t\t(fp_rect (start {} {}) (end {} {}) (stroke (width 0.05) (type solid)) (fill none) (layer {}) (uuid \"{uuid}\"))",
+            mm(-hw),
+            mm(-hh),
+            mm(hw),
+            mm(hh),
+            sexpr_str(crtyd_layer)
+        )
+        .unwrap();
+    } else {
+        for (i, outline) in footprint.courtyard_outlines.iter().enumerate() {
+            let pts: Vec<String> = outline.iter().map(|&(x, y)| format!("(xy {} {})", mm(if fp.side == Side::Bottom { -x } else { x }), mm(y))).collect();
+            let uuid = crate::duid_for(&format!("footprint:{}:crtyd:{i}", fp.id), &fp.id);
+            writeln!(out, "\t\t(fp_poly (pts {}) (stroke (width 0.05) (type solid)) (fill none) (layer {}) (uuid \"{uuid}\"))", pts.join(" "), sexpr_str(crtyd_layer)).unwrap();
+        }
     }
 
     // 3D model reference, identity offset/scale/rotate -- this app has no
@@ -710,6 +773,47 @@ mod tests {
         let a = export_kicad_pcb(&design, &model, &meta()).unwrap();
         let b = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn every_footprint_exports_its_courtyard_on_its_own_side() {
+        // kicad-cli judges `courtyards_overlap` from F.CrtYd/B.CrtYd graphics;
+        // a footprint with none gives the gates that ask it nothing to see.
+        // `(fill none)`, not `(fill no)`: kicad-cli reads the latter as no
+        // courtyard at all (found the hard way -- every overlap went unreported).
+        let (design, model) = fixture();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let fps = &design.placement.as_ref().unwrap().footprints;
+        let (top, bottom) = (fps.iter().filter(|f| f.side == Side::Top).count(), fps.iter().filter(|f| f.side == Side::Bottom).count());
+        assert!(top > 0 && bottom > 0, "the fixture has parts on both sides");
+        assert_eq!(out.matches("(layer \"F.CrtYd\")").count(), top, "one courtyard per top-side footprint");
+        assert_eq!(out.matches("(layer \"B.CrtYd\")").count(), bottom, "a bottom-side footprint's courtyard is on B.CrtYd");
+        assert!(out.contains("(fp_rect (start ") && out.contains("(fill none) (layer \"F.CrtYd\")"), "{out}");
+        assert!(out.contains("(46 \"B.CrtYd\" user)") && out.contains("(47 \"F.CrtYd\" user)"), "both courtyard layers declared");
+    }
+
+    #[test]
+    fn the_project_carries_the_designs_own_erc_pin_map_and_the_embedded_library_severities() {
+        let (mut design, model) = fixture();
+        let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
+        assert!(plain["erc"]["pin_map"].is_null(), "no custom map: KiCad's own default applies, nothing is written");
+        assert_eq!(plain["erc"]["rule_severities"]["lib_symbol_mismatch"], "ignore");
+        assert_eq!(plain["erc"]["rule_severities"]["lib_symbol_issues"], "ignore");
+        design.schematic = Some(eda_model::ir::SchematicSection {
+            symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![],
+            erc_pin_map: Some(eda_model::ir::ErcPinMap { matrix: { let mut m = eda_model::ir::ErcPinMap::default_matrix(); m[1][1] = 0; m } }),
+            user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false,
+        });
+        let custom = export_kicad_pro_for(&design, &model);
+        let json: serde_json::Value = serde_json::from_str(&custom).expect("valid json");
+        assert_eq!(json["erc"]["pin_map"][1][1], 0, "{custom}");
+        assert_eq!(json["erc"]["pin_map"].as_array().map(Vec::len), Some(12));
+        assert_eq!(json["erc"]["rule_severities"]["lib_symbol_mismatch"], "ignore");
+        assert!(json["board"]["design_settings"]["rules"]["min_clearance"].is_number(), "the board half is untouched");
+        // A malformed matrix is ignored wholesale, like KiCad's own loader.
+        design.schematic.as_mut().unwrap().erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix: vec![vec![0; 3]; 3] });
+        let bad: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
+        assert!(bad["erc"]["pin_map"].is_null());
     }
 
     #[test]

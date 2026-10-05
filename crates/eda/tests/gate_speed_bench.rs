@@ -1,10 +1,11 @@
-//! Speed check for the `eda_gates` -> `eda_drc` compatibility shim (see the
-//! task report's migration section): `check_placement`/`check_routing` now
-//! call `eda_drc::run` internally instead of their own from-scratch
-//! geometry, and the build placer's per-step gate loop needs this to stay
-//! fast. `#[ignore]`d (prints timing, does not assert a hard budget --
-//! machine-dependent); run with:
-//! `cargo test -p eda --test gate_speed_bench -- --ignored --nocapture`
+//! Speed check for the in-process gates: `check_placement`/`check_routing` are
+//! what the build placer runs after every part it places and the studio runs
+//! on every refresh, so they must stay in the microseconds-to-milliseconds
+//! range -- no process spawn, no heavy engine. (KiCad's own gates, courtyard
+//! overlap and edge clearance, are kicad-cli's and live in
+//! `eda_gates::kicad`, which only the judges call.) `#[ignore]`d (prints
+//! timing, asserts only a very generous budget -- machine-dependent); run
+//! with: `cargo test -p eda --test gate_speed_bench -- --ignored --nocapture`
 
 use eda_engine::{derive_schematic, EngineOptions};
 use eda_gates::{check_placement, check_routing};

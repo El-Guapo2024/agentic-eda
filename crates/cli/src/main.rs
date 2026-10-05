@@ -17,7 +17,6 @@
 //! ```
 
 mod board;
-mod board_stats;
 mod cleanup_api;
 mod fab_api;
 mod sch_api;
@@ -54,8 +53,7 @@ struct Args {
     judge: bool,
     /// Also write a fabrication package (gerbers, drill, BOM, placement).
     fab: bool,
-    /// Also run the ported KiCad design-rule checker (`eda-drc`) as part of
-    /// `check`.
+    /// Also run kicad-cli's DRC as part of `check`.
     drc: bool,
 }
 
@@ -110,23 +108,24 @@ fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
     fails == 0
 }
 
-/// Run the ported KiCad DRC engine (`eda-drc`) and print a scorecard the
-/// same shape `print_checks` uses. A `warning`-severity item does not fail
-/// the run (matching KiCad's own default severities -- see
-/// `eda_drc::item`); an `error` does.
-fn print_drc(d: &eda_model::ir::Design, model: &ConstraintModel) -> bool {
-    let violations = eda_connectivity::run_drc(d, model);
-    let errors = violations.iter().filter(|v| v.severity == eda_drc::Severity::Error).count();
-    let warnings = violations.len() - errors;
-    println!("drc: {} violations, {errors} error, {warnings} warning", violations.len());
-    for v in &violations {
+/// Run kicad-cli's DRC on the design (derived files in `<out>/.kicad`) and
+/// print a scorecard the same shape `print_checks` uses. A `warning`-severity
+/// item does not fail the run (KiCad's own default severities); an `error`
+/// does.
+fn print_drc(d: &eda_model::ir::Design, model: &ConstraintModel, work: &Path) -> Result<bool, Vec<CheckResult>> {
+    let report = eda_kicad_engine::drc(d, model, work, false)?;
+    let all: Vec<_> = report.violations.iter().chain(report.unconnected_items.iter()).collect();
+    let errors = all.iter().filter(|v| v.severity == "error").count();
+    let warnings = all.iter().filter(|v| v.severity == "warning").count();
+    println!("drc ({}): {} violations, {errors} error, {warnings} warning", report.engine, all.len());
+    for v in &all {
         let refs: Vec<String> = v.items.iter().map(|it| it.description.clone()).collect();
-        println!("  [{:?}] {}: {}", v.severity, v.error_type, v.description);
+        println!("  [{}] {}: {}", v.severity, v.kind, v.description);
         if !refs.is_empty() {
             println!("      {}", refs.join(" <-> "));
         }
     }
-    errors == 0
+    Ok(errors == 0)
 }
 
 fn load_model(args: &Args) -> Result<ConstraintModel, Vec<CheckResult>> {
@@ -376,13 +375,10 @@ fn stage_schematic(cx: &mut Ctx) -> Result<Design, Vec<CheckResult>> {
     let t0 = Instant::now();
     let opts = EngineOptions { seed: cx.args.seed, intent_hash: cx.ihash.clone(), ..Default::default() };
     let design = derive_schematic(&cx.model, &opts)?;
-    // One engine: `check_erc` is the ported KiCad ERC's electrical checks
-    // *and* this generator's own readability/tidiness checks (grid,
-    // overlap, wire length, ...) folded in as additional tests -- the same
-    // way KiCad's own ERC runs non-electrical checks (similar labels,
-    // off-grid pins) alongside electrical ones, rather than as a second
-    // tool a caller has to remember to also run.
-    let checks = check_erc(&design, &cx.model);
+    // The generator's own readability/tidiness checks (grid, overlap, wire
+    // length, ...), `eda-lint`'s. Electrical rules are KiCad's: `eda board
+    // erc` runs kicad-cli's ERC on the exported schematic.
+    let checks = eda_lint::check_schematic(&design, &cx.model);
     cx.log.candidate(Stage::Schematic, 0, cx.args.seed, &design, Tier::Geometry, &checks, serde_json::Value::Null).ok();
     // Always persist the candidate: a failed one is what review reads.
     save_design(&cx.args.out, &design)?;
@@ -497,6 +493,8 @@ fn stage_place(cx: &mut Ctx, design: &Design, seed: u64, board_floor: f64) -> Re
     save_design(&cx.args.out, &placed)?;
     let mut checks = check_placement(&placed, &cx.model);
     checks.extend(eda::preflight(&placed, &cx.model, &cx.model.board));
+    // Courtyard overlap and pad-to-edge clearance are KiCad's: one kicad-cli run.
+    checks.extend(eda_gates::kicad::check_placement(&placed, &cx.model));
     let metrics = serde_json::json!({
         "hpwl_um": hpwl(&placed, &cx.model),
         "features": placement_features(&placed, &cx.model),
@@ -754,7 +752,9 @@ fn stage_route(cx: &mut Ctx, design: &Design) -> Result<Design, Vec<CheckResult>
     };
     // Always persist the candidate: a gate-failed one is what review reads.
     save_design(&cx.args.out, &routed)?;
-    let checks = check_routing(&routed, &cx.model);
+    let mut checks = check_routing(&routed, &cx.model);
+    // Copper-to-edge clearance is KiCad's: one kicad-cli run.
+    checks.extend(eda_gates::kicad::check_routing(&routed, &cx.model));
     let r = routed.routing.as_ref().unwrap();
     let metrics = serde_json::json!({ "tracks": r.tracks.len(), "vias": r.vias.len() });
     cx.log.candidate(Stage::Routing, 0, cx.args.seed, &routed, Tier::Geometry, &checks, metrics).ok();
@@ -898,61 +898,55 @@ fn export(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
     Ok(())
 }
 
-/// Locate `kicad-cli`. Same lookup the DRC test uses.
-fn find_kicad_cli() -> Option<std::path::PathBuf> {
-    if let Ok(out) = std::process::Command::new("which").arg("kicad-cli").output() {
-        if out.status.success() {
-            let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !p.is_empty() {
-                return Some(std::path::PathBuf::from(p));
-            }
-        }
-    }
-    let mac = std::path::PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli");
-    mac.exists().then_some(mac)
-}
-
-/// Write the files a board house reads, into `<out>/fab/`.
+/// Write the files a board house reads, into `<out>/fab/`, all by kicad-cli
+/// from the `.kicad_pcb`/`.kicad_sch` `export` just wrote: Gerbers, drill,
+/// position file and BOM (JLCPCB's column layout).
 ///
 /// Gated first, and the gate fails rather than warns: a package missing a
 /// part number is not a good order with a note on it, it is an order the
 /// assembler cannot fill. Getting that back from the factory costs days;
 /// getting it back from here costs nothing.
 fn export_fab(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
-    let checks = eda_fab::check_fab(design, &cx.model);
+    let checks = eda_lint::fab::check(design, &cx.model);
     if !print_checks("fab gates", &checks) {
         return Err(checks.into_iter().filter(|c| c.status == CheckStatus::Fail).collect());
     }
     let title = cx.args.intent.file_stem().and_then(|s| s.to_str()).unwrap_or("design");
     let dir = cx.args.out.join("fab");
-    write(&dir.join(format!("{title}-bom.csv")), eda_fab::bom_csv(&cx.model).as_bytes())?;
-    write(&dir.join(format!("{title}-positions.csv")), eda_fab::cpl_csv(design)?.as_bytes())?;
 
-    // Gerbers and the drill file are plotted from the .kicad_pcb we just
-    // wrote, so the copper shipped is the copper `kicad-cli pcb drc`
-    // checks. Missing kicad-cli is a hard failure: silently shipping a
-    // BOM and calling it a fab package is exactly the half-done output
-    // that gets discovered at the factory.
+    // The copper shipped is the copper the DRC gates checked. Missing
+    // kicad-cli is a hard failure: silently shipping a BOM and calling it a
+    // fab package is exactly the half-done output that gets discovered at
+    // the factory.
     let pcb = cx.args.out.join(format!("{title}.kicad_pcb"));
     if !pcb.exists() {
         return Err(vec![CheckResult::fail("fab_no_board", title, "no .kicad_pcb to plot: a fab package without copper is not a package")]);
     }
-    let cli = find_kicad_cli().ok_or_else(|| {
+    let cli = eda_kicad_engine::find_cli().ok_or_else(|| {
         vec![CheckResult::fail(
             "fab_no_kicad_cli",
             "kicad-cli",
-            "kicad-cli was not found, so the gerbers and drill file cannot be plotted.              The BOM and positions alone are not a fabrication package; install KiCad or drop --fab.",
+            "kicad-cli was not found, so the gerbers and drill file cannot be plotted. The BOM and positions alone are not a fabrication package; install KiCad or drop --fab.",
         )]
     })?;
-    for (what, args) in [
-        ("gerbers", vec!["pcb", "export", "gerbers"]),
-        ("drill", vec!["pcb", "export", "drill"]),
-    ] {
+    std::fs::create_dir_all(&dir).map_err(|e| vec![CheckResult::fail("io", dir.display().to_string(), e.to_string())])?;
+    let sch = cx.args.out.join(format!("{title}.kicad_sch"));
+    let gerber_layers = fab_api::default_gerber_layers(&cx.model.board.layers);
+    let dir_out = format!("{}/", dir.display());
+    let pos_out = dir.join(format!("{title}-positions.csv")).display().to_string();
+    let bom_out = dir.join(format!("{title}-bom.csv")).display().to_string();
+    let mut jobs: Vec<(&str, Vec<String>, std::path::PathBuf)> = vec![
+        ("gerbers", [vec!["pcb".to_string(), "export".into(), "gerbers".into()], fab_api::gerber_args(&gerber_layers), vec!["-o".into(), dir_out.clone()]].concat(), pcb.clone()),
+        ("drill", [vec!["pcb".to_string(), "export".into(), "drill".into()], fab_api::drill_args(false, false), vec!["-o".into(), dir_out]].concat(), pcb.clone()),
+        ("positions", [vec!["pcb".to_string(), "export".into(), "pos".into()], fab_api::pos_args("csv", "both", true, false, false), vec!["-o".into(), pos_out]].concat(), pcb.clone()),
+    ];
+    if sch.exists() {
+        jobs.push(("bom", [vec!["sch".to_string(), "export".into(), "bom".into()], fab_api::bom_args(), vec!["-o".into(), bom_out]].concat(), sch));
+    }
+    for (what, args, input) in jobs {
         let out = std::process::Command::new(&cli)
             .args(&args)
-            .arg("-o")
-            .arg(format!("{}/", dir.display()))
-            .arg(&pcb)
+            .arg(&input)
             .output()
             .map_err(|e| vec![CheckResult::fail("fab_plot", what, format!("could not run kicad-cli: {e}"))])?;
         if !out.status.success() {
@@ -1094,6 +1088,7 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             save_design(&cx.args.out, &placed)?;
             let mut checks = check_placement(&placed, &cx.model);
     checks.extend(eda::preflight(&placed, &cx.model, &cx.model.board));
+            checks.extend(eda_gates::kicad::check_placement(&placed, &cx.model));
             let metrics = serde_json::json!({ "hpwl_um": hpwl(&placed, &cx.model), "source": "bookshelf" });
             cx.log.candidate(Stage::Placement, 0, cx.args.seed, &placed, Tier::Geometry, &checks, metrics).ok();
             println!("hpwl_um {}", hpwl(&placed, &cx.model).unwrap_or(-1));
@@ -1106,21 +1101,21 @@ fn run_cmd(cx: &mut Ctx) -> Result<(), Vec<CheckResult>> {
             let d = prior.ok_or_else(|| vec![CheckResult::fail("cli", "check", "check needs --design")])?;
             let mut ok = true;
             if d.schematic.is_some() {
-                ok &= print_checks("schematic gates", &check_erc(&d, &cx.model));
+                ok &= print_checks("schematic gates", &eda_lint::check_schematic(&d, &cx.model));
             }
             if d.placement.is_some() {
                 ok &= print_checks("placement gates", &{ let mut c = check_placement(&d, &cx.model); c.extend(eda::preflight(&d, &cx.model, &cx.model.board)); c });
             }
             if d.routing.is_some() {
                 ok &= print_checks("routing gates", &check_routing(&d, &cx.model));
-                // KiCad's own DRC type names (`unconnected_items`,
-                // `track_dangling`, `via_dangling`) -- see
-                // `eda_connectivity::check`, ported from
-                // `DRC_TEST_PROVIDER_CONNECTIVITY::Run`.
-                ok &= print_checks("connectivity", &eda_connectivity::check(&d, &cx.model));
+            }
+            if d.placement.is_some() {
+                // KiCad's own gates (courtyard overlap, copper-to-edge
+                // clearance): one kicad-cli run on the design as it is.
+                ok &= print_checks("kicad gates", &eda_gates::kicad::check(&d, &cx.model));
             }
             if cx.args.drc {
-                ok &= print_drc(&d, &cx.model);
+                ok &= print_drc(&d, &cx.model, &cx.args.out.join(".kicad"))?;
             }
             return if ok { Ok(()) } else { Err(vec![CheckResult::fail("check", "design", "gate failures above")]) };
         }

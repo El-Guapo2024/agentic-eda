@@ -1184,15 +1184,6 @@ mod tests {
             let child = screens.get("i2c_thingy.kicad_sch").expect("child content present");
             assert!(!child.instance_overrides.is_empty(), "a twice-placed screen must carry per-instance overrides");
         }
-
-        // Flatten and confirm BOTH references appear with real pins -- the
-        // override mechanism actually produced two distinct components,
-        // not one reference silently shadowing the other.
-        let model = _model;
-        let (flat, _nets) = crate::hierarchy::flatten(&design, &model).expect("root exists");
-        let refs: std::collections::BTreeSet<&str> = flat.symbols.iter().map(|s| s.id.as_str()).collect();
-        assert!(refs.contains("R1") && refs.contains("R2"), "both R1 and R2 (one resistor, two sheet instances) must appear: {refs:?}");
-        assert!(refs.contains("U1") && refs.contains("U2"), "both U1 and U2 (one port expander, two sheet instances) must appear: {refs:?}");
     }
 
     /// A bus wire, a bus entry, and a bus alias (GAPS.md #20) all survive

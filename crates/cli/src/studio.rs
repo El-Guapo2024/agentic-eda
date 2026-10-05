@@ -20,7 +20,6 @@
 //! was fixed to run in the background instead.
 
 use crate::board;
-use crate::board_stats;
 use crate::cleanup_api;
 use crate::fab_api;
 use crate::route_api;
@@ -544,18 +543,24 @@ fn handle(
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job),
+        // DRC and ERC are kicad-cli's (docs/ARCHITECTURE.md, "Engines"): the
+        // current design.json revision is exported, kicad-cli runs (seconds),
+        // and its report comes back mapped to our item ids. One request at a
+        // time, so the studio waits for it -- the dialogs show a running
+        // state. Our own checks, the ones KiCad does not have, are
+        // `/api/lint`: cheap and in-process, refreshed on every change.
         ("GET", "/api/drc") => {
-            // `?engine=kicad`: run the real kicad-cli DRC on the current design.
-            let kicad = target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "engine=kicad");
-            let v = if kicad { crate::kicad_engine::drc(dir) } else { drc_json(dir) }.unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
-            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
-        }
-        ("GET", "/api/erc") if target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "engine=kicad") => {
-            let v = crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `?refill_zones=1`: the DRC dialog's "Refill all zones before performing DRC".
+            let refill = target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "refill_zones=1");
+            let v = crate::kicad_engine::drc(dir, refill).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/erc") => {
-            let v = erc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            let v = crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+        }
+        ("GET", "/api/lint") => {
+            let v = crate::kicad_engine::lint(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         // Symbol Fields Table / Find / ERC pin map backends: `crate::sch_api`.
@@ -699,26 +704,18 @@ fn handle(
         // "Board Statistics..." (task item 8): read-only, same stateless
         // no-Cmd shape as fab_api::bom below (nothing to undo -- it never
         // touches design.json).
-        ("POST", "/api/board_stats") => respond(stream, "200 OK", "application/json", board_stats::compute(dir, &body).to_string().as_bytes()),
-        // Fabrication outputs (Plot / Generate Drill Files / Footprint
-        // Position Files dialogs, plus the plain BOM): `crate::fab_api`
-        // runs the same `eda_fab` writers `eda fab ...` does and writes
-        // into `<dir>/export/` -- see that module's own doc comment.
-        ("POST", "/api/fab/kicad") => {
-            let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-            let kind = req["kind"].as_str().unwrap_or("");
-            let args: Vec<String> = req["args"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-            let v = crate::kicad_engine::export(dir, kind, &args).unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }));
-            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
-        }
+        ("POST", "/api/board_stats") => respond(stream, "200 OK", "application/json", crate::kicad_engine::board_stats(dir, &body).to_string().as_bytes()),
+        // Fabrication and schematic outputs (Plot / Generate Drill Files /
+        // Footprint Position Files / Plot Schematic / Export Netlist): each
+        // dialog's JSON becomes kicad-cli arguments (`crate::fab_api`,
+        // `crate::sch_output_api`) and runs through `crate::kicad_engine`,
+        // into `<dir>/export/kicad/`. `/api/fab/kicad` is the same engine
+        // with raw `pcb export` arguments.
+        ("POST", "/api/fab/kicad") => respond(stream, "200 OK", "application/json", fab_api::kicad(dir, &body).to_string().as_bytes()),
         ("POST", "/api/fab/gerbers") => respond(stream, "200 OK", "application/json", fab_api::gerbers(dir, &body).to_string().as_bytes()),
         ("POST", "/api/fab/drill") => respond(stream, "200 OK", "application/json", fab_api::drill(dir, &body).to_string().as_bytes()),
         ("POST", "/api/fab/pos") => respond(stream, "200 OK", "application/json", fab_api::pos(dir, &body).to_string().as_bytes()),
         ("POST", "/api/fab/bom") => respond(stream, "200 OK", "application/json", fab_api::bom(dir).to_string().as_bytes()),
-        // Schematic outputs (File > Plot... / File > Export > Netlist...):
-        // `crate::sch_output_api` runs `eda_kicad::plot_schematic` (SCH_PLOTTER) and
-        // `eda_kicad::export_netlist` (NETLIST_EXPORTER_*) and writes into
-        // `<dir>/export/`, same contract as `/api/fab/*` above.
         ("POST", "/api/sch/plot") => respond(stream, "200 OK", "application/json", sch_output_api::plot(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/netlist") => respond(stream, "200 OK", "application/json", sch_output_api::netlist(dir, &body).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
@@ -1256,7 +1253,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         .iter()
         .map(|w| {
             let mut v = json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus });
-            // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias expansion `eda_kicad::bus` already does for ERC.
+            // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias name expansion (`eda_kicad::expand_bus_members`).
             if w.bus {
                 v["members"] = json!(eda_kicad::expand_bus_members(&w.net, &design.bus_aliases).unwrap_or_default());
             }
@@ -1539,97 +1536,6 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
         .map(|p| json!({ "number": p.number, "name": p.name, "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit }))
         .collect();
     json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description })
-}
-
-/// `GET /api/drc`: the ported KiCad design-rule checker (`eda_drc`), run
-/// fresh on the board's current design/model -- no caching, since DRC is
-/// cheap enough on these board sizes to just run on every request the same
-/// way `/api/state`'s own gate checks do.
-///
-/// Shaped like `kicad-cli pcb drc --format json`'s own report (`type`/
-/// `description`/`severity`/`items`), for the React DRC dialog this feeds
-/// and for anyone cross-checking against the real oracle by eye. Two
-/// deliberate differences: positions are this API's own µm integers (every
-/// other endpoint here -- `pads`, `routing.tracks`, `outline` -- already
-/// uses board-space µm, not kicad-cli's millimetres), each as `[x, y]`
-/// rather than kicad-cli's own `{x, y}` mm object; and an extra `fix` key
-/// (`null` when absent) carrying the placement-quality providers' agent-fix
-/// metadata (see `eda_drc::FixHint`), which kicad-cli's own JSON has no
-/// concept of.
-/// GET /api/erc: `eda_kicad::check_erc_excluding` (the ERC engine, gap #4
-/// in GAPS.md -- "built, zero UI exposure" when this doc was first
-/// written; exclusions followed in a later session) run fresh on every
-/// call, same no-caching reasoning `drc_json`'s own doc gives. Flatter
-/// than `drc_json`'s `DrcViolation`/items shape: `check_erc` reports
-/// plain `CheckResult`s (check name, Fail/Warn/Excluded, an optional
-/// "REF" or "REF.PIN" `location` string, a human `hint`) rather than
-/// DRC's richer positioned-item list, so there is no ready-made
-/// canvas-marker position to extract here the way DRC's `it.pos` gives
-/// one -- `SchematicView.tsx`'s own `ercMarkerPosition` resolves
-/// `location` back to a point client-side instead (several different
-/// shapes: "REF.PIN", "NET:REF.PIN", a literal "x,y", "NET@x,y", ... --
-/// see its own doc). An `Excluded` result is kept (not dropped) and
-/// reported with its own `"excluded"` severity, so `ErcDialog.tsx` can
-/// still show and un-exclude it; `Pass` is never present in `check_erc`'s
-/// own output in the first place.
-fn erc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, model) = board::load(dir)?;
-    // `dialog_erc.cpp`'s own accepted-findings list, applied the same way
-    // `check_erc_excluding` always has: a finding whose (check, location)
-    // matches a persisted exclusion downgrades from Fail/Warn to
-    // `CheckStatus::Excluded` rather than disappearing, so `ErcDialog.tsx`
-    // can still show (and un-exclude) it instead of it just going quiet.
-    let mut exclusions = eda_kicad::Exclusions::new();
-    if let Some(sch) = &design.schematic {
-        for e in &sch.erc_exclusions {
-            exclusions.exclude(e.check.clone(), e.location.clone());
-        }
-    }
-    let found = eda_kicad::check_erc_excluding(&design, &model, &exclusions);
-    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    let violations: Vec<Value> = found
-        .iter()
-        .filter(|c| !matches!(c.status, CheckStatus::Pass))
-        .map(|c| {
-            // Only a still-live finding counts toward the dialog's own
-            // Errors/Warnings tally -- an excluded one is accounted for by
-            // its own severity (the frontend's own exclusions filter), not
-            // double-counted into "error"/"warning" too.
-            if !matches!(c.status, CheckStatus::Excluded) {
-                *counts.entry(c.check.as_str()).or_default() += 1;
-            }
-            json!({
-                "check": c.check,
-                "severity": match c.status { CheckStatus::Fail => "error", CheckStatus::Excluded => "excluded", _ => "warning" },
-                "location": c.location,
-                "hint": c.hint,
-            })
-        })
-        .collect();
-    Ok(json!({ "violations": violations, "counts": counts }))
-}
-
-fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, model) = board::load(dir)?;
-    let found = eda_connectivity::run_drc(&design, &model);
-    let counts = eda_drc::counts_by_type(&found);
-    let violations: Vec<Value> = found
-        .iter()
-        .map(|v| {
-            json!({
-                "type": v.error_type,
-                "description": v.description,
-                "severity": match v.severity { eda_drc::Severity::Error => "error", eda_drc::Severity::Warning => "warning" },
-                "items": v.items.iter().map(|it| json!({
-                    "description": it.description,
-                    "pos": [it.pos.0, it.pos.1],
-                    "id": it.id,
-                })).collect::<Vec<_>>(),
-                "fix": v.fix,
-            })
-        })
-        .collect();
-    Ok(json!({ "violations": violations, "counts": counts }))
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document

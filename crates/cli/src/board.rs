@@ -390,12 +390,36 @@ fn print_fill(design: &eda_model::ir::Design, model: &ConstraintModel, want_zone
 /// stack and clears redo -- the usual "a new edit erases old redos"
 /// rule; a refused command changes nothing, so it pushes nothing.
 pub(crate) fn step(dir: &Path, cmd: Cmd, strict: bool, by: &str) -> Result<String, Vec<CheckResult>> {
+    step_with(dir, cmd, if strict { Strictness::Gates } else { Strictness::Off }, by)
+}
+
+/// How hard a command is judged before it is applied.
+///
+/// KiCad's own gates (courtyard overlap, copper-to-edge clearance) are
+/// kicad-cli's, and a kicad-cli run takes seconds, so they cost far too much
+/// for the studio, which sends every drag and every routed segment through
+/// [`step`] with its Strict switch on, or for the router and the placer's
+/// repair loop.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Strictness {
+    /// Apply it, whatever the gates say.
+    Off,
+    /// Refuse a command that adds in-process gate failures -- what the studio's
+    /// Strict switch and every API path ask for. Microseconds to milliseconds.
+    Gates,
+    /// Also refuse one that adds a failure of KiCad's own gates: kicad-cli on
+    /// the board before and after. What the CLI's `--strict` asks for.
+    Judged,
+}
+
+/// [`step`] with the full choice of [`Strictness`].
+pub(crate) fn step_with(dir: &Path, cmd: Cmd, strictness: Strictness, by: &str) -> Result<String, Vec<CheckResult>> {
     let _lock = lock(dir);
     sync_external_edits_locked(dir);
     let line = cmd_line(&cmd);
     let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
     let domain = cmd.domain();
-    let r = step_quiet(dir, &cmd, strict);
+    let r = step_quiet(dir, &cmd, strictness);
     match &r {
         Ok(summary) => {
             if let Some(before) = before {
@@ -584,12 +608,16 @@ pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
     Ok(msg)
 }
 
-/// Every gate result that bears on this board right now: the placement
-/// gates `Board::checks` already runs, plus the routing gates when there is
-/// any routing to judge. A hand-added track or via goes through
+/// Every in-process gate result that bears on this board right now: the
+/// placement gates `Board::checks` already runs, plus the routing gates when
+/// there is any routing to judge. A hand-added track or via goes through
 /// `check_routing` exactly like the router's own output does -- same
-/// clearance test, same wrong-net test, same function -- so `--strict`
-/// refuses a bad one the same way it refuses a bad placement move.
+/// clearance test, same wrong-net test, same function.
+///
+/// These are cheap (microseconds to milliseconds), so every edit counts them
+/// before and after. KiCad's own gates (courtyard overlap, copper-to-edge
+/// clearance) are kicad-cli's and cost seconds, so only the judges ask for
+/// them: [`judged_checks`], `eda board check`, and `--strict`.
 fn all_checks(board: &Board, model: &ConstraintModel) -> Vec<CheckResult> {
     let mut out = board.checks();
     if board.design().routing.is_some() {
@@ -598,11 +626,23 @@ fn all_checks(board: &Board, model: &ConstraintModel) -> Vec<CheckResult> {
     out
 }
 
-fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
-    all_checks(board, model).iter().filter(|c| matches!(c.status, CheckStatus::Fail)).count()
+/// [`all_checks`] plus KiCad's gates, from one kicad-cli DRC run on the
+/// board as it is.
+fn judged_checks(board: &Board, model: &ConstraintModel) -> Vec<CheckResult> {
+    let mut out = all_checks(board, model);
+    out.extend(eda_gates::kicad::check(board.design(), model));
+    out
 }
 
-fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckResult>> {
+fn failures_in(checks: &[CheckResult]) -> usize {
+    checks.iter().filter(|c| matches!(c.status, CheckStatus::Fail)).count()
+}
+
+fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
+    failures_in(&all_checks(board, model))
+}
+
+fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, Vec<CheckResult>> {
     let (meta, mut design, mut model) = load(dir)?;
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
@@ -622,7 +662,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckRe
     let after = all_failures(&board, &model);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
-    if strict && after > before {
+    if strictness != Strictness::Off && after > before {
         let new: Vec<String> = all_checks(&board, &model)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
@@ -634,6 +674,29 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strict: bool) -> Result<String, Vec<CheckRe
             &cmd.subjects().join(","),
             format!("that move takes the board from {before} failure(s) to {after} ({}); refused because --strict", new.join("; ")),
         ));
+    }
+    if strictness == Strictness::Judged {
+        // `--strict` from the CLI also judges with KiCad's own gates: one
+        // kicad-cli run on each side of the move.
+        if eda_kicad_engine::find_cli().is_none() {
+            return Err(fail("kicad_cli_missing", "kicad-cli", "--strict judges a move with KiCad's own gates (courtyard overlap, edge clearance), which need kicad-cli; set EDA_KICAD_CLI or install KiCad"));
+        }
+        let was_all = judged_checks(&was, &model);
+        let now_all = judged_checks(&board, &model);
+        let (strict_before, strict_after) = (failures_in(&was_all), failures_in(&now_all));
+        if strict_after > strict_before {
+            let new: Vec<String> = now_all
+                .iter()
+                .filter(|c| matches!(c.status, CheckStatus::Fail))
+                .filter(|c| !was_all.iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, CheckStatus::Fail)))
+                .map(|c| format!("{} @ {}", c.check, c.location.clone().unwrap_or_default()))
+                .collect();
+            return Err(fail(
+                "board_worse",
+                &cmd.subjects().join(","),
+                format!("that move takes the board from {strict_before} failure(s) to {strict_after} ({}); refused because --strict", new.join("; ")),
+            ));
+        }
     }
 
     let (done, placed, failures) = progress(&board, &model);
@@ -1105,7 +1168,7 @@ pub fn run(
 ) -> Result<(), Vec<CheckResult>> {
     let verb = rest.first().map(String::as_str).unwrap_or("");
     let dir = dir_arg(rest);
-    let strict = has(rest, "--strict");
+    let strict = if has(rest, "--strict") { Strictness::Judged } else { Strictness::Off };
 
     match verb {
         "new" => {
@@ -1139,7 +1202,7 @@ pub fn run(
         "check" => {
             let (meta, design, model) = load(&dir)?;
             let board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
-            let checks = all_checks(&board, &model);
+            let checks = judged_checks(&board, &model);
             let failed: Vec<CheckResult> = checks.iter().filter(|c| matches!(c.status, eda_model::CheckStatus::Fail)).cloned().collect();
             for c in &failed {
                 eprintln!("FAIL {} @ {}: {}", c.check, c.location.clone().unwrap_or_default(), c.hint.clone().unwrap_or_default());
@@ -1171,7 +1234,7 @@ pub fn run(
             } else {
                 return Err(fail("board_usage", "place", "say where: --region R, --edge E, --near P --side S, or --at x,y"));
             };
-            step(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}"))
+            step_with(&dir, cmd, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "move" => {
             let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "move", "usage: eda board move <REF> (--dir north|south|east|west [--steps N] | --to x,y)"))?;
@@ -1180,29 +1243,29 @@ pub fn run(
                 let mm = |s: &str| -> Result<i64, Vec<CheckResult>> {
                     s.trim().parse::<f64>().map(|v| (v * 1000.0).round() as i64).map_err(|_| fail("board_usage", "--to", "x and y must be numbers, in millimetres"))
                 };
-                return step(&dir, Cmd::MoveTo { part, x: mm(x)?, y: mm(y)? }, strict, &actor()).map(|s| eprintln!("{s}"));
+                return step_with(&dir, Cmd::MoveTo { part, x: mm(x)?, y: mm(y)? }, strict, &actor()).map(|s| eprintln!("{s}"));
             }
             let d = flag(rest, "--dir").ok_or_else(|| fail("board_usage", "move", "move needs --dir north|south|east|west, or --to x,y"))?;
             let steps = flag(rest, "--steps").and_then(|s| s.parse().ok()).unwrap_or(1);
-            step(&dir, Cmd::Nudge { part, dir: parse_dir(&d)?, steps }, strict, &actor()).map(|s| eprintln!("{s}"))
+            step_with(&dir, Cmd::Nudge { part, dir: parse_dir(&d)?, steps }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "rotate" => {
             let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "rotate", "usage: eda board rotate <REF> [--quarters N]"))?;
             let q = flag(rest, "--quarters").and_then(|s| s.parse().ok()).unwrap_or(1);
-            step(&dir, Cmd::Rotate { part, quarter_turns: q }, strict, &actor()).map(|s| eprintln!("{s}"))
+            step_with(&dir, Cmd::Rotate { part, quarter_turns: q }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "swap" => {
             let a = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "swap", "usage: eda board swap <A> <B>"))?;
             let b = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "swap", "usage: eda board swap <A> <B>"))?;
-            step(&dir, Cmd::Swap { a, b }, strict, &actor()).map(|s| eprintln!("{s}"))
+            step_with(&dir, Cmd::Swap { a, b }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "rip" => {
             let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "rip", "usage: eda board rip <REF>"))?;
-            step(&dir, Cmd::Rip { part }, strict, &actor()).map(|s| eprintln!("{s}"))
+            step_with(&dir, Cmd::Rip { part }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "flip" => {
             let part = rest.get(1).cloned().ok_or_else(|| fail("board_usage", "flip", "usage: eda board flip <REF>"))?;
-            step(&dir, Cmd::Flip { part }, strict, &actor()).map(|s| eprintln!("{s}"))
+            step_with(&dir, Cmd::Flip { part }, strict, &actor()).map(|s| eprintln!("{s}"))
         }
         "track" => match rest.get(1).map(String::as_str).unwrap_or("") {
             "add" => {
@@ -1210,16 +1273,16 @@ pub fn run(
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "track add", "needs --layer L"))?;
                 let width = mm_arg(&flag(rest, "--width").ok_or_else(|| fail("board_usage", "track add", "needs --width, mm"))?)?;
                 let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "track add", "needs --pts \"x1,y1 x2,y2 ...\", mm"))?)?;
-                step(&dir, Cmd::AddTrack { net, layer, width, pts }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::AddTrack { net, layer, width, pts }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "track delete", "usage: eda board track delete <id>"))?;
-                step(&dir, Cmd::DeleteTrack { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::DeleteTrack { id }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "width" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "track width", "usage: eda board track width <id> --width mm"))?;
                 let width = mm_arg(&flag(rest, "--width").ok_or_else(|| fail("board_usage", "track width", "needs --width, mm"))?)?;
-                step(&dir, Cmd::SetTrackWidth { id, width }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::SetTrackWidth { id, width }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             other => Err(fail("board_usage", other, "usage: eda board track <add|delete|width> ...")),
         },
@@ -1231,16 +1294,16 @@ pub fn run(
                 let diameter = mm_arg(&flag(rest, "--dia").ok_or_else(|| fail("board_usage", "via add", "needs --dia, mm"))?)?;
                 let from_layer = flag(rest, "--from").ok_or_else(|| fail("board_usage", "via add", "needs --from LAYER"))?;
                 let to_layer = flag(rest, "--to-layer").ok_or_else(|| fail("board_usage", "via add", "needs --to-layer LAYER"))?;
-                step(&dir, Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::AddVia { net, x, y, drill, diameter, from_layer, to_layer }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "via delete", "usage: eda board via delete <id>"))?;
-                step(&dir, Cmd::DeleteVia { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::DeleteVia { id }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "move" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "via move", "usage: eda board via move <id> --to x,y"))?;
                 let Point { x, y } = parse_point_mm(&flag(rest, "--to").ok_or_else(|| fail("board_usage", "via move", "needs --to x,y, mm"))?)?;
-                step(&dir, Cmd::MoveVia { id, x, y }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::MoveVia { id, x, y }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             other => Err(fail("board_usage", other, "usage: eda board via <add|delete|move> ...")),
         },
@@ -1249,11 +1312,11 @@ pub fn run(
                 let net = flag(rest, "--net").ok_or_else(|| fail("board_usage", "zone add", "needs --net N"))?;
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "zone add", "needs --layer L"))?;
                 let outline = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "zone add", "needs --pts \"x1,y1 x2,y2 ...\", mm"))?)?;
-                step(&dir, Cmd::AddZone { net, layer, outline }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::AddZone { net, layer, outline }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "zone delete", "usage: eda board zone delete <id>"))?;
-                step(&dir, Cmd::DeleteZone { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::DeleteZone { id }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             other => Err(fail("board_usage", other, "usage: eda board zone <add|delete> ...")),
         },
@@ -1272,17 +1335,17 @@ pub fn run(
                 let filled = has(rest, "--filled");
                 let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "shape add", "needs --pts \"x,y ...\", mm"))?)?;
                 let shape = parse_shape(&kind, layer, stroke_width, filled, pts)?;
-                step(&dir, Cmd::AddShape { shape }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::AddShape { shape }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "shape delete", "usage: eda board shape delete <id>"))?;
-                step(&dir, Cmd::DeleteShape { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::DeleteShape { id }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "move" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "shape move", "usage: eda board shape move <id> --dx mm --dy mm"))?;
                 let dx = mm_arg(&flag(rest, "--dx").ok_or_else(|| fail("board_usage", "shape move", "needs --dx, mm"))?)?;
                 let dy = mm_arg(&flag(rest, "--dy").ok_or_else(|| fail("board_usage", "shape move", "needs --dy, mm"))?)?;
-                step(&dir, Cmd::MoveShape { id, dx, dy }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::MoveShape { id, dx, dy }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             other => Err(fail("board_usage", other, "usage: eda board shape <add|delete|move> ...")),
         },
@@ -1297,7 +1360,7 @@ pub fn run(
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
                 let text = Text { id: String::new(), content, at, angle, layer, size_um, stroke_width, justify, mirror };
-                step(&dir, Cmd::AddText { text }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::AddText { text }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "edit" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text edit", "usage: eda board text edit <id> ..."))?;
@@ -1308,16 +1371,16 @@ pub fn run(
                 let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
-                step(&dir, Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::EditText { id, content, angle, layer, size_um, stroke_width, justify, mirror }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "delete" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text delete", "usage: eda board text delete <id>"))?;
-                step(&dir, Cmd::DeleteText { id }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::DeleteText { id }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             "move" => {
                 let id = rest.get(2).cloned().ok_or_else(|| fail("board_usage", "text move", "usage: eda board text move <id> --to x,y"))?;
                 let Point { x, y } = parse_point_mm(&flag(rest, "--to").ok_or_else(|| fail("board_usage", "text move", "needs --to x,y, mm"))?)?;
-                step(&dir, Cmd::MoveText { id, x, y }, strict, &actor()).map(|s| eprintln!("{s}"))
+                step_with(&dir, Cmd::MoveText { id, x, y }, strict, &actor()).map(|s| eprintln!("{s}"))
             }
             other => Err(fail("board_usage", other, "usage: eda board text <add|edit|delete|move> ...")),
         },
@@ -1328,30 +1391,36 @@ pub fn run(
         // studio UI's own `/api/undo`/`/api/redo` (see their own doc).
         "undo" => undo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
         "redo" => redo(&dir, &actor(), None).map(|s| eprintln!("{s}")),
-        // Any kicad-cli `pcb export` kind on the exported board:
-        // `eda board export --kicad gerbers [-- kicad-cli args...]`.
+        // Any kicad-cli export of the current design:
+        // `eda board export --kicad gerbers [-- kicad-cli args...]` (a `pcb
+        // export` kind), `eda board export --kicad-sch netlist` (a `sch
+        // export` kind).
         "export" => {
-            let kind = rest.iter().position(|a| a == "--kicad").and_then(|i| rest.get(i + 1)).ok_or_else(|| fail("board_usage", "export", "usage: eda board export --kicad <gerbers|drill|pos|step|glb|pdf|svg|ipc2581|odb|...> [-- args]"))?;
             let pass: Vec<String> = rest.iter().skip_while(|a| *a != "--").skip(1).cloned().collect();
-            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::export(&dir, kind, &pass)?).unwrap_or_default());
+            let usage = || fail("board_usage", "export", "usage: eda board export --kicad <gerbers|drill|pos|step|glb|pdf|svg|ipc2581|odb|...> | --kicad-sch <netlist|bom|pdf|svg|...> [-- args]");
+            let v = if let Some(kind) = rest.iter().position(|a| a == "--kicad-sch").and_then(|i| rest.get(i + 1)) {
+                crate::kicad_engine::export_sch(&dir, kind, &pass)?
+            } else {
+                let kind = rest.iter().position(|a| a == "--kicad").and_then(|i| rest.get(i + 1)).ok_or_else(usage)?;
+                crate::kicad_engine::export(&dir, kind, &pass)?
+            };
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             Ok(())
         }
-        // ERC through kicad-cli on the exported schematic.
+        // ERC and DRC are kicad-cli's, run on the exported schematic/board
+        // (`--kicad` is accepted and ignored: there is no other engine).
         "erc" => {
-            if !rest.iter().any(|a| a == "--kicad") {
-                return Err(fail("board_usage", "erc", "usage: eda board erc --kicad"));
-            }
             println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::erc(&dir)?).unwrap_or_default());
             Ok(())
         }
-        // DRC: our own engine, or `--kicad` for kicad-cli on the exported board.
         "drc" => {
-            let v = if rest.iter().any(|a| a == "--kicad") { crate::kicad_engine::drc(&dir)? } else {
-                let (_, design, model) = load(&dir)?;
-                let found = eda_connectivity::run_drc(&design, &model);
-                serde_json::json!({ "engine": "eda", "counts": eda_drc::counts_by_type(&found), "violations": found.iter().map(|v| serde_json::json!({ "type": v.error_type, "description": v.description, "items": v.items.iter().map(|i| serde_json::json!({ "id": i.id, "description": i.description, "pos": [i.pos.0, i.pos.1] })).collect::<Vec<_>>() })).collect::<Vec<_>>() })
-            };
-            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc(&dir, has(rest, "--refill-zones"))?).unwrap_or_default());
+            Ok(())
+        }
+        // Our own checks, the ones KiCad does not have (`eda-lint`):
+        // placement quality, net-class width, schematic readability.
+        "lint" => {
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::lint(&dir)?).unwrap_or_default());
             Ok(())
         }
         // Shared view state (`view_api`): print it, or select / switch tab /
@@ -1380,7 +1449,7 @@ pub fn run(
         other => Err(fail(
             "board_usage",
             other,
-            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|erc|export|gui|serve> [-C dir] [--strict]",
+            "usage: eda board <new|status|check|place|move|rotate|flip|swap|rip|track|via|zone|fill|shape|text|route|undo|redo|drc|erc|lint|export|gui|serve> [-C dir] [--strict]",
         )),
     }
 }
@@ -1481,6 +1550,28 @@ mod tests {
         let cmd = Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 5_000 }, Point { x: 6_000, y: 5_000 }] };
         let err = step(&dir2, cmd, true, "test").unwrap_err();
         assert_eq!(err[0].check, "board_worse");
+    }
+
+    /// The CLI's `--strict` also judges with kicad-cli (skipped without one);
+    /// the studio's Strict switch (`step`, in-process gates only) does not,
+    /// because a kicad-cli run per drag would take seconds.
+    #[test]
+    fn cli_strict_refuses_a_move_kicad_cli_calls_a_courtyard_overlap_and_the_studios_does_not() {
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        // U2 onto U1's spot. The in-process gates have nothing to say about
+        // stacked courtyards (KiCad's `courtyards_overlap`); kicad-cli does.
+        let cmd = Cmd::MoveTo { part: "U2".into(), x: 5_000, y: 5_000 };
+        let studio = scratch("strict_studio");
+        setup(&studio);
+        step(&studio, cmd.clone(), true, "test").expect("the studio's strict counts in-process gates only");
+        let cli = scratch("strict_cli");
+        setup(&cli);
+        let err = step_with(&cli, cmd, Strictness::Judged, "test").unwrap_err();
+        assert_eq!(err[0].check, "board_worse", "{err:?}");
+        assert!(err[0].hint.as_deref().unwrap_or("").contains("placement_courtyard_overlap"), "{err:?}");
     }
 
     #[test]
@@ -1637,7 +1728,7 @@ mod tests {
 
     /// The hard rule this task was built around: "there must be one
     /// netlist." Drawing a wire between two previously-unconnected pins
-    /// must merge them into the same net *in the model `check_erc`/the PCB
+    /// must merge them into the same net *in the model the ERC export/the PCB
     /// ratsnest read* -- not just in the schematic's own drawing -- and
     /// deleting that wire must split them back apart. Exercises `AddWire`
     /// and `DeleteWire` end to end: `step` -> `reconcile_schematic` (fired

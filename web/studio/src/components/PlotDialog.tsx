@@ -5,15 +5,15 @@
 // output: X2 format and whether a board-edge check should block the plot.
 //
 // POSTs straight to /api/fab/gerbers (crates/cli/src/fab_api.rs), which
-// runs eda_fab::gerber -- KiCad's own GERBER_PLOTTER, ported, not a
-// kicad-cli call -- and writes into this board's own export/ folder.
+// runs `kicad-cli pcb export gerbers --layers ...` on the exported board and
+// writes into this board's own export/kicad/gerbers/ folder.
 import { useState } from "react";
 import { postFabGerbers } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
 
 /** The default checklist: every copper layer (board.layers), both mask/
- * paste/silk layers and the board outline -- eda_fab::gerber::
- * default_jlc_layers' own set, the layers a JLCPCB order actually needs. */
+ * paste/silk layers and the board outline -- the layers a JLCPCB order
+ * actually needs (crates/cli/src/fab_api.rs `default_gerber_layers`). */
 function defaultLayers(copperLayers: string[]): string[] {
   return [...copperLayers, "F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "Edge.Cuts"];
 }
@@ -65,8 +65,8 @@ export function PlotDialog() {
             ))}
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
-            Output directory: <code>export/</code> (inside this board's own directory). Gerber X2 format with a .gbrjob job file, same as `kicad-cli pcb export
-            gerbers`.
+            Output directory: <code>export/kicad/gerbers/</code> (inside this board's own directory). Written by `kicad-cli pcb export gerbers`
+            (Gerber X2, with its .gbrjob job file).
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>

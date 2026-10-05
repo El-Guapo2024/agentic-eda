@@ -117,7 +117,7 @@ fn get_glyph(codepoint: u32) -> Glyph {
 }
 
 /// One decoded Newstroke glyph for callers outside this crate that lay out
-/// text themselves (the schematic plotter, `eda_kicad::plotter`, ports
+/// text themselves (a plotter or renderer porting
 /// `STROKE_FONT::GetTextAsGlyphs`' markup/cursor logic on top of this):
 /// the advance width and the pen-down runs, both in font-design units
 /// (multiply by the text size). Same fallback to `?` as [`get_glyph`].

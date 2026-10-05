@@ -220,9 +220,9 @@ pub struct SchematicSection {
     /// Per-design ERC pin-to-pin conflict matrix override --
     /// `ERC_SETTINGS::m_PinMap` (`erc_settings.cpp`), edited by
     /// `panel_setup_pinmap.cpp`. `None` (every design written before this
-    /// existed) means KiCad's own default map (`m_defaultPinMap`), i.e.
-    /// exactly the table `eda_kicad::erc` has always used. See
-    /// [`ErcPinMap`].
+    /// existed) means KiCad's own default map (`m_defaultPinMap`): the
+    /// derived project file then carries no `pin_map` and kicad-cli's ERC
+    /// uses its own table. See [`ErcPinMap`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub erc_pin_map: Option<ErcPinMap>,
     /// User-defined symbol fields (`SCH_FIELD`s beyond Reference/Value/
@@ -258,8 +258,8 @@ pub struct SchematicSection {
     /// `derive_schematic`. The two disagree on what `SymbolInstance::at`
     /// means: `derive_schematic` always places it at the engine's own
     /// "top-left of a synthesized box" corner (every downstream consumer —
-    /// rendering, the exporter's `baked_local`, and `eda_kicad::erc`'s own
-    /// `resolve_pins` — agrees on that convention), while a real file's
+    /// rendering, the exporter's `baked_local`, and the schematic checks'
+    /// own pin resolution — agrees on that convention), while a real file's
     /// `(symbol (at X Y))` is the symbol's *native* KiCad origin, which for
     /// a real library symbol is almost never a bounding-box corner. Mixing
     /// the two conventions silently computes the wrong absolute pin
@@ -608,9 +608,9 @@ pub struct BusAlias {
 /// 1 = warning, 2 = error), row/column in `ELECTRICAL_PINTYPE` order
 /// (input, output, bidirectional, tri_state, passive, free, unspecified,
 /// power_in, power_out, open_collector, open_emitter, no_connect).
-/// `eda_kicad::erc` validates the shape and falls back to the default for
-/// anything malformed, like `ERC_SETTINGS`'s own loader (a grid that is
-/// not `ELECTRICAL_PINTYPES_TOTAL` square is ignored).
+/// `eda_kicad::custom_erc_pin_map` validates the shape and falls back to the
+/// default for anything malformed, like `ERC_SETTINGS`'s own loader (a grid
+/// that is not `ELECTRICAL_PINTYPES_TOTAL` square is ignored).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ErcPinMap {
@@ -651,9 +651,9 @@ pub const DEFAULT_ERC_PIN_MAP: [[u8; 12]; 12] = [
 
 /// An accepted ERC finding (`dialog_erc.cpp`'s own "Exclude this
 /// violation" / `SCHEMATIC::RecordERCExclusions`): `(check, location)`
-/// matches `eda_kicad::erc::Exclusions`'s own key shape exactly (a
-/// `BTreeSet<(String, String)>`) so `crates/cli/src/studio.rs::erc_json`
-/// can build one directly from this list with no translation. No `id`
+/// is the key the studio applies to kicad-cli's ERC report
+/// (`eda_kicad_engine::ErcReport::to_json`): a finding with a listed key
+/// reports as `excluded`, with no translation. No `id`
 /// field -- unlike `Wire`/`NetLabel`/etc., this has nothing geometric to
 /// derive one from, and the `(check, location)` pair is already a stable,
 /// natural key (unlike those others, there is never more than one
@@ -661,7 +661,7 @@ pub const DEFAULT_ERC_PIN_MAP: [[u8; 12]; 12] = [
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ErcExclusion {
-    /// `eda_kicad::erc`'s own check name ("pin_not_connected", ...).
+    /// kicad-cli's own ERC check name ("pin_not_connected", ...).
     pub check: String,
     /// "REF", "REF.PIN", or whatever else `CheckResult::location` carried
     /// for this finding -- a finding with no location at all can never be
@@ -714,10 +714,9 @@ pub struct SheetInstance {
     pub size: (Um, Um),
     /// Sheet pins on this placement's own border (`SCH_SHEET_PIN`), each
     /// tied *by name* (not by any stored link) to a hierarchical label of
-    /// the same name in `file`'s own content -- see
-    /// `crate::hierarchy`'s own doc for how that join flattens into one
-    /// netlist, and `check_erc`'s `hier_label_mismatch` for the name-only
-    /// matching rule (shape is cosmetic, confirmed against
+    /// the same name in `file`'s own content -- kicad-cli's ERC
+    /// (`hier_label_mismatch`) judges that name-only matching rule (shape
+    /// is cosmetic, confirmed against
     /// `connection_graph.cpp::ercCheckHierSheets`, which never compares
     /// it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

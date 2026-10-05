@@ -63,10 +63,14 @@ const BOLD_THICKNESS_FACTOR = 1 / 5;
 export interface SchematicPaintOptions {
   selection: Set<string>;
   netHighlight: string | null;
-  /** GET /api/erc's current report, or null when it hasn't been fetched this session -- same "only while the dialog cares" gating `state.erc` itself already has (see store.tsx's polling effect), not re-decided here. */
+  /** GET /api/erc's current report (kicad-cli's), or null when ERC has not run this session -- kept showing after the dialog closes, like KiCad's own markers until the next run. */
   ercViolations?: ErcViolation[] | null;
   /** `state.ercSelected` -- which `ercViolations` row the dialog's list currently has clicked/focused, drawn with the highlighted color instead of its own severity color (DRC markers' own `drcSelected` convention, mirrored here). */
   ercSelected?: number | null;
+  /** GET /api/lint's schematic findings (crates/lint: our own readability checks) -- only while the ERC dialog is open, drawn as blue diamonds so they never read as KiCad's circles. */
+  lintViolations?: ErcViolation[] | null;
+  /** Index into `lintViolations` the dialog's Lint tab has clicked. */
+  lintSelected?: number | null;
 }
 
 const REF_FONT = 1.6;
@@ -809,6 +813,33 @@ function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch:
   });
 }
 
+/** Our own lint findings (crates/lint) on the sheet: a blue diamond where the finding's `location` resolves to a point (many readability checks name a pair or a net, which do not), bigger and filled when the dialog's Lint tab has it selected. */
+function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, findings: ErcViolation[], selected: number | null) {
+  const hair = 1 / view.scale;
+  findings.forEach((v, i) => {
+    const resolved = ercMarkerPosition(v.location, sch);
+    if (!resolved) return;
+    const [x, y] = resolved.at;
+    const on = i === selected;
+    const r = on ? ERC_MARKER_RADIUS_UM * 1.5 : ERC_MARKER_RADIUS_UM * 1.1;
+    ctx.save();
+    ctx.strokeStyle = "#4ea1ff";
+    ctx.fillStyle = "#4ea1ff";
+    ctx.lineWidth = Math.max(100, hair);
+    ctx.beginPath();
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x + r, y);
+    ctx.lineTo(x, y + r);
+    ctx.lineTo(x - r, y);
+    ctx.closePath();
+    ctx.globalAlpha = on ? 0.45 : 0.2;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
 // Background is filled once in screen-space by the caller, before the
 // world transform is applied (see canvas/Canvas.tsx's PCB equivalent) --
 // not here, which would mean computing an inverse-transformed rect on
@@ -917,6 +948,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
 
   // ERC markers last of all -- an overlay above every sheet layer, matching real KiCad (and this app's own canvas/painter.ts for DRC).
   if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null);
+  if (opts.lintViolations) drawLintMarkers(ctx, view, sch, opts.lintViolations, opts.lintSelected ?? null);
 }
 
 // Re-exported for SchematicView.tsx's bounds/hit-testing, which need the

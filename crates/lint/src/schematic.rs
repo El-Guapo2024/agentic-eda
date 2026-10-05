@@ -1,13 +1,10 @@
-//! Readability/style checks, folded into the ERC engine as the same kind of
-//! test KiCad's own ERC runs alongside pure electrical ones (KiCad flags
-//! similar labels and off-grid pins too, not just pin conflicts). These are
-//! this project's own generator-quality checks -- grid alignment, wire
+//! Schematic readability/style checks: grid alignment, wire
 //! orthogonality/length/overlap, label placement, sheet density/aspect --
-//! things a hand-drawn KiCad sheet has a human judging instead. Ported
-//! (moved, not rewritten) from the former `eda-gates::check_style` so
-//! `eda_kicad::check_erc` is the one engine judging a schematic, per the
-//! project's own "no duplicate tools" rule; every check keeps its original
-//! name, severity and fix hint verbatim.
+//! things a hand-drawn KiCad sheet has a human judging instead. They are
+//! this project's own generator-quality checks; KiCad's ERC has no
+//! equivalent (it does the electrical ones, and runs through kicad-cli).
+//! Moved, not rewritten, from the former ERC port's `erc_style` module;
+//! every check keeps its original name, severity and fix hint verbatim.
 
 use std::collections::BTreeMap;
 
@@ -79,7 +76,7 @@ fn split_pin_ref(pin_ref: &str) -> (&str, &str) {
 /// engine and renderer do. Returns one `CheckResult` per finding, plus a
 /// `Pass` for any check that found nothing to fail/warn about, and always
 /// exactly one `schematic_wire_crossing_count` result (Warn, informational).
-pub(crate) fn check_style(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
+pub fn check_style(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
     let mut results = Vec::new();
     let Some(sch) = design.schematic.as_ref() else {
         results.push(CheckResult::fail("schematic_wire_through_symbol", "design", "design has no schematic section"));
@@ -674,7 +671,7 @@ fn check_endpoint_off_pin(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo
         // gate can judge -- e.g. the short leg `derive_schematic` draws
         // from a `PWR_FLAG` to an existing power symbol, neither end of
         // which is a `Part` pin. Nothing here re-derives *those* two
-        // points' correctness (that's `eda_kicad::erc`'s job on the
+        // points' correctness (that's kicad-cli's ERC on the
         // exported file), so skip rather than false-fail.
         if w.pins.is_empty() {
             continue;

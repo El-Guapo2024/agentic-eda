@@ -1,250 +1,220 @@
-//! kicad-cli as the batch engine (docs/ARCHITECTURE.md): `design.json` is
-//! exported to a derived `.kicad/` folder beside it, kicad-cli runs on that
-//! export, and its JSON report is pointed back at our own item ids through
-//! the exporter's uuid map (`eda_kicad::export_kicad_pcb_mapped`).
+//! A board directory's face of kicad-cli (docs/ARCHITECTURE.md, "Engines"):
+//! load the board, hand its current `design.json` revision to
+//! `eda_kicad_engine`, return the report as the JSON the studio and the CLI
+//! print. Derived files go to `.kicad/` beside `design.json` (scratch,
+//! rewritten on every run); exports go to `export/kicad/<kind>/`.
 //!
-//! The `.kicad/` files are scratch output, rewritten on every run -- never
-//! edited, never read back as a design.
+//! DRC, ERC and every output (plots, Gerbers, drill, position, STEP,
+//! netlist, BOM, ...) are kicad-cli's. Our own checks, the ones KiCad does
+//! not have, are `eda-lint`'s (see [`lint`]).
 
 use crate::board;
-use eda_model::CheckResult;
+use eda_model::ir::Design;
+use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-fn fail(check: &str, location: &str, msg: impl Into<String>) -> Vec<CheckResult> {
-    vec![CheckResult::fail(check, location, msg.into())]
+/// Where this board's derived KiCad files go.
+fn work(dir: &Path) -> PathBuf {
+    dir.join(".kicad")
 }
 
-/// `EDA_KICAD_CLI`, else `kicad-cli` on `PATH`, else the macOS bundle.
-pub fn find_cli() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("EDA_KICAD_CLI").map(PathBuf::from).filter(|p| p.exists()) {
-        return Some(p);
+/// The board's design and model, with the schematic the engine would derive
+/// from the intent when none is stored yet -- so ERC, plots and netlists
+/// work on a fresh board, same as `GET /api/schematic.svg`.
+pub fn load_with_schematic(dir: &Path) -> Result<(Design, ConstraintModel), Vec<CheckResult>> {
+    let (_, mut design, model) = board::load(dir)?;
+    if design.schematic.is_none() {
+        design = eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?;
     }
-    if let Ok(out) = Command::new("which").arg("kicad-cli").output() {
-        let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if out.status.success() && !p.is_empty() {
-            return Some(PathBuf::from(p));
-        }
-    }
-    let mac = PathBuf::from("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli");
-    mac.exists().then_some(mac)
+    Ok((design, model))
 }
 
-/// `kicad-cli version`, e.g. "9.0.9".
-pub fn cli_version(cli: &Path) -> String {
-    Command::new(cli).arg("version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
-}
-
-fn work_dir(dir: &Path) -> Result<PathBuf, Vec<CheckResult>> {
-    let w = dir.join(".kicad");
-    std::fs::create_dir_all(&w).map_err(|e| fail("kicad_engine_dir", ".kicad", format!("cannot create {}: {e}", w.display())))?;
-    Ok(w)
-}
-
-/// Export the current design as `board.kicad_pcb` + `board.kicad_pro`;
-/// returns the pcb path and the uuid -> our id map.
-fn export_board(dir: &Path) -> Result<(PathBuf, std::collections::HashMap<String, String>), Vec<CheckResult>> {
+/// `kicad-cli pcb drc` on the current design: `{ engine, violations,
+/// unconnected_items, counts }`. `refill_zones`: see
+/// [`eda_kicad_engine::drc`] (off by default; kicad-cli drops its courtyard
+/// checks when it refills).
+pub fn drc(dir: &Path, refill_zones: bool) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    let date = chrono_like_today();
-    let (pcb, map) = eda_kicad::export_kicad_pcb_mapped(&design, &model, &eda_kicad::ExportMeta { date: &date, title: "board" })?;
-    let w = work_dir(dir)?;
-    let pcb_path = w.join("board.kicad_pcb");
-    std::fs::write(&pcb_path, pcb).map_err(|e| fail("kicad_engine_write", "board.kicad_pcb", e.to_string()))?;
-    std::fs::write(w.join("board.kicad_pro"), eda_kicad::export_kicad_pro(&model)).map_err(|e| fail("kicad_engine_write", "board.kicad_pro", e.to_string()))?;
-    Ok((pcb_path, map))
+    Ok(eda_kicad_engine::drc(&design, &model, &work(dir), refill_zones)?.to_json())
 }
 
+/// `kicad-cli sch erc` on the current schematic, in the studio's ERC shape
+/// (`check`, `severity`, `location` = the first item's id, `hint`) plus the
+/// full mapped `items` list. A finding the schematic's own exclusion list
+/// accepts reports as `excluded`.
+pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (design, model) = load_with_schematic(dir)?;
+    let exclusions: Vec<(String, String)> = design.schematic.as_ref().map(|s| s.erc_exclusions.iter().map(|e| (e.check.clone(), e.location.clone())).collect()).unwrap_or_default();
+    Ok(eda_kicad_engine::erc(&design, &model, &work(dir))?.to_json(&exclusions))
+}
+
+/// Today's date (`YYYY-MM-DD`), for the derived-file header the studio's
+/// "Save As" routes write; the one clock helper lives in the engine crate.
 pub(crate) fn chrono_like_today() -> String {
-    // YYYY-MM-DD from the system clock (civil-from-days, no extra crate).
-    let days = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() / 86_400).unwrap_or(0) as i64;
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    format!("{y:04}-{m:02}-{d:02}")
+    eda_kicad_engine::today()
 }
 
-/// One kicad-cli report entry, in the studio's `DrcReport` shape, with each
-/// item's KiCad uuid resolved to our id (`null` when it isn't one of ours,
-/// e.g. a zone fill KiCad computed).
-fn map_violation(v: &Value, map: &std::collections::HashMap<String, String>, units_mm: bool) -> Value {
-    let to_um = |x: f64| if units_mm { (x * 1000.0).round() as i64 } else { (x * 25_400.0).round() as i64 };
-    let items: Vec<Value> = v["items"]
+/// The board's project name: its intent's file stem, as every file written for
+/// it has always been named.
+fn project_name(dir: &Path) -> String {
+    board::load(dir).ok().and_then(|(meta, _, _)| Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).map(str::to_string)).unwrap_or_else(|| "board".to_string())
+}
+
+/// `kicad-cli pcb export <kind> [args...]`: `{ ok, engine, files }`.
+pub fn export(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+    let (_, design, model) = board::load(dir)?;
+    eda_kicad_engine::export_pcb(&design, &model, &work(dir), dir, &project_name(dir), kind, args)
+}
+
+/// `kicad-cli sch export <kind> [args...]` (`netlist`, `bom`, `pdf`, `svg`,
+/// `dxf`, `ps`, `png`): `{ ok, engine, files }`.
+pub fn export_sch(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+    let (design, model) = load_with_schematic(dir)?;
+    eda_kicad_engine::export_sch(&design, &model, &work(dir), dir, &project_name(dir), kind, args)
+}
+
+/// Our own checks, the ones KiCad does not have: `{ pcb: { violations,
+/// counts }, schematic: { violations, counts } }`. `pcb` is shaped like a
+/// DRC report (`type`, `description`, `severity`, `items`, `fix`);
+/// `schematic` like an ERC one (`check`, `severity`, `location`, `hint`).
+/// Cheap and in-process, so the studio runs it on every refresh.
+pub fn lint(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+    let (design, model) = load_with_schematic(dir)?;
+    let pcb = eda_lint::check_pcb(&design, &model);
+    let pcb_counts = eda_lint::counts(&pcb);
+    let mut sch_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    let sch_checks = eda_lint::check_schematic(&design, &model);
+    let schematic: Vec<Value> = sch_checks
+        .iter()
+        .filter(|c| !matches!(c.status, eda_model::CheckStatus::Pass))
+        .map(|c| {
+            *sch_counts.entry(c.check.as_str()).or_default() += 1;
+            json!({
+                "check": c.check,
+                "severity": match c.status { eda_model::CheckStatus::Fail => "error", _ => "warning" },
+                "location": c.location,
+                "hint": c.hint,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "pcb": { "violations": pcb, "counts": pcb_counts },
+        "schematic": { "violations": schematic, "counts": sch_counts },
+    }))
+}
+
+// ------------------------------------------------------------- board statistics
+
+/// kicad-cli prints a length as `"26.3850 mm"` and an area as `"664.401 mm²"`
+/// (or `in`/`in²`): the number and its unit, in micrometres / square
+/// micrometres, which is what the studio keeps everything in.
+fn quantity_um(s: &str, area: bool) -> f64 {
+    let s = s.trim();
+    let split = s.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')).unwrap_or(s.len());
+    let n: f64 = s[..split].parse().unwrap_or(0.0);
+    let per_unit = match s[split..].trim().trim_end_matches(['²', '2']) {
+        "in" => 25_400.0,
+        "mil" => 25.4,
+        _ => 1_000.0,
+    };
+    if area { n * per_unit * per_unit } else { n * per_unit }
+}
+
+fn entries(titles: &[(&str, &str)], section: &Value) -> Vec<Value> {
+    titles.iter().map(|(title, key)| json!({ "title": title, "qty": section[*key].as_i64().unwrap_or(0) })).collect()
+}
+
+/// kicad-cli's `pcb export stats` JSON in the Board Statistics dialog's
+/// shape (`BoardStatsReply`): lengths in um, areas in um^2.
+pub(crate) fn stats_reply(j: &Value) -> Value {
+    let b = &j["board"];
+    let len = |k: &str| quantity_um(b[k].as_str().unwrap_or("0"), false);
+    let area = |k: &str| quantity_um(b[k].as_str().unwrap_or("0"), true);
+    let pct = |k: &str| b[k].as_str().unwrap_or("0").trim().trim_end_matches('%').trim().parse::<f64>().unwrap_or(0.0);
+    let comp = |kind: &str| json!({ "front": j["components"][kind]["front"].as_i64().unwrap_or(0), "back": j["components"][kind]["back"].as_i64().unwrap_or(0) });
+    let footprints: Vec<Value> = [("THT:", "tht"), ("SMD:", "smd"), ("Unspecified:", "unspecified")]
+        .iter()
+        .map(|(title, kind)| {
+            let mut c = comp(kind);
+            c["title"] = json!(title);
+            c
+        })
+        .collect();
+    let drills: Vec<Value> = j["drill_holes"]
         .as_array()
-        .map(|is| {
-            is.iter()
-                .map(|it| {
-                    let uuid = it["uuid"].as_str().unwrap_or("");
+        .map(|ds| {
+            ds.iter()
+                .map(|d| {
+                    let layer = |k: &str| d[k].as_str().filter(|l| !l.is_empty() && *l != "N/A").map(str::to_string);
                     json!({
-                        "description": it["description"],
-                        "pos": [to_um(it["pos"]["x"].as_f64().unwrap_or(0.0)), to_um(it["pos"]["y"].as_f64().unwrap_or(0.0))],
-                        "id": map.get(uuid),
-                        "uuid": uuid,
+                        "qty": d["count"].as_i64().unwrap_or(0),
+                        "shape": if d["shape"].as_str().unwrap_or("Round").eq_ignore_ascii_case("round") { "round" } else { "slot" },
+                        "x_um": quantity_um(d["x_size"].as_str().unwrap_or("0"), false),
+                        "y_um": quantity_um(d["y_size"].as_str().unwrap_or("0"), false),
+                        "plated": d["plated"].as_bool().unwrap_or(false),
+                        "is_pad": d["source"].as_str() == Some("Pad"),
+                        "start_layer": layer("start_layer"),
+                        "stop_layer": layer("stop_layer"),
                     })
                 })
                 .collect()
         })
         .unwrap_or_default();
-    json!({ "type": v["type"], "description": v["description"], "severity": v["severity"], "items": items })
+    json!({
+        "ok": true,
+        "board": {
+            "has_outline": b["has_outline"].as_bool().unwrap_or(false),
+            "width_um": len("width"),
+            "height_um": len("height"),
+            "area_um2": area("area"),
+            "front_copper_area_um2": area("front_copper_area"),
+            "back_copper_area_um2": area("back_copper_area"),
+            "front_courtyard_area_um2": area("front_footprint_area"),
+            "back_courtyard_area_um2": area("back_footprint_area"),
+            "front_density_pct": pct("front_component_density"),
+            "back_density_pct": pct("back_component_density"),
+            "min_track_width_um": len("min_track_width"),
+            "min_clearance_um": len("min_track_clearance"),
+            "min_drill_um": len("min_drill_diameter"),
+            "thickness_um": len("board_thickness"),
+        },
+        "footprints": footprints,
+        "pads": entries(&[("Through hole:", "through_hole"), ("SMD:", "smd"), ("Connector:", "connector"), ("NPTH:", "npth")], &j["pads"]),
+        "pad_properties": entries(&[("Castellated:", "castellated"), ("Press-fit:", "press_fit")], &j["pads"]),
+        "vias": entries(&[("Through vias:", "through"), ("Blind vias:", "blind"), ("Buried vias:", "buried"), ("Micro vias:", "micro")], &j["vias"]),
+        "drills": drills,
+    })
 }
 
-/// `kicad-cli pcb drc` on the current design: `{ engine, violations,
-/// unconnected_items, counts }`. Zones are refilled first, as KiCad's own
-/// DRC dialog does.
-pub fn drc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
-    let cli = find_cli().ok_or_else(|| fail("kicad_cli_missing", "kicad-cli", "kicad-cli not found (set EDA_KICAD_CLI or install KiCad 9)"))?;
-    let (pcb, map) = export_board(dir)?;
-    let report = pcb.with_file_name("drc.json");
-    // `--refill-zones` exists only in newer kicad-cli (not 9.0); without it
-    // KiCad checks the fills our exporter wrote (`eda_zone_filler`).
-    let refill = Command::new(&cli).args(["pcb", "drc", "--help"]).output().map(|o| String::from_utf8_lossy(&o.stdout).contains("--refill-zones") || String::from_utf8_lossy(&o.stderr).contains("--refill-zones")).unwrap_or(false);
-    let mut cmd = Command::new(&cli);
-    cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
-    if refill {
-        cmd.arg("--refill-zones");
-    }
-    let out = cmd
-        .arg("-o")
-        .arg(&report)
-        .arg(&pcb)
-        .output()
-        .map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
-    let text = std::fs::read_to_string(&report).map_err(|_| fail("kicad_cli_drc", "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))?;
-    let raw: Value = serde_json::from_str(&text).map_err(|e| fail("kicad_cli_drc", "drc.json", e.to_string()))?;
-    let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
-    let violations: Vec<Value> = raw["violations"].as_array().map(|vs| vs.iter().map(|v| map_violation(v, &map, units_mm)).collect()).unwrap_or_default();
-    let unconnected: Vec<Value> = raw["unconnected_items"].as_array().map(|vs| vs.iter().map(|v| map_violation(v, &map, units_mm)).collect()).unwrap_or_default();
-    let mut counts = std::collections::BTreeMap::<String, usize>::new();
-    for v in violations.iter().chain(unconnected.iter()) {
-        *counts.entry(v["type"].as_str().unwrap_or("?").to_string()).or_default() += 1;
-    }
-    Ok(json!({
-        "engine": format!("kicad-cli {}", cli_version(&cli)),
-        "zones_refilled_by_kicad": refill,
-        "violations": violations,
-        "unconnected_items": unconnected,
-        "counts": counts,
-    }))
-}
-
-/// Export the current schematic as `board.kicad_sch` (+ `board.kicad_pro`).
-fn export_schematic(dir: &Path) -> Result<(PathBuf, std::collections::HashMap<String, String>), Vec<CheckResult>> {
-    let (_, design, model) = board::load(dir)?;
-    let date = chrono_like_today();
-    let (sch, map) = eda_kicad::export_kicad_sch_mapped(&design, &model, &eda_kicad::ExportMeta { date: &date, title: "board" })?;
-    let w = work_dir(dir)?;
-    let path = w.join("board.kicad_sch");
-    std::fs::write(&path, sch).map_err(|e| fail("kicad_engine_write", "board.kicad_sch", e.to_string()))?;
-    std::fs::write(w.join("board.kicad_pro"), eda_kicad::export_kicad_pro(&model)).map_err(|e| fail("kicad_engine_write", "board.kicad_pro", e.to_string()))?;
-    Ok((path, map))
-}
-
-/// `kicad-cli sch erc` on the current schematic, in the studio's ERC shape
-/// (`check`, `severity`, `location` = the first item's id, `hint`) plus the
-/// full mapped `items` list. Violations from every sheet are flattened.
-pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
-    let cli = find_cli().ok_or_else(|| fail("kicad_cli_missing", "kicad-cli", "kicad-cli not found (set EDA_KICAD_CLI or install KiCad)"))?;
-    let (sch, map) = export_schematic(dir)?;
-    let report = sch.with_file_name("erc.json");
-    let out = Command::new(&cli)
-        .args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"])
-        .arg(&report)
-        .arg(&sch)
-        .output()
-        .map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
-    let text = std::fs::read_to_string(&report).map_err(|_| fail("kicad_cli_erc", "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))?;
-    let raw: Value = serde_json::from_str(&text).map_err(|e| fail("kicad_cli_erc", "erc.json", e.to_string()))?;
-    let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
-    let mut counts = std::collections::BTreeMap::<String, usize>::new();
-    let mut violations = Vec::new();
-    for sheet in raw["sheets"].as_array().into_iter().flatten() {
-        for v in sheet["violations"].as_array().into_iter().flatten() {
-            let m = map_violation(v, &map, units_mm);
-            let ty = m["type"].as_str().unwrap_or("?").to_string();
-            *counts.entry(ty.clone()).or_default() += 1;
-            let location = m["items"].as_array().and_then(|is| is.iter().find_map(|i| i["id"].as_str().map(str::to_string))).unwrap_or_default();
-            let item_desc: Vec<&str> = m["items"].as_array().map(|is| is.iter().filter_map(|i| i["description"].as_str()).collect()).unwrap_or_default();
-            violations.push(json!({
-                "check": ty,
-                "severity": m["severity"],
-                "location": location,
-                "hint": format!("{}{}{}", m["description"].as_str().unwrap_or(""), if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
-                "items": m["items"],
-            }));
+/// `POST /api/board_stats` (the Board Statistics dialog): `{exclude_footprints_without_pads,
+/// subtract_holes_from_board_area, subtract_holes_from_copper_areas}` and, to
+/// save the report, `{report: true, units: "mm"|"in"|"mils"}`. kicad-cli computes it
+/// (`pcb export stats`), nothing here measures a board.
+pub fn board_stats(dir: &Path, body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let flag = |k: &str| req.get(k).and_then(Value::as_bool).unwrap_or(false);
+    let want_report = flag("report");
+    let opts = eda_kicad_engine::StatsOptions {
+        exclude_footprints_without_pads: flag("exclude_footprints_without_pads"),
+        subtract_holes_from_board: flag("subtract_holes_from_board_area"),
+        subtract_holes_from_copper: flag("subtract_holes_from_copper_areas"),
+        inches: matches!(req.get("units").and_then(Value::as_str), Some("in") | Some("mils")),
+    };
+    let run = || -> Result<Value, Vec<CheckResult>> {
+        let (meta, design, model) = board::load(dir)?;
+        let text = eda_kicad_engine::stats(&design, &model, &work(dir), opts, true)?;
+        let j: Value = serde_json::from_str(&text).map_err(|e| vec![CheckResult::fail("kicad_cli_stats", "stats.json", e.to_string())])?;
+        let mut reply = stats_reply(&j);
+        if want_report {
+            reply["report"] = Value::String(eda_kicad_engine::stats(&design, &model, &work(dir), opts, false)?);
+            let name = std::path::PathBuf::from(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
+            reply["report_file_name"] = Value::String(format!("{name}_report.txt"));
         }
-    }
-    Ok(json!({ "engine": format!("kicad-cli {}", cli_version(&cli)), "violations": violations, "counts": counts }))
-}
-
-/// kicad-cli `pcb export` subcommands that write a directory of files; every
-/// other kind writes one file named `board.<ext>`.
-const DIR_KINDS: &[&str] = &["gerbers", "drill"];
-
-fn export_ext(kind: &str) -> &'static str {
-    match kind {
-        "pos" => "pos",
-        "step" => "step",
-        "stpz" => "stpz",
-        "brep" => "brep",
-        "xao" => "xao",
-        "glb" => "glb",
-        "stl" => "stl",
-        "ply" => "ply",
-        "u3d" => "u3d",
-        "vrml" => "wrl",
-        "pdf" | "3dpdf" => "pdf",
-        "svg" => "svg",
-        "dxf" => "dxf",
-        "ps" => "ps",
-        "png" => "png",
-        "ipc2581" => "xml",
-        "ipcd356" => "d356",
-        "odb" => "zip",
-        "gencad" => "cad",
-        "idf" => "emn",
-        "bom" => "csv",
-        "stats" | "stackup" => "txt",
-        _ => "out",
-    }
-}
-
-/// `kicad-cli pcb export <kind> [args...]` on the current design, into
-/// `export/kicad/<kind>/`. `args` are passed through (e.g. `--layers
-/// F.Cu,B.Cu`, `--format csv`). Returns the files written this run,
-/// relative to `dir`.
-pub fn export(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
-    if !kind.chars().all(|c| c.is_ascii_alphanumeric()) {
-        return Err(fail("kicad_cli_export", kind, "unknown export kind"));
-    }
-    let cli = find_cli().ok_or_else(|| fail("kicad_cli_missing", "kicad-cli", "kicad-cli not found (set EDA_KICAD_CLI or install KiCad)"))?;
-    let (pcb, _) = export_board(dir)?;
-    let out_dir = dir.join("export").join("kicad").join(kind);
-    std::fs::create_dir_all(&out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
-    let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
-    let target = if DIR_KINDS.contains(&kind) { out_dir.clone() } else { out_dir.join(format!("board.{}", export_ext(kind))) };
-    let mut out_arg = target.to_string_lossy().to_string();
-    if DIR_KINDS.contains(&kind) && !out_arg.ends_with('/') {
-        out_arg.push('/');
-    }
-    let out = Command::new(&cli).args(["pcb", "export", kind]).args(args).arg("-o").arg(&out_arg).arg(&pcb).output().map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
-    let mut files: Vec<String> = std::fs::read_dir(&out_dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started))
-        .map(|e| format!("export/kicad/{kind}/{}", e.file_name().to_string_lossy()))
-        .collect();
-    files.sort();
-    if !out.status.success() || files.is_empty() {
-        return Err(fail("kicad_cli_export", kind, format!("kicad-cli pcb export {kind} failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))));
-    }
-    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(&cli)), "files": files }))
+        Ok(reply)
+    };
+    run().unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }))
 }
 
 #[cfg(test)]
@@ -252,22 +222,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_report_items_back_to_our_ids() {
-        let mut map = std::collections::HashMap::new();
-        map.insert("u-1".to_string(), "trk_1#2".to_string());
-        let v = json!({ "type": "clearance", "description": "x", "severity": "error",
-            "items": [{ "description": "Track", "pos": { "x": 1.5, "y": -2.0 }, "uuid": "u-1" },
-                      { "description": "Zone", "pos": { "x": 0.0, "y": 0.0 }, "uuid": "u-9" }] });
-        let m = map_violation(&v, &map, true);
-        assert_eq!(m["items"][0]["id"], "trk_1#2");
-        assert_eq!(m["items"][0]["pos"], json!([1500, -2000]));
-        assert!(m["items"][1]["id"].is_null());
+    fn kicad_clis_quantities_become_micrometres() {
+        assert_eq!(quantity_um("26.3850 mm", false), 26_385.0);
+        assert_eq!(quantity_um("0.2000 mm", false), 200.0);
+        assert_eq!(quantity_um("664.401 mm\u{b2}", true), 664_401_000.0);
+        assert_eq!(quantity_um("0.5 in", false), 12_700.0);
+        assert_eq!(quantity_um("1 in\u{b2}", true), 25_400.0 * 25_400.0);
     }
 
     #[test]
-    fn today_is_a_date() {
-        let d = chrono_like_today();
-        assert_eq!(d.len(), 10);
-        assert_eq!(&d[4..5], "-");
+    fn the_stats_json_fills_the_dialogs_reply() {
+        let j = json!({
+            "board": { "has_outline": true, "width": "26.3850 mm", "height": "25.1810 mm", "area": "664.401 mm\u{b2}", "front_copper_area": "124.712 mm\u{b2}", "back_copper_area": "32.81 mm\u{b2}",
+                       "front_component_density": "2.18", "back_component_density": "1.00", "min_track_clearance": "0.2030 mm", "min_track_width": "0.2000 mm", "min_drill_diameter": "0.3000 mm",
+                       "board_thickness": "1.6000 mm", "front_footprint_area": "14.498 mm\u{b2}", "back_footprint_area": "7 mm\u{b2}" },
+            "pads": { "through_hole": 4, "smd": 72, "connector": 1, "npth": 2, "castellated": 0, "press_fit": 3 },
+            "vias": { "through": 12, "blind": 0, "buried": 0, "micro": 0 },
+            "components": { "tht": { "front": 1, "back": 2 }, "smd": { "front": 3, "back": 4 }, "unspecified": { "front": 30, "back": 0 } },
+            "drill_holes": [
+                { "count": 12, "shape": "Round", "x_size": "0.3000 mm", "y_size": "0.3000 mm", "plated": true, "source": "Via", "start_layer": "F.Cu", "stop_layer": "B.Cu" },
+                { "count": 2, "shape": "Oblong", "x_size": "1.0000 mm", "y_size": "2.0000 mm", "plated": false, "source": "Pad", "start_layer": "N/A", "stop_layer": "" },
+            ],
+        });
+        let r = stats_reply(&j);
+        assert_eq!(r["ok"], true);
+        assert_eq!(r["board"]["width_um"], 26_385.0);
+        assert_eq!(r["board"]["area_um2"], 664_401_000.0);
+        assert_eq!(r["board"]["front_density_pct"], 2.18);
+        assert_eq!(r["board"]["min_clearance_um"], 203.0);
+        assert_eq!(r["board"]["thickness_um"], 1_600.0);
+        assert_eq!(r["board"]["front_courtyard_area_um2"], 14_498_000.0);
+        assert_eq!(r["footprints"][0], json!({ "title": "THT:", "front": 1, "back": 2 }));
+        assert_eq!(r["footprints"][2]["front"], 30);
+        assert_eq!(r["pads"][0], json!({ "title": "Through hole:", "qty": 4 }));
+        assert_eq!(r["pads"][3], json!({ "title": "NPTH:", "qty": 2 }));
+        assert_eq!(r["pad_properties"][1], json!({ "title": "Press-fit:", "qty": 3 }));
+        assert_eq!(r["vias"][0], json!({ "title": "Through vias:", "qty": 12 }));
+        assert_eq!(r["drills"][0]["is_pad"], false);
+        assert_eq!(r["drills"][0]["start_layer"], "F.Cu");
+        assert_eq!(r["drills"][1]["shape"], "slot");
+        assert_eq!(r["drills"][1]["plated"], false);
+        assert_eq!(r["drills"][1]["is_pad"], true);
+        assert!(r["drills"][1]["start_layer"].is_null() && r["drills"][1]["stop_layer"].is_null(), "N/A and empty layers are null");
     }
 }

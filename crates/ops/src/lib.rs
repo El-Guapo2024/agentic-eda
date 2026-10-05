@@ -869,9 +869,9 @@ pub enum Cmd {
 
     /// `dialog_erc.cpp`'s own "Exclude this violation" (right-click a
     /// finding, or the dialog's own Exclude button): accepts one ERC
-    /// finding by its own `(check, location)` key -- the same shape
-    /// `eda_kicad::erc::Exclusions` already keys on, so `erc_json` can
-    /// build one directly from the persisted list with no translation.
+    /// finding by its own `(check, location)` key -- the key the studio
+    /// applies to kicad-cli's ERC report, so the persisted list needs no
+    /// translation.
     /// Refused if `location` is empty (nothing to key on -- the same
     /// findings `Exclusions` itself can never exclude); adding one
     /// already excluded is a harmless no-op, not an error.
@@ -2037,6 +2037,35 @@ impl<'a> Board<'a> {
         )
     }
 
+    /// Whether `fp`'s pad copper keeps the board's copper-to-edge clearance
+    /// from the outline (its bounding box -- the placer's own notion of the
+    /// board, as everywhere else in this file).
+    ///
+    /// A placement constraint, not a check: whether a layout *violates* KiCad's
+    /// `copper_edge_clearance` is kicad-cli's call (`eda_gates::kicad`), but
+    /// the placer has to know where it may put pads in the first place, and
+    /// cannot ask kicad-cli on every candidate. `place_on_edge` has always
+    /// kept its connectors out of the band the same way.
+    fn pads_clear_of_edge(&self, part: &str, fp: &FootprintInstance, bb: (Um, Um, Um, Um)) -> bool {
+        let clearance = self.model.board.tuning.copper_edge_clearance();
+        let Some(p) = self.model.part(part) else { return true };
+        let Some(pads) = placed_pads(self.model, p, fp) else { return true };
+        pads.iter().all(|pad| {
+            pad.center.x - pad.size.0 / 2 - bb.0 >= clearance
+                && pad.center.y - pad.size.1 / 2 - bb.1 >= clearance
+                && bb.2 - (pad.center.x + pad.size.0 / 2) >= clearance
+                && bb.3 - (pad.center.y + pad.size.1 / 2) >= clearance
+        })
+    }
+
+    /// How many placed footprints have pad copper inside the board-edge
+    /// clearance band ([`Self::pads_clear_of_edge`]). What the placer's own
+    /// repair moves must not make worse.
+    pub(crate) fn parts_in_edge_band(&self) -> usize {
+        let bb = self.board_bbox();
+        self.placement().footprints.iter().filter(|fp| !self.pads_clear_of_edge(&fp.id, fp, bb)).count()
+    }
+
     // --------------------------------------------------------- commands
 
     /// Resolve `Place` to an exact pose.
@@ -2084,6 +2113,9 @@ impl<'a> Board<'a> {
                 if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
                     continue; // a corner on the boundary is not inside it
                 }
+                if !self.pads_clear_of_edge(part, &fp, bb) {
+                    continue;
+                }
                 let Ok(kr) = self.keepout_at(part, &fp) else { continue };
                 if self.collides(part, kr) {
                     continue;
@@ -2128,6 +2160,9 @@ impl<'a> Board<'a> {
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
                 if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
                     continue; // a corner on the boundary is not inside it
+                }
+                if !self.pads_clear_of_edge(part, &fp, bb) {
+                    continue;
                 }
                 let Ok(kr) = self.keepout_at(part, &fp) else { continue };
                 if self.collides(part, kr) {

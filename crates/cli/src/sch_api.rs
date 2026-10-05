@@ -171,14 +171,15 @@ pub fn find(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `GET /api/sch/erc_pin_map`: `{ok, matrix, custom}` -- the matrix ERC
-/// actually runs with (`eda_kicad::resolve_pin_map`) and whether the design
+/// actually runs with (the design's own, else KiCad's default; the project file
+/// carries it to kicad-cli, `eda_kicad::export_kicad_pro_for`) and whether the design
 /// stores its own.
 pub fn erc_pin_map(dir: &Path) -> Value {
     let (_, design, _) = match board::load(dir) {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };
-    let matrix: Vec<Vec<u8>> = eda_kicad::resolve_pin_map(&design).iter().map(|r| r.to_vec()).collect();
+    let matrix: Vec<Vec<u8>> = eda_kicad::custom_erc_pin_map(&design).unwrap_or_else(eda_model::ir::ErcPinMap::default_matrix);
     let custom = design.schematic.as_ref().is_some_and(|s| s.erc_pin_map.is_some());
     json!({ "ok": true, "matrix": matrix, "custom": custom })
 }

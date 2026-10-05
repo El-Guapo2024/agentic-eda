@@ -1,46 +1,50 @@
 // pcbnew.DRCTool.runDRC ("Design Rules Checker", Inspect menu). Read
 // pcbnew/dialogs/dialog_drc_base.cpp for the real dialog's shape: a
-// top options row (refill zones / test schematic parity + a settings
-// menu), a notebook with "Violations (%s)" / "Unconnected Items (%s)" /
-// "Schematic Parity (%s)" / "Ignored Tests (%s)" tabs, a "Show: All /
-// Errors [n] / Warnings [n] / Exclusions [n]" filter row with a
-// Save... button, then Delete Marker / Delete All Markers / OK-Cancel.
+// top options row (refill zones / test schematic parity), a notebook with
+// "Violations (%s)" / "Unconnected Items (%s)" / "Schematic Parity (%s)" /
+// "Ignored Tests (%s)" tabs, a "Show: All / Errors [n] / Warnings [n] /
+// Exclusions [n]" filter row, then OK-Cancel.
 //
-// Violations now come from GET /api/drc -- crates/drc, the ported real
-// KiCad DRC engine (clearance/courtyard/silk/track-width/placement-
-// quality providers), not a client-side read of this app's own
-// placement/routing gate checks the way this dialog used to work (see
-// git history for that version). KiCad's own `type` names (ErrorType's
-// snake_case, matching kicad-cli's own DRC report) are shown directly as
-// each violation's category rather than this app inventing its own.
+// The violations ARE kicad-cli's: GET /api/drc exports the current design
+// to a derived .kicad_pcb, runs `kicad-cli pcb drc` on it, and points each
+// reported item back at our own id (crates/cli/src/kicad_engine.rs). There
+// is no other DRC engine and no engine switch. It takes seconds (about 4 s
+// on a 30-part board), so it runs on demand -- when the dialog opens on a
+// board kicad-cli has not judged yet, and on "Run DRC" -- with a visible
+// running state, never on every change. KiCad's own `type` names are shown
+// directly as each violation's category.
 //
-// "Unconnected Items", "Schematic Parity" and "Ignored Tests" are real
-// KiCad tabs with nothing behind them yet -- kept as clickable, honestly
-// -empty tabs rather than omitted, matching how a disabled menu item
-// still shows with "(not ported yet)" instead of vanishing. Exclusions/
-// Save/Delete Marker have no backing concept (nothing persists a marker
-// to exclude or delete) and are left out rather than wired to a no-op.
-import { useMemo, useState } from "react";
-import { fetchDrc } from "../api/client";
+// "Lint" is a tab of its own: crates/lint, our own checks that KiCad does
+// not have (placement quality, net-class track width). In-process and
+// cheap, so it follows the board live while the dialog is open; it never
+// mixes into kicad-cli's lists.
+//
+// "Schematic Parity" and "Ignored Tests" are real KiCad tabs with nothing
+// behind them yet -- kept as clickable, honestly-empty tabs rather than
+// omitted. Exclusions/Save/Delete Marker have no backing concept and are left
+// out rather than wired to a no-op.
+import { useEffect, useMemo, useState } from "react";
 import type { DrcViolation } from "../api/types";
-import { useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
 
-type DrcTab = "violations" | "unconnected" | "parity" | "ignored";
+type DrcTab = "violations" | "unconnected" | "lint" | "parity" | "ignored";
 
 const STUB_TABS: Array<{ id: DrcTab; label: string }> = [
   { id: "parity", label: "Schematic Parity" },
   { id: "ignored", label: "Ignored Tests" },
 ];
 
-/** `<ref>` or `<ref>.<pad>` (crates/drc's `DrcRefItem.id` convention, see types.ts) -> the bare part reference, for SET_HOT/SET_SELECTION (a track/via/zone id has no "." and passes through as-is -- this app's canvas selection already accepts those ids directly, same as a part ref). */
+/** Our id for a violation's item -> the id the canvas selects by: a pad (`REF.PAD`) selects its part, a track segment (`id#n`) its track; the Edge.Cuts outline (`outline`) is nothing to select. */
 function baseRef(id: string): string {
-  return id.split(".")[0]!;
+  return id.split("#")[0]!.split(".")[0]!;
 }
 
 export function DrcDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
+  const api = useStudioApi();
+  const open = state.drcDialogOpen;
   const [tab, setTab] = useState<DrcTab>("violations");
   const [showErrors, setShowErrors] = useState(true);
   const [showWarnings, setShowWarnings] = useState(true);
@@ -50,23 +54,20 @@ export function DrcDialog() {
   const warnings = useMemo(() => violations.filter((v) => v.severity === "warning"), [violations]);
   const visible = violations.filter((v) => (v.severity === "error" ? showErrors : showWarnings));
   const unconnected = state.drc?.unconnected_items ?? [];
-  const [running, setRunning] = useState(false);
-  const [runError, setRunError] = useState<string | null>(null);
-  // "Run DRC" (dialog_drc.cpp OnRunDRCClick) -- the kicad-cli engine runs on
-  // demand; the live engine re-runs on its own whenever the board changes.
-  const runDrc = async () => {
-    setRunning(true);
-    setRunError(null);
-    try {
-      dispatch({ type: "DRC_OK", drc: await fetchDrc(state.drcEngine) });
-    } catch (e) {
-      setRunError(String(e));
-    } finally {
-      setRunning(false);
-    }
-  };
+  const lint = state.lint?.pcb.violations ?? [];
+  const running = state.drcRunning;
+  const stale = state.drc !== null && !running && state.drcVersion !== state.version;
 
-  if (!state.drcDialogOpen) return null;
+  // Opening the dialog on a board kicad-cli has not judged yet runs it (the
+  // running state below shows meanwhile); a board it already judged keeps its
+  // report until "Run DRC". `version === null` re-evaluates this once the
+  // first /api/version answer is in.
+  useEffect(() => {
+    if (open && state.version !== null && !state.drcRunning && (state.drc === null || state.drcVersion !== state.version)) void api.runDrc();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, state.version === null]);
+
+  if (!open) return null;
   const close = () => dispatch({ type: "SET_DRC_OPEN", open: false });
 
   /**
@@ -78,9 +79,9 @@ export function DrcDialog() {
    * element, this just measures the one already on screen, the same
    * class name SchematicView.tsx's own view-fit measures by).
    */
-  const jumpTo = (v: DrcViolation, index: number) => {
-    dispatch({ type: "SET_DRC_SELECTED", index });
-    const refs = v.items.flatMap((it) => (it.id ? [baseRef(it.id)] : []));
+  const jumpTo = (v: DrcViolation, index: number, lintRow: boolean) => {
+    dispatch(lintRow ? { type: "SET_DRC_LINT_SELECTED", index } : { type: "SET_DRC_SELECTED", index });
+    const refs = v.items.flatMap((it) => (it.id && it.id !== "outline" ? [baseRef(it.id)] : []));
     dispatch({ type: "SET_SELECTION", refs });
     dispatch({ type: "SET_HOT", refs });
 
@@ -98,6 +99,18 @@ export function DrcDialog() {
     dispatch({ type: "SET_TAB", tab: "pcb" });
   };
 
+  const row = (v: DrcViolation, index: number, lintRow: boolean, selected: boolean) => (
+    <div key={index} className={`problem-row${v.severity === "warning" ? " warn" : ""}${lintRow ? " lint" : ""}${selected ? " selected" : ""}`} onClick={() => jumpTo(v, index, lintRow)}>
+      <b>{v.type.replace(/_/g, " ")}</b> <span>{v.description}</span>
+      {v.items.length > 0 && <small>{v.items.map((it) => it.description).join(", ")}</small>}
+      {v.fix && (
+        <small style={{ display: "block", color: "var(--chrome-accent, #4ea1ff)" }}>
+          Fix: move {v.fix.mover} toward {v.fix.toward} ({v.fix.suggested_command})
+        </small>
+      )}
+    </div>
+  );
+
   return (
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 620 }} onClick={(e) => e.stopPropagation()}>
@@ -110,23 +123,25 @@ export function DrcDialog() {
         </div>
         <div className="dialog-body" style={{ paddingTop: 10 }}>
           <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, fontSize: 11 }}>
-            <span style={{ color: "var(--chrome-text-dim)" }}>Engine:</span>
-            <select value={state.drcEngine} onChange={(e) => dispatch({ type: "SET_DRC_ENGINE", engine: e.target.value as "eda" | "kicad" })}>
-              <option value="eda">Live (re-runs on every change)</option>
-              <option value="kicad">KiCad (kicad-cli)</option>
-            </select>
-            <button onClick={runDrc} disabled={running}>
+            <button onClick={() => void api.runDrc()} disabled={running}>
               {running ? "Running…" : "Run DRC"}
             </button>
             {state.drc?.engine && <span style={{ color: "var(--chrome-text-dim)" }}>{state.drc.engine}</span>}
-            {runError && <span style={{ color: "var(--chrome-danger)" }}>{runError}</span>}
+            {stale && <span style={{ color: "var(--chrome-warn)" }}>The board changed since this run -- Run DRC again to refresh.</span>}
+            {state.drcError && <span style={{ color: "var(--chrome-danger)" }}>{state.drcError}</span>}
           </div>
-          <div style={{ display: "flex", gap: 18, marginBottom: 10, opacity: 0.45 }}>
-            <label className="toggle">
-              <input type="checkbox" checked={state.drcEngine === "eda" || state.drc?.zones_refilled_by_kicad !== false} readOnly disabled />
+          {running && (
+            <div className="run-banner" role="status">
+              <span className="bar" />
+              <span>kicad-cli is checking the board (a few seconds). Edits wait until it is done.</span>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 18, marginBottom: 10 }}>
+            <label className="toggle" title="KiCad's own refill. Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills, so it judges the fills shown on screen instead.">
+              <input type="checkbox" checked={state.drcRefillZones} onChange={(e) => dispatch({ type: "SET_DRC_REFILL", refill: e.target.checked })} />
               Refill all zones before performing DRC
             </label>
-            <label className="toggle">
+            <label className="toggle" style={{ opacity: 0.45 }}>
               <input type="checkbox" readOnly disabled />
               Test for parity between PCB and schematic
             </label>
@@ -139,6 +154,9 @@ export function DrcDialog() {
             <div className={`dock-tab${tab === "unconnected" ? " active" : ""}`} onClick={() => setTab("unconnected")}>
               Unconnected Items ({unconnected.length})
             </div>
+            <div className={`dock-tab${tab === "lint" ? " active" : ""}`} onClick={() => setTab("lint")} title="Our own checks, the ones KiCad does not have">
+              Lint ({lint.length})
+            </div>
             {STUB_TABS.map((t) => (
               <div key={t.id} className={`dock-tab${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>
                 {t.label}
@@ -146,52 +164,58 @@ export function DrcDialog() {
             ))}
           </div>
 
-          {tab === "unconnected" &&
-            (unconnected.length === 0 ? (
-              <div className="panel-empty">{state.drcEngine === "kicad" ? "No unconnected items." : "Unconnected items come from the KiCad engine (Run DRC with KiCad)."}</div>
-            ) : (
-              unconnected.map((v, i) => (
-                <div key={i} className="problem-row" onClick={() => jumpTo(v, -1)}>
-                  <b>{v.type.replace(/_/g, " ")}</b> <span>{v.description}</span>
-                  {v.items.length > 0 && <small>{v.items.map((it) => it.description).join(", ")}</small>}
-                </div>
-              ))
-            ))}
-          {tab !== "violations" && tab !== "unconnected" && <div className="panel-empty">Not available: no backend data for this tab yet.</div>}
-
-          {tab === "violations" && (
-            <>
-              <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, fontSize: 11 }}>
-                <span style={{ color: "var(--chrome-text-dim)" }}>Show:</span>
-                <label className="toggle">
-                  <input type="checkbox" checked={showErrors} onChange={(e) => setShowErrors(e.target.checked)} />
-                  Errors ({errors.length})
-                </label>
-                <label className="toggle">
-                  <input type="checkbox" checked={showWarnings} onChange={(e) => setShowWarnings(e.target.checked)} />
-                  Warnings ({warnings.length})
-                </label>
-              </div>
-
-              {!state.drc && <div className="panel-empty">Running DRC…</div>}
-              {state.drc && violations.length === 0 && <div className="panel-empty">No violations.</div>}
-              {state.drc && violations.length > 0 && visible.length === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
-              {visible.map((v) => {
-                const index = violations.indexOf(v);
-                return (
-                  <div key={index} className={`problem-row${v.severity === "warning" ? " warn" : ""}`} onClick={() => jumpTo(v, index)}>
+          <div style={{ opacity: running ? 0.5 : 1 }}>
+            {tab === "unconnected" &&
+              (!state.drc ? (
+                <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to list unconnected items."}</div>
+              ) : unconnected.length === 0 ? (
+                <div className="panel-empty">No unconnected items.</div>
+              ) : (
+                unconnected.map((v, i) => (
+                  <div key={i} className="problem-row" onClick={() => jumpTo(v, -1, false)}>
                     <b>{v.type.replace(/_/g, " ")}</b> <span>{v.description}</span>
                     {v.items.length > 0 && <small>{v.items.map((it) => it.description).join(", ")}</small>}
-                    {v.fix && (
-                      <small style={{ display: "block", color: "var(--chrome-accent, #4ea1ff)" }}>
-                        Fix: move {v.fix.mover} toward {v.fix.toward} ({v.fix.suggested_command})
-                      </small>
-                    )}
                   </div>
-                );
-              })}
-            </>
-          )}
+                ))
+              ))}
+
+            {tab === "lint" && (
+              <>
+                <div className="panel-empty" style={{ textAlign: "left", marginBottom: 6 }}>
+                  Our own checks (placement quality, net-class track width). KiCad has no equivalent; its rules are in Violations.
+                </div>
+                {!state.lint && <div className="panel-empty">Loading…</div>}
+                {state.lint && lint.length === 0 && <div className="panel-empty">No findings.</div>}
+                {lint.map((v, i) => row(v, i, true, state.drcLintSelected === i))}
+              </>
+            )}
+
+            {(tab === "parity" || tab === "ignored") && <div className="panel-empty">Not available: no backend data for this tab yet.</div>}
+
+            {tab === "violations" && (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, fontSize: 11 }}>
+                  <span style={{ color: "var(--chrome-text-dim)" }}>Show:</span>
+                  <label className="toggle">
+                    <input type="checkbox" checked={showErrors} onChange={(e) => setShowErrors(e.target.checked)} />
+                    Errors ({errors.length})
+                  </label>
+                  <label className="toggle">
+                    <input type="checkbox" checked={showWarnings} onChange={(e) => setShowWarnings(e.target.checked)} />
+                    Warnings ({warnings.length})
+                  </label>
+                </div>
+
+                {!state.drc && <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to check the board."}</div>}
+                {state.drc && violations.length === 0 && <div className="panel-empty">No violations.</div>}
+                {state.drc && violations.length > 0 && visible.length === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
+                {visible.map((v) => {
+                  const index = violations.indexOf(v);
+                  return row(v, index, false, state.drcSelected === index);
+                })}
+              </>
+            )}
+          </div>
         </div>
         <div className="dialog-footer">
           <button className="primary" onClick={close}>

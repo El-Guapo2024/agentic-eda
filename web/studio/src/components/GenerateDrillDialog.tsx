@@ -1,10 +1,9 @@
 // dialog_gendrill.cpp ("Generate Drill Files", File > Fabrication Outputs
 // > Drill Files...). The real dialog's map/report/units/zeros-format
-// options aren't all wired here yet -- eda_fab::drill (KiCad's own
-// EXCELLON_WRITER, ported) always writes millimetres in KiCad's "decimal"
-// zeros format, its own default and the one `eda fab drill`/kicad-cli
-// comparator both run against; the one option that changes the *file
-// set* -- merged vs. separate PTH/NPTH files -- is exposed.
+// options aren't all wired here yet -- the dialog POSTs to /api/fab/drill
+// (crates/cli/src/fab_api.rs), which runs `kicad-cli pcb export drill` with
+// its defaults (Excellon, millimetres, "decimal" zeros); the one option that
+// changes the *file set* -- merged vs. separate PTH/NPTH files -- is exposed.
 import { useState } from "react";
 import { postFabDrill } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
@@ -43,7 +42,7 @@ export function GenerateDrillDialog() {
             </label>
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
-            Output directory: <code>export/</code>. Plated and non-plated holes merge into one <code>.drl</code> file unless separated above -- same default as
+            Output directory: <code>export/kicad/drill/</code>. Plated and non-plated holes merge into one <code>.drl</code> file unless separated above -- written by
             `kicad-cli pcb export drill`.
           </div>
           {result && (

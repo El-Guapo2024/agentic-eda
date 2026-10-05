@@ -151,11 +151,9 @@ fn run_case(path: &Path, seed: u64) -> RunOutcome {
             }
         }
     };
-    // One engine: `check_erc` is both the ported KiCad ERC's electrical
-    // checks and this generator's own auto-layout readability checks,
-    // folded in as additional tests -- see `stage_schematic` in
-    // `crates/cli`, which calls the same one function.
-    let sch_checks = check_erc(&design, &model);
+    // The generator's own readability checks (`eda-lint`); electrical rules
+    // are kicad-cli's ERC, which the corpus does not spawn.
+    let sch_checks = check_schematic(&design, &model);
     let crossing_hint = sch_checks
         .iter()
         .find(|c| c.check == "schematic_wire_crossing_count")

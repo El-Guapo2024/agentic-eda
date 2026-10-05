@@ -856,8 +856,8 @@ fn power_symbol_extent(ps: &eda_model::ir::PowerSymbol) -> geometry::TextBox {
 /// attachment point — *not* the stub tip, so this must be compared against
 /// the same on-box point, not the stub tip, when matching a label to a pin)
 /// or a power symbol's own point (its pin sits exactly there, the same
-/// coincident-point convention `eda_kicad`'s writer and `check_erc` both
-/// use — see `eda_engine::derive_schematic`'s power-symbol placement).
+/// coincident-point convention `eda_kicad`'s writer and the readability
+/// checks both use — see `eda_engine::derive_schematic`'s power-symbol placement).
 struct Connected {
     wired_pins: std::collections::HashSet<String>,
     label_points: std::collections::BTreeSet<Point>,
