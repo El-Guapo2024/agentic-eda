@@ -53,6 +53,16 @@ pub enum SchCmd {
         #[serde(default)]
         at: Option<Point>,
     },
+    /// Change Symbol (`DIALOG_CHANGE_SYMBOLS::processSymbols`, `MODE::CHANGE`): every placed unit of the reference `id`
+    /// takes the library symbol `lib_id`; position, orientation, unit and fields stay (fields are the caller's to reset).
+    /// Refused when no library symbol has that id, or when the new symbol has fewer units than one of the placed ones
+    /// ("new symbol has too few units"), or when the reference already uses it.
+    ChangeSymbol { id: String, lib_id: String },
+    /// Update Symbol(s) from Library (`DIALOG_CHANGE_SYMBOLS`, `MODE::UPDATE`): the symbols placed with these library ids start
+    /// resolving from the project's edited library symbol of that id (`LibrarySymbol::published`, what the Symbol Editor's
+    /// "Update Symbol in Schematic" sets). Library ids with no edited symbol, or one already published, are skipped; refused when
+    /// none was left to update.
+    UpdateLibrarySymbols { lib_ids: Vec<String> },
 }
 
 impl SchCmd {
@@ -61,7 +71,8 @@ impl SchCmd {
         match self {
             SchCmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddGraphic { .. } => vec!["graphic"],
-            SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } => vec![id.as_str()],
+            SchCmd::UpdateLibrarySymbols { lib_ids } => lib_ids.iter().map(String::as_str).collect(),
+            SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
             SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
         }
     }
@@ -77,6 +88,8 @@ impl SchCmd {
             SchCmd::AddSheetPin { sheet, name, .. } => format!("schematic sheet-pin add {sheet} {name}"),
             SchCmd::DeleteSheetPin { id } => format!("schematic sheet-pin delete {id}"),
             SchCmd::EditSheetPin { id, .. } => format!("schematic sheet-pin edit {id}"),
+            SchCmd::ChangeSymbol { id, lib_id } => format!("schematic change-symbol {id} {lib_id}"),
+            SchCmd::UpdateLibrarySymbols { lib_ids } => format!("schematic update-symbols {}", lib_ids.join(" ")),
         }
     }
 
@@ -86,6 +99,7 @@ impl SchCmd {
             SchCmd::SetLocked { .. } => "schematic-lock",
             SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } => "schematic-graphic",
             SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
+            SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } => "schematic-symbol",
         }
     }
 }
@@ -102,7 +116,57 @@ impl<'a> Board<'a> {
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
             SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
             SchCmd::EditSheetPin { id, name, shape, at } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at),
+            SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
+            SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
         }
+    }
+
+    fn update_library_symbols(&mut self, lib_ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        let mut updated = 0usize;
+        if let Some(lib) = self.design.symbol_library.as_mut() {
+            for sym in lib.symbols.iter_mut().filter(|s| lib_ids.contains(&s.lib_id) && !s.published) {
+                sym.published = true;
+                updated += 1;
+            }
+        }
+        if updated == 0 {
+            return Err(vec![CheckResult::fail("ops_nothing_to_update", lib_ids.first().map(String::as_str).unwrap_or("symbols"), "no edited library symbol is waiting to be updated from")]);
+        }
+        Ok(())
+    }
+
+    /// How many units the library symbol `lib_id` has: the project's own (edited) symbol first, then the libraries and builtin table
+    /// `ConstraintModel::symbol_of` resolves. `None` when no library symbol has that id.
+    fn library_unit_count(&self, lib_id: &str) -> Option<u32> {
+        if let Some(sym) = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)) {
+            return Some(sym.unit_count.max(1));
+        }
+        self.model.symbol_of(lib_id).map(|s| s.unit_count.max(1))
+    }
+
+    fn change_symbol(&mut self, id: &str, lib_id: &str) -> Result<(), Vec<CheckResult>> {
+        let lib_id = lib_id.trim();
+        if lib_id.is_empty() {
+            return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a symbol needs a library id")]);
+        }
+        let Some(unit_count) = self.library_unit_count(lib_id) else {
+            return Err(vec![CheckResult::fail("ops_unknown_lib_symbol", lib_id, "symbol not found")]);
+        };
+        let sch = self.schematic_mut()?;
+        let placed: Vec<usize> = sch.symbols.iter().enumerate().filter(|(_, s)| s.id == id).map(|(i, _)| i).collect();
+        if placed.is_empty() {
+            return Err(vec![CheckResult::fail("ops_unknown_symbol", id, "no symbol with this reference on the sheet")]);
+        }
+        if let Some(&i) = placed.iter().find(|&&i| sch.symbols[i].unit > unit_count) {
+            return Err(vec![CheckResult::fail("ops_too_few_units", id, format!("new symbol has too few units: unit {} is placed but {lib_id} has {unit_count}", sch.symbols[i].unit))]);
+        }
+        if placed.iter().all(|&i| sch.symbols[i].lib_id == lib_id) {
+            return Err(vec![CheckResult::fail("ops_symbol_unchanged", id, format!("the symbol already uses {lib_id}"))]);
+        }
+        for i in placed {
+            sch.symbols[i].lib_id = lib_id.to_string();
+        }
+        Ok(())
     }
 }
 
@@ -501,6 +565,41 @@ mod tests {
         b.apply(&Cmd::sch(SchCmd::DeleteSheetPin { id: moved.id.clone() })).unwrap();
         assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].pins.len(), 1);
         assert_eq!(b.apply(&Cmd::sch(SchCmd::DeleteSheetPin { id: moved.id })).unwrap_err()[0].check, "ops_unknown_sheet_pin");
+    }
+
+    #[test]
+    fn change_symbol_swaps_the_library_symbol_of_every_unit_and_refuses_what_cannot_be() {
+        use eda_model::ir::SymbolInstance;
+        let mut sch = empty_sheet();
+        let mk = |id: &str, lib: &str, unit: u32| SymbolInstance { id: id.into(), at: p(0, 0), rot: 0, mirrored: false, mirror_y: false, lib_id: lib.into(), unit, value: "10k".into(), footprint: String::new(), datasheet: String::new() };
+        sch.symbols.push(mk("R1", "Device:R", 1));
+        let model = ConstraintModel::default();
+        let mut b = Board::new(design_with_schematic(sch), &model, 100, 300);
+        b.apply(&Cmd::sch(SchCmd::ChangeSymbol { id: "R1".into(), lib_id: "Device:C".into() })).unwrap();
+        let s = &b.design().schematic.as_ref().unwrap().symbols[0];
+        assert_eq!((s.lib_id.as_str(), s.value.as_str(), s.unit), ("Device:C", "10k", 1), "the fields stay; resetting them is the caller's");
+        let check = |b: &mut Board, id: &str, lib: &str| b.apply(&Cmd::sch(SchCmd::ChangeSymbol { id: id.into(), lib_id: lib.into() })).unwrap_err()[0].check.clone();
+        assert_eq!(check(&mut b, "R1", "Device:C"), "ops_symbol_unchanged");
+        assert_eq!(check(&mut b, "R1", "nowhere:X"), "ops_unknown_lib_symbol");
+        assert_eq!(check(&mut b, "R1", ""), "ops_bad_symbol");
+        assert_eq!(check(&mut b, "R9", "Device:R"), "ops_unknown_symbol");
+    }
+
+    #[test]
+    fn update_library_symbols_publishes_edited_symbols_once() {
+        use eda_model::ir::{LibrarySymbol, SymbolLibrarySection};
+        let mut design = design_with_schematic(empty_sheet());
+        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![LibrarySymbol::new_empty("Device:R"), LibrarySymbol::new_empty("Device:C")] });
+        let model = ConstraintModel::default();
+        let mut b = Board::new(design, &model, 100, 300);
+        let published = |b: &Board, id: &str| b.design().symbol_library.as_ref().unwrap().by_lib_id(id).unwrap().published;
+        b.apply(&Cmd::sch(SchCmd::UpdateLibrarySymbols { lib_ids: vec!["Device:R".into(), "Device:Nowhere".into()] })).unwrap();
+        assert!(published(&b, "Device:R") && !published(&b, "Device:C"));
+        // Already published, unknown and empty requests have nothing to update.
+        let err = |b: &mut Board, ids: Vec<&str>| b.apply(&Cmd::sch(SchCmd::UpdateLibrarySymbols { lib_ids: ids.into_iter().map(String::from).collect() })).unwrap_err()[0].check.clone();
+        assert_eq!(err(&mut b, vec!["Device:R"]), "ops_nothing_to_update");
+        assert_eq!(err(&mut b, vec!["Device:Nowhere"]), "ops_nothing_to_update");
+        assert_eq!(err(&mut b, vec![]), "ops_nothing_to_update");
     }
 
     #[test]
