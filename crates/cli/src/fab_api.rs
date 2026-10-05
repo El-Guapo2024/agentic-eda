@@ -1,159 +1,153 @@
-//! `/api/fab/*`: the backend for the studio's Plot, Generate Drill Files
-//! and Footprint Position Files dialogs (`web/studio/src/components/
+//! `/api/fab/*`: the backend for the studio's Plot, Generate Drill Files and
+//! Footprint Position Files dialogs (`web/studio/src/components/
 //! PlotDialog.tsx`, `GenerateDrillDialog.tsx`, `FootprintPositionDialog.tsx`).
 //!
-//! Each endpoint takes the same board directory every other `/api/*`
-//! route does, runs the matching `eda_fab` writer (ported from KiCad --
-//! see `crates/fab/src/gerber.rs`/`drill.rs`/`position.rs`'s own doc
-//! comments), writes the result into `<dir>/export/`, and returns the
-//! paths written (relative to `dir`, so the dialog can show them next to
-//! "open folder"). `crate::fab_cmd` is the CLI's own `eda fab ...` verb on
-//! the same writers; this module exists only to translate a JSON POST
-//! body into the same option structs `fab_cmd` builds from flags, so a
-//! studio dialog and the CLI produce identical output for identical
-//! input.
+//! Gerbers, drill files, position files and BOMs are kicad-cli's job
+//! (docs/ARCHITECTURE.md, "Engines"): each dialog's JSON becomes kicad-cli
+//! arguments (the `*_args` builders below, shared with the CLI's own `eda fab
+//! ...` verbs, so a dialog and the CLI produce identical output for
+//! identical input) and runs through `crate::kicad_engine`. Nothing here
+//! writes a Gerber, a drill file or a placement file itself. Output lands
+//! in `<dir>/export/kicad/<kind>/`; the reply names the files, relative to
+//! `dir`, so the dialog can show them. `POST /api/fab/kicad` is the same
+//! engine with raw arguments.
 
 use crate::board;
+use crate::kicad_engine;
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn write_all(dir: &Path, files: impl IntoIterator<Item = (String, Vec<u8>)>) -> Result<Vec<String>, String> {
-    let out_dir = dir.join("export");
-    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-    let mut written = Vec::new();
-    for (name, bytes) in files {
-        let path = out_dir.join(&name);
-        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
-        written.push(format!("export/{name}"));
-    }
-    Ok(written)
-}
-
-fn title_of(dir: &Path) -> Result<String, String> {
-    let (meta, _, _) = board::load(dir).map_err(|e| board::reasons(&e))?;
-    Ok(PathBuf::from(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string())
-}
-
-fn err(message: impl Into<String>) -> Value {
+pub(crate) fn err(message: impl Into<String>) -> Value {
     json!({ "ok": false, "message": message.into() })
 }
 
-fn ok(files: Vec<String>) -> Value {
-    json!({ "ok": true, "files": files })
+/// An engine result as the dialogs' reply: `{ ok, files, engine }` or
+/// `{ ok: false, message }`.
+pub(crate) fn reply(r: Result<Value, Vec<eda_model::CheckResult>>) -> Value {
+    r.unwrap_or_else(|e| err(board::reasons(&e)))
 }
 
-/// `POST /api/fab/gerbers`: `{"layers": ["F.Cu", "B.Cu", ...]}` (omitted
-/// or empty = [`eda_fab::gerber::default_jlc_layers`], the Plot dialog's
-/// own default checklist).
+/// kicad-cli's names for the layers a fab house wants by default: every
+/// copper layer, mask, paste, silkscreen, the board outline (what JLCPCB's
+/// own upload instructions ask for).
+pub(crate) fn default_gerber_layers(copper: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = copper.to_vec();
+    v.extend(["F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "Edge.Cuts"].map(String::from));
+    v
+}
+
+/// `kicad-cli pcb export gerbers --layers ...`.
+pub(crate) fn gerber_args(layers: &[String]) -> Vec<String> {
+    vec!["--layers".into(), layers.join(",")]
+}
+
+/// `kicad-cli pcb export drill` (Excellon).
+pub(crate) fn drill_args(separate_th: bool, report: bool) -> Vec<String> {
+    let mut a: Vec<String> = vec!["--format".into(), "excellon".into()];
+    if separate_th {
+        a.push("--excellon-separate-th".into());
+    }
+    if report {
+        a.push("--generate-report".into());
+    }
+    a
+}
+
+/// `kicad-cli pcb export pos`.
+pub(crate) fn pos_args(format: &str, side: &str, units_mm: bool, smd_only: bool, exclude_fp_th: bool) -> Vec<String> {
+    let mut a: Vec<String> = vec!["--format".into(), if format == "ascii" { "ascii" } else { "csv" }.into()];
+    a.extend(["--side".into(), match side { "front" => "front", "back" => "back", _ => "both" }.into()]);
+    a.extend(["--units".into(), if units_mm { "mm" } else { "in" }.into()]);
+    if smd_only {
+        a.push("--smd-only".into());
+    }
+    if exclude_fp_th {
+        a.push("--exclude-fp-th".into());
+    }
+    a
+}
+
+/// `kicad-cli sch export bom` in JLCPCB's column layout (Comment,
+/// Designator, Footprint, LCSC Part #), grouped by what makes two parts
+/// interchangeable.
+pub(crate) fn bom_args() -> Vec<String> {
+    ["--fields", "Value,Reference,Footprint,LCSC", "--labels", "Comment,Designator,Footprint,LCSC Part #", "--group-by", "Value,Footprint,LCSC", "--sort-field", "Reference"].map(String::from).to_vec()
+}
+
+fn copper_layers(dir: &Path) -> Result<Vec<String>, String> {
+    let (_, _, model) = board::load(dir).map_err(|e| board::reasons(&e))?;
+    Ok(model.board.layers.clone())
+}
+
+/// `POST /api/fab/gerbers`: `{"layers": ["F.Cu", "B.Cu", ...]}` (omitted or
+/// empty = [`default_gerber_layers`], the Plot dialog's own default
+/// checklist).
 pub fn gerbers(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let (_, design, model) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
-    };
-    let title = match title_of(dir) {
-        Ok(t) => t,
-        Err(e) => return err(e),
-    };
-    let meta = eda_fab::gerber::FabMeta { title: title.clone(), date: eda::now_rfc3339(), rev: "rev?".into(), generator_version: env!("CARGO_PKG_VERSION").into() };
-    let requested: Vec<String> = req.get("layers").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    let layers = if requested.is_empty() {
-        eda_fab::gerber::default_jlc_layers(model.board.layers.len().max(2))
-    } else {
-        match crate::fab_cmd::parse_layers(&requested.join(","), &model.board.layers) {
-            Ok(l) => l,
-            Err(e) => return err(board::reasons(&e)),
-        }
-    };
-    let files = match eda_fab::gerber::plot_all(&design, &model, &meta, &layers) {
-        Ok(f) => f,
-        Err(e) => return err(board::reasons(&e)),
-    };
-    let job_bytes = eda_fab::job::write_job(&design, &model, &meta, &files).into_bytes();
-    let mut out: Vec<(String, Vec<u8>)> = files.into_iter().map(|f| (f.filename, f.content.into_bytes())).collect();
-    out.push((format!("{title}-job.gbrjob"), job_bytes));
-    match write_all(dir, out) {
-        Ok(written) => ok(written),
-        Err(e) => err(e),
+    let mut layers: Vec<String> = req.get("layers").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    if layers.is_empty() {
+        layers = match copper_layers(dir) {
+            Ok(c) => default_gerber_layers(&c),
+            Err(e) => return err(e),
+        };
     }
+    reply(kicad_engine::export(dir, "gerbers", &gerber_args(&layers)))
 }
 
 /// `POST /api/fab/drill`: `{"separate_th": bool}`.
 pub fn drill(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let (_, design, model) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
-    };
-    let title = match title_of(dir) {
-        Ok(t) => t,
-        Err(e) => return err(e),
-    };
-    let meta = eda_fab::drill::DrillMeta { title, date: eda::now_rfc3339(), generator_version: env!("CARGO_PKG_VERSION").into() };
-    let opts = eda_fab::drill::DrillOptions { separate_th: req.get("separate_th").and_then(Value::as_bool).unwrap_or(false) };
-    let files = match eda_fab::drill::write_drill(&design, &model, &meta, opts) {
-        Ok(f) => f,
-        Err(e) => return err(board::reasons(&e)),
-    };
-    match write_all(dir, files.into_iter().map(|f| (f.filename, f.content.into_bytes()))) {
-        Ok(written) => ok(written),
-        Err(e) => err(e),
-    }
+    reply(kicad_engine::export(dir, "drill", &drill_args(req.get("separate_th").and_then(Value::as_bool).unwrap_or(false), false)))
 }
 
 /// `POST /api/fab/pos`: `{"format": "csv"|"ascii", "side": "front"|"back"|"both",
 /// "units_mm": bool, "smd_only": bool, "exclude_fp_th": bool}`.
 pub fn pos(dir: &Path, body: &[u8]) -> Value {
-    use eda_fab::position::{PosFormat, PosOptions, PosSide};
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let (_, design, model) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
-    };
-    let title = match title_of(dir) {
-        Ok(t) => t,
-        Err(e) => return err(e),
-    };
-    let format = match req.get("format").and_then(Value::as_str) {
-        Some("ascii") => PosFormat::Ascii,
-        _ => PosFormat::Csv,
-    };
-    let side = match req.get("side").and_then(Value::as_str) {
-        Some("front") => PosSide::Front,
-        Some("back") => PosSide::Back,
-        _ => PosSide::Both,
-    };
-    let opts = PosOptions {
-        format,
-        side,
-        units_mm: req.get("units_mm").and_then(Value::as_bool).unwrap_or(true),
-        smd_only: req.get("smd_only").and_then(Value::as_bool).unwrap_or(false),
-        exclude_fp_th: req.get("exclude_fp_th").and_then(Value::as_bool).unwrap_or(false),
-    };
-    let meta = eda_fab::position::PosMeta { date: eda::now_rfc3339(), generator_version: env!("CARGO_PKG_VERSION").into() };
-    let content = match eda_fab::position::write_pos(&design, &model, &meta, opts) {
-        Ok(c) => c,
-        Err(e) => return err(board::reasons(&e)),
-    };
-    let ext = if format == PosFormat::Ascii { "pos" } else { "csv" };
-    match write_all(dir, [(format!("{title}.{ext}"), content.into_bytes())]) {
-        Ok(written) => ok(written),
-        Err(e) => err(e),
-    }
+    let args = pos_args(
+        req.get("format").and_then(Value::as_str).unwrap_or("csv"),
+        req.get("side").and_then(Value::as_str).unwrap_or("both"),
+        req.get("units_mm").and_then(Value::as_bool).unwrap_or(true),
+        req.get("smd_only").and_then(Value::as_bool).unwrap_or(false),
+        req.get("exclude_fp_th").and_then(Value::as_bool).unwrap_or(false),
+    );
+    reply(kicad_engine::export(dir, "pos", &args))
 }
 
 /// `POST /api/fab/bom`: no body.
 pub fn bom(dir: &Path) -> Value {
-    let (_, _, model) = match board::load(dir) {
-        Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
-    };
-    let title = match title_of(dir) {
-        Ok(t) => t,
-        Err(e) => return err(e),
-    };
-    match write_all(dir, [(format!("{title}-bom.csv"), eda_fab::bom_csv(&model).into_bytes())]) {
-        Ok(written) => ok(written),
-        Err(e) => err(e),
+    reply(kicad_engine::export_sch(dir, "bom", &bom_args()))
+}
+
+/// `POST /api/fab/kicad`: `{"kind": "<pcb export kind>", "args": [...]}`,
+/// any `kicad-cli pcb export` subcommand with its own arguments.
+pub fn kicad(dir: &Path, body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let kind = req["kind"].as_str().unwrap_or("");
+    let args: Vec<String> = req["args"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    reply(kicad_engine::export(dir, kind, &args))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_plot_is_copper_mask_paste_silk_and_the_outline() {
+        let l = default_gerber_layers(&["F.Cu".into(), "In1.Cu".into(), "B.Cu".into()]);
+        assert_eq!(l.join(","), "F.Cu,In1.Cu,B.Cu,F.Mask,B.Mask,F.Paste,B.Paste,F.SilkS,B.SilkS,Edge.Cuts");
+        assert_eq!(gerber_args(&l), vec!["--layers", "F.Cu,In1.Cu,B.Cu,F.Mask,B.Mask,F.Paste,B.Paste,F.SilkS,B.SilkS,Edge.Cuts"]);
+    }
+
+    #[test]
+    fn drill_options_become_flags() {
+        assert_eq!(drill_args(false, false), vec!["--format", "excellon"]);
+        assert_eq!(drill_args(true, true), vec!["--format", "excellon", "--excellon-separate-th", "--generate-report"]);
+    }
+
+    #[test]
+    fn position_options_become_flags() {
+        assert_eq!(pos_args("ascii", "front", false, true, true), vec!["--format", "ascii", "--side", "front", "--units", "in", "--smd-only", "--exclude-fp-th"]);
+        assert_eq!(pos_args("whatever", "sideways", true, false, false), vec!["--format", "csv", "--side", "both", "--units", "mm"]);
     }
 }

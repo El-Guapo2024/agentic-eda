@@ -13,6 +13,7 @@ eda-engine = { path = "../engine" }
 eda-render = { path = "../render" }
 eda-gates = { path = "../gates" }
 eda-kicad = { path = "../kicad" }
+eda-lint = { path = "../lint" }
 eda-interchange = { path = "../interchange" }
 eda-grid = { path = "../grid" }
 eda-freeroute = { path = "../freeroute" }

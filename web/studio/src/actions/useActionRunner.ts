@@ -1574,8 +1574,9 @@ export function useActionRunner() {
           let report = state.erc;
           if (!report) {
             try {
+              dispatch({ type: "TOAST", message: "Running ERC (kicad-cli, a few seconds)...", kind: "info" });
               report = await fetchErc();
-              dispatch({ type: "ERC_OK", erc: report });
+              dispatch({ type: "ERC_OK", erc: report, version: state.version });
             } catch {
               dispatch({ type: "TOAST", message: "Could not run ERC.", kind: "error" });
               return;

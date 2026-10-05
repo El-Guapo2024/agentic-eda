@@ -7,11 +7,12 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, DrcEngine, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
+import { revisionOf } from "../kicad-port/checkRevision";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -669,28 +670,46 @@ export interface StudioState {
   ratsnest: Ratsnest | null;
 
   /**
-   * GET /api/drc (crates/drc's ported KiCad DRC engine, see
-   * api/client.ts's fetchDrc) -- fetched only while `drcDialogOpen`,
-   * the one place this app shows it (DrcDialog.tsx, and the PCB canvas's
-   * violation markers while that dialog is up).
+   * GET /api/drc: `kicad-cli pcb drc` on the current design (see
+   * api/client.ts's fetchDrc). It takes seconds, so it runs on demand --
+   * when the dialog opens on a board it has not judged yet, and on "Run DRC"
+   * -- never on every change; `drcRunning` is what the dialog and status
+   * show meanwhile, and nothing else waits: the board stays editable during
+   * a run. The PCB canvas draws its markers (DrcDialog.tsx owns the list) and
+   * keeps drawing the last report after the dialog closes, like KiCad's own
+   * markers until the next run -- dimmed once the report is out of date.
    */
   drc: DrcReport | null;
-  /** Live engine (re-run on every board change while the dialog is open) or kicad-cli (run on demand, "Run DRC"). */
-  drcEngine: DrcEngine;
-  /** Same choice for ERC (`kicad` runs kicad-cli sch erc on demand). */
-  ercEngine: DrcEngine;
+  drcRunning: boolean;
+  drcError: string | null;
+  /** The board revision (the `version` stamp) the current `drc` report was computed on -- the server's own (`drc.revision`); when it differs from `version`, the board has moved on and the report is out of date (kicad-port/checkRevision.ts). */
+  drcVersion: string | null;
+  /** "Refill all zones before performing DRC" (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills. */
+  drcRefillZones: boolean;
   /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
   drcSelected: number | null;
+  /** Same, for the dialog's Lint tab (`lint.pcb.violations`). */
+  drcLintSelected: number | null;
 
   ercDialogOpen: boolean;
-  /**
-   * GET /api/erc (crates/kicad's `check_erc`, gap #4 -- see api/client.ts's
-   * fetchErc) -- fetched only while `ercDialogOpen`, same reasoning as
-   * `drc`/`drcDialogOpen` above.
-   */
+  /** GET /api/erc: `kicad-cli sch erc`, on demand like `drc` above. */
   erc: ErcReport | null;
+  ercRunning: boolean;
+  ercError: string | null;
+  /** Same as `drcVersion`, for `erc`. */
+  ercVersion: string | null;
   /** Index into `erc.violations` the dialog's list has clicked -- null selects nothing. */
   ercSelected: number | null;
+  /** Same, for the dialog's Lint tab (`lint.schematic.violations`). */
+  ercLintSelected: number | null;
+
+  /**
+   * GET /api/lint: our own checks, the ones KiCad does not have (crates/lint).
+   * In-process and cheap, so it is refetched on every board change while a
+   * DRC or ERC dialog is open and shown in those dialogs' Lint tabs (and as
+   * markers while they are open) -- never mixed into kicad-cli's lists.
+   */
+  lint: LintReport | null;
 
   /** Cmd+C's clipboard (Cmd-ready IR shapes, see components/canvas/clipboard.ts) -- client-side only, holds full item data so Cmd+V still works after the original was deleted, or pasted more than once. Null = nothing copied yet this session. */
   clipboard: ClipboardContents | null;
@@ -844,12 +863,20 @@ const initialState: StudioState = {
   schematicError: null,
   ratsnest: null,
   drc: null,
-  drcEngine: "eda",
-  ercEngine: "eda",
+  drcRunning: false,
+  drcError: null,
+  drcVersion: null,
+  drcRefillZones: false,
   drcSelected: null,
+  drcLintSelected: null,
   ercDialogOpen: false,
   erc: null,
+  ercRunning: false,
+  ercError: null,
+  ercVersion: null,
   ercSelected: null,
+  ercLintSelected: null,
+  lint: null,
   clipboard: null,
   moveExactDialogOpen: false,
   routerSettingsDialogOpen: false,
@@ -872,8 +899,6 @@ export type Action =
   | { type: "BOARD_ERR"; message: string }
   | { type: "VERSION"; version: string }
   | { type: "SET_TAB"; tab: EditorTab }
-  | { type: "SET_DRC_ENGINE"; engine: DrcEngine }
-  | { type: "SET_ERC_ENGINE"; engine: DrcEngine }
   | { type: "SET_SHEET_PATH"; path: string[]; /** false = do not push onto the Back/Forward history (Back/Forward themselves). Default true. */ record?: boolean }
   | { type: "SET_SCH_NAV"; nav: NavHistory }
   | { type: "SET_SCH_LINE_MODE"; mode: LineMode }
@@ -929,11 +954,21 @@ export type Action =
   | { type: "SCHEMATIC_OK"; schematic: Schematic }
   | { type: "SCHEMATIC_ERR"; message: string }
   | { type: "RATSNEST_OK"; ratsnest: Ratsnest }
-  | { type: "DRC_OK"; drc: DrcReport }
+  | { type: "DRC_RUNNING" }
+  | { type: "DRC_OK"; drc: DrcReport; /** The revision the report was computed on (kicad-port/checkRevision.ts's `revisionOf`). */ version: string | null }
+  | { type: "DRC_ERR"; message: string }
+  | { type: "SET_DRC_REFILL"; refill: boolean }
   | { type: "SET_DRC_SELECTED"; index: number | null }
+  | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
   | { type: "SET_ERC_DIALOG_OPEN"; open: boolean }
-  | { type: "ERC_OK"; erc: ErcReport }
+  | { type: "ERC_RUNNING" }
+  | { type: "ERC_OK"; erc: ErcReport; /** The revision the report was computed on. */ version: string | null }
+  | { type: "ERC_ERR"; message: string }
+  /** Exclude / un-exclude one finding in the report on screen without re-running kicad-cli (the exclusion itself is a persisted `Cmd`); `version` is the revision the patched report is now valid for (checkRevision.ts's `revisionAfterOwnEdit`): the board's after that Cmd when the report was current, so it is not called out of date by its own exclusion -- the report's own when it already was out of date. */
+  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; version: string | null }
   | { type: "SET_ERC_SELECTED"; index: number | null }
+  | { type: "SET_ERC_LINT_SELECTED"; index: number | null }
+  | { type: "LINT_OK"; lint: LintReport }
   | { type: "SET_DRAW_STATE"; draw: DrawState | null }
   | { type: "SET_ZONE_PENDING"; outline: [Um, Um][] | null }
   | { type: "SET_ZONE_EDIT_ID"; id: string | null }
@@ -1209,22 +1244,45 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":
       return { ...state, ratsnest: action.ratsnest };
-    case "SET_DRC_ENGINE":
-      return { ...state, drcEngine: action.engine, drc: null };
-    case "SET_ERC_ENGINE":
-      return { ...state, ercEngine: action.engine, erc: null };
+    case "DRC_RUNNING":
+      return { ...state, drcRunning: true, drcError: null };
     case "DRC_OK":
       // A fresh report invalidates any previous selection -- indices (and
       // the violations they pointed at) aren't stable across re-runs.
-      return { ...state, drc: action.drc, drcSelected: null };
+      return { ...state, drc: action.drc, drcRunning: false, drcError: null, drcVersion: action.version, drcSelected: null };
+    case "DRC_ERR":
+      return { ...state, drcRunning: false, drcError: action.message };
+    case "SET_DRC_REFILL":
+      return { ...state, drcRefillZones: action.refill };
     case "SET_DRC_SELECTED":
-      return { ...state, drcSelected: action.index };
+      return { ...state, drcSelected: action.index, drcLintSelected: action.index === null ? state.drcLintSelected : null };
+    case "SET_DRC_LINT_SELECTED":
+      return { ...state, drcLintSelected: action.index, drcSelected: action.index === null ? state.drcSelected : null };
     case "SET_ERC_DIALOG_OPEN":
       return { ...state, ercDialogOpen: action.open };
+    case "ERC_RUNNING":
+      return { ...state, ercRunning: true, ercError: null };
     case "ERC_OK":
-      return { ...state, erc: action.erc, ercSelected: null };
+      return { ...state, erc: action.erc, ercRunning: false, ercError: null, ercVersion: action.version, ercSelected: null };
+    case "ERC_ERR":
+      return { ...state, ercRunning: false, ercError: action.message };
+    case "ERC_MARK_EXCLUDED": {
+      if (!state.erc) return state;
+      const counts = { ...state.erc.counts };
+      const violations = state.erc.violations.map((v) => {
+        if (v.check !== action.check || v.location !== action.location) return v;
+        if (action.excluded && v.severity !== "excluded") counts[v.check] = Math.max(0, (counts[v.check] ?? 0) - 1);
+        if (!action.excluded && v.severity === "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
+        return { ...v, severity: action.excluded ? ("excluded" as const) : ("error" as const) };
+      });
+      return { ...state, erc: { ...state.erc, violations, counts }, ercVersion: action.version };
+    }
     case "SET_ERC_SELECTED":
-      return { ...state, ercSelected: action.index };
+      return { ...state, ercSelected: action.index, ercLintSelected: action.index === null ? state.ercLintSelected : null };
+    case "SET_ERC_LINT_SELECTED":
+      return { ...state, ercLintSelected: action.index, ercSelected: action.index === null ? state.ercSelected : null };
+    case "LINT_OK":
+      return { ...state, lint: action.lint };
     case "SET_DRAW_STATE":
       return { ...state, drawState: action.draw };
     case "SET_ZONE_PENDING":
@@ -1329,6 +1387,10 @@ function reducer(state: StudioState, action: Action): StudioState {
 export interface StudioApi {
   /** Force an immediate /api/state refetch (after a command, or on demand). */
   refresh: () => Promise<void>;
+  /** Run kicad-cli's DRC on the current design (seconds; `state.drcRunning` meanwhile). A run already in flight is not doubled. */
+  runDrc: () => Promise<void>;
+  /** Run kicad-cli's ERC on the current schematic -- same contract as `runDrc`. */
+  runErc: () => Promise<void>;
   /** The store's latest state -- unlike the `useStudioState()` snapshot a handler closed over, it includes what an `await`ed refetch just loaded. */
   getState: () => StudioState;
   /** R/Shift+R (edit_tool.cpp Rotate): `refs` defaults to the selection; the caller passes RequestSelection's hover fallback. Footprints and vias rotate; several items share one pivot and commit as ONE undo step. */
@@ -1461,21 +1523,50 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const refreshDrc = useCallback(async () => {
+  // kicad-cli runs take seconds, so a run is started on demand (the dialogs'
+  // Run buttons, and a dialog opening on a board it has not judged yet) and a
+  // second request while one is in flight is dropped. The server keeps
+  // answering edits and the version poll meanwhile, so the board stays
+  // editable during a run: the report says which revision it was computed on
+  // (`revision`), and the dialogs and markers show it out of date when the
+  // board has moved on since (kicad-port/checkRevision.ts).
+  const drcInFlight = useRef(false);
+  const runDrc = useCallback(async () => {
+    if (drcInFlight.current) return;
+    drcInFlight.current = true;
+    const askedAt = stateRef.current.version;
+    dispatch({ type: "DRC_RUNNING" });
     try {
-      const drc = await fetchDrc(stateRef.current.drcEngine);
-      dispatch({ type: "DRC_OK", drc });
-    } catch {
-      // same reasoning as refreshRatsnest -- keep the last good report.
+      const drc = await fetchDrc(stateRef.current.drcRefillZones);
+      dispatch({ type: "DRC_OK", drc, version: revisionOf(drc, askedAt) });
+    } catch (e) {
+      dispatch({ type: "DRC_ERR", message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      drcInFlight.current = false;
     }
   }, []);
 
-  const refreshErc = useCallback(async () => {
+  const ercInFlight = useRef(false);
+  const runErc = useCallback(async () => {
+    if (ercInFlight.current) return;
+    ercInFlight.current = true;
+    const askedAt = stateRef.current.version;
+    dispatch({ type: "ERC_RUNNING" });
     try {
-      const erc = await fetchErc(stateRef.current.ercEngine);
-      dispatch({ type: "ERC_OK", erc });
+      const erc = await fetchErc();
+      dispatch({ type: "ERC_OK", erc, version: revisionOf(erc, askedAt) });
+    } catch (e) {
+      dispatch({ type: "ERC_ERR", message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      ercInFlight.current = false;
+    }
+  }, []);
+
+  const refreshLint = useCallback(async () => {
+    try {
+      dispatch({ type: "LINT_OK", lint: await fetchLint() });
     } catch {
-      // same reasoning as refreshDrc -- keep the last good report.
+      // backend restarting, board mid-edit -- keep the last good result.
     }
   }, []);
 
@@ -1560,8 +1651,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     let lastVersion: string | null = null;
     let lastSchematicFetch: string | null = null;
     let lastRatsnestFetch: string | null = null;
-    let lastDrcFetch: string | null = null;
-    let lastErcFetch: string | null = null;
+    let lastLintFetch: string | null = null;
     let lastFillFetch: string | null = null;
     const tick = async () => {
       try {
@@ -1581,21 +1671,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           lastRatsnestFetch = v;
           await refreshRatsnest();
         }
-        // Gated on the dialog being open, not a tab -- DRC has no tab of
-        // its own (it overlays whichever tab is showing), and running
-        // the DRC engine on every tick regardless of whether anyone's
-        // looking at it would be pure waste.
-        // kicad-cli runs on demand ("Run DRC"), like KiCad's own dialog.
-        if (stateRef.current.drcDialogOpen && stateRef.current.drcEngine === "eda" && lastDrcFetch !== v) {
-          lastDrcFetch = v;
-          await refreshDrc();
-        }
-        // Same reasoning as DRC above -- ERC overlays whichever tab is
-        // showing (normally the Schematic one, but nothing stops running
-        // it from the PCB tab), gated on the dialog, not a tab.
-        if (stateRef.current.ercDialogOpen && stateRef.current.ercEngine === "eda" && lastErcFetch !== v) {
-          lastErcFetch = v;
-          await refreshErc();
+        // kicad-cli's DRC and ERC are not polled: they take seconds, so they
+        // run on demand (runDrc/runErc). Our own lint checks are cheap and
+        // in-process, and are shown by those two dialogs, so they follow the
+        // board while either is open.
+        if ((stateRef.current.drcDialogOpen || stateRef.current.ercDialogOpen) && lastLintFetch !== v) {
+          lastLintFetch = v;
+          await refreshLint();
         }
         // Gated on "has been filled at least once this session" (not a
         // dialog -- there isn't one, B/Ctrl+B just toggle a canvas
@@ -1617,7 +1699,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       stopped = true;
       clearInterval(id);
     };
-  }, [refresh, refreshSchematic, refreshRatsnest, refreshDrc, refreshErc, refreshFill, applyRemoteView]);
+  }, [refresh, refreshSchematic, refreshRatsnest, refreshLint, refreshFill, applyRemoteView]);
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {
@@ -1676,6 +1758,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const api: StudioApi = {
     refresh,
+    runDrc,
+    runErc,
     getState: () => stateRef.current,
     partByRef: (ref) => stateRef.current.board?.parts.find((p) => p.ref === ref),
     trackById: (id) => stateRef.current.board?.routing?.tracks.find((t) => t.id === id),

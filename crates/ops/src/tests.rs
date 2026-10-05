@@ -140,12 +140,7 @@ fn a_placed_part_never_overlaps_one_already_down() {
         b.apply(&Cmd::Place { part: format!("C{i}"), anchor: "U1".into(), side: Dir::East })
             .unwrap_or_else(|e| panic!("C{i} could not be placed: {e:?}"));
     }
-    let fails: Vec<_> = b
-        .checks()
-        .into_iter()
-        .filter(|c| c.check == "placement_courtyard_overlap" && matches!(c.status, CheckStatus::Fail))
-        .collect();
-    assert!(fails.is_empty(), "sliding must not stack parts: {fails:?}");
+    assert_eq!(crate::repair::courtyard_overlaps(&b), 0, "sliding must not stack parts");
 }
 
 #[test]
@@ -308,12 +303,7 @@ fn seeding_the_same_region_twice_does_not_stack() {
     b.apply(&Cmd::PlaceRegion { part: "U1".into(), region: Region::Centre }).unwrap();
     b.apply(&Cmd::PlaceRegion { part: "U2".into(), region: Region::Centre }).unwrap();
     assert_ne!(b.pose_of("U1").unwrap().at, b.pose_of("U2").unwrap().at);
-    let fails: Vec<_> = b
-        .checks()
-        .into_iter()
-        .filter(|c| c.check == "placement_courtyard_overlap" && matches!(c.status, CheckStatus::Fail))
-        .collect();
-    assert!(fails.is_empty(), "{fails:?}");
+    assert_eq!(crate::repair::courtyard_overlaps(&b), 0, "two parts seeded into one region must not overlap");
 }
 
 #[test]

@@ -1571,11 +1571,14 @@ export type PushPinField = "length" | "name_size" | "number_size";
 
 // ---------------------------------------------------------------- DRC
 //
-// GET /api/drc. Source of truth: crates/cli/src/studio.rs `drc_json()`,
-// crates/drc/src/item.rs `DrcViolation`/`DrcRefItem`/`FixHint`, shaped
-// like kicad-cli's own `pcb drc --format json` report (`type`/
-// `description`/`severity`/`items`) plus an extra `fix` key kicad-cli's
-// own JSON has no concept of.
+// GET /api/drc: `kicad-cli pcb drc`'s report on the current design
+// (crates/cli/src/kicad_engine.rs `drc`, run through crates/kicad-engine),
+// with each item's KiCad uuid pointed back at our own id. It takes seconds,
+// so the studio runs it on demand and shows a running state; there is no
+// other DRC engine. `type`/`description`/`severity`/`items` are
+// kicad-cli's own JSON; positions are this API's µm integers (every other
+// endpoint here uses board-space µm, not kicad-cli's mm), as `[x, y]`.
+// Our own checks, the ones KiCad does not have, are `LintReport` below.
 
 export type DrcSeverity = "error" | "warning";
 
@@ -1583,11 +1586,11 @@ export interface DrcItem {
   description: string;
   /** Board-space um, like every other position in this file -- *not* kicad-cli's own mm. */
   pos: [Um, Um];
-  /** Stable id of the referenced item (track/via/zone id, or `<ref>.<pad>`/`<ref>` for a footprint/pad) -- enough to select it without re-matching on position. `null` from the kicad-cli engine for an item that isn't one of ours (e.g. a fill polygon KiCad computed). */
+  /** Our id for the referenced item (track/via/zone id, or `<ref>.<pad>`/`<ref>` for a footprint/pad; `outline` for the Edge.Cuts outline) -- enough to select it without re-matching on position. `null` for an item that isn't one of ours (e.g. a fill polygon KiCad computed). */
   id: string | null;
 }
 
-/** `crates/drc::FixHint` -- this workspace's own agent-repair metadata, no real-KiCad equivalent. Absent (not null -- `#[serde(skip_serializing_if = "Option::is_none")]`) when a violation has no computed fix; the `?? null` this file's other optional fields already use handles either. */
+/** `crates/lint`'s agent-repair metadata for a placement finding: which part to move, toward what, how far. kicad-cli's report has no such thing, so only lint findings carry one. */
 export interface DrcFix {
   /** Reference designator of the part a fix would move. */
   mover: string;
@@ -1599,11 +1602,12 @@ export interface DrcFix {
 }
 
 export interface DrcViolation {
-  /** `crates/drc::ErrorType`'s own snake_case name ("clearance", "courtyards_overlap", ...) -- real KiCad's own DRC type names, per `kicad-cli pcb drc`'s report. */
+  /** KiCad's own DRC type name ("clearance", "courtyards_overlap", ...) for a kicad-cli violation; the check's own name ("placement_proximity", ...) for a lint finding. */
   type: string;
   description: string;
   severity: DrcSeverity;
   items: DrcItem[];
+  /** Lint findings only. */
   fix?: DrcFix | null;
 }
 
@@ -1611,70 +1615,86 @@ export interface DrcReport {
   violations: DrcViolation[];
   /** Violation count by `type`. */
   counts: Record<string, number>;
-  /** "eda" (our live engine) or "kicad-cli <version>" (crates/cli/src/kicad_engine.rs). */
+  /** "kicad-cli <version>". */
   engine?: string;
-  /** kicad-cli only: the ratsnest it reports as `unconnected_items`. */
+  /** The ratsnest kicad-cli reports as `unconnected_items`. */
   unconnected_items?: DrcViolation[];
-  /** kicad-cli only: whether kicad-cli refilled zones itself (`--refill-zones`). */
+  /** Whether kicad-cli refilled zones itself (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills, so it judges the fills the exported board already carries (the ones the studio shows). */
   zones_refilled_by_kicad?: boolean;
+  /** The design revision this run started from: the stamp GET /api/version served at that moment. The report is out of date once the board's revision is another one (kicad-port/checkRevision.ts). Absent from a server that does not stamp. */
+  revision?: string;
 }
-
-/** Which engine runs DRC: our live in-process port, or real kicad-cli on the exported board. */
-export type DrcEngine = "eda" | "kicad";
 
 // ---------------------------------------------------------------- ERC
 //
-// GET /api/erc. Source of truth: crates/cli/src/studio.rs `erc_json()`,
-// crates/kicad/src/erc.rs `check_erc`. Flatter than `DrcReport`: ERC
-// reports plain `CheckResult`s, not DRC's richer positioned-item list --
-// `location` is a "REF" or "REF.PIN" string (an id into `Schematic.
-// symbols`/pin, not a sheet coordinate), which `ErcDialog.tsx` resolves
-// back to something selectable/panable itself rather than reading a
-// ready-made position the way DRC's `DrcItem.pos` gives one.
+// GET /api/erc: `kicad-cli sch erc`'s report on the current schematic
+// (crates/cli/src/kicad_engine.rs `erc`), flattened over every sheet, with
+// each item's KiCad uuid pointed back at our own id. Run on demand, like DRC.
+// `location` is our id for the first item the violation names -- a symbol
+// ("REF"), a pin ("REF.PIN"), a power symbol, a wire, a label, a no-connect
+// or a text -- never a ready-made point: `ercMarkerPosition`
+// (components/schematic/ercMarkerPosition.ts) resolves it back to something
+// selectable/panable, the one place this app does that. (kicad-cli's own
+// ERC positions are not reliable units, so they are not used.)
 
-/** `"excluded"` is `dialog_erc.cpp`'s "Exclude this violation" (right-click a marker), persisted server-side in `design.schematic.erc_exclusions` and applied by `check_erc_excluding` -- a finding stays in `violations[]` (so `ErcDialog.tsx` can still show and un-exclude it) rather than disappearing the way an unexcluded Pass does. */
+/** `"excluded"` is `dialog_erc.cpp`'s "Exclude this violation" (right-click a marker), persisted server-side in `design.schematic.erc_exclusions` and applied by the backend to the report -- a finding stays in `violations[]` (so `ErcDialog.tsx` can still show and un-exclude it) rather than disappearing. */
 export type ErcSeverity = "error" | "warning" | "excluded";
 
+/** One item an ERC violation names, as kicad-cli describes it ("Symbol U1 Pin 2 [VOUT, Power output, Line]"). */
+export interface ErcItem {
+  description: string;
+  /** Our id for it (see `ErcViolation.location`), or `null` when it is not one of ours. */
+  id: string | null;
+}
+
 export interface ErcViolation {
-  /** `eda_kicad::erc`'s own check name ("pin_not_connected", "wire_dangling", ...) -- real KiCad's own ERC type names, per `kicad-cli sch erc`'s report. */
+  /** KiCad's own ERC type name ("pin_not_connected", "wire_dangling", ...) for a kicad-cli violation; the readability check's own name ("schematic_wire_overlap", ...) for a lint finding. */
   check: string;
   severity: ErcSeverity;
   /**
-   * An id into the schematic, in one of several shapes depending on which
-   * check produced it (`crates/kicad/src/erc.rs`, every `location: Some(format!(...))`
-   * call read directly) -- never a ready-made point the way DRC's `DrcItem.pos`
-   * is. `ercMarkerPosition` (components/schematic/ercMarkerPosition.ts) is the
-   * one place this app resolves any of these back to a canvas position:
-   *   "REF.PIN"      -- pin_not_connected (PIN is a pin *number*, not name).
-   *   "NET:REF.PIN"  -- pin_to_pin / pin_not_driven / power_pin_not_driven.
-   *   "NET:ID"       -- same two checks, when the flagged net member is a
-   *                     power symbol: ID is its own `PowerSymbol.id`, not
-   *                     a part ref (no dot).
-   *   "x,y"          -- no_connect_connected / no_connect_dangling: a
-   *                     literal point, board-space um.
-   *   "NET:x,y"      -- unconnected_wire_endpoint: same literal point,
-   *                     net name prefix ignored.
-   *   a bare net name -- wire_dangling: no symbol/point in the string at
-   *                     all.
-   * `null` on a (currently theoretical) location-less finding.
+   * Our id for the first item the violation names (see the block comment
+   * above). A lint finding's `location` keeps the shapes those checks have
+   * always used ("REF.PIN", "NET:REF.PIN", "x,y", "NET@x,y", a bare net
+   * name, ...), which `ercMarkerPosition` also resolves. `null` when
+   * there is nothing to key on.
    */
   location: string | null;
   hint: string | null;
+  /** kicad-cli violations only: every item it names. */
+  items?: ErcItem[];
 }
 
 export interface ErcReport {
   violations: ErcViolation[];
-  /** Violation count by `check`. */
+  /** Violation count by `check` (excluded ones are not counted). */
   counts: Record<string, number>;
-  /** "kicad-cli <version>" when run by kicad-cli (crates/cli/src/kicad_engine.rs `erc`); absent for our own engine. */
+  /** "kicad-cli <version>". */
   engine?: string;
+  /** The design revision this run started from -- see `DrcReport.revision`. */
+  revision?: string;
+}
+
+// ---------------------------------------------------------------- Lint
+//
+// GET /api/lint: our own checks, the ones KiCad does not have (crates/lint):
+// placement quality and net-class track width on the PCB, readability on the
+// schematic. Never DRC, never ERC: clearance, courtyards, pin conflicts and
+// the rest are kicad-cli's. In-process and cheap, so the studio refetches it
+// on every board change while a DRC/ERC dialog is open.
+
+export interface LintReport {
+  /** Shaped like `DrcReport.violations` (`type` is the check name, `fix` is set on placement findings). */
+  pcb: { violations: DrcViolation[]; counts: Record<string, number> };
+  /** Shaped like `ErcReport.violations`. */
+  schematic: { violations: ErcViolation[]; counts: Record<string, number> };
 }
 
 /**
- * `POST /api/board_stats` (crates/cli/src/board_stats.rs): a port of
- * `BOARD_STATISTICS_DATA`, driving components/BoardStatisticsDialog.tsx.
- * Lengths in µm, areas in µm². An unset minimum is source's own INT_MAX
- * nm sentinel (2147483.647 µm), kept on purpose so it displays the same.
+ * `POST /api/board_stats` (crates/cli/src/kicad_engine.rs `board_stats`):
+ * `kicad-cli pcb export stats`, in the shape components/
+ * BoardStatisticsDialog.tsx reads. Lengths in µm, areas in µm². An unset
+ * minimum is KiCad's own INT_MAX nm sentinel (2147483.647 µm), so it
+ * displays the same.
  */
 export interface BoardStatsOptions {
   exclude_footprints_without_pads: boolean;
@@ -1701,6 +1721,8 @@ export interface BoardStatsDrill {
 export interface BoardStatsReply {
   ok: boolean;
   message?: string;
+  /** The design revision the statistics were computed on (the /api/version stamp), like every kicad-cli reply. */
+  revision?: string;
   board?: {
     has_outline: boolean;
     width_um: number;

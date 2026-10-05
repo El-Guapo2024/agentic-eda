@@ -69,8 +69,14 @@ export interface PaintOptions {
   sketchPads: boolean;
   sketchTracks: boolean;
   sketchVias: boolean;
-  /** GET /api/drc's violations (crates/drc, see DrcDialog.tsx) -- null until the dialog has been opened at least once this session (nothing drawn until then); kept showing after it's closed, like real KiCad's markers persisting until the next DRC run. */
+  /** GET /api/drc's violations (kicad-cli's report, see DrcDialog.tsx) -- null until DRC has run at least once this session (nothing drawn until then); kept showing after the dialog closes, like real KiCad's markers persisting until the next DRC run. */
   drcViolations: DrcViolation[] | null;
+  /** The board has moved on since `drcViolations` were computed (kicad-port/checkRevision.ts): the markers are still drawn, dimmed and dashed, until the next DRC run. */
+  drcStale?: boolean;
+  /** GET /api/lint's PCB findings (crates/lint: our own checks, the ones KiCad does not have) -- only while the DRC dialog is open, since they follow the board live there and nowhere else. Drawn as blue diamonds so they never read as KiCad's circles. */
+  lintViolations?: DrcViolation[] | null;
+  /** Index into `lintViolations` the dialog's Lint tab has clicked. */
+  lintSelected?: number | null;
   /** B/Ctrl+B's last GET /api/fill (zone_filler_tool.cpp) -- null (or a zone simply missing from it) means "no fill computed yet", which always paints as an outline regardless of `zoneDisplayMode`. See state.zoneFill's own doc. */
   zoneFill: FillReport | null;
   /** ZONE_DISPLAY_MODE: how a zone WITH fill data paints. A zone with no fill data yet ignores this and always shows its outline. */
@@ -831,7 +837,7 @@ const DRC_MARKER_RADIUS_UM = 300;
 /**
  * DRC violation markers -- one circle per violation, centered on its
  * first item's position (every violation here has at least one item;
- * `crates/drc` never emits an empty `items[]`), color-coded by severity
+ * kicad-cli never emits an empty `items[]`), color-coded by severity
  * (or LAYER_DRC_HIGHLIGHTED when it's the dialog's currently-focused
  * one), with a small "!" so a marker reads as "problem here" even before
  * the dialog's list gives it a description. This is a legible, KiCad-
@@ -841,7 +847,7 @@ const DRC_MARKER_RADIUS_UM = 300;
  * so a plain circle is the honest simplification here, not a guess at
  * the real shape.
  */
-function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, violations: DrcViolation[], selected: number | null) {
+function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, violations: DrcViolation[], selected: number | null, stale = false) {
   const hair = hairlineUm(view, 1.5);
   violations.forEach((v, i) => {
     const item = v.items[0];
@@ -854,13 +860,45 @@ function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, viol
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(100, hair);
+    // Out of date: the same marker, dimmed and dashed -- where the problem was, not necessarily where it is now.
+    if (stale) ctx.setLineDash([r * 0.35, r * 0.25]);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.globalAlpha = 0.35;
+    ctx.globalAlpha = stale ? 0.1 : 0.35;
+    ctx.fill();
+    ctx.globalAlpha = stale ? 0.55 : 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
+    ctx.restore();
+  });
+}
+
+/** Our own lint findings (crates/lint), drawn apart from kicad-cli's DRC circles: a blue diamond around the finding's first item, bigger and filled when the dialog's Lint tab has it selected. */
+const LINT_MARKER_COLOR = "#4ea1ff";
+
+function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, findings: DrcViolation[], selected: number | null) {
+  const hair = hairlineUm(view, 1.5);
+  findings.forEach((v, i) => {
+    const item = v.items[0];
+    if (!item) return;
+    const [x, y] = item.pos;
+    const on = i === selected;
+    const r = on ? DRC_MARKER_RADIUS_UM * 1.5 : DRC_MARKER_RADIUS_UM * 1.1;
+    ctx.save();
+    ctx.strokeStyle = LINT_MARKER_COLOR;
+    ctx.fillStyle = LINT_MARKER_COLOR;
+    ctx.lineWidth = Math.max(100, hair);
+    ctx.beginPath();
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x + r, y);
+    ctx.lineTo(x, y + r);
+    ctx.lineTo(x - r, y);
+    ctx.closePath();
+    ctx.globalAlpha = on ? 0.45 : 0.2;
     ctx.fill();
     ctx.globalAlpha = 1;
     ctx.stroke();
-    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
     ctx.restore();
   });
 }
@@ -914,7 +952,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   if (opts.activeTool === "select") drawSelectedGroups(ctx, view, board, opts);
   // DRC markers last of all -- an overlay above every board layer and
   // the in-progress tool preview, matching real KiCad.
-  if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected);
+  if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected, opts.drcStale);
+  if (opts.lintViolations) drawLintMarkers(ctx, view, opts.lintViolations, opts.lintSelected ?? null);
 }
 
 /** The geometry points of a free-standing graphic, for bounding purposes only (not a faithful outline -- an arc's `mid` stands in for its sweep, a circle's `end` for its radius -- see `drawShapeGeometry` for the real rendering). */

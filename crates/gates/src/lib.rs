@@ -1,12 +1,21 @@
-//! eda-gates — placement and routing geometry gates.
+//! eda-gates — placement and routing gates.
 //!
-//! The former schematic-section gates (`check_schematic` and its 23
-//! individual checks) moved to `eda_kicad::check_erc` -- see that crate's
-//! `erc_style` module -- so the ERC port is the one engine a schematic is
-//! judged by, per the project's "no duplicate tools" rule. This crate now
-//! covers only placement and routing (`pcb.rs`) and the partial-build
-//! variant of the placement gates (`partial.rs`).
+//! Two tiers, by cost:
+//!
+//! * **In-process gates** ([`check_placement`], [`check_routing`],
+//!   [`check_placement_partial`], ...): our own exact-geometry judges plus
+//!   `eda-lint`'s placement-quality checks. Microseconds to milliseconds,
+//!   so the constructive placer runs them on every step and the studio on
+//!   every refresh.
+//! * **KiCad's gates** ([`kicad`]): courtyard overlap and copper-to-edge
+//!   clearance are KiCad design rules, so they come from one kicad-cli DRC
+//!   run, filtered by type. Seconds, so only the judges call them (`eda
+//!   board check`, `--strict`, the pipeline's stage gates).
+//!
+//! Schematic readability checks live in `eda-lint`; electrical rules are
+//! kicad-cli's ERC.
 
+pub mod kicad;
 pub mod partial;
 pub mod pcb;
 pub use partial::check_placement_partial;

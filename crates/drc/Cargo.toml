@@ -2,6 +2,7 @@
 name = "eda-drc"
 version = "0.1.0"
 edition = "2021"
+description = "Geometry core (shapes, collision, clearance rules, rule expressions, rtree, zone-fill driver, stroke font) for the router, zone filler, connectivity and exporter. Not a design-rule checker: DRC is kicad-cli's."
 
 [dependencies]
 serde = { workspace = true }
@@ -10,11 +11,3 @@ eda-model = { path = "../model" }
 eda-clipper2 = { path = "../clipper2" }
 eda-shape-poly-set = { path = "../shape-poly-set" }
 eda-zone-filler = { path = "../zone-filler" }
-
-[dev-dependencies]
-serde_yaml = { workspace = true }
-eda-kicad = { path = "../kicad" }
-eda-engine = { path = "../engine" }
-eda-place = { path = "../place" }
-eda-freeroute = { path = "../freeroute" }
-eda-connectivity = { path = "../connectivity" }

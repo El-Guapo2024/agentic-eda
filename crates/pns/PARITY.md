@@ -27,8 +27,9 @@ exists rather than letting you rediscover it.
    never hull-vs-hull.** This matches real KiCad too: `ITEM::Collide`
    dispatches to the real shapes; `ITEM::Hull()` is a separate construct
    used only by WALKAROUND/OPTIMIZER to shape a path around an obstacle.
-   Reusing `eda_drc`'s geometry/constraint-resolution means this router
-   and the DRC engine agree on clearance by construction.
+   Reusing `eda_drc`'s geometry/constraint-resolution keeps the router's
+   idea of clearance the rules the exported board carries (kicad-cli's
+   DRC, the only DRC engine, judges the result).
 3. **No `ARC_T`.** This project's IR represents every track as a
    straight-segment polyline (`eda_model::ir::Track::pts`); nothing ever
    constructs an arc item. Every KiCad pass that branches on "does this

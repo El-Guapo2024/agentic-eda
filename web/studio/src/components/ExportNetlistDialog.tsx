@@ -1,13 +1,13 @@
 // File > Export > Netlist... -- eeschema's DIALOG_EXPORT_NETLIST
 // (dialog_export_netlist.cpp): pick a netlist format and export. The real
 // dialog also has Spice/Cadstar/OrcadPCB2/Allegro/PADS tabs and a plugin
-// list -- only the two exporters ported here are offered (the KiCad `.net`
-// s-expression, NETLIST_EXPORTER_KICAD, and the generic `.xml`,
-// NETLIST_EXPORTER_XML); see PARITY-sch.md section 7.
+// list -- only the two formats offered here are wired (the KiCad `.net`
+// s-expression and the generic `.xml`; kicad-cli has the others); see
+// PARITY-sch.md section 10.
 //
-// POSTs to /api/sch/netlist (crates/cli/src/sch_api.rs), which runs
-// eda_kicad::export_netlist over the board's one netlist and writes into
-// this board's own export/ folder.
+// POSTs to /api/sch/netlist (crates/cli/src/sch_output_api.rs), which runs
+// `kicad-cli sch export netlist` on the exported schematic and writes into
+// this board's own export/kicad/sch-netlist/ folder.
 import { useEffect, useState } from "react";
 import { postSchNetlist } from "../api/client";
 import { buildSchNetlistRequest, SCH_NETLIST_FORMATS, summarizeOutputs, type SchNetlistFormat } from "../kicad-port/schOutputs";
@@ -57,8 +57,7 @@ export function ExportNetlistDialog() {
             ))}
           </fieldset>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
-            Output directory: <code>export/</code> (inside this board's own directory). Nets are numbered in KiCad's own order (sorted by name, nodes by reference then pin); power symbols and
-            <code> #</code> references are left out.
+            Output directory: <code>export/kicad/sch-netlist/</code> (inside this board's own directory). Written by <code>kicad-cli sch export netlist</code>, so the nets are numbered and ordered the way KiCad does it.
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>

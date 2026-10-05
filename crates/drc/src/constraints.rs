@@ -104,9 +104,8 @@ pub fn clearance_with_custom_rules(rules: &BoardRules, a_net: Option<&str>, b_ne
 /// [`clearance_with_custom_rules`] can actually apply and with each one's
 /// `condition` tokenized once -- see that function's doc comment for why
 /// this exists as a separate compile-once step rather than reading
-/// `BoardRules` directly per pair. Build one of these per `eda_drc::run`
-/// call (cheap: real `.kicad_dru` files are a handful of rules), not per
-/// pair.
+/// `BoardRules` directly per pair. Build one of these once per board
+/// (cheap: real `.kicad_dru` files are a handful of rules), not per pair.
 pub struct CompiledClearanceRules(Vec<CompiledClearanceRule>);
 
 struct CompiledClearanceRule {

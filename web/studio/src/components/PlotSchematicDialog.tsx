@@ -2,13 +2,14 @@
 // (dialog_plot_schematic.cpp, SCH_PLOT_OPTS): output format, colour vs.
 // black and white, "Plot drawing sheet", "Use background color", page size,
 // and all pages vs. the current one. The real dialog also offers PostScript/
-// DXF/PNG, a colour-theme chooser and PDF property popups -- not ported
-// (see PARITY-sch.md section 7).
+// DXF/PNG, a colour-theme chooser and PDF property popups -- not wired here
+// (see PARITY-sch.md section 10); kicad-cli has no page-size override, so
+// that real option is not offered either.
 //
-// POSTs to /api/sch/plot (crates/cli/src/sch_api.rs), which runs
-// eda_kicad::plot_schematic -- the SCH_PLOTTER / SVG_PLOTTER / PDF_PLOTTER
-// port, not a kicad-cli call -- and writes into this board's own export/
-// folder (one .svg per sheet, or one multi-page .pdf).
+// POSTs to /api/sch/plot (crates/cli/src/sch_output_api.rs), which runs
+// `kicad-cli sch export svg|pdf` on the exported schematic and writes into
+// this board's own export/kicad/ folder (one .svg per sheet, or one
+// multi-page .pdf).
 import { useEffect, useState } from "react";
 import { postSchPlot } from "../api/client";
 import { buildSchPlotRequest, DEFAULT_SCH_PLOT_FORM, summarizeOutputs, type SchPlotForm } from "../kicad-port/schOutputs";
@@ -85,16 +86,8 @@ export function PlotSchematicDialog() {
               <input type="checkbox" disabled={!form.color} checked={form.useBackgroundColor} onChange={(e) => set({ useBackgroundColor: e.target.checked })} /> Use background color
             </label>
           </fieldset>
-          <label style={{ display: "block", marginBottom: 10 }}>
-            Page size:{" "}
-            <select value={form.pageSize} onChange={(e) => set({ pageSize: e.target.value as SchPlotForm["pageSize"] })}>
-              <option value="auto">Schematic size</option>
-              <option value="a4">A4</option>
-              <option value="a">A (US letter)</option>
-            </select>
-          </label>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
-            Output directory: <code>export/</code> (inside this board's own directory), named like KiCad's own plot files (<code>&lt;project&gt;[-&lt;sheet&gt;].svg</code> / <code>.pdf</code>).
+            Output directory: <code>export/kicad/sch-svg/</code> or <code>sch-pdf/</code> (inside this board's own directory), written by <code>kicad-cli sch export</code>.
           </div>
           {result && (
             <div className={result.ok ? "panel-empty" : "problem-row"} style={{ fontSize: 11 }}>

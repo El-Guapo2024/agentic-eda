@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-01T21:19:10.220146+00:00",
+  "generated_at": "2026-10-04T00:40:09.280630+00:00",
   "metrics": [
     {
       "name": "connectivity_boards_evaluated",
@@ -10,42 +10,6 @@
       "name": "connectivity_exact_match_rate",
       "current": 0.8390804597701149,
       "floor": 0.8390804597701149
-    },
-    {
-      "name": "drc_boards_evaluated",
-      "current": 40.0,
-      "floor": 40.0,
-      "note": "Floor reset down from 56 (not a quality regression): this round's measurement deliberately excludes the examples/*.yaml + examples/ladder/* + work/* boards (16 of the previous 56) -- those go through this project's own schematic->place->route->export pipeline, never `import_kicad_pcb`, and every fix landed this round is specifically in the KiCad-import path (pad position, courtyard graphics, non-copper pads) or in `.kicad_dru` condition evaluation (insideCourtyard) -- neither applies to a synthetically-generated board with no custom rules, so that portion is unaffected either way. Re-measuring it anyway would have meant paying examples/ladder's well-documented, already out-of-scope `crates/freeroute` cold-route cost (GAPS.md #2: l4_control_hub alone measured at 1850s+) for a number this round's changes cannot move. The full, uncapped 40-board KiCad QA corpus (`select_qa_pcb_boards`'s cap) is otherwise unchanged and unreduced -- see GAPS.md #3's latest update for the per-board trail."
-    },
-    {
-      "name": "drc_precision",
-      "current": 0.10925925925925926,
-      "floor": 0.07982236392621271,
-      "note": "current measured on this round's 40-board QA-only sample (see drc_boards_evaluated's note), not the full 56-board set the floor was set against -- genuinely higher (0.0798->0.1093) even on a sample missing the examples/work boards' own contribution, from three fixes traced on issue11814 and confirmed project-wide: (1) a back-side footprint's pad position was being mirrored twice (once by the file's own convention, once by this port's `to_board`), landing a pad on its sibling's position and fabricating copper-on-foreign-net overlaps -- GAPS.md #3's actual root cause, not the pad-shape/rotation-primitive fidelity gap previously suspected; (2) a real `F.CrtYd`/`B.CrtYd` courtyard is now read instead of a pad-bbox-plus-margin fallback (courtyards_overlap was 100% false-positive, kicad 0 vs ours dozens); (3) `A.insideCourtyard(...)` in a `.kicad_dru` rule now actually matches, so a board's own courtyard-scoped clearance override (e.g. a tight QFN/WSON package's rule) isn't silently skipped in favor of a stricter default. Floor intentionally left at the old (sub-sample) value rather than raised to this round's number: mixing the unchanged examples/work portion back in for a future full run could land the combined ratio anywhere between the two components' own ratios, and this session did not re-measure that portion to know where. Raising the floor is left to whoever next runs the full 56-board set."
-    },
-    {
-      "name": "drc_recall",
-      "current": 0.20827029752899648,
-      "floor": 0.16993939393939395,
-      "note": "Same basis and same three fixes as drc_precision's note (0.1699->0.2083 on this round's 40-board QA-only sample); floor left unraised for the same reason -- see drc_precision's note."
-    },
-    {
-      "name": "erc_boards_evaluated",
-      "current": 50.0,
-      "floor": 50.0,
-      "note": "Floor reset down from 52: the prior 52 included work/mcu30 and work/l1-order, two local-only gitignored scratch boards (`work/` is 'local state, not source') that cannot exist in any fresh checkout, including this one. 50 is the full, reproducible examples/+QA-corpus set -- see REPORT.md's own ERC section for the full explanation."
-    },
-    {
-      "name": "erc_precision",
-      "current": 0.7464788732394366,
-      "floor": 0.7464788732394366,
-      "note": "Floor reset down from 0.7510 for the same reason as erc_boards_evaluated (a smaller but fully reproducible corpus, not a code regression) -- see REPORT.md. Per-type matched counts on the shared checks actually rose this round (GAPS.md #6's hierarchy flattening now descends into child sheets)."
-    },
-    {
-      "name": "erc_recall",
-      "current": 0.38326446280991733,
-      "floor": 0.38326446280991733,
-      "note": "Floor reset down from 0.4777 for the same reason as erc_boards_evaluated (a smaller but fully reproducible corpus, not a code regression) -- see REPORT.md."
     },
     {
       "name": "roundtrip_own_footprint_pose_survival_rate",

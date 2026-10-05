@@ -1,12 +1,9 @@
-//! Every check `check_erc` can emit is named here, once -- the same
-//! anti-regression registry `eda-gates` keeps for its own placement/routing
-//! checks (see that crate's `tests/check_registry.rs`, whose own schematic
-//! entries moved here along with the checks themselves).
+//! Every check `eda-lint` can emit is named here, once.
 //!
-//! This exists because of a failure mode that already happened elsewhere in
-//! this project: a gate was written, wired in, reported clean, and was
-//! measuring nothing. A check that silently stops firing is worse than no
-//! check, because the run still says PASS and now something believes it.
+//! This exists because of a failure mode that already happened in this
+//! project: a gate was written, wired in, reported clean, and was measuring
+//! nothing. A check that silently stops firing is worse than no check,
+//! because the run still says PASS and now something believes it.
 //!
 //! A registry cannot prove a check is *correct*. What it proves is that the
 //! set of checks is deliberate: renaming one, deleting one, or adding one
@@ -16,43 +13,24 @@
 
 use std::collections::BTreeSet;
 
-/// Check names emitted anywhere in `eda_kicad::check_erc` -- both its own
-/// pin-electrical checks and the readability/style checks folded in from
-/// the former `eda-gates::check_schematic` (see `erc_style.rs`).
 const REGISTERED: &[&str] = &[
-    // -- electrical (erc.rs) -----------------------------------------
-    "duplicate_reference",
-    "endpoint_off_grid",
-    "footprint_link_issues",
-    "isolated_pin_label",
-    "label_dangling",
-    "lib_symbol_issues",
-    "lib_symbol_mismatch",
-    "no_connect_connected",
-    "no_connect_dangling",
-    "pin_not_connected",
-    "pin_not_driven",
-    "pin_to_pin",
-    "power_pin_not_driven",
-    "unconnected_wire_endpoint",
-    "wire_dangling",
-    // -- multi-unit symbols, GAPS.md #21 (erc.rs::check_multi_unit_symbols) --
-    "different_unit_footprint",
-    "different_unit_net",
-    "extra_units",
-    "missing_bidi_pin",
-    "missing_input_pin",
-    "missing_power_pin",
-    "missing_unit",
-    "unit_value_mismatch",
-    // -- hierarchy, GAPS.md #6/#20 (erc.rs::check_hierarchy) --
-    "duplicate_sheet_names",
-    "hier_label_mismatch",
-    "bus_to_bus_conflict",
-    // -- buses, GAPS.md #20 (bus.rs::check_bus) --
-    "bus_to_net_conflict",
-    "net_not_bus_member",
-    // -- readability/style (erc_style.rs) -----------------------------
+    // -- placement (placement.rs, named in finding.rs) ---------------
+    "placement_board_use",
+    "placement_decoupling",
+    "placement_edge_connector",
+    "placement_net_compactness",
+    "placement_proximity",
+    "placement_refdes_clear",
+    "placement_stub_crossings",
+    // -- routing (routing.rs) ----------------------------------------
+    "routing_track_width",
+    // -- fab readiness (fab.rs) --------------------------------------
+    "fab_no_lcsc",
+    "fab_no_mpn",
+    "fab_placement",
+    "fab_unknown_part",
+    "fab_unplaced_part",
+    // -- schematic readability (schematic.rs) ------------------------
     "schematic_cluster_split",
     "schematic_column_overflow",
     "schematic_content_in_bounds",
@@ -78,21 +56,21 @@ const REGISTERED: &[&str] = &[
     "schematic_wire_through_symbol",
 ];
 
-/// Scrape check-name literals out of the crate source. Deliberately crude
-/// (see `eda-gates`' own copy of this function, which this mirrors): a
-/// quoted string that is either a bare `pin_*`/`no_connect_*`/
-/// `lib_symbol_*`/`*_dangling`/`*_reference` electrical check name, or
-/// carries the `schematic_` style-check prefix.
+/// Scrape check-name literals out of the crate source. Deliberately crude:
+/// it matches the naming convention every check follows (`<area>_<what>`),
+/// so a check that invents a different shape of name is invisible to it.
+/// That is a known limit -- the job is to notice a *registered* check
+/// vanishing, and a convention-based scrape is enough for that.
 fn emitted() -> BTreeSet<String> {
-    const SOURCES: &[&str] = &[include_str!("../src/erc.rs"), include_str!("../src/erc_style.rs"), include_str!("../src/bus.rs")];
+    const SOURCES: &[&str] = &[include_str!("../src/finding.rs"), include_str!("../src/fab.rs"), include_str!("../src/schematic.rs"), include_str!("../src/routing.rs"), include_str!("../src/placement.rs")];
+    const PREFIXES: &[&str] = &["placement_", "routing_", "fab_", "schematic_"];
     let mut found = BTreeSet::new();
     for src in SOURCES {
         for (i, _) in src.match_indices('"') {
             let rest = &src[i + 1..];
             let Some(end) = rest.find('"') else { continue };
             let tok = &rest[..end];
-            let is_candidate = tok.starts_with("schematic_") || REGISTERED.contains(&tok);
-            if is_candidate && tok.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+            if PREFIXES.iter().any(|p| tok.starts_with(p)) && tok.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
                 found.insert(tok.to_string());
             }
         }
