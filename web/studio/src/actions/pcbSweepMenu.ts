@@ -10,6 +10,8 @@ import type { StudioApi, StudioState } from "../state/store";
 import type { MenuEntry } from "../components/canvas/ContextMenu";
 import actionsData from "../kicad/actions.json";
 import { itemKind } from "../kicad-port/pcbItems";
+import { convertAvailability } from "../kicad-port/pcbConvert";
+import { routeQueueActive } from "../components/canvas/routeQueue";
 
 const LABELS = new Map<string, string>((actionsData as { actions: { name: string; label: string }[] }).actions.map((a) => [a.name, a.label]));
 
@@ -18,18 +20,21 @@ const label = (name: string): string => LABELS.get(name) ?? name;
 
 export function pcbSweepMenuEntries(state: StudioState, api: StudioApi, refs: readonly string[], run: (name: string) => void, isEnabled: (name: string) => boolean): MenuEntry[] {
   const board = state.board;
-  if (!board || refs.length === 0) return [];
+  const out: MenuEntry[] = [];
+  const add = (name: string, when: boolean): void => {
+    if (when && isEnabled(name)) out.push({ label: label(name), onSelect: () => run(name) });
+  };
+  // The router's menu offers Cancel Current Item only inside RouteSelected (`inRouteSelected`).
+  add("pcbnew.InteractiveRouter.CancelCurrentItem", routeQueueActive());
+  // The differential pair tool's own menu ("Select Differential Pair Size" > custom size): the dimensions dialog.
+  add("pcbnew.InteractiveRouter.DiffPairDialog", state.activeTool === "diffpair" || state.drawState?.kind === "diffpair");
+  if (!board || refs.length === 0) return out;
   const kinds = refs.map((id) => itemKind(board, id));
   const shapeKinds = refs.map((id) => api.shapeById(id)?.kind ?? null);
   const count = refs.length;
   const only = (pred: (i: number) => boolean): boolean => refs.every((_, i) => pred(i));
   const has = (pred: (i: number) => boolean): boolean => refs.some((_, i) => pred(i));
   const shapeIn = (i: number, ks: readonly string[]): boolean => shapeKinds[i] != null && ks.includes(shapeKinds[i]!);
-
-  const out: MenuEntry[] = [];
-  const add = (name: string, when: boolean): void => {
-    if (when && isEnabled(name)) out.push({ label: label(name), onSelect: () => run(name) });
-  };
 
   // SELECT_MENU
   add("pcbnew.InteractiveSelection.FilterSelection", true);
@@ -61,5 +66,15 @@ export function pcbSweepMenuEntries(state: StudioState, api: StudioApi, refs: re
   add("pcbnew.InteractiveEdit.mergePolygons", booleanTypes);
   add("pcbnew.InteractiveEdit.subtractPolygons", booleanTypes);
   add("pcbnew.InteractiveEdit.intersectPolygons", booleanTypes);
+
+  // "Create from Selection" submenu (CONVERT_TOOL::Init)
+  const convert = convertAvailability(board, refs);
+  add("pcbnew.Convert.convertToPoly", convert.poly);
+  add("pcbnew.Convert.convertToZone", convert.zone);
+  add("pcbnew.Convert.convertToKeepout", convert.keepout);
+  add("pcbnew.Convert.convertToLines", convert.lines);
+  add("pcbnew.Convert.outsetItems", convert.outset);
+  add("pcbnew.Convert.convertToTracks", convert.tracks);
+  add("pcbnew.Convert.convertToArc", convert.arc);
   return out;
 }

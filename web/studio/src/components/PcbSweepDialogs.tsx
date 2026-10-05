@@ -7,11 +7,10 @@
 //   dogbone           GetDogboneParams (edit_tool.cpp): "Arc radius" and
 //                     "Add slots in acute corners".
 //   filter_selection  DIALOG_FILTER_SELECTION (dialog_filter_selection.cpp).
-import { useEffect, useState } from "react";
-import { useStudioState } from "../state/store";
-import { umFrom, umTo } from "../state/units";
+import { useState } from "react";
 import { closeSweepDialog, useSweepDialog, type DogboneDialog, type FilterSelectionDialog, type UnitEntryDialog } from "../actions/pcbSweepDialogs";
 import type { FilterOptions } from "../kicad-port/pcbSelectionOps";
+import { useEscape, useLengthField } from "./pcbDialogKit";
 
 export function PcbSweepDialogs() {
   const dlg = useSweepDialog();
@@ -24,31 +23,9 @@ export function PcbSweepDialogs() {
       return <Dogbone dlg={dlg} />;
     case "filter_selection":
       return <FilterSelection dlg={dlg} />;
+    case "element":
+      return <>{dlg.element}</>;
   }
-}
-
-/** Escape closes any of them. */
-function useEscape() {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") closeSweepDialog();
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, []);
-}
-
-/** A length field in the display units, parsed with a unit suffix allowed ("1.5", "0.2mm", "10mil"). */
-function useLengthField(valueUm: number) {
-  const units = useStudioState().units;
-  const [text, setText] = useState(() => String(Number(umTo(valueUm, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5))));
-  const parse = (): number | null => {
-    const m = /^\s*(-?\d*\.?\d+)\s*(mm|mil|in|")?\s*$/i.exec(text);
-    if (!m) return null;
-    const unit = m[2] ? (m[2] === '"' ? "in" : (m[2].toLowerCase() as "mm" | "mil" | "in")) : units;
-    return Math.round(umFrom(parseFloat(m[1]!), unit));
-  };
-  return { text, setText, parse, units };
 }
 
 function UnitEntry({ dlg }: { dlg: UnitEntryDialog }) {

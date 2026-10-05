@@ -10,28 +10,22 @@
 // is called once per registry build, so `ctx.state` is the render's snapshot
 // -- anything read after an `await` goes through `ctx.api.getState()`.
 
-import type { Dispatch } from "react";
-import type { Action, StudioApi, StudioState } from "../state/store";
 import type { BoardState, Cmd, RouteMode, Shape } from "../api/types";
-import { dpMove, fetchState, routeMove, routeSetMode } from "../api/client";
+import { dpMove, routeMove, routeSetMode } from "../api/client";
+import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { openSweepDialog } from "./pcbSweepDialogs";
+import { registerPcbRouterSweep } from "./pcbRouterSweep";
+import { registerPcbSelectionSync } from "./pcbSelectionSync";
+import { registerPcbConvertSweep } from "./pcbConvertSweep";
 import { DEFAULT_FILTER_OPTIONS, filterSelection, netItems, netsOfItems, unrouteSelected, type FilterOptions } from "../kicad-port/pcbSelectionOps";
 import { itemKind } from "../kicad-port/pcbItems";
 import { mirrorReferencePoint, mirrorableIds, planMirror, type FlipDirection } from "../kicad-port/pcbMirror";
 import { healShapes, isLineModifiable, lineSelectionError, modifyLines, simplifyPolygonRing, type LineRoutine, type ModifyResult } from "../kicad-port/pcbModify";
 import { boardOutlineRings } from "../kicad-port/pcbOutline";
 import { breakTrack, filletTracks, type EditBoard, type EditTrack } from "../kicad-port/pcbTrackEdit";
-
-export interface SweepCtx {
-  state: StudioState;
-  dispatch: Dispatch<Action>;
-  api: StudioApi;
-  /** `PCB_SELECTION_TOOL::RequestSelection`: the selection, or the item under the cursor when nothing is selected. */
-  requestSelection: () => string[];
-}
 
 /** Values the dialogs start from, remembered between invocations like the C++ `static`s. */
 const last = {
@@ -51,18 +45,6 @@ export function nextRouterMode(mode: RouteMode): RouteMode {
   return mode === "mark_obstacles" ? "shove" : mode === "shove" ? "walkaround" : "mark_obstacles";
 }
 
-/** Every item id of the board that can come out of a shape/track edit (to find what an edit created). */
-function itemIds(board: BoardState | null): Set<string> {
-  const out = new Set<string>();
-  if (!board) return out;
-  for (const s of board.drawings?.shapes ?? []) out.add(s.id);
-  for (const t of board.drawings?.texts ?? []) out.add(t.id);
-  for (const t of board.routing?.tracks ?? []) out.add(t.id);
-  for (const v of board.routing?.vias ?? []) out.add(v.id);
-  for (const z of board.routing?.zones ?? []) out.add(z.id);
-  return out;
-}
-
 /** The `EditBoard` the track edits (Break Track, Fillet Tracks) read their connectivity from. */
 export function editBoardOf(board: BoardState): EditBoard {
   const pads: EditBoard["pads"][number][] = [];
@@ -79,53 +61,12 @@ export function editBoardOf(board: BoardState): EditBoard {
   };
 }
 
+export type { SweepCtx };
+
 export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx): void {
   const { state, dispatch, api } = ctx;
-  const toast = (message: string, kind: "info" | "error" = "info") => dispatch({ type: "TOAST", message, kind });
-  /** Same guard `useActionRunner` puts on every board edit: a stray key on the schematic tab must never reach a board command. */
-  const pcbOnly =
-    (fn: () => void) =>
-    () => {
-      if (state.tab === "pcb") fn();
-    };
+  const { toast, pcbOnly, lockedIds, requestFiltered, applyEdit } = createSweepHelpers(ctx);
   const board = state.board;
-  const lockedIds = new Set(board?.locked ?? []);
-
-  /**
-   * `RequestSelection( clientFilter )`: the selection (or the hovered item), with the items the filter rejects and
-   * the locked ones dropped from the selection itself (`FilterCollectorForLockedItems`).
-   */
-  const requestFiltered = (accept: (id: string) => boolean): string[] => {
-    const ids = ctx.requestSelection();
-    const out = ids.filter((id) => accept(id) && !lockedIds.has(id));
-    if (state.selection.size > 0 && out.length !== ids.length) dispatch({ type: "SET_SELECTION", refs: out });
-    return out;
-  };
-
-  /**
-   * Send `cmds` as one undo step, then select what the edit made (every id that did not exist before) plus whatever of
-   * the old selection survived -- the C++ keeps modified items selected and adds the created ones. The new ids are read
-   * from the backend directly: the store's own state only catches up on its next render, and its board refresh also
-   * drops every non-footprint id from the selection.
-   */
-  const applyEdit = async (cmds: Cmd[], removed: readonly string[] = [], message: string | null = null): Promise<boolean> => {
-    if (cmds.length === 0) {
-      if (message) toast(message);
-      return false;
-    }
-    const before = itemIds(api.getState().board);
-    const previous = [...api.getState().selection];
-    const ok = await api.cmdBatch(cmds);
-    if (!ok) return false;
-    const fresh = await fetchState().catch(() => null);
-    const after = itemIds(fresh);
-    const gone = new Set(removed);
-    const keep = previous.filter((id) => !gone.has(id) && (after.has(id) || !!fresh?.parts.some((p) => p.ref === id)));
-    const created = [...after].filter((id) => !before.has(id));
-    dispatch({ type: "SET_SELECTION", refs: [...keep, ...created] });
-    if (message) toast(message);
-    return true;
-  };
 
   // --------------------------------------------------------------- router modes
   // router_tool.cpp ChangeRouterMode / CycleRouterMode: `settings.SetMode( mode )`. The studio keeps the mode in
@@ -476,4 +417,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   if (draw?.kind === "zone" || (draw?.kind === "shape" && draw.shapeKind === "polygon")) {
     m.set("pcbnew.InteractiveDrawing.closeOutline", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawFinishRequest: state.pcbx.drawFinishRequest + 1 } })));
   }
+
+  registerPcbRouterSweep(m, ctx);
+  registerPcbSelectionSync(m, ctx);
+  registerPcbConvertSweep(m, ctx);
 }

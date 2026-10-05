@@ -25,6 +25,7 @@ import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
 import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
 import { findRouteAnchor, constrainByAngleMode, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
+import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
 import { routeMove, routeDragMove, dpMove } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
@@ -538,6 +539,7 @@ export function Canvas() {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
           const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
+          clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
           void startInteractiveRoute(sx, sy, layer, width, state.routerSettings, dispatch);
           return;
         }
@@ -552,7 +554,8 @@ export function Canvas() {
         const draw = state.drawState;
         if (!draw || draw.kind !== "diffpair") {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
-          void startDiffPairRoute(sx, sy, layer, dispatch);
+          const custom = state.pcbx.customDiffPair;
+          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthUm, gap: custom.gapUm } : undefined);
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);

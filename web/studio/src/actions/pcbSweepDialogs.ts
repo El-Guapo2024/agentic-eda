@@ -6,7 +6,7 @@
 // time, like KiCad's modal dialogs. The components are in
 // components/PcbSweepDialogs.tsx.
 
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import type { FilterOptions } from "../kicad-port/pcbSelectionOps";
 
 /** `WX_UNIT_ENTRY_DIALOG`: one length (Fillet Lines' radius, Chamfer's setback, a tolerance...). `onOk` gets micrometres. */
@@ -35,7 +35,13 @@ export interface FilterSelectionDialog {
   onOk: (options: FilterOptions) => void;
 }
 
-export type SweepDialog = UnitEntryDialog | DogboneDialog | FilterSelectionDialog;
+/** Any other dialog: the action brings its own component (components/Pcb*Dialogs.tsx), which closes itself with `closeSweepDialog`. */
+export interface ElementDialog {
+  kind: "element";
+  element: ReactNode;
+}
+
+export type SweepDialog = UnitEntryDialog | DogboneDialog | FilterSelectionDialog | ElementDialog;
 
 let current: SweepDialog | null = null;
 const listeners = new Set<() => void>();

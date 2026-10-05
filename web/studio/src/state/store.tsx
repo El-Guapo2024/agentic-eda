@@ -2016,12 +2016,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_SELECTION", refs: members });
     },
     addZone: async (net, layer, outline, settings) => {
-      const board = stateRef.current.board;
+      // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
+      const board = await fetchState().catch(() => null);
       if (!board) return;
       const before = allItemIds(board);
       const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // Read the board from the backend: `stateRef` only catches up on the next render, which is after this continuation, so the new
+      // zone would not be in it yet and its settings (a rule area's flags, say) would never be applied.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newId = [...allItemIds(after)].find((id) => !before.has(id));
       if (!newId) return;
