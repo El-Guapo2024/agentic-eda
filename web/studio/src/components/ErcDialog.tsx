@@ -12,7 +12,11 @@
 // at our own id (crates/cli/src/kicad_engine.rs). There is no other ERC
 // engine and no engine switch. It takes seconds, so it runs on demand --
 // when the dialog opens on a schematic kicad-cli has not judged yet, and on
-// "Run ERC" -- with a visible running state, never on every change.
+// "Run ERC" -- with a visible running state, never on every change. The
+// schematic stays editable during a run (the server answers edits meanwhile;
+// closing this window leaves the run going), and a report stamped with a
+// revision the design has since left is shown as out of date
+// (kicad-port/checkRevision.ts).
 //
 // Each violation's `location` is our id for its first item (a symbol, a
 // pin "REF.PIN", a power symbol, a wire, a label, a no-connect, a text), not
@@ -35,6 +39,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchVersion } from "../api/client";
 import type { ErcViolation } from "../api/types";
+import { STALE_NOTICE, isStale, revisionAfterOwnEdit } from "../kicad-port/checkRevision";
 import { useStudioDispatch, useStudioState, useStudioApi } from "../state/store";
 import { ercMarkerPosition } from "./schematic/ercMarkerPosition";
 import { fitTransform } from "./canvas/view";
@@ -58,13 +63,14 @@ export function ErcDialog() {
   const visible = violations.filter((v) => (v.severity === "error" ? showErrors : v.severity === "warning" ? showWarnings : showExcluded));
   const lint = state.lint?.schematic.violations ?? [];
   const running = state.ercRunning;
-  const stale = state.erc !== null && !running && state.ercVersion !== state.version;
+  // Out of date: the design's revision is no longer the one the report was computed on. A run in flight says "running" instead.
+  const stale = state.erc !== null && !running && isStale(state.ercVersion, state.version);
 
   // Opening the dialog on a schematic kicad-cli has not judged yet runs it
   // (the running state below shows meanwhile); one it already judged keeps
   // its report until "Run ERC".
   useEffect(() => {
-    if (open && state.version !== null && !state.ercRunning && (state.erc === null || state.ercVersion !== state.version)) void api.runErc();
+    if (open && state.version !== null && !state.ercRunning && (state.erc === null || isStale(state.ercVersion, state.version))) void api.runErc();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, state.version === null]);
 
@@ -109,11 +115,14 @@ export function ErcDialog() {
   const toggleExclusion = async (v: ErcViolation) => {
     if (!v.location) return;
     const wasExcluded = v.severity === "excluded";
+    const before = api.getState();
     const ok = await api.cmd(wasExcluded ? { op: "delete_erc_exclusion", check: v.check, location: v.location } : { op: "add_erc_exclusion", check: v.check, location: v.location });
     if (!ok) return;
-    // The report on screen is patched in place; `version` is the board
-    // version after the Cmd, so the waiver does not make the run look out of date.
-    const version = await fetchVersion().catch(() => null);
+    // The report on screen is patched in place. A current report stays
+    // current (the waiver does not make the run look out of date); one that
+    // was already out of date stays out of date.
+    const boardAfter = await fetchVersion().catch(() => null);
+    const version = revisionAfterOwnEdit(before.ercVersion, before.version, boardAfter);
     dispatch({ type: "ERC_MARK_EXCLUDED", check: v.check, location: v.location, excluded: !wasExcluded, version });
   };
 
@@ -160,13 +169,17 @@ export function ErcDialog() {
               {running ? "Running…" : "Run ERC"}
             </button>
             {state.erc?.engine && <span style={{ color: "var(--chrome-text-dim)" }}>{state.erc.engine}</span>}
-            {stale && <span style={{ color: "var(--chrome-warn)" }}>The schematic changed since this run -- Run ERC again to refresh.</span>}
+            {stale && (
+              <span className="stale-notice" role="status" style={{ color: "var(--chrome-warn)" }}>
+                {STALE_NOTICE}
+              </span>
+            )}
             {state.ercError && <span style={{ color: "var(--chrome-danger)" }}>{state.ercError}</span>}
           </div>
           {running && (
             <div className="run-banner" role="status">
               <span className="bar" />
-              <span>kicad-cli is checking the schematic (a few seconds). Edits wait until it is done.</span>
+              <span>kicad-cli is checking the schematic (a few seconds). The schematic stays editable: close this window and carry on, and the result is marked out of date if the design changes.</span>
             </div>
           )}
 
@@ -179,7 +192,7 @@ export function ErcDialog() {
             </div>
           </div>
 
-          <div style={{ opacity: running ? 0.5 : 1 }}>
+          <div style={{ opacity: running ? 0.5 : stale ? 0.6 : 1 }}>
             {tab === "erc" && (
               <>
                 <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, fontSize: 11 }}>
