@@ -23,6 +23,8 @@ import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
 import { repeatSource } from "../kicad-port/schRepeat";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
+import { keepOnSheet } from "../kicad-port/schSelectionPrune";
+import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -607,6 +609,8 @@ export interface StudioState {
    * equivalent for.
    */
   selectionFilter: SelectionFilter;
+  /** The schematic's own (panel_sch_selection_filter.cpp): what a click/box/Select All on the sheet may pick (kicad-port/schSelectionFilter.ts). */
+  schSelectionFilter: SchSelectionFilter;
 
   /** Refuse a move/edit that adds gate failures. Not a KiCad feature -- see the task's Strict toggle. */
   strict: boolean;
@@ -843,6 +847,7 @@ const initialState: StudioState = {
   layerVisible: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, true])),
   layerOpacity: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, 1])),
   selectionFilter: DEFAULT_SELECTION_FILTER,
+  schSelectionFilter: DEFAULT_SCH_SELECTION_FILTER,
   strict: true,
   drcDialogOpen: false,
   hotkeysDialogOpen: false,
@@ -933,6 +938,7 @@ export type Action =
   | { type: "SET_LAYER_VISIBLE"; layer: string; visible: boolean }
   | { type: "SET_LAYER_OPACITY"; layer: string; opacity: number }
   | { type: "SET_SELECTION_FILTER"; filter: Partial<StudioState["selectionFilter"]> }
+  | { type: "SET_SCH_SELECTION_FILTER"; filter: SchSelectionFilter }
   | { type: "SET_STRICT"; strict: boolean }
   | { type: "SET_DRC_OPEN"; open: boolean }
   | { type: "SET_HOTKEYS_DIALOG_OPEN"; open: boolean }
@@ -1045,7 +1051,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       }
       // Drop selection/hot refs for parts that no longer exist (ripped, renamed).
       const refs = new Set(action.board.parts.map((p) => p.ref));
-      const selection = new Set([...state.selection].filter((r) => refs.has(r)));
+      // On the schematic tab the selection also holds the sheet's wires, labels, shapes... which are no parts: SCHEMATIC_OK prunes those against the sheet.
+      const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
       return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot };
     }
@@ -1205,6 +1212,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, layerOpacity: { ...state.layerOpacity, [action.layer]: action.opacity } };
     case "SET_SELECTION_FILTER":
       return { ...state, selectionFilter: { ...state.selectionFilter, ...action.filter } };
+    case "SET_SCH_SELECTION_FILTER":
+      return { ...state, schSelectionFilter: action.filter };
     case "SET_STRICT":
       return { ...state, strict: action.strict };
     case "SET_DRC_OPEN":
@@ -1236,7 +1245,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_PREFERENCES_DIALOG_OPEN":
       return { ...state, preferencesDialogOpen: action.open };
     case "SCHEMATIC_OK":
-      return { ...state, schematic: action.schematic, schematicError: null };
+      return { ...state, schematic: action.schematic, schematicError: null, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
     case "SCHEMATIC_ERR":
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":

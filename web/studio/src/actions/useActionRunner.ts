@@ -62,6 +62,11 @@ import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
+import { allItems, hitItems } from "../components/schematic/schItems";
+import { deleteCmds } from "../kicad-port/schDelete";
+import { withoutLocked } from "../kicad-port/schLock";
+import { schSelectable } from "../kicad-port/schSelectionFilter";
+import { registerSchEditActions } from "./schEditActions";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 
 function canvasRect(): DOMRect | null {
@@ -125,9 +130,15 @@ export function useActionRunner() {
       if (state.tab === "schematic") {
         const sch = state.schematic;
         if (!sch) return [];
-        const sym = hitSymbol(sch, state.cursorUm.x, state.cursorUm.y);
+        // `itemPassesFilter`: an item the selection filter keeps out (a category that is off, a locked item without "Locked items") cannot be picked up by the cursor.
+        const selectable = schSelectable(sch, state.schSelectionFilter);
+        const pick = (id: string | null | undefined): string | null => (id && selectable(id) ? id : null);
+        const sym = pick(hitSymbol(sch, state.cursorUm.x, state.cursorUm.y));
         if (sym) return [sym];
-        const wire = hitWire(sch, state.cursorUm.x, state.cursorUm.y, 400 / (state.schematicView.scale || 1));
+        // Any other placed item (label, text, power symbol, sheet, shape, junction, ...) under the cursor, then a wire.
+        const other = hitItems(sch, state.cursorUm.x, state.cursorUm.y, 6 / (state.schematicView.scale || 1)).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pick(r.id));
+        if (other) return [other.id];
+        const wire = pick(hitWire(sch, state.cursorUm.x, state.cursorUm.y, 400 / (state.schematicView.scale || 1)));
         return wire ? [wire] : [];
       }
       if (state.tab !== "pcb" || !state.board) return [];
@@ -145,13 +156,10 @@ export function useActionRunner() {
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
       const locked = new Set(state.board?.locked ?? []);
+      // `SCH_EDIT_TOOL::DoDelete`: every selectable schematic item, locked ones skipped (kicad-port/schDelete.ts).
+      if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
       for (const id of refs) {
-        if (state.tab === "schematic") {
-          if (api.symbolById(id)) cmds.push({ op: "delete_symbol", id });
-          else if (api.wireById(id)) cmds.push({ op: "delete_wire", id });
-          else if (state.schematic?.junctions?.some((j) => j.id === id)) cmds.push({ op: "delete_junction", id });
-          else if (state.schematic?.lines?.some((l) => l.id === id)) cmds.push({ op: "delete_sch_line", id });
-        } else if (state.tab === "pcb") {
+        if (state.tab === "pcb") {
           if (locked.has(id)) continue;
           if (api.trackById(id)) cmds.push({ op: "delete_track", id });
           else if (api.viaById(id)) cmds.push({ op: "delete_via", id });
@@ -1014,10 +1022,11 @@ export function useActionRunner() {
       "common.Interactive.selectAll",
       viewTab(() => {
         if (state.tab === "schematic") {
-          // sch_selection_tool.cpp SelectAll: every selectable item on the sheet (symbols + wires here).
+          // sch_selection_tool.cpp SelectAll: every selectable item on the sheet (the selection filter's categories, locked ones only with "Locked items" on).
           const sch = state.schematic;
           if (!sch) return;
-          dispatch({ type: "SET_SELECTION", refs: [...sch.symbols.map((x) => x.id), ...sch.wires.map((w) => w.id).filter(Boolean)] });
+          const selectable = schSelectable(sch, state.schSelectionFilter);
+          dispatch({ type: "SET_SELECTION", refs: [...new Set(allItems(sch).map((r) => r.id))].filter(selectable) });
           return;
         }
         if (!state.board) return;
@@ -1040,7 +1049,8 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveMove.move",
       schematicOnly(() => {
-        const first = requestSelection()[0];
+        // `FilterSelectionForLockedItems` (SCH_MOVE_TOOL::doMoveSelection): a locked symbol is not moved.
+        const first = withoutLocked(requestSelection(), new Set(state.schematic?.locked ?? []))[0];
         if (!first || !api.symbolById(first)) return;
         adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
@@ -1056,7 +1066,7 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveMove.drag",
       schematicOnly(() => {
-        const refs = requestSelection();
+        const refs = withoutLocked(requestSelection(), new Set(state.schematic?.locked ?? []));
         const first = refs[0];
         if (!first || !api.symbolById(first) || !state.schematic) return;
         adoptHovered();
@@ -1068,7 +1078,9 @@ export function useActionRunner() {
 
     // sch_edit_tool.cpp Rotate/Mirror: RequestSelection (hover fallback), every selected symbol,
     // one common point for 2+ items, one undo step.
-    const schSymbols = () => requestSelection().filter((id) => api.symbolById(id));
+    // Rotate/Mirror skip locked items (`FilterSelectionForLockedItems`, called first by SCH_EDIT_TOOL::Rotate/Mirror).
+    const schLocked = () => new Set(state.schematic?.locked ?? []);
+    const schSymbols = () => withoutLocked(requestSelection(), schLocked()).filter((id) => api.symbolById(id));
     m.set(
       "eeschema.InteractiveEdit.rotateCCW",
       schematicOnly(() => {
@@ -2158,6 +2170,9 @@ export function useActionRunner() {
         if (state.tab === "symbol") void symApi.exportLibraryKicadSym();
       });
     }
+
+    // The schematic edit and drawing tools (Lock, Change To, Break, shapes, sheet pins, ...) -- actions/schEditActions.ts.
+    registerSchEditActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch]);

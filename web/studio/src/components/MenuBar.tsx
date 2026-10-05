@@ -20,7 +20,7 @@ const schMenusFile = schMenusData as MenusFile;
 const actionsFile = actionsData as ActionsFile;
 const actionsByName = new Map<string, KicadAction>(actionsFile.actions.map((a) => [a.name, a]));
 
-function MenuNodeView({ node }: { node: MenuNode }) {
+export function MenuNodeView({ node }: { node: MenuNode }) {
   const { run, isEnabled } = useActionRunner();
   if (node.type === "separator") return <div className="menu-separator" role="separator" />;
   if (node.type === "submenu") {

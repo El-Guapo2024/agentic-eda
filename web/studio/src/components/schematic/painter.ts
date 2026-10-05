@@ -42,6 +42,8 @@ import { drawStrokeText } from "../text/strokeFont";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { unitLetter } from "../../kicad-port/unitLetter";
+import { drawSelectionBox, paintGraphics } from "./schGraphicsPainter";
+import { allItems, itemBounds } from "./schItems";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -701,8 +703,8 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
 }
 
 /** `T`: free-standing text -- `SCH_TEXT`'s own render, drawn with the Newstroke font like every other schematic text (labels, pin names, fields). `t.angle` is already world-space (like `SymbolInstance.rot`, not a library-local `LibGraphic.angle_deg`), so it feeds `ctx.rotate`/`angleRad` directly, no Y-flip negation -- see `drawRealSymbol`'s own `ctx.rotate((symbol.rot * Math.PI) / 180)` for the parallel case this mirrors. */
-function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText) {
-  drawStrokeText(ctx, t.content, t.at[0], t.at[1], { sizeUm: t.size_um, angleRad: (t.angle * Math.PI) / 180, justify: "left", color: layerColor("LAYER_NOTES") });
+function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolean) {
+  drawStrokeText(ctx, t.content, t.at[0], t.at[1], { sizeUm: t.size_um, angleRad: (t.angle * Math.PI) / 180, justify: "left", color: on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOTES") });
 }
 
 /**
@@ -718,12 +720,12 @@ function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText) {
  * drew here, the view simply had no sheets to show) rather than full
  * pixel-parity with source's own pin glyphs.
  */
-function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet) {
+function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet, on: boolean) {
   const hair = 1 / view.scale;
   const [x, y] = s.at;
   const [w, h] = s.size;
   ctx.save();
-  ctx.strokeStyle = layerColor("LAYER_SHEET");
+  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_SHEET");
   ctx.lineWidth = Math.max(152.4, hair);
   ctx.strokeRect(x, y, w, h);
   ctx.restore();
@@ -738,10 +740,10 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet)
   }
 }
 
-function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: NoConnect) {
+function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: NoConnect, on: boolean) {
   const hair = 1 / view.scale;
   ctx.save();
-  ctx.strokeStyle = layerColor("LAYER_NOCONNECT");
+  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOCONNECT");
   ctx.lineWidth = Math.max(152.4, hair);
   const [x, y] = nc.at;
   const s = NOCONNECT_HALF_UM;
@@ -763,12 +765,12 @@ function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: N
  * `crates/kicad/src/bus.rs`'s own doc) and irrelevant to drawing it: both
  * ends are simply connected by one straight segment.
  */
-function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: BusEntry) {
+function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: BusEntry, on: boolean) {
   const hair = 1 / view.scale;
   const [x, y] = be.at;
   const [dx, dy] = be.size;
   ctx.save();
-  ctx.strokeStyle = layerColor("LAYER_BUS");
+  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_BUS");
   ctx.lineWidth = Math.max(150, hair);
   ctx.beginPath();
   ctx.moveTo(x, y);
@@ -867,7 +869,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
 
   // Bus entries (GAPS.md #20) -- a short diagonal stub from `at` to
   // `at + size`, `LAYER_BUS`-colored same as the bus wire it taps.
-  for (const be of sch.bus_entries) drawBusEntry(ctx, view, be);
+  for (const be of sch.bus_entries) drawBusEntry(ctx, view, be, opts.selection.has(be.id));
 
   // Junctions -- see junctions.ts's own doc for exactly which points
   // besides coincident wire endpoints (power symbol/label anchors landing
@@ -899,26 +901,29 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     ctx.stroke();
   }
 
+  // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`).
+  paintGraphics(ctx, view, sch.graphics ?? [], opts.selection);
+
   // Hierarchical sheets (GAPS.md #6) -- drawn early, like the wires/
   // junctions pass above, so a sheet's own local wires/labels/symbols
   // (all drawn later below) read as sitting "on" the page rather than
   // under it.
-  for (const s of sch.sheets) drawSheet(ctx, view, s);
+  for (const s of sch.sheets) drawSheet(ctx, view, s, opts.selection.has(s.id));
 
   // No-connects.
-  for (const nc of sch.no_connects) drawNoConnect(ctx, view, nc);
+  for (const nc of sch.no_connects) drawNoConnect(ctx, view, nc, opts.selection.has(nc.id));
 
   // Labels.
   for (const l of sch.labels) {
-    drawLabel(ctx, view, l, sch.wires, opts.netHighlight === l.net);
+    drawLabel(ctx, view, l, sch.wires, opts.netHighlight === l.net || opts.selection.has(l.id));
   }
 
   // Free text.
-  for (const t of sch.texts) drawSchText(ctx, t);
+  for (const t of sch.texts) drawSchText(ctx, t, opts.selection.has(t.id));
 
   // Power symbols (GND, +5V, PWR_FLAG, ...).
   for (const ps of sch.power_symbols) {
-    const on = opts.netHighlight === ps.net;
+    const on = opts.netHighlight === ps.net || opts.selection.has(ps.id);
     const resolved = resolveLibSymbol({ id: ps.id, lib_id: ps.lib_id, at: ps.at, rot: ps.rot, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [ps.pin] }, sch.lib_symbols);
     const m = symbolTransformMatrix(ps.rot, null);
     const resolvedPin = resolved?.pins[0] ?? (sch.lib_symbols[ps.lib_id]?.pins.find((p) => p.unit === 0 || p.unit === 1) ? resolvePin(sch.lib_symbols[ps.lib_id]!.pins.find((p) => p.unit === 0 || p.unit === 1)!, m, ps.at) : null);
@@ -943,6 +948,17 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     } else {
       const r = resolveSymbol(s);
       drawBoxSymbol(ctx, view, r, selected, unitSuffix);
+    }
+  }
+
+  // A dashed box around a selected item whose own colour change reads too faintly (text, labels, sheets, shapes, power symbols).
+  if (opts.selection.size > 0) {
+    for (const ref of allItems(sch)) {
+      if (!opts.selection.has(ref.id)) continue;
+      if (ref.kind === "label" || ref.kind === "text" || ref.kind === "sheet" || ref.kind === "graphic" || ref.kind === "power" || ref.kind === "no_connect") {
+        const b = itemBounds(sch, ref);
+        if (b) drawSelectionBox(ctx, view, b);
+      }
     }
   }
 

@@ -36,8 +36,13 @@ import { isMac } from "../platform";
 import { computeDragAttachment } from "./schematic/wireAttachment";
 import { nextReference } from "../kicad-port/nextReference";
 import { wireTail } from "../kicad-port/schLineMode";
-import { collectBoxSelection } from "./schematic/boxSelection";
-import { hitJunction, hitSchLine, hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
+import { boxItems, hitItems } from "./schematic/schItems";
+import { SchContextMenu } from "./schematic/SchContextMenu";
+import { summarizeSelection } from "./schematic/schSelectionSummary";
+import { schContextMenu } from "../kicad-port/schContextMenu";
+import { schSelectable } from "../kicad-port/schSelectionFilter";
+import type { MenuNode } from "../kicad/types";
+import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
 import { sheetSize } from "../kicad-port/schSheet";
 import type { Cmd } from "../api/types";
@@ -172,7 +177,12 @@ export function SchematicView() {
   const pendingClickRef = useRef<string | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
+  /** The right-click menu (`SCH_SELECTION_TOOL`'s context menu): where it is and what it offers for the selection. */
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodes: MenuNode[] } | null>(null);
   const sch = state.schematic;
+  /** `SCH_SELECTION_TOOL::itemPassesFilter`: an item of a category the selection filter has off, or a locked one without its "Locked items", cannot be picked. */
+  const selectable = sch ? schSelectable(sch, state.schSelectionFilter) : () => true;
+  const pickable = (id: string | null): string | null => (id && selectable(id) ? id : null);
   const moveMode = state.activeTool === "move";
   const dragMode = state.activeTool === "drag";
   /** Which Cmd a committed move/drag preview becomes -- `M` and a plain click-drag move symbols with no wire attachment (`"symbol"`); `G` and a plain click-drag on a symbol both default to rubber-banding (`"symbol_drag"`, sch_selection_tool.cpp's own default for a plain drag -- see DragState's doc). */
@@ -510,7 +520,7 @@ export function SchematicView() {
 
         const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
         const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
-        const symId = hitSymbol(sch, wx, wy);
+        const symId = pickable(hitSymbol(sch, wx, wy));
         if (symId) {
           if (hasModifier(modifiers)) {
             // Unchanged from before this pass: a modified click always
@@ -548,10 +558,11 @@ export function SchematicView() {
           return;
         }
         const thresholdUm = 400 / state.schematicView.scale;
-        // An explicit junction or a graphic line is selectable by a plain click (for Del) -- unlike a wire it has no net a plain click
-        // could highlight instead.
-        // Tight, screen-sized radii (the wire/net threshold above is a loose 400 px): a near miss must still reach the wire under it.
-        const placedItem = hitJunction(sch, wx, wy, Math.max(450, 8 / state.schematicView.scale)) ?? hitSchLine(sch, wx, wy, 6 / state.schematicView.scale);
+        // Every other placed item -- an explicit junction, a graphic line, a label, a text, a power symbol, a no-connect, a bus entry, a sheet
+        // or a drawn shape -- is selectable by a plain click (for Del, Lock, Change To...); unlike a wire it has no net a plain click
+        // could highlight instead. Tight, screen-sized tolerance (the wire/net threshold above is a loose 400 px): a near miss must still
+        // reach the wire under it.
+        const placedItem = hitItems(sch, wx, wy, 6 / state.schematicView.scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id;
         if (placedItem) {
           dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, placedItem, modifiers) });
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
@@ -624,6 +635,20 @@ export function SchematicView() {
           dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "symbol_drag", dxUm: dx, dyUm: dy, rotateQuarterTurns } : null });
         }
       }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (!sch) return;
+        // `SCH_SELECTION_TOOL`: a right-click on an item that is not selected selects it first, on empty space clears the selection; then the
+        // menu for whatever is selected (kicad-port/schContextMenu.ts).
+        const [wx, wy] = toWorld(e.clientX, e.clientY);
+        const scale = state.schematicView.scale || 1;
+        const hit = pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
+        let ids = [...state.selection];
+        if (hit && !state.selection.has(hit)) ids = [hit];
+        else if (!hit && ids.length > 0) ids = [];
+        if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids)) });
+      }}
       onDoubleClick={() => {
         const draw = state.drawState;
         if (draw?.kind !== "wire") return;
@@ -657,7 +682,7 @@ export function SchematicView() {
             const [x1, y1] = toWorld(e.clientX, e.clientY);
             const [x0, y0] = drag.startWorld;
             const box: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
-            const hits = collectBoxSelection(sch, box, marquee.crossing);
+            const hits = boxItems(sch, box, marquee.crossing).filter((id) => pickable(id));
             if (hits.length > 0 || hasModifier(modifiers)) {
               dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, modifiers) });
             }
@@ -668,6 +693,7 @@ export function SchematicView() {
     >
       <canvas ref={canvasRef} />
       {empty && <div className="pcb-canvas-empty">{empty}</div>}
+      {contextMenu && <SchContextMenu x={contextMenu.x} y={contextMenu.y} nodes={contextMenu.nodes} onClose={() => setContextMenu(null)} />}
     </div>
   );
 }
