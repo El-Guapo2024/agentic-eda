@@ -2238,7 +2238,7 @@ fn d_true() -> bool {
 /// `dialog_footprint_properties_fp_editor.cpp`'s Fields tab. Position/
 /// orientation/layer are deferred (see PARITY-fpedit.md): only name/value/
 /// visibility are modeled, enough to author one and read it back.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FootprintField {
     pub name: String,
@@ -2465,7 +2465,7 @@ impl LibraryPad {
 /// this footprint's local frame instead of board space -- `Shape::
 /// translate`/`set_layer`/`set_stroke_width`/`set_filled` and each type's
 /// own `id`/`set_id` all come along for free.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LibraryFootprint {
     /// "Lib:Name" (opened from a loaded library) or a bare name (authored
@@ -2991,7 +2991,7 @@ impl LibrarySymbolPin {
 /// <ref>"`-prefixed name for one authored from scratch or opened from an
 /// instance with no resolvable library symbol (see `Cmd::OpenSymbolForEdit`'s
 /// own doc).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LibrarySymbol {
     pub lib_id: String,

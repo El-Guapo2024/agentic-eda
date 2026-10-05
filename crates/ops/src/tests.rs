@@ -2447,7 +2447,7 @@ fn push_pin_property_skips_length_across_different_body_styles_but_not_text_size
     let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
     let source_id = sym.pins.iter().find(|p| p.number == "1").unwrap().id.clone();
 
-    b.apply(&Cmd::PushPinProperty { lib_id: "Test:Sym".into(), source_pin_id: source_id, field: PushPinField::Length }).unwrap();
+    b.apply(&Cmd::PushPinProperty { lib_id: "Test:Sym".into(), source_pin_id: source_id, field: PushPinField::Length, body_style: None }).unwrap();
     let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
     let by_num = |n: &str| sym.pins.iter().find(|p| p.number == n).unwrap();
     assert_eq!(by_num("3").length_mm, 5.08, "same body style -- length pushed");
