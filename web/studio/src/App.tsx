@@ -43,6 +43,7 @@ import { SheetDialog } from "./components/SheetDialog";
 import { BusUnfoldDialog } from "./components/BusUnfoldDialog";
 import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
 import { SchTextDialog } from "./components/SchTextDialog";
+import { SchToolDialogs } from "./components/SchToolDialogs";
 import { SymbolChooserDialog } from "./components/SymbolChooserDialog";
 import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
@@ -222,6 +223,7 @@ function StudioFrame() {
       <BusUnfoldDialog />
       <PowerSymbolDialog />
       <SchTextDialog />
+      <SchToolDialogs />
       <SymbolChooserDialog />
       <SymbolPropertiesDialog />
       <AnnotateDialog />

@@ -41,6 +41,7 @@ import { SchContextMenu } from "./schematic/SchContextMenu";
 import { summarizeSelection } from "./schematic/schSelectionSummary";
 import { schContextMenu } from "../kicad-port/schContextMenu";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
+import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } from "./schematic/schShapeTools";
 import type { MenuNode } from "../kicad/types";
 import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
@@ -287,6 +288,10 @@ export function SchematicView() {
         ctx.stroke();
       }
     }
+    // The shape or rule area being drawn (kicad-port/schShapeEdit.ts, polygonGeom.ts), rubber-banded to the cursor.
+    if (state.drawState?.kind === "sch_shape" && state.cursorUm) {
+      paintShapePreview(ctx, state.schematicView, state.drawState, shapeSnap(state.cursorUm.x, state.cursorUm.y), state.schLineMode);
+    }
     // `S`: the sheet being sized, from its first corner to the (grid-snapped) cursor.
     if (state.drawState?.kind === "sheet" && state.cursorUm) {
       const start = state.drawState.start;
@@ -327,6 +332,10 @@ export function SchematicView() {
     const p = alignToGrid({ x: xUm, y: yUm }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false });
     return [p.x, p.y];
   };
+
+  /** The point a shape tool takes for the cursor: the grid (`GRID_GRAPHICS`), or for a rule area also a pin it is near (`GRID_CONNECTABLE`). */
+  const shapeSnap = (xUm: number, yUm: number): [number, number] =>
+    (state.activeTool === "sch_rule_area" && sch ? nearestSnapPoint(pinSnapPoints(sch), xUm, yUm, 400 / state.schematicView.scale) : null) ?? snapToGrid(xUm, yUm);
 
   /**
    * Commit a finished click-to-add-point polyline: a wire or bus (`add_wire`), or -- with the Draw Lines tool -- a graphic line
@@ -421,6 +430,12 @@ export function SchematicView() {
           } else {
             dispatch({ type: "SET_DRAW_STATE", draw: next });
           }
+          return;
+        }
+
+        // Draw Rectangle / Circle / Arc / Bezier / Text Box / Rule Area and Place Directive Label (components/schematic/schShapeTools.ts).
+        if (isSchShapeTool(state.activeTool)) {
+          shapeToolClick({ tool: state.activeTool, draw: state.drawState, sch, lineMode: state.schLineMode, dispatch, api }, shapeSnap(wx, wy));
           return;
         }
 
@@ -651,6 +666,11 @@ export function SchematicView() {
       }}
       onDoubleClick={() => {
         const draw = state.drawState;
+        // `IsDblClick( BUT_LEFT )` in DrawShape / DrawRuleArea: finish the shape as it stands.
+        if (draw?.kind === "sch_shape" && sch && state.cursorUm) {
+          finishShapeDraw({ tool: state.activeTool, draw, sch, lineMode: state.schLineMode, dispatch, api }, shapeSnap(state.cursorUm.x, state.cursorUm.y));
+          return;
+        }
         if (draw?.kind !== "wire") return;
         commitDrawn(draw.pts);
         dispatch({ type: "SET_DRAW_STATE", draw: null });

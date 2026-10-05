@@ -778,8 +778,8 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     return;
   }
 
-  // `S` (the schematic's sheet tool) draws its own rubber band in SchematicView.tsx -- never reaches the board painter.
-  if (draw.kind === "sheet") return;
+  // `S` (the schematic's sheet tool) and the schematic's shape tools draw their own rubber band in SchematicView.tsx -- never reaches the board painter.
+  if (draw.kind === "sheet" || draw.kind === "sch_shape") return;
 
   const cursor = opts.cursorUm;
   const pts = draw.pts.slice();

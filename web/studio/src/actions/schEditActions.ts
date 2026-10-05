@@ -11,7 +11,8 @@ import { measureStrokeText } from "../components/text/strokeFont";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
-import type { Action, StudioApi, StudioState } from "../state/store";
+import { deleteLastPoint, finishShapeDraw } from "../components/schematic/schShapeTools";
+import type { Action, StudioApi, StudioState, ToolId } from "../state/store";
 import type { SymbolEditorApi, SymAction } from "../state/symbolEditorStore";
 
 export interface SchEditContext {
@@ -73,6 +74,35 @@ export function registerSchEditActions(m: Map<string, () => void>, ctx: SchEditC
   m.set("eeschema.InteractiveEdit.toCLabel", convert("directive_label"));
   m.set("eeschema.InteractiveEdit.toText", convert("text"));
   m.set("eeschema.InteractiveEdit.toTextBox", convert("text_box"));
+
+  // Draw Rectangles / Circles / Arcs / Bezier Curve / Text Boxes / Rule Areas and Place Directive Labels -- SCH_DRAWING_TOOLS::DrawShape / DrawRuleArea / TwoClickPlace:
+  // each arms its tool, which stays armed for the next item until Esc (the click behaviour is components/schematic/schShapeTools.ts, called by SchematicView).
+  const arm = (tool: ToolId) =>
+    schematicOnly(() => {
+      ctx.dispatch({ type: "SET_DRAW_STATE", draw: null });
+      ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool });
+    });
+  m.set("eeschema.InteractiveDrawing.drawRectangle", arm("sch_rect"));
+  m.set("eeschema.InteractiveDrawing.drawCircle", arm("sch_circle"));
+  m.set("eeschema.InteractiveDrawing.drawArc", arm("sch_arc"));
+  m.set("eeschema.InteractiveDrawing.drawBezier", arm("sch_bezier"));
+  m.set("eeschema.InteractiveDrawing.drawTextBox", arm("sch_textbox"));
+  m.set("eeschema.InteractiveDrawing.drawRuleArea", arm("sch_rule_area"));
+  m.set("eeschema.InteractiveDrawing.placeClassLabel", arm("sch_directive"));
+
+  // Close Outline (End) and Delete Last Point (Backspace) -- DrawRuleArea's loop: `closeOutline` finishes the polygon as a double-click does, `deleteLastPoint`
+  // (also Delete and Undo while drawing) drops the last corner and cancels the rule area when none is left.
+  const draw = state.drawState?.kind === "sch_shape" ? state.drawState : null;
+  if (state.activeTool === "sch_rule_area") {
+    m.set(
+      "eeschema.InteractiveDrawing.closeOutline",
+      schematicOnly(() => {
+        const at = ctx.cursorSnapped();
+        if (sch && at) finishShapeDraw({ tool: state.activeTool, draw: state.drawState, sch, lineMode: state.schLineMode, dispatch: ctx.dispatch, api }, at);
+      })
+    );
+  }
+  if (draw?.poly) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
 }
 
 /** The labels, texts, text boxes and directive labels among `ids`, as the conversion's sources (a label's spin is read off its wire, as the painter does). */

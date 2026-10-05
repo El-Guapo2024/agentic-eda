@@ -67,6 +67,7 @@ import { deleteCmds } from "../kicad-port/schDelete";
 import { withoutLocked } from "../kicad-port/schLock";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { registerSchEditActions } from "./schEditActions";
+import { deleteLastPoint } from "../components/schematic/schShapeTools";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 
 function canvasRect(): DOMRect | null {
@@ -261,6 +262,8 @@ export function useActionRunner() {
     // Del: RequestSelection (selection, else the item under the cursor), then ONE commit for all of it.
     m.set("common.Interactive.delete", () => {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
+      // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
+      if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
       deleteRefs(requestSelection());
     });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.

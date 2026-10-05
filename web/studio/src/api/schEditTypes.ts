@@ -69,6 +69,13 @@ export type SchGraphicInput = Omit<SchGraphic, "id"> & { id?: string };
 /** What `convert_text` turns the selected labels / texts / text boxes into (`SCH_EDIT_TOOL::ChangeTextType`'s `convertTo`). */
 export type SchTextKind = "label" | "global_label" | "hier_label" | "directive_label" | "text" | "text_box";
 
+/** A dialog one of the schematic's tools opens (`StudioState.schToolDialog`; components/SchToolDialogs.tsx). */
+export type SchToolDialog =
+  /** A drawn text box waiting for its text (`DrawShape` -> `DIALOG_TEXT_PROPERTIES`). */
+  | { kind: "text_box"; start: PointXY; end: PointXY }
+  /** A directive label waiting for its fields (`createNewLabel` -> `DIALOG_LABEL_PROPERTIES`). */
+  | { kind: "directive"; at: PointXY };
+
 export type SchEditCmd =
   /** Lock / Unlock / Toggle Lock (`SCH_EDIT_TOOL::modifyLockSelected`). */
   | { verb: "set_locked"; ids: string[]; locked: boolean }

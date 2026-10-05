@@ -25,6 +25,9 @@ import { repeatSource } from "../kicad-port/schRepeat";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
 import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
+import type { SchToolDialog } from "../api/schEditTypes";
+import type { ShapeEdit } from "../kicad-port/schShapeEdit";
+import type { PolyGeom } from "../kicad-port/polygonGeom";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -113,6 +116,14 @@ export type ToolId =
   | "sch_sheet"
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
   | "sch_place_symbol"
+  /** The schematic's shape tools (`SCH_DRAWING_TOOLS::DrawShape` / `DrawRuleArea` / `TwoClickPlace` for a directive label): kicad-port/schShapeEdit.ts, polygonGeom.ts. */
+  | "sch_rect"
+  | "sch_circle"
+  | "sch_arc"
+  | "sch_bezier"
+  | "sch_textbox"
+  | "sch_rule_area"
+  | "sch_directive"
   /** `common.Control.zoomTool` (Ctrl+F5, zoom_tool.cpp): drag a rectangle to zoom to it -- see components/ZoomAreaOverlay.tsx. */
   | "zoom_area";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
@@ -145,6 +156,13 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_line: "Line: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   sch_sheet: "Hierarchical Sheet: click one corner, then the opposite one, then name the sheet. Esc to cancel",
   sch_place_symbol: "Place Symbol: click where to place it",
+  sch_rect: "Rectangle: click one corner, then the opposite one. Esc to cancel",
+  sch_circle: "Circle: click the centre, then a point on the circle. Esc to cancel",
+  sch_arc: "Arc: click the start, then the end. Esc to cancel",
+  sch_bezier: "Bezier curve: click the start, the end, then control points 1 and 2. Esc to cancel",
+  sch_textbox: "Text Box: click one corner, then the opposite one, then enter the text. Esc to cancel",
+  sch_rule_area: "Rule Area: click the corners, double-click or press End to close it, Backspace to remove the last corner. Esc to cancel",
+  sch_directive: "Directive Label: click where to place it",
   zoom_area: "Zoom to Selection Area: drag a rectangle (left button zooms in, right button zooms out), Esc to cancel",
 };
 
@@ -160,6 +178,8 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
 export type DrawState =
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
   | { kind: "sheet"; start: [Um, Um] }
+  /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, arc, Bezier curve or text box, `poly` for a rule area. */
+  | { kind: "sch_shape"; shape?: ShapeEdit; poly?: PolyGeom }
   | {
       kind: "route";
       net: string;
@@ -552,6 +572,8 @@ export interface StudioState {
   schPowerPending: { at: [Um, Um] } | null;
   /** `T`: a just-clicked point waiting for SchTextDialog to confirm the content. */
   schTextPending: { at: [Um, Um] } | null;
+  /** The dialog one of the schematic edit/drawing tools has open (text box text, directive label fields, ...): components/SchToolDialogs.tsx. */
+  schToolDialog: SchToolDialog | null;
   /** `A`: SymbolChooserDialog's own open/closed flag. */
   symbolChooserOpen: boolean;
   /** `E`/`U`/`V`/`F` on a selected symbol: SymbolPropertiesDialog's own open/closed+focus state -- `field` picks which input autofocuses (`E` opens the same dialog with nothing singled out). */
@@ -815,6 +837,7 @@ const initialState: StudioState = {
   schRepeat: [],
   schPowerPending: null,
   schTextPending: null,
+  schToolDialog: null,
   symbolChooserOpen: false,
   armedSymbol: null,
   symbolProperties: null,
@@ -995,6 +1018,7 @@ export type Action =
   | { type: "SET_SCH_REPEAT"; cmds: Cmd[] }
   | { type: "SET_SCH_POWER_PENDING"; pending: StudioState["schPowerPending"] }
   | { type: "SET_SCH_TEXT_PENDING"; pending: StudioState["schTextPending"] }
+  | { type: "SET_SCH_TOOL_DIALOG"; dialog: SchToolDialog | null }
   | { type: "SET_LAST_LABEL_TEXT"; text: string }
   | { type: "SET_LAST_POWER_LIB_ID"; libId: string }
   | { type: "SET_SYMBOL_CHOOSER_OPEN"; open: boolean }
@@ -1338,6 +1362,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, schPowerPending: action.pending };
     case "SET_SCH_TEXT_PENDING":
       return { ...state, schTextPending: action.pending };
+    case "SET_SCH_TOOL_DIALOG":
+      return { ...state, schToolDialog: action.dialog };
     case "SET_LAST_LABEL_TEXT":
       return { ...state, lastLabelText: action.text };
     case "SET_LAST_POWER_LIB_ID":
