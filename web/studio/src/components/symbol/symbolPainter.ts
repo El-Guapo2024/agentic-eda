@@ -24,6 +24,16 @@ import { drawPinDecoration, drawPinText, drawRealGraphic } from "../schematic/pa
 import type { ResolvedGraphic } from "../schematic/libSymbol";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix } from "../schematic/transform";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
+import { drawStrokeText } from "../text/strokeFont";
+import { electricalTypeLayout, pinLabelsShown, pinShown } from "../../kicad-port/symPinText";
+import { polyPreview } from "../../kicad-port/symPolyDraw";
+import { snapPoint } from "../canvas/gridHelper";
+
+/** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
+export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon";
+
+/** Half the cap height, the shift that centres stroke text on its line (`MIDDLE_OFFSET_FACTOR` of `components/schematic/painter.ts`). */
+const MIDDLE_OFFSET_FACTOR = 0.35;
 
 /** This editor's own canvas has no "instance transform" the way a placed symbol does -- it draws/hit-tests the symbol's own graphics directly in its own frame, so every `resolvePin`/`resolveLibPoint` call in this file (and in `SymbolEditorCanvas.tsx`'s hit-testing) uses this identity matrix. */
 export const IDENTITY = symbolTransformMatrix(0, null);
@@ -103,10 +113,10 @@ function drawOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform) {
 }
 
 /** Rubber-band preview for the graphics tool currently in progress -- points already internal-space (µm), same convention the Footprint/PCB editors' own `drawInProgress` uses. */
-function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [number, number][] } | null, cursorUm: { x: number; y: number } | null) {
+function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: SymShapeKind; pts: [number, number][] } | null, cursorUm: { x: number; y: number } | null) {
   if (!draw) return;
-  const pts = draw.pts.slice();
-  if (cursorUm) pts.push([cursorUm.x, cursorUm.y]);
+  // The floating vertex of a poly shape (`EDA_SHAPE::calcEdit`) follows the cursor.
+  const pts = polyPreview(draw.pts, cursorUm ? [cursorUm.x, cursorUm.y] : null);
   if (pts.length < 2) return;
   ctx.save();
   ctx.strokeStyle = layerColor("selection");
@@ -142,9 +152,17 @@ export interface SymPaintOptions {
   gridVisible: boolean;
   activeUnit: number;
   activeBodyStyle: number;
-  drawState: { shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [number, number][] } | null;
+  drawState: { shapeKind: SymShapeKind; pts: [number, number][] } | null;
   cursorUm: { x: number; y: number } | null;
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+  /** `m_ShowPinsElectricalType`: the electrical type's name beside every pin. */
+  showElectricalTypes: boolean;
+  /** `m_ShowHiddenPins`: pins marked hidden are drawn (in the hidden colour) -- not at all when off. */
+  showHiddenPins: boolean;
+  /** `m_ShowPinNumbers`: force the pin numbers on even where the symbol hides them. */
+  showPinNumbers: boolean;
+  /** The Text tool's text between its dialog and the placing click: it follows the cursor (`SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace`). */
+  pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
 }
 
 export function paintSymbol(
@@ -152,7 +170,7 @@ export function paintSymbol(
   view: ViewTransform,
   widthPx: number,
   heightPx: number,
-  symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[] } | null,
+  symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean } | null,
   opts: SymPaintOptions
 ) {
   if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm);
@@ -174,38 +192,40 @@ export function paintSymbol(
     ctx.restore();
   }
 
+  const labels = pinLabelsShown(symbol, opts.showPinNumbers);
+  const hiddenColor = layerColor("LAYER_HIDDEN");
   for (const p of symbol.pins) {
-    if (p.hidden || !visibleHere(p.unit, p.body_style, opts.activeUnit, opts.activeBodyStyle)) continue;
+    // `SCH_PAINTER::draw( SCH_PIN )`: a pin marked invisible is drawn only while hidden pins are shown, and then in the hidden colour
+    // (the symbol editor starts with them shown, `show_hidden_lib_pins`).
+    if (!pinShown(p.hidden, opts.showHiddenPins) || !visibleHere(p.unit, p.body_style, opts.activeUnit, opts.activeBodyStyle)) continue;
     const mv = moved(p.id);
     ctx.save();
     if (mv) ctx.translate(mv.dxUm, mv.dyUm);
     const rp = resolvePin(toLibPin(p), IDENTITY, [0, 0]);
     const selected = opts.selection.has(p.id ?? "");
     ctx.beginPath();
-    ctx.strokeStyle = selected ? layerColor("selection") : layerColor("LAYER_PIN");
+    ctx.strokeStyle = selected ? layerColor("selection") : p.hidden ? hiddenColor : layerColor("LAYER_PIN");
     ctx.lineWidth = Math.max(152.4, hairlineUm(view, 1));
     drawPinDecoration(ctx, rp);
     ctx.stroke();
-    drawPinText(ctx, rp);
-    ctx.restore();
-  }
-
-  // A hidden pin still needs *some* on-canvas indication while editing,
-  // unlike the schematic's own placed-instance view (which never shows
-  // one at all, matching real KiCad) -- a dim marker at its own position
-  // so it can still be clicked/selected/edited here.
-  for (const p of symbol.pins) {
-    if (!p.hidden || !visibleHere(p.unit, p.body_style, opts.activeUnit, opts.activeBodyStyle)) continue;
-    const [x, y] = mmPointToUm(p.at);
-    ctx.save();
-    ctx.globalAlpha = 0.5;
-    ctx.fillStyle = opts.selection.has(p.id ?? "") ? layerColor("selection") : layerColor("LAYER_PIN");
-    ctx.beginPath();
-    ctx.arc(x, y, hairlineUm(view, 4), 0, Math.PI * 2);
-    ctx.fill();
+    // The labels are the symbol's call (`GetShowPinNames` / `GetShowPinNumbers`): blank what is not shown, the shared painter draws the rest.
+    const shownPin = { ...rp.pin, name: labels.names ? rp.pin.name : "", number: labels.numbers ? rp.pin.number : "" };
+    drawPinText(ctx, { ...rp, pin: shownPin }, p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined);
+    if (opts.showElectricalTypes && p.electrical_type !== "no_connect") {
+      // `GetPinElectricalTypeInfo`, drawn in `LAYER_PRIVATE_NOTES` (the hidden colour on a hidden pin).
+      const l = electricalTypeLayout(p, rp.tip, rp.dir);
+      const color = p.hidden ? hiddenColor : layerColor("LAYER_PRIVATE_NOTES");
+      const shift = l.sizeUm * MIDDLE_OFFSET_FACTOR;
+      if (l.vertical) drawStrokeText(ctx, l.text, l.at[0] + shift, l.at[1], { sizeUm: l.sizeUm, thicknessUm: l.thicknessUm, angleRad: -Math.PI / 2, justify: l.justify, color });
+      else drawStrokeText(ctx, l.text, l.at[0], l.at[1] + shift, { sizeUm: l.sizeUm, thicknessUm: l.thicknessUm, justify: l.justify, color });
+    }
     ctx.restore();
   }
 
   drawOrigin(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorUm);
+  if (opts.pendingText && opts.cursorUm) {
+    const [x, y] = snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
+    drawRealGraphic(ctx, { kind: "text", content: opts.pendingText.text, at: [x, y], angleDeg: opts.pendingText.angleDeg, sizeUm: opts.pendingText.sizeMm * 1000 }, layerColor("selection"));
+  }
 }

@@ -468,6 +468,8 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
 /** `GET /api/footprint_library`'s one field: every footprint name available to open (already-opened library entries plus intent/real-library-resolved ones), sorted. */
 export interface FootprintLibraryNames {
   names: string[];
+  /** The names that are entries of the project library itself (editable in place); the others come from the intent, a `.kicad_mod` or the builtin table. Absent from an older backend. */
+  project?: string[];
 }
 
 export interface Check {
@@ -1560,6 +1562,8 @@ export interface LibrarySymbol extends SymbolPropertiesFields {
 /** `GET /api/symbol_editor/names`'s one field: every `lib_id` available to open (already-opened library entries, every lib_id the project's intent already resolved, and the small builtin catalog), sorted. */
 export interface SymbolEditorNames {
   names: string[];
+  /** The `lib_id`s that are entries of the project library itself (editable in place). Absent from an older backend. */
+  project?: string[];
 }
 
 /** `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items, folded into one Cmd with a field selector -- see `Cmd`'s own `push_pin_property` doc. */

@@ -13,11 +13,13 @@ import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprin
 import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCmd, postRedo, postUndo } from "../api/client";
 import { duplicatePads, uniqueFootprintName } from "../kicad-port/fpEditActions";
 import { highestPadNumber } from "../kicad-port/padNumbering";
+import { DEFAULT_PAD_MASTER, importPadSettings, settingsOf, type PadSettings } from "../kicad-port/padSettings";
+import { DEFAULT_ENUMERATE_PARAMS, enumerateCommit, type EnumerateParams, type EnumerateState } from "../kicad-port/padEnumeration";
 import type { ViewTransform } from "./store";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 
-export type FpToolId = "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor";
+export type FpToolId = "select" | "move" | "pad" | "draw_segment" | "draw_arc" | "draw_bezier" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor" | "enumerate";
 
 export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   select: "Select item(s)",
@@ -31,6 +33,7 @@ export const FP_TOOL_MESSAGES: Record<FpToolId, string> = {
   draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
   text: "Click to place text",
   anchor: "Place the footprint anchor: click the new origin of the footprint",
+  enumerate: "Renumber pads: click each pad in the order it should be numbered; click a numbered pad again to take its number back; double-click to finish, Esc to cancel",
 };
 
 /** Same "click to add a point(s), commit on the last one" shape the PCB tab's own `DrawState` uses, narrowed to what the footprint editor's graphics tools need (no route/zone/measure concept here). `arc`/`bezier`: the construction managers' state, see the PCB tab's `DrawState`. */
@@ -66,9 +69,29 @@ export interface FootprintEditorState {
   /** "E" on a selected pad, or double-click -- which pad's Pad Properties dialog is open. */
   padPropertiesId: string | null;
   footprintPropertiesOpen: boolean;
+  /** `pcbnew.PadTool.enumeratePads`: the "Renumber Pads" parameter dialog (`DIALOG_ENUM_PADS`) is open. OK arms the click-to-number tool. */
   renumberDialogOpen: boolean;
-  /** `pad_tool.cpp`'s Copy Pad Properties (Cmd+C on a selected pad) -- client-side only, same spirit as the PCB tab's own `state.clipboard`. Paste (`pastePadProperties`) applies it to every pad in the current selection via `edit_pad`. */
-  copiedPadProps: Partial<LibraryPad> | null;
+  /**
+   * `BOARD_DESIGN_SETTINGS::m_Pad_Master`: the default pad. Place Pad creates pads from it and pushes the pad it placed back into it,
+   * Copy Pad Properties to Default stores the selected pad's settings here, Paste Default Pad Properties to Selected applies them, and
+   * Default Pad Properties edits it directly. It belongs to the board settings, not the footprint, so it survives opening another footprint.
+   */
+  defaultPad: PadSettings;
+  /** `DIALOG_ENUM_PADS`'s `s_lastUsedParams`: the parameters the last Renumber Pads run used. */
+  enumerateParams: EnumerateParams;
+  /** The running click-to-number tool (`pcbnew.PadTool.enumeratePads`), or `null`. Nothing is sent to the backend until it finishes. */
+  enumerate: EnumerateState | null;
+  /** The footprint the library tree has selected (`GetLibTree()->GetSelectedLibId()`), which the library actions work on; `null` = none (the open footprint is the target). */
+  treeSelection: string | null;
+  /** `FOOTPRINT_EDITOR_CONTROL::m_copiedFootprint`: the footprint Copy / Cut put aside for Paste. */
+  copiedFootprint: LibraryFootprint | null;
+  /** Dialogs of the pad / library actions. */
+  padTableOpen: boolean;
+  defaultPadOpen: boolean;
+  pushPadOpen: boolean;
+  loadFromBoardOpen: boolean;
+  /** The board part this footprint was loaded from (`LoadFootprintFromBoard`), so "Insert footprint into PCB" knows what to update. */
+  linkedPart: string | null;
   /** `PAD_TOOL::m_lastPadNumber`: the number the last placed (or duplicated-with-increment) pad took, which `Duplicate and Increment` continues from. `null` until one is set -- then the highest-numbered pad stands in (padNumbering.ts's `nextPadNumber`). */
   lastPadNumber: string | null;
   /** `EDIT_TOOL::Duplicate` hands the copies straight to `doMoveSelection` and, if that is cancelled, `commit.Revert()`s them: true while the freshly duplicated items are glued to the cursor, so Escape undoes the duplicate and a drop keeps it. */
@@ -94,7 +117,16 @@ const initialState: FootprintEditorState = {
   padPropertiesId: null,
   footprintPropertiesOpen: false,
   renumberDialogOpen: false,
-  copiedPadProps: null,
+  defaultPad: DEFAULT_PAD_MASTER,
+  enumerateParams: DEFAULT_ENUMERATE_PARAMS,
+  enumerate: null,
+  treeSelection: null,
+  copiedFootprint: null,
+  padTableOpen: false,
+  defaultPadOpen: false,
+  pushPadOpen: false,
+  loadFromBoardOpen: false,
+  linkedPart: null,
   lastPadNumber: null,
   duplicatePending: false,
   toast: null,
@@ -120,7 +152,16 @@ export type FpAction =
   | { type: "SET_PAD_PROPERTIES_ID"; id: string | null }
   | { type: "SET_FOOTPRINT_PROPERTIES_OPEN"; open: boolean }
   | { type: "SET_RENUMBER_DIALOG_OPEN"; open: boolean }
-  | { type: "SET_COPIED_PAD_PROPS"; props: Partial<LibraryPad> | null }
+  | { type: "SET_DEFAULT_PAD"; pad: PadSettings }
+  | { type: "SET_ENUMERATE_PARAMS"; params: EnumerateParams }
+  | { type: "SET_ENUMERATE"; state: EnumerateState | null }
+  | { type: "SET_TREE_SELECTION"; name: string | null }
+  | { type: "SET_COPIED_FOOTPRINT"; footprint: LibraryFootprint | null }
+  | { type: "SET_PAD_TABLE_OPEN"; open: boolean }
+  | { type: "SET_DEFAULT_PAD_OPEN"; open: boolean }
+  | { type: "SET_PUSH_PAD_OPEN"; open: boolean }
+  | { type: "SET_LOAD_FROM_BOARD_OPEN"; open: boolean }
+  | { type: "SET_LINKED_PART"; ref: string | null }
   | { type: "SET_LAST_PAD_NUMBER"; number: string | null }
   | { type: "SET_DUPLICATE_PENDING"; pending: boolean }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
@@ -130,7 +171,18 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
   switch (action.type) {
     case "SET_NAME":
       if (action.name === state.name) return state;
-      return { ...initialState, name: action.name, gridUm: state.gridUm, gridVisible: state.gridVisible };
+      // What belongs to the editor session rather than to one footprint (the board's default pad, the Renumber Pads parameters, the library tree's
+      // selection, a copied footprint) survives opening another footprint.
+      return {
+        ...initialState,
+        name: action.name,
+        gridUm: state.gridUm,
+        gridVisible: state.gridVisible,
+        defaultPad: state.defaultPad,
+        enumerateParams: state.enumerateParams,
+        treeSelection: state.treeSelection,
+        copiedFootprint: state.copiedFootprint,
+      };
     case "FOOTPRINT_OK":
       return { ...state, footprint: action.footprint, error: null };
     case "FOOTPRINT_ERR":
@@ -142,10 +194,11 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs) };
     case "CLEAR_SELECTION":
-      return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, padPropertiesId: null };
+      return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, padPropertiesId: null, enumerate: null };
     case "ESCAPE": {
       const inProgress = state.activeTool !== "select" || state.drawState != null || state.movePreview != null;
-      if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null };
+      // `evt->IsCancelInteractive()` in EnumeratePads: `commit.Revert()` -- nothing was sent, so dropping the tool's state is the revert.
+      if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null, enumerate: null };
       return { ...state, selection: new Set() };
     }
     case "SET_ACTIVE_TOOL":
@@ -170,8 +223,26 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, footprintPropertiesOpen: action.open };
     case "SET_RENUMBER_DIALOG_OPEN":
       return { ...state, renumberDialogOpen: action.open };
-    case "SET_COPIED_PAD_PROPS":
-      return { ...state, copiedPadProps: action.props };
+    case "SET_DEFAULT_PAD":
+      return { ...state, defaultPad: action.pad };
+    case "SET_ENUMERATE_PARAMS":
+      return { ...state, enumerateParams: action.params };
+    case "SET_ENUMERATE":
+      return { ...state, enumerate: action.state };
+    case "SET_TREE_SELECTION":
+      return { ...state, treeSelection: action.name };
+    case "SET_COPIED_FOOTPRINT":
+      return { ...state, copiedFootprint: action.footprint };
+    case "SET_PAD_TABLE_OPEN":
+      return { ...state, padTableOpen: action.open };
+    case "SET_DEFAULT_PAD_OPEN":
+      return { ...state, defaultPadOpen: action.open };
+    case "SET_PUSH_PAD_OPEN":
+      return { ...state, pushPadOpen: action.open };
+    case "SET_LOAD_FROM_BOARD_OPEN":
+      return { ...state, loadFromBoardOpen: action.open };
+    case "SET_LINKED_PART":
+      return { ...state, linkedPart: action.ref };
     case "SET_LAST_PAD_NUMBER":
       return { ...state, lastPadNumber: action.number };
     case "SET_DUPLICATE_PENDING":
@@ -217,10 +288,14 @@ export interface FootprintEditorApi {
   editPad: (id: string, pad: LibraryPad) => Promise<boolean>;
   renumberPads: (start: number, prefix: string, step: number) => Promise<void>;
   pushPadProperties: (sourcePadId: string, filters: { shape: boolean; orientation: boolean; layers: boolean; type: boolean }) => Promise<void>;
-  /** `pad_tool.cpp`'s Copy Pad Properties -- stores the pad's full field set (minus id/number/position) client-side. */
+  /** `PAD_TOOL::copyPadSettings` (`pcbnew.PadTool.CopyPadSettings`): `m_Pad_Master->ImportSettingsFrom( selPad )` -- the pad's settings become the default pad. */
   copyPadProperties: (id: string) => void;
-  /** Paste Pad Properties -- applies the copied fields to every pad in `ids` via `edit_pad`. */
+  /** `PAD_TOOL::pastePadProperties` (`pcbnew.PadTool.ApplyPadSettings`): every pad of `ids` takes the default pad's settings (`ImportSettingsFrom( *masterPad )`), one undo step. */
   pastePadProperties: (ids: string[]) => Promise<void>;
+  /** `PAD_TOOL::EnumeratePads`' commit (`finish`) or revert: the numbers the click session produced are sent as one `set_pad_numbers` (one undo step), or dropped. */
+  finishEnumerate: (commit: boolean) => Promise<void>;
+  /** Pick a tool the way the toolbar does: leaving the Renumber Pads tool commits what it numbered (`evt->IsActivate()` -> `commit.Push( "Renumber Pads" )`). */
+  setTool: (tool: FpToolId) => Promise<void>;
   addGraphic: (shape: CmdShape) => Promise<void>;
   moveGraphic: (id: string, dx: Um, dy: Um) => Promise<void>;
   editGraphic: (id: string, layer: string, strokeWidth: Um, filled: boolean) => Promise<void>;
@@ -421,36 +496,34 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
     copyPadProperties: (id) => {
       const pad = stateRef.current.footprint?.pads.find((p) => p.id === id);
       if (!pad) return;
-      // Mirrors pad_tool.cpp's ImportSettingsFrom scope: shape/size/drill/
-      // layers/overrides, never number/position/rotation -- see
-      // pastePadProperties's own doc.
-      const props: Partial<LibraryPad> = {
-        offset: pad.offset,
-        size: pad.size,
-        shape: pad.shape,
-        kind: pad.kind,
-        drill: pad.drill,
-        drill_slot: pad.drill_slot,
-        roundrect_ratio: pad.roundrect_ratio,
-        trapezoid_delta: pad.trapezoid_delta,
-        chamfer_ratio: pad.chamfer_ratio,
-        chamfer_corners: pad.chamfer_corners,
-        layers: pad.layers,
-        clearance_override: pad.clearance_override,
-        thermal_gap_override: pad.thermal_gap_override,
-        thermal_spoke_width_override: pad.thermal_spoke_width_override,
-      };
-      dispatch({ type: "SET_COPIED_PAD_PROPS", props });
+      dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(pad) });
     },
     pastePadProperties: async (ids) => {
-      const name = stateRef.current.name;
-      const copied = stateRef.current.copiedPadProps;
-      if (!name || !copied) return;
+      const st = stateRef.current;
+      const name = st.name;
+      if (!name || !st.footprint) return;
+      const cmds: Cmd[] = [];
       for (const id of ids) {
-        const current = stateRef.current.footprint?.pads.find((p) => p.id === id);
-        if (!current) continue;
-        await runCmd({ op: "edit_pad", footprint: name, id, pad: { ...current, ...copied } });
+        const current = st.footprint.pads.find((p) => p.id === id);
+        if (current) cmds.push({ op: "edit_pad", footprint: name, id, pad: importPadSettings(current, st.defaultPad) });
       }
+      if (cmds.length === 0) return;
+      await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+    },
+    finishEnumerate: async (commit) => {
+      const st = stateRef.current;
+      const session = st.enumerate;
+      const name = st.name;
+      dispatch({ type: "SET_ENUMERATE", state: null });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      if (!commit || !session || !name) return;
+      const numbers = enumerateCommit(session);
+      if (numbers.length === 0) return;
+      if (await runCmd({ op: "set_pad_numbers", footprint: name, numbers })) dispatch({ type: "SET_LAST_PAD_NUMBER", number: numbers[numbers.length - 1]![1] }); // `SetLastPadNumber( newNumber )`
+    },
+    setTool: async (tool) => {
+      if (stateRef.current.enumerate && tool !== "enumerate") await api.finishEnumerate(true);
+      dispatch({ type: "SET_ACTIVE_TOOL", tool });
     },
     addGraphic: async (shape) => {
       const name = stateRef.current.name;

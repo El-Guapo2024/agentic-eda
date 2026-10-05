@@ -537,9 +537,10 @@ export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin
  * and outside per real symbol; number placement always assumes
  * `nameOutsideShown = false` for the same reason (both are a direct,
  * documented consequence of the same missing field, not two separate
- * approximations).
+ * approximations). `colors` overrides the two label colours (the symbol
+ * editor draws a hidden pin's labels in the hidden colour, `getColorForLayer`).
  */
-export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
+export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin, colors?: { name: string; number: string }) {
   const { pin, tip: P, root: R, dir } = rp;
   if (pin.electrical_type === "no_connect") return;
   const horizontal = isHorizontalPin(dir);
@@ -548,7 +549,7 @@ export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
 
   if (pin.name) {
     const sizeUm = PIN_FONT * 1000;
-    const color = layerColor("LAYER_PINNAM");
+    const color = colors?.name ?? layerColor("LAYER_PINNAM");
     const anchor: [number, number] = [R[0] + dir[0] * PIN_NAME_OFFSET_UM, R[1] + dir[1] * PIN_NAME_OFFSET_UM];
     // RIGHT (dir=(1,0)): H LEFT. LEFT (dir=(-1,0)): H RIGHT. UP
     // (dir=(0,-1)): angle 90, H LEFT. DOWN (dir=(0,1)): angle 90, H RIGHT.
@@ -563,7 +564,7 @@ export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
 
   if (pin.number) {
     const sizeUm = PIN_FONT * 0.85 * 1000;
-    const color = layerColor("LAYER_PINNUM");
+    const color = colors?.number ?? layerColor("LAYER_PINNUM");
     const off = sizeUm / 2 + PIN_TEXT_CLEARANCE_UM + PIN_TEXT_PEN_UM;
     if (horizontal) {
       // s = -1 (above the line) -- nameOutsideShown is always false here.
