@@ -10,6 +10,7 @@ import React, { createContext, useCallback, useContext, useEffect, useReducer, u
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
+import { revisionOf } from "../kicad-port/checkRevision";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
@@ -673,14 +674,15 @@ export interface StudioState {
    * api/client.ts's fetchDrc). It takes seconds, so it runs on demand --
    * when the dialog opens on a board it has not judged yet, and on "Run DRC"
    * -- never on every change; `drcRunning` is what the dialog and status
-   * show meanwhile. The PCB canvas draws its markers (DrcDialog.tsx owns the
-   * list) and keeps drawing the last report after the dialog closes, like
-   * KiCad's own markers until the next run.
+   * show meanwhile, and nothing else waits: the board stays editable during
+   * a run. The PCB canvas draws its markers (DrcDialog.tsx owns the list) and
+   * keeps drawing the last report after the dialog closes, like KiCad's own
+   * markers until the next run -- dimmed once the report is out of date.
    */
   drc: DrcReport | null;
   drcRunning: boolean;
   drcError: string | null;
-  /** The board version (`version`) the current `drc` report was run for -- when it differs from `version` the report is out of date. */
+  /** The board revision (the `version` stamp) the current `drc` report was computed on -- the server's own (`drc.revision`); when it differs from `version`, the board has moved on and the report is out of date (kicad-port/checkRevision.ts). */
   drcVersion: string | null;
   /** "Refill all zones before performing DRC" (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills. */
   drcRefillZones: boolean;
@@ -694,6 +696,7 @@ export interface StudioState {
   erc: ErcReport | null;
   ercRunning: boolean;
   ercError: string | null;
+  /** Same as `drcVersion`, for `erc`. */
   ercVersion: string | null;
   /** Index into `erc.violations` the dialog's list has clicked -- null selects nothing. */
   ercSelected: number | null;
@@ -952,16 +955,16 @@ export type Action =
   | { type: "SCHEMATIC_ERR"; message: string }
   | { type: "RATSNEST_OK"; ratsnest: Ratsnest }
   | { type: "DRC_RUNNING" }
-  | { type: "DRC_OK"; drc: DrcReport; /** `state.version` when the run started. */ version: string | null }
+  | { type: "DRC_OK"; drc: DrcReport; /** The revision the report was computed on (kicad-port/checkRevision.ts's `revisionOf`). */ version: string | null }
   | { type: "DRC_ERR"; message: string }
   | { type: "SET_DRC_REFILL"; refill: boolean }
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
   | { type: "SET_ERC_DIALOG_OPEN"; open: boolean }
   | { type: "ERC_RUNNING" }
-  | { type: "ERC_OK"; erc: ErcReport; version: string | null }
+  | { type: "ERC_OK"; erc: ErcReport; /** The revision the report was computed on. */ version: string | null }
   | { type: "ERC_ERR"; message: string }
-  /** Exclude / un-exclude one finding in the report on screen without re-running kicad-cli (the exclusion itself is a persisted `Cmd`); `version` is the board version after that Cmd, so the report is not called out of date by its own exclusion. */
+  /** Exclude / un-exclude one finding in the report on screen without re-running kicad-cli (the exclusion itself is a persisted `Cmd`); `version` is the revision the patched report is now valid for (checkRevision.ts's `revisionAfterOwnEdit`): the board's after that Cmd when the report was current, so it is not called out of date by its own exclusion -- the report's own when it already was out of date. */
   | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; version: string | null }
   | { type: "SET_ERC_SELECTED"; index: number | null }
   | { type: "SET_ERC_LINT_SELECTED"; index: number | null }
@@ -1520,18 +1523,22 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // kicad-cli runs take seconds and the server answers one request at a
-  // time, so a run is started on demand (the dialogs' Run buttons, and a
-  // dialog opening on a board it has not judged yet) and a second request
-  // while one is in flight is dropped.
+  // kicad-cli runs take seconds, so a run is started on demand (the dialogs'
+  // Run buttons, and a dialog opening on a board it has not judged yet) and a
+  // second request while one is in flight is dropped. The server keeps
+  // answering edits and the version poll meanwhile, so the board stays
+  // editable during a run: the report says which revision it was computed on
+  // (`revision`), and the dialogs and markers show it out of date when the
+  // board has moved on since (kicad-port/checkRevision.ts).
   const drcInFlight = useRef(false);
   const runDrc = useCallback(async () => {
     if (drcInFlight.current) return;
     drcInFlight.current = true;
-    const version = stateRef.current.version;
+    const askedAt = stateRef.current.version;
     dispatch({ type: "DRC_RUNNING" });
     try {
-      dispatch({ type: "DRC_OK", drc: await fetchDrc(stateRef.current.drcRefillZones), version });
+      const drc = await fetchDrc(stateRef.current.drcRefillZones);
+      dispatch({ type: "DRC_OK", drc, version: revisionOf(drc, askedAt) });
     } catch (e) {
       dispatch({ type: "DRC_ERR", message: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -1543,10 +1550,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const runErc = useCallback(async () => {
     if (ercInFlight.current) return;
     ercInFlight.current = true;
-    const version = stateRef.current.version;
+    const askedAt = stateRef.current.version;
     dispatch({ type: "ERC_RUNNING" });
     try {
-      dispatch({ type: "ERC_OK", erc: await fetchErc(), version });
+      const erc = await fetchErc();
+      dispatch({ type: "ERC_OK", erc, version: revisionOf(erc, askedAt) });
     } catch (e) {
       dispatch({ type: "ERC_ERR", message: e instanceof Error ? e.message : String(e) });
     } finally {

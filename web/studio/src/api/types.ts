@@ -1602,6 +1602,8 @@ export interface DrcReport {
   unconnected_items?: DrcViolation[];
   /** Whether kicad-cli refilled zones itself (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills, so it judges the fills the exported board already carries (the ones the studio shows). */
   zones_refilled_by_kicad?: boolean;
+  /** The design revision this run started from: the stamp GET /api/version served at that moment. The report is out of date once the board's revision is another one (kicad-port/checkRevision.ts). Absent from a server that does not stamp. */
+  revision?: string;
 }
 
 // ---------------------------------------------------------------- ERC
@@ -1649,6 +1651,8 @@ export interface ErcReport {
   counts: Record<string, number>;
   /** "kicad-cli <version>". */
   engine?: string;
+  /** The design revision this run started from -- see `DrcReport.revision`. */
+  revision?: string;
 }
 
 // ---------------------------------------------------------------- Lint
@@ -1698,6 +1702,8 @@ export interface BoardStatsDrill {
 export interface BoardStatsReply {
   ok: boolean;
   message?: string;
+  /** The design revision the statistics were computed on (the /api/version stamp), like every kicad-cli reply. */
+  revision?: string;
   board?: {
     has_outline: boolean;
     width_um: number;

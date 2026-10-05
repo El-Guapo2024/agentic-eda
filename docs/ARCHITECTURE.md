@@ -54,6 +54,20 @@ never edited as masters.
     filler's, the ones on screen). `--refill-zones` is opt-in (`eda board drc
     --refill-zones`, the DRC dialog's checkbox) because kicad-cli 10.99 skips
     its courtyard checks on a run that refills.
+  - **The studio stays live while kicad-cli runs.** `/api/drc`, `/api/erc`,
+    `/api/board_stats`, `/api/fab/*` and `/api/sch/plot|netlist` run on threads
+    of their own (`crates/cli/src/kicad_lane.rs`), so edits, the `/api/version`
+    poll and the 3D view never wait for one: an edit answers in milliseconds
+    during a DRC. One kicad-cli at a time (they share `.kicad/`, and a DRC, an
+    ERC and a STEP export together are not what 16 GB is for); a request for
+    what is already running, on the same design revision, joins that run
+    instead of starting another. Edits, undo/redo and every other route still
+    run one at a time on the serve loop, as before. Every kicad-cli reply
+    carries `revision`, the `/api/version` stamp of the design the run started
+    from; the studio compares it with the board's current one and shows a
+    report whose revision the board has left as out of date ("design changed
+    since this check — rerun", dimmed markers) rather than as current. The
+    canvas is never locked for a run.
 - **Our own ports** are kept for what kicad-cli cannot do or cannot do fast
   enough interactively:
   - the interactive router (`crates/pns`, a port of KiCad's PNS),

@@ -128,10 +128,13 @@ export async function fetchRatsnest(): Promise<Ratsnest> {
 /**
  * `kicad-cli pcb drc` on the current design (crates/cli/src/kicad_engine.rs),
  * run fresh server-side on every call. It takes seconds (about 4 s on a
- * 30-part board) and the server answers one request at a time, so callers
- * run it on demand and show a running state (store.tsx's `runDrc`).
- * `refillZones` is KiCad's "Refill all zones before performing DRC" -- off by
- * default, because kicad-cli 10.99 skips its courtyard checks when it refills.
+ * 30-part board), so callers run it on demand and show a running state
+ * (store.tsx's `runDrc`). Only this request waits: the server keeps
+ * answering edits and /api/version while kicad-cli runs, and the report's
+ * `revision` says which version of the board it judged, so a caller can tell
+ * when the board has moved on (kicad-port/checkRevision.ts). `refillZones` is
+ * KiCad's "Refill all zones before performing DRC" -- off by default, because
+ * kicad-cli 10.99 skips its courtyard checks when it refills.
  */
 export async function fetchDrc(refillZones = false): Promise<DrcReport> {
   const r = await getJson<DrcReport & { error?: string }>(refillZones ? "/api/drc?refill_zones=1" : "/api/drc");
@@ -139,7 +142,7 @@ export async function fetchDrc(refillZones = false): Promise<DrcReport> {
   return r;
 }
 
-/** `kicad-cli sch erc` on the current schematic -- same on-demand, seconds-long contract as `fetchDrc`. */
+/** `kicad-cli sch erc` on the current schematic -- same on-demand, seconds-long, revision-stamped contract as `fetchDrc`. */
 export async function fetchErc(): Promise<ErcReport> {
   const r = await getJson<ErcReport & { error?: string }>("/api/erc");
   if (r.error) throw new ApiError(r.error);
@@ -239,6 +242,8 @@ export interface FabReply {
   /** Paths written, relative to the board directory (e.g. `export/board-F_Cu.gtl`). */
   files?: string[];
   message?: string;
+  /** The design revision the export was made from (the /api/version stamp), like every kicad-cli reply. */
+  revision?: string;
 }
 
 export function postFabGerbers(layers?: string[]): Promise<FabReply> {
