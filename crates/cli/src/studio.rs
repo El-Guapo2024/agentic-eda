@@ -482,7 +482,9 @@ fn mime_of(path: &Path) -> &'static str {
 /// never wait for it. `route` and `body` name the request: the same one on the
 /// same revision joins the run already going instead of starting another
 /// kicad-cli, and a different one waits its turn -- one kicad-cli at a time
-/// (`crate::kicad_lane`).
+/// (`crate::kicad_lane`). A new route that starts kicad-cli goes through here:
+/// answered inline it holds up the whole loop again (a test in `kicad_lane`
+/// fails when a kicad-cli route is not an `offload` arm).
 fn offload(stream: &TcpStream, lane: &Arc<Lane>, dir: &Path, job: &Job, route: &str, body: &[u8], work: impl FnOnce(&Path, &[u8]) -> Value + Send + 'static) -> Result<(), String> {
     // The loop drops its own handle on `stream` when it moves on; this one keeps the connection open for the answer.
     let mut out = stream.try_clone().map_err(|e| e.to_string())?;

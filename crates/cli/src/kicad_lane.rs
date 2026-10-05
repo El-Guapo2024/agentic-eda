@@ -194,6 +194,29 @@ mod tests {
         assert_eq!(runs.load(SeqCst), 2);
     }
 
+    /// The routes in studio.rs that start kicad-cli must go through `offload`; one answered
+    /// inline holds up the whole serve loop again (edits, /api/version, the 3D view) for as
+    /// long as kicad-cli runs. A new route that calls into the engine, the fab or the schematic
+    /// output backends and fails this: wrap it in `offload(...)` like its neighbours.
+    #[test]
+    fn every_studio_route_that_starts_kicad_cli_goes_through_offload() {
+        let studio = include_str!("studio.rs");
+        let production = studio.split("#[cfg(test)]").next().unwrap();
+        let starts_kicad_cli = ["kicad_engine::drc(", "kicad_engine::erc(", "kicad_engine::board_stats", "kicad_engine::export", "fab_api::", "sch_output_api::"];
+        for (n, line) in production.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with("use ") {
+                continue;
+            }
+            assert!(
+                !starts_kicad_cli.iter().any(|call| line.contains(call)) || line.contains("offload("),
+                "studio.rs:{}: this starts kicad-cli on the request loop; run it through `offload(...)` (crates/cli/src/kicad_lane.rs): {}",
+                n + 1,
+                code
+            );
+        }
+    }
+
     #[test]
     fn a_job_that_panics_answers_everyone_and_frees_the_lane() {
         let lane = Arc::new(Lane::default());
