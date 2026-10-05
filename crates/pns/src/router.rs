@@ -384,6 +384,20 @@ impl Router {
         Ok(())
     }
 
+    /// `ROUTER::UpdateSizes` for a pair (the "Differential Pair Dimensions..." dialog,
+    /// `ROUTER_TOOL::DpDimensionsDialog`): the running pair's track width and gap. `None` leaves a value as it is. The pair's
+    /// own preview and its commit read them, so the next `move` already uses the new values. Returns whether a pair is running.
+    pub fn set_diff_pair_dimensions(&mut self, width: Option<Um>, gap: Option<Um>) -> bool {
+        let Some(d) = self.diff.as_mut() else { return false };
+        if let Some(w) = width.filter(|w| *w > 0) {
+            d.width = w;
+        }
+        if let Some(g) = gap.filter(|g| *g > 0) {
+            d.gap = g;
+        }
+        true
+    }
+
     /// The net names of the diff-pair session currently in progress, if
     /// any -- `(net_a, net_b)`, the UI's own readout (not consulted by
     /// `Router` itself for any decision, same as [`Self::current_net`]).
@@ -586,6 +600,32 @@ mod tests {
         router.cancel();
         assert!(!router.is_routing());
         assert!(router.finish(Point { x: 5175, y: 0 }).is_none());
+    }
+
+    #[test]
+    fn diff_pair_dimensions_change_the_running_pair() {
+        let (design, mut model) = two_pad_board();
+        model.nets = vec![IrNet { name: "USB_DP".into(), pins: vec!["R1.1".into(), "R2.1".into()] }, IrNet { name: "USB_DN".into(), pins: vec!["R1.2".into(), "R2.2".into()] }];
+        let mut router = Router::new(&design, &model);
+        assert!(!router.set_diff_pair_dimensions(Some(200), Some(300)), "no pair is running yet");
+        router.start_diff_pair(Point { x: -825, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
+        let at = Point { x: 3000, y: 0 };
+        let before = router.diff_pair_preview(at).expect("preview");
+        assert_eq!(before.width, 125, "the net class's own width until the dialog says otherwise");
+        let spacing = |p: &crate::diff_pair::DiffPairPreview| (p.head_a.pts.last().unwrap().y - p.head_b.pts.last().unwrap().y).abs();
+        // The two lines sit `(width + gap) / 2` either side of the spine (`half_total`, integer division).
+        let apart = |w: i64, g: i64| 2 * ((w + g) / 2);
+        assert_eq!(spacing(&before), apart(125, 180));
+        assert!(router.set_diff_pair_dimensions(Some(200), Some(300)));
+        let after = router.diff_pair_preview(at).expect("preview");
+        assert_eq!(after.width, 200);
+        assert_eq!(spacing(&after), apart(200, 300), "the lines sit width + gap apart");
+        // Zero or negative values are ignored (the dialog refuses a gap of 0).
+        assert!(router.set_diff_pair_dimensions(Some(0), Some(-5)));
+        assert_eq!(router.diff_pair_preview(at).unwrap().width, 200);
+        // `None` leaves a value as it is.
+        router.set_diff_pair_dimensions(None, Some(400));
+        assert_eq!(spacing(&router.diff_pair_preview(at).unwrap()), apart(200, 400));
     }
 
     #[test]

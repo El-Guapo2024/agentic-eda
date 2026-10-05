@@ -22,6 +22,7 @@
 use crate::board;
 use crate::board_stats;
 use crate::cleanup_api;
+use crate::convert_api;
 use crate::fab_api;
 use crate::route_api;
 use crate::sch_api;
@@ -686,6 +687,7 @@ fn handle(
         // pairs" section doc comment); `/api/route/cancel` above already
         // ends a dp session too.
         ("POST", "/api/route/dp_start") => respond(stream, "200 OK", "application/json", route_api::dp_start(dir, route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/dp_dims") => respond(stream, "200 OK", "application/json", route_api::dp_dims(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_move") => respond(stream, "200 OK", "application/json", route_api::dp_move(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
@@ -696,6 +698,7 @@ fn handle(
         ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/convert/polys") => respond(stream, "200 OK", "application/json", convert_api::polys(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
         // "Board Statistics..." (task item 8): read-only, same stateless
         // no-Cmd shape as fab_api::bom below (nothing to undo -- it never

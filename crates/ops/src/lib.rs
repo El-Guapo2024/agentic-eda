@@ -4922,6 +4922,7 @@ mod tests;
 
 pub mod build;
 pub mod fields_table;
+pub mod convert;
 pub mod pcb_edit;
 pub mod search;
 pub mod repair;

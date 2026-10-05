@@ -319,7 +319,8 @@ fn dp_preview_json(router: &Router, preview: &eda_pns::diff_pair::DiffPairPrevie
     })
 }
 
-/// `POST /api/route/dp_start`: `{x, y, layer}`.
+/// `POST /api/route/dp_start`: `{x, y, layer, width?, gap?}` -- `width`/`gap` are the "Differential Pair Dimensions..." dialog's
+/// custom values (`BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions`); without them the pair takes the board rules' own.
 pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
@@ -331,11 +332,24 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     match router.start_diff_pair(at, layer) {
         Ok(()) => {
+            router.set_diff_pair_dimensions(req.get("width").and_then(Value::as_i64), req.get("gap").and_then(Value::as_i64));
             let reply = router.diff_pair_preview(at).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
             reply
         }
         Err(message) => err(message),
+    }
+}
+
+/// `POST /api/route/dp_dims`: `{width?, gap?}` -- `ROUTER_TOOL::DpDimensionsDialog` (`m_router->UpdateSizes`) for the pair being routed now.
+pub fn dp_dims(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    if router.set_diff_pair_dimensions(req.get("width").and_then(Value::as_i64), req.get("gap").and_then(Value::as_i64)) {
+        json!({ "ok": true })
+    } else {
+        err("not routing a diff pair")
     }
 }
 

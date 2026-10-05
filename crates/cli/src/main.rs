@@ -19,6 +19,7 @@
 mod board;
 mod board_stats;
 mod cleanup_api;
+mod convert_api;
 mod fab_api;
 mod sch_api;
 mod fab_cmd;
