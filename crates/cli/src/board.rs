@@ -846,6 +846,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeletePad { footprint, id } => format!("pad delete {footprint:?} {id}"),
         Cmd::EditPad { footprint, id, pad } => format!("pad edit {footprint:?} {id} --number {:?}", pad.number),
         Cmd::PushPadProperties { footprint, source_pad_id, .. } => format!("pad push-properties {footprint:?} {source_pad_id}"),
+        Cmd::SetPadNumbers { footprint, numbers } => format!("pad set-numbers {footprint:?} --count {}", numbers.len()),
         Cmd::RenumberPads { footprint, start, prefix, step } => format!("pad renumber {footprint:?} --start {start} --prefix {prefix:?} --step {step}"),
         Cmd::AddFootprintGraphic { footprint, shape } => format!("footprint-shape add {footprint:?} --kind {} --layer {}", shape_kind(shape), shape.layer()),
         Cmd::DeleteFootprintGraphic { footprint, id } => format!("footprint-shape delete {footprint:?} {id}"),
@@ -990,7 +991,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::Annotate { .. } => "schematic-annotate",
 
         Cmd::OpenFootprintForEdit { .. } | Cmd::NewFootprint { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::PutLibraryFootprint { .. } | Cmd::RenameLibraryFootprint { .. } | Cmd::RepairFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
-        Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::RenumberPads { .. } => "pad",
+        Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::SetPadNumbers { .. } | Cmd::RenumberPads { .. } => "pad",
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
 

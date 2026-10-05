@@ -105,6 +105,29 @@ pub fn import_pad_settings(dst: &mut LibraryPad, master: &LibraryPad) {
     }
 }
 
+/// `SCH_PIN::ChangeLength` (eeschema/sch_pin.cpp): a pin's length changes with its inner end -- the
+/// end that meets the body -- staying where it is; the connection point (`at`) moves along the pin
+/// instead. `angle_deg` is the library angle, the direction from the connection point into the body,
+/// so the point moves by `old - new` along `(cos a, sin a)` (the C++ does the same per
+/// `PIN_ORIENTATION`: right `+x`, left `-x`, up `-y` and down `+y` on its y-down screen, which is `+y`
+/// and `-y` in the y-up file frame).
+pub fn change_pin_length(pin: &mut eda_model::ir::LibrarySymbolPin, new_length_mm: f64) {
+    let change = pin.length_mm - new_length_mm;
+    let (dx, dy) = match pin.angle_deg.rem_euclid(360.0).round() as i64 {
+        0 => (1.0, 0.0),
+        90 => (0.0, 1.0),
+        180 => (-1.0, 0.0),
+        270 => (0.0, -1.0),
+        _ => {
+            let r = pin.angle_deg.to_radians();
+            (r.cos(), r.sin())
+        }
+    };
+    let snap = |v: f64| (v * 1e6).round() / 1e6; // no float noise in a file that is written in mm
+    pin.at = SPoint { x: snap(pin.at.x + dx * change), y: snap(pin.at.y + dy * change) };
+    pin.length_mm = new_length_mm;
+}
+
 fn bad_name(subject: &str, what: &str, c: char) -> Vec<CheckResult> {
     vec![CheckResult::fail("ops_bad_name", subject, format!("{what} cannot contain {c:?}"))]
 }
@@ -197,6 +220,20 @@ impl<'a> Board<'a> {
         let lib = self.footprint_library_mut();
         lib.footprints.retain(|f| f.name != new_name);
         lib.by_name_mut(name).expect("checked above").name = new_name.to_string();
+        Ok(())
+    }
+
+    /// See [`Cmd::SetPadNumbers`](crate::Cmd::SetPadNumbers).
+    pub(crate) fn set_pad_numbers(&mut self, footprint: &str, numbers: &[(String, String)]) -> Result<(), Vec<CheckResult>> {
+        let fp = self.library_footprint_mut(footprint)?;
+        if let Some((id, _)) = numbers.iter().find(|(id, _)| !fp.pads.iter().any(|p| &p.id == id)) {
+            return Err(vec![CheckResult::fail("ops_unknown_pad", id, "no pad with this id")]);
+        }
+        for (id, number) in numbers {
+            if let Some(p) = fp.pads.iter_mut().find(|p| &p.id == id) {
+                p.number = number.clone();
+            }
+        }
         Ok(())
     }
 
@@ -442,6 +479,21 @@ mod verb_tests {
     }
 
     #[test]
+    fn set_pad_numbers_applies_every_pair_or_none() {
+        let m = ConstraintModel::default();
+        let mut b = board(&m);
+        b.apply(&Cmd::PutLibraryFootprint { footprint: footprint_with_pads("N"), overwrite: false }).unwrap();
+        let ids: Vec<String> = b.design().footprint_library.as_ref().unwrap().by_name("N").unwrap().pads.iter().map(|p| p.id.clone()).collect();
+        b.apply(&Cmd::SetPadNumbers { footprint: "N".into(), numbers: vec![(ids[0].clone(), "B1".into()), (ids[1].clone(), "B2".into())] }).unwrap();
+        let nums = |b: &Board| b.design().footprint_library.as_ref().unwrap().by_name("N").unwrap().pads.iter().map(|p| p.number.clone()).collect::<Vec<_>>();
+        assert_eq!(nums(&b), vec!["B1".to_string(), "B2".to_string()]);
+        let e = b.apply(&Cmd::SetPadNumbers { footprint: "N".into(), numbers: vec![(ids[0].clone(), "X".into()), ("nope".into(), "Y".into())] }).unwrap_err();
+        assert_eq!(e[0].check, "ops_unknown_pad");
+        assert_eq!(nums(&b), vec!["B1".to_string(), "B2".to_string()], "an unknown id changes nothing");
+        assert_eq!(Cmd::SetPadNumbers { footprint: "N".into(), numbers: vec![] }.domain(), Domain::FootprintEditor);
+    }
+
+    #[test]
     fn the_new_verbs_run_in_their_own_editors_undo_domain() {
         let fp = footprint_with_pads("A");
         assert_eq!(Cmd::PutLibraryFootprint { footprint: fp, overwrite: false }.domain(), Domain::FootprintEditor);
@@ -628,5 +680,24 @@ mod verb_tests {
         assert_eq!(len("1"), 5.0, "same body style");
         assert_eq!(len("4"), 5.0, "a pin shared by every body style is reached too");
         assert_eq!(len("3"), 1.0, "a pin of the other body style is not");
+    }
+
+    #[test]
+    fn changing_a_pin_length_keeps_its_inner_end_and_moves_the_connection_point() {
+        let mut p = symbol_with_pins("eda:L").pins[0].clone();
+        // pin 1: connection point (0, 5.08), angle 270 (into the body = down), length 2.54 -> inner end at (0, 2.54)
+        assert_eq!((p.at.x, p.at.y, p.angle_deg), (0.0, 5.08, 270.0));
+        change_pin_length(&mut p, 5.08);
+        assert_eq!(p.length_mm, 5.08);
+        assert_eq!((p.at.x, p.at.y), (0.0, 7.62), "longer: the tip moves out, the inner end (0, 2.54) stays");
+        change_pin_length(&mut p, 1.27);
+        assert_eq!((p.at.x, p.at.y), (0.0, 3.81), "shorter: the tip moves back in, the inner end still (0, 2.54)");
+
+        let mut left = p.clone();
+        left.angle_deg = 0.0; // into the body = +x
+        left.at = SPoint { x: -5.08, y: 0.0 };
+        left.length_mm = 2.54;
+        change_pin_length(&mut left, 1.27);
+        assert_eq!((left.at.x, left.at.y), (-3.81, 0.0), "angle 0: the tip moves along +x when the pin shortens");
     }
 }

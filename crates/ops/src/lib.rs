@@ -1136,6 +1136,11 @@ pub enum Cmd {
         filter_layers: bool,
         filter_type: bool,
     },
+    /// `PAD_TOOL::EnumeratePads`' commit ("Renumber Pads", click each pad in the order it should be
+    /// numbered): `numbers` is every `(pad id, new number)` pair the click sequence produced, applied
+    /// together -- one undo step -- or not at all when an id is unknown. A pad that is not named keeps
+    /// its number.
+    SetPadNumbers { footprint: String, numbers: Vec<(String, String)> },
     /// `pad_tool.cpp`'s "Renumber Pads" (`DIALOG_ENUM_PADS`), simplified:
     /// source numbers pads in click/drag order; this orders them by
     /// position (top-to-bottom, then left-to-right -- reading order,
@@ -1387,6 +1392,7 @@ impl Cmd {
             | Cmd::DeletePad { .. }
             | Cmd::EditPad { .. }
             | Cmd::PushPadProperties { .. }
+            | Cmd::SetPadNumbers { .. }
             | Cmd::RenumberPads { .. }
             | Cmd::AddFootprintGraphic { .. }
             | Cmd::DeleteFootprintGraphic { .. }
@@ -1522,6 +1528,7 @@ impl Cmd {
             | Cmd::DeletePad { footprint, .. }
             | Cmd::EditPad { footprint, .. }
             | Cmd::PushPadProperties { footprint, .. }
+            | Cmd::SetPadNumbers { footprint, .. }
             | Cmd::RenumberPads { footprint, .. }
             | Cmd::AddFootprintGraphic { footprint, .. }
             | Cmd::DeleteFootprintGraphic { footprint, .. }
@@ -1976,6 +1983,7 @@ impl<'a> Board<'a> {
             Cmd::PushPadProperties { footprint, source_pad_id, filter_shape, filter_orientation, filter_layers, filter_type } => {
                 self.push_pad_properties(footprint, source_pad_id, *filter_shape, *filter_orientation, *filter_layers, *filter_type)
             }
+            Cmd::SetPadNumbers { footprint, numbers } => self.set_pad_numbers(footprint, numbers),
             Cmd::RenumberPads { footprint, start, prefix, step } => self.renumber_pads(footprint, *start, prefix, *step),
 
             Cmd::AddFootprintGraphic { footprint, shape } => self.add_footprint_graphic(footprint, shape.clone()),
@@ -4852,7 +4860,8 @@ impl<'a> Board<'a> {
                 // is shared by every body style (`0`) or belongs to the style the editor shows
                 // (`!pin->GetBodyStyle() || pin->GetBodyStyle() == m_frame->GetBodyStyle()`);
                 // name/number size have no such guard, confirmed directly against that function.
-                PushPinField::Length if p.body_style == 0 || p.body_style == shown_style => p.length_mm = src.length_mm,
+                // (`pin->ChangeLength( sourcePin->GetLength() )`: the pin's inner end stays put, its tip moves.)
+                PushPinField::Length if p.body_style == 0 || p.body_style == shown_style => library_editors::change_pin_length(p, src.length_mm),
                 PushPinField::Length => {}
                 PushPinField::NameSize => p.name_size_mm = src.name_size_mm,
                 PushPinField::NumberSize => p.number_size_mm = src.number_size_mm,
