@@ -12,6 +12,7 @@ import { alignToGrid } from "../kicad-port/gridSnap";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
 import { registerSchSheetPinActions } from "./schSheetPinActions";
+import { registerSchSymbolActions } from "./schSymbolActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
 import { deleteLastPoint, finishShapeDraw } from "../components/schematic/schShapeTools";
 import type { BreakMode } from "../kicad-port/schBreak";
@@ -142,6 +143,7 @@ export function registerSchEditActions(m: Map<string, () => void>, ctx: SchEditC
   if (draw?.poly) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
 
   registerSchSheetPinActions(m, ctx);
+  registerSchSymbolActions(m, ctx);
 }
 
 /** The labels, texts, text boxes and directive labels among `ids`, as the conversion's sources (a label's spin is read off its wire, as the painter does). */

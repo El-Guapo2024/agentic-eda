@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import type { DirectiveShape, SchFill, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
+import { ChangeSymbolsDialog } from "./SchChangeSymbolsDialog";
 import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { commitGraphic } from "./schematic/schShapeTools";
 
@@ -24,6 +25,8 @@ export function SchToolDialogs() {
       return <CleanupPinsDialog key={`cp:${dialog.sheetId}`} dialog={dialog} />;
     case "sync_pins":
       return <SyncPinsDialog key={`sp:${dialog.sheetIds.join(",")}`} dialog={dialog} />;
+    case "change_symbols":
+      return <ChangeSymbolsDialog key={`cs:${dialog.mode}:${dialog.selected.join(",")}`} dialog={dialog} />;
   }
 }
 

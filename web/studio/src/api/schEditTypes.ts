@@ -78,7 +78,9 @@ export type SchToolDialog =
   /** Cleanup Sheet Pins asking before it deletes the unreferenced pins of a sheet (`IsOK`). */
   | { kind: "cleanup_pins"; sheetId: string; sheetName: string; pins: Array<{ id: string; name: string }> }
   /** The Sync Sheet Pins dialog (`DIALOG_SYNC_SHEET_PINS`) for these sheets, `first` the one whose page opens. */
-  | { kind: "sync_pins"; sheetIds: string[]; first?: string };
+  | { kind: "sync_pins"; sheetIds: string[]; first?: string }
+  /** Change Symbols / Update Symbols (`DIALOG_CHANGE_SYMBOLS`), `selected` the references selected when it opened. */
+  | { kind: "change_symbols"; mode: "change" | "update"; selected: string[] };
 
 export type SchEditCmd =
   /** Lock / Unlock / Toggle Lock (`SCH_EDIT_TOOL::modifyLockSelected`). */
@@ -94,4 +96,8 @@ export type SchEditCmd =
   | { verb: "add_sheet_pin"; sheet: string; name: string; shape: LabelShape; at: PointXY }
   | { verb: "delete_sheet_pin"; id: string }
   /** Rename, reshape or move a sheet pin; a field left out is unchanged. */
-  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY };
+  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY }
+  /** Give every placed unit of reference `id` the library symbol `lib_id` (`DIALOG_CHANGE_SYMBOLS`, change mode). */
+  | { verb: "change_symbol"; id: string; lib_id: string }
+  /** Update Symbol(s) from Library: the symbols placed with these library ids resolve from the project's edited library symbol (`published`). */
+  | { verb: "update_library_symbols"; lib_ids: string[] };
