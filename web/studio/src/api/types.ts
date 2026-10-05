@@ -1702,6 +1702,8 @@ export interface BoardStatsDrill {
 export interface BoardStatsReply {
   ok: boolean;
   message?: string;
+  /** The design revision the statistics were computed on (the /api/version stamp), like every kicad-cli reply. */
+  revision?: string;
   board?: {
     has_outline: boolean;
     width_um: number;

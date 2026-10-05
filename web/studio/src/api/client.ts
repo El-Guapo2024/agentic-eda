@@ -242,6 +242,8 @@ export interface FabReply {
   /** Paths written, relative to the board directory (e.g. `export/board-F_Cu.gtl`). */
   files?: string[];
   message?: string;
+  /** The design revision the export was made from (the /api/version stamp), like every kicad-cli reply. */
+  revision?: string;
 }
 
 export function postFabGerbers(layers?: string[]): Promise<FabReply> {

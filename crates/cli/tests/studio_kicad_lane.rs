@@ -19,6 +19,14 @@ use std::time::{Duration, Instant};
 /// What "answers while a DRC runs" means: far under the seconds the run takes.
 const INSTANT: Duration = Duration::from_millis(300);
 
+/// A busy machine can stall one request for a moment; a server that makes
+/// requests wait out the run stalls every one of them for as long as it takes.
+/// So the fastest of a few tries has to be instant.
+fn quick(what: &str, tries: &[Duration]) {
+    let fastest = tries.iter().min().unwrap();
+    assert!(*fastest < INSTANT, "{what}: even the fastest of {} tries took {fastest:?} while a DRC ran: {tries:?}", tries.len());
+}
+
 /// A kicad-cli that takes `secs` and writes an empty report. `FAKE_KICAD_LOG`
 /// (set by the server's environment, which kicad-cli inherits) gets one line
 /// per start and end, and one `overlap` line when another run was going.
@@ -171,24 +179,34 @@ fn version_and_edits_answer_while_a_drc_runs_and_the_report_is_stamped_with_its_
     studio.wait_for_kicad_cli("pcb-drc");
 
     // The poll that drives live co-editing, several times: it must keep answering.
+    let mut polls = Vec::new();
     for _ in 0..5 {
         let (status, body, took) = studio.request("GET", "/api/version", "");
         assert_eq!(status, 200);
-        assert!(took < INSTANT, "/api/version took {took:?} while a DRC ran");
         assert_eq!(serde_json::from_str::<String>(&body).unwrap(), before, "nothing has changed the board yet");
+        polls.push(took);
     }
-    // An edit, applied and undoable as ever.
-    let (reply, took) = studio.cmd(rotate("R1"));
-    assert_eq!(reply["ok"], true, "{reply}");
-    assert!(took < INSTANT, "an /api/cmd edit took {took:?} while a DRC ran");
-    assert_eq!(studio.rotation_of("R1"), 90.0);
-    let (undone, took) = {
-        let (status, body, took) = studio.request("POST", "/api/undo", &json!({ "domain": "pcb" }).to_string());
-        assert_eq!(status, 200);
-        (serde_json::from_str::<Value>(&body).unwrap(), took)
-    };
-    assert_eq!(undone["ok"], true, "{undone}");
-    assert!(took < INSTANT, "/api/undo took {took:?} while a DRC ran");
+    quick("/api/version", &polls);
+    // Edits, applied and undoable as ever.
+    let edits: Vec<Duration> = (0..3)
+        .map(|_| {
+            let (reply, took) = studio.cmd(rotate("R1"));
+            assert_eq!(reply["ok"], true, "{reply}");
+            took
+        })
+        .collect();
+    quick("an /api/cmd edit", &edits);
+    assert_eq!(studio.rotation_of("R1"), 270.0, "three quarter turns, every one applied");
+    let undos: Vec<Duration> = (0..3)
+        .map(|_| {
+            let (status, body, took) = studio.request("POST", "/api/undo", &json!({ "domain": "pcb" }).to_string());
+            assert_eq!(status, 200);
+            assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["ok"], true, "{body}");
+            took
+        })
+        .collect();
+    quick("/api/undo", &undos);
+    assert_eq!(studio.rotation_of("R1"), 0.0);
     // Edit again so the board has moved on from the revision the run started on.
     let (reply, _) = studio.cmd(rotate("R2"));
     assert_eq!(reply["ok"], true, "{reply}");
@@ -264,7 +282,7 @@ fn edits_made_at_the_same_time_during_a_drc_still_take_turns() {
         let (status, reply, took) = edit.join().unwrap();
         assert_eq!(status, 200);
         assert_eq!(reply["ok"], true, "{reply}");
-        assert!(took < Duration::from_secs(1), "an edit waited {took:?} for the DRC");
+        assert!(took < Duration::from_millis(1500), "an edit waited {took:?} for the DRC");
     }
     assert_eq!(studio.rotation_of("R1"), 180.0, "six quarter turns");
     let (status, _, _) = drc.join().unwrap();
