@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { LibraryFill, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
-import { paintSymbol, mmPointToUm, umPointToMm, toLibPin, IDENTITY } from "./symbolPainter";
+import { paintSymbol, mmPointToUm, umPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
 import { snapPoint } from "../canvas/gridHelper";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
@@ -26,16 +26,24 @@ import { computeClickModifiers, applySingleClickModifier, hasModifier } from "..
 import { distToSegment } from "../canvas/itemHitTest";
 import { nextPinNumber } from "../../kicad-port/pinNumbering";
 import { orientationToAngleDeg } from "../../kicad-port/pinOrientation";
+import { polyBegin, polyContinue, polyFinish } from "../../kicad-port/symPolyDraw";
+import { pinOccupying, synchronizePins } from "../../kicad-port/symPinSync";
+import { pinShown } from "../../kicad-port/symPinText";
+import { askConfirm } from "../library/libraryDialogs";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import "../../styles/canvas.css";
 
-const SHAPE_TOOL_KIND: Partial<Record<SymToolId, "segment" | "arc" | "rect" | "circle" | "polygon">> = {
+const SHAPE_TOOL_KIND: Partial<Record<SymToolId, SymShapeKind>> = {
   draw_segment: "segment",
+  draw_lines: "lines",
   draw_arc: "arc",
   draw_rect: "rect",
   draw_circle: "circle",
   draw_polygon: "polygon",
 };
+
+/** Draw Lines and Draw Polygons are one tool in this KiCad (`SHAPE_T::POLY` for both): points are added by clicks and the shape ends on a double click or Enter. */
+const isPolyKind = (k: SymShapeKind) => k === "lines" || k === "polygon";
 
 /** `SYMBOL_EDITOR_PIN_TOOL`'s own sticky defaults (`g_LastPinType`/`g_LastPinShape`/`g_LastPinOrient`, `SYMBOL_EDITOR_SETTINGS::m_Defaults`), confirmed directly from source: input/line/right (180deg, see pinOrientation.ts), 100 mil (2.54mm) length, 50 mil (1.27mm) name/number text. Reused here as this editor's own "last placed pin" memory the same way `FootprintCanvas.tsx`'s `DEFAULT_PAD_TEMPLATE` stands in for `m_Pad_Master`. */
 const DEFAULT_PIN_TEMPLATE: Omit<LibrarySymbolPin, "id" | "number" | "at" | "unit" | "body_style"> = {
@@ -104,7 +112,7 @@ function pinHitDistance(pin: LibrarySymbolPin, wx: number, wy: number): number {
 
 type DragState = { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] } | { kind: "move"; refs: string[]; moveKind: "pin" | "graphic"; startWorld: [number, number] };
 
-function symbolGraphicFromDraw(kind: "segment" | "arc" | "rect" | "circle" | "polygon", ptsUm: [number, number][], unit: number, bodyStyle: number): LibrarySymbolGraphic | null {
+function symbolGraphicFromDraw(kind: SymShapeKind, ptsUm: [number, number][], unit: number, bodyStyle: number): LibrarySymbolGraphic | null {
   const p = (i: number) => umPointToMm(ptsUm[i]![0], ptsUm[i]![1]);
   const base = { unit, body_style: bodyStyle, stroke_mm: 0.254, fill: "none" as LibraryFill };
   switch (kind) {
@@ -116,15 +124,19 @@ function symbolGraphicFromDraw(kind: "segment" | "arc" | "rect" | "circle" | "po
       return ptsUm.length >= 2 ? { kind: "circle", ...base, center: p(0), radius_mm: Math.hypot(ptsUm[1]![0] - ptsUm[0]![0], ptsUm[1]![1] - ptsUm[0]![1]) / 1000 } : null;
     case "arc":
       return ptsUm.length >= 3 ? { kind: "arc", ...base, start: p(0), mid: p(1), end: p(2) } : null;
-    case "polygon":
-      return ptsUm.length >= 3 ? { kind: "polyline", ...base, pts: ptsUm.map((_, i) => p(i)), fill: "background" } : null;
+    case "lines":
+    case "polygon": {
+      // `doDrawShape`: both tools build a `SHAPE_T::POLY` with `m_lastFillStyle`, which is `NO_FILL` -- an unfilled polyline, closed only by ending on its start.
+      const done = polyFinish(ptsUm);
+      return done ? { kind: "polyline", ...base, pts: done.pts.map(([x, y]) => umPointToMm(x, y)) } : null;
+    }
   }
 }
 
-// `polygon` has no fixed point count -- left out of this table (same
+// The poly tools have no fixed point count -- left out of this table (same
 // convention `FootprintCanvas.tsx`'s own `AUTO_FINISH` uses), so
 // placement only ever ends on an explicit Enter/double-click.
-const AUTO_FINISH: Partial<Record<"segment" | "rect" | "circle" | "arc" | "polygon", number>> = { segment: 2, rect: 2, circle: 2, arc: 3 };
+const AUTO_FINISH: Partial<Record<SymShapeKind, number>> = { segment: 2, rect: 2, circle: 2, arc: 3 };
 
 export function SymbolEditorCanvas() {
   const state = useSymState();
@@ -136,6 +148,11 @@ export function SymbolEditorCanvas() {
   const pinTemplateRef = useRef<Omit<LibrarySymbolPin, "id" | "number" | "at" | "unit" | "body_style">>(DEFAULT_PIN_TEMPLATE);
   /** The number the Pin tool gave its latest pin, per open symbol -- see the pin-tool branch of onPointerDown. */
   const lastPlacedPinRef = useRef<{ libId: string | null; number: string } | null>(null);
+  /** The view as of now, for work that finishes after a round trip (the anchor tool re-centres the view once the symbol has moved). */
+  const viewRef = useRef(state.view);
+  viewRef.current = state.view;
+  /** An anchor click whose verb has not come back yet: a double click must not shift the symbol twice. */
+  const anchorBusyRef = useRef(false);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const wheelPrefs = useWheelPrefs();
@@ -167,7 +184,12 @@ export function SymbolEditorCanvas() {
     if (pts.length === 0) pts.push([-3000, -3000], [3000, 3000]);
     const bounds = boundsOfPoints(pts);
     if (!bounds) return;
-    dispatch({ type: "SET_VIEW", view: fitTransform(bounds, containerSize.width, containerSize.height) });
+    // A symbol a few millimetres across would be blown up to fill the canvas (a pin number as tall as the window): show at least 25.4 mm (an inch).
+    const MIN_SPAN_UM = 25400;
+    const grow = (lo: number, hi: number): [number, number] => (hi - lo >= MIN_SPAN_UM ? [lo, hi] : [(lo + hi) / 2 - MIN_SPAN_UM / 2, (lo + hi) / 2 + MIN_SPAN_UM / 2]);
+    const [minX, maxX] = grow(bounds.minX, bounds.maxX);
+    const [minY, maxY] = grow(bounds.minY, bounds.maxY);
+    dispatch({ type: "SET_VIEW", view: fitTransform({ minX, minY, maxX, maxY }, containerSize.width, containerSize.height) });
     dispatch({ type: "MARK_VIEW_INITIALIZED" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sym != null, containerSize, dispatch]);
@@ -204,10 +226,14 @@ export function SymbolEditorCanvas() {
       drawState: state.drawState,
       cursorUm: state.cursorUm,
       movePreview: state.movePreview,
+      showElectricalTypes: state.showElectricalTypes,
+      showHiddenPins: state.showHiddenPins,
+      showPinNumbers: state.showPinNumbers,
+      pendingText: state.pendingText,
     });
     ctx.restore();
     ctx.restore();
-  }, [sym, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, containerSize]);
+  }, [sym, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.pendingText, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -225,7 +251,8 @@ export function SymbolEditorCanvas() {
       const tol = Math.max(80, 6 / state.view.scale);
       for (let i = sym.pins.length - 1; i >= 0; i--) {
         const p = sym.pins[i]!;
-        if (p.id && visible(p.unit, p.body_style) && pinHitDistance(p, wx, wy) <= tol) return { kind: "pin", id: p.id };
+        // A hidden pin that is not drawn cannot be picked (`IsShowingHiddenPins`).
+        if (p.id && pinShown(p.hidden, state.showHiddenPins) && visible(p.unit, p.body_style) && pinHitDistance(p, wx, wy) <= tol) return { kind: "pin", id: p.id };
       }
       for (let i = sym.graphics.length - 1; i >= 0; i--) {
         const g = sym.graphics[i]!;
@@ -233,7 +260,7 @@ export function SymbolEditorCanvas() {
       }
       return null;
     },
-    [sym, state.view.scale, state.activeUnit, state.activeBodyStyle]
+    [sym, state.view.scale, state.activeUnit, state.activeBodyStyle, state.showHiddenPins]
   );
 
   const finishDraw = useCallback(() => {
@@ -243,6 +270,46 @@ export function SymbolEditorCanvas() {
     if (graphic) void api.addGraphic(graphic);
     dispatch({ type: "SET_DRAW_STATE", draw: null });
   }, [state.drawState, state.activeUnit, state.activeBodyStyle, api, dispatch]);
+
+  /**
+   * `PlacePin`: with Synchronized Pins Mode on, a pin dropped on top of another one (any unit, a body style that matches) asks first --
+   * "This position is already occupied by another pin, in unit %d." -- and only a "Place Pin Anyway" goes on.
+   */
+  const confirmPinPlacement = useCallback(
+    async (pin: LibrarySymbolPin): Promise<boolean> => {
+      if (!sym || !synchronizePins(state.syncPins, sym.unit_count)) return true;
+      const occupant = pinOccupying(pin, sym.pins);
+      if (!occupant) return true;
+      return askConfirm({
+        title: "Confirmation",
+        message: `This position is already occupied by another pin, in unit ${occupant.unit}.\n\nDisable the 'Synchronized Pins Mode' option to avoid this message.`,
+        okLabel: "Place Pin Anyway",
+      });
+    },
+    [sym, state.syncPins]
+  );
+
+  /**
+   * `SYMBOL_EDITOR_DRAWING_TOOLS::PlaceAnchor`: the click point becomes the symbol's origin (`symbol->Move( -cursorPos )`) and the view is
+   * "refreshed without changing the viewport" -- re-centred by the same amount, so the symbol stays where it is on the screen.
+   */
+  const placeAnchor = useCallback(
+    (sx: number, sy: number) => {
+      if (!state.libId || anchorBusyRef.current) return;
+      anchorBusyRef.current = true;
+      void api
+        .cmd({ op: "set_symbol_anchor", lib_id: state.libId, at: umPointToMm(sx, sy) })
+        .then((ok) => {
+          if (!ok) return;
+          const v = viewRef.current;
+          dispatch({ type: "SET_VIEW", view: { ...v, x: v.x + sx * v.scale, y: v.y + sy * v.scale } });
+        })
+        .finally(() => {
+          anchorBusyRef.current = false;
+        });
+    },
+    [state.libId, api, dispatch]
+  );
 
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture(e.pointerId);
@@ -262,15 +329,25 @@ export function SymbolEditorCanvas() {
       // a quick second click must get the NEXT number, as the C++ tool's `m_lastPin` carry does.
       const last = lastPlacedPinRef.current;
       const number = nextPinNumber(last && last.libId === state.libId ? [...sym.pins, { number: last.number }] : sym.pins);
-      lastPlacedPinRef.current = { libId: state.libId, number };
       const pin: LibrarySymbolPin = { ...pinTemplateRef.current, number, unit: state.activeUnit, body_style: state.activeBodyStyle, at: umPointToMm(sx, sy) };
-      void api.addPin(pin);
+      void confirmPinPlacement(pin).then((go) => {
+        if (!go) return;
+        lastPlacedPinRef.current = { libId: state.libId, number };
+        void api.addPin(pin);
+      });
       return;
     }
 
     const shapeKind = SHAPE_TOOL_KIND[state.activeTool];
     if (shapeKind) {
-      const already = state.drawState?.shapeKind === shapeKind ? state.drawState.pts : [];
+      const same = state.drawState?.shapeKind === shapeKind;
+      if (isPolyKind(shapeKind)) {
+        // `doDrawShape`: the first click begins the outline, each later one continues it (`EDA_SHAPE::continueEdit`); a double click or Enter ends it.
+        const pts = same ? polyContinue(state.drawState!.pts, [sx, sy]) : polyBegin([sx, sy]);
+        dispatch({ type: "SET_DRAW_STATE", draw: { kind: "shape", shapeKind, pts } });
+        return;
+      }
+      const already = same ? state.drawState!.pts : [];
       const pts: [number, number][] = [...already, [sx, sy]];
       if (pts.length >= (AUTO_FINISH[shapeKind] ?? Infinity)) {
         const graphic = symbolGraphicFromDraw(shapeKind, pts, state.activeUnit, state.activeBodyStyle);
@@ -283,8 +360,18 @@ export function SymbolEditorCanvas() {
     }
 
     if (state.activeTool === "text") {
-      void api.addGraphic({ kind: "text", unit: state.activeUnit, body_style: state.activeBodyStyle, text: "TEXT", at: umPointToMm(sx, sy), angle_deg: 0, size_mm: 1.27 });
-      dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      // `TwoClickPlace` (SCH_TEXT_T): the first click asks for the text (DIALOG_TEXT_PROPERTIES), which then follows the cursor; the second click places it.
+      if (state.pendingText) {
+        void api.addGraphic({ kind: "text", unit: state.activeUnit, body_style: state.activeBodyStyle, text: state.pendingText.text, at: umPointToMm(sx, sy), angle_deg: state.pendingText.angleDeg, size_mm: state.pendingText.sizeMm });
+        dispatch({ type: "SET_PENDING_TEXT", pending: null });
+      } else {
+        dispatch({ type: "SET_TEXT_DIALOG", at: [sx, sy] });
+      }
+      return;
+    }
+
+    if (state.activeTool === "anchor") {
+      placeAnchor(sx, sy);
       return;
     }
 
@@ -329,13 +416,15 @@ export function SymbolEditorCanvas() {
       if (dxUm !== 0 || dyUm !== 0) {
         const dxMm = dxUm / 1000;
         const dyMm = -dyUm / 1000;
-        for (const id of refs) {
-          if (kind === "pin") {
+        if (kind === "pin") {
+          // One undo step for the whole drop; in Synchronized Pins Mode the matching pins of the other units travel with them (`SYMBOL_EDITOR_MOVE_TOOL::Main`).
+          const moves = refs.flatMap((id) => {
             const p = api.pinById(id);
-            if (p) void api.movePin(id, p.at.x + dxMm, p.at.y + dyMm);
-          } else {
-            void api.moveGraphic(id, dxMm, dyMm);
-          }
+            return p ? [{ id, x: p.at.x + dxMm, y: p.at.y + dyMm }] : [];
+          });
+          void api.movePins(moves);
+        } else {
+          for (const id of refs) void api.moveGraphic(id, dxMm, dyMm);
         }
       }
     }
@@ -355,6 +444,7 @@ export function SymbolEditorCanvas() {
       finishDraw();
       return;
     }
+    if (state.activeTool !== "select") return; // only the select tool opens Properties on a double click
     const [wx, wy] = worldAt(e);
     const hit = hitTest(wx, wy);
     if (hit?.kind === "pin") dispatch({ type: "SET_PIN_PROPERTIES_ID", id: hit.id });
@@ -411,6 +501,14 @@ export function SymbolEditorCanvas() {
     const entries: MenuEntry[] = [
       { label: "Rotate CCW (R)", onSelect: () => rotatePinSelection(true), disabled: pinRefs.length === 0 },
       { label: "Pin Properties...", onSelect: () => dispatch({ type: "SET_PIN_PROPERTIES_ID", id: pinRefs[0]! }), disabled: pinRefs.length !== 1 },
+      // `SYMBOL_EDITOR_PIN_TOOL::Init`: with a single pin selected (`singlePinCondition`) the menu offers to push its length / sizes to every other pin.
+      ...(refs.length === 1 && pinRefs.length === 1
+        ? ([
+            { label: "Push Pin Length", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "length") },
+            { label: "Push Pin Name Size", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "name_size") },
+            { label: "Push Pin Number Size", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "number_size") },
+          ] as MenuEntry[])
+        : []),
       { label: "Delete (Del)", onSelect: () => refs.forEach((id) => (api.pinById(id) ? void api.deletePin(id) : void api.deleteGraphic(id))), disabled: refs.length === 0 },
     ];
     setContextMenu({ x: e.clientX, y: e.clientY, entries });

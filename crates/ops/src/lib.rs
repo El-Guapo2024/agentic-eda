@@ -47,6 +47,8 @@ use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+pub mod library_editors;
+
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
 /// Cmd with a field selector rather than three near-identical variants --
@@ -1049,6 +1051,30 @@ pub enum Cmd {
     /// builtin table/intent resolution, exactly as if this editor had
     /// never touched it.
     DeleteLibraryFootprint { name: String },
+    /// Store a whole footprint in the project library under `footprint.name`: the one verb behind
+    /// `FOOTPRINT_EDITOR_CONTROL`'s Duplicate, Paste (the copy lands under `<name>_copy`) and Import,
+    /// and `SaveFootprintAs`. The caller picks a free name first (`DuplicateFootprint`'s `name_1`,
+    /// `name_2`, ...); this refuses a name that is taken -- in the project library, or by anything the
+    /// model resolves -- unless `overwrite` (the dialog's "Overwrite" button). Item ids of the stored
+    /// copy are assigned here, never taken from the caller. A new entry starts unpublished; an
+    /// overwritten one keeps following the board if it already did.
+    PutLibraryFootprint {
+        footprint: LibraryFootprint,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// `FOOTPRINT_EDITOR_CONTROL::RenameFootprint`: `name` (a project-library entry) becomes
+    /// `new_name`. Refused when `new_name` is taken unless `overwrite`. Never touches a board instance
+    /// naming the old name (same "explicit, not automatic" rule as [`Cmd::DeleteLibraryFootprint`]).
+    RenameLibraryFootprint {
+        name: String,
+        new_name: String,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// `FOOTPRINT_EDITOR_CONTROL::RepairFootprint`: give every pad/graphic/text that repeats another
+    /// item's id a fresh one. (A missing id is also filled in.)
+    RepairFootprint { name: String },
     /// `dialog_footprint_properties_fp_editor.cpp`'s General tab -- the
     /// whole panel commits together, same shape as `EditZone`.
     EditFootprintProperties {
@@ -1110,6 +1136,11 @@ pub enum Cmd {
         filter_layers: bool,
         filter_type: bool,
     },
+    /// `PAD_TOOL::EnumeratePads`' commit ("Renumber Pads", click each pad in the order it should be
+    /// numbered): `numbers` is every `(pad id, new number)` pair the click sequence produced, applied
+    /// together -- one undo step -- or not at all when an id is unknown. A pad that is not named keeps
+    /// its number.
+    SetPadNumbers { footprint: String, numbers: Vec<(String, String)> },
     /// `pad_tool.cpp`'s "Renumber Pads" (`DIALOG_ENUM_PADS`), simplified:
     /// source numbers pads in click/drag order; this orders them by
     /// position (top-to-bottom, then left-to-right -- reading order,
@@ -1160,6 +1191,29 @@ pub enum Cmd {
     /// Never touches a placed instance naming it -- same "explicit, not
     /// automatic" rule `DeleteLibraryFootprint` documents.
     DeleteLibrarySymbol { lib_id: String },
+    /// Store a whole symbol in the project library under `symbol.lib_id`: the one verb behind
+    /// `SYMBOL_EDIT_FRAME::DuplicateSymbol` (Duplicate and Paste), `ImportSymbol` and
+    /// `saveSymbolCopyAs`. Same contract as [`Cmd::PutLibraryFootprint`]: the caller picks a free name
+    /// (`ensureUniqueName`'s `name_1`, `name_2`, ...), a taken one is refused unless `overwrite`, item
+    /// ids are assigned here.
+    PutLibrarySymbol {
+        symbol: LibrarySymbol,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// `SYMBOL_EDITOR_CONTROL::RenameSymbol`: `lib_id` (a project-library entry) becomes `new_lib_id`.
+    /// Never touches a placed instance naming the old id (undo of this editor restores only the symbol
+    /// library, so nothing else may change with it).
+    RenameLibrarySymbol {
+        lib_id: String,
+        new_lib_id: String,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// `SYMBOL_EDITOR_DRAWING_TOOLS::PlaceAnchor` ("Move Symbol Anchor"): `at` (mm, the symbol's own
+    /// frame) becomes the new origin -- `symbol->Move( -cursorPos )`, every pin and graphic of every unit
+    /// and body style shifts by `-at`.
+    SetSymbolAnchor { lib_id: String, at: eda_model::symbol::SPoint },
     /// `dialog_lib_symbol_properties.cpp`'s General + Units&&Body Styles
     /// tabs -- the whole panel commits together, same shape as
     /// `EditFootprintProperties`.
@@ -1204,7 +1258,18 @@ pub enum Cmd {
     /// (source) pin to every *other* pin on the symbol unconditionally;
     /// folded into one Cmd with a field selector rather than three
     /// near-identical variants.
-    PushPinProperty { lib_id: String, source_pin_id: String, field: PushPinField },
+    ///
+    /// `body_style` is `m_frame->GetBodyStyle()` -- the body style the editor is showing. Source's
+    /// length push reaches only pins that are shared by every style (`0`) or belong to that one
+    /// (`!pin->GetBodyStyle() || pin->GetBodyStyle() == m_frame->GetBodyStyle()`); `None` means the
+    /// source pin's own style (what this verb did before the field existed).
+    PushPinProperty {
+        lib_id: String,
+        source_pin_id: String,
+        field: PushPinField,
+        #[serde(default)]
+        body_style: Option<u32>,
+    },
 
     /// Free-standing graphics on a symbol's own unit/body-style, in its
     /// local mm frame -- same shape/validation spirit as the PCB tab's
@@ -1315,6 +1380,9 @@ impl Cmd {
             Cmd::OpenFootprintForEdit { .. }
             | Cmd::NewFootprint { .. }
             | Cmd::DeleteLibraryFootprint { .. }
+            | Cmd::PutLibraryFootprint { .. }
+            | Cmd::RenameLibraryFootprint { .. }
+            | Cmd::RepairFootprint { .. }
             | Cmd::EditFootprintProperties { .. }
             | Cmd::SetFootprintAnchor { .. }
             | Cmd::UpdateFootprintOnBoard { .. }
@@ -1324,6 +1392,7 @@ impl Cmd {
             | Cmd::DeletePad { .. }
             | Cmd::EditPad { .. }
             | Cmd::PushPadProperties { .. }
+            | Cmd::SetPadNumbers { .. }
             | Cmd::RenumberPads { .. }
             | Cmd::AddFootprintGraphic { .. }
             | Cmd::DeleteFootprintGraphic { .. }
@@ -1336,6 +1405,9 @@ impl Cmd {
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
             | Cmd::DeleteLibrarySymbol { .. }
+            | Cmd::PutLibrarySymbol { .. }
+            | Cmd::RenameLibrarySymbol { .. }
+            | Cmd::SetSymbolAnchor { .. }
             | Cmd::EditSymbolProperties { .. }
             | Cmd::UpdateSymbolOnBoard { .. }
             | Cmd::AddSymbolPin { .. }
@@ -1440,6 +1512,8 @@ impl Cmd {
             Cmd::ReplaceText { .. } => vec!["replace_text"],
             Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => vec!["erc_pin_map"],
 
+            Cmd::PutLibraryFootprint { footprint, .. } => vec![footprint.name.as_str()],
+            Cmd::RenameLibraryFootprint { name, .. } | Cmd::RepairFootprint { name } => vec![name.as_str()],
             Cmd::OpenFootprintForEdit { name }
             | Cmd::NewFootprint { name }
             | Cmd::DeleteLibraryFootprint { name }
@@ -1454,6 +1528,7 @@ impl Cmd {
             | Cmd::DeletePad { footprint, .. }
             | Cmd::EditPad { footprint, .. }
             | Cmd::PushPadProperties { footprint, .. }
+            | Cmd::SetPadNumbers { footprint, .. }
             | Cmd::RenumberPads { footprint, .. }
             | Cmd::AddFootprintGraphic { footprint, .. }
             | Cmd::DeleteFootprintGraphic { footprint, .. }
@@ -1464,6 +1539,8 @@ impl Cmd {
             | Cmd::DeleteFootprintText { footprint, .. }
             | Cmd::MoveFootprintText { footprint, .. } => vec![footprint.as_str()],
 
+            Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
+            Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
             Cmd::OpenSymbolForEdit { lib_id } | Cmd::NewSymbol { lib_id } | Cmd::DeleteLibrarySymbol { lib_id } | Cmd::EditSymbolProperties { lib_id, .. } | Cmd::UpdateSymbolOnBoard { lib_id } => vec![lib_id.as_str()],
             Cmd::AddSymbolPin { lib_id, .. }
             | Cmd::MoveSymbolPin { lib_id, .. }
@@ -1889,6 +1966,9 @@ impl<'a> Board<'a> {
             Cmd::NewFootprint { name } => self.new_footprint(name),
             Cmd::NewSymbol { lib_id } => self.new_symbol(lib_id),
             Cmd::DeleteLibraryFootprint { name } => self.delete_library_footprint(name),
+            Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
+            Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
+            Cmd::RepairFootprint { name } => self.repair_footprint(name),
             Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model } => {
                 self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone())
             }
@@ -1903,6 +1983,7 @@ impl<'a> Board<'a> {
             Cmd::PushPadProperties { footprint, source_pad_id, filter_shape, filter_orientation, filter_layers, filter_type } => {
                 self.push_pad_properties(footprint, source_pad_id, *filter_shape, *filter_orientation, *filter_layers, *filter_type)
             }
+            Cmd::SetPadNumbers { footprint, numbers } => self.set_pad_numbers(footprint, numbers),
             Cmd::RenumberPads { footprint, start, prefix, step } => self.renumber_pads(footprint, *start, prefix, *step),
 
             Cmd::AddFootprintGraphic { footprint, shape } => self.add_footprint_graphic(footprint, shape.clone()),
@@ -1918,6 +1999,9 @@ impl<'a> Board<'a> {
 
             Cmd::OpenSymbolForEdit { lib_id } => self.open_symbol_for_edit(lib_id),
             Cmd::DeleteLibrarySymbol { lib_id } => self.delete_library_symbol(lib_id),
+            Cmd::PutLibrarySymbol { symbol, overwrite } => self.put_library_symbol(symbol, *overwrite),
+            Cmd::RenameLibrarySymbol { lib_id, new_lib_id, overwrite } => self.rename_library_symbol(lib_id, new_lib_id, *overwrite),
+            Cmd::SetSymbolAnchor { lib_id, at } => self.set_symbol_anchor(lib_id, *at),
             Cmd::EditSymbolProperties { lib_id, reference_prefix, description, keywords, datasheet, power, in_bom, on_board, pin_numbers_hidden, pin_names_hidden, pin_name_offset_mm, unit_count, has_alternate_body_style, footprint_filters } => self.edit_symbol_properties(
                 lib_id,
                 reference_prefix.clone(),
@@ -1940,7 +2024,7 @@ impl<'a> Board<'a> {
             Cmd::MoveSymbolPin { lib_id, id, x, y } => self.move_symbol_pin(lib_id, id, *x, *y),
             Cmd::DeleteSymbolPin { lib_id, id } => self.delete_symbol_pin(lib_id, id),
             Cmd::EditSymbolPin { lib_id, id, pin } => self.edit_symbol_pin(lib_id, id, pin.clone()),
-            Cmd::PushPinProperty { lib_id, source_pin_id, field } => self.push_pin_property(lib_id, source_pin_id, *field),
+            Cmd::PushPinProperty { lib_id, source_pin_id, field, body_style } => self.push_pin_property(lib_id, source_pin_id, *field, *body_style),
 
             Cmd::AddSymbolGraphic { lib_id, graphic } => self.add_symbol_graphic(lib_id, graphic.clone()),
             Cmd::DeleteSymbolGraphic { lib_id, id } => self.delete_symbol_graphic(lib_id, id),
@@ -4496,19 +4580,8 @@ impl<'a> Board<'a> {
             if filter_type && p.kind != src.kind {
                 continue;
             }
-            p.size = src.size;
-            p.offset = src.offset;
-            p.shape = src.shape;
-            p.drill = src.drill;
-            p.drill_slot = src.drill_slot;
-            p.roundrect_ratio = src.roundrect_ratio;
-            p.trapezoid_delta = src.trapezoid_delta;
-            p.chamfer_ratio = src.chamfer_ratio;
-            p.chamfer_corners = src.chamfer_corners;
-            p.layers = src.layers.clone();
-            p.clearance_override = src.clearance_override;
-            p.thermal_gap_override = src.thermal_gap_override;
-            p.thermal_spoke_width_override = src.thermal_spoke_width_override;
+            // `pad->ImportSettingsFrom( aSrcPad )` -- see `library_editors::import_pad_settings`.
+            library_editors::import_pad_settings(p, &src);
         }
         Ok(())
     }
@@ -4812,17 +4885,18 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn push_pin_property(&mut self, lib_id: &str, source_pin_id: &str, field: PushPinField) -> Result<(), Vec<CheckResult>> {
+    fn push_pin_property(&mut self, lib_id: &str, source_pin_id: &str, field: PushPinField, body_style: Option<u32>) -> Result<(), Vec<CheckResult>> {
         let sym = self.library_symbol_mut(lib_id)?;
         let src = sym.pins.iter().find(|p| p.id == source_pin_id).cloned().ok_or_else(|| vec![CheckResult::fail("ops_unknown_pin", source_pin_id, "no pin with this id")])?;
+        let shown_style = body_style.unwrap_or(src.body_style);
         for p in sym.pins.iter_mut().filter(|p| p.id != source_pin_id) {
             match field {
-                // `symbol_editor_pin_tool.cpp::PushPinProperties`: a length
-                // push is skipped between pins of different body styles
-                // (source's own `if ( eachPin->GetBodyStyle() ==
-                // pin->GetBodyStyle() )` guard); name/number size have no
-                // such guard, confirmed directly against that function.
-                PushPinField::Length if p.body_style == src.body_style => p.length_mm = src.length_mm,
+                // `symbol_editor_pin_tool.cpp::PushPinProperties`: a length push reaches a pin that
+                // is shared by every body style (`0`) or belongs to the style the editor shows
+                // (`!pin->GetBodyStyle() || pin->GetBodyStyle() == m_frame->GetBodyStyle()`);
+                // name/number size have no such guard, confirmed directly against that function.
+                // (`pin->ChangeLength( sourcePin->GetLength() )`: the pin's inner end stays put, its tip moves.)
+                PushPinField::Length if p.body_style == 0 || p.body_style == shown_style => library_editors::change_pin_length(p, src.length_mm),
                 PushPinField::Length => {}
                 PushPinField::NameSize => p.name_size_mm = src.name_size_mm,
                 PushPinField::NumberSize => p.number_size_mm = src.number_size_mm,

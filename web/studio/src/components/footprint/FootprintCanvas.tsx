@@ -14,10 +14,14 @@ import { paintFootprint } from "./footprintPainter";
 import { snapPoint } from "../canvas/gridHelper";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
+import { useActionRunner } from "../../actions/useActionRunner";
 import { isMac } from "../../platform";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
 import { nextPadNumber } from "../../kicad-port/padNumbering";
+import { padCanHaveNumber } from "../../kicad-port/fpEditActions";
+import { newPadFromMaster, settingsOf } from "../../kicad-port/padSettings";
+import { enumerateHit, enumerateShownNumber, padsUnderSweep, sweepPoints } from "../../kicad-port/padEnumeration";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { arcClick, arcMotion, arcRemoveLastPoint } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion, bezierRemoveLastPoint } from "../../kicad-port/bezierGeom";
@@ -35,25 +39,6 @@ const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "ci
   draw_rect: "rect",
   draw_circle: "circle",
   draw_polygon: "polygon",
-};
-
-/** `BOARD_DESIGN_SETTINGS::SetDefaultMasterPad()` -- the interactive Pad tool's own starting template (`m_Pad_Master`), reused here as this editor's "last placed pad" memory: after each placement, `PlaceItem()`'s own "push settings back into the master" behavior is mirrored by just remembering the pad just placed. */
-const DEFAULT_PAD_TEMPLATE: Omit<LibraryPad, "id" | "number" | "at"> = {
-  offset: { x: 0, y: 0 },
-  size: [2540, 1270],
-  shape: "round_rect",
-  kind: "smd",
-  drill: null,
-  drill_slot: null,
-  rot: 0,
-  roundrect_ratio: 0.15,
-  trapezoid_delta: null,
-  chamfer_ratio: null,
-  chamfer_corners: { top_left: false, top_right: false, bottom_left: false, bottom_right: false },
-  layers: ["F.Cu", "F.Paste", "F.Mask"],
-  clearance_override: null,
-  thermal_gap_override: null,
-  thermal_spoke_width_override: null,
 };
 
 /** Layers a through-hole pad's own default should occupy -- not reachable by the Pad tool directly (it always starts from the SMD master above, same as source), but `padTemplateForKind` keeps this ready for the Pad Properties dialog's own type-preset buttons (step 3) to reuse. */
@@ -186,7 +171,12 @@ export function FootprintCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
-  const padTemplateRef = useRef<Omit<LibraryPad, "id" | "number" | "at">>(DEFAULT_PAD_TEMPLATE);
+  const { run, isEnabled } = useActionRunner();
+  /** `EnumeratePads`' `oldMousePos`: where the mouse was at the last event, so a fast move can be swept for pads in between. */
+  const lastMouseRef = useRef<{ x: number; y: number } | null>(null);
+  /** The previous press of the Renumber Pads tool: a second press at the same place right after is a double click (finish), not another click. */
+  const lastDownRef = useRef<{ t: number; x: number; y: number } | null>(null);
+  const dblSuppressUntil = useRef(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const wheelPrefs = useWheelPrefs();
@@ -258,8 +248,11 @@ export function FootprintCanvas() {
     ctx.save();
     ctx.translate(state.view.x, state.view.y);
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
-    paintFootprint(ctx, state.view, width, height, fp, {
-      selection: state.selection,
+    // The Renumber Pads tool shows the numbers it has handed out (and highlights those pads, `pad->SetSelected()`) before anything is committed.
+    const session = state.enumerate;
+    const shown = fp && session ? { ...fp, pads: fp.pads.map((p) => ({ ...p, number: enumerateShownNumber(session, p.id ?? "", p.number) })) } : fp;
+    paintFootprint(ctx, state.view, width, height, shown, {
+      selection: session ? new Set([...state.selection, ...session.assigned.keys()]) : state.selection,
       gridUm: state.gridUm,
       gridVisible: state.gridVisible,
       drawState: state.drawState,
@@ -268,7 +261,7 @@ export function FootprintCanvas() {
     });
     ctx.restore();
     ctx.restore();
-  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, state.drawState, state.cursorUm, state.movePreview, containerSize]);
+  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, state.drawState, state.cursorUm, state.movePreview, state.enumerate, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -299,6 +292,24 @@ export function FootprintCanvas() {
     },
     [fp, state.view.scale]
   );
+
+  /** One mouse event of the Renumber Pads tool: the numberable pads under the swept path take (or, on a click, give back) their number. */
+  const enumerateAt = (wx: number, wy: number, isClick: boolean) => {
+    const st = api.getState();
+    const session = st.enumerate;
+    const f = st.footprint;
+    if (!session || !f) return;
+    const points = sweepPoints(lastMouseRef.current, { x: wx, y: wy }); // "wxWidgets deliver mouse move events not frequently enough"
+    lastMouseRef.current = { x: wx, y: wy };
+    const hits = padsUnderSweep(
+      f.pads.filter((p) => p.id && padCanHaveNumber(p)), // `pad->CanHaveNumber() && checkVisibility( pad )`
+      points,
+      (pad, x, y) => padContains(pad, x, y)
+    );
+    let next = session;
+    for (const pad of hits) next = enumerateHit(next, pad.id!, pad.number, isClick);
+    if (next !== session) dispatch({ type: "SET_ENUMERATE", state: next });
+  };
 
   const finishDraw = useCallback(() => {
     const draw = state.drawState;
@@ -339,11 +350,29 @@ export function FootprintCanvas() {
       return;
     }
 
+    // `PAD_TOOL::EnumeratePads`: every pad the cursor meets takes the next number; a double click finishes.
+    if (state.activeTool === "enumerate" && state.enumerate && fp) {
+      const now = performance.now();
+      const last = lastDownRef.current;
+      lastDownRef.current = { t: now, x: e.clientX, y: e.clientY };
+      if (last && now - last.t < 350 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 6) {
+        dblSuppressUntil.current = now + 600; // the dblclick event that follows must not open a pad's properties
+        void api.finishEnumerate(true); // `evt->IsDblClick( BUT_LEFT )` -> `commit.Push( "Renumber Pads" )`
+        return;
+      }
+      enumerateAt(wx, wy, true);
+      return;
+    }
+
+    // `PAD_TOOL::PlacePad` (`PAD_PLACER::CreateItem` / `PlaceItem`): the new pad is the default pad (`m_Pad_Master`) with the next number
+    // (none for a pad that cannot have one), and the pad placed is pushed back into the default pad.
     if (state.activeTool === "pad" && fp) {
-      const number = nextPadNumber(fp.pads);
-      const pad: LibraryPad = { ...padTemplateRef.current, number, at: { x: sx, y: sy } };
+      const master = state.defaultPad;
+      const number = padCanHaveNumber(master) ? nextPadNumber(fp.pads) : "";
+      const pad: LibraryPad = newPadFromMaster(master, number, { x: sx, y: sy });
       void api.addPad(pad);
-      dispatch({ type: "SET_LAST_PAD_NUMBER", number }); // `PAD_PLACER::CreateItem`: `m_padTool->SetLastPadNumber( padNumber )`
+      dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(pad) });
+      if (number) dispatch({ type: "SET_LAST_PAD_NUMBER", number }); // `PAD_PLACER::CreateItem`: `m_padTool->SetLastPadNumber( padNumber )`
       return;
     }
 
@@ -410,6 +439,12 @@ export function FootprintCanvas() {
   const onPointerMove = (e: React.PointerEvent) => {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
+    // The Renumber Pads tool: a drag over pads numbers them (`evt->IsDrag( BUT_LEFT )`); every event moves `oldMousePos` on.
+    if (state.activeTool === "enumerate" && state.enumerate) {
+      if (e.buttons & 1) enumerateAt(wx, wy, false);
+      else lastMouseRef.current = { x: wx, y: wy };
+      return;
+    }
     // `drawArc` / `drawOneBezier`'s motion branch: update the construction manager's geometry (never its step) with the snapped cursor.
     const draw = state.drawState;
     if (draw && (draw.arc || draw.bezier)) {
@@ -458,6 +493,8 @@ export function FootprintCanvas() {
   };
 
   const onDoubleClick = (e: React.MouseEvent) => {
+    // The Renumber Pads tool owns the double click (it finishes the tool); it must not also open a pad's properties.
+    if (state.activeTool === "enumerate" || performance.now() < dblSuppressUntil.current) return;
     if (state.drawState) {
       finishDraw();
       return;
@@ -527,46 +564,22 @@ export function FootprintCanvas() {
     if (hit && !state.selection.has(hit.id)) dispatch({ type: "SET_SELECTION", refs: [hit.id] });
     const refs = hit ? (state.selection.has(hit.id) ? [...state.selection] : [hit.id]) : [...state.selection];
     const padRefs = refs.filter((r) => api.padById(r));
+    /** An entry that runs a registered KiCad action (PAD_TOOL's selection-menu items, `PAD_TOOL::Init`). */
+    const act = (name: string, label: string, disabled = false): MenuEntry => ({ label, onSelect: () => run(name), disabled: disabled || !isEnabled(name) });
     const entries: MenuEntry[] = [
       { label: "Rotate 90° (R)", onSelect: () => padRefs.forEach((id) => void api.rotatePad(id, 1)), disabled: padRefs.length === 0 },
       { label: "Duplicate (Ctrl+D)", onSelect: () => void api.duplicateSelection(false), disabled: refs.length === 0 },
       { label: "Duplicate and Increment (Ctrl+Shift+D)", onSelect: () => void api.duplicateSelection(true), disabled: refs.length === 0 },
       { label: "Pad Properties...", onSelect: () => dispatch({ type: "SET_PAD_PROPERTIES_ID", id: padRefs[0]! }), disabled: padRefs.length !== 1 },
-      { label: "Copy Pad Properties", onSelect: () => api.copyPadProperties(padRefs[0]!), disabled: padRefs.length !== 1 },
-      { label: "Paste Pad Properties", onSelect: () => void api.pastePadProperties(padRefs), disabled: padRefs.length === 0 || !state.copiedPadProps },
+      act("pcbnew.ModuleEditor.padTable", "Pad Table..."),
+      act("pcbnew.PadTool.enumeratePads", "Renumber Pads...", (fp?.pads.length ?? 0) === 0),
+      act("pcbnew.PadTool.CopyPadSettings", "Copy Pad Properties to Default", padRefs.length !== 1),
+      act("pcbnew.PadTool.ApplyPadSettings", "Paste Default Pad Properties to Selected", padRefs.length === 0),
+      act("pcbnew.PadTool.PushPadSettings", "Push Pad Properties to Other Pads...", padRefs.length !== 1),
       { label: "Delete (Del)", onSelect: () => refs.forEach((id) => (api.padById(id) ? void api.deletePad(id) : api.graphicById(id) ? void api.deleteGraphic(id) : void api.deleteText(id))), disabled: refs.length === 0 },
     ];
     setContextMenu({ x: e.clientX, y: e.clientY, entries });
   };
-
-  // Remember the master pad template from the current selection's own
-  // pad, so the Pad tool's next placement continues from whatever shape/
-  // size the operator was last working with -- `pad_tool.cpp`'s own
-  // "PlaceItem pushes settings back into m_Pad_Master".
-  useEffect(() => {
-    if (state.selection.size !== 1) return;
-    const [only] = state.selection;
-    const p = fp?.pads.find((pad) => pad.id === only);
-    if (p) {
-      padTemplateRef.current = {
-        offset: p.offset,
-        size: p.size,
-        shape: p.shape,
-        kind: p.kind,
-        drill: p.drill,
-        drill_slot: p.drill_slot,
-        rot: p.rot,
-        roundrect_ratio: p.roundrect_ratio,
-        trapezoid_delta: p.trapezoid_delta,
-        chamfer_ratio: p.chamfer_ratio,
-        chamfer_corners: p.chamfer_corners,
-        layers: p.layers,
-        clearance_override: p.clearance_override,
-        thermal_gap_override: p.thermal_gap_override,
-        thermal_spoke_width_override: p.thermal_spoke_width_override,
-      };
-    }
-  }, [state.selection, fp]);
 
   return (
     <div

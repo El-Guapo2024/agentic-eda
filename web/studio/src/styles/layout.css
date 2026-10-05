@@ -263,6 +263,18 @@
   background: currentColor;
   opacity: 0.25;
 }
+/* The Footprint and Symbol editors' toolbars are labelled buttons (no extracted icon set for these two frames), so they size to their text
+   and wrap instead of overlapping in a 30px box. */
+.toolbar[data-toolbar="footprint"],
+.toolbar[data-toolbar="symbol"] {
+  flex-wrap: wrap;
+}
+.toolbar[data-toolbar="footprint"] .toolbar-button,
+.toolbar[data-toolbar="symbol"] .toolbar-button {
+  width: auto;
+  padding: 0 8px;
+  white-space: nowrap;
+}
 .toolbar-separator {
   width: 1px;
   height: 20px;
