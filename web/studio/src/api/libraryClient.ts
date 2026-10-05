@@ -3,6 +3,7 @@
 // `client.ts` so the two library editors' own additions never grow that shared file.
 import type { LibraryFootprint, LibrarySymbol } from "./types";
 import { ApiError } from "./client";
+import { withDefaults } from "../kicad-port/libraryDefaults";
 
 export interface ParsedSymbols {
   symbols: LibrarySymbol[];
@@ -25,7 +26,7 @@ async function postText<T extends { error?: string }>(url: string, text: string)
 /** `.kicad_sym` text (a library file, or KiCad's clipboard text of `(symbol ...)` forms) -> the editable symbols it holds. */
 export async function parseSymbolText(text: string): Promise<ParsedSymbols> {
   const r = await postText<ParsedSymbols & { error?: string }>("/api/symbol_library/parse", text);
-  return { symbols: r.symbols ?? [], warnings: r.warnings ?? [] };
+  return { symbols: (r.symbols ?? []).map(withDefaults), warnings: r.warnings ?? [] };
 }
 
 /** `.kicad_mod` text -> the editable footprint (the IR omits empty lists, so they are filled in here like `fetchFootprint` does). */
@@ -131,7 +132,7 @@ async function getLibrary<T extends { error?: string }>(url: string): Promise<T>
 /** Any symbol of the tree -- the project entry or the one a library file / the builtin table defines -- without opening (materializing) it. */
 export async function fetchAnySymbol(libId: string): Promise<{ symbol: LibrarySymbol; inProject: boolean }> {
   const r = await getLibrary<{ symbol: LibrarySymbol; in_project: boolean; error?: string }>(`/api/library/symbol?lib_id=${encodeURIComponent(libId)}`);
-  return { symbol: r.symbol, inProject: r.in_project };
+  return { symbol: withDefaults(r.symbol), inProject: r.in_project };
 }
 
 /** Any footprint of the tree, the footprint sibling of `fetchAnySymbol` (the IR omits empty lists, so they are filled in here). */

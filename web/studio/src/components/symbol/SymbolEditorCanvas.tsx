@@ -184,7 +184,12 @@ export function SymbolEditorCanvas() {
     if (pts.length === 0) pts.push([-3000, -3000], [3000, 3000]);
     const bounds = boundsOfPoints(pts);
     if (!bounds) return;
-    dispatch({ type: "SET_VIEW", view: fitTransform(bounds, containerSize.width, containerSize.height) });
+    // A symbol a few millimetres across would be blown up to fill the canvas (a pin number as tall as the window): show at least 25.4 mm (an inch).
+    const MIN_SPAN_UM = 25400;
+    const grow = (lo: number, hi: number): [number, number] => (hi - lo >= MIN_SPAN_UM ? [lo, hi] : [(lo + hi) / 2 - MIN_SPAN_UM / 2, (lo + hi) / 2 + MIN_SPAN_UM / 2]);
+    const [minX, maxX] = grow(bounds.minX, bounds.maxX);
+    const [minY, maxY] = grow(bounds.minY, bounds.maxY);
+    dispatch({ type: "SET_VIEW", view: fitTransform({ minX, minY, maxX, maxY }, containerSize.width, containerSize.height) });
     dispatch({ type: "MARK_VIEW_INITIALIZED" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sym != null, containerSize, dispatch]);

@@ -9,6 +9,7 @@ import type { LengthUnit } from "../state/units";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
 import { fileStem, schematicSaveNames } from "../kicad-port/saveAs";
+import { withDefaults } from "../kicad-port/libraryDefaults";
 
 export class ApiError extends Error {}
 
@@ -320,7 +321,7 @@ export async function downloadFootprintKicadMod(name: string): Promise<void> {
 export async function fetchLibrarySymbol(libId: string): Promise<LibrarySymbol> {
   const s = await getJson<LibrarySymbol & { error?: string }>(`/api/symbol?lib_id=${encodeURIComponent(libId)}`);
   if (s.error) throw new ApiError(s.error);
-  return s;
+  return withDefaults(s); // the server leaves out every field that has its default value (a unit or body style of 1, empty text fields)
 }
 
 export async function fetchSymbolEditorNames(): Promise<SymbolEditorNames> {

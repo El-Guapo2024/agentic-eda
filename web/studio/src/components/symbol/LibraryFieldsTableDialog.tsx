@@ -106,7 +106,7 @@ export function LibraryFieldsTableDialog() {
                 {shown.length === 0 && (
                   <tr>
                     <td colSpan={8} style={{ color: "var(--chrome-text-dim)" }}>
-                      {rows.length === 0 ? `No symbols found in library '${lib}'.` : "No match."}
+                      {rows.length === 0 ? `No symbols of the project in library '${lib}' yet: a symbol that comes from a library file is read-only until it is opened.` : "No match."}
                     </td>
                   </tr>
                 )}
