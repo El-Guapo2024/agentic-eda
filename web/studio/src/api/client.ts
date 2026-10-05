@@ -436,6 +436,11 @@ export function routeCancel(): Promise<{ ok: boolean }> {
   return postJson("/api/route/cancel", {});
 }
 
+/** `ROUTER_TOOL::ChangeRouterMode`/`CycleRouterMode` on the session that is running now (`ok: false` when none is: the studio keeps the mode for the next one). */
+export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
+  return postJson("/api/route/mode", { mode });
+}
+
 // `D`: drag an existing track segment/corner or via, keeping its
 // connections (gap #7 stage 5) -- wired into Canvas.tsx's own drag tool,
 // see components/canvas/dragging.ts. `routeCancel` above already ends a

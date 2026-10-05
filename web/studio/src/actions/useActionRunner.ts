@@ -63,6 +63,7 @@ import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
+import { registerPcbEditSweep } from "./pcbEditSweep";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -2157,6 +2158,9 @@ export function useActionRunner() {
         if (state.tab === "symbol") void symApi.exportLibraryKicadSym();
       });
     }
+
+    // The pcbnew edit-tool rows (router modes, Mirror, Fillet/Chamfer/Dogbone/Extend Lines, polygon booleans, ...): actions/pcbEditSweep.ts.
+    registerPcbEditSweep(m, { state, dispatch, api, requestSelection });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch]);

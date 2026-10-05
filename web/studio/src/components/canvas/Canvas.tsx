@@ -39,6 +39,7 @@ import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, a
 import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
 import { openPropertiesFor } from "./properties";
 import { useActionRunner } from "../../actions/useActionRunner";
+import { pcbSweepMenuEntries } from "../../actions/pcbSweepMenu";
 import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner, removeCorner } from "../../kicad-port/zonePointEditor";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
@@ -149,7 +150,10 @@ export function Canvas() {
   // already does -- a plain api.ripSelection() call only ever handles
   // footprints, which used to make a right-click Delete on anything else
   // silently do nothing.
-  const { run } = useActionRunner();
+  const { run, isEnabled } = useActionRunner();
+  /** The registry of the latest render: a context-menu entry runs after the selection its right click made has rendered. */
+  const runRef = useRef(run);
+  runRef.current = run;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -483,6 +487,14 @@ export function Canvas() {
     }
   }, [state.drawState, state.activeLayer, state.cursorUm, state.gridUm, state.pcbx, board, api, dispatch]);
 
+  // pcbnew.InteractiveDrawing.closeOutline (drawing_tool.cpp: `polyGeomMgr.SetFinished()`) asks for what Enter does: finish the zone/polygon.
+  const finishRequestSeen = useRef(state.pcbx.drawFinishRequest);
+  useEffect(() => {
+    if (state.pcbx.drawFinishRequest === finishRequestSeen.current) return;
+    finishRequestSeen.current = state.pcbx.drawFinishRequest;
+    finishDraw();
+  }, [state.pcbx.drawFinishRequest, finishDraw]);
+
   const onPointerDown = (e: React.PointerEvent) => {
     // Throws NotFoundError for a synthesized pointer (common.Control.cursorClick's
     // Enter-key click, actions/useActionRunner.ts), which has no real pointer to capture.
@@ -493,6 +505,7 @@ export function Canvas() {
     }
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
+    if (state.pcbx.menuCursorUm) dispatch({ type: "PCBX", patch: { menuCursorUm: null } });
 
     // Route/via/zone/drawing/text tools: a click either starts, extends,
     // or (for via/text) completes one placement -- entirely separate
@@ -995,7 +1008,19 @@ export function Canvas() {
     const [wx, wy] = worldAt(e);
     const hit = partHit(board.parts, wx, wy);
     if (hit && !state.selection.has(hit.ref)) dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
-    const refs = hit ? (state.selection.has(hit.ref) ? [...state.selection] : [hit.ref]) : [...state.selection];
+    dispatch({ type: "PCBX", patch: { menuCursorUm: { x: wx, y: wy } } }); // `GetMenuCursorPos()`
+    // pcb_selection_tool.cpp Main(): a right click on an item that is not selected selects it first (here for the non-footprint
+    // kinds -- tracks, vias, zones, shapes, text -- whose own entries below depend on it).
+    let pickedId: string | null = null;
+    if (!hit) {
+      const toleranceUm = Math.max(150, 6 / state.view.scale);
+      const top = pickSelectionCandidates(board, wx, wy, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)[0];
+      if (top && !state.selection.has(top.id)) {
+        pickedId = top.id;
+        dispatch({ type: "SET_SELECTION", refs: [top.id] });
+      }
+    }
+    const refs = pickedId ? [pickedId] : hit ? (state.selection.has(hit.ref) ? [...state.selection] : [hit.ref]) : [...state.selection];
     const placedRefs = refs.filter((r) => api.partByRef(r)?.placed);
 
     const entries: MenuEntry[] = [
@@ -1059,6 +1084,12 @@ export function Canvas() {
         }
       }
     }
+    // drawing_tool.cpp's `canCloseOutline`: while a zone, rule area or graphic polygon is being drawn, the menu offers to close it.
+    if (state.drawState?.kind === "zone" || (state.drawState?.kind === "shape" && state.drawState.shapeKind === "polygon")) {
+      entries.unshift({ label: "Close Outline", onSelect: () => runRef.current("pcbnew.InteractiveDrawing.closeOutline") });
+    }
+    // The pcbnew edit tools' own entries (actions/pcbSweepMenu.ts): Select, Break/Fillet Tracks, Mirror, Shape Modification...
+    entries.push(...pcbSweepMenuEntries(state, api, refs, (name) => runRef.current(name), isEnabled));
     if (!hit && refs.length === 0 && board.outline) {
       const bounds = boundsOfPoints(board.outline);
       const rect = containerRef.current?.getBoundingClientRect();

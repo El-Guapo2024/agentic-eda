@@ -38,6 +38,10 @@ export interface PcbParityState {
   fpEditRequest: string | null;
   /** `MEANDER_SETTINGS` amplitude/spacing the length-tuning dialog edits (`lengthTuner.Ampl*`/`Spacing*` step them). */
   lengthTuner: { amplitudeUm: number; spacingUm: number };
+  /** Bumped by `closeOutline` to ask the canvas to finish the zone/polygon being drawn with the points placed so far (the canvas owns the draw). */
+  drawFinishRequest: number;
+  /** `TOOL_MANAGER::GetMenuCursorPos()`: where the context menu was opened. The pointer is over the menu by the time an entry runs, so a cursor-driven action (Break Track) reads this instead of the live cursor; the next canvas press clears it. */
+  menuCursorUm: { x: number; y: number } | null;
 }
 
 export const DEFAULT_PCB_PARITY: PcbParityState = {
@@ -49,6 +53,8 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   drawStrokeWidthUm: DEFAULT_STROKE_WIDTH_UM,
   fpEditRequest: null,
   lengthTuner: { amplitudeUm: 200, spacingUm: 400 },
+  drawFinishRequest: 0,
+  menuCursorUm: null,
 };
 
 /** `drawing_tool.cpp`: `#define WIDTH_STEP pcbIUScale.mmToIU( 0.1 )`. */

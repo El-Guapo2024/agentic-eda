@@ -1011,9 +1011,12 @@ function reducer(state: StudioState, action: Action): StudioState {
         if (!(l in layerVisible)) layerVisible[l] = true;
         if (!(l in layerOpacity)) layerOpacity[l] = 1;
       }
-      // Drop selection/hot refs for parts that no longer exist (ripped, renamed).
+      // Drop selection/hot refs for parts that no longer exist (ripped, renamed) and for items that were deleted or re-created under a
+      // new id -- but keep a selected track/via/zone/shape/text/group that is still there (every refresh used to drop all of those).
       const refs = new Set(action.board.parts.map((p) => p.ref));
-      const selection = new Set([...state.selection].filter((r) => refs.has(r)));
+      const live = allItemIds(action.board);
+      for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
+      const selection = new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
       return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot };
     }

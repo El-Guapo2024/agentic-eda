@@ -27,6 +27,7 @@ import { TextDialog } from "./components/TextDialog";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
 import { MoveExactDialog } from "./components/MoveExactDialog";
 import { PcbParityDialogs } from "./components/PcbParityDialogs";
+import { PcbSweepDialogs } from "./components/PcbSweepDialogs";
 import { RouterSettingsDialog } from "./components/RouterSettingsDialog";
 import { LengthTuningDialog } from "./components/LengthTuningDialog";
 import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
@@ -200,6 +201,7 @@ function StudioFrame() {
       <ItemPropertiesDialog />
       <MoveExactDialog />
       <PcbParityDialogs />
+      <PcbSweepDialogs />
       <RouterSettingsDialog />
       <LengthTuningDialog />
       <CleanupTracksDialog />
