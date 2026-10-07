@@ -16,10 +16,12 @@
 //                      unplaced footprint for click-to-place (this project's
 //                      footprints come from the schematic, not a library
 //                      chooser).
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
 import { movableItem, polarTranslation, positionRelativeSelectionAnchor, relativeMoveVector, toPolarDeg, type MovableKind } from "../kicad-port/pcbEditActions";
+import { itemPosition } from "../kicad-port/pcbReference";
+import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
 
 export function PcbParityDialogs() {
   const which = useStudioState().pcbx.pcbDialog;
@@ -131,8 +133,43 @@ function PositionRelativeDialog() {
 
   const [anchorKind, setAnchorKind] = useState<AnchorKind>("origin");
   const [itemRef, setItemRef] = useState("");
+  /** An item picked on the canvas ("Select Item..."): any board item, anchored on its position (`UpdatePickedItem`). */
+  const [pickedItem, setPickedItem] = useState<{ id: string; x: number; y: number } | null>(null);
   const [pointX, setPointX] = useState(0); // display units
   const [pointY, setPointY] = useState(0);
+  // `OnSelectItemClick` / `OnSelectPointClick`: "Hide, but do not close, the dialog" while the picker runs.
+  const [picking, setPicking] = useState(false);
+  const pickingRef = useRef(false);
+  useEffect(
+    () => () => {
+      if (pickingRef.current) picker.cancel(true);
+    },
+    []
+  );
+  const runPick = async <T,>(pick: () => Promise<T | null>): Promise<T | null> => {
+    pickingRef.current = true;
+    setPicking(true);
+    const result = await pick();
+    pickingRef.current = false;
+    setPicking(false);
+    return result;
+  };
+  const shown = (um: number) => Number(umTo(um, units).toFixed(units === "mm" ? 4 : units === "mil" ? 2 : 5));
+  const selectItem = async () => {
+    const id = await runPick(() => pickItem("Select reference item..."));
+    const at = id && board ? itemPosition(board, id) : null;
+    if (!id || !at) return;
+    setPickedItem({ id, x: at.x, y: at.y });
+    setItemRef("");
+    setAnchorKind("item");
+  };
+  const selectPoint = async () => {
+    const p = await runPick(() => pickPoint("Select reference point..."));
+    if (!p) return;
+    setPointX(shown(p.x));
+    setPointY(shown(p.y));
+    setAnchorKind("point");
+  };
   const [polar, setPolar] = useState(false);
   const [a, setA] = useState(0); // Offset X (or distance), display units
   const [b, setB] = useState(0); // Offset Y (or angle, degrees)
@@ -147,6 +184,7 @@ function PositionRelativeDialog() {
       case "grid":
         return { x: 0, y: 0 }; // BOARD_DESIGN_SETTINGS grid origin: this model has no grid-origin setting, so it is the board origin.
       case "item": {
+        if (pickedItem && !itemRef) return { x: pickedItem.x, y: pickedItem.y };
         const p = placed.find((q) => q.ref === itemRef);
         return p?.at ? { x: p.at[0], y: p.at[1] } : { x: 0, y: 0 };
       }
@@ -183,6 +221,7 @@ function PositionRelativeDialog() {
     setPolar(nextPolar);
   };
 
+  if (picking) return null;
   if (movables.length === 0 || !selectionAnchor) {
     // `PositionRelative`: "if( selection.Empty() ) return 0;"
     return (
@@ -234,18 +273,24 @@ function PositionRelativeDialog() {
             <label className="filter-row">
               <input type="radio" checked={anchorKind === "item"} onChange={() => setAnchorKind("item")} /> Item:
               <select value={itemRef} onChange={(e) => { setItemRef(e.target.value); setAnchorKind("item"); }} style={{ marginLeft: 6 }}>
-                <option value="">&lt;none selected&gt;</option>
+                <option value="">{pickedItem ? `${pickedItem.id} (picked)` : "<none selected>"}</option>
                 {placed.map((p) => (
                   <option key={p.ref} value={p.ref}>
                     {p.ref}
                   </option>
                 ))}
               </select>
+              <button type="button" style={{ marginLeft: 6, padding: "0 6px" }} title="Pick the reference item on the board" onClick={() => void selectItem()}>
+                Select Item...
+              </button>
             </label>
             <label className="filter-row">
               <input type="radio" checked={anchorKind === "point"} onChange={() => setAnchorKind("point")} /> Point:
               <input type="number" step="any" value={pointX} onChange={(e) => { setPointX(Number(e.target.value)); setAnchorKind("point"); }} style={{ width: 80, marginLeft: 6 }} />
               <input type="number" step="any" value={pointY} onChange={(e) => { setPointY(Number(e.target.value)); setAnchorKind("point"); }} style={{ width: 80, marginLeft: 4 }} />
+              <button type="button" style={{ marginLeft: 6, padding: "0 6px" }} title="Pick the reference point on the board" onClick={() => void selectPoint()}>
+                Select Point...
+              </button>
             </label>
           </div>
           <label className="filter-row" style={{ marginBottom: 8 }}>

@@ -17,10 +17,11 @@
 // radio, same as source's `m_rbCircDirection` -- unlike MoveExactDialog's
 // single signed rotation field, this needs no CCW-positive-then-negate
 // bridge (see `ArrayGeometry`'s own doc in api/types.ts).
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo, type LengthUnit } from "../state/units";
 import type { ArrayGeometry } from "../api/types";
+import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
 
 type Tab = "grid" | "circular";
 
@@ -81,6 +82,39 @@ export function CreateArrayDialog() {
 
   const [busy, setBusy] = useState(false);
 
+  // `OnSelectCenterButton`: the centre can be picked on the board ("Select center item..." / "Select center point...") while the dialog waits.
+  const [picking, setPicking] = useState(false);
+  const pickingRef = useRef(false);
+  useEffect(
+    () => () => {
+      if (pickingRef.current) picker.cancel(true);
+    },
+    []
+  );
+  const runPick = async <T,>(pick: () => Promise<T | null>): Promise<T | null> => {
+    pickingRef.current = true;
+    setPicking(true);
+    const result = await pick();
+    pickingRef.current = false;
+    setPicking(false);
+    return result;
+  };
+  const setCenterUm = (x: number, y: number) => {
+    setCenterX(Math.round(umTo(x, unit) * 1000) / 1000);
+    setCenterY(Math.round(umTo(y, unit) * 1000) / 1000);
+  };
+  /** `UpdatePickedItem`: the centre becomes the item's position. */
+  const selectCenterItem = async () => {
+    const id = await runPick(() => pickItem("Select center item..."));
+    const at = id ? referencePointUm(api, id) : null;
+    if (at) setCenterUm(at[0], at[1]);
+  };
+  /** `UpdatePickedPoint`: the centre becomes the point. */
+  const selectCenterPoint = async () => {
+    const p = await runPick(() => pickPoint("Select center point..."));
+    if (p) setCenterUm(p.x, p.y);
+  };
+
   const ids = useMemo(() => [...state.selection], [state.selection]);
 
   // One-time default for the circular center: the average reference
@@ -97,7 +131,7 @@ export function CreateArrayDialog() {
     setCenterInit(true);
   }
 
-  if (!open) return null;
+  if (!open || picking) return null;
 
   const close = () => {
     dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: false });
@@ -233,6 +267,14 @@ export function CreateArrayDialog() {
                   Centre Y ({unit})
                   <input type="number" step="any" value={centerY} onChange={(e) => setCenterY(Number(e.target.value))} style={{ width: "100%" }} />
                 </label>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                <button type="button" style={{ flex: 1 }} onClick={() => void selectCenterPoint()}>
+                  Select Point...
+                </button>
+                <button type="button" style={{ flex: 1 }} onClick={() => void selectCenterItem()}>
+                  Select Item...
+                </button>
               </div>
               <label style={{ display: "block", marginTop: 6 }}>
                 Point count

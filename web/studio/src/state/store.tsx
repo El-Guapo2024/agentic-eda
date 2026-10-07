@@ -22,6 +22,7 @@ import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParity
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
+import { pasteMoveOrigin } from "../kicad-port/pcbReference";
 import { repeatSource } from "../kicad-port/schRepeat";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
@@ -994,6 +995,8 @@ export type Action =
   | { type: "DRC_RUNNING" }
   | { type: "DRC_OK"; drc: DrcReport; /** The revision the report was computed on (kicad-port/checkRevision.ts's `revisionOf`). */ version: string | null }
   | { type: "DRC_ERR"; message: string }
+  /** `BOARD::DeleteMARKERs` (Global Deletions > Delete Markers): the last report and its markers go. */
+  | { type: "DRC_CLEAR" }
   | { type: "SET_DRC_REFILL"; refill: boolean }
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
@@ -1084,10 +1087,13 @@ function reducer(state: StudioState, action: Action): StudioState {
         if (!(l in layerVisible)) layerVisible[l] = true;
         if (!(l in layerOpacity)) layerOpacity[l] = 1;
       }
-      // Drop selection/hot refs for parts that no longer exist (ripped, renamed).
+      // Drop selection/hot refs for parts that no longer exist (ripped, renamed) and for items that were deleted or re-created under a
+      // new id -- but keep a selected track/via/zone/shape/text/group that is still there (every refresh used to drop all of those).
       const refs = new Set(action.board.parts.map((p) => p.ref));
       // On the schematic tab the selection also holds the sheet's wires, labels, shapes... which are no parts: SCHEMATIC_OK prunes those against the sheet.
-      const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r)));
+      const live = allItemIds(action.board);
+      for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
+      const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
       return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot };
     }
@@ -1293,6 +1299,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drc: action.drc, drcRunning: false, drcError: null, drcVersion: action.version, drcSelected: null };
     case "DRC_ERR":
       return { ...state, drcRunning: false, drcError: action.message };
+    case "DRC_CLEAR":
+      return { ...state, drc: null, drcVersion: null, drcSelected: null };
     case "SET_DRC_REFILL":
       return { ...state, drcRefillZones: action.refill };
     case "SET_DRC_SELECTED":
@@ -1502,7 +1510,7 @@ export interface StudioApi {
   ungroupSelection: () => Promise<void>;
   /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
   /** `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback. */
-  copySelection: (refs?: readonly string[]) => void;
+  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => void;
   /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
   pasteClipboard: () => Promise<void>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
@@ -2104,7 +2112,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = allItemIds(board);
       const ok = await runCmd({ op: "duplicate", ids });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // The board as the backend has it now: `stateRef` only catches up on the next render, so the copies would not be in it yet
+      // and the Move tool would never pick them up.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
       if (newIds.length === 0) return;
@@ -2140,12 +2150,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_SELECTION", refs: members });
     },
     addZone: async (net, layer, outline, settings) => {
-      const board = stateRef.current.board;
+      // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
+      const board = await fetchState().catch(() => null);
       if (!board) return;
       const before = allItemIds(board);
       const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // Read the board from the backend: `stateRef` only catches up on the next render, which is after this continuation, so the new
+      // zone would not be in it yet and its settings (a rule area's flags, say) would never be applied.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newId = [...allItemIds(after)].find((id) => !before.has(id));
       if (!newId) return;
@@ -2155,11 +2168,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
       if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
     },
-    copySelection: (refs) => {
+    copySelection: (refs, reference) => {
       const board = stateRef.current.board;
       if (!board) return;
       const clipboard = collectClipboardContents(board, refs ? new Set(refs) : stateRef.current.selection);
-      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard });
+      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard: reference ? { ...clipboard, reference } : clipboard });
     },
     pasteClipboard: async () => {
       const clip = stateRef.current.clipboard;
@@ -2168,13 +2181,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = allItemIds(board);
       const ok = await runCmd({ op: "paste_items", tracks: clip.tracks, vias: clip.vias, zones: clip.zones, shapes: clip.shapes, texts: clip.texts });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // As in `duplicateSelection`: read the board from the backend, `stateRef` is still the one from before the paste.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
       if (newIds.length === 0) return;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
+      // A copy made with a reference point is carried by that point (see kicad-port/pcbReference.ts).
+      dispatch({ type: "SET_MOVE_ORIGIN", at: pasteMoveOrigin(clip.reference, stateRef.current.cursorUm) });
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });

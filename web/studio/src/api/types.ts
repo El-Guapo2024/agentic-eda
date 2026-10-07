@@ -67,6 +67,8 @@ export interface Track {
   layer: string;
   width: Um;
   pts: [Um, Um][];
+  /** The arc's mid point when this track is a KiCad arc (`PCB_ARC`; `pts` is then its tessellation), else null/absent. */
+  arc_mid?: [Um, Um] | null;
 }
 
 export interface Via {
@@ -631,6 +633,15 @@ export interface CmdTrack {
   width: Um;
   pts: PointXY[];
 }
+/** `crates/model/src/ir.rs` `Track` as `commit_route` takes it (ids are assigned server side). `arc_mid_offset` is the arc's mid point relative to `pts[0]`; `pts` must then be the arc's tessellation (`kicad-port/trackArc.ts`). */
+export interface CmdRouteTrack {
+  net: string;
+  layer: string;
+  width: Um;
+  pts: PointXY[];
+  pins?: string[];
+  arc_mid_offset?: PointXY;
+}
 export interface CmdVia {
   id?: string;
   net: string;
@@ -727,8 +738,10 @@ export type Cmd =
   | { op: "set_dimension_settings"; settings: DimensionSettings }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
   | { op: "swap_layers"; mapping: [string, string][] }
-  /** Removal-only use of `Cmd::CommitRoute`: delete several tracks/vias as ONE undo step (unknown ids tolerated) -- what `unrouteSegment`/`deleteFull` send. */
-  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[] }
+  /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
+  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[] }
+  /** `EDIT_TOOL::BooleanPolygons`: merge/subtract/intersect rectangles, circles and polygons (`ids` in routine order, the base first). */
+  | { op: "boolean_shapes"; operation: "merge" | "subtract" | "intersect"; ids: string[] }
   /** `BOARD_EDITOR_CONTROL::modifyLockSelected` -- lock/unlock every id (part ref or track/via/zone/shape/text id). */
   | { op: "set_locked"; ids: string[]; locked: boolean }
   /** `EDIT_TOOL::Swap` -- cyclic pose shift across `parts` in selection order (position, rotation, side). */

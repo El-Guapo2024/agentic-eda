@@ -25,6 +25,7 @@
 
 use crate::board;
 use crate::cleanup_api;
+use crate::convert_api;
 use crate::fab_api;
 use crate::kicad_lane::Lane;
 use crate::route_api;
@@ -717,6 +718,7 @@ fn handle(
         ("POST", "/api/route/via") => respond(stream, "200 OK", "application/json", route_api::via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/cancel") => respond(stream, "200 OK", "application/json", route_api::cancel(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/mode") => respond(stream, "200 OK", "application/json", route_api::set_mode(route_session, &body).to_string().as_bytes()),
         // D (stage 5): drag an existing track segment/corner or via,
         // keeping its connections -- shares `route_session` with the
         // route endpoints above (see route_api::drag_start's doc comment).
@@ -728,6 +730,7 @@ fn handle(
         // pairs" section doc comment); `/api/route/cancel` above already
         // ends a dp session too.
         ("POST", "/api/route/dp_start") => respond(stream, "200 OK", "application/json", route_api::dp_start(dir, route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/dp_dims") => respond(stream, "200 OK", "application/json", route_api::dp_dims(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_move") => respond(stream, "200 OK", "application/json", route_api::dp_move(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
@@ -738,6 +741,7 @@ fn handle(
         ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/convert/polys") => respond(stream, "200 OK", "application/json", convert_api::polys(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
         // "Board Statistics..." (task item 8): read-only, same stateless
         // no-Cmd shape as fab_api::bom below (nothing to undo -- it never
@@ -880,6 +884,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "tracks": r.tracks.iter().map(|t| json!({
                 "id": t.id, "net": t.net, "layer": t.layer, "width": t.width,
                 "pts": t.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+                // The arc's mid point when this track is a KiCad arc (`Track::arc`), so an edit that re-sends the track keeps it an arc.
+                "arc_mid": t.arc().map(|(_, m, _)| [m.x, m.y]),
             })).collect::<Vec<_>>(),
             "vias": r.vias.iter().map(|v| json!({
                 "id": v.id, "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter,
