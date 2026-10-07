@@ -20,6 +20,8 @@ import { openSweepDialog } from "./pcbSweepDialogs";
 import { registerPcbRouterSweep } from "./pcbRouterSweep";
 import { registerPcbSelectionSync } from "./pcbSelectionSync";
 import { registerPcbConvertSweep } from "./pcbConvertSweep";
+import { registerPcbGlobalEditSweep } from "./pcbGlobalEditSweep";
+import { registerPcbPointEditSweep } from "./pcbPointEditSweep";
 import { DEFAULT_FILTER_OPTIONS, filterSelection, netItems, netsOfItems, unrouteSelected, type FilterOptions } from "../kicad-port/pcbSelectionOps";
 import { itemKind } from "../kicad-port/pcbItems";
 import { mirrorReferencePoint, mirrorableIds, planMirror, type FlipDirection } from "../kicad-port/pcbMirror";
@@ -421,4 +423,6 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
   registerPcbRouterSweep(m, ctx);
   registerPcbSelectionSync(m, ctx);
   registerPcbConvertSweep(m, ctx);
+  registerPcbGlobalEditSweep(m, ctx);
+  registerPcbPointEditSweep(m, ctx);
 }

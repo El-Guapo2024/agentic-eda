@@ -57,31 +57,34 @@ export function createSweepHelpers(ctx: SweepCtx): SweepHelpers {
     return out;
   };
 
-  /**
-   * Send `cmds` as one undo step, then select what the edit made (every id that did not exist before) plus whatever of
-   * the old selection survived -- the C++ keeps modified items selected and adds the created ones. The new ids are read
-   * from the backend directly: the store's own state only catches up on its next render, and its board refresh also
-   * drops every non-footprint id from the selection.
-   */
-  const applyEdit = async (cmds: Cmd[], removed: readonly string[] = [], message: string | null = null, opts: { keep?: boolean } = {}): Promise<boolean> => {
-    if (cmds.length === 0) {
-      if (message) toast(message);
-      return false;
-    }
-    const before = itemIds(api.getState().board);
-    const previous = [...api.getState().selection];
-    const ok = await api.cmdBatch(cmds);
-    if (!ok) return false;
-    const fresh = await fetchState().catch(() => null);
-    const after = itemIds(fresh);
-    const gone = new Set(removed);
-    // `keep: false` selects only what the edit created (an outset deselects the originals).
-    const keep = opts.keep === false ? [] : previous.filter((id) => !gone.has(id) && (after.has(id) || !!fresh?.parts.some((p) => p.ref === id)));
-    const created = [...after].filter((id) => !before.has(id));
-    dispatch({ type: "SET_SELECTION", refs: [...keep, ...created] });
-    if (message) toast(message);
-    return true;
-  };
+  const applyEdit = (cmds: Cmd[], removed: readonly string[] = [], message: string | null = null, opts: { keep?: boolean } = {}): Promise<boolean> => applyCommands(api, dispatch, cmds, removed, message, opts);
 
   return { toast, pcbOnly, lockedIds, requestFiltered, applyEdit };
+}
+
+/**
+ * Send `cmds` as one undo step, then select what the edit made (every id that did not exist before) plus whatever of
+ * the old selection survived -- the C++ keeps modified items selected and adds the created ones. The new ids are read
+ * from the backend directly: the store's own state only catches up on its next render, and its board refresh also
+ * drops every non-footprint id from the selection. `keep: false` selects only what the edit created (an outset
+ * deselects the originals).
+ */
+export async function applyCommands(api: StudioApi, dispatch: Dispatch<Action>, cmds: Cmd[], removed: readonly string[] = [], message: string | null = null, opts: { keep?: boolean } = {}): Promise<boolean> {
+  const toast = (text: string) => dispatch({ type: "TOAST", message: text, kind: "info" });
+  if (cmds.length === 0) {
+    if (message) toast(message);
+    return false;
+  }
+  const before = itemIds(api.getState().board);
+  const previous = [...api.getState().selection];
+  const ok = await api.cmdBatch(cmds);
+  if (!ok) return false;
+  const fresh = await fetchState().catch(() => null);
+  const after = itemIds(fresh);
+  const gone = new Set(removed);
+  const keep = opts.keep === false ? [] : previous.filter((id) => !gone.has(id) && (after.has(id) || !!fresh?.parts.some((p) => p.ref === id)));
+  const created = [...after].filter((id) => !before.has(id));
+  dispatch({ type: "SET_SELECTION", refs: [...keep, ...created] });
+  if (message) toast(message);
+  return true;
 }

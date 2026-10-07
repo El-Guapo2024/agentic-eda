@@ -19,7 +19,9 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import type { ToolId } from "../../state/store";
-import type { RuleAreaFields, Zone, ZoneSettingsFields } from "../../api/types";
+import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
+import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
+import { applyCommands } from "../../actions/pcbSweepKit";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
 import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
@@ -118,7 +120,9 @@ type DragState =
   | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text" | "dimension"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
-  | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] };
+  | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] }
+  /** The same for a graphic shape's handle (kicad-port/pcbPointEdit.ts): `base` is the shape at drag-start, every move recomputes from it. */
+  | { kind: "shapePoint"; shapeId: string; base: Shape; point: EditPoint };
 
 /** A click/double-click/right-click within this many board µm of a zone corner counts as landing on it -- same generous, zoom-aware tolerance `ANCHOR_SNAP_UM`-adjacent code elsewhere in this file already uses. */
 function zoneCornerToleranceUm(viewScale: number): number {
@@ -161,6 +165,8 @@ export function Canvas() {
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   /** pcb_point_editor.cpp's live corner-drag preview -- local, like `marquee` above, since only this component's own render loop needs it. */
   const [zoneCornerPreview, setZoneCornerPreview] = useState<{ zoneId: string; outline: [number, number][] } | null>(null);
+  /** The live preview of a graphic shape's handle drag (the shape as it would be once dropped). */
+  const [shapePointPreview, setShapePointPreview] = useState<{ id: string; shape: Shape } | null>(null);
   const moveMode = state.activeTool === "move";
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
@@ -308,6 +314,7 @@ export function Canvas() {
       currentViaPreset: state.currentViaPreset,
       units: state.units,
       zoneCornerPreview,
+      shapePointPreview,
       layerVisible: state.layerVisible,
       layerOpacity: state.layerOpacity,
       activeLayer: state.activeLayer,
@@ -360,7 +367,7 @@ export function Canvas() {
       ctx.stroke();
     }
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, marquee, zoneCornerPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -691,6 +698,16 @@ export function Canvas() {
           return;
         }
       }
+      // The same for a single selected graphic shape's handles (kicad-port/pcbPointEdit.ts), unless it is locked.
+      const shape = api.shapeById(soleId);
+      if (shape && !(board.locked ?? []).includes(soleId)) {
+        const hit = activeEditPoint(shapeEditPoints(shape), [wx, wy], zoneCornerToleranceUm(state.view.scale));
+        if (hit) {
+          dragRef.current = { kind: "shapePoint", shapeId: shape.id, base: shape, point: hit };
+          setShapePointPreview(null);
+          return;
+        }
+      }
     }
 
     if (moveMode) {
@@ -913,6 +930,10 @@ export function Canvas() {
     } else if (drag.kind === "zoneCorner") {
       const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
       setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });
+    } else if (drag.kind === "shapePoint") {
+      const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
+      const next = moveShapePoint(drag.base, drag.point, [sx, sy], state.pcbx.arcEditMode);
+      setShapePointPreview(next ? { id: drag.shapeId, shape: cmdShapeToShape(next, drag.shapeId) } : null);
     } else if (drag.kind === "box") {
       const rect = containerRef.current!.getBoundingClientRect();
       const x0 = drag.startScreen[0] - rect.left,
@@ -975,6 +996,13 @@ export function Canvas() {
         api.cmd({ op: "set_zone_outline", id: drag.zoneId, outline: (zoneCornerPreview?.outline ?? drag.baseOutline).map(([x, y]) => ({ x, y })) });
       }
       setZoneCornerPreview(null);
+    } else if (drag.kind === "shapePoint") {
+      // A shape's id is its geometry's: dropping the handle makes a new shape (selected) in place of the old one, one undo step.
+      const preview = shapePointPreview;
+      setShapePointPreview(null);
+      if (preview && JSON.stringify(shapeToCmd(preview.shape)) !== JSON.stringify(shapeToCmd(drag.base))) {
+        void applyCommands(api, dispatch, [{ op: "delete_shape", id: drag.shapeId }, { op: "add_shape", shape: shapeToCmd(preview.shape) }], [drag.shapeId]);
+      }
     }
   };
 
@@ -1092,7 +1120,7 @@ export function Canvas() {
       entries.unshift({ label: "Close Outline", onSelect: () => runRef.current("pcbnew.InteractiveDrawing.closeOutline") });
     }
     // The pcbnew edit tools' own entries (actions/pcbSweepMenu.ts): Select, Break/Fillet Tracks, Mirror, Shape Modification...
-    entries.push(...pcbSweepMenuEntries(state, api, refs, (name) => runRef.current(name), isEnabled));
+    entries.push(...pcbSweepMenuEntries(state, api, refs, (name) => runRef.current(name), isEnabled, [wx, wy]));
     if (!hit && refs.length === 0 && board.outline) {
       const bounds = boundsOfPoints(board.outline);
       const rect = containerRef.current?.getBoundingClientRect();

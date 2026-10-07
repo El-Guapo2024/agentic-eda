@@ -11,6 +11,8 @@ import type { MenuEntry } from "../components/canvas/ContextMenu";
 import actionsData from "../kicad/actions.json";
 import { itemKind } from "../kicad-port/pcbItems";
 import { convertAvailability } from "../kicad-port/pcbConvert";
+import { activeEditPoint, canRemoveCorner } from "../kicad-port/pcbPointEdit";
+import { handleToleranceUm, pointItemOf, pointsOfItem, ringOf } from "./pcbPointEditSweep";
 import { routeQueueActive } from "../components/canvas/routeQueue";
 
 const LABELS = new Map<string, string>((actionsData as { actions: { name: string; label: string }[] }).actions.map((a) => [a.name, a.label]));
@@ -18,7 +20,7 @@ const LABELS = new Map<string, string>((actionsData as { actions: { name: string
 /** The action's own label from `actions.json` ("Fillet Lines..."). */
 const label = (name: string): string => LABELS.get(name) ?? name;
 
-export function pcbSweepMenuEntries(state: StudioState, api: StudioApi, refs: readonly string[], run: (name: string) => void, isEnabled: (name: string) => boolean): MenuEntry[] {
+export function pcbSweepMenuEntries(state: StudioState, api: StudioApi, refs: readonly string[], run: (name: string) => void, isEnabled: (name: string) => boolean, at?: readonly [number, number]): MenuEntry[] {
   const board = state.board;
   const out: MenuEntry[] = [];
   const add = (name: string, when: boolean): void => {
@@ -66,6 +68,21 @@ export function pcbSweepMenuEntries(state: StudioState, api: StudioApi, refs: re
   add("pcbnew.InteractiveEdit.mergePolygons", booleanTypes);
   add("pcbnew.InteractiveEdit.subtractPolygons", booleanTypes);
   add("pcbnew.InteractiveEdit.intersectPolygons", booleanTypes);
+
+  // Point editor corner operations (EDIT_TOOL::Init): the handle under the pointer decides which of them apply.
+  const pointItem = count === 1 ? pointItemOf(board, new Set(refs)) : null;
+  const ring = pointItem ? ringOf(pointItem) : null;
+  const active = pointItem && at ? activeEditPoint(pointsOfItem(pointItem), at, handleToleranceUm(state.view.scale)) : null;
+  add("pcbnew.InteractiveEdit.moveCorner", active?.kind === "corner");
+  add("pcbnew.InteractiveEdit.moveMidpoint", active?.kind === "midpoint");
+  add("pcbnew.PointEditor.removeCorner", !!ring && active?.kind === "corner" && active.id.startsWith("v") && canRemoveCorner(ring));
+  add("pcbnew.PointEditor.chamferCorner", !!ring);
+  add("pcbnew.InteractiveEdit.editVertices", !!ring);
+  const arc = count === 1 && shapeKinds[0] === "arc";
+  add("common.Interactive.cycleArcEditMode", arc);
+  add("pcbnew.PointEditor.arcKeepCenter", arc);
+  add("pcbnew.PointEditor.arcKeepEndpoint", arc);
+  add("pcbnew.PointEditor.arcKeepRadius", arc);
 
   // "Create from Selection" submenu (CONVERT_TOOL::Init)
   const convert = convertAvailability(board, refs);
