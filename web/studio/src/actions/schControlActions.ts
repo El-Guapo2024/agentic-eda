@@ -133,6 +133,28 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   m.set("eeschema.EditorControl.showNetNavigator", onSchematic(() => controlDispatch({ type: "SET_NET_NAVIGATOR", open: !control.netNavigatorOpen })));
   // Highlight Nets -- `HighlightNetCursor`: the picker tool; each click is `highlightNet( toolMgr, position )` (SchematicView.tsx owns the click), Esc leaves it.
   m.set("eeschema.EditorControl.highlightNetTool", onSchematic(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "sch_highlight_net" ? "select" : "sch_highlight_net" })));
+  // Find Net in Inspector -- `SCH_EDITOR_CONTROL::FindNetInInspector` -> `SCH_EDIT_FRAME::FindNetInInspector`: the net of the first selected item that has one (a wire, label or
+  // power symbol; a symbol itself has no connection), else the highlighted net; the Net Navigator opens with that name in its filter and the highlight is cleared.
+  m.set(
+    "eeschema.InteractiveEdit.findNetInInspector",
+    onSchematic(() => {
+      if (!sch) return;
+      const netOfItem = new Map<string, string>([...sch.wires, ...sch.labels, ...sch.power_symbols].map((i) => [i.id, i.net]));
+      let net = "";
+      for (const id of state.selection) {
+        const n = netOfItem.get(id);
+        if (n) {
+          net = n;
+          break;
+        }
+      }
+      if (net === "") net = state.netHighlight ?? "";
+      if (net === "") return toast("No connected net selected.", "error");
+      dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
+      controlDispatch({ type: "SET_NET_FILTER", text: net });
+      controlDispatch({ type: "SET_NET_NAVIGATOR", open: true });
+    })
+  );
   // Select on PCB -- `ExplicitCrossProbeToPcb` -> `SendSelectItemsToPcb( items, true )`: the selected symbols' footprints are selected in the board editor.
   // (`RequestSelection`: the symbol under the cursor when nothing is selected.) Sheets and pins are the other two kinds KiCad sends; this schematic selects neither.
   m.set(
