@@ -399,7 +399,8 @@ could never be unlocked from the UI (hence the Selection Filter's Locked items);
 a double-click finished a polygon at a stale cursor (it now uses the click's own point); Break / Slice did nothing when the pointer had not moved first; autoplaced
 sheet pins sent fractional coordinates the backend refuses; Place Pins from Sheet could double-place a pin on a quick second click. In the shared canvas context menu
 (`components/canvas/ContextMenu.tsx`, used by the PCB, footprint and symbol canvases) no entry ever ran: a press on an entry bubbled to the canvas's `onPointerDown`,
-which closes the menu, so the menu was gone before the click (Rotate on the PCB canvas and Delete on the symbol canvas sent nothing); presses inside the menu now stay inside it.
+which closes the menu, so the menu was gone before the click (Rotate on the PCB canvas and Delete on the symbol canvas sent nothing); presses inside the menu now stay inside it. Update Symbol(s) flips `LibrarySymbol::published` in the symbol library, which a Schematic-scope undo did not restore (and no other
+scope reached), so it could not be undone; `board.rs::restore_domain` now takes the published flags (only those) from the snapshot in that scope, with a test.
 
 Verified in the browser pane against a scratch copy of `work/mcu30` (the real board was never touched): Lock / Unlock / Toggle Lock and the Locked items filter, Change
 To, Delete and undo, all seven drawing tools including rule-area Backspace / Esc / Close Outline, Break and Slice, sheet pins (Sync dialog add and delete,
