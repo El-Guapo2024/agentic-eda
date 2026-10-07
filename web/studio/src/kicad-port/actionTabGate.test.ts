@@ -43,7 +43,7 @@ test("isActionEnabledForTab: actions both pcbnew frames register work on the pcb
 });
 
 test("isActionEnabledForTab: symbol-editor-frame actions are enabled on the symbol tab only", () => {
-  for (const name of ["eeschema.SymbolDrawing.placeSymbolPin", "eeschema.SymbolLibraryControl.newSymbol", "eeschema.SymbolLibraryControl.saveLibraryAs"]) {
+  for (const name of ["eeschema.SymbolDrawing.placeSymbolPin", "eeschema.SymbolLibraryControl.newSymbol", "eeschema.SymbolLibraryControl.saveLibraryAs", "eeschema.EditorControl.nextUnit", "eeschema.EditorControl.previousUnit", "eeschema.InspectionTool.checkSymbol"]) {
     assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
     assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);
     assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);

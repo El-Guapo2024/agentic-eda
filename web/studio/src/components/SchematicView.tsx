@@ -41,6 +41,9 @@ import { hitJunction, hitSchLine, hitSymbol, hitWire, schematicBounds } from "./
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
 import { sheetSize } from "../kicad-port/schSheet";
 import { isStale } from "../kicad-port/checkRevision";
+import { useSchControlState } from "../state/schControlStore";
+import { hitSheet } from "../kicad-port/schControl";
+import { netAtClick } from "../actions/schControlActions";
 import type { Cmd } from "../api/types";
 import "../styles/canvas.css";
 
@@ -163,6 +166,7 @@ export function SchematicView() {
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const wheelPrefs = useWheelPrefs();
+  const schControl = useSchControlState();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -249,7 +253,7 @@ export function SchematicView() {
       fileName: `${state.board?.name || "schematic"}.kicad_sch`,
       sheetPath: "/",
     });
-    paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected });
+    paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display });
     if (state.drawState?.kind === "wire") {
       // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the
       // rubber band from the last click to the cursor is two segments (an
@@ -302,7 +306,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool]);
+  }, [sch, displaySch, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -385,6 +389,13 @@ export function SchematicView() {
         }
         if (e.button !== 0) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
+
+        // Highlight Nets (`SCH_EDITOR_CONTROL::HighlightNetCursor`'s picker): a click is `highlightNet` at that point -- the net of the wire, label or power symbol there,
+        // or, over nothing, the highlight cleared. The tool stays armed.
+        if (state.activeTool === "sch_highlight_net") {
+          dispatch({ type: "SET_NET_HIGHLIGHT", net: netAtClick(sch, wx, wy, state.schematicView.scale) });
+          return;
+        }
 
         // `I` (Draw Lines) shares this exact click-to-add-point state machine with the wire and bus tools -- it differs only in
         // what it commits (a graphic notes-layer line) and in connecting to nothing: no pin snap, no auto-finish on a pin
@@ -625,7 +636,16 @@ export function SchematicView() {
           dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "symbol_drag", dxUm: dx, dyUm: dy, rotateQuarterTurns } : null });
         }
       }}
-      onDoubleClick={() => {
+      onDoubleClick={(e) => {
+        // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`).
+        if (sch && state.activeTool === "select" && state.drawState == null) {
+          const [wx, wy] = toWorld(e.clientX, e.clientY);
+          const sheetId = hitSheet(sch.sheets, wx, wy);
+          if (sheetId) {
+            void api.navigateToSheet([...state.currentSheetPath, sheetId]);
+            return;
+          }
+        }
         const draw = state.drawState;
         if (draw?.kind !== "wire") return;
         commitDrawn(draw.pts);

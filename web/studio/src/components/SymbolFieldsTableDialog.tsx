@@ -28,6 +28,7 @@
 // symbols), saved view presets, and the sidebar field-name templates.
 import { useEffect, useRef, useState } from "react";
 import { exportBom, fetchFieldsTable } from "../api/client";
+import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import type { BomFmt, FieldsTableReply, FieldsTableRow, FieldsTableSpec } from "../api/types";
 import {
   bomFmtPresets,
@@ -75,10 +76,13 @@ export function SymbolFieldsTableDialog() {
 
   const requestId = useRef(0);
 
-  // A fresh open starts from the dialog's default view with nothing staged.
+  // A fresh open starts from the dialog's default view with nothing staged -- on the Export tab when Generate Bill of Materials opened it (`ShowExportTab`).
+  const schControl = useSchControlState();
+  const schControlDispatch = useSchControlDispatch();
   useEffect(() => {
     if (!open) return;
-    setTab("edit");
+    setTab(schControl.fieldsTableOnExport ? "export" : "edit");
+    if (schControl.fieldsTableOnExport) schControlDispatch({ type: "SET_FIELDS_TABLE_ON_EXPORT", on: false });
     setSpec(null);
     setChanges(emptyChanges());
     setTable(null);

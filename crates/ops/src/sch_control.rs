@@ -142,7 +142,9 @@ impl<'a> Board<'a> {
     /// new id must be valid (`LIB_ID::IsValid`) and name a symbol that loads (`LoadSymbol( id )` -- here the model's symbol table, which
     /// holds the library files, the project library and the built-in symbols). A Value that was only the old item's name follows to
     /// the new name ("If value is a proxy for the itemName then make sure it gets updated"). `update_fields` is the dialog's "Update
-    /// symbol fields": the Datasheet takes the library symbol's (`UpdateFields( ..., reset other fields )`).
+    /// symbol fields from new library" (`UpdateFields( ..., reset other fields )`): the Value becomes the library symbol's (its name here -- the
+    /// library symbol keeps no Value field of its own), the Datasheet the library symbol's, and the Footprint goes back to the library's, which
+    /// is none ("Warning: fields Value and Footprints will be therefore replaced").
     pub(crate) fn set_symbol_lib_ids(&mut self, changes: &[(String, String)], update_fields: bool) -> Result<(), Vec<CheckResult>> {
         if changes.is_empty() {
             return Err(fail("ops_nothing_to_change", "library links", "no library link changes"));
@@ -174,6 +176,8 @@ impl<'a> Board<'a> {
                 }
                 if update_fields {
                     if let Some(sym) = resolved.get(to) {
+                        s.value = new_name.clone();
+                        s.footprint = String::new();
                         s.datasheet = sym.datasheet.clone();
                     }
                 }

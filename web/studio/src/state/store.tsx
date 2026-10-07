@@ -112,6 +112,8 @@ export type ToolId =
   | "sch_sheet"
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
   | "sch_place_symbol"
+  /** `eeschema.EditorControl.highlightNetTool` (Highlight Nets): each click highlights the net under it, the tool stays armed -- see SchematicView.tsx. */
+  | "sch_highlight_net"
   /** `common.Control.zoomTool` (Ctrl+F5, zoom_tool.cpp): drag a rectangle to zoom to it -- see components/ZoomAreaOverlay.tsx. */
   | "zoom_area";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
@@ -144,6 +146,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_line: "Line: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   sch_sheet: "Hierarchical Sheet: click one corner, then the opposite one, then name the sheet. Esc to cancel",
   sch_place_symbol: "Place Symbol: click where to place it",
+  sch_highlight_net: "Highlight Nets: click a wire, label or power symbol to highlight its net (click empty space to clear), Esc to leave",
   zoom_area: "Zoom to Selection Area: drag a rectangle (left button zooms in, right button zooms out), Esc to cancel",
 };
 

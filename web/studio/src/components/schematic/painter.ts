@@ -35,13 +35,16 @@ import type { BusEntry, ErcViolation, LabelShape, LabelScope, LibFill, NoConnect
 import type { ViewTransform } from "../../state/store";
 import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
-import { resolveLibSymbol, type ResolvedGraphic } from "./libSymbol";
+import { resolveLibSymbol, symbolBounds as libSymbolBounds, type ResolvedGraphic } from "./libSymbol";
 import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
 import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement } from "./labelShape";
 import { drawStrokeText } from "../text/strokeFont";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { unitLetter } from "../../kicad-port/unitLetter";
+import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from "./displayOptions";
+import { bodyBoundsOf } from "./symbolMarkers";
+import { drawSymbolMarkers } from "./symbolMarkersDraw";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -73,6 +76,8 @@ export interface SchematicPaintOptions {
   lintViolations?: ErcViolation[] | null;
   /** Index into `lintViolations` the dialog's Lint tab has clicked. */
   lintSelected?: number | null;
+  /** The View menu's toggles (hidden pins, which ERC markers, simulation marks); KiCad's defaults when omitted. */
+  display?: SchDisplayOptions;
 }
 
 const REF_FONT = 1.6;
@@ -581,20 +586,23 @@ export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin, colo
   }
 }
 
-function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: ResolvedPin[]) {
+function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: ResolvedPin[], showHiddenPins = false) {
   const hair = 1 / view.scale;
   ctx.strokeStyle = layerColor("LAYER_PIN");
   ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM, hair);
   for (const rp of pins) {
-    if (rp.pin.hidden) continue;
+    // `SCH_PAINTER::draw( SCH_PIN )`: a hidden pin is drawn only while "Show Hidden Pins" is on, and then in the hidden-items colour (`LAYER_HIDDEN`).
+    if (rp.pin.hidden && !showHiddenPins) continue;
+    const hidden = rp.pin.hidden;
+    ctx.strokeStyle = hidden ? layerColor("LAYER_HIDDEN") : layerColor("LAYER_PIN");
     ctx.beginPath();
     drawPinDecoration(ctx, rp);
     ctx.stroke();
-    drawPinText(ctx, rp);
+    drawPinText(ctx, rp, hidden ? { name: layerColor("LAYER_HIDDEN"), number: layerColor("LAYER_HIDDEN") } : undefined);
   }
 }
 
-function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean, unitSuffix: string) {
+function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean, unitSuffix: string, showHiddenPins = false) {
   const hair = 1 / view.scale;
   const strokeColor = layerColor("LAYER_DEVICE");
   ctx.strokeStyle = strokeColor;
@@ -608,7 +616,7 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
     ctx.restore();
   }
 
-  drawPins(ctx, view, pins);
+  drawPins(ctx, view, pins, showHiddenPins);
   drawFieldsAbout(ctx, instance, (bbox.minX + bbox.maxX) / 2, bbox.maxY, bbox.minY, unitSuffix);
 }
 
@@ -792,9 +800,11 @@ function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: Bu
  * last, like DRC's own markers, so a marker is never hidden under a wire
  * or symbol.
  */
-function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, violations: ErcViolation[], selected: number | null, stale = false) {
+function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, violations: ErcViolation[], selected: number | null, stale = false, display: SchDisplayOptions = DEFAULT_SCH_DISPLAY) {
   const hair = 1 / view.scale;
   violations.forEach((v, i) => {
+    // View > Show ERC Errors / Warnings / Exclusions: each severity is a layer that can be switched off (`LAYER_ERC_ERR`, `_WARN`, `_EXCLUSION`).
+    if (!ercSeverityShown(v.severity, display)) return;
     const resolved = ercMarkerPosition(v.location, sch);
     if (!resolved) return;
     const [x, y] = resolved.at;
@@ -852,6 +862,7 @@ function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch
 // every repaint for no benefit.
 export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
   const hair = 1 / view.scale;
+  const display = opts.display ?? DEFAULT_SCH_DISPLAY;
 
   // Wires. `on`: net-highlighted (click a wire with no modifier), or
   // box/modified-click *selected* (new this session -- `opts.selection`
@@ -945,15 +956,20 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     const unitSuffix = (unitCounts.get(s.id) ?? 1) > 1 ? unitLetter(s.unit) : "";
     const real = resolveLibSymbol(s, sch.lib_symbols);
     if (real) {
-      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix);
+      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix, display.showHiddenPins);
     } else {
       const r = resolveSymbol(s);
       drawBoxSymbol(ctx, view, r, selected, unitSuffix);
     }
+    // Do not Populate / Exclude from Simulation marks over the symbol body.
+    if (s.dnp || s.exclude_from_sim) {
+      const all = real ? real.bbox : libSymbolBounds(s, sch.lib_symbols);
+      drawSymbolMarkers(ctx, (real && bodyBoundsOf(real.graphics)) || all, all, s, display.markSimExclusions);
+    }
   }
 
   // ERC markers last of all -- an overlay above every sheet layer, matching real KiCad (and this app's own canvas/painter.ts for DRC).
-  if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null, opts.ercStale);
+  if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null, opts.ercStale, display);
   if (opts.lintViolations) drawLintMarkers(ctx, view, sch, opts.lintViolations, opts.lintSelected ?? null);
 }
 

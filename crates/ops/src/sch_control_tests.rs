@@ -131,6 +131,13 @@ fn the_library_link_of_a_group_moves_with_its_value_proxy_and_is_checked_first()
     assert_eq!(get("R1").value, "L", "a value that was the old item's name follows the link");
     assert_eq!(get("R2").value, "10k", "a real value stays");
     assert_eq!(get("C1").lib_id, "Device:C", "another group is untouched");
+
+    // "Update symbol fields from new library" resets Value and Footprint to the library symbol's
+    b.apply(&Cmd::EditSymbolFields { id: "R2".into(), value: None, footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }).unwrap();
+    b.apply(&Cmd::SetSymbolLibIds { changes: vec![("Device:L".into(), "Device:LED".into())], update_fields: true }).unwrap();
+    let s = symbols(&b);
+    let r2 = s.iter().find(|x| x.id == "R2").unwrap();
+    assert_eq!((r2.lib_id.as_str(), r2.value.as_str(), r2.footprint.as_str()), ("Device:LED", "LED", ""));
 }
 
 #[test]

@@ -821,6 +821,16 @@ export type Cmd =
   | { op: "edit_symbol_fields"; id: string; value?: string | null; footprint?: string | null; datasheet?: string | null }
   | { op: "rename_symbol"; id: string; new_id: string }
   | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[] }
+  /** `eeschema.EditorControl.setDNP` / `setExcludeFromBOM` / `setExcludeFromBoard` / `setExcludeFromSimulation` (`SCH_EDIT_TOOL::SetAttribute`): the attributes given are set on every unit of every reference in `ids`; one left out stays. */
+  | { op: "set_symbol_attrs"; ids: string[]; dnp?: boolean | null; exclude_from_bom?: boolean | null; exclude_from_board?: boolean | null; exclude_from_sim?: boolean | null }
+  /** `eeschema.EditorControl.editPageNumber`: the page number of the sheet placement `sheet` (its id); letters and digits, empty for "by place in the hierarchy". */
+  | { op: "set_sheet_page"; sheet: string; page: string }
+  /** `eeschema.Interactive.increment*`: the new text of a label (its net name) or a free text, by id. */
+  | { op: "set_sch_item_text"; id: string; text: string }
+  /** `eeschema.EditorControl.editSymbolLibraryLinks`: every symbol linked to a `from` library id is linked to the paired `to` id (`update_fields`: the Datasheet follows the library symbol). */
+  | { op: "set_symbol_lib_ids"; changes: Array<[string, string]>; update_fields?: boolean }
+  /** `eeschema.EditorControl.incrementAnnotations`: every reference with the start's letters and a number at least its own moves by `increment`. */
+  | { op: "increment_annotations"; start: string; increment: number }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
   | { op: "add_erc_exclusion"; check: string; location: string }
   | { op: "delete_erc_exclusion"; check: string; location: string }
@@ -1300,6 +1310,12 @@ export interface SchematicSymbol {
   footprint: string | null;
   datasheet: string | null;
   pins: SchematicPin[];
+  /** `SCH_SYMBOL::GetDNP` (Do not Populate): the symbol is drawn with a cross over it and left out of the assembly. */
+  dnp?: boolean;
+  /** Exclude from Bill of Materials / from Board / from Simulation (`SetAttribute`). Absent from a backend built before they existed. */
+  exclude_from_bom?: boolean;
+  exclude_from_board?: boolean;
+  exclude_from_sim?: boolean;
 }
 
 /**
@@ -1413,6 +1429,8 @@ export interface Sheet {
   id: string;
   name: string;
   file: string;
+  /** The page number the user gave this placement (Edit Sheet Page Number); empty or absent when it is numbered by its place in the hierarchy. */
+  page?: string;
   at: [Um, Um];
   size: [Um, Um];
   pins: SheetPin[];

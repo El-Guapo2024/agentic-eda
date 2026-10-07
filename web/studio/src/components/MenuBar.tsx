@@ -25,7 +25,7 @@ const actionsFile = actionsData as ActionsFile;
 const actionsByName = new Map<string, KicadAction>(actionsFile.actions.map((a) => [a.name, a]));
 
 function MenuNodeView({ node }: { node: MenuNode }) {
-  const { run, isEnabled } = useActionRunner();
+  const { run, isEnabled, isChecked } = useActionRunner();
   if (node.type === "separator") return <div className="menu-separator" role="separator" />;
   if (node.type === "submenu") {
     return (
@@ -47,9 +47,14 @@ function MenuNodeView({ node }: { node: MenuNode }) {
   const label = action?.label ?? node.action;
   const tooltip = enabled ? action?.tooltip : `${action?.tooltip ?? ""} (not ported yet)`.trim();
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
+  // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate ...) shows its state as a check mark.
+  const checked = enabled ? isChecked(node.action) : undefined;
   return (
-    <div className="menu-node-item" role="menuitem" aria-disabled={!enabled} title={tooltip} onClick={() => enabled && run(node.action)}>
-      <span>{label}</span>
+    <div className="menu-node-item" role={checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={checked} aria-disabled={!enabled} title={tooltip} onClick={() => enabled && run(node.action)}>
+      <span>
+        {checked !== undefined && <span style={{ display: "inline-block", width: 14 }}>{checked ? "✓" : ""}</span>}
+        {label}
+      </span>
       {hotkey && <span className="menu-node-hotkey">{displayHotkey(hotkey)}</span>}
     </div>
   );
