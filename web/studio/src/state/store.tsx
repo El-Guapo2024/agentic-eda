@@ -19,6 +19,8 @@ import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
+import { keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
@@ -113,7 +115,11 @@ export type ToolId =
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
   | "sch_place_symbol"
   /** `common.Control.zoomTool` (Ctrl+F5, zoom_tool.cpp): drag a rectangle to zoom to it -- see components/ZoomAreaOverlay.tsx. */
-  | "zoom_area";
+  | "zoom_area"
+  /** `pcbnew.EditorControl.drillOrigin` (Place > Drill/Place File Origin): one click sets the origin and the tool ends (`DrillOrigin`'s picker: "a one-shot"). */
+  | "drill_origin"
+  /** `pcbnew.Control.localRatsnestTool`: click a pad (or, failing that, a footprint) to show or hide its ratsnest lines; clicking off everything resets them; Esc leaves. */
+  | "local_ratsnest";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
@@ -145,6 +151,8 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_sheet: "Hierarchical Sheet: click one corner, then the opposite one, then name the sheet. Esc to cancel",
   sch_place_symbol: "Place Symbol: click where to place it",
   zoom_area: "Zoom to Selection Area: drag a rectangle (left button zooms in, right button zooms out), Esc to cancel",
+  drill_origin: "Drill/Place File Origin: click to place it, Esc to cancel",
+  local_ratsnest: "Local Ratsnest: click a pad or footprint to show or hide its ratsnest, click empty space to reset, Esc to leave",
 };
 
 /**
@@ -504,10 +512,12 @@ export interface StudioState {
    * fill data (`zoneFill` above) paints -- solid copper, or just its
    * outline. A zone with no fill data yet always shows its outline
    * regardless of this mode, same as source (nothing to fill with).
-   * KiCad's other two modes (fracture-borders/triangulation) are
-   * developer debug views, not ported -- see PARITY-pcb.md.
+   * `fractured` / `triangulated` are `SHOW_FRACTURE_BORDERS` /
+   * `SHOW_TRIANGULATION` (`pcbnew.Control.zoneDisplayOutlines` /
+   * `zoneDisplayTesselation`): the fill drawn with the edges of its
+   * fractured ring, or with the triangles it is cut into.
    */
-  zoneDisplayMode: "filled" | "outline";
+  zoneDisplayMode: "filled" | "outline" | "fractured" | "triangulated";
   /** Board Setup... (dialog_board_setup.cpp) -- net classes/track-via sizing/rules/etc, see BoardSetupDialog.tsx. */
   boardSetupDialogOpen: boolean;
   /** Which `BoardSetupDialog.tsx` page to land on next time it opens --
@@ -723,6 +733,8 @@ export interface StudioState {
   lengthTuningMode: TuneMode;
   /** The "pcbnew parity" action batch's own state (move-individually queue, zone cutout/similar mode, parity dialogs, angle snap, ...) -- see kicad-port/pcbParityState.ts. Patched by the single `PCBX` action. */
   pcbx: PcbParityState;
+  /** The board-control actions' state (sketch modes, ratsnest/highlight sets, partial zone fill, board flip, their dialogs) -- see kicad-port/boardControlState.ts. Patched by the single `BCX` action. */
+  bcx: BoardControlState;
   /**
    * `pcbnew.InteractiveDrawing.ruleArea` vs `.zone` (task item 3): both
    * arm the same outline-drawing tool (`activeTool === "zone"`); this is
@@ -883,6 +895,7 @@ const initialState: StudioState = {
   lengthTuningDialogOpen: false,
   lengthTuningMode: "single",
   pcbx: DEFAULT_PCB_PARITY,
+  bcx: DEFAULT_BOARD_CONTROL,
   nextZoneIsRuleArea: false,
   cleanupTracksDialogOpen: false,
   editTracksAndViasDialogOpen: false,
@@ -976,7 +989,7 @@ export type Action =
   | { type: "SET_DIMENSION_EDIT_ID"; id: string | null }
   | { type: "FILL_OK"; fill: FillReport }
   | { type: "CLEAR_ZONE_FILL" }
-  | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" }
+  | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" | "fractured" | "triangulated" }
   | { type: "SET_BOARD_SETUP_DIALOG_OPEN"; open: boolean }
   | { type: "SET_BOARD_SETUP_INITIAL_PAGE"; page: string | null }
   | { type: "SET_PLOT_DIALOG_OPEN"; open: boolean }
@@ -1008,6 +1021,9 @@ export type Action =
   | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
   | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean; mode?: TuneMode }
   | { type: "PCBX"; patch: Partial<PcbParityState> }
+  | { type: "BCX"; patch: Partial<BoardControlState> }
+  /** `highlightNetSelection`: several nets highlighted at once (the first is `netHighlight`, the rest `bcx.netHighlightMore`); empty clears. */
+  | { type: "SET_NET_HIGHLIGHT_SET"; nets: string[] }
   | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
   | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
@@ -1156,12 +1172,14 @@ function reducer(state: StudioState, action: Action): StudioState {
         return { ...state, enteredGroupId: null, selection: new Set([leftId]) };
       }
       // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
-      return { ...state, netHighlight: null };
+      return { ...state, netHighlight: null, bcx: withHighlight(state.bcx, state.netHighlight, []) };
     }
     case "SET_HOT":
       return { ...state, hot: new Set(action.refs) };
     case "SET_NET_HIGHLIGHT":
-      return { ...state, netHighlight: action.net };
+      return { ...state, netHighlight: action.net, bcx: withHighlight(state.bcx, state.netHighlight, action.net ? [action.net] : []) };
+    case "SET_NET_HIGHLIGHT_SET":
+      return { ...state, netHighlight: action.nets[0] ?? null, bcx: withHighlight(state.bcx, state.netHighlight, action.nets) };
     case "SET_ARMED":
       return { ...state, armed: action.ref, selection: new Set() };
     case "SET_MOVE_PREVIEW":
@@ -1189,7 +1207,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_FULLSCREEN_CROSSHAIR":
       return { ...state, fullscreenCrosshair: action.value };
     case "TOGGLE_RATSNEST":
-      return { ...state, showRatsnest: !state.showRatsnest };
+      // `SetElementVisibility( LAYER_RATSNEST )` sets every pad's local-ratsnest flag to the new global state: the Local Ratsnest tool's clicks are forgotten.
+      return { ...state, showRatsnest: !state.showRatsnest, bcx: { ...state.bcx, localRatsnestPads: [] } };
     case "TOGGLE_RATSNEST_CURVED":
       return { ...state, ratsnestCurved: !state.ratsnestCurved };
     case "TOGGLE_SKETCH_PADS":
@@ -1294,12 +1313,13 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_DIMENSION_EDIT_ID":
       return { ...state, dimensionEditId: action.id };
     case "FILL_OK":
-      return { ...state, zoneFill: action.fill };
+      // Only the zones that are filled show a fill: all of them after Fill All, the named ones after a draft fill of a selection.
+      return { ...state, zoneFill: keepFilled(action.fill, state.bcx.zoneFilled) };
     case "CLEAR_ZONE_FILL":
       // zone_filler_tool.cpp ZoneUnfillAll: discards the computed fill;
       // the canvas falls back to outline-only (painter.ts), same as a
       // zone that has never been filled at all.
-      return { ...state, zoneFill: null };
+      return { ...state, zoneFill: null, bcx: { ...state.bcx, zoneFilled: null } };
     case "SET_ZONE_DISPLAY_MODE":
       return { ...state, zoneDisplayMode: action.mode };
     case "SET_BOARD_SETUP_DIALOG_OPEN":
@@ -1364,6 +1384,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, lengthTuningDialogOpen: action.open, lengthTuningMode: action.mode ?? state.lengthTuningMode };
     case "PCBX":
       return { ...state, pcbx: { ...state.pcbx, ...action.patch } };
+    case "BCX":
+      return { ...state, bcx: { ...state.bcx, ...action.patch } };
     case "SET_NEXT_ZONE_IS_RULE_AREA":
       // Arming a plain zone/rule-area draw also drops any pending cutout/similar mode (pcbx.zoneDrawMode).
       return { ...state, nextZoneIsRuleArea: action.value, pcbx: { ...state.pcbx, zoneDrawMode: null } };
@@ -1572,7 +1594,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const refreshFill = useCallback(async () => {
     try {
-      const fill = await fetchFill();
+      // The triangulation display needs each island's holes (`?polys=1`); every other mode draws the fractured ring it already has.
+      const fill = await fetchFill(stateRef.current.zoneDisplayMode === "triangulated");
       dispatch({ type: "FILL_OK", fill });
     } catch {
       // same reasoning as refreshDrc -- keep the last good report.

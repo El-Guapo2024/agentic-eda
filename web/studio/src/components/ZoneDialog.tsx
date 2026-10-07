@@ -28,6 +28,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
+import { duplicatedZoneOutline } from "../kicad-port/boardControl";
 
 type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
 const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
@@ -80,7 +81,10 @@ export function ZoneDialog() {
   const addOutline = state.zonePending;
   const editId = state.zoneEditId;
   const editZone = editId ? api.zoneById(editId) : undefined;
-  const open = addOutline != null || (editId != null && editZone != null);
+  // `pcbnew.EditorControl.zoneDuplicate`: the dialog opens on a copy of this zone's settings; OK adds the copy.
+  const dupId = state.bcx.duplicateZoneId;
+  const dupZone = dupId ? api.zoneById(dupId) : undefined;
+  const open = addOutline != null || (editId != null && editZone != null) || dupZone != null;
 
   const nets = useMemo(() => {
     const set = new Set<string>();
@@ -101,6 +105,11 @@ export function ZoneDialog() {
       setNet(editZone.net);
       setLayer(editZone.layer);
       setSettings({ ...editZone });
+    } else if (dupZone) {
+      // `zoneSettings << *oldZone`: the copy starts from the original's net, layer and settings.
+      setNet(dupZone.net);
+      setLayer(dupZone.layer);
+      setSettings({ ...dupZone });
     } else {
       setNet("");
       setLayer("");
@@ -108,7 +117,7 @@ export function ZoneDialog() {
       dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, editId]);
+  }, [open, editId, dupId]);
 
   if (!open) return null;
 
@@ -121,6 +130,7 @@ export function ZoneDialog() {
   const close = () => {
     dispatch({ type: "SET_ZONE_PENDING", outline: null });
     dispatch({ type: "SET_ZONE_EDIT_ID", id: null });
+    if (dupZone) dispatch({ type: "BCX", patch: { duplicateZoneId: null } });
   };
 
   // panel_zone_properties.cpp's AcceptOptions(): the one cross-field check
@@ -140,6 +150,11 @@ export function ZoneDialog() {
     } else if (addOutline) {
       await api.addZone(effectiveNet, effectiveLayer, addOutline, settings);
       close();
+    } else if (dupZone) {
+      // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layer as the original --
+      // is offset a bit so it can be picked.
+      await api.addZone(effectiveNet, effectiveLayer, duplicatedZoneOutline(dupZone.outline, effectiveLayer === dupZone.layer), settings);
+      close();
     }
   };
 
@@ -147,7 +162,7 @@ export function ZoneDialog() {
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <span>{editZone ? (settings.is_rule_area ? "Rule Area Properties" : "Zone Properties") : settings.is_rule_area ? "Rule Area Properties -- New Rule Area" : "Zone Properties -- New Zone"}</span>
+          <span>{editZone ? (settings.is_rule_area ? "Rule Area Properties" : "Zone Properties") : dupZone ? "Zone Properties -- Duplicate Zone onto Layer" : settings.is_rule_area ? "Rule Area Properties -- New Rule Area" : "Zone Properties -- New Zone"}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "70vh", overflowY: "auto" }}>
           <label className="filter-row" style={{ display: "block", marginBottom: 8 }} title="ZONE::GetIsRuleArea() -- a keepout instead of a copper pour">

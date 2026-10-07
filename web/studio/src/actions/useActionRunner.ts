@@ -63,6 +63,7 @@ import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
+import { registerBoardControlActions } from "./boardControlActions";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -141,6 +142,8 @@ export function useActionRunner() {
       if (state.selection.size === 0 && refs.length > 0) dispatch({ type: "SET_SELECTION", refs });
       return refs;
     };
+    // The board-control actions (display options, net highlight and ratsnest, zone tools, exports, repair): actions/boardControlActions.ts.
+    registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
@@ -850,7 +853,14 @@ export function useActionRunner() {
     // app's /api/fill is always computed fresh (no per-zone fill cache to
     // mutate), so "fill" is just "go fetch it", and "unfill" is just
     // "stop showing what we fetched" -- see state.zoneFill's own doc.
-    m.set("pcbnew.ZoneFiller.zoneFillAll", pcbOnly(() => api.fillZones()));
+    // Fill All covers every zone, so it also forgets a draft fill of just some (`bcx.zoneFilled`, see ZoneFiller.zoneFill in boardControlActions.ts).
+    m.set(
+      "pcbnew.ZoneFiller.zoneFillAll",
+      pcbOnly(() => {
+        dispatch({ type: "BCX", patch: { zoneFilled: null } });
+        void api.fillZones();
+      })
+    );
     m.set("pcbnew.ZoneFiller.zoneUnfillAll", pcbOnly(() => api.unfillZones()));
     // pcb_control.cpp ZoneDisplayMode: independent of whether a zone HAS
     // fill data at all (above) -- how one that does paints. Source's

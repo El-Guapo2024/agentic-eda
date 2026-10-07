@@ -45,6 +45,8 @@ import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
+import { connectedTrackWidth, displayedRatsnest, highlightedNets, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
+import { padAt } from "../../kicad-port/boardControlPick";
 import "../../styles/canvas.css";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
@@ -293,10 +295,19 @@ export function Canvas() {
     paintBoard(ctx, state.view, width, height, board, {
       selection: state.selection,
       hot: state.hot,
-      netHighlight: state.netHighlight,
-      showRatsnest: state.showRatsnest,
+      netHighlight: state.bcx.netHighlightMore.length > 0 ? highlightedNets(state.netHighlight, state.bcx.netHighlightMore) : state.netHighlight,
+      // The ratsnest lines `RATSNEST_VIEW_ITEM::ViewDraw` would draw: the global switch, hidden nets, the Local Ratsnest tool's pads and the visible-layers mode.
+      showRatsnest: state.showRatsnest || state.bcx.localRatsnestPads.length > 0,
       ratsnestCurved: state.ratsnestCurved,
-      ratsnestEdges: state.ratsnest?.edges ?? null,
+      ratsnestEdges: state.ratsnest
+        ? displayedRatsnest(state.ratsnest.edges, {
+            showGlobal: state.showRatsnest,
+            mode: state.bcx.ratsnestMode,
+            hiddenNets: new Set(state.bcx.hiddenRatsnestNets),
+            flippedPads: new Set(state.bcx.localRatsnestPads),
+            visibleLayers: new Set(board.layers.flatMap((l, i) => (state.layerVisible[l] !== false ? [i] : []))),
+          })
+        : null,
       drcViolations: state.drc?.violations ?? null,
       drcStale: isStale(state.drcVersion, state.version),
       drcSelected: state.drcSelected,
@@ -317,6 +328,10 @@ export function Canvas() {
       sketchPads: state.sketchPads,
       sketchTracks: state.sketchTracks,
       sketchVias: state.sketchVias,
+      sketchGraphics: state.bcx.sketchGraphics,
+      sketchText: state.bcx.sketchText,
+      showPadNumbers: state.bcx.showPadNumbers,
+      auxOrigin: board.aux_origin ?? null,
       drawState: state.drawState,
       cursorUm: state.cursorUm,
       activeTool: state.activeTool,
@@ -359,7 +374,7 @@ export function Canvas() {
       ctx.stroke();
     }
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, marquee, zoneCornerPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, marquee, zoneCornerPreview, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -505,6 +520,25 @@ export function Canvas() {
     if (board && e.button === 0 && !e.altKey) {
       const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
 
+      // `pcbnew.EditorControl.drillOrigin`: `DrillOrigin`'s picker click handler -- the drill/place file origin goes here and the tool is done
+      // ("drill origin is a one-shot; don't continue with tool").
+      if (state.activeTool === "drill_origin") {
+        void api.cmd({ op: "set_aux_origin", at: { x: sx, y: sy } });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+        return;
+      }
+
+      // `pcbnew.Control.localRatsnestTool`: `BOARD_INSPECTION_TOOL::LocalRatsnestTool`'s click handler. The pad under the cursor, else the
+      // footprint, has its ratsnest shown or hidden; a click on neither resets every pad. The tool stays armed until Esc.
+      if (state.activeTool === "local_ratsnest") {
+        const pad = padAt(board.parts, wx, wy);
+        const part = pad ? board.parts.find((p) => p.ref === pad.ref) : partHit(board.parts, wx, wy);
+        const flipped = state.bcx.localRatsnestPads;
+        const next = pad ? toggleLocalRatsnestPad(flipped, pad.id) : part ? toggleLocalRatsnestFootprint(flipped, (part.pads ?? []).map((q) => `${part.ref}.${q.num}`), state.showRatsnest) : [];
+        dispatch({ type: "BCX", patch: { localRatsnestPads: next } });
+        return;
+      }
+
       if (state.activeTool === "via") {
         const anchor = findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM);
         if (!anchor) {
@@ -528,7 +562,9 @@ export function Canvas() {
           // real net), same as `isStartingPointRoutable` upstream.
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
-          const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
+          // `autoTrackWidth`: starting from an existing track's end, that track's width wins over the current one.
+          const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM)?.from, board.routing?.tracks ?? []) : null;
+          const width = connected ?? state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
           void startInteractiveRoute(sx, sy, layer, width, state.routerSettings, dispatch);
           return;
         }

@@ -157,8 +157,9 @@ export async function fetchLint(): Promise<LintReport> {
 }
 
 /** `crates/zone-filler`'s real KiCad fill algorithm, run fresh server-side on every call (B/Ctrl+B -- see state/store.tsx's `zoneFill`). */
-export async function fetchFill(): Promise<FillReport> {
-  const r = await getJson<FillReport & { error?: string }>("/api/fill");
+export async function fetchFill(withPolys = false): Promise<FillReport> {
+  // `polys` (the fill unfractured, outline + holes per island) is what the "Draw Zone Fill Triangulation" display triangulates.
+  const r = await getJson<FillReport & { error?: string }>(withPolys ? "/api/fill?polys=1" : "/api/fill");
   if (r.error) throw new ApiError(r.error);
   return r;
 }
