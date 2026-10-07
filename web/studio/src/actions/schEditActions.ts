@@ -215,21 +215,25 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
 
   registerSchSheetPinActions(registry, ctx);
   registerSchSymbolActions(registry, ctx);
+  registerStackedPinActions(registry, ctx);
+}
 
-  // Convert Stacked Pins / Explode Stacked Pin -- SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins / ExplodeStackedPin (kicad-port/stackedPins.ts). They act on the open symbol's
-  // selected pins, so they exist on the Symbol Editor tab only; the whole change is one undo step.
-  if (state.tab === "symbol") {
-    const stack = (plan: typeof planConvertStackedPins) => () => {
-      const st = ctx.symApi.getState();
-      if (!st.symbol || !st.libId) return;
-      const result = plan(st.libId, st.symbol.pins, [...st.selection]);
-      if (!result.ok) return ctx.symDispatch({ type: "TOAST", message: result.message, kind: "error" });
-      ctx.symDispatch({ type: "SET_SELECTION", refs: [] }); // "Clear selection before modifying pins, like the Delete command does"
-      void ctx.symApi.cmd({ op: "batch", cmds: result.cmds });
-    };
-    registry.set("eeschema.InteractiveEdit.convertStackedPins", stack(planConvertStackedPins));
-    registry.set("eeschema.InteractiveEdit.explodeStackedPin", stack(planExplodeStackedPin));
-  }
+/**
+ * Convert Stacked Pins / Explode Stacked Pin -- SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins / ExplodeStackedPin (kicad-port/stackedPins.ts). They act on the open symbol's
+ * selected pins, so they exist on the Symbol Editor tab only (and go into the raw registry, not the schematic-only wrapper); the whole change is one undo step.
+ */
+function registerStackedPinActions(m: ActionMap, ctx: SchEditContext): void {
+  if (ctx.state.tab !== "symbol") return;
+  const stack = (plan: typeof planConvertStackedPins) => () => {
+    const st = ctx.symApi.getState();
+    if (!st.symbol || !st.libId) return;
+    const result = plan(st.libId, st.symbol.pins, [...st.selection]);
+    if (!result.ok) return ctx.symDispatch({ type: "TOAST", message: result.message, kind: "error" });
+    ctx.symDispatch({ type: "SET_SELECTION", refs: [] }); // "Clear selection before modifying pins, like the Delete command does"
+    void ctx.symApi.cmd({ op: "batch", cmds: result.cmds });
+  };
+  m.set("eeschema.InteractiveEdit.convertStackedPins", stack(planConvertStackedPins));
+  m.set("eeschema.InteractiveEdit.explodeStackedPin", stack(planExplodeStackedPin));
 }
 
 /** The labels, texts, text boxes and directive labels among `ids`, as the conversion's sources (a label's spin is read off its wire, as the painter does). */
