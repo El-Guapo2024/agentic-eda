@@ -195,7 +195,9 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
                 {c.padCount !== null && <small style={{ opacity: 0.6 }}> · {c.padCount} pads</small>}
               </div>
             ))}
-            {shown.length === 0 && <div className="panel-empty">No footprint matches the filters.</div>}
+            {shown.length === 0 && (
+              <div className="panel-empty">{names.length === 0 ? "This project has no footprints yet. Open or draw one in the Footprint Editor, then assign it here." : "No footprint matches the filters."}</div>
+            )}
           </div>
         </div>
       </div>
