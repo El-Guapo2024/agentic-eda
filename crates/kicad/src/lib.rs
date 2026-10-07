@@ -186,7 +186,17 @@ pub fn export_kicad_sch(
         let y = mm(sym.at.y);
         let uuid = duid_for(&format!("sym:{}", sym.id), &sym.id);
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit {})", sexpr_str(&lib_id), sym.unit).unwrap();
-        writeln!(out, "\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)").unwrap();
+        // The attributes `SCH_EDIT_TOOL::SetAttribute` toggles (Do not Populate, Exclude from BOM / Board / Simulation): kicad-cli's BOM, netlist and ERC read them from here.
+        let yes_no = |b: bool| if b { "yes" } else { "no" };
+        writeln!(
+            out,
+            "\t\t(exclude_from_sim {}) (in_bom {}) (on_board {}) (dnp {})",
+            yes_no(sym.exclude_from_sim),
+            yes_no(!sym.exclude_from_bom),
+            yes_no(!sym.exclude_from_board),
+            yes_no(sym.dnp)
+        )
+        .unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         let value = if !sym.value.is_empty() { sym.value.as_str() } else { part.value.as_deref().unwrap_or(&sym.id) };
         let footprint = if !sym.footprint.is_empty() { sym.footprint.as_str() } else { part.footprint.as_deref().unwrap_or("") };
@@ -416,7 +426,8 @@ pub fn export_kicad_sch(
         }
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
-        writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\" (page \"1\"))").unwrap();
+        let page = if s.page.is_empty() { "1" } else { s.page.as_str() };
+        writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\" (page {}))", sexpr_str(page)).unwrap();
         writeln!(out, "\t\t\t)").unwrap();
         writeln!(out, "\t\t)").unwrap();
         writeln!(out, "\t)").unwrap();
@@ -1241,6 +1252,7 @@ mod tests {
                 at: Point { x: 10_000, y: 10_000 },
                 size: (20_000, 20_000),
                 pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000, y: 30_000 } }],
+                page: String::new(),
             }],
             instance_overrides: vec![], junctions: vec![], lines: vec![],
             imported_from_kicad: false,

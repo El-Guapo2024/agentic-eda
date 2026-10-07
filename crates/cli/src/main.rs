@@ -21,6 +21,7 @@ mod cleanup_api;
 mod fab_api;
 mod library_api;
 mod sch_api;
+mod sch_control_api;
 mod fab_cmd;
 mod import_kicad;
 mod route_api;

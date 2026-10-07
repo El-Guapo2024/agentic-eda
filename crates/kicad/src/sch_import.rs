@@ -99,6 +99,10 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         value: String,
         footprint: String,
         datasheet: String,
+        dnp: bool,
+        exclude_from_bom: bool,
+        exclude_from_board: bool,
+        exclude_from_sim: bool,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
     // `SCH_SYMBOL_INSTANCE`-style per-sheet-instance overrides -- only ever
@@ -140,6 +144,10 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         let value = property_text(item, "Value").unwrap_or_default();
         let footprint = property_text(item, "Footprint").unwrap_or_default();
         let datasheet = property_text(item, "Datasheet").unwrap_or_default();
+        // `(dnp yes) (in_bom no) (on_board no) (exclude_from_sim yes)`: the attributes `SetAttribute` toggles. A file without the token (KiCad 6)
+        // has the default: populated, in the BOM, on the board, simulated.
+        let flag = |name: &str| sexpr::find(item, name).and_then(|n| sexpr::txt(n, 1));
+        let (dnp, exclude_from_bom, exclude_from_board, exclude_from_sim) = (flag("dnp") == Some("yes"), flag("in_bom") == Some("no"), flag("on_board") == Some("no"), flag("exclude_from_sim") == Some("yes"));
 
         if resolved.power {
             let pin_local = resolved.pins.first().map(|p| p.at).unwrap_or(SPoint::new(0.0, 0.0));
@@ -150,7 +158,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         }
 
         overrides.extend(parse_instance_overrides(item, at_um));
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, reference, value, footprint, datasheet });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim });
     }
 
     // Group by reference, preserving first-sighting order (file order) so
@@ -235,6 +243,10 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
                 value: r.value.clone(),
                 footprint: r.footprint.clone(),
                 datasheet: r.datasheet.clone(),
+                dnp: r.dnp,
+                exclude_from_bom: r.exclude_from_bom,
+                exclude_from_board: r.exclude_from_board,
+                exclude_from_sim: r.exclude_from_sim,
             });
         }
     }
@@ -353,7 +365,17 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
                 Some(eda_model::ir::SheetPin { id, name, shape, at: mm_point_to_um(at) })
             })
             .collect();
-        sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)), pins });
+        // `(instances (project "p" (path "/<parent>" (page "2"))))`: this placement's page number. Page "1" is the root's, and what this
+        // project's own writer puts on a sheet whose page was never set -- both read back as "no explicit page" (`SheetInstance::page`).
+        let page = sexpr::find(s, "instances")
+            .and_then(|i| sexpr::find(i, "project"))
+            .and_then(|p| sexpr::find(p, "path"))
+            .and_then(|p| sexpr::find(p, "page"))
+            .and_then(|pg| sexpr::txt(pg, 1))
+            .filter(|pg| !pg.is_empty() && *pg != "1")
+            .unwrap_or_default()
+            .to_string();
+        sheets.push(SheetInstance { id, name, file, at: mm_point_to_um(at), size: (crate::import::mm_to_um(size.0), crate::import::mm_to_um(size.1)), pins, page });
         notes.sheets_not_descended += 1;
     }
 
@@ -1063,7 +1085,7 @@ mod tests {
         );
         let model = ConstraintModel { parts: vec![u1], symbols: vec![lib], ..Default::default() };
 
-        let sym = |unit: u32, x: i64| SymbolInstance { id: "U1".into(), at: Point { x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new() };
+        let sym = |unit: u32, x: i64| SymbolInstance { id: "U1".into(), at: Point { x, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:DUAL".into(), unit, value: "DUAL".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let sch = SchematicSection {
             symbols: vec![sym(1, 0), sym(2, 50_000)],
             wires: vec![],
@@ -1150,6 +1172,7 @@ mod tests {
         assert_eq!(root_sch.sheets[0].file, "child.kicad_sch");
         assert_eq!(root_sch.sheets[0].pins.len(), 1);
         assert_eq!(root_sch.sheets[0].pins[0].name, "AD0");
+        assert_eq!(root_sch.sheets[0].page, "2", "the placement's own page number is read from its (instances ...) block");
 
         let screens = design.sheet_contents.expect("sheet_contents populated");
         let child = screens.get("child.kicad_sch").expect("child content present");
@@ -1158,6 +1181,31 @@ mod tests {
         assert!(model.parts.iter().any(|p| p.reference == "R1"), "child's own Part folded into the combined model");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Do not Populate and the three exclusions (`SCH_EDIT_TOOL::SetAttribute`) survive `export_kicad_sch` -> `import_kicad_sch`: the writer
+    /// puts them where kicad-cli's BOM, netlist and ERC read them, the reader takes them back.
+    #[test]
+    fn symbol_attributes_round_trip_through_the_derived_file() {
+        let model = ConstraintModel { parts: vec![part("R1", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)]), part("R2", vec![pin("1", "1", PinKind::Passive), pin("2", "2", PinKind::Passive)])], ..Default::default() };
+        let mut design = derive_schematic(&model, &EngineOptions::new(1, "attrs")).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            let r1 = sch.symbols.iter_mut().find(|s| s.id == "R1").unwrap();
+            r1.dnp = true;
+            r1.exclude_from_bom = true;
+            r1.exclude_from_board = true;
+            r1.exclude_from_sim = true;
+        }
+        let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "attrs" }).unwrap();
+        assert!(text.contains("(exclude_from_sim yes) (in_bom no) (on_board no) (dnp yes)"), "R1's flags are in the file");
+        assert!(text.contains("(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)"), "R2 keeps the defaults");
+        let (back, _, _) = import_kicad_sch(&text).unwrap();
+        let sch = back.schematic.unwrap();
+        let r1 = sch.symbols.iter().find(|s| s.id == "R1").unwrap();
+        let r2 = sch.symbols.iter().find(|s| s.id == "R2").unwrap();
+        assert!(r1.dnp && r1.exclude_from_bom && r1.exclude_from_board && r1.exclude_from_sim);
+        assert!(!r2.dnp && !r2.exclude_from_bom && !r2.exclude_from_board && !r2.exclude_from_sim);
     }
 
     /// Real KiCad data, not a hand-built fixture: `topology_mismatch.kicad_sch`

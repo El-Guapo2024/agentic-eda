@@ -336,6 +336,20 @@ pub struct SymbolInstance {
     /// The instance's own `Datasheet` field, same reasoning as `value`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub datasheet: String,
+    /// `SCH_SYMBOL::GetDNP` ("Do not populate", `eeschema.EditorControl.setDNP`): the part is drawn but not
+    /// assembled. The derived `.kicad_sch` carries it as `(dnp yes)`, so kicad-cli's BOM, netlist and ERC see it.
+    /// Kept in step across every placed unit of one reference (`SCH_EDIT_TOOL::SetAttribute` collects the other units).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dnp: bool,
+    /// `GetExcludedFromBOM` (`setExcludeFromBOM`): left out of the bill of materials -- `(in_bom no)`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_from_bom: bool,
+    /// `GetExcludedFromBoard` (`setExcludeFromBoard`): no footprint for it on the board -- `(on_board no)`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_from_board: bool,
+    /// `GetExcludedFromSim` (`setExcludeFromSimulation`): left out of the SPICE netlist -- `(exclude_from_sim yes)`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclude_from_sim: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -721,6 +735,11 @@ pub struct SheetInstance {
     /// it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pins: Vec<SheetPin>,
+    /// This placement's page number (`SCH_SHEET::getPageNumber`, `(instances (project .. (path .. (page "2"))))`), set by
+    /// Edit Sheet Page Number (`eeschema.EditorControl.editPageNumber`). Empty -- every sheet before this field existed -- means
+    /// the sheet's place in the hierarchy (its 1-based virtual page number); Next/Previous Sheet and the plot's page order sort by it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub page: String,
 }
 
 /// One pin on a [`SheetInstance`]'s own border. `shape` is the same
@@ -3393,8 +3412,8 @@ mod tests {
             },
             schematic: Some(SchematicSection {
                 symbols: vec![
-                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
-                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() },
+                    SymbolInstance { id: "U1".into(), at: Point { x: 50_800, y: 63_500 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
+                    SymbolInstance { id: "C1".into(), at: Point { x: 38_100, y: 63_500 }, rot: 90_000, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() , dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false },
                 ],
                 wires: vec![Wire { id: String::new(), net: "VIN".into(), pins: vec!["U1.3".into(), "C1.1".into()], pts: vec![Point { x: 35_000, y: 60_000 }, Point { x: 48_000, y: 60_000 }], bus: false }],
                 labels: vec![],

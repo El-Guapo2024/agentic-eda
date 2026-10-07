@@ -891,6 +891,10 @@ mod tests {
             value: value.into(),
             footprint: fp.into(),
             datasheet: String::new(),
+            dnp: false,
+            exclude_from_bom: false,
+            exclude_from_board: false,
+            exclude_from_sim: false,
         }
     }
 

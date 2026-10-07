@@ -600,6 +600,8 @@ fn handle(
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
+        // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
+        ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -1284,6 +1286,11 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 "mpn": part.and_then(|p| p.mpn.clone()),
                 "package": part.and_then(|p| p.package.clone()),
                 "pins": pins,
+                // Do not Populate / Exclude from BOM / Board / Simulation (`setDNP` ...): the flags the painter marks and the attribute actions toggle.
+                "dnp": s.dnp,
+                "exclude_from_bom": s.exclude_from_bom,
+                "exclude_from_board": s.exclude_from_board,
+                "exclude_from_sim": s.exclude_from_sim,
             })
         })
         .collect();
@@ -1363,7 +1370,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         .iter()
         .map(|s| {
             json!({
-                "id": s.id, "name": s.name, "file": s.file,
+                "id": s.id, "name": s.name, "file": s.file, "page": s.page,
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
                 "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
             })
@@ -1831,7 +1838,7 @@ mod tests {
 
     #[test]
     fn a_real_sheet_id_descends_and_builds_the_breadcrumb() {
-        let placement = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![] };
+        let placement = SheetInstance { id: "s1".into(), name: "child".into(), file: "child.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (1000, 1000), pins: vec![], page: String::new() };
         let child = sch(vec![]);
         let mut screens = std::collections::BTreeMap::new();
         screens.insert("child.kicad_sch".to_string(), child);
