@@ -12,6 +12,7 @@ export function GenerateDrillDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const [separateTh, setSeparateTh] = useState(false);
+  const [useAuxOrigin, setUseAuxOrigin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
 
@@ -22,7 +23,7 @@ export function GenerateDrillDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postFabDrill(separateTh);
+      const reply = await postFabDrill(separateTh, useAuxOrigin);
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Drill file written." : "Failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
@@ -39,6 +40,14 @@ export function GenerateDrillDialog() {
             <label className="toggle">
               <input type="checkbox" checked={separateTh} onChange={(e) => setSeparateTh(e.target.checked)} />
               Generate independent files for NPTH and PTH holes
+            </label>
+            {/* m_origin: "Absolute" or "Drill/place file origin" (pcbnew.EditorControl.drillOrigin). */}
+            <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+              Origin:
+              <select value={useAuxOrigin ? "aux" : "abs"} onChange={(e) => setUseAuxOrigin(e.target.value === "aux")}>
+                <option value="abs">Absolute</option>
+                <option value="aux">Drill/place file origin</option>
+              </select>
             </label>
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>

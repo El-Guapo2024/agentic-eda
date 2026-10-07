@@ -16,6 +16,8 @@ export function FootprintPositionDialog() {
   const [unitsMm, setUnitsMm] = useState(true);
   const [smdOnly, setSmdOnly] = useState(false);
   const [excludeFpTh, setExcludeFpTh] = useState(false);
+  // m_useDrillPlaceOrigin starts checked in KiCad's dialog.
+  const [useAuxOrigin, setUseAuxOrigin] = useState(true);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
 
@@ -26,7 +28,7 @@ export function FootprintPositionDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postFabPos({ format, side, units_mm: unitsMm, smd_only: smdOnly, exclude_fp_th: excludeFpTh });
+      const reply = await postFabPos({ format, side, units_mm: unitsMm, smd_only: smdOnly, exclude_fp_th: excludeFpTh, use_aux_origin: useAuxOrigin });
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Position file written." : "Failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
@@ -77,6 +79,10 @@ export function FootprintPositionDialog() {
             <label className="toggle">
               <input type="checkbox" checked={excludeFpTh} onChange={(e) => setExcludeFpTh(e.target.checked)} />
               Exclude all footprints with through-hole pads
+            </label>
+            <label className="toggle">
+              <input type="checkbox" checked={useAuxOrigin} onChange={(e) => setUseAuxOrigin(e.target.checked)} />
+              Use drill/place file origin
             </label>
           </div>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)" }}>

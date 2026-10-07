@@ -248,12 +248,14 @@ export interface FabReply {
   revision?: string;
 }
 
-export function postFabGerbers(layers?: string[]): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/gerbers", layers && layers.length > 0 ? { layers } : {});
+/** `useAuxOrigin`: the Plot dialog's "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
+export function postFabGerbers(layers?: string[], useAuxOrigin = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
 }
 
-export function postFabDrill(separateTh: boolean): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh });
+/** `useAuxOrigin`: the drill dialog's Origin choice, "Drill/place file origin" instead of "Absolute". */
+export function postFabDrill(separateTh: boolean, useAuxOrigin = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh, ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
 }
 
 export interface FabPosOptions {
@@ -262,6 +264,8 @@ export interface FabPosOptions {
   units_mm: boolean;
   smd_only: boolean;
   exclude_fp_th: boolean;
+  /** "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
+  use_aux_origin?: boolean;
 }
 
 export function postFabPos(opts: FabPosOptions): Promise<FabReply> {
