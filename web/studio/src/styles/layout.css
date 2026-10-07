@@ -198,6 +198,12 @@
 .menu-node-submenu > .menubar-dropdown {
   top: -5px;
   left: 100%;
+  /* A submenu opens only while its label (or the open submenu itself) is hovered; without this every nested menu of a
+     dropdown was open at once and they overlapped. */
+  display: none;
+}
+.menu-node-submenu:hover > .menubar-dropdown {
+  display: block;
 }
 
 /* ------------------------------------------------------------ toolbars */

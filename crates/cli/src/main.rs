@@ -20,6 +20,7 @@ mod board;
 mod board_control_api;
 mod board_output_api;
 mod cleanup_api;
+mod convert_api;
 mod fab_api;
 mod library_api;
 mod sch_api;

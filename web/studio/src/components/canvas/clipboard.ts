@@ -14,6 +14,8 @@ export interface ClipboardContents {
   zones: CmdZone[];
   shapes: CmdShape[];
   texts: CmdText[];
+  /** The point picked by Copy with Reference Point (`selection.SetReferencePoint( refPoint )`): a paste is carried by it. A plain copy has none. */
+  reference?: { x: number; y: number };
 }
 
 const pt = ([x, y]: readonly [number, number]) => ({ x, y });

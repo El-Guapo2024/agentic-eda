@@ -23,6 +23,7 @@ import { drawBezierPreview } from "./bezierPreview";
 import { BEZIER_MAX_ERROR_UM } from "./itemHitTest";
 import { isHighlighted } from "../../kicad-port/boardControl";
 import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
+import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 
 /**
  * pcb_painter.cpp GetColor's net-highlight branch (see kicad-port/
@@ -98,6 +99,8 @@ export interface PaintOptions {
   units: LengthUnit;
   /** pcb_point_editor.cpp's zone corner-drag preview (Canvas.tsx's own local state, only set while a drag is live) -- lets drawZoneHandles show the corner actually moving, not the last-committed outline, while the drag is in progress. */
   zoneCornerPreview: { zoneId: string; outline: [Um, Um][] } | null;
+  /** The same for a graphic shape's handle drag (kicad-port/pcbPointEdit.ts): the shape as it would be once dropped, drawn instead of the committed one. */
+  shapePointPreview: { id: string; shape: Shape } | null;
   /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
   drcSelected: number | null;
 }
@@ -531,7 +534,8 @@ function realLayerKey(layer: string): string {
 
 /** Free-standing board graphics (Place > Line/Arc/Rectangle/Circle/Polygon) -- everything crates/model/src/ir.rs's `Shape` enum can hold, each drawn in its own layer's real color (silkscreen, fab, etc., not just copper). */
 function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
-  const shapes = board.drawings?.shapes ?? [];
+  // A handle drag in progress shows the shape as it would be dropped, in place of the committed one.
+  const shapes = (board.drawings?.shapes ?? []).map((s) => (opts.shapePointPreview?.id === s.id ? opts.shapePointPreview.shape : s));
   for (const s of shapes) {
     const bucketish = realLayerKey(s.layer);
     if (opts.layerVisible[s.layer] === false) continue;
@@ -877,8 +881,8 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     return;
   }
 
-  // `S` (the schematic's sheet tool) draws its own rubber band in SchematicView.tsx -- never reaches the board painter.
-  if (draw.kind === "sheet") return;
+  // `S` (the schematic's sheet tool) and the schematic's shape tools draw their own rubber band in SchematicView.tsx -- never reaches the board painter.
+  if (draw.kind === "sheet" || draw.kind === "sch_shape") return;
 
   const cursor = opts.cursorUm;
   const pts = draw.pts.slice();
@@ -1044,6 +1048,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // draggable handles, shown only in the plain Select tool (same as
   // source only activating the point editor over the selection tool).
   if (opts.activeTool === "select") drawZoneHandles(ctx, view, board, opts);
+  if (opts.activeTool === "select") drawShapeHandles(ctx, view, board, opts);
   // Task item 5: a selected group's own bounding box, same tier as the
   // zone corner handles above (a selection-mode indicator, not board
   // content).
@@ -1147,6 +1152,40 @@ function drawSelectedGroups(ctx: CanvasRenderingContext2D, view: ViewTransform, 
     ctx.setLineDash([]);
     ctx.restore();
   }
+}
+
+/**
+ * pcb_point_editor.cpp's handles for a single selected graphic shape (kicad-port/pcbPointEdit.ts): a square at each point, a smaller
+ * diamond at the middle of a polygon's or rectangle's edges; unlocked shapes only. Follows the drag preview while one is live.
+ */
+function drawShapeHandles(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  if (opts.selection.size !== 1) return;
+  const id = [...opts.selection][0]!;
+  if ((board.locked ?? []).includes(id)) return;
+  const shape = opts.shapePointPreview?.id === id ? opts.shapePointPreview.shape : board.drawings?.shapes.find((s) => s.id === id);
+  if (!shape) return;
+  const r = hairlineUm(view, 4);
+  ctx.save();
+  ctx.fillStyle = layerColor("selection");
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.lineWidth = hairlineUm(view, 1);
+  for (const p of shapeEditPoints(shape)) {
+    const [x, y] = p.pos;
+    ctx.beginPath();
+    if (p.kind === "corner") {
+      ctx.rect(x - r, y - r, r * 2, r * 2);
+    } else {
+      const d = r * 0.8;
+      ctx.moveTo(x, y - d);
+      ctx.lineTo(x + d, y);
+      ctx.lineTo(x, y + d);
+      ctx.lineTo(x - d, y);
+      ctx.closePath();
+    }
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 /**

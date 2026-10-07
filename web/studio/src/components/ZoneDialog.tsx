@@ -131,6 +131,7 @@ export function ZoneDialog() {
     dispatch({ type: "SET_ZONE_PENDING", outline: null });
     dispatch({ type: "SET_ZONE_EDIT_ID", id: null });
     if (dupZone) dispatch({ type: "BCX", patch: { duplicateZoneId: null } });
+    dispatch({ type: "PCBX", patch: { zoneConvert: null } });
   };
 
   // panel_zone_properties.cpp's AcceptOptions(): the one cross-field check
@@ -149,6 +150,12 @@ export function ZoneDialog() {
       if (ok) close();
     } else if (addOutline) {
       await api.addZone(effectiveNet, effectiveLayer, addOutline, settings);
+      // "Create Zone from Selection": the other outlines the conversion made get the same settings, then the converted sources go.
+      const convert = state.pcbx.zoneConvert;
+      if (convert) {
+        for (const outline of convert.extraOutlines) await api.addZone(effectiveNet, effectiveLayer, outline, settings);
+        if (convert.deleteCmds.length > 0) await api.cmdBatch(convert.deleteCmds);
+      }
       close();
     } else if (dupZone) {
       // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layer as the original --

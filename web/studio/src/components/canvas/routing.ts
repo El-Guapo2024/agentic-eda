@@ -17,6 +17,7 @@ import type { Dispatch } from "react";
 import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
 import { posture90 } from "../../kicad-port/pcbEditActions";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
+import { advanceRouteQueue } from "./routeQueue";
 
 /** `X` / the first click after arming the route tool: start a session from
  * whatever pad/via/track-end is at `(x, y)`. Shows an error toast and
@@ -26,14 +27,15 @@ import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
  * RouterSettingsDialog.tsx) -- read fresh at the start of every session,
  * same as every other "current pick" this app's route/via tools read
  * (track width, via preset). */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: { mode: RouteMode; removeLoops: boolean }, dispatch: Dispatch<Action>): Promise<void> {
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: { mode: RouteMode; removeLoops: boolean }, dispatch: Dispatch<Action>): Promise<boolean> {
   const preview = await routeStart(x, y, layer, width, settings.mode, settings.removeLoops);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
-    return;
+    return false;
   }
   const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias };
   dispatch({ type: "SET_DRAW_STATE", draw });
+  return true;
 }
 
 /** A click while routing: fix the current head. Finishes the whole
@@ -68,6 +70,8 @@ export async function finishInteractiveRoute(x: number, y: number, dispatch: Dis
   if (!reply.ok) dispatch({ type: "TOAST", message: reply.message || "Could not finish the route.", kind: "error" });
   dispatch({ type: "SET_DRAW_STATE", draw: null });
   await api.refresh();
+  // RouteSelected's loop: the next queued connection starts once this one is done.
+  await advanceRouteQueue();
 }
 
 /** Esc while routing (or dragging -- `routeCancel`'s own doc comment:

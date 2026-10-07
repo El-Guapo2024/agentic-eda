@@ -20,6 +20,7 @@ import type { Cmd, CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
 import { finishInteractiveRoute, cancelInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
+import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
 import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic } from "../api/client";
 import { formatLength } from "../state/units";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
@@ -63,9 +64,19 @@ import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
+import { allItems, hitItems } from "../components/schematic/schItems";
+import { deleteCmds } from "../kicad-port/schDelete";
+import { withoutLocked } from "../kicad-port/schLock";
+import { schSelectable } from "../kicad-port/schSelectionFilter";
+import { registerSchEditActions } from "./schEditActions";
+import { deleteLastPoint } from "../components/schematic/schShapeTools";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerBoardControlActions } from "./boardControlActions";
 import { flipLocalX } from "../kicad-port/boardControl";
+import { registerPcbEditSweep } from "./pcbEditSweep";
+import { layerPairsOf } from "./pcbRouterSweep";
+import { picker } from "./pcbPicker";
+import { otherLayerOfPair } from "../kicad-port/layerPairs";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -128,9 +139,15 @@ export function useActionRunner() {
       if (state.tab === "schematic") {
         const sch = state.schematic;
         if (!sch) return [];
-        const sym = hitSymbol(sch, state.cursorUm.x, state.cursorUm.y);
+        // `itemPassesFilter`: an item the selection filter keeps out (a category that is off, a locked item without "Locked items") cannot be picked up by the cursor.
+        const selectable = schSelectable(sch, state.schSelectionFilter);
+        const pick = (id: string | null | undefined): string | null => (id && selectable(id) ? id : null);
+        const sym = pick(hitSymbol(sch, state.cursorUm.x, state.cursorUm.y));
         if (sym) return [sym];
-        const wire = hitWire(sch, state.cursorUm.x, state.cursorUm.y, 400 / (state.schematicView.scale || 1));
+        // Any other placed item (label, text, power symbol, sheet, shape, junction, ...) under the cursor, then a wire.
+        const other = hitItems(sch, state.cursorUm.x, state.cursorUm.y, 6 / (state.schematicView.scale || 1)).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pick(r.id));
+        if (other) return [other.id];
+        const wire = pick(hitWire(sch, state.cursorUm.x, state.cursorUm.y, 400 / (state.schematicView.scale || 1)));
         return wire ? [wire] : [];
       }
       if (state.tab !== "pcb" || !state.board) return [];
@@ -150,13 +167,10 @@ export function useActionRunner() {
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
       const locked = new Set(state.board?.locked ?? []);
+      // `SCH_EDIT_TOOL::DoDelete`: every selectable schematic item, locked ones skipped (kicad-port/schDelete.ts).
+      if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
       for (const id of refs) {
-        if (state.tab === "schematic") {
-          if (api.symbolById(id)) cmds.push({ op: "delete_symbol", id });
-          else if (api.wireById(id)) cmds.push({ op: "delete_wire", id });
-          else if (state.schematic?.junctions?.some((j) => j.id === id)) cmds.push({ op: "delete_junction", id });
-          else if (state.schematic?.lines?.some((l) => l.id === id)) cmds.push({ op: "delete_sch_line", id });
-        } else if (state.tab === "pcb") {
+        if (state.tab === "pcb") {
           if (locked.has(id)) continue;
           if (api.trackById(id)) cmds.push({ op: "delete_track", id });
           else if (api.viaById(id)) cmds.push({ op: "delete_via", id });
@@ -258,6 +272,8 @@ export function useActionRunner() {
     // Del: RequestSelection (selection, else the item under the cursor), then ONE commit for all of it.
     m.set("common.Interactive.delete", () => {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
+      // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
+      if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
       deleteRefs(requestSelection());
     });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
@@ -289,7 +305,8 @@ export function useActionRunner() {
         "pcbnew.Control.layerToggle",
         pcbOnly(() => {
           if (!state.board) return;
-          const toLayer = state.board.layers.find((l) => l !== draw.layer) ?? draw.layer;
+          // `layerToggle` (router_tool.cpp): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts).
+          const toLayer = otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer);
           const rules = state.board.board_rules;
           routeToggleVia(!draw.placingVia, rules?.via_diameter ?? 600, rules?.via_drill ?? 300, toLayer).then(() => {
             dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, placingVia: !draw.placingVia, pendingViaLayer: toLayer } });
@@ -374,6 +391,8 @@ export function useActionRunner() {
       void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings.mode, dispatch, freeAngle);
     };
     m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
+    // `routerInlineDrag` (EDIT_TOOL::invokeInlineRouter -> `RunAction( PCB_ACTIONS::routerInlineDrag, DM_ANY )`): the router's own drag entry point, the one `D` above ends in.
+    m.set("pcbnew.InteractiveRouter.InlineDrag", pcbOnly(startDragAtCursor(false)));
     // `G` (EDIT_TOOL::Drag with `dragFreeAngle` -> `invokeInlineRouter( PNS::DM_ANY | PNS::DM_FREE_ANGLE )`,
     // router_tool.cpp InlineDrag -> DRAGGER free-angle mode): the same grab as `D`, but the router only
     // marks obstacles (crates/pns/src/dragger.rs "Free-angle mode"). `CanInlineDrag` refuses footprints for
@@ -747,6 +766,8 @@ export function useActionRunner() {
     // is running does Escape clear the selection, and only once that's
     // also empty does it clear the net highlight).
     m.set("common.Interactive.cancel", () => {
+      // PICKER_TOOL::Main: Escape ends a running pick session (reference point, offset tool, a dialog's "Select ...") and nothing else.
+      if (picker.cancel()) return;
       // Tell the backend's router session to end too (fire-and-forget --
       // see cancelInteractiveRoute's own doc comment) before the ordinary
       // ESCAPE reducer case clears `drawState` locally; otherwise the
@@ -755,6 +776,8 @@ export function useActionRunner() {
       // kinds (`POST /api/route/cancel` drops whatever's active on the
       // shared `Router`), so route/drag/diff-pair all share this one branch.
       if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch);
+      // RouteSelected's loop (`m_cancelled = true` when Escape arrives while `m_inRouteSelected`): the whole run ends and the tool is popped.
+      if (clearRouteQueue()) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       dispatch({ type: "ESCAPE" });
     });
 
@@ -1026,10 +1049,11 @@ export function useActionRunner() {
       "common.Interactive.selectAll",
       viewTab(() => {
         if (state.tab === "schematic") {
-          // sch_selection_tool.cpp SelectAll: every selectable item on the sheet (symbols + wires here).
+          // sch_selection_tool.cpp SelectAll: every selectable item on the sheet (the selection filter's categories, locked ones only with "Locked items" on).
           const sch = state.schematic;
           if (!sch) return;
-          dispatch({ type: "SET_SELECTION", refs: [...sch.symbols.map((x) => x.id), ...sch.wires.map((w) => w.id).filter(Boolean)] });
+          const selectable = schSelectable(sch, state.schSelectionFilter);
+          dispatch({ type: "SET_SELECTION", refs: [...new Set(allItems(sch).map((r) => r.id))].filter(selectable) });
           return;
         }
         if (!state.board) return;
@@ -1052,7 +1076,8 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveMove.move",
       schematicOnly(() => {
-        const first = requestSelection()[0];
+        // `FilterSelectionForLockedItems` (SCH_MOVE_TOOL::doMoveSelection): a locked symbol is not moved.
+        const first = withoutLocked(requestSelection(), new Set(state.schematic?.locked ?? []))[0];
         if (!first || !api.symbolById(first)) return;
         adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
@@ -1068,7 +1093,7 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveMove.drag",
       schematicOnly(() => {
-        const refs = requestSelection();
+        const refs = withoutLocked(requestSelection(), new Set(state.schematic?.locked ?? []));
         const first = refs[0];
         if (!first || !api.symbolById(first) || !state.schematic) return;
         adoptHovered();
@@ -1080,7 +1105,9 @@ export function useActionRunner() {
 
     // sch_edit_tool.cpp Rotate/Mirror: RequestSelection (hover fallback), every selected symbol,
     // one common point for 2+ items, one undo step.
-    const schSymbols = () => requestSelection().filter((id) => api.symbolById(id));
+    // Rotate/Mirror skip locked items (`FilterSelectionForLockedItems`, called first by SCH_EDIT_TOOL::Rotate/Mirror).
+    const schLocked = () => new Set(state.schematic?.locked ?? []);
+    const schSymbols = () => withoutLocked(requestSelection(), schLocked()).filter((id) => api.symbolById(id));
     m.set(
       "eeschema.InteractiveEdit.rotateCCW",
       schematicOnly(() => {
@@ -1939,7 +1966,8 @@ export function useActionRunner() {
 
       // ---- RouteSelected (Shift+X) / RouteSelectedFromEnd (Shift+E) / Autoroute (Shift+F) -- router_tool.cpp ROUTER_TOOL::RouteSelected. For every ratsnest line leaving the selected
       // footprints' pads (or selected track ends/vias) a route starts at the item's end; `Autoroute` aims it at the line's far end and keeps it only if it reaches it (otherwise the
-      // live session is left for the user to finish -- and, unlike source's loop, stops there); the other two hand the first connection to the live route tool, from this end / the far end.
+      // live session is left for the user to finish); the other two hand the connection to the live route tool, from this end / the far end. The connections run one after the other
+      // as source's loop does (components/canvas/routeQueue.ts): finishing one -- or `cancelCurrentItem` -- starts the next, Escape ends the run.
       const routeSelected = (variant: "interactive" | "fromEnd" | "auto") =>
         pcbOnly(async () => {
           if (!board || routing) return; // `if( m_router->RoutingInProgress() ) return 0;`
@@ -1953,34 +1981,37 @@ export function useActionRunner() {
           dispatch({ type: "SET_SELECTION", refs: [] });
           const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
           const settings = state.routerSettings;
-          const handOver = async (at: [number, number], layer: string) => {
+          const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
-            await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch);
+            return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch)) ? "live" : "done";
           };
-          if (variant !== "auto") {
-            const a = anchors[0]!;
-            await handOver(variant === "fromEnd" ? a.target : a.at, routeStartLayer(a, copperLayers, state.activeLayer));
-            return;
-          }
           let done = 0;
-          for (const a of anchors) {
+          const runAnchor = (a: (typeof anchors)[number]) => async (): Promise<QueueOutcome> => {
             const layer = routeStartLayer(a, copperLayers, state.activeLayer);
+            if (variant !== "auto") return handOver(variant === "fromEnd" ? a.target : a.at, layer);
             const started = await routeStart(a.at[0], a.at[1], layer, width, settings.mode, settings.removeLoops);
-            if (!started.ok) continue;
+            if (!started.ok) return "done";
             const head = await routeMove(a.target[0], a.target[1]);
             // AttemptFinish: only a head that reaches the far end without colliding completes by itself.
             if (head.ok && !head.colliding && head.snapped_end && (await routeFinish(a.target[0], a.target[1])).ok) {
               done++;
-              continue;
+              return "done";
             }
             await routeCancel();
             await api.refresh();
             dispatch({ type: "TOAST", message: `Autorouted ${done} of ${anchors.length} connections; finish the next one by hand.`, kind: "info" });
-            await handOver(a.at, layer);
-            return;
-          }
-          await api.refresh();
-          dispatch({ type: "TOAST", message: `Autorouted ${done} of ${anchors.length} connections.`, kind: done === anchors.length ? "info" : "error" });
+            return handOver(a.at, layer);
+          };
+          await startRouteQueue(
+            anchors.map(runAnchor),
+            dispatch,
+            variant === "auto"
+              ? () => {
+                  void api.refresh();
+                  dispatch({ type: "TOAST", message: `Autorouted ${done} of ${anchors.length} connections.`, kind: done === anchors.length ? "info" : "error" });
+                }
+              : null
+          );
         });
       m.set("pcbnew.InteractiveRouter.RouteSelected", routeSelected("interactive"));
       m.set("pcbnew.InteractiveRouter.RouteSelectedFromEnd", routeSelected("fromEnd"));
@@ -2172,6 +2203,12 @@ export function useActionRunner() {
         if (state.tab === "symbol") void symApi.exportLibraryKicadSym();
       });
     }
+
+    // The schematic edit and drawing tools (Lock, Change To, Break, shapes, sheet pins, ...) -- actions/schEditActions.ts. Registered before the library editors'
+    // below: both chain on a name they share (drawRectangle, drawCircle, drawArc) so each editor keeps its own tab's handler, in either order.
+    registerSchEditActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
+    // The pcbnew edit-tool rows (router modes, Mirror, Fillet/Chamfer/Dogbone/Extend Lines, polygon booleans, ...): actions/pcbEditSweep.ts.
+    registerPcbEditSweep(m, { state, dispatch, api, requestSelection });
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });

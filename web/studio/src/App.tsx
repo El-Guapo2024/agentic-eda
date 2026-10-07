@@ -11,6 +11,7 @@ import { Toolbar } from "./components/Toolbar";
 import { QuickActions } from "./components/QuickActions";
 import { PropertiesPanel } from "./components/panels/PropertiesPanel";
 import { RightDock } from "./components/panels/RightDock";
+import { SchSelectionFilterPanel } from "./components/panels/SchSelectionFilterPanel";
 import { MessagePanel } from "./components/MessagePanel";
 import { StatusBar } from "./components/StatusBar";
 import { Canvas } from "./components/canvas/Canvas";
@@ -27,6 +28,9 @@ import { TextDialog } from "./components/TextDialog";
 import { ItemPropertiesDialog } from "./components/ItemPropertiesDialog";
 import { MoveExactDialog } from "./components/MoveExactDialog";
 import { PcbParityDialogs } from "./components/PcbParityDialogs";
+import { PcbSweepDialogs } from "./components/PcbSweepDialogs";
+import { VertexEditorPane } from "./components/PcbPointEditDialogs";
+import { PcbPickerPrompt } from "./components/PcbPickerPrompt";
 import { RouterSettingsDialog } from "./components/RouterSettingsDialog";
 import { LengthTuningDialog } from "./components/LengthTuningDialog";
 import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
@@ -42,6 +46,7 @@ import { SheetDialog } from "./components/SheetDialog";
 import { BusUnfoldDialog } from "./components/BusUnfoldDialog";
 import { PowerSymbolDialog } from "./components/PowerSymbolDialog";
 import { SchTextDialog } from "./components/SchTextDialog";
+import { SchToolDialogs } from "./components/SchToolDialogs";
 import { SymbolChooserDialog } from "./components/SymbolChooserDialog";
 import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
@@ -124,13 +129,11 @@ function StudioFrame() {
   const hideBoardChrome = is3d || isFootprint || isSymbolEditor;
   // eeschema's default AUI layout has no layer/appearance manager at all
   // (that's a pcbnew-only concept -- a schematic has no copper/technical
-  // layers to toggle) and no selection-filter-by-item-type panel either
-  // (pcbnew's exists because tracks/zones/vias/footprints overlap on
-  // different layers; a schematic sheet has no such overlap problem).
-  // Its right-hand dock is just the drawing/placement toolbar
+  // layers to toggle). Its right-hand dock is the drawing/placement toolbar
   // (drawing-toolbar-col below, already tab-aware via Toolbar's own
-  // schToolbarsFile lookup) -- so the tabbed Appearance/Filter/Activity
-  // dock only makes sense on the PCB tab.
+  // schToolbarsFile lookup) plus just the Selection Filter
+  // (panel_sch_selection_filter.cpp, rendered below) -- so the tabbed
+  // Appearance/Filter/Activity dock only makes sense on the PCB tab.
   const showRightDock = state.tab === "pcb";
   return (
     <div className="app-frame">
@@ -182,6 +185,14 @@ function StudioFrame() {
             <RightDock />
           </div>
         )}
+        {/* eeschema's right dock: the Selection Filter (panel_sch_selection_filter.cpp). */}
+        {state.tab === "schematic" && (
+          <div className="right-dock-col">
+            <div className="dock">
+              <SchSelectionFilterPanel />
+            </div>
+          </div>
+        )}
       </div>
       <div className="message-panel-row">
         <MessagePanel />
@@ -201,6 +212,9 @@ function StudioFrame() {
       <ItemPropertiesDialog />
       <MoveExactDialog />
       <PcbParityDialogs />
+      <PcbSweepDialogs />
+      <VertexEditorPane />
+      <PcbPickerPrompt />
       <RouterSettingsDialog />
       <LengthTuningDialog />
       <CleanupTracksDialog />
@@ -216,6 +230,7 @@ function StudioFrame() {
       <BusUnfoldDialog />
       <PowerSymbolDialog />
       <SchTextDialog />
+      <SchToolDialogs />
       <SymbolChooserDialog />
       <SymbolPropertiesDialog />
       <AnnotateDialog />
