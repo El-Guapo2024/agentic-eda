@@ -10,6 +10,7 @@ import type { ChamferCorners, LibraryPad, LibraryPadShape, PadKind } from "../..
 import { useFpApi, useFpState, useFpDispatch } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
 import { formatLength, umFrom, umTo } from "../../state/units";
+import { importPadSettings, settingsOf } from "../../kicad-port/padSettings";
 
 const SHAPE_OPTIONS: { value: LibraryPadShape; label: string }[] = [
   { value: "circle", label: "Circle" },
@@ -43,9 +44,12 @@ export function PadPropertiesDialog() {
   const dispatch = useFpDispatch();
   const api = useFpApi();
   const units = useStudioState().units;
+  // `pcbnew.PadTool.defaultPadProperties`: the same dialog on the default pad (`ShowPadPropertiesDialog( nullptr )` -> `m_Pad_Master`), which has
+  // no number and no position, and OK stores into the default pad instead of editing a pad of the footprint.
+  const defaultMode = state.defaultPadOpen;
   const id = state.padPropertiesId;
-  const pad = id ? state.footprint?.pads.find((p) => p.id === id) : undefined;
-  const close = () => dispatch({ type: "SET_PAD_PROPERTIES_ID", id: null });
+  const pad: LibraryPad | undefined = defaultMode ? { id: "", number: "", at: { x: 0, y: 0 }, ...state.defaultPad } : id ? state.footprint?.pads.find((p) => p.id === id) : undefined;
+  const close = () => (defaultMode ? dispatch({ type: "SET_DEFAULT_PAD_OPEN", open: false }) : dispatch({ type: "SET_PAD_PROPERTIES_ID", id: null }));
 
   const [form, setForm] = useState<LibraryPad | null>(null);
 
@@ -56,9 +60,9 @@ export function PadPropertiesDialog() {
   useEffect(() => {
     if (pad) setForm(pad);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, defaultMode]);
 
-  if (!id || !pad || !form) return null;
+  if ((!defaultMode && !id) || !pad || !form) return null;
 
   const set = <K extends keyof LibraryPad>(key: K, value: LibraryPad[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
   const len = (valueUm: number, onChange: (um: number) => void, width = 80) => (
@@ -68,7 +72,13 @@ export function PadPropertiesDialog() {
   );
 
   const submit = async () => {
-    if (await api.editPad(id, form)) close();
+    if (defaultMode) {
+      // `m_Pad_Master` takes what the dialog holds (the circle / SMD fix-ups of `ImportSettingsFrom` included).
+      dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(importPadSettings(form, form)) });
+      close();
+      return;
+    }
+    if (id && (await api.editPad(id, form))) close();
   };
 
   const hasDrill = form.kind !== "smd";
@@ -78,13 +88,17 @@ export function PadPropertiesDialog() {
     <div className="dialog-backdrop" onClick={close}>
       <div className="dialog" style={{ width: 480 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <span>Pad Properties</span>
-          <span>{pad.number || "(no number)"}</span>
+          <span>{defaultMode ? "Default Pad Properties" : "Pad Properties"}</span>
+          <span>{defaultMode ? "used by Add Pad" : pad.number || "(no number)"}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "72vh", overflowY: "auto" }}>
           <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
-            <span>Number</span>
-            <input value={form.number} onChange={(e) => set("number", e.target.value)} style={{ width: 80 }} />
+            {!defaultMode && (
+              <>
+                <span>Number</span>
+                <input value={form.number} onChange={(e) => set("number", e.target.value)} style={{ width: 80 }} />
+              </>
+            )}
             <span>Pad type</span>
             <select value={form.kind} onChange={(e) => set("kind", e.target.value as PadKind)}>
               {KIND_OPTIONS.map((o) => (
@@ -94,10 +108,14 @@ export function PadPropertiesDialog() {
               ))}
             </select>
 
-            <span>Position</span>
-            <span>
-              {len(form.at.x, (x) => set("at", { ...form.at, x }))} {len(form.at.y, (y) => set("at", { ...form.at, y }))}
-            </span>
+            {!defaultMode && (
+              <>
+                <span>Position</span>
+                <span>
+                  {len(form.at.x, (x) => set("at", { ...form.at, x }))} {len(form.at.y, (y) => set("at", { ...form.at, y }))}
+                </span>
+              </>
+            )}
             <span>Rotation</span>
             <span>
               <input type="number" step="any" value={form.rot / 1000} onChange={(e) => Number.isFinite(Number(e.target.value)) && set("rot", Math.round(Number(e.target.value) * 1000))} style={{ width: 80 }} />°
@@ -250,14 +268,16 @@ export function PadPropertiesDialog() {
           </div>
         </div>
         <div className="dialog-footer">
-          <button
-            onClick={() => {
-              void api.deletePad(id);
-              close();
-            }}
-          >
-            Delete Pad
-          </button>
+          {!defaultMode && id && (
+            <button
+              onClick={() => {
+                void api.deletePad(id);
+                close();
+              }}
+            >
+              Delete Pad
+            </button>
+          )}
           <button onClick={close}>Cancel</button>
           <button className="primary" onClick={submit}>
             OK

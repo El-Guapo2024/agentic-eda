@@ -25,24 +25,44 @@ import React, { createContext, useCallback, useContext, useEffect, useReducer, u
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
 import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchLibrarySymbol, fetchSymbolEditorNames, postCmd, postRedo, postUndo } from "../api/client";
 import { uniqueSymbolLibId } from "../kicad-port/symEditActions";
+import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
 import type { ViewTransform } from "./store";
 
-export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text";
+export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor";
 
 export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
   pin: "Pin: click to place, number auto-increments",
   draw_segment: "Line: click start, then end",
+  draw_lines: "Lines: click each point of the connected graphic lines; double-click or Enter to finish, Esc to cancel",
   draw_arc: "Arc: click start, mid, then end",
   draw_rect: "Rectangle: click one corner, then the opposite one",
   draw_circle: "Circle: click center, then a point on the edge",
-  draw_polygon: "Polygon: click points, Enter/double-click to finish, Esc to cancel",
-  text: "Click to place text",
+  draw_polygon: "Polygon: click points, Enter/double-click to finish (the shape closes), Esc to cancel",
+  text: "Text: click where it goes, then type it",
+  anchor: "Move the symbol anchor: click the point that becomes the symbol's origin",
 };
 
-/** Same "click to add point(s), commit on the last one" shape the Footprint Editor's own `FpDrawState` uses. Points are internal-space µm (see this file's own unit-convention doc). */
-export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "arc" | "rect" | "circle" | "polygon"; pts: [number, number][] };
+/** Same "click to add point(s), commit on the last one" shape the Footprint Editor's own `FpDrawState` uses. Points are internal-space µm (see this file's own unit-convention doc). `lines` is the open multi-point polyline (`drawSymbolLines`), `polygon` the closed one. */
+export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon"; pts: [number, number][] };
+
+/** `DIALOG_SAVE_SYMBOL_AS` (Save As / Save Copy As): which of the two it is. */
+export interface SaveAsRequest {
+  /** `saveSymbolAs` (`aOpenCopy`) opens the copy afterwards; `saveSymbolCopyAs` leaves the editor where it was. */
+  openCopy: boolean;
+  /** The symbol being saved. */
+  libId: string;
+}
+
+/** A `.kicad_sym` file read for Import Symbol: the symbols in it, for the selection dialog (`DIALOG_IMPORT_SYMBOL_SELECT`). */
+export interface ImportRequest {
+  fileName: string;
+  symbols: LibrarySymbol[];
+  warnings: string[];
+  /** The library the symbols land in (the tree selection's library). */
+  lib: string;
+}
 
 export interface SymMovePreview {
   refs: string[];
@@ -75,6 +95,27 @@ export interface SymbolEditorState {
   pinPropertiesId: string | null;
   pinTableOpen: boolean;
   propertiesOpen: boolean;
+  /** The symbols the library tree has selected (`GetSelectedLibIds()`); empty = none (the open symbol is the target, `GetTargetLibId`). */
+  treeSelection: string[];
+  /** `m_ShowPinsElectricalType`: draw each pin's electrical type beside it. On to begin with, as `show_pin_electrical_type` is in `SYMBOL_EDITOR_SETTINGS`. */
+  showElectricalTypes: boolean;
+  /** `m_ShowPinNumbers`: force the pin numbers on even where the symbol hides them. Off to begin with (`SCH_RENDER_SETTINGS`). */
+  showPinNumbers: boolean;
+  /** `m_ShowHiddenPins`: draw the pins marked hidden. On to begin with (`show_hidden_lib_pins`). */
+  showHiddenPins: boolean;
+  /** `SYMBOL_EDIT_FRAME::m_SyncPinEdit`: Synchronized Pins Mode. On by default for a multi-unit symbol. */
+  syncPins: boolean;
+  /** The symbols Copy / Cut put on the clipboard: kept beside the clipboard text so Paste of our own copy loses nothing (and works where the browser denies clipboard access). */
+  copied: { text: string; symbols: LibrarySymbol[] } | null;
+  saveAs: SaveAsRequest | null;
+  importRequest: ImportRequest | null;
+  fieldsTableOpen: boolean;
+  /** `placeSymbolText` / the Text tool: where the click landed, in internal µm; the Text Properties dialog asks for the text. */
+  textDialog: { atUm: [number, number] } | null;
+  /** The text the dialog was OK'd with, following the cursor until the click that places it (`TwoClickPlace`'s `item` while `IS_MOVING`). */
+  pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
+  /** `m_lastTextAngle`: the text angle the next Text dialog starts with. */
+  lastTextAngle: number;
   toast: { message: string; kind: "error" | "info" } | null;
 }
 
@@ -97,6 +138,18 @@ const initialState: SymbolEditorState = {
   pinPropertiesId: null,
   pinTableOpen: false,
   propertiesOpen: false,
+  treeSelection: [],
+  showElectricalTypes: true,
+  showPinNumbers: false,
+  showHiddenPins: true,
+  syncPins: false,
+  copied: null,
+  saveAs: null,
+  importRequest: null,
+  fieldsTableOpen: false,
+  textDialog: null,
+  pendingText: null,
+  lastTextAngle: 0,
   toast: null,
 };
 
@@ -121,6 +174,17 @@ export type SymAction =
   | { type: "SET_PIN_PROPERTIES_ID"; id: string | null }
   | { type: "SET_PIN_TABLE_OPEN"; open: boolean }
   | { type: "SET_PROPERTIES_OPEN"; open: boolean }
+  | { type: "SET_TREE_SELECTION"; names: string[] }
+  | { type: "TOGGLE_ELECTRICAL_TYPES" }
+  | { type: "TOGGLE_PIN_NUMBERS" }
+  | { type: "TOGGLE_HIDDEN_PINS" }
+  | { type: "SET_SYNC_PINS"; on: boolean }
+  | { type: "SET_COPIED"; copied: { text: string; symbols: LibrarySymbol[] } | null }
+  | { type: "SET_SAVE_AS"; request: SaveAsRequest | null }
+  | { type: "SET_IMPORT_REQUEST"; request: ImportRequest | null }
+  | { type: "SET_FIELDS_TABLE_OPEN"; open: boolean }
+  | { type: "SET_TEXT_DIALOG"; at: [number, number] | null }
+  | { type: "SET_PENDING_TEXT"; pending: { text: string; sizeMm: number; angleDeg: number } | null }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
@@ -128,9 +192,22 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
   switch (action.type) {
     case "SET_LIB_ID":
       if (action.libId === state.libId) return state;
-      return { ...initialState, libId: action.libId, gridUm: state.gridUm, gridVisible: state.gridVisible };
+      // The view options, the library tree's selection and the clipboard belong to the editor session, not to one symbol.
+      return {
+        ...initialState,
+        libId: action.libId,
+        gridUm: state.gridUm,
+        gridVisible: state.gridVisible,
+        treeSelection: state.treeSelection,
+        showElectricalTypes: state.showElectricalTypes,
+        showPinNumbers: state.showPinNumbers,
+        showHiddenPins: state.showHiddenPins,
+        copied: state.copied,
+        lastTextAngle: state.lastTextAngle,
+      };
     case "SYMBOL_OK":
-      return { ...state, symbol: action.symbol, error: null };
+      // `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()` each time a symbol is loaded: on for a multi-unit symbol.
+      return { ...state, symbol: action.symbol, error: null, syncPins: state.symbol ? state.syncPins : defaultSyncMode(action.symbol.unit_count) };
     case "SYMBOL_ERR":
       return { ...state, error: action.message };
     case "SET_VIEW":
@@ -142,12 +219,15 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "CLEAR_SELECTION":
       return { ...state, selection: new Set(), activeTool: "select", drawState: null, movePreview: null, pinPropertiesId: null };
     case "ESCAPE": {
-      const inProgress = state.activeTool !== "select" || state.drawState != null || state.movePreview != null;
+      // `IsCancelInteractive()` in the drawing tools: with a shape (or the text to place) in hand, Escape drops that and the tool stays armed;
+      // only without one does it leave the tool.
+      if (state.drawState != null || state.pendingText != null) return { ...state, drawState: null, pendingText: null, textDialog: null };
+      const inProgress = state.activeTool !== "select" || state.movePreview != null;
       if (inProgress) return { ...state, activeTool: "select", drawState: null, movePreview: null };
       return { ...state, selection: new Set() };
     }
     case "SET_ACTIVE_TOOL":
-      return { ...state, activeTool: action.tool, drawState: null };
+      return { ...state, activeTool: action.tool, drawState: null, pendingText: null, textDialog: null };
     case "SET_DRAW_STATE":
       return { ...state, drawState: action.draw };
     case "SET_MOVE_PREVIEW":
@@ -170,6 +250,28 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, pinTableOpen: action.open };
     case "SET_PROPERTIES_OPEN":
       return { ...state, propertiesOpen: action.open };
+    case "SET_TREE_SELECTION":
+      return { ...state, treeSelection: action.names };
+    case "TOGGLE_ELECTRICAL_TYPES":
+      return { ...state, showElectricalTypes: !state.showElectricalTypes };
+    case "TOGGLE_PIN_NUMBERS":
+      return { ...state, showPinNumbers: !state.showPinNumbers };
+    case "TOGGLE_HIDDEN_PINS":
+      return { ...state, showHiddenPins: !state.showHiddenPins };
+    case "SET_SYNC_PINS":
+      return { ...state, syncPins: action.on };
+    case "SET_COPIED":
+      return { ...state, copied: action.copied };
+    case "SET_SAVE_AS":
+      return { ...state, saveAs: action.request };
+    case "SET_IMPORT_REQUEST":
+      return { ...state, importRequest: action.request };
+    case "SET_FIELDS_TABLE_OPEN":
+      return { ...state, fieldsTableOpen: action.open };
+    case "SET_TEXT_DIALOG":
+      return { ...state, textDialog: action.at ? { atUm: action.at } : null };
+    case "SET_PENDING_TEXT":
+      return { ...state, pendingText: action.pending, textDialog: null, lastTextAngle: action.pending ? action.pending.angleDeg : state.lastTextAngle };
     case "TOAST":
       return { ...state, toast: { message: action.message, kind: action.kind } };
     case "TOAST_CLEAR":
@@ -197,6 +299,8 @@ export interface SymbolEditorApi {
   /** `x`/`y` and every other geometry argument below is plain mm, matching the wire format directly -- callers (the canvas) convert from internal µm themselves, see this file's own unit-convention doc. */
   addPin: (pin: LibrarySymbolPin) => Promise<void>;
   movePin: (id: string, xMm: number, yMm: number) => Promise<void>;
+  /** Several pins moved to absolute positions as ONE undo step; in Synchronized Pins Mode the matching pins of the other units move with them. */
+  movePins: (moves: { id: string; x: number; y: number }[]) => Promise<void>;
   deletePin: (id: string) => Promise<void>;
   editPin: (id: string, pin: LibrarySymbolPin) => Promise<boolean>;
   pushPinProperty: (sourcePinId: string, field: PushPinField) => Promise<void>;
@@ -301,14 +405,36 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     pinById: (id) => stateRef.current.symbol?.pins.find((p) => p.id === id),
     graphicById: (id) => stateRef.current.symbol?.graphics.find((g) => g.id === id),
     addPin: async (pin) => {
-      const libId = stateRef.current.libId;
+      const st = stateRef.current;
+      const libId = st.libId;
       if (!libId) return;
-      await runCmd({ op: "add_symbol_pin", lib_id: libId, pin });
+      // `PlacePin` -> `CreateImagePins`: in Synchronized Pins Mode a pin placed on one unit gets its image in every other unit.
+      const images = st.symbol && synchronizePins(st.syncPins, st.symbol.unit_count) ? imagePinsFor(pin, st.symbol.unit_count) : [];
+      const cmds: Cmd[] = [pin, ...images].map((p): Cmd => ({ op: "add_symbol_pin", lib_id: libId, pin: p }));
+      await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
     movePin: async (id, xMm, yMm) => {
       const libId = stateRef.current.libId;
       if (!libId) return;
       await runCmd({ op: "move_symbol_pin", lib_id: libId, id, x: xMm, y: yMm });
+    },
+    movePins: async (moves) => {
+      const st = stateRef.current;
+      const libId = st.libId;
+      const sym = st.symbol;
+      if (!libId || !sym || moves.length === 0) return;
+      // `SYMBOL_EDITOR_MOVE_TOOL::Main`: "Pick up any synchronized pins" -- the matching pin of every other unit moves with the pin.
+      const sync = synchronizePins(st.syncPins, sym.unit_count);
+      const target = new Map<string, { x: number; y: number }>(moves.map((m) => [m.id, { x: m.x, y: m.y }]));
+      if (sync) {
+        for (const m of moves) {
+          const pin = sym.pins.find((p) => p.id === m.id);
+          if (!pin) continue;
+          for (const other of linkedPinsToMove(pin, sym.pins, sym.unit_count)) if (other.id && !target.has(other.id)) target.set(other.id, { x: m.x, y: m.y });
+        }
+      }
+      const cmds: Cmd[] = [...target.entries()].map(([id, at]): Cmd => ({ op: "move_symbol_pin", lib_id: libId, id, x: at.x, y: at.y }));
+      await runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
     deletePin: async (id) => {
       const libId = stateRef.current.libId;
@@ -317,14 +443,26 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       await runCmd({ op: "delete_symbol_pin", lib_id: libId, id });
     },
     editPin: async (id, pin) => {
-      const libId = stateRef.current.libId;
+      const st = stateRef.current;
+      const libId = st.libId;
       if (!libId) return false;
-      return runCmd({ op: "edit_symbol_pin", lib_id: libId, id, pin });
+      const sym = st.symbol;
+      const original = sym?.pins.find((p) => p.id === id);
+      const cmds: Cmd[] = [{ op: "edit_symbol_pin", lib_id: libId, id, pin }];
+      // `EditPinProperties`: with synchronized pins the matching pin of every other unit follows the edit (and a pin made common to all units
+      // makes its twins redundant).
+      if (sym && original && synchronizePins(st.syncPins, sym.unit_count)) {
+        const plan = planSyncedEdit(original, { ...pin, id }, sym.pins, sym.unit_count);
+        for (const other of plan.updates) if (other.id) cmds.push({ op: "edit_symbol_pin", lib_id: libId, id: other.id, pin: other });
+        for (const rid of plan.removeIds) cmds.push({ op: "delete_symbol_pin", lib_id: libId, id: rid });
+      }
+      return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
     },
     pushPinProperty: async (sourcePinId, field) => {
-      const libId = stateRef.current.libId;
+      const st = stateRef.current;
+      const libId = st.libId;
       if (!libId) return;
-      await runCmd({ op: "push_pin_property", lib_id: libId, source_pin_id: sourcePinId, field });
+      await runCmd({ op: "push_pin_property", lib_id: libId, source_pin_id: sourcePinId, field, body_style: st.activeBodyStyle });
     },
     addGraphic: async (graphic) => {
       const libId = stateRef.current.libId;

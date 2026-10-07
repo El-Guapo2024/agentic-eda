@@ -642,6 +642,12 @@ fn handle(
                 Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
             }
         }
+        // The library editors' read-only lookups of ANY symbol / footprint (project entry or resolved), for Duplicate, Save Copy As, Copy.
+        ("GET", "/api/library/symbol") => respond(stream, "200 OK", "application/json", crate::library_api::symbol(dir, &query_value(target, "lib_id")).to_string().as_bytes()),
+        ("GET", "/api/library/footprint") => respond(stream, "200 OK", "application/json", crate::library_api::footprint(dir, &query_value(target, "name")).to_string().as_bytes()),
+        // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
+        ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
+        ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
         ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
@@ -1618,10 +1624,15 @@ fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
 fn footprint_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let mut names: std::collections::BTreeSet<String> = model.footprints.iter().map(|f| f.name.clone()).collect();
+    // `project`: the names that are entries of the project library itself (editable in place, what the library tree's
+    // Delete / Rename / Cut act on); the rest come from the intent, a loaded `.kicad_mod` or the builtin table.
+    let mut project: Vec<String> = Vec::new();
     if let Some(lib) = &design.footprint_library {
         names.extend(lib.footprints.iter().map(|f| f.name.clone()));
+        project = lib.footprints.iter().map(|f| f.name.clone()).collect();
+        project.sort();
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>() }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project }))
 }
 
 /// `GET /api/footprint/export?name=<name>` -- a derived, standalone
@@ -1634,13 +1645,8 @@ fn footprint_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 /// click) -- this route itself only ever returns `text/plain`, no
 /// `Content-Disposition`, matching every other GET route here.
 fn footprint_kicad_mod(dir: &Path, name: &str) -> Result<String, Vec<CheckResult>> {
-    let (_, design, _) = board::load(dir)?;
-    let fp = design
-        .footprint_library
-        .as_ref()
-        .and_then(|l| l.by_name(name))
-        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
-    Ok(eda_kicad::export_kicad_mod(fp))
+    // The project entry, else what the model resolves the name to (a read-only export never needs the footprint opened first).
+    crate::library_api::footprint_kicad_mod_any(dir, name)
 }
 
 /// `GET /api/board.kicad_pcb` -- the design as a derived `.kicad_pcb` (File > Save As... on the PCB tab). `design.json` stays the
@@ -1724,23 +1730,22 @@ fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let mut names: std::collections::BTreeSet<String> = model.symbols.iter().map(|s| s.lib_id.clone()).collect();
     names.extend(eda_model::symbol::builtin_catalog().into_iter().map(|s| s.lib_id));
+    // `project`: the entries of the project library itself -- see `footprint_library_json`.
+    let mut project: Vec<String> = Vec::new();
     if let Some(lib) = &design.symbol_library {
         names.extend(lib.symbols.iter().map(|s| s.lib_id.clone()));
+        project = lib.symbols.iter().map(|s| s.lib_id.clone()).collect();
+        project.sort();
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>() }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project }))
 }
 
 /// `GET /api/symbol/export?lib_id=<id>` -- the derived, standalone
 /// `.kicad_sym` for one symbol-library entry (Symbol Editor's "Export
 /// .kicad_sym"), same shape as `footprint_kicad_mod`.
 fn symbol_kicad_sym(dir: &Path, lib_id: &str) -> Result<String, Vec<CheckResult>> {
-    let (_, design, _) = board::load(dir)?;
-    let sym = design
-        .symbol_library
-        .as_ref()
-        .and_then(|l| l.by_lib_id(lib_id))
-        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])?;
-    Ok(eda_kicad::export_kicad_sym(sym))
+    // The project entry, else the resolved symbol (real library file, builtin table): Export and Copy work on any symbol in the tree.
+    crate::library_api::symbol_kicad_sym_any(dir, lib_id)
 }
 
 /// `GET /api/symbol_library/export` -- every symbol of the project library in one derived `.kicad_sym`

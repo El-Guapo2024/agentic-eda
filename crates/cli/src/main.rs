@@ -21,6 +21,7 @@ mod board_control_api;
 mod board_output_api;
 mod cleanup_api;
 mod fab_api;
+mod library_api;
 mod sch_api;
 mod fab_cmd;
 mod import_kicad;

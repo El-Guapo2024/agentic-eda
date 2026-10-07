@@ -8,3 +8,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# The `eda` build gets `arbitrary_precision` from starlark (via eda-intent); its tests here run with the same feature, because it changes how
+# serde reads a buffered fractional number (see tests/library_symbol_graphic_wire.rs).
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
