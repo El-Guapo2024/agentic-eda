@@ -9,6 +9,8 @@
 import { useEffect, useRef, useState } from "react";
 import menusData from "../kicad/menus.json";
 import schMenusData from "../kicad/sch_menus.json";
+import fpMenusData from "../kicad/fp_menus.json";
+import symMenusData from "../kicad/sym_menus.json";
 import actionsData from "../kicad/actions.json";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
 import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
@@ -17,6 +19,8 @@ import { useStudioState } from "../state/store";
 
 const menusFile = menusData as MenusFile;
 const schMenusFile = schMenusData as MenusFile;
+const fpMenusFile = fpMenusData as MenusFile;
+const symMenusFile = symMenusData as MenusFile;
 const actionsFile = actionsData as ActionsFile;
 const actionsByName = new Map<string, KicadAction>(actionsFile.actions.map((a) => [a.name, a]));
 
@@ -68,7 +72,8 @@ export function MenuBar() {
   // window's source wasn't available), so it keeps pcbnew's menu rather
   // than showing an empty/fake one -- most of it is disabled there
   // anyway, same as everywhere else this app hasn't ported an action.
-  const activeMenus = state.tab === "schematic" ? schMenusFile : menusFile;
+  // The two library editors are frames of their own in KiCad, each with its own menu bar (menubar_footprint_editor.cpp, menubar_symbol_editor.cpp).
+  const activeMenus = state.tab === "schematic" ? schMenusFile : state.tab === "footprint" ? fpMenusFile : state.tab === "symbol" ? symMenusFile : menusFile;
 
   if (activeMenus.menus.length === 0) {
     return (

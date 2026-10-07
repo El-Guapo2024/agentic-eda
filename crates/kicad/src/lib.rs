@@ -30,8 +30,14 @@ pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net
 mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules};
 
+mod footprint_import;
+pub use footprint_import::{parse_library_footprint, ParsedFootprint};
+
 mod footprint_lib;
 pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
+
+mod symbol_import;
+pub use symbol_import::{parse_library_symbols, ParsedSymbols};
 
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};

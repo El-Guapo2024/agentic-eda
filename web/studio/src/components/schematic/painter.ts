@@ -67,6 +67,8 @@ export interface SchematicPaintOptions {
   netHighlight: string | null;
   /** GET /api/erc's current report (kicad-cli's), or null when ERC has not run this session -- kept showing after the dialog closes, like KiCad's own markers until the next run. */
   ercViolations?: ErcViolation[] | null;
+  /** The design has moved on since `ercViolations` were computed (kicad-port/checkRevision.ts): the markers are still drawn, dimmed and dashed, until the next ERC run. */
+  ercStale?: boolean;
   /** `state.ercSelected` -- which `ercViolations` row the dialog's list currently has clicked/focused, drawn with the highlighted color instead of its own severity color (DRC markers' own `drcSelected` convention, mirrored here). */
   ercSelected?: number | null;
   /** GET /api/lint's schematic findings (crates/lint: our own readability checks) -- only while the ERC dialog is open, drawn as blue diamonds so they never read as KiCad's circles. */
@@ -543,9 +545,10 @@ export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin
  * and outside per real symbol; number placement always assumes
  * `nameOutsideShown = false` for the same reason (both are a direct,
  * documented consequence of the same missing field, not two separate
- * approximations).
+ * approximations). `colors` overrides the two label colours (the symbol
+ * editor draws a hidden pin's labels in the hidden colour, `getColorForLayer`).
  */
-export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
+export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin, colors?: { name: string; number: string }) {
   const { pin, tip: P, root: R, dir } = rp;
   if (pin.electrical_type === "no_connect") return;
   const horizontal = isHorizontalPin(dir);
@@ -554,7 +557,7 @@ export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
 
   if (pin.name) {
     const sizeUm = PIN_FONT * 1000;
-    const color = layerColor("LAYER_PINNAM");
+    const color = colors?.name ?? layerColor("LAYER_PINNAM");
     const anchor: [number, number] = [R[0] + dir[0] * PIN_NAME_OFFSET_UM, R[1] + dir[1] * PIN_NAME_OFFSET_UM];
     // RIGHT (dir=(1,0)): H LEFT. LEFT (dir=(-1,0)): H RIGHT. UP
     // (dir=(0,-1)): angle 90, H LEFT. DOWN (dir=(0,1)): angle 90, H RIGHT.
@@ -569,7 +572,7 @@ export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin) {
 
   if (pin.number) {
     const sizeUm = PIN_FONT * 0.85 * 1000;
-    const color = layerColor("LAYER_PINNUM");
+    const color = colors?.number ?? layerColor("LAYER_PINNUM");
     const off = sizeUm / 2 + PIN_TEXT_CLEARANCE_UM + PIN_TEXT_PEN_UM;
     if (horizontal) {
       // s = -1 (above the line) -- nameOutsideShown is always false here.
@@ -791,7 +794,7 @@ function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: Bu
  * last, like DRC's own markers, so a marker is never hidden under a wire
  * or symbol.
  */
-function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, violations: ErcViolation[], selected: number | null) {
+function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, violations: ErcViolation[], selected: number | null, stale = false) {
   const hair = 1 / view.scale;
   violations.forEach((v, i) => {
     const resolved = ercMarkerPosition(v.location, sch);
@@ -804,12 +807,15 @@ function drawErcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch:
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(100, hair);
+    // Out of date: dimmed and dashed, like the PCB's DRC markers.
+    if (stale) ctx.setLineDash([r * 0.35, r * 0.25]);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.globalAlpha = v.severity === "excluded" ? 0.18 : 0.35;
+    ctx.globalAlpha = stale ? 0.1 : v.severity === "excluded" ? 0.18 : 0.35;
     ctx.fill();
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = stale ? 0.55 : 1;
     ctx.stroke();
+    ctx.setLineDash([]);
     drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
     ctx.restore();
   });
@@ -963,7 +969,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   }
 
   // ERC markers last of all -- an overlay above every sheet layer, matching real KiCad (and this app's own canvas/painter.ts for DRC).
-  if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null);
+  if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null, opts.ercStale);
   if (opts.lintViolations) drawLintMarkers(ctx, view, sch, opts.lintViolations, opts.lintSelected ?? null);
 }
 

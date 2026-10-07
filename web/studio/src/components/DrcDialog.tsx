@@ -11,8 +11,11 @@
 // is no other DRC engine and no engine switch. It takes seconds (about 4 s
 // on a 30-part board), so it runs on demand -- when the dialog opens on a
 // board kicad-cli has not judged yet, and on "Run DRC" -- with a visible
-// running state, never on every change. KiCad's own `type` names are shown
-// directly as each violation's category.
+// running state, never on every change. The board stays editable during a
+// run (the server answers edits meanwhile; closing this window leaves the run
+// going), and a report stamped with a revision the board has since left is
+// shown as out of date (kicad-port/checkRevision.ts). KiCad's own `type`
+// names are shown directly as each violation's category.
 //
 // "Lint" is a tab of its own: crates/lint, our own checks that KiCad does
 // not have (placement quality, net-class track width). In-process and
@@ -25,6 +28,7 @@
 // out rather than wired to a no-op.
 import { useEffect, useMemo, useState } from "react";
 import type { DrcViolation } from "../api/types";
+import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
 
@@ -56,14 +60,15 @@ export function DrcDialog() {
   const unconnected = state.drc?.unconnected_items ?? [];
   const lint = state.lint?.pcb.violations ?? [];
   const running = state.drcRunning;
-  const stale = state.drc !== null && !running && state.drcVersion !== state.version;
+  // Out of date: the board's revision is no longer the one the report was computed on. A run in flight says "running" instead.
+  const stale = state.drc !== null && !running && isStale(state.drcVersion, state.version);
 
   // Opening the dialog on a board kicad-cli has not judged yet runs it (the
   // running state below shows meanwhile); a board it already judged keeps its
   // report until "Run DRC". `version === null` re-evaluates this once the
   // first /api/version answer is in.
   useEffect(() => {
-    if (open && state.version !== null && !state.drcRunning && (state.drc === null || state.drcVersion !== state.version)) void api.runDrc();
+    if (open && state.version !== null && !state.drcRunning && (state.drc === null || isStale(state.drcVersion, state.version))) void api.runDrc();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, state.version === null]);
 
@@ -127,13 +132,17 @@ export function DrcDialog() {
               {running ? "Running…" : "Run DRC"}
             </button>
             {state.drc?.engine && <span style={{ color: "var(--chrome-text-dim)" }}>{state.drc.engine}</span>}
-            {stale && <span style={{ color: "var(--chrome-warn)" }}>The board changed since this run -- Run DRC again to refresh.</span>}
+            {stale && (
+              <span className="stale-notice" role="status" style={{ color: "var(--chrome-warn)" }}>
+                {STALE_NOTICE}
+              </span>
+            )}
             {state.drcError && <span style={{ color: "var(--chrome-danger)" }}>{state.drcError}</span>}
           </div>
           {running && (
             <div className="run-banner" role="status">
               <span className="bar" />
-              <span>kicad-cli is checking the board (a few seconds). Edits wait until it is done.</span>
+              <span>kicad-cli is checking the board (a few seconds). The board stays editable: close this window and carry on, and the result is marked out of date if the design changes.</span>
             </div>
           )}
           <div style={{ display: "flex", gap: 18, marginBottom: 10 }}>
@@ -164,7 +173,7 @@ export function DrcDialog() {
             ))}
           </div>
 
-          <div style={{ opacity: running ? 0.5 : 1 }}>
+          <div style={{ opacity: running ? 0.5 : stale ? 0.6 : 1 }}>
             {tab === "unconnected" &&
               (!state.drc ? (
                 <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to list unconnected items."}</div>

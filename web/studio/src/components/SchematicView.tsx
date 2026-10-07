@@ -48,6 +48,7 @@ import type { MenuNode } from "../kicad/types";
 import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
 import { sheetSize } from "../kicad-port/schSheet";
+import { isStale } from "../kicad-port/checkRevision";
 import type { Cmd } from "../api/types";
 import "../styles/canvas.css";
 
@@ -267,7 +268,7 @@ export function SchematicView() {
       fileName: `${state.board?.name || "schematic"}.kicad_sch`,
       sheetPath: "/",
     });
-    paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected });
+    paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected });
     if (state.drawState?.kind === "wire") {
       // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the
       // rubber band from the last click to the cursor is two segments (an
@@ -326,7 +327,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool]);
+  }, [sch, displaySch, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 

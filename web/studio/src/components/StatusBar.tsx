@@ -11,6 +11,7 @@
 import { TOOL_MESSAGES, useStudioDispatch, useStudioState } from "../state/store";
 import type { LengthUnit } from "../state/units";
 import { formatLength, formatXY, toPolar } from "../state/units";
+import { isStale, statusNotes } from "../kicad-port/checkRevision";
 
 export function StatusBar() {
   const state = useStudioState();
@@ -44,6 +45,14 @@ export function StatusBar() {
   // PARITY-sch.md), this is the one piece of "what will clicking do"
   // feedback they get.
   const showToolMsg = state.tab === "pcb" || state.tab === "schematic";
+  // kicad-cli's checks run in the background (the board stays editable): say so, and say when their markers are out of date.
+  const checkNotes = statusNotes({
+    tab: state.tab,
+    drcRunning: state.drcRunning,
+    ercRunning: state.ercRunning,
+    drcStale: state.drc !== null && isStale(state.drcVersion, state.version),
+    ercStale: state.erc !== null && isStale(state.ercVersion, state.version),
+  });
 
   return (
     <div className="status-bar">
@@ -74,6 +83,11 @@ export function StatusBar() {
       </select>
       {showToolMsg && <span className="field">{TOOL_MESSAGES[state.activeTool]}</span>}
       {onPcb && state.activeLayer && <span className="field">layer {state.activeLayer}</span>}
+      {checkNotes.map((note) => (
+        <span key={note} className="field" role="status" style={{ color: "var(--chrome-warn)" }}>
+          {note}
+        </span>
+      ))}
       <span className="spacer" />
       <label className="toggle" title="Refuse a move/edit that adds gate failures (not a KiCad feature)">
         <input type="checkbox" checked={state.strict} onChange={(e) => dispatch({ type: "SET_STRICT", strict: e.target.checked })} />

@@ -470,6 +470,8 @@ export interface LibraryFootprint extends FootprintPropertiesFields {
 /** `GET /api/footprint_library`'s one field: every footprint name available to open (already-opened library entries plus intent/real-library-resolved ones), sorted. */
 export interface FootprintLibraryNames {
   names: string[];
+  /** The names that are entries of the project library itself (editable in place); the others come from the intent, a `.kicad_mod` or the builtin table. Absent from an older backend. */
+  project?: string[];
 }
 
 export interface Check {
@@ -847,6 +849,12 @@ export type Cmd =
   /** `eeschema.SymbolLibraryControl.newSymbol`: a new, empty symbol in the project library (refused when the lib_id is taken). */
   | { op: "new_symbol"; lib_id: string }
   | { op: "delete_library_footprint"; name: string }
+  /** `FOOTPRINT_EDITOR_CONTROL` Duplicate / Paste / Import / Save As: store a whole footprint under `footprint.name` (refused when taken unless `overwrite`). */
+  | { op: "put_library_footprint"; footprint: LibraryFootprint; overwrite?: boolean }
+  /** `FOOTPRINT_EDITOR_CONTROL::RenameFootprint`. */
+  | { op: "rename_library_footprint"; name: string; new_name: string; overwrite?: boolean }
+  /** `FOOTPRINT_EDITOR_CONTROL::RepairFootprint`: repeated item ids get fresh ones. */
+  | { op: "repair_footprint"; name: string }
   | ({ op: "edit_footprint_properties"; name: string } & FootprintPropertiesFields)
   | { op: "set_footprint_anchor"; name: string; at: PointXY }
   | { op: "update_footprint_on_board"; name: string }
@@ -857,6 +865,8 @@ export type Cmd =
   | { op: "edit_pad"; footprint: string; id: string; pad: LibraryPad }
   | { op: "push_pad_properties"; footprint: string; source_pad_id: string; filter_shape: boolean; filter_orientation: boolean; filter_layers: boolean; filter_type: boolean }
   | { op: "renumber_pads"; footprint: string; start: number; prefix: string; step: number }
+  /** `PAD_TOOL::EnumeratePads`' commit: `[pad id, new number]` pairs, applied together. */
+  | { op: "set_pad_numbers"; footprint: string; numbers: [string, string][] }
   | { op: "add_footprint_graphic"; footprint: string; shape: CmdShape }
   | { op: "delete_footprint_graphic"; footprint: string; id: string }
   | { op: "move_footprint_graphic"; footprint: string; id: string; dx: Um; dy: Um }
@@ -873,13 +883,20 @@ export type Cmd =
   // `postUndo`/`postRedo` `domain` param) -- its own undo/redo scope.
   | { op: "open_symbol_for_edit"; lib_id: string }
   | { op: "delete_library_symbol"; lib_id: string }
+  /** `SYMBOL_EDIT_FRAME` Duplicate / Paste / Import / Save Copy As: store a whole symbol under `symbol.lib_id` (refused when taken unless `overwrite`). */
+  | { op: "put_library_symbol"; symbol: LibrarySymbol; overwrite?: boolean }
+  /** `SYMBOL_EDITOR_CONTROL::RenameSymbol`. */
+  | { op: "rename_library_symbol"; lib_id: string; new_lib_id: string; overwrite?: boolean }
+  /** `SYMBOL_EDITOR_DRAWING_TOOLS::PlaceAnchor`: `at` (mm, symbol frame, Y up) becomes the new origin. */
+  | { op: "set_symbol_anchor"; lib_id: string; at: { x: Mm; y: Mm } }
   | ({ op: "edit_symbol_properties"; lib_id: string } & SymbolPropertiesFields)
   | { op: "update_symbol_on_board"; lib_id: string }
   | { op: "add_symbol_pin"; lib_id: string; pin: LibrarySymbolPin }
   | { op: "move_symbol_pin"; lib_id: string; id: string; x: Mm; y: Mm }
   | { op: "delete_symbol_pin"; lib_id: string; id: string }
   | { op: "edit_symbol_pin"; lib_id: string; id: string; pin: LibrarySymbolPin }
-  | { op: "push_pin_property"; lib_id: string; source_pin_id: string; field: PushPinField }
+  /** `body_style` is the editor's shown body style: a length push reaches pins shared by every style (0) or of that one. */
+  | { op: "push_pin_property"; lib_id: string; source_pin_id: string; field: PushPinField; body_style?: number | null }
   | { op: "add_symbol_graphic"; lib_id: string; graphic: LibrarySymbolGraphic }
   | { op: "delete_symbol_graphic"; lib_id: string; id: string }
   | { op: "move_symbol_graphic"; lib_id: string; id: string; dx_mm: Mm; dy_mm: Mm }
@@ -1553,6 +1570,8 @@ export interface LibrarySymbol extends SymbolPropertiesFields {
 /** `GET /api/symbol_editor/names`'s one field: every `lib_id` available to open (already-opened library entries, every lib_id the project's intent already resolved, and the small builtin catalog), sorted. */
 export interface SymbolEditorNames {
   names: string[];
+  /** The `lib_id`s that are entries of the project library itself (editable in place). Absent from an older backend. */
+  project?: string[];
 }
 
 /** `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items, folded into one Cmd with a field selector -- see `Cmd`'s own `push_pin_property` doc. */
@@ -1610,6 +1629,8 @@ export interface DrcReport {
   unconnected_items?: DrcViolation[];
   /** Whether kicad-cli refilled zones itself (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills, so it judges the fills the exported board already carries (the ones the studio shows). */
   zones_refilled_by_kicad?: boolean;
+  /** The design revision this run started from: the stamp GET /api/version served at that moment. The report is out of date once the board's revision is another one (kicad-port/checkRevision.ts). Absent from a server that does not stamp. */
+  revision?: string;
 }
 
 // ---------------------------------------------------------------- ERC
@@ -1657,6 +1678,8 @@ export interface ErcReport {
   counts: Record<string, number>;
   /** "kicad-cli <version>". */
   engine?: string;
+  /** The design revision this run started from -- see `DrcReport.revision`. */
+  revision?: string;
 }
 
 // ---------------------------------------------------------------- Lint
@@ -1706,6 +1729,8 @@ export interface BoardStatsDrill {
 export interface BoardStatsReply {
   ok: boolean;
   message?: string;
+  /** The design revision the statistics were computed on (the /api/version stamp), like every kicad-cli reply. */
+  revision?: string;
   board?: {
     has_outline: boolean;
     width_um: number;

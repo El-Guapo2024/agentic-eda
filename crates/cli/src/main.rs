@@ -19,6 +19,7 @@
 mod board;
 mod cleanup_api;
 mod fab_api;
+mod library_api;
 mod sch_api;
 mod fab_cmd;
 mod import_kicad;
@@ -27,6 +28,7 @@ mod sch_output_api;
 mod studio;
 mod view_api;
 mod kicad_engine;
+mod kicad_lane;
 mod tune_api;
 
 use eda::prelude::*;

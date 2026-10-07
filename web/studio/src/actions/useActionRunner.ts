@@ -60,6 +60,7 @@ import { nextReference } from "../kicad-port/nextReference";
 import { refDesPrefix } from "../kicad-port/packFootprints";
 import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
+import { registerLibraryEditorActions } from "./libraryEditorActions";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { allItems, hitItems } from "../components/schematic/schItems";
@@ -2174,8 +2175,12 @@ export function useActionRunner() {
       });
     }
 
-    // The schematic edit and drawing tools (Lock, Change To, Break, shapes, sheet pins, ...) -- actions/schEditActions.ts.
+    // The schematic edit and drawing tools (Lock, Change To, Break, shapes, sheet pins, ...) -- actions/schEditActions.ts. Registered before the library editors'
+    // below: both chain on a name they share (drawRectangle, drawCircle, drawArc) so each editor keeps its own tab's handler, in either order.
     registerSchEditActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
+
+    // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
+    registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch]);

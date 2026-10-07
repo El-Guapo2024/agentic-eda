@@ -71,6 +71,8 @@ export interface PaintOptions {
   sketchVias: boolean;
   /** GET /api/drc's violations (kicad-cli's report, see DrcDialog.tsx) -- null until DRC has run at least once this session (nothing drawn until then); kept showing after the dialog closes, like real KiCad's markers persisting until the next DRC run. */
   drcViolations: DrcViolation[] | null;
+  /** The board has moved on since `drcViolations` were computed (kicad-port/checkRevision.ts): the markers are still drawn, dimmed and dashed, until the next DRC run. */
+  drcStale?: boolean;
   /** GET /api/lint's PCB findings (crates/lint: our own checks, the ones KiCad does not have) -- only while the DRC dialog is open, since they follow the board live there and nowhere else. Drawn as blue diamonds so they never read as KiCad's circles. */
   lintViolations?: DrcViolation[] | null;
   /** Index into `lintViolations` the dialog's Lint tab has clicked. */
@@ -845,7 +847,7 @@ const DRC_MARKER_RADIUS_UM = 300;
  * so a plain circle is the honest simplification here, not a guess at
  * the real shape.
  */
-function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, violations: DrcViolation[], selected: number | null) {
+function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, violations: DrcViolation[], selected: number | null, stale = false) {
   const hair = hairlineUm(view, 1.5);
   violations.forEach((v, i) => {
     const item = v.items[0];
@@ -858,12 +860,15 @@ function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, viol
     ctx.fillStyle = color;
     ctx.strokeStyle = color;
     ctx.lineWidth = Math.max(100, hair);
+    // Out of date: the same marker, dimmed and dashed -- where the problem was, not necessarily where it is now.
+    if (stale) ctx.setLineDash([r * 0.35, r * 0.25]);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.globalAlpha = 0.35;
+    ctx.globalAlpha = stale ? 0.1 : 0.35;
     ctx.fill();
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = stale ? 0.55 : 1;
     ctx.stroke();
+    ctx.setLineDash([]);
     drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
     ctx.restore();
   });
@@ -947,7 +952,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   if (opts.activeTool === "select") drawSelectedGroups(ctx, view, board, opts);
   // DRC markers last of all -- an overlay above every board layer and
   // the in-progress tool preview, matching real KiCad.
-  if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected);
+  if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected, opts.drcStale);
   if (opts.lintViolations) drawLintMarkers(ctx, view, opts.lintViolations, opts.lintSelected ?? null);
 }
 
