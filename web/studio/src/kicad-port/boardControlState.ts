@@ -12,7 +12,7 @@ export interface BoardControlState {
   sketchGraphics: boolean;
   /** `m_DisplayTextFill` off (`pcbnew.Control.textOutlines`, "Sketch Text Items"): text drawn as outlines. */
   sketchText: boolean;
-  /** `m_DisplayPadNum` (`pcbnew.Control.showPadNumbers`). */
+  /** `m_ViewersDisplay.m_DisplayPadNumbers` (`pcbnew.Control.showPadNumbers`; Preferences > Display Options "Show pad numbers"): on in KiCad's own defaults. */
   showPadNumbers: boolean;
   /** `m_RatsnestMode` (`pcbnew.Control.ratsnestModeCycle`): lines for every copper layer, or only the ones on show. */
   ratsnestMode: RatsnestMode;
@@ -43,7 +43,7 @@ export interface BoardControlState {
 export const DEFAULT_BOARD_CONTROL: BoardControlState = {
   sketchGraphics: false,
   sketchText: false,
-  showPadNumbers: false,
+  showPadNumbers: true,
   ratsnestMode: "all",
   hiddenRatsnestNets: [],
   netHighlightMore: [],

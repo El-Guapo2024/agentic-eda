@@ -45,7 +45,7 @@ import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
-import { connectedTrackWidth, displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
+import { connectedTrackWidth, displayedRatsnest, flipLocalX, flipPan, highlightedNets, netsOfSelection, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
 import { padAt } from "../../kicad-port/boardControlPick";
 import "../../styles/canvas.css";
 
@@ -1106,6 +1106,16 @@ export function Canvas() {
           });
         }
       }
+    }
+    // board_inspection_tool.cpp NET_CONTEXT_MENU ("Net Inspection Tools"), which the selection tool's menu carries when the selection is
+    // connected items -- flat here, and offered when the selection has a net to act on (a selected footprint stands for its pads).
+    if (refs.length > 0 && netsOfSelection(refs, board).length > 0) {
+      entries.push(
+        { label: "Show Net in Ratsnest", onSelect: () => run("pcbnew.EditorControl.showNet") },
+        { label: "Hide Net in Ratsnest", onSelect: () => run("pcbnew.EditorControl.hideNet") },
+        { label: "Highlight Net of Selection", onSelect: () => run("pcbnew.EditorControl.highlightNetSelection") },
+        { label: "Clear Net Highlighting (~)", onSelect: () => run("pcbnew.EditorControl.clearHighlight") }
+      );
     }
     // board_editor_control.cpp ZONE_CONTEXT_MENU, which the selection tool's menu carries when only zones are selected
     // (`SELECTION_CONDITIONS::OnlyTypes( { PCB_ZONE_T } )`) -- flat here, with its "Zone Priority" submenu's four entries after it.
