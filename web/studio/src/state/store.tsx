@@ -21,6 +21,7 @@ import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParity
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
+import { pasteMoveOrigin } from "../kicad-port/pcbReference";
 import { repeatSource } from "../kicad-port/schRepeat";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
@@ -1400,7 +1401,7 @@ export interface StudioApi {
   ungroupSelection: () => Promise<void>;
   /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
   /** `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback. */
-  copySelection: (refs?: readonly string[]) => void;
+  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => void;
   /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
   pasteClipboard: () => Promise<void>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
@@ -1980,7 +1981,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = allItemIds(board);
       const ok = await runCmd({ op: "duplicate", ids });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // The board as the backend has it now: `stateRef` only catches up on the next render, so the copies would not be in it yet
+      // and the Move tool would never pick them up.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
       if (newIds.length === 0) return;
@@ -2034,11 +2037,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
       if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
     },
-    copySelection: (refs) => {
+    copySelection: (refs, reference) => {
       const board = stateRef.current.board;
       if (!board) return;
       const clipboard = collectClipboardContents(board, refs ? new Set(refs) : stateRef.current.selection);
-      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard });
+      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard: reference ? { ...clipboard, reference } : clipboard });
     },
     pasteClipboard: async () => {
       const clip = stateRef.current.clipboard;
@@ -2047,13 +2050,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = allItemIds(board);
       const ok = await runCmd({ op: "paste_items", tracks: clip.tracks, vias: clip.vias, zones: clip.zones, shapes: clip.shapes, texts: clip.texts });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // As in `duplicateSelection`: read the board from the backend, `stateRef` is still the one from before the paste.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
       if (newIds.length === 0) return;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
+      // A copy made with a reference point is carried by that point (see kicad-port/pcbReference.ts).
+      dispatch({ type: "SET_MOVE_ORIGIN", at: pasteMoveOrigin(clip.reference, stateRef.current.cursorUm) });
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });

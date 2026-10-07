@@ -66,6 +66,7 @@ import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schem
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerPcbEditSweep } from "./pcbEditSweep";
 import { layerPairsOf } from "./pcbRouterSweep";
+import { picker } from "./pcbPicker";
 import { otherLayerOfPair } from "../kicad-port/layerPairs";
 
 function canvasRect(): DOMRect | null {
@@ -749,6 +750,8 @@ export function useActionRunner() {
     // is running does Escape clear the selection, and only once that's
     // also empty does it clear the net highlight).
     m.set("common.Interactive.cancel", () => {
+      // PICKER_TOOL::Main: Escape ends a running pick session (reference point, offset tool, a dialog's "Select ...") and nothing else.
+      if (picker.cancel()) return;
       // Tell the backend's router session to end too (fire-and-forget --
       // see cancelInteractiveRoute's own doc comment) before the ordinary
       // ESCAPE reducer case clears `drawState` locally; otherwise the

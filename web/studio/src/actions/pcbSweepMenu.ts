@@ -84,6 +84,13 @@ export function pcbSweepMenuEntries(state: StudioState, api: StudioApi, refs: re
   add("pcbnew.PointEditor.arcKeepEndpoint", arc);
   add("pcbnew.PointEditor.arcKeepRadius", arc);
 
+  // Position submenu (makePositioningToolsMenu) and the Copy group: the entries that start from a picked point, shown
+  // for a selection that is not being moved (`notMovingCondition`).
+  const notMoving = state.activeTool !== "move" && state.activeTool !== "drag" && !state.movePreview;
+  add("pcbnew.InteractiveMove.moveWithReference", notMoving);
+  add("pcbnew.PositionRelative.interactiveOffsetTool", notMoving);
+  add("pcbnew.InteractiveMove.copyWithReference", notMoving);
+
   // "Create from Selection" submenu (CONVERT_TOOL::Init)
   const convert = convertAvailability(board, refs);
   add("pcbnew.Convert.convertToPoly", convert.poly);

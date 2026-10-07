@@ -6,11 +6,14 @@ import { useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 
-/** Escape closes the dialog (`closeSweepDialog` unless a dialog handles its own stack). */
+/** Escape closes the dialog (`closeSweepDialog` unless a dialog handles its own stack). The key is the dialog's: it must not go on to the canvas' own Escape (cancel the tool, then clear the selection). */
 export function useEscape(onClose: () => void = closeSweepDialog) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      onClose();
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);

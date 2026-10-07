@@ -22,6 +22,7 @@ import type { ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
 import { applyCommands } from "../../actions/pcbSweepKit";
+import { picker } from "../../actions/pcbPicker";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
 import { paintBoard } from "./painter";
 import { layerColor } from "./layers";
@@ -514,6 +515,21 @@ export function Canvas() {
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
     if (state.pcbx.menuCursorUm) dispatch({ type: "PCBX", patch: { menuCursorUm: null } });
+
+    // PICKER_TOOL::Main: while a pick session runs (actions/pcbPicker.ts) a left click answers it -- snapped like
+    // PCB_GRID_HELPER::BestSnapAnchor, or the item under it for an item session -- and does nothing else.
+    if (e.button === 0 && picker.session()) {
+      const [px, py] = snapRef(wx, wy, e);
+      picker.click({
+        point: { x: px, y: py },
+        item: () => {
+          if (!board) return null;
+          const toleranceUm = Math.max(150, 6 / state.view.scale);
+          return pickSelectionCandidates(board, wx, wy, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)[0]?.id ?? null;
+        },
+      });
+      return;
+    }
 
     // Route/via/zone/drawing/text tools: a click either starts, extends,
     // or (for via/text) completes one placement -- entirely separate
@@ -1182,6 +1198,8 @@ export function Canvas() {
    * same dispatch useActionRunner.ts's "E" hotkey uses (properties.ts).
    */
   const onDoubleClick = (e: React.MouseEvent) => {
+    // PICKER_TOOL::Main: "Not currently used, but we don't want to pass them either".
+    if (picker.session()) return;
     if (state.drawState) {
       finishDraw();
       return;
