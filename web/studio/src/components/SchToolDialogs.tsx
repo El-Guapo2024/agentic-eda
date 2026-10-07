@@ -5,6 +5,7 @@ import type { DirectiveShape, SchFill, SchHAlign, SchLineStyle, SchToolDialog, S
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { ChangeSymbolsDialog } from "./SchChangeSymbolsDialog";
+import { GlobalEditDialog } from "./SchGlobalEditDialog";
 import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { commitGraphic } from "./schematic/schShapeTools";
 
@@ -27,6 +28,8 @@ export function SchToolDialogs() {
       return <SyncPinsDialog key={`sp:${dialog.sheetIds.join(",")}`} dialog={dialog} />;
     case "change_symbols":
       return <ChangeSymbolsDialog key={`cs:${dialog.mode}:${dialog.selected.join(",")}`} dialog={dialog} />;
+    case "edit_text_graphics":
+      return <GlobalEditDialog key={`ge:${dialog.selected.join(",")}`} dialog={dialog} />;
   }
 }
 

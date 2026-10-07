@@ -3,7 +3,7 @@
 // useActionRunner's handler map. Every handler cites the KiCad function it ports (eeschema/tools at 8303b2ad);
 // the logic with no React in it lives in `kicad-port/sch*.ts` with unit tests, the verbs in crates/ops/src/sch_edit.rs.
 import type { Dispatch } from "react";
-import type { Schematic } from "../api/types";
+import type { Cmd, Schematic } from "../api/types";
 import { GRID } from "../components/schematic/layout";
 import { inferSpin } from "../components/schematic/labelShape";
 import { allItems } from "../components/schematic/schItems";
@@ -11,6 +11,7 @@ import { measureStrokeText } from "../components/text/strokeFont";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
+import { schematicActions, type ActionMap } from "./schActionRegistry";
 import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { registerSchSymbolActions } from "./schSymbolActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
@@ -18,6 +19,9 @@ import { deleteLastPoint, finishShapeDraw } from "../components/schematic/schSha
 import type { BreakMode } from "../kicad-port/schBreak";
 import { nextUnitToPlace, unitCountOf } from "../kicad-port/schUnits";
 import { addCorner, canAddCorner, canRemoveCorner, removeCorner } from "../kicad-port/schPolyCorners";
+import { swapUnitLabels } from "../kicad-port/schSwapLabels";
+import { planConvertStackedPins, planExplodeStackedPin } from "../kicad-port/stackedPins";
+import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import { polygonOutline } from "../components/schematic/schSelectionSummary";
 import type { Action, StudioApi, StudioState, ToolId } from "../state/store";
 import type { SymbolEditorApi, SymAction } from "../state/symbolEditorStore";
@@ -36,8 +40,9 @@ export interface SchEditContext {
   cursorSnapped: () => [number, number] | null;
 }
 
-export function registerSchEditActions(m: Map<string, () => void>, ctx: SchEditContext): void {
+export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext): void {
   const { state, api, requestSelection } = ctx;
+  const m = schematicActions(registry, state.tab);
   const schematicOnly = (fn: () => void) => () => {
     if (state.tab === "schematic") fn();
   };
@@ -129,6 +134,38 @@ export function registerSchEditActions(m: Map<string, () => void>, ctx: SchEditC
     }
   }
 
+  // Swap Unit Labels -- SCH_EDIT_TOOL::SwapUnitLabels: the units of the selected multi-unit reference trade the net labels on their pins (kicad-port/schSwapLabels.ts).
+  // Offered, like the menu entry (`GetSameSymbolMultiUnitSelection`), for one reference with several units placed.
+  const unitRef = sch && state.selection.size === 1 ? [...state.selection][0]! : null;
+  if (sch && unitRef && sch.symbols.filter((s) => s.id === unitRef).length > 1) {
+    m.set(
+      "eeschema.InteractiveEdit.swapUnitLabels",
+      schematicOnly(() => {
+        const info = (message: string, kind: "info" | "error" = "info") => ctx.dispatch({ type: "TOAST", message, kind });
+        const pinTips = (s: (typeof sch.symbols)[number]): Array<[number, number]> => resolveLibSymbol(s, sch.lib_symbols)?.pins.map((p) => [p.tip[0], p.tip[1]] as [number, number]) ?? [];
+        const placed = sch.symbols.filter((s) => s.id === unitRef);
+        const result = swapUnitLabels(
+          {
+            wires: sch.wires.map((w) => ({ id: w.id, pts: w.pts, bus: w.bus })),
+            labels: sch.labels.map((l) => ({ id: l.id, at: l.at, net: l.net })),
+            pinPoints: [...sch.symbols.flatMap(pinTips), ...sch.power_symbols.map((p) => [p.at[0], p.at[1]] as [number, number])],
+          },
+          placed.map((s) => ({ unit: s.unit, tips: pinTips(s) }))
+        );
+        if (!result.ok) return info(result.message, "error");
+        // A label's text cannot be edited in place: each changed label is replaced by one of the new text at the same spot, one undo step.
+        const cmds: Cmd[] = [];
+        for (const e of result.edits) {
+          const l = sch.labels.find((x) => x.id === e.id);
+          if (!l) continue;
+          cmds.push({ op: "delete_label", id: l.id });
+          cmds.push({ op: "add_label", net: e.net, at: { x: l.at[0], y: l.at[1] }, kind: l.scope === "local" ? { scope: "local" } : { scope: l.scope, shape: l.shape ?? "passive" } });
+        }
+        if (cmds.length > 0) void api.cmdBatch(cmds);
+      })
+    );
+  }
+
   // Place Next Symbol Unit -- SCH_DRAWING_TOOLS::PlaceNextSymbolUnit: one selected multi-unit symbol; the lowest unit of it not yet on the sheet is armed for placement under the
   // same reference, value and footprint (kicad-port/schUnits.ts); anything else says why not (the info-bar messages).
   m.set(
@@ -176,8 +213,23 @@ export function registerSchEditActions(m: Map<string, () => void>, ctx: SchEditC
   }
   if (draw?.poly) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
 
-  registerSchSheetPinActions(m, ctx);
-  registerSchSymbolActions(m, ctx);
+  registerSchSheetPinActions(registry, ctx);
+  registerSchSymbolActions(registry, ctx);
+
+  // Convert Stacked Pins / Explode Stacked Pin -- SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins / ExplodeStackedPin (kicad-port/stackedPins.ts). They act on the open symbol's
+  // selected pins, so they exist on the Symbol Editor tab only; the whole change is one undo step.
+  if (state.tab === "symbol") {
+    const stack = (plan: typeof planConvertStackedPins) => () => {
+      const st = ctx.symApi.getState();
+      if (!st.symbol || !st.libId) return;
+      const result = plan(st.libId, st.symbol.pins, [...st.selection]);
+      if (!result.ok) return ctx.symDispatch({ type: "TOAST", message: result.message, kind: "error" });
+      ctx.symDispatch({ type: "SET_SELECTION", refs: [] }); // "Clear selection before modifying pins, like the Delete command does"
+      void ctx.symApi.cmd({ op: "batch", cmds: result.cmds });
+    };
+    registry.set("eeschema.InteractiveEdit.convertStackedPins", stack(planConvertStackedPins));
+    registry.set("eeschema.InteractiveEdit.explodeStackedPin", stack(planExplodeStackedPin));
+  }
 }
 
 /** The labels, texts, text boxes and directive labels among `ids`, as the conversion's sources (a label's spin is read off its wire, as the painter does). */

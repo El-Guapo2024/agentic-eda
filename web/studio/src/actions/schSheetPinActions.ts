@@ -6,12 +6,14 @@
 import type { Cmd, Sheet } from "../api/types";
 import { loadHierLabels, pinExtentOf, sheetAt } from "../components/schematic/schPinTool";
 import { autoplacePins, hasUndefinedPins, pinsToCleanUp, unplacedLabels } from "../kicad-port/schSheetPins";
+import { schematicActions, type ActionMap } from "./schActionRegistry";
 import type { SchEditContext } from "./schEditActions";
 
 const NO_NEW_LABELS = "No new hierarchical labels found.";
 
-export function registerSchSheetPinActions(m: Map<string, () => void>, ctx: SchEditContext): void {
+export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditContext): void {
   const { state, api, requestSelection, dispatch } = ctx;
+  const m = schematicActions(registry, state.tab);
   const sch = state.schematic;
   const info = (message: string) => dispatch({ type: "TOAST", message, kind: "info" });
 

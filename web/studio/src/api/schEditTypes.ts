@@ -80,7 +80,9 @@ export type SchToolDialog =
   /** The Sync Sheet Pins dialog (`DIALOG_SYNC_SHEET_PINS`) for these sheets, `first` the one whose page opens. */
   | { kind: "sync_pins"; sheetIds: string[]; first?: string }
   /** Change Symbols / Update Symbols (`DIALOG_CHANGE_SYMBOLS`), `selected` the references selected when it opened. */
-  | { kind: "change_symbols"; mode: "change" | "update"; selected: string[] };
+  | { kind: "change_symbols"; mode: "change" | "update"; selected: string[] }
+  /** Edit Text & Graphics Properties (`DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS`), `selected` the ids selected when it opened. */
+  | { kind: "edit_text_graphics"; selected: string[] };
 
 export type SchEditCmd =
   /** Lock / Unlock / Toggle Lock (`SCH_EDIT_TOOL::modifyLockSelected`). */
