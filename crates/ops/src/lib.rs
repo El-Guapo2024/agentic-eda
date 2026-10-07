@@ -46,6 +46,7 @@ use eda_model::ir::{
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+pub use pcb_edit::BooleanOp;
 
 pub mod library_editors;
 pub mod sch_control;
@@ -598,6 +599,12 @@ pub enum Cmd {
     /// second's pose, ..., the last on the first's. Two parts is a plain
     /// pose swap. One Cmd so the whole chain is one undo step.
     SwapChain { parts: Vec<String> },
+    /// `EDIT_TOOL::BooleanPolygons` (Merge / Subtract / Intersect Polygons,
+    /// `item_modification_routine.cpp`): `ids` are rectangles, circles and
+    /// polygons in the order the routine takes them (the first is the base
+    /// and the donor of layer/width/fill). The consumed shapes are deleted
+    /// and the result added as polygons -- see [`pcb_edit::boolean_shapes`].
+    BooleanShapes { operation: BooleanOp, ids: Vec<String> },
     /// `ZONE_CREATE_HELPER::performZoneCutout` (`Shift+C`, "Add a Zone
     /// Cutout"): subtract the closed polygon `cutout` from zone `id`'s
     /// outline (`SHAPE_POLY_SET::BooleanSubtract`) and replace the zone by
@@ -869,6 +876,9 @@ pub enum Cmd {
     /// same library symbol, their orientations. A selection of more than two is a Batch of these in selection
     /// order, which `Swap`'s own loop (`sorted[i]` with `sorted[i + 1]`) turns into a rotation of the positions.
     SwapSchItems { a: String, b: String },
+    /// The schematic editor's other edit and drawing tools (lock, break, convert text type, shapes, sheet pins,
+    /// ...), one verb family -- see [`sch_edit::SchCmd`]. On the wire: `{"op": "sch_edit", "verb": "...", ...}`.
+    SchEdit(sch_edit::SchCmd),
 
     /// `dialog_erc.cpp`'s own "Exclude this violation" (right-click a
     /// finding, or the dialog's own Exclude button): accepts one ERC
@@ -1335,7 +1345,7 @@ fn empty_schematic_section() -> SchematicSection {
         no_connects: vec![],
         bus_entries: vec![],
         junctions: vec![],
-        lines: vec![],
+        lines: vec![], extras: Default::default(),
         erc_exclusions: vec![],
         erc_pin_map: None,
         user_fields: Default::default(),
@@ -1393,6 +1403,7 @@ impl Cmd {
             | Cmd::DeleteSchLine { .. }
             | Cmd::AddSheet { .. }
             | Cmd::SwapSchItems { .. }
+            | Cmd::SchEdit(_)
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
             | Cmd::AddLabel { .. }
@@ -1514,6 +1525,7 @@ impl Cmd {
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
+            Cmd::BooleanShapes { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::ZoneCutout { id, .. } => vec![id.as_str()],
 
             Cmd::MoveSymbol { id, .. }
@@ -1540,6 +1552,7 @@ impl Cmd {
             Cmd::AddSchLine { .. } => vec!["sch_line"],
             Cmd::AddSheet { name, .. } => vec![name.as_str()],
             Cmd::SwapSchItems { a, b } => vec![a, b],
+            Cmd::SchEdit(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
@@ -1880,6 +1893,7 @@ impl<'a> Board<'a> {
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
+            Cmd::BooleanShapes { operation, ids } => pcb_edit::boolean_shapes(self.drawings_mut(), *operation, ids),
             Cmd::ZoneCutout { id, cutout } => self.zone_cutout(id, cutout),
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
@@ -1986,6 +2000,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
+            Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
             Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
             Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
@@ -5071,8 +5086,11 @@ mod sch_control_tests;
 
 pub mod build;
 pub mod fields_table;
+pub mod convert;
+pub mod pcb_edit;
 pub mod search;
 pub mod repair;
 pub mod view;
 pub mod episode;
 pub mod flash;
+pub mod sch_edit;

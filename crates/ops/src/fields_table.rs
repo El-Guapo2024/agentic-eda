@@ -912,7 +912,7 @@ mod tests {
             user_fields: Default::default(),
             title_block: None,
             sheets: vec![],
-            instance_overrides: vec![], junctions: vec![], lines: vec![],
+            instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
             imported_from_kicad: false,
         }
     }

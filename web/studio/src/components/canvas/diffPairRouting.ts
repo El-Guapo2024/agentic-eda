@@ -13,8 +13,9 @@ import { dpStateFromPreview, type DpDrawState } from "../../kicad-port/dpTool";
  * recognized differential-pair suffix and a matching pad for the other
  * half already on the board (`dp_coupled_net_name`). Shows an error toast
  * and leaves `drawState` untouched otherwise. */
-export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>): Promise<void> {
-  const preview = await dpStart(x, y, layer);
+export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number }): Promise<void> {
+  // `dims`: the "Differential Pair Dimensions..." dialog's custom width and gap, when it was used.
+  const preview = await dpStart(x, y, layer, dims);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start from a differential-pair net (needs a +/-/P/N suffix and a matching pad already on the board).", kind: "error" });
     return;

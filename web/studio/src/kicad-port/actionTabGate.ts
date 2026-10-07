@@ -50,6 +50,9 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set([
   "eeschema.EditorControl.nextUnit",
   "eeschema.EditorControl.previousUnit",
   "eeschema.InspectionTool.checkSymbol",
+  // `SYMBOL_EDITOR_EDIT_TOOL`'s stacked-pin tools.
+  "eeschema.InteractiveEdit.convertStackedPins",
+  "eeschema.InteractiveEdit.explodeStackedPin",
 ]);
 
 /**

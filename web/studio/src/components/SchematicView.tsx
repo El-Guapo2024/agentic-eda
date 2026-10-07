@@ -36,8 +36,16 @@ import { isMac } from "../platform";
 import { computeDragAttachment } from "./schematic/wireAttachment";
 import { nextReference } from "../kicad-port/nextReference";
 import { wireTail } from "../kicad-port/schLineMode";
-import { collectBoxSelection } from "./schematic/boxSelection";
-import { hitJunction, hitSchLine, hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
+import { boxItems, hitItems } from "./schematic/schItems";
+import { SchContextMenu } from "./schematic/SchContextMenu";
+import { summarizeSelection } from "./schematic/schSelectionSummary";
+import { schContextMenu } from "../kicad-port/schContextMenu";
+import { schSelectable } from "../kicad-port/schSelectionFilter";
+import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } from "./schematic/schShapeTools";
+import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
+import { paintPinPreview, placePinClick } from "./schematic/schPinTool";
+import type { MenuNode } from "../kicad/types";
+import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
 import { sheetSize } from "../kicad-port/schSheet";
 import { isStale } from "../kicad-port/checkRevision";
@@ -177,7 +185,12 @@ export function SchematicView() {
   const pendingClickRef = useRef<string | null>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
+  /** The right-click menu (`SCH_SELECTION_TOOL`'s context menu): where it is and what it offers for the selection. */
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodes: MenuNode[] } | null>(null);
   const sch = state.schematic;
+  /** `SCH_SELECTION_TOOL::itemPassesFilter`: an item of a category the selection filter has off, or a locked one without its "Locked items", cannot be picked. */
+  const selectable = sch ? schSelectable(sch, state.schSelectionFilter) : () => true;
+  const pickable = (id: string | null): string | null => (id && selectable(id) ? id : null);
   const moveMode = state.activeTool === "move";
   const dragMode = state.activeTool === "drag";
   /** Which Cmd a committed move/drag preview becomes -- `M` and a plain click-drag move symbols with no wire attachment (`"symbol"`); `G` and a plain click-drag on a symbol both default to rubber-banding (`"symbol_drag"`, sch_selection_tool.cpp's own default for a plain drag -- see DragState's doc). */
@@ -214,13 +227,19 @@ export function SchematicView() {
   // shifts whichever wire endpoints state.dragAttach resolved for this
   // drag, for the live rubber-band -- shiftAttachedWires's own doc.
   const dragPreviewActive = sch != null && state.movePreview != null && (state.movePreview.kind === "symbol" || state.movePreview.kind === "symbol_drag");
+  // A Break / Slice in progress shows the cut lines as their pieces, the new end at the (grid-snapped) cursor (kicad-port/schBreak.ts).
+  const breaking = state.drawState?.kind === "sch_shape" ? state.drawState.brk : undefined;
+  const breakSnap = breaking && state.cursorUm ? alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false }) : null;
+  const breakCursor: [number, number] | null = breakSnap ? [breakSnap.x, breakSnap.y] : null;
   const displaySch: Schematic | null = dragPreviewActive
     ? {
         ...sch!,
         symbols: sch!.symbols.map((s) => (state.movePreview!.refs.includes(s.id) ? { ...s, at: [s.at[0] + state.movePreview!.dxUm, s.at[1] + state.movePreview!.dyUm] as [number, number] } : s)),
         wires: state.movePreview!.kind === "symbol_drag" ? shiftAttachedWires(sch!.wires, state.dragAttach, state.movePreview!.refs, state.movePreview!.dxUm, state.movePreview!.dyUm) : sch!.wires,
       }
-    : sch;
+    : sch && breaking && breakCursor
+      ? breakPreviewSheet(sch, breaking, breakCursor)
+      : sch;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -282,6 +301,12 @@ export function SchematicView() {
         ctx.stroke();
       }
     }
+    // The shape or rule area being drawn (kicad-port/schShapeEdit.ts, polygonGeom.ts), rubber-banded to the cursor.
+    if (state.drawState?.kind === "sch_shape" && state.cursorUm) {
+      paintShapePreview(ctx, state.schematicView, state.drawState, shapeSnap(state.cursorUm.x, state.cursorUm.y), state.schLineMode);
+      // The sheet pin the next click would drop.
+      if (state.drawState.pin) paintPinPreview(ctx, state.schematicView, sch, state.drawState.pin, shapeSnap(state.cursorUm.x, state.cursorUm.y));
+    }
     // `S`: the sheet being sized, from its first corner to the (grid-snapped) cursor.
     if (state.drawState?.kind === "sheet" && state.cursorUm) {
       const start = state.drawState.start;
@@ -322,6 +347,10 @@ export function SchematicView() {
     const p = alignToGrid({ x: xUm, y: yUm }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false });
     return [p.x, p.y];
   };
+
+  /** The point a shape tool takes for the cursor: the grid (`GRID_GRAPHICS`), or for a rule area also a pin it is near (`GRID_CONNECTABLE`). */
+  const shapeSnap = (xUm: number, yUm: number): [number, number] =>
+    (state.activeTool === "sch_rule_area" && sch ? nearestSnapPoint(pinSnapPoints(sch), xUm, yUm, 400 / state.schematicView.scale) : null) ?? snapToGrid(xUm, yUm);
 
   /**
    * Commit a finished click-to-add-point polyline: a wire or bus (`add_wire`), or -- with the Draw Lines tool -- a graphic line
@@ -397,6 +426,19 @@ export function SchematicView() {
           return;
         }
 
+        // Place Pins from Sheet: pick the sheet, then drop each pin on its border.
+        if (state.activeTool === "sch_sheet_pin") {
+          const placement = state.drawState?.kind === "sch_shape" && state.drawState.pin ? state.drawState.pin : { sheetId: null, queue: [] };
+          void placePinClick({ sch, placement, path: state.currentSheetPath, dispatch, api }, snapToGrid(wx, wy), 6 / state.schematicView.scale);
+          return;
+        }
+
+        // Break / Slice: the click that drops the new end of the cut wire.
+        if (state.activeTool === "sch_break" && state.drawState?.kind === "sch_shape" && state.drawState.brk) {
+          commitBreak(state.drawState.brk, snapToGrid(wx, wy), dispatch, api);
+          return;
+        }
+
         // `I` (Draw Lines) shares this exact click-to-add-point state machine with the wire and bus tools -- it differs only in
         // what it commits (a graphic notes-layer line) and in connecting to nothing: no pin snap, no auto-finish on a pin
         // (`GRID_GRAPHICS` instead of `GRID_WIRES` in `SCH_LINE_WIRE_BUS_TOOL::DrawSegments`).
@@ -423,6 +465,12 @@ export function SchematicView() {
           } else {
             dispatch({ type: "SET_DRAW_STATE", draw: next });
           }
+          return;
+        }
+
+        // Draw Rectangle / Circle / Arc / Bezier / Text Box / Rule Area and Place Directive Label (components/schematic/schShapeTools.ts).
+        if (isSchShapeTool(state.activeTool)) {
+          shapeToolClick({ tool: state.activeTool, draw: state.drawState, sch, lineMode: state.schLineMode, dispatch, api }, shapeSnap(wx, wy));
           return;
         }
 
@@ -497,11 +545,16 @@ export function SchematicView() {
         // "R"), matching what a real library's own default Value usually
         // is for a part this simple.
         if (state.activeTool === "sch_place_symbol" && state.armedSymbol) {
-          const { libId, referencePrefix, unit } = state.armedSymbol;
-          const id = nextReference(sch.symbols, referencePrefix || "U");
-          const value = libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId;
+          const { libId, referencePrefix, unit, ref } = state.armedSymbol;
+          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U");
+          const value = state.armedSymbol.value ?? (libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId);
           const [sx, sy] = snapToGrid(wx, wy);
-          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: "", unit });
+          api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: state.armedSymbol.footprint ?? "", unit });
+          // `PlaceNextSymbolUnit` hands the tool one symbol -- "place that and get out of the placement tool" (`placeOneOnly`).
+          if (ref) {
+            dispatch({ type: "SET_ARMED_SYMBOL", symbol: null });
+            dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+          }
           return;
         }
 
@@ -522,7 +575,7 @@ export function SchematicView() {
 
         const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
         const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
-        const symId = hitSymbol(sch, wx, wy);
+        const symId = pickable(hitSymbol(sch, wx, wy));
         if (symId) {
           if (hasModifier(modifiers)) {
             // Unchanged from before this pass: a modified click always
@@ -560,10 +613,11 @@ export function SchematicView() {
           return;
         }
         const thresholdUm = 400 / state.schematicView.scale;
-        // An explicit junction or a graphic line is selectable by a plain click (for Del) -- unlike a wire it has no net a plain click
-        // could highlight instead.
-        // Tight, screen-sized radii (the wire/net threshold above is a loose 400 px): a near miss must still reach the wire under it.
-        const placedItem = hitJunction(sch, wx, wy, Math.max(450, 8 / state.schematicView.scale)) ?? hitSchLine(sch, wx, wy, 6 / state.schematicView.scale);
+        // Every other placed item -- an explicit junction, a graphic line, a label, a text, a power symbol, a no-connect, a bus entry, a sheet
+        // or a drawn shape -- is selectable by a plain click (for Del, Lock, Change To...); unlike a wire it has no net a plain click
+        // could highlight instead. Tight, screen-sized tolerance (the wire/net threshold above is a loose 400 px): a near miss must still
+        // reach the wire under it.
+        const placedItem = hitItems(sch, wx, wy, 6 / state.schematicView.scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id;
         if (placedItem) {
           dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, placedItem, modifiers) });
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
@@ -636,6 +690,22 @@ export function SchematicView() {
           dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "symbol_drag", dxUm: dx, dyUm: dy, rotateQuarterTurns } : null });
         }
       }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (!sch) return;
+        // `SCH_SELECTION_TOOL`: a right-click on an item that is not selected selects it first, on empty space clears the selection; then the
+        // menu for whatever is selected (kicad-port/schContextMenu.ts).
+        const [wx, wy] = toWorld(e.clientX, e.clientY);
+        // The menu opens at the cursor, which is where the actions it offers (Break, Slice, ...) read their position from.
+        dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
+        const scale = state.schematicView.scale || 1;
+        const hit = pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
+        let ids = [...state.selection];
+        if (hit && !state.selection.has(hit)) ids = [hit];
+        else if (!hit && ids.length > 0) ids = [];
+        if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale)) });
+      }}
       onDoubleClick={(e) => {
         // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`).
         if (sch && state.activeTool === "select" && state.drawState == null) {
@@ -647,6 +717,12 @@ export function SchematicView() {
           }
         }
         const draw = state.drawState;
+        // `IsDblClick( BUT_LEFT )` in DrawShape / DrawRuleArea: finish the shape as it stands, at the point that was clicked.
+        if (draw?.kind === "sch_shape" && sch) {
+          const [wx, wy] = toWorld(e.clientX, e.clientY);
+          finishShapeDraw({ tool: state.activeTool, draw, sch, lineMode: state.schLineMode, dispatch, api }, shapeSnap(wx, wy));
+          return;
+        }
         if (draw?.kind !== "wire") return;
         commitDrawn(draw.pts);
         dispatch({ type: "SET_DRAW_STATE", draw: null });
@@ -678,7 +754,7 @@ export function SchematicView() {
             const [x1, y1] = toWorld(e.clientX, e.clientY);
             const [x0, y0] = drag.startWorld;
             const box: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
-            const hits = collectBoxSelection(sch, box, marquee.crossing);
+            const hits = boxItems(sch, box, marquee.crossing).filter((id) => pickable(id));
             if (hits.length > 0 || hasModifier(modifiers)) {
               dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, modifiers) });
             }
@@ -689,6 +765,7 @@ export function SchematicView() {
     >
       <canvas ref={canvasRef} />
       {empty && <div className="pcb-canvas-empty">{empty}</div>}
+      {contextMenu && <SchContextMenu x={contextMenu.x} y={contextMenu.y} nodes={contextMenu.nodes} onClose={() => setContextMenu(null)} />}
     </div>
   );
 }

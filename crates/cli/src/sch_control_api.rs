@@ -78,6 +78,7 @@ mod tests {
             junctions: vec![],
             lines: vec![],
             imported_from_kicad: false,
+            extras: Default::default(),
         }
     }
 

@@ -25,6 +25,7 @@
 
 use crate::board;
 use crate::cleanup_api;
+use crate::convert_api;
 use crate::fab_api;
 use crate::kicad_lane::Lane;
 use crate::route_api;
@@ -719,6 +720,7 @@ fn handle(
         ("POST", "/api/route/via") => respond(stream, "200 OK", "application/json", route_api::via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/cancel") => respond(stream, "200 OK", "application/json", route_api::cancel(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/mode") => respond(stream, "200 OK", "application/json", route_api::set_mode(route_session, &body).to_string().as_bytes()),
         // D (stage 5): drag an existing track segment/corner or via,
         // keeping its connections -- shares `route_session` with the
         // route endpoints above (see route_api::drag_start's doc comment).
@@ -730,6 +732,7 @@ fn handle(
         // pairs" section doc comment); `/api/route/cancel` above already
         // ends a dp session too.
         ("POST", "/api/route/dp_start") => respond(stream, "200 OK", "application/json", route_api::dp_start(dir, route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/dp_dims") => respond(stream, "200 OK", "application/json", route_api::dp_dims(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_move") => respond(stream, "200 OK", "application/json", route_api::dp_move(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
@@ -740,6 +743,7 @@ fn handle(
         ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/convert/polys") => respond(stream, "200 OK", "application/json", convert_api::polys(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
         // "Board Statistics..." (task item 8): read-only, same stateless
         // no-Cmd shape as fab_api::bom below (nothing to undo -- it never
@@ -882,6 +886,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "tracks": r.tracks.iter().map(|t| json!({
                 "id": t.id, "net": t.net, "layer": t.layer, "width": t.width,
                 "pts": t.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
+                // The arc's mid point when this track is a KiCad arc (`Track::arc`), so an edit that re-sends the track keeps it an arc.
+                "arc_mid": t.arc().map(|(_, m, _)| [m.x, m.y]),
             })).collect::<Vec<_>>(),
             "vias": r.vias.iter().map(|v| json!({
                 "id": v.id, "net": v.net, "x": v.at.x, "y": v.at.y, "d": v.diameter,
@@ -1183,7 +1189,7 @@ fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model
         imported_from_kicad: false,
         title_block: None,
         sheets: vec![],
-        instance_overrides: vec![], junctions: vec![], lines: vec![],
+        instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
         symbols: Vec::new(),
         wires: Vec::new(),
         labels: Vec::new(),
@@ -1221,7 +1227,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
-                instance_overrides: vec![], junctions: vec![], lines: vec![],
+                instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
                 symbols: Vec::new(),
                 wires: Vec::new(),
                 labels: Vec::new(),
@@ -1309,6 +1315,9 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
     // Explicit junctions (`J`) and graphic lines on the notes layer (`I`) -- see `eda_model::ir::Junction`/`SchLine`.
     let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y] })).collect();
     let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um })).collect();
+    // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
+    let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
+    let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y] })).collect();
@@ -1388,6 +1397,8 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "bus_entries": bus_entries,
         "junctions": junctions,
         "lines": lines,
+        "graphics": graphics,
+        "locked": locked,
         "title_block": title_block,
         "lib_symbols": lib_symbols,
         "sheets": sheets,
@@ -1798,7 +1809,7 @@ mod tests {
     use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
 
     fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
-        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
     }
 
     fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {

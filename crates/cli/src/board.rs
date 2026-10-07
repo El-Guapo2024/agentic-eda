@@ -532,6 +532,20 @@ fn clear_dir(stack_dir: &Path) {
     let _ = std::fs::remove_dir_all(stack_dir);
 }
 
+/// The Schematic scope's undo also follows `LibrarySymbol::published`: Update Symbol(s) (`SchCmd::UpdateLibrarySymbols`) is run from the
+/// schematic but flips that flag in the symbol library, which the Schematic scope does not otherwise restore -- so the edit could never be
+/// undone. Only the flags come from the snapshot (a symbol the snapshot does not have keeps its own), never the symbols' own edits.
+fn follow_published(mut library: Option<eda_model::ir::SymbolLibrarySection>, snapshot: Option<&eda_model::ir::SymbolLibrarySection>) -> Option<eda_model::ir::SymbolLibrarySection> {
+    if let (Some(lib), Some(snap)) = (library.as_mut(), snapshot) {
+        for sym in lib.symbols.iter_mut() {
+            if let Some(old) = snap.by_lib_id(&sym.lib_id) {
+                sym.published = old.published;
+            }
+        }
+    }
+    library
+}
+
 /// Overlay `scope`'s own half of `snapshot` onto `current`, leaving
 /// everything else untouched -- `None` is a full restore (the original,
 /// single-timeline undo/redo behavior: `snapshot` replaces `current`
@@ -544,7 +558,10 @@ fn clear_dir(stack_dir: &Path) {
 fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Design, scope: Option<Domain>) -> eda_model::ir::Design {
     match scope {
         None => snapshot,
-        Some(Domain::Schematic) => eda_model::ir::Design { schematic: snapshot.schematic, nets: snapshot.nets, ..current },
+        Some(Domain::Schematic) => {
+            let symbol_library = follow_published(current.symbol_library, snapshot.symbol_library.as_ref());
+            eda_model::ir::Design { schematic: snapshot.schematic, nets: snapshot.nets, symbol_library, ..current }
+        }
         // GAPS.md #8: the Footprint Editor's own scope touches only
         // `footprint_library`, same reasoning `Schematic`'s own arm
         // documents -- an undo on that tab must never revert a PCB edit
@@ -818,6 +835,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
         Cmd::SetLocked { ids, locked } => format!("{} {}", if *locked { "lock" } else { "unlock" }, ids.join(" ")),
         Cmd::SwapChain { parts } => format!("swap-chain {}", parts.join(" ")),
+        Cmd::BooleanShapes { operation, ids } => format!("shape boolean {} {}", serde_json::to_value(operation).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(), ids.join(" ")),
         Cmd::ZoneCutout { id, cutout } => format!("zone cutout {id} --pts \"{}\"", pts(cutout)),
 
         Cmd::Batch { cmds } => format!("batch [{}]", cmds.iter().map(cmd_line).collect::<Vec<_>>().join("; ")),
@@ -857,6 +875,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
         Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::SwapSchItems { a, b } => format!("schematic swap {a} {b}"),
+        Cmd::SchEdit(c) => c.describe(),
         Cmd::AddErcExclusion { check, location } => format!("schematic erc-exclude {check:?} {location:?}"),
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
@@ -1031,6 +1050,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SwapLayers { .. } => "swap-layers",
         Cmd::SetLocked { .. } => "lock",
         Cmd::SwapChain { .. } => "swap",
+        Cmd::BooleanShapes { .. } => "shape",
         Cmd::ZoneCutout { .. } => "zone",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
@@ -1049,6 +1069,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSchLine { .. } | Cmd::DeleteSchLine { .. } => "schematic-line",
         Cmd::AddSheet { .. } => "schematic-sheet",
         Cmd::SwapSchItems { .. } => "schematic-swap",
+        Cmd::SchEdit(c) => c.kind(),
         Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } => "schematic-erc-exclusion",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
@@ -1709,7 +1730,7 @@ mod tests {
                 erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
-                instance_overrides: vec![], junctions: vec![], lines: vec![],
+                instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
             }),
             nets: None,
             // `Board` (crates/ops) always expects a placement section to
@@ -2478,6 +2499,32 @@ mod tests {
         // fallback onto another tab's stack.
         let err = undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap_err();
         assert_eq!(err[0].check, "board_no_undo");
+    }
+
+    /// Update Symbol(s) runs from the Schematic tab but flips `LibrarySymbol::published` in the symbol library: a Schematic-scope undo must
+    /// bring the flag back (and redo restore it) without removing the edited symbol or touching the Symbol Editor's own history.
+    #[test]
+    fn update_symbols_from_the_schematic_is_undone_from_the_schematic_tab() {
+        let dir = scratch("update_symbols_undo");
+        setup_schematic(&dir);
+        step(&dir, Cmd::OpenSymbolForEdit { lib_id: "TEST:R".into() }, false, "test").unwrap();
+        let published = |d: &eda_model::ir::Design| d.symbol_library.as_ref().unwrap().by_lib_id("TEST:R").unwrap().published;
+        assert!(!published(&load(&dir).unwrap().1), "an opened symbol starts unpublished");
+
+        step(&dir, Cmd::sch(eda_ops::sch_edit::SchCmd::UpdateLibrarySymbols { lib_ids: vec!["TEST:R".into()] }), false, "test").unwrap();
+        assert!(published(&load(&dir).unwrap().1));
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!published(&design), "a Schematic-tab undo brings the symbol back to unpublished");
+        assert!(design.symbol_library.as_ref().unwrap().by_lib_id("TEST:R").is_some(), "...without removing the edited symbol");
+        // The Symbol Editor's own step (the open) is still there to undo from its own tab.
+        undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
+        assert!(load(&dir).unwrap().1.symbol_library.as_ref().is_none_or(|l| l.by_lib_id("TEST:R").is_none()));
+
+        redo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
+        redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert!(published(&load(&dir).unwrap().1), "redo restores the update");
     }
 
     /// `board::load`'s overlay (mirroring `loading_overlays_only_published_
