@@ -12,7 +12,6 @@
 //!   (`SCH_TEXTBOX`), rule areas (`SCH_RULE_AREA`) and directive labels (`SCH_DIRECTIVE_LABEL`, the
 //!   "netclass flag"). Decoration or annotation: none of them is part of any net.
 //! - `locked`: the ids of locked items (`SCH_ITEM::IsLocked`, set by Lock / Unlock / Toggle Lock).
-//! - `body_styles`: which body style ("DeMorgan" alternate) a placed unit shows (`SCH_SYMBOL::GetBodyStyle`).
 
 use crate::ir::{Millideg, Point, Um};
 use serde::{Deserialize, Serialize};
@@ -29,14 +28,11 @@ pub struct SchExtras {
     /// multi-unit part locks together, the way the studio selects them together).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locked: Vec<String>,
-    /// Non-default body styles of placed symbols, sorted by `(id, unit)`. Absent means body style 1.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub body_styles: Vec<BodyStyleEntry>,
 }
 
 impl SchExtras {
     pub fn is_empty(&self) -> bool {
-        self.graphics.is_empty() && self.locked.is_empty() && self.body_styles.is_empty()
+        self.graphics.is_empty() && self.locked.is_empty()
     }
 
     /// True when `id` is locked.
@@ -59,20 +55,6 @@ impl SchExtras {
         }
     }
 
-    /// The body style (1-based) the placed unit `(id, unit)` shows.
-    pub fn body_style_of(&self, id: &str, unit: u32) -> u32 {
-        self.body_styles.iter().find(|b| b.id == id && b.unit == unit).map_or(1, |b| b.body_style)
-    }
-
-    /// Set the body style of placed unit `(id, unit)`; style 1 (the default) removes the entry.
-    pub fn set_body_style(&mut self, id: &str, unit: u32, body_style: u32) {
-        self.body_styles.retain(|b| !(b.id == id && b.unit == unit));
-        if body_style > 1 {
-            self.body_styles.push(BodyStyleEntry { id: id.to_string(), unit, body_style });
-            self.body_styles.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
-        }
-    }
-
     /// Backfill `id` on every graphic that has none, deterministically from its content (same
     /// contract as `SchematicSection::assign_missing_ids`). `existing` is the set of ids already
     /// taken in the section; it grows as ids are handed out.
@@ -87,22 +69,12 @@ impl SchExtras {
         }
     }
 
-    /// Canonical order for hashing: `locked` and `body_styles` are kept sorted by their setters;
+    /// Canonical order for hashing: `locked` is kept sorted by its setter;
     /// `graphics` keeps its drawing order (it is meaningful), so there is nothing to sort.
     pub fn canonicalize(&mut self) {
         self.locked.sort();
         self.locked.dedup();
-        self.body_styles.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
     }
-}
-
-/// One placed unit's non-default body style.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BodyStyleEntry {
-    pub id: String,
-    pub unit: u32,
-    pub body_style: u32,
 }
 
 /// Stroke style of a graphic (`LINE_STYLE`): `Default` follows the sheet's own default line style.
@@ -416,19 +388,6 @@ mod tests {
         assert!(e.set_locked("R1", false));
         assert!(!e.set_locked("R1", false), "already unlocked: no change");
         assert_eq!(e.locked, vec!["U2".to_string()]);
-    }
-
-    #[test]
-    fn body_style_one_is_the_absence_of_an_entry() {
-        let mut e = SchExtras::default();
-        assert_eq!(e.body_style_of("U1", 1), 1);
-        e.set_body_style("U1", 1, 2);
-        e.set_body_style("U1", 2, 2);
-        assert_eq!(e.body_style_of("U1", 1), 2);
-        assert_eq!(e.body_style_of("U1", 3), 1);
-        e.set_body_style("U1", 1, 1);
-        assert_eq!(e.body_styles.len(), 1);
-        assert_eq!(e.body_style_of("U1", 1), 1);
     }
 
     #[test]
