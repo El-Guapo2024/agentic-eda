@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardState, Cmd, Shape } from "../api/types";
+import type { BoardState, Cmd, CmdShape, Shape } from "../api/types";
 import { arcMidOfSegment, convertAvailability, copiedLineWidth, DEFAULT_CONVERT_SETTINGS, DEFAULT_OUTSET_PARAMS, outsetShapes, planConvertToLines, planConvertToTracks, planSegmentToArc, resolveConvertSettings, ringEdges, sourceRings, type OutsetParams } from "./pcbConvert";
 
 function board(partial: Partial<BoardState>): BoardState {
@@ -164,9 +164,9 @@ test("outset: a rectangle with rounded corners is four sides and four arcs", () 
   assert.equal(r.add.filter((s) => s.kind === "segment").length, 4);
   assert.equal(r.add.filter((s) => s.kind === "arc").length, 4);
   assert.ok(r.add.every((s) => (s as { layer: string }).layer === "F.CrtYd" && (s as { stroke_width: number }).stroke_width === 50));
-  const sides = r.add.filter((s) => s.kind === "segment") as Array<Extract<Shape, { kind: "segment" }>>;
+  const sides = r.add.filter((s) => s.kind === "segment") as Array<Extract<CmdShape, { kind: "segment" }>>;
   // the top side runs from the end of one corner to the start of the next: (-500+500, -500) -> (4500-500, -500)
-  assert.ok(sides.some((s) => (s.start as unknown as { y: number }).y === -500 && (s.end as unknown as { y: number }).y === -500));
+  assert.ok(sides.some((s) => s.start.y === -500 && s.end.y === -500));
 });
 
 test("outset: the grid rounds a rectangle outwards", () => {

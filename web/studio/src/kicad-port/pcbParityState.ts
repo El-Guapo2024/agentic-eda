@@ -4,6 +4,7 @@
 // merged hunk instead of a field per action.
 import type { Cmd } from "../api/types";
 import type { LayerPairSettings } from "./layerPairs";
+import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 
 /** The line width a freshly armed graphic tool starts at (Canvas.tsx's pre-existing constant, hoisted here so `incWidth`/`decWidth` can step it). */
 export const DEFAULT_STROKE_WIDTH_UM = 150;
@@ -50,6 +51,10 @@ export interface PcbParityState {
   customDiffPair: CustomDiffPair | null;
   /** "Create Zone / Rule Area from Selection" (convert_tool.cpp `CreatePolys`): what the zone dialog does once the first outline's zone is added -- the other outlines the conversion made get the same settings, then the source items go. */
   zoneConvert: ZoneConvertPending | null;
+  /** `PCBNEW_SETTINGS::m_ArcEditMode`: how editing an arc's handles recomputes the arc (kicad-port/pcbPointEdit.ts). */
+  arcEditMode: ArcEditMode;
+  /** `PCB_BASE_EDIT_FRAME::m_vertexEditorPane` is open ("Edit Corners..."): the floating table of the selected polygon's or zone's vertices. */
+  vertexEditorOpen: boolean;
 }
 
 export interface ZoneConvertPending {
@@ -79,6 +84,8 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   layerPairs: null,
   customDiffPair: null,
   zoneConvert: null,
+  arcEditMode: DEFAULT_ARC_EDIT_MODE,
+  vertexEditorOpen: false,
 };
 
 /** `drawing_tool.cpp`: `#define WIDTH_STEP pcbIUScale.mmToIU( 0.1 )`. */
