@@ -129,9 +129,8 @@ pub struct LibPin {
     /// of: `"input"`, `"output"`, `"bidirectional"`, `"tri_state"`,
     /// `"passive"`, `"free"`, `"unspecified"`, `"power_in"`,
     /// `"power_out"`, `"open_collector"`, `"open_emitter"`,
-    /// `"no_connect"` (`eda_kicad::erc::ElectricalPinType` is the closed
-    /// enum the ERC port actually matches against; this field is the raw
-    /// text).
+    /// `"no_connect"` (the closed set kicad-cli's ERC matches against;
+    /// this field is the raw text).
     pub electrical_type: String,
     /// Graphic shape token (`"line"`, `"inverted"`, `"clock"`, ...).
     #[serde(default = "d_shape")]

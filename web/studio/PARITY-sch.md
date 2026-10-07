@@ -40,8 +40,8 @@ exclusions (section 4 -- new `components/schematic/ercMarkerPosition.ts`
 resolving a `CheckResult::location` string to a canvas point/refs,
 `painter.ts`'s `drawErcMarkers`, and `Cmd::AddErcExclusion`/
 `DeleteErcExclusion` persisting to `design.schematic.erc_exclusions`,
-applied by the pre-existing `check_erc_excluding` and surfaced as a third
-`"excluded"` `ErcSeverity`), and item 8 -- wire box-select plus one real
+applied to the ERC report (since 2026-10-03 kicad-cli's, see section 4) and
+surfaced as a third `"excluded"` `ErcSeverity`), and item 8 -- wire box-select plus one real
 `sch_line_wire_bus_tool.cpp`-adjacent correctness fix (section 1/2 --
 `components/schematic/boxSelection.ts` extends box-select to wires, and
 `components/schematic/junctions.ts` fixes a found-not-told junction-dot
@@ -213,13 +213,16 @@ covers *placing* them, matching this pass's scope.
 
 ## 4. ERC (gap #4) (`sch_inspection_tool.cpp`, `dialog_erc.cpp`)
 
+**ERC is kicad-cli's** (2026-10-03, `docs/ARCHITECTURE.md`, "Engines"): the Rust ERC port is deleted, so there is no engine parity left to track here. `GET /api/erc` exports the current schematic to a derived `.kicad_sch`, runs `kicad-cli sch erc` on it (the project file carries the design's own pin map, section 9, and ignores the library-link checks, since every symbol is embedded) and points each reported item back at our own id. It takes a few seconds, so the dialog runs it on demand and shows a running state.
+
 | Action | Status | KiCad file:function |
 |---|---|---|
-| Run ERC (menu item, no default hotkey) | identical | `SCH_INSPECTION_TOOL::RunERC`/`ShowERCDialog`; `eeschema.InspectionTool.runERC` → `ErcDialog.tsx`, `GET /api/erc` → `eda_kicad::check_erc` (unexposed before this session — GAPS.md #4) |
-| Results list: one row per finding, Errors/Warnings filter | identical in spirit, flatter structure | `dialog_erc.cpp` (`RC_TREE_MODEL`, flat list, not grouped by sheet — matches); `check_erc` reports plain `CheckResult`s (no item/position breakdown the way `DrcViolation` has), so `ErcDialog.tsx` is flatter than `DrcDialog.tsx` |
-| Click a row: cross-probe (select + pan/zoom to it) | identical in spirit | `DIALOG_ERC::OnERCItemSelected`/`FocusOnItem`; `ercMarkerPosition(v.location, state.schematic)` resolves `location`'s several shapes (see types.ts's `ErcViolation.location` doc) back to a point/refs, then `jumpTo` selects/hots the refs and re-frames the schematic view exactly like `DrcDialog.tsx`'s own `jumpTo` (2mm padding around the resolved point, same `fitTransform` call). A location that resolves to `null` (a dangling ref/net, or a shape `ercMarkerPosition` doesn't recognize) still selects the row and switches tabs, just without re-framing — not expected in practice since every shape `check_erc` actually emits today resolves |
-| Canvas markers independent of the dialog | identical in spirit, same gate DRC's own markers already have | `SCH_MARKER` objects drawn via the normal VIEW; `painter.ts`'s `drawErcMarkers` (ported from `canvas/painter.ts`'s `drawDrcMarkers`), one circle per violation whose `location` resolves to a point, color-coded by severity (`LAYER_ERC_ERR`/`WARN`/`EXCLUSION`), drawn whenever `state.erc` is populated -- same "only fetched while the dialog is open" gate `state.drc`/DRC markers already live with (store.tsx's poll loop), not a deeper ERC-specific gap |
-| Exclusions (persisted "accepted" findings) | partial | `SCHEMATIC::RecordERCExclusions`/`ERC_SETTINGS::m_ErcExclusions` — `eda_kicad::Exclusions`/`check_erc_excluding` already existed engine-side; new `Cmd::AddErcExclusion`/`DeleteErcExclusion` persist to `design.schematic.erc_exclusions` (`crates/model::ErcExclusion`, matched by exact `(check, location)` string pair), surfaced as a third `ErcSeverity::Excluded` so an excluded finding stays visible (dimmed row/marker, its own "Exclusions" filter toggle) instead of disappearing, with an Exclude/Un-exclude button per dialog row. Real KiCad also offers this from a right-click on the canvas marker itself (`DIALOG_ERC`'s context menu) -- this clone only has the dialog-row button, no canvas context menu |
+| Run ERC (menu item, no default hotkey) | identical, by running KiCad's own | `SCH_INSPECTION_TOOL::RunERC`/`ShowERCDialog`; `eeschema.InspectionTool.runERC` -> `ErcDialog.tsx`, `GET /api/erc` -> `kicad-cli sch erc`. Opening the dialog on a schematic kicad-cli has not judged yet runs it; "Run ERC" re-runs; a report older than the board says so |
+| Results list: one row per finding, Errors/Warnings/Exclusions filter | identical in spirit, flatter structure | `dialog_erc.cpp` (`RC_TREE_MODEL`, flat list, not grouped by sheet -- matches); each row shows kicad-cli's own type name and description |
+| Click a row: cross-probe (select + pan/zoom to it) | identical in spirit | `DIALOG_ERC::OnERCItemSelected`/`FocusOnItem`; a violation's `location` is our id for its first item (a symbol, a pin `REF.PIN`, a power symbol, a wire, a label, a no-connect, a text), which `ercMarkerPosition` resolves back to a point/refs; `jumpTo` selects/hots the refs and re-frames the sheet |
+| Canvas markers independent of the dialog | identical in spirit | `SCH_MARKER` objects drawn via the normal VIEW; `painter.ts`'s `drawErcMarkers`, one circle per violation whose location resolves, color-coded by severity (`LAYER_ERC_ERR`/`WARN`/`EXCLUSION`), kept after the dialog closes until the next run |
+| Exclusions (persisted "accepted" findings) | partial | `SCHEMATIC::RecordERCExclusions`/`ERC_SETTINGS::m_ErcExclusions` -- `Cmd::AddErcExclusion`/`DeleteErcExclusion` persist to `design.schematic.erc_exclusions` (matched by exact `(check, location)`), applied to the report by the backend as a third `ErcSeverity::Excluded` so an excluded finding stays visible (dimmed, its own filter) and is un-excludable; the report on screen is patched in place, no re-run. Real KiCad also offers this from a right-click on the canvas marker -- not ported |
+| Our own readability checks (grid, wire length/overlap, label placement, sheet density) | not KiCad's, so not parity | `crates/lint` (`eda-lint`), `GET /api/lint`: a Lint tab of the dialog and blue diamond markers while the dialog is open, never mixed into kicad-cli's list |
 
 ## 5. Annotate
 
@@ -265,7 +268,7 @@ the `kicad-src` snapshot (commit `8303b2ad`).
 | Staged edits regroup the table before Apply; Apply commits; Close with unapplied edits asks | identical in effect — the server overlays the staged changes on the schematic *without saving* (`m_dataStore` equivalent) | `m_dataStore`, `OnClose`/`HandleUnsavedChanges` ↔ `staged_schematic` in `sch_api.rs`, `window.confirm` |
 | Apply is one undoable step | identical | `ApplyData` + one `SCH_COMMIT` ↔ `Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields }` (applied remove → rename → add → edits; atomic — an invalid part refuses the whole batch). Undo = the existing snapshot undo, schematic scope |
 | Rename / delete a symbol carries its user fields along | identical | `rename_symbol` / `delete_symbol` in `crates/ops` move/drop `user_fields[ref]` |
-| Export tab: format presets CSV / TSV / Semicolons, field/string/reference/range delimiters, keep tabs, keep line breaks, live preview, write file | identical output format (`BOM_FMT_PRESET::CSV()` etc., doubled embedded string delimiters, `\n` after the last shown column, hidden columns omitted, children not exported, mixed values listed comma-separated) | `FIELDS_EDITOR_GRID_DATA_MODEL::Export`, `BOM_FMT_PRESET`, `OnExport` ↔ `fields_table::export_bom`, `BomFmt`, `POST /api/sch/bom_export` (separate from, and richer than, `POST /api/fab/bom`/`eda_fab::bom_csv`, which stays the JLC-style quick BOM) |
+| Export tab: format presets CSV / TSV / Semicolons, field/string/reference/range delimiters, keep tabs, keep line breaks, live preview, write file | identical output format (`BOM_FMT_PRESET::CSV()` etc., doubled embedded string delimiters, `\n` after the last shown column, hidden columns omitted, children not exported, mixed values listed comma-separated) | `FIELDS_EDITOR_GRID_DATA_MODEL::Export`, `BOM_FMT_PRESET`, `OnExport` ↔ `fields_table::export_bom`, `BomFmt`, `POST /api/sch/bom_export` (separate from, and richer than, `POST /api/fab/bom`, which runs `kicad-cli sch export bom` with the fixed JLC-style columns) |
 | Export target path | partial — relative to the board directory only (no `..`, no absolute path: a studio served over HTTP must not write anywhere); default `export/<intent>-bom.csv`; no `${VAR}` expansion, no file browser | `OnExport`, `EnsureFileDirectoryExists` ↔ `sch_api::safe_relative` |
 | Attribute columns (`${DNP}`, `${EXCLUDE_FROM_BOM}`, ...), "Exclude DNP" / "Include excluded from BOM" filters, variants | missing — the IR has no DNP / BOM-exclusion attributes or variants | `BOM_PRESET::excludeDNP`, `isAttribute` |
 | Saved view presets ("Grouped By Value" etc.), field name templates sidebar, scope (sheet / recursive), "Add field from library", 'Sidebar' | missing — the view (columns, grouping, sort, filter) resets to the default each time the dialog opens | `BOM_PRESET`, `m_scope` |
@@ -304,65 +307,26 @@ backing setting: Electrical Rules > Pin Conflicts Map.
 
 | Action | Status | KiCad file:function ↔ our code |
 |---|---|---|
-| The pin map is a per-design setting used by ERC | identical — stored additively as `schematic.erc_pin_map: Option<ErcPinMap>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`; 12×12 `PIN_ERROR` ints like KiCad's `pin_map` project entry); absent = KiCad's default table; a malformed grid is ignored, an out-of-range cell keeps its default | `ERC_SETTINGS::m_PinMap`/`m_defaultPinMap`, `pin_map` loader ↔ `eda_model::ir::ErcPinMap`/`DEFAULT_ERC_PIN_MAP` (the table moved from `erc.rs`'s private `MATRIX` into the IR crate so there is one copy), `eda_kicad::resolve_pin_map`, `check_pin_to_pin` |
+| The pin map is a per-design setting used by ERC | identical — stored additively as `schematic.erc_pin_map: Option<ErcPinMap>` (`#[serde(default, skip_serializing_if = "Option::is_none")]`; 12×12 `PIN_ERROR` ints like KiCad's `pin_map` project entry); absent = KiCad's default table; a malformed grid is ignored | `ERC_SETTINGS::m_PinMap`/`m_defaultPinMap`, `pin_map` loader ↔ `eda_model::ir::ErcPinMap`/`DEFAULT_ERC_PIN_MAP`, `eda_kicad::custom_erc_pin_map` |
 | 11×11 lower-triangle grid (NC excluded: "generates errors separately"), row/column labels | identical | `PANEL_SETUP_PINMAP::reBuildMatrixPanel`, `CommentERC_H/V` ↔ `SchematicSetupDialog.tsx`, `kicad-port/ercPinMap.ts` |
 | Click a cell cycles OK → Warning → Error → OK, symmetric | identical (green ✓ / amber ! / red ×, with the source's tooltips) | `changeErrorLevel` (`( level + 1 ) % 3`, `SetPinMapValue( y, x )` and `( x, y )`) ↔ `Cmd::SetErcPinMapCell { a, b, level }` (undoable, schematic scope) |
 | "Reset to Defaults" | identical (stored as an absent `erc_pin_map`; refused when already default; undoable) | `PANEL_SETUP_PINMAP::ResetPanel`/`ERC_SETTINGS::ResetPinMap` ↔ `Cmd::ResetErcPinMap` |
-| ERC picks it up | identical — an Output↔Output cell set to OK removes the `pin_to_pin` finding, Warning downgrades it (tested in `erc.rs`); the open ERC dialog refreshes through the usual version poll | `ERC_TESTER::TestPinToPin` ↔ `eda_kicad::erc::check_pin_to_pin` |
-| ERC severity per check (Ignore / Warning / Error) | **gap** — does not fall out naturally: `crates/kicad/src/erc.rs` and `erc_style.rs` hard-code each check's `Fail`/`Warn` status inside ~30 separate `check_*` functions with no severity table to override, and `Ignore` has no representation in `CheckStatus`. Needs a per-check severity map in the IR plus a post-pass like `check_erc_excluding`'s | `panel_setup_severities.cpp`, `ERC_SETTINGS::m_ERCSeverities` |
+| ERC picks it up | identical — the derived project file carries the stored matrix as `erc.pin_map` (`eda_kicad::export_kicad_pro_for`), so `kicad-cli sch erc` judges pin conflicts by it: an Output↔Output cell set to OK removes the `pin_to_pin` finding (checked against kicad-cli), Warning downgrades it; run ERC again to see it | `ERC_TESTER::TestPinToPin` (kicad-cli's) |
+| ERC severity per check (Ignore / Warning / Error) | **gap** — the design stores no per-check severity table; kicad-cli uses KiCad's defaults (the project file only ignores the two library-link checks). Needs a per-check severity map in the IR written into the project file's `erc.rule_severities` | `panel_setup_severities.cpp`, `ERC_SETTINGS::m_ERCSeverities` |
 | Other Schematic Setup pages (general, formatting, annotation, field templates, net classes, text variables, bus aliases, ...) | missing — not shown as dead tabs | `dialog_schematic_setup.cpp` |
 ## 10. Plot and netlist export (`sch_plotter.cpp`, `netlist_exporter_*.cpp`)
 
-File > Plot... on the Schematic tab (`common.Control.plot`, which is shared
-with the PCB tab's Gerber plot and so dispatches by tab -- there is no
-`eeschema.EditorControl.plot` in the real action table) and File > Export >
-Netlist... (`eeschema.EditorControl.exportNetlist`) now work end to end:
-`PlotSchematicDialog.tsx`/`ExportNetlistDialog.tsx` -> `POST /api/sch/plot`/
-`/api/sch/netlist` (`crates/cli/src/sch_api.rs`) -> `eda_kicad::plot_schematic`/
-`export_netlist`, writing into the board's `export/`. Both are read-only
-exports (nothing is written to `design.json`), so there is no `/api/cmd`
-verb or undo entry. The netlist reads `ConstraintModel::nets` -- the one
-netlist of section 0, with `Design::nets` already applied -- and never
-re-derives connectivity from geometry. A board with no `schematic` section
-plots/exports the schematic the engine would derive from its intent, like
-`GET /api/schematic.svg`.
+**Plots and netlists are kicad-cli's** (2026-10-03): the Rust plotter and netlist exporter are deleted. File > Plot... on the Schematic tab (`common.Control.plot`, shared with the PCB tab's Gerber plot, which dispatches by tab) and File > Export > Netlist... (`eeschema.EditorControl.exportNetlist`) post to `/api/sch/plot` / `/api/sch/netlist` (`crates/cli/src/sch_output_api.rs`), which turn the dialog's options into `kicad-cli sch export svg|pdf|netlist` arguments and run it on the exported schematic, into `<board>/export/kicad/sch-<kind>/` (files named after the project). Both are read-only exports (nothing is written to `design.json`), so there is no `/api/cmd` verb or undo entry. A board with no `schematic` section exports the schematic the engine would derive from its intent, like `GET /api/schematic.svg`.
 
-The plotter is a port of KiCad's `PLOTTER` class hierarchy
-(`crates/kicad/src/plotter/`): one abstract `Plotter` trait
-(`MoveTo`/`LineTo`/`FinishTo`/`PenTo`, `Circle`, `Arc`, `Rect`, `PlotPoly`,
-`Text`, `SetColor`/`SetDash`/`SetCurrentLineWidth`), an SVG back end that
-reproduces `SVG_PLOTTER`'s lazy `<g style=...>` grouping, mm device units and
-4-digit precision, and a hand-written PDF back end that reproduces
-`PDF_PLOTTER`'s object table / deferred `/Length` / page tree / outline /
-`xref`+`trailer` layout (uncompressed streams -- KiCad's own
-`m_DebugPDFWriter` path; the workspace has no zlib). Coordinates are
-eeschema IU (0.1 um).
-
-| KiCad feature | Status | KiCad source <-> our code |
+| Action | Status | KiCad file:function ↔ our code |
 |---|---|---|
-| Plot dialog: format, colour/B&W, drawing sheet, background colour, page size, all/current page | partial | `DIALOG_PLOT_SCHEMATIC` / `SCH_PLOT_OPTS` <-> `PlotSchematicDialog.tsx`, `kicad-port/schOutputs.ts` (`buildSchPlotRequest`, unit-tested), `sch_api::plot`, `eda_kicad::SchPlotOpts`. Not ported: PostScript/DXF/PNG formats (HPGL is gone upstream), colour-theme chooser, hop-over, PDF property popups / hierarchical links / metadata, `m_plotPages` in the dialog (the API takes `pages`), output-directory/file-name fields (always `export/`) |
-| SVG: one file per sheet, named `<root>-<sheet>-...` | identical | `SCH_PLOTTER::createSVGFiles`, `plotOneSheetSVG`, `SCHEMATIC::GetUniqueFilenameForCurrentSheet` <-> `sch_plot::plot_schematic` (`PlotFormat::Svg`) |
-| PDF: one multi-page file, one page per sheet, page bookmarks nested by hierarchy | identical | `SCH_PLOTTER::createPDFFile`, `plotOneSheetPDF`, `setupPlotPagePDF`, `PDF_PLOTTER::StartPage`/`ClosePage` outline tree <-> `sch_plot::plot_schematic` (`PlotFormat::Pdf`), `plotter/pdf.rs` |
-| Page size Auto / A4 / A and the `min( scalex, scaley )` viewport scale | identical (the IR has one paper size, A4, so "Auto" = A4) | `plotOneSheetSVG`/`setupPlotPagePDF` <-> `sch_plot::plot_page` |
-| Background rect, black-and-white colour rule (`PSLIKE_PLOTTER::SetColor`: black unless white) | identical | `plotOneSheetSVG` <-> `plot_one_sheet`, `SvgPlotter::set_color`/`PdfPlotter::set_color` |
-| Drawing sheet (frame, zone grid, title block) | identical for the default sheet; no custom `.kicad_wks` | `PlotDrawingSheet` (`common_plot_functions.cpp`), `DS_DATA_ITEM::SyncDrawItems`, `defaultDrawingSheet` <-> `sch_plot::plot_drawing_sheet` -- the real default description is embedded verbatim and parsed with `sexpr.rs`; corners, `repeat`/`incrx`/`incry`, label increment, in-page clipping and `${TITLE}`/`${REVISION}`/`${ISSUE_DATE}`/`${COMMENTn}`/`${SHEETPATH}`/`${#}`/`${##}` follow source |
-| Stroke-font text (justification, rotation, `~{overbar}`/`_{sub}`/`^{super}`, italic) | identical layout, vector output | `FONT::getLinePositions`, `drawMarkup`, `STROKE_FONT::GetTextAsGlyphs` <-> `plotter::stroke_text_segments` over `eda_drc::stroke_font::glyph_strokes`. SVG also writes the invisible `<text>` + `<g class="stroked-text"><desc>` pair as `SVG_PLOTTER::Text` does. PDF writes strokes, not `PDF_PLOTTER`'s Type3 font text, so PDF text is not selectable/searchable |
-| Item plot order: background pass, then SHEET, SYMBOL, labels, LINE, bus entries, no-connects, text, junctions last | identical, except the "overlapping symbols re-plot their fields on top" pass | `SCH_SCREEN::Plot` <-> `sch_plot::plot_screen` |
-| Wires / buses / bus entries / no-connect / junction dots | identical geometry, widths (6/12 mil), colours | `SCH_LINE::Plot`, `SCH_BUS_ENTRY_BASE::Plot`, `SCH_NO_CONNECT::Plot`, `SCH_JUNCTION::Plot` <-> `plot_wire`/`plot_bus_entry`/`plot_no_connect`/`plot_junction`. The computed dots use the canvas's own rule (explicit `J` junctions and graphic lines are not plotted by this exporter; `kicad-cli` plots them from the derived `.kicad_sch`) (`components/schematic/junctions.ts` ported to `junction_points`) at KiCad's default 6x wire-width diameter |
-| Symbol graphics (rectangle, polyline, circle, arc, text) | partial | `LIB_SYMBOL::Plot`, `SCH_SHAPE::Plot` <-> `plot_graphic`. `SymbolGraphic::filled` is one bool, so every fill is `FILLED_SHAPE` (outline colour); KiCad's `FILLED_WITH_BG_BODYCOLOR` yellow body fill is not representable in the IR |
-| Pins: line, inverted/clock/low/non-logic decorations, NC cross, names inside / numbers above | identical shapes; one text size | `SCH_PIN::PlotPinType`/`PlotPinTexts` <-> `plot_pin_type`/`plot_pin_texts`. `LibPin` has no name/number size or hide flag (50 mil, power-symbol pins hidden) and stacked-pin number formatting is not ported |
-| Reference / Value fields | partial | `SCH_FIELD::Plot` <-> `plot_symbol`. The IR carries no per-field position/size/visibility: Reference sits above the body, Value below, centred, 50 mil (what the canvas does); Footprint/Datasheet are never drawn |
-| Power symbols | partial | `SCH_SYMBOL::Plot` of a power symbol <-> `plot_power_symbol`; the Value text goes on the side the body extends to |
-| Labels (local / global / hierarchical) | partial | `SCH_LABEL_BASE::Plot` <-> `plot_label`. Text offset (`GetSchematicTextOffset`) and colours follow source; spin is inferred from the attached wire (the IR stores none); global/hierarchical flags are a simplified outline, not `CreateGraphicShape` |
-| Free text, hierarchical sheet box + name/file fields + pin names | partial | `SCH_TEXT::Plot`, `SCH_SHEET::Plot` (background + border, quirk included) <-> `plot_free_text`, `plot_sheet`; sheet pins draw their name, not the shape glyph |
-| DNP cross-out, local-power icon, text boxes / tables / images, rule areas, variants, hop-over, per-symbol bookmarks, hyperlinks | missing | `SCH_SYMBOL::PlotDNP`/`PlotLocalPowerIconShape`, `SCH_TEXTBOX`/`SCH_TABLE`/`SCH_BITMAP::Plot`, `PDF_PLOTTER::Bookmark`/`HyperlinkBox`/`HyperlinkMenu` |
-| Netlist: KiCad `.net` s-expression (`export (version "E")`) | identical structure | `NETLIST_EXPORTER_KICAD::Format`, `XNODE::Format`, `KICAD_FORMAT::Prettify` <-> `netlist::export_netlist` (`NetlistFormat::Kicad`), `XNode::format`, `netlist::prettify` (tab-indented like the real file) |
-| Netlist: generic `.xml` | identical structure | `NETLIST_EXPORTER_XML::WriteNetlist` (`wxXmlDocument::Save`) <-> `NetlistFormat::Xml`, `XNode::write_xml` |
-| Sections: `design` (+ one `sheet`/`title_block` per hierarchy sheet), `components`, `groups`+`variants` (`.net` only), `libparts`, `libraries`, `nets` | identical order; groups/variants empty | `makeRoot`, `makeDesignHeader`, `makeSymbols`, `makeGroups`, `makeVariants`, `makeLibParts`, `makeLibraries`, `makeListOfNets` <-> `netlist.rs`. `libraries` lists a library only when the installed `.kicad_sym` is found (`GetFullURI`) |
-| Component ordering, `#` references skipped, multi-unit reference emitted once, `units`/`tstamps`/`sheetpath`/`libsource`/`fields`/`property` | identical | `makeSymbols`, `addSymbolFields`, `NETLIST_EXPORTER_BASE::findNextSymbol` <-> `make_symbols`. The IR has no per-symbol UUID: `tstamps` use the same `duid("sym:<ref>")` the `.kicad_sch` export writes; `MPN`/`LCSC` are emitted as user fields; library `in_bom`/`on_board` give `exclude_from_bom`/`exclude_from_board` (and `.net` skips off-board symbols as `GNL_OPT_KICAD` does) |
-| Net order and codes, node order, duplicate removal, `pinfunction`, `pintype`, `+no_connect`, net class | identical | `makeListOfNets` <-> `make_list_of_nets`: nets sorted by `StrNumCmp(name)`, `code = index + 1` over the sorted list (nets with only `#` pins are skipped and leave a gap, as in source), nodes by ref then pin number, duplicates dropped, `pinfunction = <name>_<number>` only for named pins, `class` = the board's net class (else `Default`) |
-| Pins no net names | identical naming | `SCH_PIN::GetDefaultNetName` <-> `default_net_name`: `Net-(R1-Pad2)` / `unconnected-(U1-NC-Pad5)` single-node nets |
-| Spice / Cadstar / OrcadPCB2 / Allegro / PADS exporters, netlist plugins/commands, component classes, text variables, variants | missing | `netlist_exporter_spice.cpp`, `_cadstar.cpp`, `_orcadpcb2.cpp`, `_allegro.cpp`, `_pads.cpp` |
+| Plot dialog: format (SVG / PDF), colour or black and white, drawing sheet, background colour, all pages / current page | identical, by running KiCad's own plotter | `DIALOG_PLOT_SCHEMATIC` / `SCH_PLOT_OPTS` ↔ `PlotSchematicDialog.tsx`, `kicad-port/schOutputs.ts` (`buildSchPlotRequest`) → `--black-and-white`, `--exclude-drawing-sheet`, `--no-background-color`, `--pages` |
+| Page size Auto / A4 / A | **gap** — kicad-cli has no page-size override (it plots at the sheet's own size), so the dialog no longer offers the control | `SCH_PLOT_OPTS::m_pageSizeSelect` |
+| SVG: one file per sheet; PDF: one multi-page file | identical | `SCH_PLOTTER::createSVGFiles`/`createPDFFile` (kicad-cli's) |
+| Netlist: KiCad `.net` and generic `.xml` | identical | `kicad-cli sch export netlist --format kicadsexpr|kicadxml` |
+| PostScript / DXF / PNG, a colour-theme chooser, PDF property popups | missing from the dialog (kicad-cli has them: `sch export ps|dxf|png`, `--theme`) | `DIALOG_PLOT_SCHEMATIC` |
+| Spice / Cadstar / OrcadPCB2 / Allegro / PADS exporters | missing from the dialog (kicad-cli has them: `--format`) | `netlist_exporter_*.cpp` |
+| Explicit junctions (`J`) and graphic lines (`I`) | identical -- both are in the derived `.kicad_sch` (`junction`, `polyline`), so kicad-cli plots them with everything else (the deleted Rust plotter did not) | `SCH_JUNCTION::Plot`, `SCH_LINE::Plot` (kicad-cli's) |
 
 ## 11. Hotkeyed-and-missing sweep: eeschema (`docs/parity/UI-ACTIONS.md`)
 
@@ -550,7 +514,7 @@ click through:
     `wire_dangling` finding if the test board has one, to exercise the
     "NET:REF.PIN"/bare-net-name location shapes (not just plain
     "REF.PIN") -- `ercMarkerPosition.ts`'s own unit tests cover every
-    shape in isolation, but only a real board proves `check_erc` actually
+    shape in isolation, but only a real board proves `kicad-cli sch erc` actually
     emits the shapes that module expects.
 21. Draw two wires that form a plain "T" -- one wire, then a second
     starting from a point partway along the first (not at either of its

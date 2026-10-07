@@ -46,7 +46,7 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
           onOk: (o: GlobalDeletionOptions) => {
             const plan = planGlobalDeletions(board, o, layer);
             dispatch({ type: "CLEAR_SELECTION" }); // "Clear selection before removing any items"
-            if (plan.clearMarkers) dispatch({ type: "SET_DRC_ENGINE", engine: state.drcEngine }); // `board->DeleteMARKERs()`: the DRC results go
+            if (plan.clearMarkers) dispatch({ type: "DRC_CLEAR" }); // `board->DeleteMARKERs()`: the DRC results go
             if (plan.cmds.length === 0) {
               if (!plan.clearMarkers) toast("Nothing matched the deletion options.");
               return;

@@ -220,9 +220,9 @@ pub struct SchematicSection {
     /// Per-design ERC pin-to-pin conflict matrix override --
     /// `ERC_SETTINGS::m_PinMap` (`erc_settings.cpp`), edited by
     /// `panel_setup_pinmap.cpp`. `None` (every design written before this
-    /// existed) means KiCad's own default map (`m_defaultPinMap`), i.e.
-    /// exactly the table `eda_kicad::erc` has always used. See
-    /// [`ErcPinMap`].
+    /// existed) means KiCad's own default map (`m_defaultPinMap`): the
+    /// derived project file then carries no `pin_map` and kicad-cli's ERC
+    /// uses its own table. See [`ErcPinMap`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub erc_pin_map: Option<ErcPinMap>,
     /// User-defined symbol fields (`SCH_FIELD`s beyond Reference/Value/
@@ -258,8 +258,8 @@ pub struct SchematicSection {
     /// `derive_schematic`. The two disagree on what `SymbolInstance::at`
     /// means: `derive_schematic` always places it at the engine's own
     /// "top-left of a synthesized box" corner (every downstream consumer —
-    /// rendering, the exporter's `baked_local`, and `eda_kicad::erc`'s own
-    /// `resolve_pins` — agrees on that convention), while a real file's
+    /// rendering, the exporter's `baked_local`, and the schematic checks'
+    /// own pin resolution — agrees on that convention), while a real file's
     /// `(symbol (at X Y))` is the symbol's *native* KiCad origin, which for
     /// a real library symbol is almost never a bounding-box corner. Mixing
     /// the two conventions silently computes the wrong absolute pin
@@ -608,9 +608,9 @@ pub struct BusAlias {
 /// 1 = warning, 2 = error), row/column in `ELECTRICAL_PINTYPE` order
 /// (input, output, bidirectional, tri_state, passive, free, unspecified,
 /// power_in, power_out, open_collector, open_emitter, no_connect).
-/// `eda_kicad::erc` validates the shape and falls back to the default for
-/// anything malformed, like `ERC_SETTINGS`'s own loader (a grid that is
-/// not `ELECTRICAL_PINTYPES_TOTAL` square is ignored).
+/// `eda_kicad::custom_erc_pin_map` validates the shape and falls back to the
+/// default for anything malformed, like `ERC_SETTINGS`'s own loader (a grid
+/// that is not `ELECTRICAL_PINTYPES_TOTAL` square is ignored).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ErcPinMap {
@@ -651,9 +651,9 @@ pub const DEFAULT_ERC_PIN_MAP: [[u8; 12]; 12] = [
 
 /// An accepted ERC finding (`dialog_erc.cpp`'s own "Exclude this
 /// violation" / `SCHEMATIC::RecordERCExclusions`): `(check, location)`
-/// matches `eda_kicad::erc::Exclusions`'s own key shape exactly (a
-/// `BTreeSet<(String, String)>`) so `crates/cli/src/studio.rs::erc_json`
-/// can build one directly from this list with no translation. No `id`
+/// is the key the studio applies to kicad-cli's ERC report
+/// (`eda_kicad_engine::ErcReport::to_json`): a finding with a listed key
+/// reports as `excluded`, with no translation. No `id`
 /// field -- unlike `Wire`/`NetLabel`/etc., this has nothing geometric to
 /// derive one from, and the `(check, location)` pair is already a stable,
 /// natural key (unlike those others, there is never more than one
@@ -661,7 +661,7 @@ pub const DEFAULT_ERC_PIN_MAP: [[u8; 12]; 12] = [
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ErcExclusion {
-    /// `eda_kicad::erc`'s own check name ("pin_not_connected", ...).
+    /// kicad-cli's own ERC check name ("pin_not_connected", ...).
     pub check: String,
     /// "REF", "REF.PIN", or whatever else `CheckResult::location` carried
     /// for this finding -- a finding with no location at all can never be
@@ -714,10 +714,9 @@ pub struct SheetInstance {
     pub size: (Um, Um),
     /// Sheet pins on this placement's own border (`SCH_SHEET_PIN`), each
     /// tied *by name* (not by any stored link) to a hierarchical label of
-    /// the same name in `file`'s own content -- see
-    /// `crate::hierarchy`'s own doc for how that join flattens into one
-    /// netlist, and `check_erc`'s `hier_label_mismatch` for the name-only
-    /// matching rule (shape is cosmetic, confirmed against
+    /// the same name in `file`'s own content -- kicad-cli's ERC
+    /// (`hier_label_mismatch`) judges that name-only matching rule (shape
+    /// is cosmetic, confirmed against
     /// `connection_graph.cpp::ercCheckHierSheets`, which never compares
     /// it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2238,7 +2237,7 @@ fn d_true() -> bool {
 /// `dialog_footprint_properties_fp_editor.cpp`'s Fields tab. Position/
 /// orientation/layer are deferred (see PARITY-fpedit.md): only name/value/
 /// visibility are modeled, enough to author one and read it back.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FootprintField {
     pub name: String,
@@ -2465,7 +2464,7 @@ impl LibraryPad {
 /// this footprint's local frame instead of board space -- `Shape::
 /// translate`/`set_layer`/`set_stroke_width`/`set_filled` and each type's
 /// own `id`/`set_id` all come along for free.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LibraryFootprint {
     /// "Lib:Name" (opened from a loaded library) or a bare name (authored
@@ -2760,8 +2759,11 @@ fn d_pin_name_offset_mm() -> f64 {
 /// see [`LibrarySymbol::to_engine_symbol`]'s own doc on what that means
 /// here). `unit`/`body_style` keep `SymbolGraphic`'s own "0 = shared by
 /// every unit/style" convention.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+///
+/// Serialized as a `kind`-tagged object; *read* by the hand-written `Deserialize` below (see
+/// [`LibrarySymbolGraphicWire`] for why serde's own tagged-enum reader is not used).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LibrarySymbolGraphic {
     Rectangle {
         #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -2828,6 +2830,101 @@ pub enum LibrarySymbolGraphic {
         angle_deg: f64,
         size_mm: f64,
     },
+}
+
+/// The flat shape `LibrarySymbolGraphic` is read from: the `kind` tag, the fields every kind has, and one optional field for every field some kind
+/// has. An internally tagged enum would read the object into serde's buffer first, to find the tag; with `serde_json`'s `arbitrary_precision`
+/// feature -- which the `eda` build gets from `starlark` -- a fractional number held in that buffer comes back out as a map, "invalid type:
+/// map, expected f64", so a `design.json` with a single graphic in a symbol of its library (all in mm) could not be loaded by the studio or the CLI.
+/// Reading typed fields straight off the object has no buffer. The JSON is the same as ever, and a field that does not belong to the `kind`
+/// is still refused (`deny_unknown_fields` on the enum did that).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LibrarySymbolGraphicWire {
+    kind: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    unit: u32,
+    #[serde(default = "d_body_style_one")]
+    body_style: u32,
+    #[serde(default)]
+    fill: Option<LibraryFill>,
+    #[serde(default)]
+    stroke_mm: Option<f64>,
+    #[serde(default)]
+    start: Option<crate::symbol::SPoint>,
+    #[serde(default)]
+    mid: Option<crate::symbol::SPoint>,
+    #[serde(default)]
+    end: Option<crate::symbol::SPoint>,
+    #[serde(default)]
+    center: Option<crate::symbol::SPoint>,
+    #[serde(default)]
+    radius_mm: Option<f64>,
+    #[serde(default)]
+    pts: Option<Vec<crate::symbol::SPoint>>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    at: Option<crate::symbol::SPoint>,
+    #[serde(default)]
+    angle_deg: Option<f64>,
+    #[serde(default)]
+    size_mm: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let w = LibrarySymbolGraphicWire::deserialize(d)?;
+        let allowed: &'static [&'static str] = match w.kind.as_str() {
+            "rectangle" => &["stroke_mm", "fill", "start", "end"],
+            "polyline" => &["stroke_mm", "fill", "pts"],
+            "circle" => &["stroke_mm", "fill", "center", "radius_mm"],
+            "arc" => &["stroke_mm", "fill", "start", "mid", "end"],
+            "text" => &["text", "at", "angle_deg", "size_mm"],
+            other => return Err(D::Error::unknown_variant(other, &["rectangle", "polyline", "circle", "arc", "text"])),
+        };
+        let present = [
+            ("stroke_mm", w.stroke_mm.is_some()),
+            ("fill", w.fill.is_some()),
+            ("start", w.start.is_some()),
+            ("mid", w.mid.is_some()),
+            ("end", w.end.is_some()),
+            ("center", w.center.is_some()),
+            ("radius_mm", w.radius_mm.is_some()),
+            ("pts", w.pts.is_some()),
+            ("text", w.text.is_some()),
+            ("at", w.at.is_some()),
+            ("angle_deg", w.angle_deg.is_some()),
+            ("size_mm", w.size_mm.is_some()),
+        ];
+        for (name, there) in present {
+            if there && !allowed.contains(&name) {
+                return Err(D::Error::unknown_field(name, allowed));
+            }
+        }
+        let LibrarySymbolGraphicWire { kind, id, unit, body_style, fill, stroke_mm, start, mid, end, center, radius_mm, pts, text, at, angle_deg, size_mm } = w;
+        let need = |name: &'static str| D::Error::missing_field(name);
+        let fill = fill.unwrap_or_default();
+        Ok(match kind.as_str() {
+            "rectangle" => LibrarySymbolGraphic::Rectangle { id, unit, body_style, start: start.ok_or_else(|| need("start"))?, end: end.ok_or_else(|| need("end"))?, stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?, fill },
+            "polyline" => LibrarySymbolGraphic::Polyline { id, unit, body_style, pts: pts.ok_or_else(|| need("pts"))?, stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?, fill },
+            "circle" => LibrarySymbolGraphic::Circle { id, unit, body_style, center: center.ok_or_else(|| need("center"))?, radius_mm: radius_mm.ok_or_else(|| need("radius_mm"))?, stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?, fill },
+            "arc" => LibrarySymbolGraphic::Arc {
+                id,
+                unit,
+                body_style,
+                start: start.ok_or_else(|| need("start"))?,
+                mid: mid.ok_or_else(|| need("mid"))?,
+                end: end.ok_or_else(|| need("end"))?,
+                stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?,
+                fill,
+            },
+            _ => LibrarySymbolGraphic::Text { id, unit, body_style, text: text.ok_or_else(|| need("text"))?, at: at.ok_or_else(|| need("at"))?, angle_deg: angle_deg.unwrap_or_default(), size_mm: size_mm.ok_or_else(|| need("size_mm"))? },
+        })
+    }
 }
 
 impl LibrarySymbolGraphic {
@@ -2991,7 +3088,7 @@ impl LibrarySymbolPin {
 /// <ref>"`-prefixed name for one authored from scratch or opened from an
 /// instance with no resolvable library symbol (see `Cmd::OpenSymbolForEdit`'s
 /// own doc).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LibrarySymbol {
     pub lib_id: String,

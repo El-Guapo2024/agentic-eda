@@ -28,7 +28,18 @@
 export const FOOTPRINT_EDITOR_ONLY: ReadonlySet<string> = new Set(["pcbnew.ModuleEditor.newFootprint", "pcbnew.InteractiveDrawing.setAnchor"]);
 
 /** Actions the board editor AND the footprint editor both register (`DRAWING_TOOL` / `EDIT_TOOL` run in both frames): enabled on the PCB and Footprint tabs. */
-export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set(["pcbnew.InteractiveDrawing.arcPosture", "pcbnew.InteractiveDrawing.bezier", "pcbnew.InteractiveEdit.duplicateIncrementPads"]);
+export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
+  "pcbnew.InteractiveDrawing.arcPosture",
+  "pcbnew.InteractiveDrawing.bezier",
+  "pcbnew.InteractiveEdit.duplicateIncrementPads",
+  // the drawing tools of the footprint editor's Place menu
+  "pcbnew.InteractiveDrawing.line",
+  "pcbnew.InteractiveDrawing.arc",
+  "pcbnew.InteractiveDrawing.rectangle",
+  "pcbnew.InteractiveDrawing.circle",
+  "pcbnew.InteractiveDrawing.graphicPolygon",
+  "pcbnew.InteractiveDrawing.text",
+]);
 
 /** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */
 export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set(["eeschema.SymbolDrawing.placeSymbolPin", "eeschema.SymbolLibraryControl.newSymbol", "eeschema.SymbolLibraryControl.saveLibraryAs"]);
@@ -39,10 +50,33 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set(["eeschema.Symbol
  */
 export const BOARD_AND_SCHEMATIC_ONLY: ReadonlySet<string> = new Set(["common.Control.saveAs", "common.Control.updatePcbFromSchematic"]);
 
+/**
+ * The tool groups that exist for one library editor only: `FOOTPRINT_EDITOR_CONTROL` (`pcbnew.ModuleEditor.*`) and `PAD_TOOL` (`pcbnew.PadTool.*`,
+ * which edits pads, and the studio's board has no pads of its own to edit), and `SYMBOL_EDITOR_CONTROL` (`eeschema.SymbolLibraryControl.*`),
+ * `SYMBOL_EDITOR_DRAWING_TOOLS` (`eeschema.SymbolDrawing.*`) and `SYMBOL_EDITOR_PIN_TOOL` (`eeschema.PinEditing.*`).
+ */
+export const FOOTPRINT_EDITOR_TOOL_PREFIXES: readonly string[] = ["pcbnew.ModuleEditor.", "pcbnew.PadTool."];
+export const SYMBOL_EDITOR_TOOL_PREFIXES: readonly string[] = ["eeschema.SymbolLibraryControl.", "eeschema.SymbolDrawing.", "eeschema.PinEditing."];
+
+/**
+ * Actions the schematic editor and the symbol editor both register (`symbolProperties` is in `SCH_EDIT_TOOL` and `SYMBOL_EDITOR_EDIT_TOOL`, the shape
+ * tools in `SCH_DRAWING_TOOLS` and `SYMBOL_EDITOR_DRAWING_TOOLS`, `pinTable` is the symbol editor's Edit menu entry): enabled on the Schematic and Symbol tabs.
+ */
+export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
+  "eeschema.InteractiveEdit.symbolProperties",
+  "eeschema.InteractiveEdit.pinTable",
+  "eeschema.InteractiveDrawing.drawRectangle",
+  "eeschema.InteractiveDrawing.drawCircle",
+  "eeschema.InteractiveDrawing.drawArc",
+]);
+
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {
   if (!registered) return false;
   if (FOOTPRINT_EDITOR_ONLY.has(name)) return tab === "footprint";
   if (SYMBOL_EDITOR_ONLY.has(name)) return tab === "symbol";
+  if (FOOTPRINT_EDITOR_TOOL_PREFIXES.some((p) => name.startsWith(p))) return tab === "footprint";
+  if (SYMBOL_EDITOR_TOOL_PREFIXES.some((p) => name.startsWith(p))) return tab === "symbol";
+  if (SCHEMATIC_AND_SYMBOL_EDITOR.has(name)) return tab === "schematic" || tab === "symbol";
   if (BOARD_AND_SCHEMATIC_ONLY.has(name)) return tab === "pcb" || tab === "schematic";
   if (BOARD_AND_FOOTPRINT.has(name)) return tab === "pcb" || tab === "footprint";
   if (name.startsWith("pcbnew.")) return tab === "pcb";

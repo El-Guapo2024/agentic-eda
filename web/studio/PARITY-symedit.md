@@ -106,6 +106,40 @@ registered in `useActionRunner.ts` (Symbol tab only) and checked in the browser 
 Fixed on the way: `GET /api/symbol?lib_id=...` did not percent-decode `lib_id`, so a symbol could never be shown (`Device%3AR` matched nothing) -- the studio's Symbol tab now loads symbols
 (`crates/cli/src/studio.rs::query_value`).
 
+## Library tree, drawing tools and view options (`eeschema.SymbolLibraryControl.*`, `eeschema.SymbolDrawing.*`, `eeschema.PinEditing.*`)
+
+The Symbol tab has the library tree (`SYMBOL_TREE_PANE`, several symbols selectable with Ctrl/Shift) with the context menu
+`SYMBOL_EDITOR_CONTROL::Init` builds, and its own menu bar: `eeschema/symbol_editor/menubar_symbol_editor.cpp` extracted into
+`src/kicad/sym_menus.json` by `tools/extract-lib-editor-menus.js` (the tab used to show the board editor's menu). The studio's library is the
+project library (`design.symbol_library`, entries keyed by `Lib:Name`): a symbol that only the intent, a library file or the built-in table
+defines is read-only until it is opened (which makes an editable copy). Copy, Export, Duplicate and Save Copy As read any symbol
+(`GET /api/library/symbol`); Delete and Rename need a project entry. The editor's view starts as KiCad's settings do
+(`SYMBOL_EDITOR_SETTINGS`): electrical types and hidden pins shown, pin numbers not forced.
+
+| Action | Status | KiCad file:function |
+|---|---|---|
+| Edit / Cut / Copy / Paste / Duplicate / Delete / Rename Symbol | **done** | `symbol_editor_control.cpp`: `EditSymbol`, `CutCopyDelete`, `DuplicateSymbol` (Paste is `DuplicateSymbol( true )`: each clipboard symbol lands in the target library under a free name), `DeleteSymbolFromLibrary`, `RenameSymbol` (an existing name asks "Overwrite"). The clipboard holds the bare `(symbol ...)` forms (`kicad-port/symClipboard.ts`), as KiCad's own does; the editor also keeps its copy, so Paste works where the browser denies the clipboard. Verbs `put_library_symbol`, `rename_library_symbol`, `delete_library_symbol` |
+| Save As / Save Copy As | **done** | `symbol_editor.cpp::saveSymbolCopyAs`: `SAVE_SYMBOL_AS_DIALOG` (name trimmed, spaces to `_`, `EscapeString( CTX_LIBID )`; "Save in library", New Library...), "Symbol '%s' already exists in library '%s'. Do you want to overwrite it?"; Save As opens the copy |
+| Import Symbol / Export Symbol | **done** | `ImportSymbol` + `DIALOG_IMPORT_SYMBOL_SELECT` (check the symbols to bring in, "Resolve Import Conflicts": Overwrite or Skip each, Skip All / Overwrite All, "Imported %d symbol(s), skipped %d."), `ExportSymbol` (`<name>.kicad_sym`). The reader is `crates/kicad/src/symbol_import.rs` (`POST /api/symbol_library/parse`, the inverse of `export_kicad_sym`, round-trip tested): a derived symbol (`extends`) is flattened onto its parent's drawing, bezier curves and text boxes are dropped with a warning |
+| Export View as PNG | **done** | `SYMBOL_EDITOR_CONTROL::ExportView`: the canvas as `<name>.png` |
+| Add Symbol to Schematic | **done** | `AddSymbolToSchematic`: the open symbol, at the unit being edited, becomes the schematic's symbol being placed (a symbol nothing follows yet is published first, "Update Symbol on Board") |
+| Bulk Edit Symbol Fields | partial | `DIALOG_LIB_FIELDS_TABLE`: every project symbol of the library as a row, edited in place, OK writes the changes as one undo step. The columns are the ones the library model keeps: Symbol Name, Reference, Datasheet, Description, Keywords, Exclude From BOM / Board, Power Symbol (no Value, Footprint, simulation or user fields) |
+| Synchronized Pins Mode | **done** | `ToggleSyncedPinsMode` and what it drives: a pin placed on one unit gets its image on every other (`CreateImagePins`), moving or editing a pin carries the matching pins of the other units (`SYMBOL_EDITOR_MOVE_TOOL::Main`, `EditPinProperties`), and "This position is already occupied by another pin, in unit %d" asks first (`PlacePin`). On by default for a multi-unit symbol. `kicad-port/symPinSync.ts` |
+| Push Pin Length / Name Size / Number Size | **done** | `SYMBOL_EDITOR_PIN_TOOL::PushPinProperties` from the one selected pin (tool entries and the right-click menu); length goes through `SCH_PIN::ChangeLength` (the connection point moves along the pin) and only to pins of the same body style |
+| Draw Lines / Draw Polygons | **done** | one tool in this KiCad (both `SHAPE_T::POLY`, `doDrawShape`): the first click begins the outline, each later click continues it (no zero-length segment), a double click or Enter ends it, Escape drops the shape and keeps the tool. Unfilled, as `m_lastFillStyle` is. Ending on the start closes it (the file has no closed flag: the last point repeats the first). `kicad-port/symPolyDraw.ts`, ported from `EDA_SHAPE::{begin,continue,calc,end}Edit` |
+| Draw Text | **done** | `TwoClickPlace`: the first click opens `DIALOG_TEXT_PROPERTIES` (text, size, horizontal / vertical; bold, italic and justification are not part of a library text here), the text follows the cursor, the second click places it; a text with nothing printable is dropped |
+| Move Symbol Anchor | **done** | `PlaceAnchor`: a click makes that point the origin (`symbol->Move( -cursorPos )`, `Cmd::SetSymbolAnchor`) and the view is re-centred by the same amount so the symbol does not move on the screen |
+| Show Pin Electrical Types / Show Hidden Pins / Show Pin Numbers | **done** | the left toolbar's view toggles: `PIN_LAYOUT_CACHE::GetPinElectricalTypeInfo` (the type's name beyond the connection point, `kicad-port/symPinText.ts`), `SCH_PAINTER::draw( SCH_PIN )` (a hidden pin is drawn in the hidden colour or not at all, and cannot be picked when not drawn). `m_ShowPinNumbers` is read only by the Symbol Viewer in this KiCad, so here it forces the numbers on where the symbol hides them (`pin_numbers_hidden`, which the canvas now honours, with `pin_names_hidden`) |
+| Place > Rectangle / Circle / Arc, Edit > Pin Table, File > Symbol Properties | done | the same actions the schematic registers, driving this editor's tools and dialogs on this tab |
+| Derive from Existing Symbol, Flatten Symbol, Update Symbol Fields, Bulk Edit Related Symbol Fields | missing (reason recorded) | derived symbols (`extends`) are not in the library model |
+| Show Hidden Fields, Draw Text Boxes, Export Symbol as SVG, Display next / previous symbol | missing (reason recorded) | no fields on the canvas, no text box graphic, plots are kicad-cli's, the last two are the Symbol Viewer's |
+
+Bugs found and fixed on the way: **a library symbol with a graphic made `design.json` unreadable** (opening `Device:R` for editing was enough: `starlark` turns
+`serde_json`'s `arbitrary_precision` on for the whole build and serde's tagged-enum reader then reads every buffered fraction as a map --
+`LibrarySymbolGraphic` is now read field by field, `crates/model/tests/library_symbol_graphic_wire.rs`); the server omits a pin's unit and body
+style when they are 1 (and empty text fields), so no pin ever matched the unit being edited -- nothing was drawn or pickable
+(`kicad-port/libraryDefaults.ts`); a symbol a few millimetres across was blown up to the whole canvas; the editors' toolbars overlapped.
+
 ## Known gaps (not fixed, scope-bounded)
 
 - DeMorgan alternate body style is authorable and exports correctly to
@@ -123,7 +157,9 @@ Fixed on the way: `GET /api/symbol?lib_id=...` did not percent-decode `lib_id`, 
   the canvas (and the schematic's own placed-instance renderer) always
   draws at the shared hardcoded 0.508mm offset -- pre-existing limitation,
   now also true here.
-- "Push Pin Properties" has no UI entry point yet (Cmd + backend only).
+- "Push Pin Properties" has its entry points now (tool and right-click menu, section above).
+- A new graphic or text is always on the unit being edited (KiCad draws it on every unit unless the symbol's units are locked, `m_drawSpecificUnit`):
+  the library model has no "units interchangeable" flag.
 - No live ghost/preview while a pin/shape tool is armed, before the first
   click -- same documented adaptation PARITY-sch.md's labels/power-symbol
   section already accepts for this app's "small-dialog-last" tool shape.

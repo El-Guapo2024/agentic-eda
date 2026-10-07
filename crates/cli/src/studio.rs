@@ -17,13 +17,17 @@
 //! serve_board_glb) -- the export alone can take minutes on a many-part
 //! board (real STEP models through kicad-cli/OpenCascade), and it once
 //! blocked /api/version and everything else for that long before this
-//! was fixed to run in the background instead.
+//! was fixed to run in the background instead. The rest of kicad-cli's
+//! work (DRC, ERC, board statistics, every plot and export) is the same
+//! kind of slow: it runs on threads of its own too (`offload`, and
+//! `crate::kicad_lane`, which keeps it to one kicad-cli at a time), so
+//! an edit or the /api/version poll never waits for one.
 
 use crate::board;
-use crate::board_stats;
 use crate::cleanup_api;
 use crate::convert_api;
 use crate::fab_api;
+use crate::kicad_lane::Lane;
 use crate::route_api;
 use crate::sch_api;
 use crate::sch_output_api;
@@ -100,9 +104,11 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     // `route_api`'s own doc comment for why it's safe to hold across
     // requests without re-reading the board each time.
     let route_session: crate::route_api::RouteCell = Mutex::new(None);
+    // Where DRC, ERC, statistics and the exports run -- see `offload`.
+    let lane = Arc::new(Lane::default());
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_job, &route_session, ui_root.as_deref()) {
+        if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_job, &route_session, ui_root.as_deref(), &lane) {
             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
         }
     }
@@ -470,6 +476,31 @@ fn mime_of(path: &Path) -> &'static str {
     }
 }
 
+/// Runs `work` -- anything that starts kicad-cli -- off the request loop, and
+/// answers `stream` with its reply (a JSON object, stamped with the `revision`
+/// it ran on) when it is done. Returns at once, so the loop goes on to the next
+/// request while kicad-cli runs: an edit, the /api/version poll and the 3D view
+/// never wait for it. `route` and `body` name the request: the same one on the
+/// same revision joins the run already going instead of starting another
+/// kicad-cli, and a different one waits its turn -- one kicad-cli at a time
+/// (`crate::kicad_lane`). A new route that starts kicad-cli goes through here:
+/// answered inline it holds up the whole loop again (a test in `kicad_lane`
+/// fails when a kicad-cli route is not an `offload` arm).
+fn offload(stream: &TcpStream, lane: &Arc<Lane>, dir: &Path, job: &Job, route: &str, body: &[u8], work: impl FnOnce(&Path, &[u8]) -> Value + Send + 'static) -> Result<(), String> {
+    // The loop drops its own handle on `stream` when it moves on; this one keeps the connection open for the answer.
+    let mut out = stream.try_clone().map_err(|e| e.to_string())?;
+    let what = format!("{route} {}", String::from_utf8_lossy(body));
+    let (lane, dir, job, body) = (lane.clone(), dir.to_path_buf(), job.clone(), body.to_vec());
+    std::thread::Builder::new()
+        .name("kicad-cli".into())
+        .spawn(move || {
+            let reply = lane.run(&what, || version_string(&dir, &job), || work(&dir, &body));
+            let _ = respond(&mut out, "200 OK", "application/json", reply.to_string().as_bytes());
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[allow(clippy::too_many_arguments)] // mirrors the existing job/schematic/glb_job cells this one more (route_session) joins.
 fn handle(
     stream: &mut TcpStream,
@@ -479,6 +510,7 @@ fn handle(
     glb_job: &GlbJob,
     route_session: &crate::route_api::RouteCell,
     ui_root: Option<&Path>,
+    lane: &Arc<Lane>,
 ) -> Result<(), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut request_line = String::new();
@@ -545,18 +577,23 @@ fn handle(
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job),
+        // DRC and ERC are kicad-cli's (docs/ARCHITECTURE.md, "Engines"): the
+        // current design.json revision is exported, kicad-cli runs (seconds),
+        // and its report comes back mapped to our item ids, stamped with the
+        // `revision` it was run on. They run off this loop (`offload`): the
+        // request waits for its report and nothing else does -- the dialogs
+        // show a running state, edits stay instant, and a report whose
+        // `revision` is no longer /api/version's is shown as out of date. Our
+        // own checks, the ones KiCad does not have, are `/api/lint`: cheap and
+        // in-process, refreshed on every change.
         ("GET", "/api/drc") => {
-            // `?engine=kicad`: run the real kicad-cli DRC on the current design.
-            let kicad = target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "engine=kicad");
-            let v = if kicad { crate::kicad_engine::drc(dir) } else { drc_json(dir) }.unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
-            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
+            // `?refill_zones=1`: the DRC dialog's "Refill all zones before performing DRC".
+            let refill = target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "refill_zones=1");
+            offload(stream, lane, dir, job, &format!("{path} refill={refill}"), &[], move |dir, _| crate::kicad_engine::drc(dir, refill).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
-        ("GET", "/api/erc") if target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "engine=kicad") => {
-            let v = crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
-            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
-        }
-        ("GET", "/api/erc") => {
-            let v = erc_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+        ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
+        ("GET", "/api/lint") => {
+            let v = crate::kicad_engine::lint(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         // Symbol Fields Table / Find / ERC pin map backends: `crate::sch_api`.
@@ -606,6 +643,12 @@ fn handle(
                 Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
             }
         }
+        // The library editors' read-only lookups of ANY symbol / footprint (project entry or resolved), for Duplicate, Save Copy As, Copy.
+        ("GET", "/api/library/symbol") => respond(stream, "200 OK", "application/json", crate::library_api::symbol(dir, &query_value(target, "lib_id")).to_string().as_bytes()),
+        ("GET", "/api/library/footprint") => respond(stream, "200 OK", "application/json", crate::library_api::footprint(dir, &query_value(target, "name")).to_string().as_bytes()),
+        // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
+        ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
+        ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
         ("GET", "/api/symbol_library/export") => match symbol_library_kicad_sym(dir) {
             Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
@@ -702,29 +745,22 @@ fn handle(
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
         // "Board Statistics..." (task item 8): read-only, same stateless
         // no-Cmd shape as fab_api::bom below (nothing to undo -- it never
-        // touches design.json).
-        ("POST", "/api/board_stats") => respond(stream, "200 OK", "application/json", board_stats::compute(dir, &body).to_string().as_bytes()),
-        // Fabrication outputs (Plot / Generate Drill Files / Footprint
-        // Position Files dialogs, plus the plain BOM): `crate::fab_api`
-        // runs the same `eda_fab` writers `eda fab ...` does and writes
-        // into `<dir>/export/` -- see that module's own doc comment.
-        ("POST", "/api/fab/kicad") => {
-            let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-            let kind = req["kind"].as_str().unwrap_or("");
-            let args: Vec<String> = req["args"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-            let v = crate::kicad_engine::export(dir, kind, &args).unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }));
-            respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
-        }
-        ("POST", "/api/fab/gerbers") => respond(stream, "200 OK", "application/json", fab_api::gerbers(dir, &body).to_string().as_bytes()),
-        ("POST", "/api/fab/drill") => respond(stream, "200 OK", "application/json", fab_api::drill(dir, &body).to_string().as_bytes()),
-        ("POST", "/api/fab/pos") => respond(stream, "200 OK", "application/json", fab_api::pos(dir, &body).to_string().as_bytes()),
-        ("POST", "/api/fab/bom") => respond(stream, "200 OK", "application/json", fab_api::bom(dir).to_string().as_bytes()),
-        // Schematic outputs (File > Plot... / File > Export > Netlist...):
-        // `crate::sch_output_api` runs `eda_kicad::plot_schematic` (SCH_PLOTTER) and
-        // `eda_kicad::export_netlist` (NETLIST_EXPORTER_*) and writes into
-        // `<dir>/export/`, same contract as `/api/fab/*` above.
-        ("POST", "/api/sch/plot") => respond(stream, "200 OK", "application/json", sch_output_api::plot(dir, &body).to_string().as_bytes()),
-        ("POST", "/api/sch/netlist") => respond(stream, "200 OK", "application/json", sch_output_api::netlist(dir, &body).to_string().as_bytes()),
+        // touches design.json). kicad-cli's, so off the loop like DRC.
+        ("POST", "/api/board_stats") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::board_stats),
+        // Fabrication and schematic outputs (Plot / Generate Drill Files /
+        // Footprint Position Files / Plot Schematic / Export Netlist): each
+        // dialog's JSON becomes kicad-cli arguments (`crate::fab_api`,
+        // `crate::sch_output_api`) and runs through `crate::kicad_engine`,
+        // into `<dir>/export/kicad/`. `/api/fab/kicad` is the same engine
+        // with raw `pcb export` arguments. Every one runs off the loop
+        // (`offload`), like DRC.
+        ("POST", "/api/fab/kicad") => offload(stream, lane, dir, job, path, &body, fab_api::kicad),
+        ("POST", "/api/fab/gerbers") => offload(stream, lane, dir, job, path, &body, fab_api::gerbers),
+        ("POST", "/api/fab/drill") => offload(stream, lane, dir, job, path, &body, fab_api::drill),
+        ("POST", "/api/fab/pos") => offload(stream, lane, dir, job, path, &body, fab_api::pos),
+        ("POST", "/api/fab/bom") => offload(stream, lane, dir, job, path, &body, |dir, _| fab_api::bom(dir)),
+        ("POST", "/api/sch/plot") => offload(stream, lane, dir, job, path, &body, sch_output_api::plot),
+        ("POST", "/api/sch/netlist") => offload(stream, lane, dir, job, path, &body, sch_output_api::netlist),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }
@@ -1262,7 +1298,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         .iter()
         .map(|w| {
             let mut v = json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus });
-            // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias expansion `eda_kicad::bus` already does for ERC.
+            // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias name expansion (`eda_kicad::expand_bus_members`).
             if w.bus {
                 v["members"] = json!(eda_kicad::expand_bus_members(&w.net, &design.bus_aliases).unwrap_or_default());
             }
@@ -1547,97 +1583,6 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description })
 }
 
-/// `GET /api/drc`: the ported KiCad design-rule checker (`eda_drc`), run
-/// fresh on the board's current design/model -- no caching, since DRC is
-/// cheap enough on these board sizes to just run on every request the same
-/// way `/api/state`'s own gate checks do.
-///
-/// Shaped like `kicad-cli pcb drc --format json`'s own report (`type`/
-/// `description`/`severity`/`items`), for the React DRC dialog this feeds
-/// and for anyone cross-checking against the real oracle by eye. Two
-/// deliberate differences: positions are this API's own µm integers (every
-/// other endpoint here -- `pads`, `routing.tracks`, `outline` -- already
-/// uses board-space µm, not kicad-cli's millimetres), each as `[x, y]`
-/// rather than kicad-cli's own `{x, y}` mm object; and an extra `fix` key
-/// (`null` when absent) carrying the placement-quality providers' agent-fix
-/// metadata (see `eda_drc::FixHint`), which kicad-cli's own JSON has no
-/// concept of.
-/// GET /api/erc: `eda_kicad::check_erc_excluding` (the ERC engine, gap #4
-/// in GAPS.md -- "built, zero UI exposure" when this doc was first
-/// written; exclusions followed in a later session) run fresh on every
-/// call, same no-caching reasoning `drc_json`'s own doc gives. Flatter
-/// than `drc_json`'s `DrcViolation`/items shape: `check_erc` reports
-/// plain `CheckResult`s (check name, Fail/Warn/Excluded, an optional
-/// "REF" or "REF.PIN" `location` string, a human `hint`) rather than
-/// DRC's richer positioned-item list, so there is no ready-made
-/// canvas-marker position to extract here the way DRC's `it.pos` gives
-/// one -- `SchematicView.tsx`'s own `ercMarkerPosition` resolves
-/// `location` back to a point client-side instead (several different
-/// shapes: "REF.PIN", "NET:REF.PIN", a literal "x,y", "NET@x,y", ... --
-/// see its own doc). An `Excluded` result is kept (not dropped) and
-/// reported with its own `"excluded"` severity, so `ErcDialog.tsx` can
-/// still show and un-exclude it; `Pass` is never present in `check_erc`'s
-/// own output in the first place.
-fn erc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, model) = board::load(dir)?;
-    // `dialog_erc.cpp`'s own accepted-findings list, applied the same way
-    // `check_erc_excluding` always has: a finding whose (check, location)
-    // matches a persisted exclusion downgrades from Fail/Warn to
-    // `CheckStatus::Excluded` rather than disappearing, so `ErcDialog.tsx`
-    // can still show (and un-exclude) it instead of it just going quiet.
-    let mut exclusions = eda_kicad::Exclusions::new();
-    if let Some(sch) = &design.schematic {
-        for e in &sch.erc_exclusions {
-            exclusions.exclude(e.check.clone(), e.location.clone());
-        }
-    }
-    let found = eda_kicad::check_erc_excluding(&design, &model, &exclusions);
-    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
-    let violations: Vec<Value> = found
-        .iter()
-        .filter(|c| !matches!(c.status, CheckStatus::Pass))
-        .map(|c| {
-            // Only a still-live finding counts toward the dialog's own
-            // Errors/Warnings tally -- an excluded one is accounted for by
-            // its own severity (the frontend's own exclusions filter), not
-            // double-counted into "error"/"warning" too.
-            if !matches!(c.status, CheckStatus::Excluded) {
-                *counts.entry(c.check.as_str()).or_default() += 1;
-            }
-            json!({
-                "check": c.check,
-                "severity": match c.status { CheckStatus::Fail => "error", CheckStatus::Excluded => "excluded", _ => "warning" },
-                "location": c.location,
-                "hint": c.hint,
-            })
-        })
-        .collect();
-    Ok(json!({ "violations": violations, "counts": counts }))
-}
-
-fn drc_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, model) = board::load(dir)?;
-    let found = eda_connectivity::run_drc(&design, &model);
-    let counts = eda_drc::counts_by_type(&found);
-    let violations: Vec<Value> = found
-        .iter()
-        .map(|v| {
-            json!({
-                "type": v.error_type,
-                "description": v.description,
-                "severity": match v.severity { eda_drc::Severity::Error => "error", eda_drc::Severity::Warning => "warning" },
-                "items": v.items.iter().map(|it| json!({
-                    "description": it.description,
-                    "pos": [it.pos.0, it.pos.1],
-                    "id": it.id,
-                })).collect::<Vec<_>>(),
-                "fix": v.fix,
-            })
-        })
-        .collect();
-    Ok(json!({ "violations": violations, "counts": counts }))
-}
-
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document
 /// (GAPS.md #8), serialized exactly as `design.footprint_library` stores
 /// it. Unlike `/api/state`'s hand-built display JSON, there is no second
@@ -1670,10 +1615,15 @@ fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
 fn footprint_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let mut names: std::collections::BTreeSet<String> = model.footprints.iter().map(|f| f.name.clone()).collect();
+    // `project`: the names that are entries of the project library itself (editable in place, what the library tree's
+    // Delete / Rename / Cut act on); the rest come from the intent, a loaded `.kicad_mod` or the builtin table.
+    let mut project: Vec<String> = Vec::new();
     if let Some(lib) = &design.footprint_library {
         names.extend(lib.footprints.iter().map(|f| f.name.clone()));
+        project = lib.footprints.iter().map(|f| f.name.clone()).collect();
+        project.sort();
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>() }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project }))
 }
 
 /// `GET /api/footprint/export?name=<name>` -- a derived, standalone
@@ -1686,13 +1636,8 @@ fn footprint_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 /// click) -- this route itself only ever returns `text/plain`, no
 /// `Content-Disposition`, matching every other GET route here.
 fn footprint_kicad_mod(dir: &Path, name: &str) -> Result<String, Vec<CheckResult>> {
-    let (_, design, _) = board::load(dir)?;
-    let fp = design
-        .footprint_library
-        .as_ref()
-        .and_then(|l| l.by_name(name))
-        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_footprint", name, "this footprint has not been opened in the Footprint Editor yet")])?;
-    Ok(eda_kicad::export_kicad_mod(fp))
+    // The project entry, else what the model resolves the name to (a read-only export never needs the footprint opened first).
+    crate::library_api::footprint_kicad_mod_any(dir, name)
 }
 
 /// `GET /api/board.kicad_pcb` -- the design as a derived `.kicad_pcb` (File > Save As... on the PCB tab). `design.json` stays the
@@ -1776,23 +1721,22 @@ fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let mut names: std::collections::BTreeSet<String> = model.symbols.iter().map(|s| s.lib_id.clone()).collect();
     names.extend(eda_model::symbol::builtin_catalog().into_iter().map(|s| s.lib_id));
+    // `project`: the entries of the project library itself -- see `footprint_library_json`.
+    let mut project: Vec<String> = Vec::new();
     if let Some(lib) = &design.symbol_library {
         names.extend(lib.symbols.iter().map(|s| s.lib_id.clone()));
+        project = lib.symbols.iter().map(|s| s.lib_id.clone()).collect();
+        project.sort();
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>() }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project }))
 }
 
 /// `GET /api/symbol/export?lib_id=<id>` -- the derived, standalone
 /// `.kicad_sym` for one symbol-library entry (Symbol Editor's "Export
 /// .kicad_sym"), same shape as `footprint_kicad_mod`.
 fn symbol_kicad_sym(dir: &Path, lib_id: &str) -> Result<String, Vec<CheckResult>> {
-    let (_, design, _) = board::load(dir)?;
-    let sym = design
-        .symbol_library
-        .as_ref()
-        .and_then(|l| l.by_lib_id(lib_id))
-        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])?;
-    Ok(eda_kicad::export_kicad_sym(sym))
+    // The project entry, else the resolved symbol (real library file, builtin table): Export and Copy work on any symbol in the tree.
+    crate::library_api::symbol_kicad_sym_any(dir, lib_id)
 }
 
 /// `GET /api/symbol_library/export` -- every symbol of the project library in one derived `.kicad_sym`

@@ -8,7 +8,8 @@ serde_json = { workspace = true }
 eda-model = { path = "../model" }
 eda-engine = { path = "../engine" }
 eda-layout = { path = "../layout" }
-eda-drc = { path = "../drc" }
+eda-kicad-engine = { path = "../kicad-engine" }
+eda-lint = { path = "../lint" }
 
 [dev-dependencies]
 serde_yaml = { workspace = true }

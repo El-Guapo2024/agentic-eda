@@ -61,6 +61,7 @@ import { nextReference } from "../kicad-port/nextReference";
 import { refDesPrefix } from "../kicad-port/packFootprints";
 import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
+import { registerLibraryEditorActions } from "./libraryEditorActions";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
@@ -1585,8 +1586,9 @@ export function useActionRunner() {
           let report = state.erc;
           if (!report) {
             try {
+              dispatch({ type: "TOAST", message: "Running ERC (kicad-cli, a few seconds)...", kind: "info" });
               report = await fetchErc();
-              dispatch({ type: "ERC_OK", erc: report });
+              dispatch({ type: "ERC_OK", erc: report, version: state.version });
             } catch {
               dispatch({ type: "TOAST", message: "Could not run ERC.", kind: "error" });
               return;
@@ -2176,6 +2178,9 @@ export function useActionRunner() {
 
     // The pcbnew edit-tool rows (router modes, Mirror, Fillet/Chamfer/Dogbone/Extend Lines, polygon booleans, ...): actions/pcbEditSweep.ts.
     registerPcbEditSweep(m, { state, dispatch, api, requestSelection });
+
+    // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
+    registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch]);

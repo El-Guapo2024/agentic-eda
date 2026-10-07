@@ -1,0 +1,12 @@
+[package]
+name = "eda-lint"
+version = "0.1.0"
+edition = "2021"
+description = "Our own fast checks that KiCad does not have (placement quality, net-class width, schematic readability, fab readiness). Never DRC, never ERC, never a copy of a KiCad rule."
+
+[dependencies]
+serde = { workspace = true }
+eda-model = { path = "../model" }
+eda-engine = { path = "../engine" }
+eda-layout = { path = "../layout" }
+eda-render = { path = "../render" }

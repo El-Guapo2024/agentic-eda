@@ -209,8 +209,9 @@ pub struct BoardRules {
     /// ones), so this is populated wholesale from the project file, never
     /// merged key-by-key -- see `eda_kicad::merge_project_rule_severities`.
     /// A type set to `"ignore"` here means KiCad never even runs that
-    /// check: `eda_drc::run` reports nothing of that type at all, not a
-    /// de-prioritized version of it -- see its own doc comment.
+    /// check: kicad-cli (which gets these in the exported project file)
+    /// reports nothing of that type at all, not a de-prioritized version
+    /// of it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rule_severities: BTreeMap<String, String>,
     /// A `.kicad_dru` custom-rule file found next to an imported board
@@ -232,7 +233,7 @@ pub struct BoardRules {
     /// Edge.Cuts graphics chained into a genuinely closed loop
     /// (`ImportNotes::outline_open`, negated, carried forward here since
     /// that struct itself is import-time-only and does not reach
-    /// `eda_drc::run`). `None` = not applicable/not tracked -- a board
+    /// the checks). `None` = not applicable/not tracked -- a board
     /// this workspace's own pipeline produced (always a clean closed
     /// rectangle by construction), an outline reconstructed from a single
     /// `gr_poly`/`gr_circle` (inherently closed), or a `design.json`
@@ -961,7 +962,8 @@ pub enum CheckStatus {
     /// "Exclude" action: the violation still shows up in the report (its
     /// `hint` and `location` are untouched) so the review isn't silently
     /// lost, but it counts as neither a failure nor a warning. See
-    /// `eda_kicad::{Exclusions, check_erc_excluding}`.
+    /// `ErcExclusion` -- the studio applies the schematic's exclusions to
+    /// kicad-cli's ERC report.
     Excluded,
 }
 
