@@ -647,7 +647,7 @@ fn handle(
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
         ("GET", "/api/fill") => {
-            let v = fill_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            let v = fill_json(dir, query_value(target, "polys") == "1").unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("POST", "/api/cmd") => {
@@ -1003,6 +1003,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         // `BOARD_ITEM::IsLocked()` for every kind at once (a part ref or a
         // track/via/zone/shape/text id) -- see `DrawingsSection::locked_ids`.
         "locked": design.drawings.as_ref().map(|d| d.locked_ids.clone()).unwrap_or_default(),
+        // The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`), `[x, y]` um, or null at (0, 0).
+        "aux_origin": design.drawings.as_ref().and_then(|d| d.aux_origin).map(|p| json!([p.x, p.y])),
         "checks": checks,
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),
@@ -1760,7 +1762,19 @@ fn symbol_library_kicad_sym(dir: &Path) -> Result<String, Vec<CheckResult>> {
 fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let report = eda_connectivity::analyze(&design, &model);
-    let edges: Vec<Value> = report.ratsnest.iter().map(|e| json!({ "net": e.net, "from": [e.from.x, e.from.y], "to": [e.to.x, e.to.y] })).collect();
+    // `from_id`/`to_id` (a pad is `REF.NUMBER`) and `from_layers`/`to_layers` (inclusive, indexes into `board.layers`) name what each
+    // end joins: the Local Ratsnest tool and the "visible layers" ratsnest mode decide per line from them, as RATSNEST_VIEW_ITEM does.
+    let edges: Vec<Value> = report
+        .ratsnest
+        .iter()
+        .map(|e| {
+            json!({
+                "net": e.net, "from": [e.from.x, e.from.y], "to": [e.to.x, e.to.y],
+                "from_id": eda_connectivity::RatsnestEdge::item_id(&e.from_item), "to_id": eda_connectivity::RatsnestEdge::item_id(&e.to_item),
+                "from_layers": [e.from_layers.0, e.from_layers.1], "to_layers": [e.to_layers.0, e.to_layers.1],
+            })
+        })
+        .collect();
     Ok(json!({ "edges": edges }))
 }
 
@@ -1769,8 +1783,12 @@ fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 /// coordinate space `/api/ratsnest` already uses, for the UI to draw -- see
 /// the task's stage 4. Each zone's fill may be several disjoint fragments
 /// (islands); `outline` is always a single closed ring (post-`Fracture`,
-/// already slitted, never a separate holes list).
-fn fill_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+/// already slitted, never a separate holes list). `with_polys` (`?polys=1`) adds
+/// `polys`: the same fill unfractured, one `{ outline, holes }` per island --
+/// what the "Draw Zone Fill Triangulation" display triangulates
+/// (`kicad-port/polyTriangulate.ts`), as KiCad's `POLYGON_TRIANGULATION` does
+/// (it bridges the holes itself rather than reading the fractured ring).
+fn fill_json(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
     let drc_board = eda_drc::board::build(&design, &model);
@@ -1783,11 +1801,23 @@ fn fill_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             let fragments: Vec<Value> = fill
                 .map(|f| f.polys.iter().map(|poly| json!(poly[0].iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())).collect())
                 .unwrap_or_default();
-            json!({
+            let mut zone = json!({
                 "id": z.id, "net": z.net, "layer": z.layer,
                 "area_um2": fill.map(|f| f.area()).unwrap_or(0.0),
                 "fragments": fragments,
-            })
+            });
+            if with_polys {
+                let ring = |chain: &Vec<eda_clipper2::Point64>| chain.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>();
+                let polys: Vec<Value> = fill
+                    .map(|f| {
+                        let mut whole = f.clone();
+                        whole.unfracture();
+                        whole.polys.iter().map(|poly| json!({ "outline": ring(&poly[0]), "holes": poly[1..].iter().map(ring).collect::<Vec<_>>() })).collect()
+                    })
+                    .unwrap_or_default();
+                zone["polys"] = Value::Array(polys);
+            }
+            zone
         })
         .collect();
     Ok(json!({ "zones": zones_json }))
