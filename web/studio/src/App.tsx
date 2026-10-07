@@ -20,6 +20,7 @@ import { ErcDialog } from "./components/ErcDialog";
 import { HotkeysDialog } from "./components/HotkeysDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
+import { CommonOverlay } from "./components/CommonOverlay";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
@@ -169,6 +170,7 @@ function StudioFrame() {
           {isFootprint && <FootprintEditorView />}
           {isSymbolEditor && <SymbolEditorView />}
           {is3d && <Viewer3D onReady={setViewer3d} />}
+          {!is3d && <CommonOverlay />}
           <Toast />
         </div>
         {!hideBoardChrome && (

@@ -337,27 +337,7 @@ export function Canvas() {
       ctx.setLineDash([]);
     }
 
-    // Crosshair cursor.
-    if (state.cursorUm) {
-      const sx = state.cursorUm.x * state.view.scale + state.view.x;
-      const sy = state.cursorUm.y * state.view.scale + state.view.y;
-      ctx.strokeStyle = "rgba(224,224,224,0.9)";
-      ctx.lineWidth = 1;
-      const len = state.fullscreenCrosshair ? 100000 : 8;
-      ctx.beginPath();
-      if (state.fullscreenCrosshair) {
-        ctx.moveTo(0, sy);
-        ctx.lineTo(width, sy);
-        ctx.moveTo(sx, 0);
-        ctx.lineTo(sx, height);
-      } else {
-        ctx.moveTo(sx - len, sy);
-        ctx.lineTo(sx + len, sy);
-        ctx.moveTo(sx, sy - len);
-        ctx.lineTo(sx, sy + len);
-      }
-      ctx.stroke();
-    }
+    // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it).
     ctx.restore();
   }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, marquee, zoneCornerPreview, containerSize]);
 

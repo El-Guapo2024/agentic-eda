@@ -61,6 +61,8 @@ import { refDesPrefix } from "../kicad-port/packFootprints";
 import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
+import { registerCommonActions, type ActionHandler } from "./commonActions";
+import { makeEditorAdapter } from "./editorAdapter";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
@@ -89,7 +91,7 @@ export function useActionRunner() {
   const netNavKey = useRef<string | null>(null);
 
   const registry = useMemo(() => {
-    const m = new Map<string, () => void>();
+    const m = new Map<string, ActionHandler>();
     // Rotate/move/rip/the footprint-properties dialog/the PCB view's own
     // pan-zoom actions all read or write PCB-only state (api.*Selection,
     // state.view, .pcb-canvas-container's rect) -- and that CSS class is
@@ -788,8 +790,7 @@ export function useActionRunner() {
     // rather than inventing a third state painter.ts doesn't implement.
     m.set("common.Control.highContrastModeCycle", () => dispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
     m.set("common.Control.togglePolarCoords", () => dispatch({ type: "TOGGLE_POLAR" }));
-    m.set("common.Control.cursorFullCrosshairs", () => dispatch({ type: "SET_FULLSCREEN_CROSSHAIR", value: true }));
-    m.set("common.Control.cursorSmallCrosshairs", () => dispatch({ type: "SET_FULLSCREEN_CROSSHAIR", value: false }));
+    // cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs: actions/commonActions.ts (one setting, all four canvases).
 
     m.set("common.Control.metricUnits", () => dispatch({ type: "SET_UNITS", units: "mm" }));
     m.set("common.Control.imperialUnits", () => dispatch({ type: "SET_UNITS", units: "in" }));
@@ -2163,6 +2164,20 @@ export function useActionRunner() {
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
 
+    // The shared actions that work in every editor (actions/commonActions.ts). The adapter is built when an action runs: the
+    // library editors' stores change without this registry being rebuilt.
+    registerCommonActions(m, {
+      tab: state.tab,
+      getAdapter: () => makeEditorAdapter({ tab: state.tab, studio: state, fp: fpApi.getState(), sym: symApi.getState(), dispatch, fpDispatch, symDispatch }),
+      state,
+      dispatch,
+      api,
+      fpApi,
+      fpDispatch,
+      symApi,
+      symDispatch,
+    });
+
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch]);
 
@@ -2194,6 +2209,7 @@ export function useActionRunner() {
   // vice versa) -- arguably more honest ("usable right now" instead of
   // "usable somewhere"), not a regression.
   const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)), [registry, state.tab]);
-  const run = useCallback((name: string) => registry.get(name)?.(), [registry]);
+  /** `arg` is the event parameter KiCad's parameterised actions carry (`zoomPreset`'s entry, `selectItems`' items ...). */
+  const run = useCallback((name: string, arg?: unknown) => registry.get(name)?.(arg), [registry]);
   return { run, isEnabled };
 }

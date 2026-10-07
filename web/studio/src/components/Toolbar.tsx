@@ -12,6 +12,7 @@ import { useColorScheme } from "../hooks/useColorScheme";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength } from "../state/units";
 import { DEFAULT_PCB_GRIDS_UM } from "../kicad-port/grid";
+import { ToolbarGroup } from "./ToolbarGroup";
 
 /**
  * KiCad's real default PCB grid list (app_settings.cpp
@@ -151,27 +152,8 @@ function ToolbarItemView({ item }: { item: ToolbarItem }) {
 
   if (item.type === "control") return <ToolbarControl item={item} />;
 
-  if (item.type === "group") {
-    // Real KiCad renders this as a split button: the main icon runs the
-    // group's current/primary action, a small dropdown arrow picks a
-    // different member. This app has no per-group "current selection"
-    // state and no dropdown menu widget, so the main click runs the
-    // first enabled member instead -- a real, working default (this
-    // button used to have no onClick at all, so clicking it did
-    // nothing) rather than a full split-button UI.
-    const firstEnabled = item.items.find((a) => isEnabled(a));
-    const label = firstEnabled ? (actionsByName.get(firstEnabled)?.label ?? firstEnabled) : item.label;
-    return (
-      <button
-        className="toolbar-button"
-        disabled={!firstEnabled}
-        title={firstEnabled ? label : `${item.label} (not ported yet)`}
-        onClick={() => firstEnabled && run(firstEnabled)}
-      >
-        <ActionIcon iconName={item.icon} />
-      </button>
-    );
-  }
+  // A group button runs its current member and opens a palette of all of them (ToolbarGroup.tsx).
+  if (item.type === "group") return <ToolbarGroup label={item.label} icon={item.icon} items={item.items} />;
 
   const action = actionsByName.get(item.action);
   const enabled = isEnabled(item.action);
