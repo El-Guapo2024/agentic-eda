@@ -33,8 +33,11 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
     };
   }, [onClose]);
 
+  // The menu is a React child of the canvas, whose `onPointerDown` closes the menu (and clears or re-targets the selection) -- so a press on an entry used to
+  // unmount the menu before its `click` could fire, and the entry never ran. Presses and releases inside the menu stay inside it.
+  const keep = (e: { stopPropagation: () => void }) => e.stopPropagation();
   return (
-    <div ref={ref} className="menubar-dropdown" style={{ position: "fixed", left: x, top: y, minWidth: 180, zIndex: 4000 }}>
+    <div ref={ref} className="menubar-dropdown" style={{ position: "fixed", left: x, top: y, minWidth: 180, zIndex: 4000 }} onPointerDown={keep} onPointerUp={keep}>
       {entries.map((entry, i) => (
         <div
           key={i}
