@@ -45,6 +45,7 @@ pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad
 mod bus;
 pub use bus::expand_bus_members;
 
+mod sch_extras_io;
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
 
@@ -187,6 +188,9 @@ pub fn export_kicad_sch(
         let uuid = duid_for(&format!("sym:{}", sym.id), &sym.id);
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit {})", sexpr_str(&lib_id), sym.unit).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)").unwrap();
+        if sch.extras.is_locked(&sym.id) {
+            writeln!(out, "\t\t(locked yes)").unwrap();
+        }
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         let value = if !sym.value.is_empty() { sym.value.as_str() } else { part.value.as_deref().unwrap_or(&sym.id) };
         let footprint = if !sym.footprint.is_empty() { sym.footprint.as_str() } else { part.footprint.as_deref().unwrap_or("") };
@@ -227,6 +231,9 @@ pub fn export_kicad_sch(
         let uuid = duid_for(&format!("pwr:{}", ps.id), &ps.id);
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom no) (on_board no) (dnp no)").unwrap();
+        if sch.extras.is_locked(&ps.id) {
+            writeln!(out, "\t\t(locked yes)").unwrap();
+        }
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         write_property(&mut out, "Reference", &ps.id, 0.0, -2.0, true);
         write_property(&mut out, "Value", &ps.net, 0.0, 2.0, false);
@@ -260,6 +267,9 @@ pub fn export_kicad_sch(
             writeln!(out, "\t\t(pts (xy {x1} {y1}) (xy {x2} {y2}))").unwrap();
             writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
             writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+            if sch.extras.is_locked(&w.id) {
+                writeln!(out, "\t\t(locked yes)").unwrap();
+            }
             writeln!(out, "\t)").unwrap();
         }
     }
@@ -276,6 +286,9 @@ pub fn export_kicad_sch(
         writeln!(out, "\t(bus_entry (at {x} {y}) (size {dx} {dy})").unwrap();
         writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        if sch.extras.is_locked(&be.id) {
+            writeln!(out, "\t\t(locked yes)").unwrap();
+        }
         writeln!(out, "\t)").unwrap();
     }
 
@@ -328,6 +341,9 @@ pub fn export_kicad_sch(
         let uuid = duid_for(&format!("junction:{}:{}", j.at.x, j.at.y), &j.id);
         writeln!(out, "\t(junction (at {x} {y}) (diameter 0) (color 0 0 0 0)").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        if sch.extras.is_locked(&j.id) {
+            writeln!(out, "\t\t(locked yes)").unwrap();
+        }
         writeln!(out, "\t)").unwrap();
     }
     // Graphic lines on the notes layer (`I`, `SchLine`): `(polyline ...)`, decoration with no net.
@@ -341,15 +357,22 @@ pub fn export_kicad_sch(
         writeln!(out, "\t\t(pts{pts})").unwrap();
         writeln!(out, "\t\t(stroke (width {width}) (type default))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        if sch.extras.is_locked(&l.id) {
+            writeln!(out, "\t\t(locked yes)").unwrap();
+        }
         writeln!(out, "\t)").unwrap();
     }
+
+    // Shapes, text boxes, rule areas and directive labels (`SchGraphic`).
+    sch_extras_io::write_graphics(&mut out, sch);
 
     // ---- no-connect flags ----
     for nc in &no_connects {
         let x = mm(nc.at.x);
         let y = mm(nc.at.y);
         let uuid = duid_for(&format!("nc:{}:{}", nc.at.x, nc.at.y), &nc.id);
-        writeln!(out, "\t(no_connect (at {x} {y}) (uuid \"{uuid}\"))").unwrap();
+        let locked = if sch.extras.is_locked(&nc.id) { " (locked yes)" } else { "" };
+        writeln!(out, "\t(no_connect (at {x} {y}) (uuid \"{uuid}\"){locked})").unwrap();
     }
 
     // ---- labels: local, global or hierarchical, per `NetLabel::kind` ----
@@ -369,6 +392,9 @@ pub fn export_kicad_sch(
         writeln!(out, " (at {x} {y} 0)").unwrap();
         writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify left))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        if sch.extras.is_locked(&l.id) {
+            writeln!(out, "\t\t(locked yes)").unwrap();
+        }
         writeln!(out, "\t)").unwrap();
     }
 
@@ -384,6 +410,9 @@ pub fn export_kicad_sch(
         writeln!(out, "\t\t(at {x} {y} {angle_deg})").unwrap();
         writeln!(out, "\t\t(effects (font (size {size_mm} {size_mm})))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        if sch.extras.is_locked(&t.id) {
+            writeln!(out, "\t\t(locked yes)").unwrap();
+        }
         writeln!(out, "\t)").unwrap();
     }
 
@@ -401,6 +430,9 @@ pub fn export_kicad_sch(
         writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
         writeln!(out, "\t\t(fill (color 255 255 194 1.0000))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+        if sch.extras.is_locked(&s.id) {
+            writeln!(out, "\t\t(locked yes)").unwrap();
+        }
         let name_y = mm(s.at.y - 600);
         let file_y = mm(s.at.y + s.size.1 + 600);
         writeln!(out, "\t\t(property \"Sheetname\" {} (at {x} {name_y} 0) (effects (font (size 1.27 1.27))))", sexpr_str(&s.name)).unwrap();
@@ -1242,7 +1274,7 @@ mod tests {
                 size: (20_000, 20_000),
                 pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000, y: 30_000 } }],
             }],
-            instance_overrides: vec![], junctions: vec![], lines: vec![],
+            instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
             imported_from_kicad: false,
         };
         let mut screens = std::collections::BTreeMap::new();

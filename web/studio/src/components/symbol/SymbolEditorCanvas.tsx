@@ -31,6 +31,8 @@ import { pinOccupying, synchronizePins } from "../../kicad-port/symPinSync";
 import { pinShown } from "../../kicad-port/symPinText";
 import { askConfirm } from "../library/libraryDialogs";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
+import { useActionRunner } from "../../actions/useActionRunner";
+import { stackedPinMenuState } from "../../kicad-port/stackedPins";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<SymToolId, SymShapeKind>> = {
@@ -142,6 +144,7 @@ export function SymbolEditorCanvas() {
   const state = useSymState();
   const dispatch = useSymDispatch();
   const api = useSymApi();
+  const { run } = useActionRunner();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -509,6 +512,14 @@ export function SymbolEditorCanvas() {
             { label: "Push Pin Number Size", onSelect: () => void api.pushPinProperty(pinRefs[0]!, "number_size") },
           ] as MenuEntry[])
         : []),
+      // `SYMBOL_EDITOR_EDIT_TOOL::Init`: Convert Stacked Pins / Explode Stacked Pin appear only when their conditions hold (kicad-port/stackedPins.ts).
+      ...(() => {
+        const stack = stackedPinMenuState(sym?.pins ?? [], refs);
+        return [
+          ...(stack.canConvert ? [{ label: "Convert Stacked Pins", onSelect: () => run("eeschema.InteractiveEdit.convertStackedPins") }] : []),
+          ...(stack.canExplode ? [{ label: "Explode Stacked Pin", onSelect: () => run("eeschema.InteractiveEdit.explodeStackedPin") }] : []),
+        ] as MenuEntry[];
+      })(),
       { label: "Delete (Del)", onSelect: () => refs.forEach((id) => (api.pinById(id) ? void api.deletePin(id) : void api.deleteGraphic(id))), disabled: refs.length === 0 },
     ];
     setContextMenu({ x: e.clientX, y: e.clientY, entries });

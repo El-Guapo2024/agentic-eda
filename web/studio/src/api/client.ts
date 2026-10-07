@@ -89,6 +89,8 @@ export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Sch
     bus_entries: s.bus_entries ?? [],
     junctions: s.junctions ?? [],
     lines: s.lines ?? [],
+    graphics: s.graphics ?? [],
+    locked: s.locked ?? [],
     // `bus` is new (GAPS.md #20) -- a wire from a backend built before it
     // existed has no such field at all, not even `false`.
     wires: (s.wires ?? []).map((w) => ({ ...w, bus: w.bus ?? false })),

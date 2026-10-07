@@ -50,6 +50,14 @@ test("isActionEnabledForTab: symbol-editor-frame actions are enabled on the symb
   }
 });
 
+test("isActionEnabledForTab: the Symbol Editor's stacked-pin tools are enabled on the symbol tab only", () => {
+  for (const name of ["eeschema.InteractiveEdit.convertStackedPins", "eeschema.InteractiveEdit.explodeStackedPin"]) {
+    assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);
+    assert.equal(isActionEnabledForTab(name, "symbol", false), false, "unregistered stays disabled");
+  }
+});
+
 test("isActionEnabledForTab: Save As and Update PCB from Schematic exist for the board and schematic editors only, so Ctrl+Shift+S on the Symbol tab reaches saveLibraryAs", () => {
   for (const name of ["common.Control.saveAs", "common.Control.updatePcbFromSchematic"]) {
     assert.equal(isActionEnabledForTab(name, "pcb", true), true, name);

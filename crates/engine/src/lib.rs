@@ -490,7 +490,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             seed: opts.seed,
             stage_hashes: Vec::new(),
         },
-        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![] }),
+        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default() }),
         nets: None,
         placement: None,
         routing: None,

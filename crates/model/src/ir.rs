@@ -173,7 +173,7 @@ pub enum Stage {
 
 // ---------- stage 1: schematic ----------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchematicSection {
     /// Sorted by `(id, unit)`. Several entries can share one `id`: a
@@ -212,6 +212,11 @@ pub struct SchematicSection {
     /// Graphic lines on the notes layer (`I`) -- see [`SchLine`]. Additive.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<SchLine>,
+    /// Drawn shapes, text boxes, rule areas, directive labels, locks and body styles -- see
+    /// [`crate::sch_extras::SchExtras`]. Additive; empty (and not written) for every design that
+    /// never used those tools.
+    #[serde(default, skip_serializing_if = "crate::sch_extras::SchExtras::is_empty")]
+    pub extras: crate::sch_extras::SchExtras,
     /// Accepted ("excluded") ERC findings -- `dialog_erc.cpp`'s own
     /// per-sheet `SCHEMATIC::RecordERCExclusions`. Sorted by (check,
     /// location); see [`ErcExclusion`]'s own doc for why it has no `id`.
@@ -861,6 +866,8 @@ impl SchematicSection {
                 self.lines[i].id = id;
             }
         }
+
+        self.extras.assign_missing_ids(&mut existing);
 
         // Sheets and their own pins: imported from a real file carries
         // real uuids already (see `sch_import`'s own sheet-parsing loop),
@@ -3326,7 +3333,7 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
 /// two items hash the same (an exact duplicate, e.g. a hand-add repeated
 /// verbatim) -- so ids are always unique within one design, and, given the
 /// same seed and the same existing set, always the same.
-fn next_item_id(prefix: &str, seed: &str, existing: &std::collections::BTreeSet<String>) -> String {
+pub(crate) fn next_item_id(prefix: &str, seed: &str, existing: &std::collections::BTreeSet<String>) -> String {
     let base = format!("{prefix}_{}", &fnv1a_hex(seed.as_bytes())[..12]);
     if !existing.contains(&base) {
         return base;
@@ -3352,6 +3359,7 @@ impl Design {
             s.power_symbols.sort_by(|a, b| a.id.cmp(&b.id));
             s.no_connects.sort_by(|a, b| a.at.cmp(&b.at));
             s.sheets.sort_by(|a, b| a.name.cmp(&b.name));
+            s.extras.canonicalize();
         }
         if let Some(p) = &mut d.placement {
             p.footprints.sort_by(|a, b| a.id.cmp(&b.id));
@@ -3407,7 +3415,7 @@ mod tests {
                 sheets: vec![],
                 instance_overrides: vec![],
                 junctions: vec![],
-                lines: vec![],
+                lines: vec![], extras: Default::default(),
             }),
             nets: None,
             placement: None,

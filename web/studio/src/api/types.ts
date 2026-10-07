@@ -9,6 +9,8 @@
 // board sizes this project deals with). Angles in `rot` are degrees
 // (the backend already divides millidegrees by 1000 before sending).
 
+import type { SchEditCmd, SchGraphic } from "./schEditTypes";
+
 export type Um = number;
 export type Degrees = number;
 
@@ -806,6 +808,8 @@ export type Cmd =
   | { op: "add_sheet"; name: string; file: string; at: PointXY; size: [Um, Um] }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
+  /** The schematic editor's other tool verbs (lock, break, convert text, shapes, sheet pins, ...) -- see api/schEditTypes.ts. */
+  | ({ op: "sch_edit" } & SchEditCmd)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
@@ -1440,6 +1444,10 @@ export interface Schematic {
   junctions?: SchJunction[];
   /** Graphic lines on the notes layer (`I`) -- see `SchLine`. Absent from a backend built before they existed. */
   lines?: SchLine[];
+  /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
+  graphics?: SchGraphic[];
+  /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
+  locked?: string[];
   /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */

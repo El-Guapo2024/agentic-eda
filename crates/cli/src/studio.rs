@@ -1181,7 +1181,7 @@ fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model
         imported_from_kicad: false,
         title_block: None,
         sheets: vec![],
-        instance_overrides: vec![], junctions: vec![], lines: vec![],
+        instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
         symbols: Vec::new(),
         wires: Vec::new(),
         labels: Vec::new(),
@@ -1219,7 +1219,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
-                instance_overrides: vec![], junctions: vec![], lines: vec![],
+                instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
                 symbols: Vec::new(),
                 wires: Vec::new(),
                 labels: Vec::new(),
@@ -1302,6 +1302,9 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
     // Explicit junctions (`J`) and graphic lines on the notes layer (`I`) -- see `eda_model::ir::Junction`/`SchLine`.
     let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y] })).collect();
     let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um })).collect();
+    // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
+    let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
+    let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y] })).collect();
@@ -1381,6 +1384,8 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "bus_entries": bus_entries,
         "junctions": junctions,
         "lines": lines,
+        "graphics": graphics,
+        "locked": locked,
         "title_block": title_block,
         "lib_symbols": lib_symbols,
         "sheets": sheets,
@@ -1791,7 +1796,7 @@ mod tests {
     use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
 
     fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
-        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false }
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
     }
 
     fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {
