@@ -537,7 +537,7 @@ export function Canvas() {
       }
 
       // `pcbnew.Control.localRatsnestTool`: `BOARD_INSPECTION_TOOL::LocalRatsnestTool`'s click handler. The pad under the cursor, else the
-      // footprint, has its ratsnest shown or hidden; a click on neither resets every pad. The tool stays armed until Esc.
+      // footprint, has its ratsnest shown or hidden; a click on neither resets every pad. The tool stays armed until Esc, which resets every pad too (the ESCAPE case in state/store.tsx).
       if (state.activeTool === "local_ratsnest") {
         const pad = padAt(board.parts, wx, wy);
         const part = pad ? board.parts.find((p) => p.ref === pad.ref) : partHit(board.parts, wx, wy);

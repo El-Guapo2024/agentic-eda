@@ -1157,6 +1157,8 @@ function reducer(state: StudioState, action: Action): StudioState {
           armedSymbol: null,
           symbolProperties: null,
           pcbx: { ...state.pcbx, moveQueue: [], movingIndividually: false, zoneDrawMode: null },
+          // `LocalRatsnestTool`'s finalize handler: leaving the picker with Esc puts every pad's local ratsnest flag back to the global state.
+          bcx: state.activeTool === "local_ratsnest" ? { ...state.bcx, localRatsnestPads: [] } : state.bcx,
         };
       }
       if (state.selection.size > 0) {
