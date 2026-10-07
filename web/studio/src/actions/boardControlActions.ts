@@ -10,7 +10,8 @@ import type { Action, StudioApi, StudioState } from "../state/store";
 import type { BoardControlState, BoardExportKind } from "../kicad-port/boardControlState";
 import { postRepairBoard } from "../api/boardControl";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
-import type { ZonePriorityMove } from "../api/types";
+import { fetchFootprintLibraryNames } from "../api/client";
+import type { Cmd, ZonePriorityMove } from "../api/types";
 import { afterFill, afterUnfill, filledNow, highlightedNets, netsOfSelection, ratsnestModeCycle, selectedCopperZones, setNetsHidden, swapHighlight } from "../kicad-port/boardControl";
 
 export interface BoardControlContext {
@@ -78,6 +79,10 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
 
   // The Zone Manager dialog (components/ZoneManagerDialog.tsx).
   m.set("pcbnew.Control.zonesManager", pcbOnly(() => bcx({ zoneManagerOpen: true })));
+
+  // FlipPcbView: toggles `PCB_DISPLAY_OPTIONS::m_FlipBoardView`; Canvas.tsx draws the board mirrored (as seen from its other side) and
+  // turns the pointer back into board coordinates.
+  m.set("pcbnew.Control.flipBoard", pcbOnly(() => bcx({ boardFlipped: !state.bcx.boardFlipped })));
 
   // ------------------------------------------------- net highlight and ratsnest (board_inspection_tool.cpp)
 
@@ -227,6 +232,32 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
   m.set("pcbnew.EditorControl.generateODBPPFile", exportDialog("odb"));
   m.set("pcbnew.EditorControl.generateBOM", exportDialog("pcb_bom"));
   m.set("pcbnew.EditorControl.exportFootprintAssociations", exportDialog("cmp"));
+
+  // ExportFootprints ("Footprints..." under File > Export, `ExportFootprintsToLibrary( false )`): saves a copy of every footprint of the
+  // board into a library. The studio has the one project footprint library (`design.footprint_library`) rather than a library table to pick
+  // from, and a placed footprint is its named footprint (a library entry reaches the board only once it is published), so each distinct
+  // footprint the board uses that is not an entry yet becomes one (`Cmd::OpenFootprintForEdit` copies what the board resolves the name to).
+  // KiCad skips a footprint with no library item name, and its "link the board footprints to the exported ones" option has nothing to do.
+  m.set(
+    "pcbnew.EditorControl.exportFootprints",
+    pcbOnly(() => {
+      const names = [...new Set((board?.parts ?? []).map((p) => p.footprint).filter((n): n is string => !!n))];
+      if (names.length === 0) {
+        toast("No footprints to export!");
+        return;
+      }
+      void fetchFootprintLibraryNames()
+        .then(async (lib) => {
+          const resolvable = new Set(lib.names);
+          const entries = new Set(lib.project ?? []);
+          const todo = names.filter((n) => resolvable.has(n) && !entries.has(n));
+          if (todo.length > 0 && !(await api.cmdBatch(todo.map((name): Cmd => ({ op: "open_footprint_for_edit", name }))))) return;
+          const skipped = names.filter((n) => !resolvable.has(n)).length;
+          toast(`${todo.length} footprint(s) added to the project footprint library, ${names.length - todo.length - skipped} already there${skipped > 0 ? `, ${skipped} not found` : ""}.`);
+        })
+        .catch((e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"));
+    })
+  );
 
   // ShowFootprintLinks: exactly one footprint selected.
   m.set(

@@ -45,7 +45,7 @@ import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
-import { connectedTrackWidth, displayedRatsnest, highlightedNets, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
+import { connectedTrackWidth, displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
 import { padAt } from "../../kicad-port/boardControlPick";
 import "../../styles/canvas.css";
 
@@ -246,7 +246,7 @@ export function Canvas() {
       const dir = computeAutoPanDirection(pointer, screenSize, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin);
       const step = computeAutoPanStep(dir, screenSize, s.view.scale, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin, s.prefs.autoPanAcceleration);
       if (!step) return;
-      dispatch({ type: "SET_VIEW", view: panByWorldDelta(s.view, step.x, step.y) });
+      dispatch({ type: "SET_VIEW", view: panByWorldDelta(s.view, panDeltaX(s.bcx.boardFlipped, step.x), step.y) });
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -290,6 +290,11 @@ export function Canvas() {
     ctx.fillStyle = layerColor("background");
     ctx.fillRect(0, 0, width, height);
     ctx.save();
+    // pcbnew.Control.flipBoard (`view->SetMirror( m_FlipBoardView )`): the board seen from its other side, mirrored about the canvas middle.
+    if (state.bcx.boardFlipped) {
+      ctx.translate(width, 0);
+      ctx.scale(-1, 1);
+    }
     ctx.translate(state.view.x, state.view.y);
     ctx.scale(state.view.scale || 1, state.view.scale || 1);
     paintBoard(ctx, state.view, width, height, board, {
@@ -354,7 +359,7 @@ export function Canvas() {
 
     // Crosshair cursor.
     if (state.cursorUm) {
-      const sx = state.cursorUm.x * state.view.scale + state.view.x;
+      const sx = flipLocalX(state.bcx.boardFlipped, width, state.cursorUm.x * state.view.scale + state.view.x);
       const sy = state.cursorUm.y * state.view.scale + state.view.y;
       ctx.strokeStyle = "rgba(224,224,224,0.9)";
       ctx.lineWidth = 1;
@@ -379,9 +384,9 @@ export function Canvas() {
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
       const rect = containerRef.current!.getBoundingClientRect();
-      return screenToWorld(state.view, e.clientX - rect.left, e.clientY - rect.top);
+      return screenToWorld(state.view, flipLocalX(state.bcx.boardFlipped, rect.width, e.clientX - rect.left), e.clientY - rect.top);
     },
-    [state.view]
+    [state.view, state.bcx.boardFlipped]
   );
 
   /** tool_event.h/edit_tool_move_fct.cpp's real move-tool modifiers (see kicad-port/gridSnap.ts's header comment): Ctrl (Cmd on macOS) disables grid round-off, Shift disables anchor snapping. */
@@ -926,7 +931,7 @@ export function Canvas() {
     if (drag.kind === "pan") {
       userMovedRef.current = true;
       if (Math.hypot(e.clientX - drag.startScreen[0], e.clientY - drag.startScreen[1]) > PAN_CLICK_TOLERANCE_PX) drag.moved = true;
-      dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + (e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
+      dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + panDeltaX(state.bcx.boardFlipped, e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
     } else if (drag.kind === "move") {
       const [sx, sy] = snapRef(wx, wy, e, drag.refs.length === 1 ? drag.refs[0] : undefined);
       const dx = sx - drag.snapOrigin[0];
@@ -983,7 +988,7 @@ export function Canvas() {
         const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
         const crossing = marquee.crossing;
         const [x0, y0] = drag.startWorld;
-        const [x1, y1] = screenToWorld(state.view, marquee.x1, marquee.y1);
+        const [x1, y1] = screenToWorld(state.view, flipLocalX(state.bcx.boardFlipped, containerSize.width, marquee.x1), marquee.y1);
         const selBox: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
         const hits = collectBoxSelection(board, selBox, crossing, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
         if (hits.length > 0 || hasModifier(modifiers)) {
@@ -1013,11 +1018,11 @@ export function Canvas() {
       shiftKey: e.shiftKey,
       ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
       altKey: e.altKey,
-      x: e.clientX - rect.left,
+      x: flipLocalX(state.bcx.boardFlipped, rect.width, e.clientX - rect.left),
       y: e.clientY - rect.top,
     };
     const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
-    if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
+    if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.kind === "zoom" ? result.view : flipPan(state.bcx.boardFlipped, state.view, result.view) });
   };
 
   /** KiCad builds this per-selection from whatever tool/edit actions apply (pcb_selection_tool.cpp/edit_tool.cpp) -- ported here as exactly the actions this app implements, everything else the usual disabled "(not ported yet)". */
@@ -1098,6 +1103,26 @@ export function Canvas() {
           });
         }
       }
+    }
+    // board_editor_control.cpp ZONE_CONTEXT_MENU, which the selection tool's menu carries when only zones are selected
+    // (`SELECTION_CONDITIONS::OnlyTypes( { PCB_ZONE_T } )`) -- flat here, with its "Zone Priority" submenu's four entries after it.
+    if (refs.length > 0 && refs.every((r) => api.zoneById(r))) {
+      const one = refs.length === 1;
+      entries.push(
+        { label: "Draft Fill Selected Zone(s)", onSelect: () => run("pcbnew.ZoneFiller.zoneFill") },
+        { label: "Fill All Zones", onSelect: () => run("pcbnew.ZoneFiller.zoneFillAll") },
+        { label: "Unfill Selected Zone(s)", onSelect: () => run("pcbnew.ZoneFiller.zoneUnfill") },
+        { label: "Unfill All Zones", onSelect: () => run("pcbnew.ZoneFiller.zoneUnfillAll") },
+        { label: "Merge Zones", onSelect: () => run("pcbnew.EditorControl.zoneMerge"), disabled: refs.length < 2 },
+        { label: "Duplicate Zone onto Layer...", onSelect: () => run("pcbnew.EditorControl.zoneDuplicate"), disabled: !one },
+        { label: "Add a Zone Cutout", onSelect: () => run("pcbnew.InteractiveDrawing.zoneCutout"), disabled: !one },
+        { label: "Add a Similar Zone", onSelect: () => run("pcbnew.InteractiveDrawing.similarZone"), disabled: !one },
+        { label: "Zone Priority: Move to Top", onSelect: () => run("pcbnew.EditorControl.zonePriorityMoveToTop"), disabled: !one },
+        { label: "Zone Priority: Raise", onSelect: () => run("pcbnew.EditorControl.zonePriorityRaise"), disabled: !one },
+        { label: "Zone Priority: Lower", onSelect: () => run("pcbnew.EditorControl.zonePriorityLower"), disabled: !one },
+        { label: "Zone Priority: Move to Bottom", onSelect: () => run("pcbnew.EditorControl.zonePriorityMoveToBottom"), disabled: !one },
+        { label: "Zone Manager...", onSelect: () => run("pcbnew.Control.zonesManager") }
+      );
     }
     if (!hit && refs.length === 0 && board.outline) {
       const bounds = boundsOfPoints(board.outline);

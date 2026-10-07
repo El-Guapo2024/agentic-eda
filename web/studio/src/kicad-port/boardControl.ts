@@ -242,3 +242,28 @@ export function duplicatedZoneOutline(outline: ReadonlyArray<readonly [number, n
   const d = sameLayer ? DUPLICATE_ZONE_OFFSET_UM : 0;
   return outline.map(([x, y]) => [x + d, y + d]);
 }
+
+// ------------------------------------------------------------------ flipped view
+
+/**
+ * `pcbnew.Control.flipBoard` (`PCB_CONTROL::FlipPcbView` -> `view->SetMirror( m_FlipBoardView, ... )`): the board seen from its other
+ * side is the picture mirrored about the middle of the canvas, so the world point at the centre stays the centre. `x` is a pointer
+ * x measured from the canvas's left edge; the mirror maps it to the x the unmirrored view would have at the same world point (and back:
+ * it is its own inverse).
+ */
+export function flipLocalX(flipped: boolean, canvasWidth: number, x: number): number {
+  return flipped ? canvasWidth - x : x;
+}
+
+/**
+ * A drag that pans the view moves the picture by the pointer's travel on screen. In a mirrored picture a rightward drag moves the
+ * unmirrored view leftward (`WX_VIEW_CONTROLS` pans through the mirrored matrix the same way).
+ */
+export function panDeltaX(flipped: boolean, dxScreen: number): number {
+  return flipped ? 0 - dxScreen : dxScreen; // `0 -`, not a unary minus: no negative zero for a drag that has not moved
+}
+
+/** A view that `before` was panned to (`after`) by a handler that knows nothing of the mirror (the wheel's pan): in a flipped view its x travel goes the other way. */
+export function flipPan<V extends { x: number }>(flipped: boolean, before: V, after: V): V {
+  return flipped ? { ...after, x: 2 * before.x - after.x } : after;
+}

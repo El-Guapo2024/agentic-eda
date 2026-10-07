@@ -48,6 +48,11 @@ function LayersTab() {
         <input type="checkbox" checked={state.highContrast} onChange={() => dispatch({ type: "TOGGLE_HIGH_CONTRAST" })} />
         High contrast (dim inactive layers)
       </label>
+      {/* The Appearance panel's "Flip board view" (m_cbFlipBoard): the same switch as View > Flip Board View. */}
+      <label className="filter-row">
+        <input type="checkbox" checked={state.bcx.boardFlipped} onChange={() => dispatch({ type: "BCX", patch: { boardFlipped: !state.bcx.boardFlipped } })} />
+        Flip board view
+      </label>
     </div>
   );
 }

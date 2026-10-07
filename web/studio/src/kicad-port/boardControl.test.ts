@@ -8,11 +8,14 @@ import {
   duplicatedZoneOutline,
   filledNow,
   filterZones,
+  flipLocalX,
+  flipPan,
   highlightedNets,
   isHighlighted,
   keepFilled,
   moveZone,
   netsOfSelection,
+  panDeltaX,
   rankPriorities,
   ratsnestModeCycle,
   selectedCopperZones,
@@ -216,4 +219,24 @@ test("duplicatedZoneOutline: moved 1 mm each way when the copy stays on the laye
   const outline: [number, number][] = [[0, 0], [10_000, 0], [10_000, 10_000]];
   assert.deepEqual(duplicatedZoneOutline(outline, true), [[1000, 1000], [11_000, 1000], [11_000, 11_000]]);
   assert.deepEqual(duplicatedZoneOutline(outline, false), outline);
+});
+
+test("flipLocalX: the mirror about the canvas middle is its own inverse and leaves the middle where it is", () => {
+  assert.equal(flipLocalX(false, 800, 100), 100);
+  assert.equal(flipLocalX(true, 800, 100), 700);
+  assert.equal(flipLocalX(true, 800, 400), 400);
+  assert.equal(flipLocalX(true, 800, flipLocalX(true, 800, 123.5)), 123.5);
+});
+
+test("panDeltaX: a drag to the right moves a mirrored view's origin to the left", () => {
+  assert.equal(panDeltaX(false, 30), 30);
+  assert.equal(panDeltaX(true, 30), -30);
+  assert.equal(panDeltaX(true, 0), 0);
+});
+
+test("flipPan: a pan made without the mirror in mind goes the other way along x only when the view is flipped", () => {
+  const before = { x: 100, y: 50, scale: 0.01 };
+  const after = { x: 130, y: 20, scale: 0.01 };
+  assert.deepEqual(flipPan(false, before, after), after);
+  assert.deepEqual(flipPan(true, before, after), { x: 70, y: 20, scale: 0.01 });
 });

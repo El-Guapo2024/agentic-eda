@@ -65,6 +65,7 @@ import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerBoardControlActions } from "./boardControlActions";
+import { flipLocalX } from "../kicad-port/boardControl";
 
 function canvasRect(): DOMRect | null {
   return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
@@ -1391,6 +1392,8 @@ export function useActionRunner() {
         if (onCanvasTab) fn(...args);
       };
     const activeView = () => (state.tab === "schematic" ? state.schematicView : state.view);
+    /** `view->IsMirroredX()`: the PCB canvas is showing the board flipped (pcbnew.Control.flipBoard). */
+    const flippedView = state.tab === "pcb" && state.bcx.boardFlipped;
     const setActiveView = (view: typeof state.view) => dispatch(state.tab === "schematic" ? { type: "SET_SCHEMATIC_VIEW", view } : { type: "SET_VIEW", view });
     /** The grid CursorControl/PanControl step by: this app's PCB grid, or the schematic's fixed 50 mil (SCH_GRID_UM). */
     const activeGridUm = () => (state.tab === "schematic" ? SCH_GRID_UM : state.gridUm);
@@ -1409,7 +1412,7 @@ export function useActionRunner() {
       const rect = canvasRect();
       if (!el || !rect) return;
       const [sx, sy] = worldToScreen(viewOverride ?? activeView(), world.x, world.y);
-      const init = { bubbles: true, cancelable: true, composed: true, clientX: rect.left + sx, clientY: rect.top + sy, button: 0 };
+      const init = { bubbles: true, cancelable: true, composed: true, clientX: rect.left + flipLocalX(flippedView, rect.width, sx), clientY: rect.top + sy, button: 0 };
       if (type === "dblclick") el.dispatchEvent(new MouseEvent("dblclick", { ...init, detail: 2 }));
       else el.dispatchEvent(new PointerEvent(type, { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true, buttons: type === "pointerdown" ? 1 : 0 }));
     };
@@ -1424,7 +1427,7 @@ export function useActionRunner() {
         const view = activeView();
         if (!rect || !(view.scale > 0)) return;
         const from = state.cursorUm ?? viewCenter(view, rect.width, rect.height);
-        const to = cursorMove(from, activeGridUm(), dir, fast);
+        const to = cursorMove(from, activeGridUm(), dir, fast, flippedView);
         const nextView = warpViewToInclude(view, rect.width, rect.height, to);
         dispatch({ type: "SET_CURSOR", at: to });
         if (nextView !== view) setActiveView(nextView);
@@ -1474,7 +1477,7 @@ export function useActionRunner() {
         const rect = canvasRect();
         const view = activeView();
         if (!rect || !(view.scale > 0)) return;
-        setActiveView(panByGrid(view, rect.width, rect.height, activeGridUm(), dir));
+        setActiveView(panByGrid(view, rect.width, rect.height, activeGridUm(), dir, flippedView));
       });
     m.set("common.Control.panUp", panView("up"));
     m.set("common.Control.panDown", panView("down"));
