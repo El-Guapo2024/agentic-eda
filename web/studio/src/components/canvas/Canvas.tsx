@@ -508,6 +508,9 @@ export function Canvas() {
   }, [state.drawState, state.activeLayer, state.cursorUm, state.gridUm, state.pcbx, board, api, dispatch]);
 
   const onPointerDown = (e: React.PointerEvent) => {
+    // The context menu is a child of this container, so a press on one of its entries bubbles up here: it must not close the menu
+    // (and clear the selection) before the entry's click arrives -- the menu closes itself when an entry runs or a press lands outside it.
+    if ((e.target as Element).closest?.(".menubar-dropdown")) return;
     // Throws NotFoundError for a synthesized pointer (common.Control.cursorClick's
     // Enter-key click, actions/useActionRunner.ts), which has no real pointer to capture.
     try {

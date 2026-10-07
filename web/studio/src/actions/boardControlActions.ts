@@ -248,12 +248,10 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
       }
       void fetchFootprintLibraryNames()
         .then(async (lib) => {
-          const resolvable = new Set(lib.names);
           const entries = new Set(lib.project ?? []);
-          const todo = names.filter((n) => resolvable.has(n) && !entries.has(n));
+          const todo = names.filter((n) => !entries.has(n));
           if (todo.length > 0 && !(await api.cmdBatch(todo.map((name): Cmd => ({ op: "open_footprint_for_edit", name }))))) return;
-          const skipped = names.filter((n) => !resolvable.has(n)).length;
-          toast(`${todo.length} footprint(s) added to the project footprint library, ${names.length - todo.length - skipped} already there${skipped > 0 ? `, ${skipped} not found` : ""}.`);
+          toast(`${todo.length} footprint(s) added to the project footprint library, ${names.length - todo.length} already there.`);
         })
         .catch((e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"));
     })

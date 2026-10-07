@@ -7,7 +7,7 @@
 // list: this app's version offers exactly the actions it actually
 // implements for the current selection, everything else the same
 // "(not ported yet)" a disabled menu item gets elsewhere.
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface MenuEntry {
   label: string;
@@ -17,6 +17,20 @@ export interface MenuEntry {
 
 export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; entries: MenuEntry[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  // A long menu (the Zones entries on a zone) must stay on screen: slid up or left until it fits, and scrolled when the window is too short.
+  const [place, setPlace] = useState({ left: x, top: y, maxHeight: undefined as number | undefined });
+  useLayoutEffect(() => {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box) return;
+    const margin = 4;
+    const maxHeight = window.innerHeight - 2 * margin;
+    const height = Math.min(box.height, maxHeight);
+    setPlace({
+      left: Math.max(margin, Math.min(x, window.innerWidth - box.width - margin)),
+      top: Math.max(margin, Math.min(y, window.innerHeight - height - margin)),
+      maxHeight: box.height > maxHeight ? maxHeight : undefined,
+    });
+  }, [x, y, entries]);
 
   useEffect(() => {
     const onDocDown = (e: MouseEvent) => {
@@ -34,7 +48,7 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
   }, [onClose]);
 
   return (
-    <div ref={ref} className="menubar-dropdown" style={{ position: "fixed", left: x, top: y, minWidth: 180, zIndex: 4000 }}>
+    <div ref={ref} className="menubar-dropdown" style={{ position: "fixed", left: place.left, top: place.top, maxHeight: place.maxHeight, overflowY: place.maxHeight ? "auto" : undefined, minWidth: 180, zIndex: 4000 }}>
       {entries.map((entry, i) => (
         <div
           key={i}
