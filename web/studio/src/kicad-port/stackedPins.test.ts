@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { comparePinNumbers, expandStackedPinNotation, parseAlphaNumericPin, planConvertStackedPins, planExplodeStackedPin, stackedNotation } from "./stackedPins";
+import { comparePinNumbers, expandStackedPinNotation, parseAlphaNumericPin, planConvertStackedPins, planExplodeStackedPin, stackedNotation, stackedPinMenuState } from "./stackedPins";
 import type { LibrarySymbolPin } from "../api/types";
 
 const pin = (id: string, number: string, x = 0, y = 0, over: Partial<LibrarySymbolPin> = {}): LibrarySymbolPin => ({
@@ -79,4 +79,19 @@ test("explode makes the original the smallest number and hidden copies of the re
 test("explode refuses a pin without valid stacked notation", () => {
   assert.deepEqual(planExplodeStackedPin("L", [pin("a", "7")], ["a"]), { ok: false, message: "Selected pin does not have valid stacked notation" });
   assert.deepEqual(planExplodeStackedPin("L", [pin("a", "7")], []), { ok: false, message: "Select a single pin with stacked notation to explode" });
+});
+
+test("the menu offers Convert for pins sharing a place and Explode for one stacked pin", () => {
+  const pins = [pin("a", "1", 5, 5), pin("b", "2", 5, 5), pin("c", "3", 0, 0), pin("d", "[4-6]", 9, 9)];
+  // Two pins at one place: Convert. One of a co-located pair: Convert too. A lone pin, or pins apart: not.
+  assert.deepEqual(stackedPinMenuState(pins, ["a", "b"]), { canConvert: true, canExplode: false });
+  assert.deepEqual(stackedPinMenuState(pins, ["a"]), { canConvert: true, canExplode: false });
+  assert.deepEqual(stackedPinMenuState(pins, ["c"]), { canConvert: false, canExplode: false });
+  assert.deepEqual(stackedPinMenuState(pins, ["a", "c"]), { canConvert: false, canExplode: false });
+  // Anything that is not a pin among the selection (a graphic id) rules Convert out.
+  assert.deepEqual(stackedPinMenuState(pins, ["a", "b", "sym_graphic"]), { canConvert: false, canExplode: false });
+  // Explode needs the single selected pin to carry valid stacked notation.
+  assert.deepEqual(stackedPinMenuState(pins, ["d"]), { canConvert: false, canExplode: true });
+  assert.deepEqual(stackedPinMenuState(pins, ["d", "a"]), { canConvert: false, canExplode: false });
+  assert.deepEqual(stackedPinMenuState(pins, []), { canConvert: false, canExplode: false });
 });

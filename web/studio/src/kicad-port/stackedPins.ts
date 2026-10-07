@@ -90,6 +90,25 @@ export type StackPlan = { ok: true; cmds: Cmd[]; description: string } | { ok: f
 const samePlace = (a: LibrarySymbolPin, b: LibrarySymbolPin) => a.at.x === b.at.x && a.at.y === b.at.y;
 
 /**
+ * The right-click menu's conditions (`canConvertStackedPins`, `canExplodeStackedPin` in `SYMBOL_EDITOR_EDIT_TOOL::Init`, symbol_editor_edit_tool.cpp at 8303b2ad):
+ * Convert is offered when two or more pins and nothing else are selected, all at one place, or when the one selected pin shares its place with another pin;
+ * Explode when the one selected item is a pin whose number is valid stacked notation of more than one number. `selected` holds every selected id, pins or not.
+ */
+export function stackedPinMenuState(pins: readonly LibrarySymbolPin[], selected: readonly string[]): { canConvert: boolean; canExplode: boolean } {
+  const chosen = selected.map((id) => pins.find((p) => p.id === id));
+  const first = chosen[0];
+  let canConvert = false;
+  if (chosen.length >= 2) canConvert = chosen.every((p) => p !== undefined && samePlace(p, chosen[0]!));
+  else if (first) canConvert = pins.filter((p) => samePlace(p, first)).length >= 2;
+  let canExplode = false;
+  if (chosen.length === 1 && first) {
+    const { numbers, valid } = expandStackedPinNotation(first.number);
+    canExplode = valid && numbers.length > 1;
+  }
+  return { canConvert, canExplode };
+}
+
+/**
  * `ConvertStackedPins`: the selected pins (or, with one selected, every pin of the symbol at its place) become one pin -- the first by number -- numbered with
  * the stacked notation; the others are deleted. `pins` are all the pins of the open symbol, `selected` the ids selected.
  */
