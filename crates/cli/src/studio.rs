@@ -654,7 +654,7 @@ fn handle(
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
         ("GET", "/api/fill") => {
-            let v = fill_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            let v = fill_json(dir, query_value(target, "polys") == "1").unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("POST", "/api/cmd") => {
@@ -761,6 +761,19 @@ fn handle(
         ("POST", "/api/fab/bom") => offload(stream, lane, dir, job, path, &body, |dir, _| fab_api::bom(dir)),
         ("POST", "/api/sch/plot") => offload(stream, lane, dir, job, path, &body, sch_output_api::plot),
         ("POST", "/api/sch/netlist") => offload(stream, lane, dir, job, path, &body, sch_output_api::netlist),
+        // The other Export / Fabrication Outputs dialogs kicad-cli has a command for (STEP and the 3D formats, VRML,
+        // GenCAD, IPC-D-356, IPC-2581, ODB++, the board's BOM): `crate::board_output_api`, off the loop like the rest.
+        ("POST", "/api/fab/3d") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::three_d),
+        ("POST", "/api/fab/vrml") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::vrml),
+        ("POST", "/api/fab/gencad") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::gencad),
+        ("POST", "/api/fab/ipcd356") => offload(stream, lane, dir, job, path, &body, |dir, _| crate::board_output_api::ipcd356(dir)),
+        ("POST", "/api/fab/ipc2581") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::ipc2581),
+        ("POST", "/api/fab/odb") => offload(stream, lane, dir, job, path, &body, crate::board_output_api::odb),
+        ("POST", "/api/fab/pcb_bom") => offload(stream, lane, dir, job, path, &body, |dir, _| crate::board_output_api::pcb_bom(dir)),
+        // Board control that is not a kicad-cli run (`crate::board_control_api`): cheap, answered on the loop.
+        ("POST", "/api/repair_board") => respond(stream, "200 OK", "application/json", crate::board_control_api::repair_board(dir).to_string().as_bytes()),
+        ("GET", "/api/footprint_associations") => respond(stream, "200 OK", "application/json", crate::board_control_api::footprint_associations(dir, &query_value(target, "ref")).to_string().as_bytes()),
+        ("POST", "/api/fab/cmp") => respond(stream, "200 OK", "application/json", crate::board_control_api::export_cmp(dir).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }
@@ -1002,6 +1015,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         // `BOARD_ITEM::IsLocked()` for every kind at once (a part ref or a
         // track/via/zone/shape/text id) -- see `DrawingsSection::locked_ids`.
         "locked": design.drawings.as_ref().map(|d| d.locked_ids.clone()).unwrap_or_default(),
+        // The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`), `[x, y]` um, or null at (0, 0).
+        "aux_origin": design.drawings.as_ref().and_then(|d| d.aux_origin).map(|p| json!([p.x, p.y])),
         "checks": checks,
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),
@@ -1763,7 +1778,19 @@ fn symbol_library_kicad_sym(dir: &Path) -> Result<String, Vec<CheckResult>> {
 fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let report = eda_connectivity::analyze(&design, &model);
-    let edges: Vec<Value> = report.ratsnest.iter().map(|e| json!({ "net": e.net, "from": [e.from.x, e.from.y], "to": [e.to.x, e.to.y] })).collect();
+    // `from_id`/`to_id` (a pad is `REF.NUMBER`) and `from_layers`/`to_layers` (inclusive, indexes into `board.layers`) name what each
+    // end joins: the Local Ratsnest tool and the "visible layers" ratsnest mode decide per line from them, as RATSNEST_VIEW_ITEM does.
+    let edges: Vec<Value> = report
+        .ratsnest
+        .iter()
+        .map(|e| {
+            json!({
+                "net": e.net, "from": [e.from.x, e.from.y], "to": [e.to.x, e.to.y],
+                "from_id": eda_connectivity::RatsnestEdge::item_id(&e.from_item), "to_id": eda_connectivity::RatsnestEdge::item_id(&e.to_item),
+                "from_layers": [e.from_layers.0, e.from_layers.1], "to_layers": [e.to_layers.0, e.to_layers.1],
+            })
+        })
+        .collect();
     Ok(json!({ "edges": edges }))
 }
 
@@ -1772,8 +1799,12 @@ fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 /// coordinate space `/api/ratsnest` already uses, for the UI to draw -- see
 /// the task's stage 4. Each zone's fill may be several disjoint fragments
 /// (islands); `outline` is always a single closed ring (post-`Fracture`,
-/// already slitted, never a separate holes list).
-fn fill_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+/// already slitted, never a separate holes list). `with_polys` (`?polys=1`) adds
+/// `polys`: the same fill unfractured, one `{ outline, holes }` per island --
+/// what the "Draw Zone Fill Triangulation" display triangulates
+/// (`kicad-port/polyTriangulate.ts`), as KiCad's `POLYGON_TRIANGULATION` does
+/// (it bridges the holes itself rather than reading the fractured ring).
+fn fill_json(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
     let drc_board = eda_drc::board::build(&design, &model);
@@ -1786,11 +1817,23 @@ fn fill_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
             let fragments: Vec<Value> = fill
                 .map(|f| f.polys.iter().map(|poly| json!(poly[0].iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())).collect())
                 .unwrap_or_default();
-            json!({
+            let mut zone = json!({
                 "id": z.id, "net": z.net, "layer": z.layer,
                 "area_um2": fill.map(|f| f.area()).unwrap_or(0.0),
                 "fragments": fragments,
-            })
+            });
+            if with_polys {
+                let ring = |chain: &Vec<eda_clipper2::Point64>| chain.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>();
+                let polys: Vec<Value> = fill
+                    .map(|f| {
+                        let mut whole = f.clone();
+                        whole.unfracture();
+                        whole.polys.iter().map(|poly| json!({ "outline": ring(&poly[0]), "holes": poly[1..].iter().map(ring).collect::<Vec<_>>() })).collect()
+                    })
+                    .unwrap_or_default();
+                zone["polys"] = Value::Array(polys);
+            }
+            zone
         })
         .collect();
     Ok(json!({ "zones": zones_json }))

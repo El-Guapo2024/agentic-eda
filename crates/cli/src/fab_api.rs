@@ -91,13 +91,27 @@ pub fn gerbers(dir: &Path, body: &[u8]) -> Value {
             Err(e) => return err(e),
         };
     }
-    reply(kicad_engine::export(dir, "gerbers", &gerber_args(&layers)))
+    reply(kicad_engine::export(dir, "gerbers", &with_aux_origin("gerbers", gerber_args(&layers), &req)))
 }
 
-/// `POST /api/fab/drill`: `{"separate_th": bool}`.
+/// `use_aux_origin: true` in a plot dialog's JSON: measure from the drill/place file origin
+/// (`pcbnew.EditorControl.drillOrigin`) instead of the board's absolute origin -- the Plot dialog's "Use drill/place file
+/// origin", the drill dialog's "Drill origin" and the position dialog's "Position file origin". Each is a different
+/// kicad-cli flag.
+pub(crate) fn with_aux_origin(kind: &str, mut args: Vec<String>, req: &Value) -> Vec<String> {
+    if req.get("use_aux_origin").and_then(Value::as_bool).unwrap_or(false) {
+        match kind {
+            "drill" => args.extend(["--drill-origin".to_string(), "plot".into()]),
+            _ => args.push("--use-drill-file-origin".into()),
+        }
+    }
+    args
+}
+
+/// `POST /api/fab/drill`: `{"separate_th": bool, "use_aux_origin": bool}`.
 pub fn drill(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    reply(kicad_engine::export(dir, "drill", &drill_args(req.get("separate_th").and_then(Value::as_bool).unwrap_or(false), false)))
+    reply(kicad_engine::export(dir, "drill", &with_aux_origin("drill", drill_args(req.get("separate_th").and_then(Value::as_bool).unwrap_or(false), false), &req)))
 }
 
 /// `POST /api/fab/pos`: `{"format": "csv"|"ascii", "side": "front"|"back"|"both",
@@ -111,7 +125,7 @@ pub fn pos(dir: &Path, body: &[u8]) -> Value {
         req.get("smd_only").and_then(Value::as_bool).unwrap_or(false),
         req.get("exclude_fp_th").and_then(Value::as_bool).unwrap_or(false),
     );
-    reply(kicad_engine::export(dir, "pos", &args))
+    reply(kicad_engine::export(dir, "pos", &with_aux_origin("pos", args, &req)))
 }
 
 /// `POST /api/fab/bom`: no body.
@@ -143,6 +157,16 @@ mod tests {
     fn drill_options_become_flags() {
         assert_eq!(drill_args(false, false), vec!["--format", "excellon"]);
         assert_eq!(drill_args(true, true), vec!["--format", "excellon", "--excellon-separate-th", "--generate-report"]);
+    }
+
+    #[test]
+    fn the_drill_place_file_origin_is_a_different_flag_for_each_output() {
+        let on = serde_json::json!({ "use_aux_origin": true });
+        let off = serde_json::json!({});
+        assert_eq!(with_aux_origin("gerbers", vec!["--layers".into(), "F.Cu".into()], &on), vec!["--layers", "F.Cu", "--use-drill-file-origin"]);
+        assert_eq!(with_aux_origin("pos", vec![], &on), vec!["--use-drill-file-origin"]);
+        assert_eq!(with_aux_origin("drill", drill_args(false, false), &on), vec!["--format", "excellon", "--drill-origin", "plot"]);
+        assert_eq!(with_aux_origin("drill", drill_args(false, false), &off), vec!["--format", "excellon"], "unset: the absolute origin, kicad-cli's default");
     }
 
     #[test]

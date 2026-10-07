@@ -614,6 +614,18 @@ pub enum Cmd {
     /// hole joined to the outline by a zero-width slit, `SHAPE_POLY_SET::
     /// Fracture`): the same copper area, so fills and DRC agree.
     ZoneCutout { id: String, cutout: Vec<Point> },
+    /// `pcbnew.EditorControl.zoneMerge` (`BOARD_EDITOR_CONTROL::ZoneMerge`): the zones among `ids` that touch the
+    /// first one (same net, kind and layer) joined into it -- see [`board_control::merge_zones`].
+    MergeZones { ids: Vec<String> },
+    /// `pcbnew.EditorControl.zonePriority{MoveToTop,Raise,Lower,MoveToBottom}`: where zone `id` sits in the fill
+    /// order among the zones it overlaps -- see [`board_control::set_zone_priority`].
+    SetZonePriority { id: String, to: board_control::ZonePriorityMove },
+    /// `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin`: the drill/place file origin
+    /// (`DrawingsSection::aux_origin`); `None` is the reset to (0, 0).
+    SetAuxOrigin { at: Option<Point> },
+    /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
+    /// Refused when there is nothing to repair, so no empty undo step is pushed.
+    RepairBoard,
 
     /// Add a graphic shape (silkscreen art, fab-layer outlines, ...). The
     /// `id` field of `shape`, if the caller sent one, is ignored -- ids are
@@ -1490,6 +1502,10 @@ impl Cmd {
             Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
             Cmd::BooleanShapes { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::ZoneCutout { id, .. } => vec![id.as_str()],
+            Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetZonePriority { id, .. } => vec![id.as_str()],
+            Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
+            Cmd::RepairBoard => vec!["repair_board"],
 
             Cmd::MoveSymbol { id, .. }
             | Cmd::DragSymbol { id, .. }
@@ -1853,6 +1869,16 @@ impl<'a> Board<'a> {
             Cmd::SwapChain { parts } => self.swap_chain(parts),
             Cmd::BooleanShapes { operation, ids } => pcb_edit::boolean_shapes(self.drawings_mut(), *operation, ids),
             Cmd::ZoneCutout { id, cutout } => self.zone_cutout(id, cutout),
+            Cmd::MergeZones { ids } => board_control::merge_zones(&mut self.design, ids).map(|_| ()),
+            Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
+            Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
+            Cmd::RepairBoard => {
+                let report = board_control::repair_board(&mut self.design, &self.model.nets);
+                if report.repaired == 0 {
+                    return Err(vec![CheckResult::fail("ops_repair_board", "board", "No board problems found.")]);
+                }
+                Ok(())
+            }
 
             Cmd::AddZone { net, layer, outline } => self.add_zone(net, layer, outline),
             Cmd::DeleteZone { id } => self.delete_zone(id),
@@ -5035,6 +5061,7 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 #[cfg(test)]
 mod tests;
 
+pub mod board_control;
 pub mod build;
 pub mod fields_table;
 pub mod convert;

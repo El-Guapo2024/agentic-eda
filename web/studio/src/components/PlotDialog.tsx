@@ -23,6 +23,7 @@ export function PlotDialog() {
   const dispatch = useStudioDispatch();
   const copperLayers = state.board?.layers ?? ["F.Cu", "B.Cu"];
   const [checked, setChecked] = useState<Set<string>>(() => new Set(defaultLayers(copperLayers)));
+  const [useAuxOrigin, setUseAuxOrigin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
 
@@ -41,7 +42,7 @@ export function PlotDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postFabGerbers([...checked]);
+      const reply = await postFabGerbers([...checked], useAuxOrigin);
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Plotted." : "Plot failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
@@ -64,6 +65,10 @@ export function PlotDialog() {
               </label>
             ))}
           </div>
+          <label className="toggle" style={{ marginBottom: 10 }} title="Use the drill/place file origin as the coordinate origin for plotted files">
+            <input type="checkbox" checked={useAuxOrigin} onChange={(e) => setUseAuxOrigin(e.target.checked)} />
+            Use drill/place file origin
+          </label>
           <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", marginBottom: 10 }}>
             Output directory: <code>export/kicad/gerbers/</code> (inside this board's own directory). Written by `kicad-cli pcb export gerbers`
             (Gerber X2, with its .gbrjob job file).

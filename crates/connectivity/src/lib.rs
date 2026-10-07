@@ -132,6 +132,17 @@ mod tests {
     }
 
     #[test]
+    fn a_ratsnest_line_names_the_two_pads_it_joins_and_the_copper_layers_they_are_on() {
+        let (design, model) = two_pad_model();
+        let report = analyze(&design, &model);
+        let edge = &report.ratsnest[0];
+        let ids: std::collections::BTreeSet<String> = [RatsnestEdge::item_id(&edge.from_item), RatsnestEdge::item_id(&edge.to_item)].into();
+        assert_eq!(ids, ["R1.1".to_string(), "R2.1".to_string()].into(), "a pad is REF.NUMBER");
+        // Two SMD pads on the top side: one copper layer each, F.Cu (index 0).
+        assert_eq!((edge.from_layers, edge.to_layers), ((0, 0), (0, 0)));
+    }
+
+    #[test]
     fn a_routed_track_between_the_same_two_pads_clears_the_ratsnest() {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));

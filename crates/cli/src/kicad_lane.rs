@@ -14,6 +14,10 @@
 //! and a STEP export at once is what a 16 GB machine does not need. The 3D
 //! view's GLB build has its own slot (`GlbJob`) and its own temp directory.
 //!
+//! A run that never ends would hold the lane for good, so `eda_kicad_engine`
+//! kills one that outlives its limit (120 s for a DRC or ERC, 300 s for an
+//! export) and returns an error; the lane then goes on with the next request.
+//!
 //! A request for what is already running joins it instead of starting
 //! another run: same request (route and body) on the same design revision
 //! (the stamp `/api/version` serves). Anything else waits for its turn, and
@@ -202,7 +206,7 @@ mod tests {
     fn every_studio_route_that_starts_kicad_cli_goes_through_offload() {
         let studio = include_str!("studio.rs");
         let production = studio.split("#[cfg(test)]").next().unwrap();
-        let starts_kicad_cli = ["kicad_engine::drc(", "kicad_engine::erc(", "kicad_engine::board_stats", "kicad_engine::export", "fab_api::", "sch_output_api::"];
+        let starts_kicad_cli = ["kicad_engine::drc(", "kicad_engine::erc(", "kicad_engine::board_stats", "kicad_engine::export", "fab_api::", "sch_output_api::", "board_output_api::"];
         for (n, line) in production.lines().enumerate() {
             let code = line.trim_start();
             if code.starts_with("//") || code.starts_with("use ") {

@@ -61,7 +61,12 @@ never edited as masters.
     during a DRC. One kicad-cli at a time (they share `.kicad/`, and a DRC, an
     ERC and a STEP export together are not what 16 GB is for); a request for
     what is already running, on the same design revision, joins that run
-    instead of starting another. Edits, undo/redo and every other route still
+    instead of starting another. A run that does not finish is killed (its
+    whole process group) and answers with an error naming the command: 120 s
+    for a DRC or ERC, 300 s for an export (`eda_kicad_engine::REPORT_TIMEOUT`
+    and `EXPORT_TIMEOUT`; `EDA_KICAD_TIMEOUT_SECS` replaces both for a slow
+    machine or a test), so a hung kicad-cli never holds the lane for good.
+    Edits, undo/redo and every other route still
     run one at a time on the serve loop, as before. Every kicad-cli reply
     carries `revision`, the `/api/version` stamp of the design the run started
     from; the studio compares it with the board's current one and shows a

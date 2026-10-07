@@ -97,7 +97,10 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     writeln!(out, "\t(setup").unwrap();
     writeln!(out, "\t\t(pad_to_mask_clearance 0.0)").unwrap();
     writeln!(out, "\t\t(allow_soldermask_bridges_in_footprints no)").unwrap();
-    writeln!(out, "\t\t(aux_axis_origin 0 0)").unwrap();
+    // The drill/place file origin (`pcbnew.EditorControl.drillOrigin`): what kicad-cli measures drill, position and
+    // (when asked) Gerber coordinates from.
+    let aux = design.drawings.as_ref().and_then(|d| d.aux_origin).unwrap_or(eda_model::ir::Point { x: 0, y: 0 });
+    writeln!(out, "\t\t(aux_axis_origin {} {})", mm(aux.x), mm(aux.y)).unwrap();
     writeln!(out, "\t\t(grid_origin 0 0)").unwrap();
     writeln!(out, "\t\t(pcbplotparams").unwrap();
     writeln!(out, "\t\t\t(layerselection 0x00010fc_ffffffff)").unwrap();
@@ -765,6 +768,20 @@ mod tests {
 
     fn meta() -> super::super::ExportMeta<'static> {
         super::super::ExportMeta { date: "2026-01-01", title: "t" }
+    }
+
+    #[test]
+    fn the_drill_origin_is_written_as_the_aux_axis_origin_and_read_back_by_the_importer() {
+        let (mut design, model) = fixture();
+        assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(aux_axis_origin 0 0)"), "none set: KiCad's default");
+        design.drawings = Some(eda_model::ir::DrawingsSection { aux_origin: Some(Point { x: 12_500, y: -3_000 }), ..Default::default() });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(aux_axis_origin 12.5 -3"), "{out}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.drawings.and_then(|d| d.aux_origin), Some(Point { x: 12_500, y: -3_000 }), "an imported board keeps its drill/place file origin");
+        // A board saved with the default origin imports with none set (no empty drawings section is invented for it).
+        let (plain, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&fixture().0, &model, &meta()).unwrap()).unwrap();
+        assert!(plain.drawings.and_then(|d| d.aux_origin).is_none());
     }
 
     #[test]

@@ -21,6 +21,8 @@ import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
 import { BEZIER_MAX_ERROR_UM } from "./itemHitTest";
+import { isHighlighted } from "../../kicad-port/boardControl";
+import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 
 /**
@@ -33,15 +35,16 @@ import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
  * courtyard/body, which source's own `conItem` cast would be null for
  * too, so this already matches: only genuinely connected items dim).
  */
-function withNetHighlight(color: string, net: string | null | undefined, highlight: string | null): string {
+function withNetHighlight(color: string, net: string | null | undefined, highlight: string | readonly string[] | null): string {
   if (!highlight || !net) return color;
-  return rgbToHex(netHighlightColor(hexToRgb(color), net === highlight));
+  return rgbToHex(netHighlightColor(hexToRgb(color), isHighlighted(net, highlight)));
 }
 
 export interface PaintOptions {
   selection: Set<string>;
   hot: Set<string>;
-  netHighlight: string | null;
+  /** The highlighted net, or every net of a multi-net highlight (`highlightNetSelection`); null = none. */
+  netHighlight: string | readonly string[] | null;
   showRatsnest: boolean;
   ratsnestCurved: boolean;
   /** GET /api/ratsnest's edges (crates/connectivity, KiCad's own ratsnest algorithm) -- null while the first fetch hasn't landed yet, in which case nothing is drawn (no client-side fallback computation anymore). */
@@ -80,8 +83,16 @@ export interface PaintOptions {
   lintSelected?: number | null;
   /** B/Ctrl+B's last GET /api/fill (zone_filler_tool.cpp) -- null (or a zone simply missing from it) means "no fill computed yet", which always paints as an outline regardless of `zoneDisplayMode`. See state.zoneFill's own doc. */
   zoneFill: FillReport | null;
-  /** ZONE_DISPLAY_MODE: how a zone WITH fill data paints. A zone with no fill data yet ignores this and always shows its outline. */
-  zoneDisplayMode: "filled" | "outline";
+  /** ZONE_DISPLAY_MODE: how a zone WITH fill data paints. A zone with no fill data yet ignores this and always shows its outline. `fractured` / `triangulated` draw the fill with its fractured ring's edges / the triangles it is cut into. */
+  zoneDisplayMode: "filled" | "outline" | "fractured" | "triangulated";
+  /** `m_DisplayGraphicsFill` off (`pcbnew.Control.graphicOutlines`): filled graphics drawn as outlines. */
+  sketchGraphics?: boolean;
+  /** `m_DisplayTextFill` off (`pcbnew.Control.textOutlines`, "Show footprint texts in line mode"): text drawn as thin lines. */
+  sketchText?: boolean;
+  /** `m_DisplayPadNum` (`pcbnew.Control.showPadNumbers`). */
+  showPadNumbers?: boolean;
+  /** The drill/place file origin (`pcbnew.EditorControl.drillOrigin`), drawn as KiCad's red circle-and-cross when it is not at (0, 0). */
+  auxOrigin?: [number, number] | null;
   /** pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), for the via tool's ghost -- null until the hotkey's first press, same board-default fallback `Canvas.tsx`'s own via-placement click uses. */
   currentViaPreset: { diameter: number; drill: number } | null;
   /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
@@ -131,6 +142,52 @@ function drawOutline(ctx: CanvasRenderingContext2D, view: ViewTransform, outline
   ctx.strokeStyle = layerColor("board_edge");
   ctx.lineWidth = hairlineUm(view, 1.5);
   ctx.stroke();
+}
+
+/** Only once the pad is legible on screen, like the net name (a few pixels of digits are not worth drawing). */
+function padNumberLegible(pad: Pad, view: ViewTransform): boolean {
+  return Math.min(pad.w, pad.h) * view.scale > 8;
+}
+
+/**
+ * `PCB_PAINTER::draw( const PAD*, LAYER_PAD_NETNAMES )`'s text geometry: the pad's box is limited to 1.1x its smaller side (a 45-degree
+ * pad does not bloat it), the text is turned a quarter when the pad is taller than wide, the size is the box's height (at most
+ * `MAX_FONT_SIZE`, 10 mm) and, when the pad shows a net name as well, the two lines share it (`size / 2.5`, the net name
+ * `size / 1.4` below the middle, the number `size / 1.7` above).
+ */
+export function padTextLayout(pad: { w: number; h: number }, withNet: boolean): { size: number; width: number; rotated: boolean; netOffset: number; numberOffset: number } {
+  let [w, h] = [pad.w, pad.h];
+  const limit = Math.min(pad.w, pad.h) * 1.1;
+  if (w > limit && h > limit) [w, h] = [limit, limit];
+  let size = h;
+  let rotated = false;
+  if (w < h * 0.95) {
+    rotated = true;
+    size = w;
+    [w, h] = [h, w];
+  }
+  size = Math.min(size, 10_000);
+  let [netOffset, numberOffset] = [0, 0];
+  if (withNet) {
+    size = size / 2.5;
+    netOffset = size / 1.4;
+    numberOffset = size / 1.7;
+  }
+  return { size, width: w, rotated, netOffset, numberOffset };
+}
+
+/** The pad's number, centred (above the middle when a net name shares the pad), bold, as `PCB_PAINTER::draw( const PAD* )` writes it. */
+function drawPadNumber(ctx: CanvasRenderingContext2D, pad: Pad, withNet: boolean, color: string) {
+  const layout = padTextLayout(pad, withNet);
+  // "We use a size for at least 3 chars ... a smaller text size to handle interline, pen size"; the stroked font is 0.9 as wide.
+  let tsize = Math.min((1.5 * layout.width) / Math.max([...pad.num].length, 3), layout.size);
+  tsize = Math.min(tsize * 0.85, layout.size);
+  ctx.save();
+  ctx.translate(pad.x, pad.y);
+  if (layout.rotated) ctx.rotate(-Math.PI / 2);
+  // (x, y) is the baseline: the cap height is about 0.7 of the size, so half of it puts the digits' middle where KiCad centres them.
+  drawStrokeText(ctx, pad.num, 0, -layout.numberOffset + tsize * 0.35, { sizeUm: tsize, justify: "center", thicknessUm: (tsize * 0.9) / 6, color });
+  ctx.restore();
 }
 
 function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part: Part, opts: PaintOptions) {
@@ -201,14 +258,17 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       ctx.stroke();
     }
     // Net name, only once the pad is legible on screen.
+    const numbered = opts.showPadNumbers && pad.num !== "" && padNumberLegible(pad, view);
     if (pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10) {
       ctx.fillStyle = "rgba(0,0,0,0.75)";
       const fontUm = Math.min(pad.w, pad.h) * 0.35;
       ctx.font = `${fontUm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(pad.net, pad.x, pad.y, pad.w * 0.9);
+      // With the number on too, the two share the pad: the net name drops below the middle (`Y_offset_netname`).
+      ctx.fillText(pad.net, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
     }
+    if (numbered) drawPadNumber(ctx, pad, !!pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10, layerColor("pad_netname"));
   }
 
   // Reference designator.
@@ -232,7 +292,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
   if (opts.layerVisible[silkKey] !== false) {
     withAlpha(ctx, layerAlpha(opts, silkKey), () => {
-      drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: fs / 6, color: layerColor(silkKey) });
+      drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : fs / 6, color: layerColor(silkKey) });
     });
   }
 
@@ -357,6 +417,18 @@ function drawRuleArea(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zon
   drawStrokeText(ctx, ruleAreaLabel(z), cx, cy, { sizeUm: Math.max(hairlineUm(view, 11), 300), justify: "center", color });
 }
 
+/** A fill's triangles, cached per fill (`CacheTriangulation`): from each island's outline and holes when the backend sent them (`?polys=1`), else from its fractured ring. */
+const triangleCache = new WeakMap<object, Triangle[]>();
+function fillTriangles(fill: { fragments: [number, number][][]; polys?: { outline: [number, number][]; holes: [number, number][][] }[] }): Triangle[] {
+  const key: object = fill.polys ?? fill.fragments;
+  let tris = triangleCache.get(key);
+  if (!tris) {
+    tris = (fill.polys ?? fill.fragments.map((outline) => ({ outline, holes: [] }))).flatMap((poly) => triangulate(poly));
+    triangleCache.set(key, tris);
+  }
+  return tris;
+}
+
 function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
   if (!board.routing) return;
   for (const z of board.routing.zones) {
@@ -393,18 +465,41 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     const copperColor = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
     const fill = opts.zoneFill?.zones.find((f) => f.id === z.id);
     withAlpha(ctx, layerAlpha(opts, z.layer), () => {
-      if (opts.zoneDisplayMode === "filled" && fill && fill.fragments.length > 0) {
-        // `fragments` are already "Fracture"d (pcb_painter.cpp paints the
-        // real ZONE_FILLER output the same way): each is one closed ring,
-        // holes slit into the outer boundary -- a plain nonzero-winding
-        // fill per fragment is exactly right, no separate even-odd pass.
-        ctx.fillStyle = copperColor;
-        for (const frag of fill.fragments) {
-          if (frag.length < 3) continue;
+      if (opts.zoneDisplayMode !== "outline" && fill && fill.fragments.length > 0) {
+        if (opts.zoneDisplayMode === "filled") {
+          // `fragments` are already "Fracture"d (pcb_painter.cpp paints the
+          // real ZONE_FILLER output the same way): each is one closed ring,
+          // holes slit into the outer boundary -- a plain nonzero-winding
+          // fill per fragment is exactly right, no separate even-odd pass.
+          ctx.fillStyle = copperColor;
+          for (const frag of fill.fragments) {
+            if (frag.length < 3) continue;
+            ctx.beginPath();
+            frag.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+            ctx.closePath();
+            ctx.fill();
+          }
+        } else {
+          // SHOW_FRACTURE_BORDERS / SHOW_TRIANGULATION: `SetIsFill( false ); SetIsStroke( true ); SetLineWidth( 0 )` -- no fill, the
+          // fractured ring's own edges, or the triangles the fill is cut into.
+          ctx.strokeStyle = copperColor;
+          ctx.lineWidth = hairlineUm(view, 1);
           ctx.beginPath();
-          frag.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-          ctx.closePath();
-          ctx.fill();
+          if (opts.zoneDisplayMode === "fractured") {
+            for (const frag of fill.fragments) {
+              if (frag.length < 3) continue;
+              frag.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+              ctx.closePath();
+            }
+          } else {
+            for (const [a, b, c] of fillTriangles(fill)) {
+              ctx.moveTo(a[0], a[1]);
+              ctx.lineTo(b[0], b[1]);
+              ctx.lineTo(c[0], c[1]);
+              ctx.closePath();
+            }
+          }
+          ctx.stroke();
         }
         if (selected) {
           // Source's selection shadow is a separate highlight layer this
@@ -451,12 +546,13 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
     ctx.lineWidth = Math.max(s.stroke_width, hairlineUm(view, selected ? 2 : 1));
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    drawShapeGeometry(ctx, s);
+    drawShapeGeometry(ctx, s, !!opts.sketchGraphics);
     ctx.restore();
   }
 }
 
-function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape) {
+/** `sketch` is `pcbnew.Control.graphicOutlines` ("Sketch Graphic Items", `m_DisplayGraphicsFill` off): a filled shape is drawn as its outline only. */
+function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false) {
   ctx.beginPath();
   switch (s.kind) {
     case "segment":
@@ -503,7 +599,7 @@ function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape) {
       return;
     }
   }
-  if (s.filled) ctx.fill();
+  if (s.filled && !sketch) ctx.fill();
   ctx.stroke();
 }
 
@@ -539,7 +635,8 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     const angleRad = (-t.angle / 1000) * (Math.PI / 180);
     drawStrokeText(ctx, t.content, t.x, t.y, {
       sizeUm: Math.max(t.size, hairlineUm(view, 8)),
-      thicknessUm: t.stroke_width,
+      // "Sketch Text Items" (`m_DisplayTextFill` off): the text in line mode, one pixel wide.
+      thicknessUm: opts.sketchText ? hairlineUm(view, 1) : t.stroke_width,
       justify: t.justify,
       angleRad,
       mirror: t.mirror,
@@ -600,10 +697,10 @@ function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
  * guard -- each net's ratsnest disappears on its own the moment that net
  * is finished, exactly like real KiCad's.
  */
-function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: RatsnestEdge[], curved: boolean, netHighlight: string | null) {
+function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: RatsnestEdge[], curved: boolean, netHighlight: string | readonly string[] | null) {
   const hair = hairlineUm(view, 1);
   for (const e of edges) {
-    const on = netHighlight === e.net;
+    const on = isHighlighted(e.net, netHighlight);
     ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("ratsnest");
     ctx.lineWidth = on ? hairlineUm(view, 2.5) : hair;
     const [ax, ay] = e.from;
@@ -943,6 +1040,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   drawShapes(ctx, view, board, opts);
   drawTexts(ctx, view, board, opts);
   drawDimensions(ctx, view, board, opts);
+  if (opts.auxOrigin) drawAuxOrigin(ctx, view, opts.auxOrigin);
   // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, board, opts);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
@@ -959,6 +1057,26 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // the in-progress tool preview, matching real KiCad.
   if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected, opts.drcStale);
   if (opts.lintViolations) drawLintMarkers(ctx, view, opts.lintViolations, opts.lintSelected ?? null);
+}
+
+/**
+ * `ORIGIN_VIEWITEM( KIGFX::COLOR4D( 0.8, 0.0, 0.0, 1.0 ), CIRCLE_CROSS )` at the drill/place file origin (`BOARD_EDITOR_CONTROL`'s `m_placeOrigin`):
+ * a one-pixel red circle and cross, 16 pixels out, not drawn while the origin is at (0, 0).
+ */
+function drawAuxOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform, at: [number, number]) {
+  if (at[0] === 0 && at[1] === 0) return;
+  const r = hairlineUm(view, 16);
+  ctx.save();
+  ctx.strokeStyle = "rgb(204, 0, 0)";
+  ctx.lineWidth = hairlineUm(view, 1);
+  ctx.beginPath();
+  ctx.arc(at[0], at[1], r, 0, Math.PI * 2);
+  ctx.moveTo(at[0] - r, at[1]);
+  ctx.lineTo(at[0] + r, at[1]);
+  ctx.moveTo(at[0], at[1] - r);
+  ctx.lineTo(at[0], at[1] + r);
+  ctx.stroke();
+  ctx.restore();
 }
 
 /** The geometry points of a free-standing graphic, for bounding purposes only (not a faithful outline -- an arc's `mid` stands in for its sweep, a circle's `end` for its radius -- see `drawShapeGeometry` for the real rendering). */
