@@ -1,6 +1,7 @@
 // What the shared pointer tools show over any editor's canvas while they run: the lasso being drawn
-// (`SELECTION_TOOL::selectLasso` / `PCB_SELECTION_TOOL::SelectPolyArea`) and the item the picker's motion handler highlights
-// (`PICKER_TOOL` motion handler -> `BrightenItem`, as the interactive delete tool does).
+// (`SELECTION_TOOL::selectLasso` / `PCB_SELECTION_TOOL::SelectPolyArea`), the item the picker's motion handler highlights
+// (`PICKER_TOOL` motion handler -> `BrightenItem`, as the interactive delete tool does) and, in the library editors, the rectangle of the
+// zoom tool (`ZOOM_TOOL::selectRegion`; the board and the schematic have components/ZoomAreaOverlay.tsx).
 //
 // The picker itself is `actions/pcbPicker.ts` (`PickerHost`); `components/CommonToolHost.tsx` owns the pointer for the editors
 // whose canvases do not answer a picker themselves, and draws these two. Plain module state with subscribers, like
@@ -19,6 +20,11 @@ export interface LassoSession {
 }
 
 /** The clarification menu (`SELECTION_TOOL::doSelectionMenu`): the items a click could mean, listed by description, where they were clicked. */
+/** The zoom tool while it is armed in a library editor (`ZOOM_TOOL::Main`): the box being dragged, in world points, and the button that drags it (left zooms in, right out). */
+export interface ZoomAreaSession {
+  drag: { a: readonly [number, number]; b: readonly [number, number]; button: number } | null;
+}
+
 export interface SelectionMenu {
   at: { x: number; y: number };
   items: { id: string; label: string }[];
@@ -30,12 +36,14 @@ export interface CommonToolState {
   /** The id of the item under the cursor that the running picker highlights, or null. */
   hover: string | null;
   lasso: LassoSession | null;
+  /** The zoom tool is armed (`common.Control.zoomTool` in the Footprint or Symbol Editor); null when it is not. */
+  zoomArea: ZoomAreaSession | null;
   menu: SelectionMenu | null;
   /** The items every match of the open Find dialog's search text sits on, brightened (`SCH_FIND_REPLACE_TOOL::UpdateFind`). */
   findHighlights: readonly string[];
 }
 
-const IDLE: CommonToolState = { hover: null, lasso: null, menu: null, findHighlights: [] };
+const IDLE: CommonToolState = { hover: null, lasso: null, zoomArea: null, menu: null, findHighlights: [] };
 
 let current: CommonToolState = IDLE;
 const listeners = new Set<() => void>();
@@ -65,6 +73,10 @@ export function setPickerHover(id: string | null): void {
 
 export function setLasso(lasso: LassoSession | null): void {
   set({ ...current, lasso });
+}
+
+export function setZoomArea(zoomArea: ZoomAreaSession | null): void {
+  set({ ...current, zoomArea });
 }
 
 export function setFindHighlights(ids: readonly string[]): void {
@@ -97,9 +109,12 @@ export function closeSelectionMenu(choice: string[] | null = null): void {
   menu.onChoose(choice);
 }
 
-/** Escape while a lasso is being drawn (`evt->IsCancelInteractive()` in `SelectPolyArea`): nothing is selected. True when there was one. */
-export function cancelLasso(): boolean {
-  if (!current.lasso) return false;
-  set({ ...current, lasso: null });
+/**
+ * Escape while a lasso is being drawn (`evt->IsCancelInteractive()` in `SelectPolyArea`): nothing is selected; or while the zoom tool is armed
+ * (`ZOOM_TOOL::Main`'s `evt->IsCancelInteractive()`): the view stays. True when there was one of them.
+ */
+export function cancelAreaTool(): boolean {
+  if (!current.lasso && !current.zoomArea) return false;
+  set({ ...current, lasso: null, zoomArea: null });
   return true;
 }

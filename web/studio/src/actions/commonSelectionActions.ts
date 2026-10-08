@@ -13,7 +13,7 @@ import type { ActionHandler, CommonActionContext } from "./commonActions";
 import { isCanvasTab, type PickedItem } from "./editorAdapter";
 import { picker } from "./pcbPicker";
 import type { PickerSession } from "../kicad-port/pickerHost";
-import { cancelLasso, getCommonTool, getLastPointer, setPickerHover, showSelectionMenu } from "../state/commonTool";
+import { cancelAreaTool, getCommonTool, getLastPointer, setPickerHover, setZoomArea, showSelectionMenu } from "../state/commonTool";
 import { setCommonOptions } from "../state/commonOptions";
 import { selectionModeForAction } from "../kicad-port/lasso";
 import { idsOfParameter, reselectIds, selectCursorResult, selectIds, unselectIds } from "../kicad-port/selectionEvents";
@@ -34,7 +34,7 @@ export function registerSelectionActions(m: Map<string, ActionHandler>, ctx: Com
    * editor's own draw / move / route / placement tool -- and the selection stays as it is (Escape's first tier, not its second).
    */
   const cancelActiveTool = (): void => {
-    if (picker.cancel() || cancelLasso()) return;
+    if (picker.cancel() || cancelAreaTool()) return;
     const a = fresh();
     if (!a || a.toolIdle) return;
     if (a.tab === "footprint") fpDispatch({ type: "ESCAPE" });
@@ -60,6 +60,12 @@ export function registerSelectionActions(m: Map<string, ActionHandler>, ctx: Com
       if (a) a.setSelection([...a.itemBoxes().keys()]);
     });
     m.set("common.Interactive.unselectAll", () => fresh()?.setSelection([]));
+  }
+
+  // ACTIONS::zoomTool -- ZOOM_TOOL::Main in the library editors (the board's and the schematic's is `useActionRunner.ts`'s): the rubber-band zoom is armed, a
+  // drag draws the box and the release zooms to it (components/CommonToolHost.tsx); running the action again, or Esc, puts it away.
+  if (ctx.tab === "footprint" || ctx.tab === "symbol") {
+    m.set("common.Control.zoomTool", () => setZoomArea(getCommonTool().zoomArea ? null : { drag: null }));
   }
 
   // ACTIONS::selectionCursor -- PCB_SELECTION_TOOL::CursorSelection -> selectCursor( false ): with nothing selected, the item under the
@@ -166,7 +172,7 @@ export function registerSelectionActions(m: Map<string, ActionHandler>, ctx: Com
   // session; for the other editors the pointer is components/CommonToolHost.tsx's.
   m.set("common.InteractivePicker.pickerTool", (arg) => {
     if (!isPickerSession(arg)) return;
-    cancelLasso();
+    cancelAreaTool();
     picker.start(arg);
   });
   m.set("common.InteractivePicker.pickerSubTool", (arg) => {

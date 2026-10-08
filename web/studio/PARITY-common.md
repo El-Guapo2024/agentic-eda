@@ -21,6 +21,7 @@ where it does something -- an action an editor does not offer stays dimmed there
 | Behaviour | Status | KiCad file:function |
 |---|---|---|
 | Zoom to Selection, Center on Selection, Center on Contents | identical | `COMMON_TOOLS::doZoomFit( ZOOM_FIT_SELECTION )` / `doCenter`: the selection's box (nothing selected does nothing), the document's own box or the default view box when it has no area. The library editors use the bigger fit margin (`LIBRARY_EDITOR_FIT_MARGIN`, "1.48") |
+| Zoom to Selection Area (`zoomTool`) | identical | `ZOOM_TOOL::Main` / `selectRegion`: a drag draws the box, the left button zooms in so the box fills the screen, the right button zooms out by the same ratio, then the tool ends (Esc cancels; `zoomToAreaView`). The board and the schematic run it from `ZoomAreaOverlay.tsx`; the Footprint and Symbol Editors from `CommonToolHost.tsx` (the box is drawn by `CommonOverlay`) |
 | Zoom presets (`zoomPreset`) | identical | `COMMON_TOOLS::ZoomPreset` / `doZoomToPreset`: entry `idx` of the editor's zoom list (`zoomList` per editor, `kicad-port/zoomFit.ts`) about the view centre, entry 0 is Zoom Auto (zoom to fit the page or the document) |
 
 ## 2. Cursor, crosshair and display options

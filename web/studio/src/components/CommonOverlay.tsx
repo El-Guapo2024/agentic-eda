@@ -147,8 +147,20 @@ export function CommonOverlay() {
       ctx.setLineDash([]);
     }
 
+    // The zoom tool's box in the library editors (`ZOOM_TOOL::selectRegion`'s `SELECTION_AREA`): a blue rectangle from where the button went down to the cursor.
+    const zoomBox = tool.zoomArea?.drag;
+    if (zoomBox) {
+      const [xa, xb] = [sx(zoomBox.a[0]), sx(zoomBox.b[0])];
+      const [ya, yb] = [sy(zoomBox.a[1]), sy(zoomBox.b[1])];
+      ctx.fillStyle = "rgba(74,163,255,0.12)";
+      ctx.strokeStyle = "#4aa3ff";
+      ctx.lineWidth = 1;
+      ctx.fillRect(Math.min(xa, xb), Math.min(ya, yb), Math.abs(xb - xa), Math.abs(yb - ya));
+      ctx.strokeRect(Math.min(xa, xb), Math.min(ya, yb), Math.abs(xb - xa), Math.abs(yb - ya));
+    }
+
     // `blitCursor`: at the cursor, in the chosen mode, when a tool wants it or the setting forces it.
-    if (adapter.cursor && cursorVisible(opts.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null)) {
+    if (adapter.cursor && cursorVisible(opts.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null || tool.zoomArea != null)) {
       const px = sx(adapter.cursor.x);
       const py = sy(adapter.cursor.y);
       ctx.strokeStyle = cursorColor(tab);

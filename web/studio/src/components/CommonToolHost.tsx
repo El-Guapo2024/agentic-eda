@@ -8,16 +8,19 @@
 // sitting on top of the tool stack, gets the event first. The same listener runs the lasso: with the selection mode on "lasso", a left drag that
 // starts on empty space (or with Shift held) draws a polygon instead of the rectangle; the polygon grows with the drag and with further clicks,
 // a double click or End closes it and selects what it hits (clockwise = items fully inside, counterclockwise = items it touches), Escape drops it.
+// The zoom tool of the library editors (`ZOOM_TOOL::selectRegion`) is run here too: while it is armed a drag draws the box, and the release zooms to it
+// (left button in, right button out) and ends the tool; the board and the schematic have components/ZoomAreaOverlay.tsx for it.
 import { useEffect, useRef } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { useFpApi, useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { useSymApi, useSymDispatch, useSymState } from "../state/symbolEditorStore";
 import { useCommonOptions, type CommonOptions } from "../state/commonOptions";
-import { closeSelectionMenu, getCommonTool, setLasso, setLastPointer, setPickerHover, useCommonTool } from "../state/commonTool";
+import { closeSelectionMenu, getCommonTool, setLasso, setLastPointer, setPickerHover, setZoomArea, useCommonTool } from "../state/commonTool";
 import { picker, usePickerSession } from "../actions/pcbPicker";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { isCanvasTab, makeEditorAdapter, type EditorAdapter } from "../actions/editorAdapter";
 import { screenToWorld } from "../kicad-port/view";
+import { zoomToAreaView } from "../kicad-port/cursorControl";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { getSnapOrigin } from "./canvas/gridHelper";
@@ -52,14 +55,15 @@ export function CommonToolHost() {
 
   // The pointer shown over the canvas while a picker that asks for one runs (`SetCursor( KICURSOR::REMOVE )` of the delete tool).
   const session = usePickerSession();
+  const zoomArmed = useCommonTool().zoomArea !== null;
   useEffect(() => {
     const el = document.querySelector<HTMLElement>(".pcb-canvas-container");
     if (!el) return;
-    el.style.cursor = session?.cursor === "remove" ? "not-allowed" : "";
+    el.style.cursor = session?.cursor === "remove" ? "not-allowed" : zoomArmed ? "zoom-in" : "";
     return () => {
       el.style.cursor = "";
     };
-  }, [session, studio.tab]);
+  }, [session, zoomArmed, studio.tab]);
 
   // Where the pointer is, for a menu an action opens (`GetMousePosition()`).
   useEffect(() => {
@@ -114,6 +118,18 @@ export function CommonToolHost() {
         else if (e.button === 2) picker.cancel();
         return;
       }
+      // The zoom tool (`ZOOM_TOOL::selectRegion`): a press with either button starts the box.
+      if (getCommonTool().zoomArea && (e.button === 0 || e.button === 2)) {
+        e.stopPropagation();
+        e.preventDefault();
+        setZoomArea({ drag: { a: w, b: w, button: e.button } });
+        try {
+          c.setPointerCapture(e.pointerId);
+        } catch {
+          /* synthetic pointer */
+        }
+        return;
+      }
       if (e.button !== 0) return;
 
       // The lasso: a click adds a point to the one being drawn; a press on empty space (or with Shift) may start one.
@@ -152,6 +168,12 @@ export function CommonToolHost() {
         setPickerHover(s.hover({ x: w[0], y: w[1] }));
       } else if (getCommonTool().hover !== null) setPickerHover(null);
 
+      const zoom = getCommonTool().zoomArea;
+      if (zoom?.drag) {
+        setZoomArea({ drag: { ...zoom.drag, b: toWorld(a, c, e) } });
+        return;
+      }
+
       // A drag that began on empty space becomes the lasso once it has travelled far enough (`evt->IsDrag( BUT_LEFT )`).
       if (press && e.pointerId === press.id && e.buttons & 1) {
         const w = toWorld(a, c, e);
@@ -170,6 +192,19 @@ export function CommonToolHost() {
 
     const onPointerUp = (e: PointerEvent) => {
       const a = latest.current.adapter;
+      // The zoom box is dropped: zoom to it (a box with no width or no height changes nothing) and the tool is done (`Main()`'s `break`).
+      const zoom = getCommonTool().zoomArea;
+      const zc = container(e);
+      if (zoom?.drag && a && zc) {
+        e.stopPropagation();
+        e.preventDefault();
+        const rect = zc.getBoundingClientRect();
+        const w = toWorld(a, zc, e);
+        const next = zoomToAreaView(a.view, rect.width, rect.height, { x: zoom.drag.a[0], y: zoom.drag.a[1] }, { x: w[0], y: w[1] }, zoom.drag.button === 2);
+        if (next) a.setView(next);
+        setZoomArea(null);
+        return;
+      }
       if (!press || e.pointerId !== press.id) {
         const lasso = getCommonTool().lasso;
         if (lasso && lasso.dragging) setLasso({ ...lasso, dragging: false }); // the release ends the freehand stretch; the lasso goes on until it is closed
@@ -211,7 +246,7 @@ export function CommonToolHost() {
 
     const onContextMenu = (e: MouseEvent) => {
       if (!container(e) || (e.target as Element).closest(".menubar-dropdown")) return;
-      if (picker.session() && latest.current.adapter?.tab !== "pcb") {
+      if (getCommonTool().zoomArea || (picker.session() && latest.current.adapter?.tab !== "pcb")) {
         e.stopPropagation();
         e.preventDefault();
       }
@@ -229,6 +264,7 @@ export function CommonToolHost() {
       col.removeEventListener("dblclick", onDoubleClick, true);
       col.removeEventListener("contextmenu", onContextMenu, true);
       setLasso(null);
+      setZoomArea(null);
     };
   }, []);
 

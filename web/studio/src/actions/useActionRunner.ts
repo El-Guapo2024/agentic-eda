@@ -62,7 +62,7 @@ import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
-import { cancelLasso, getCommonTool } from "../state/commonTool";
+import { cancelAreaTool, getCommonTool } from "../state/commonTool";
 import { commonChecked } from "../kicad-port/commonChecked";
 import { useCommonOptions } from "../state/commonOptions";
 import { registerEditorFrameActions } from "./editorFrameActions";
@@ -791,7 +791,7 @@ export function useActionRunner() {
     // also empty does it clear the net highlight).
     m.set("common.Interactive.cancel", () => {
       // PICKER_TOOL::Main: Escape ends a running pick session (reference point, offset tool, a dialog's "Select ...") and nothing else.
-      if (picker.cancel() || cancelLasso()) return;
+      if (picker.cancel() || cancelAreaTool()) return;
       // Tell the backend's router session to end too (fire-and-forget --
       // see cancelInteractiveRoute's own doc comment) before the ordinary
       // ESCAPE reducer case clears `drawState` locally; otherwise the
