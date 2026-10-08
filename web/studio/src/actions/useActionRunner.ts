@@ -1034,7 +1034,7 @@ export function useActionRunner() {
     });
     // `common.Control.saveAs` (ACTIONS::saveAs, Ctrl+Shift+S): "Save current document to another location". design.json is the only
     // master, so what is saved is the editor's derived KiCad file(s) -- `.kicad_pcb`, or the `.kicad_sch` (+ one per sub-sheet) --
-    // handed to the browser's Save (kicad-port/saveAs.ts). Not live on the library editors (tab gate).
+    // handed to the browser's Save (kicad-port/saveAs.ts). The Footprint Editor's Save As is `commonSuiteActions.ts`'s (a library copy); the Symbol Editor has none (tab gate).
     m.set("common.Control.saveAs", () => {
       const name = state.board?.name ?? "board";
       const saved = (files: string[]) => dispatch({ type: "TOAST", message: `Saved ${files.join(", ")} (derived from design.json).`, kind: "info" });

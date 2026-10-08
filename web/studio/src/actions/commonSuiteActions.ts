@@ -3,7 +3,9 @@
 // Schematic from PCB. COMMON_CONTROL (common/tool/common_control.cpp) runs the first group in every editor frame; `registerCommonActions`
 // (commonActions.ts) calls `registerSuiteActions` once while the registry is built.
 import { downloadKicadPcb } from "../api/client";
-import { setAboutOpen, setPageSettingsOpen } from "../state/commonDialogs";
+import { setAboutOpen, setPageSettingsOpen, setSaveFootprintAs } from "../state/commonDialogs";
+import { getLibraryTree } from "../state/libraryTree";
+import { saveAsTarget } from "../kicad-port/saveFootprintAs";
 import { URL_DONATE, URL_GET_INVOLVED, bugReportUrl, gettingStartedUrl, helpNameFor, helpUrl, languageOf, versionInfoText, type HelpTab } from "../kicad-port/appLinks";
 import { makeVersionEnv } from "./versionEnv";
 import { isCanvasTab } from "./editorAdapter";
@@ -66,6 +68,20 @@ export function registerSuiteActions(m: Map<string, ActionHandler>, ctx: CommonA
       downloadKicadPcb(name)
         .then((file) => toast(`Saved ${file} (derived from design.json).`))
         .catch((e: unknown) => toast(e instanceof Error ? e.message : String(e), "error"));
+    });
+  }
+
+  // ACTIONS::saveAs in the Footprint Editor -- FOOTPRINT_EDITOR_CONTROL::SaveAs: with a footprint in the tree selected (or none, and one loaded) the
+  // "Save Footprint As" dialog (components/SaveFootprintAsDialog.tsx) stores a copy under the name and library chosen and the editor moves to the copy; a library
+  // row selected is "Save Library As", which copies a library file -- the studio's project library is part of design.json and the installed libraries are
+  // read-only, so there is no file to copy.
+  if (tab === "footprint") {
+    m.set("common.Control.saveAs", () => {
+      const st = ctx.fpApi.getState();
+      const target = saveAsTarget(st.treeSelection, st.name, getLibraryTree("footprint").selectedLibs);
+      if (target.kind === "footprint") setSaveFootprintAs({ name: target.name, loaded: target.loaded });
+      else if (target.kind === "library") toast("Save Library As copies a library file: the project library is part of design.json and the installed libraries are read-only.");
+      else toast("Open a footprint first.");
     });
   }
 

@@ -9,6 +9,7 @@ import { AboutDialog } from "./AboutDialog";
 import { PageSettingsDialog } from "./PageSettingsDialog";
 import { GridOriginDialog } from "./GridOriginDialog";
 import { GridsDialog } from "./GridsDialog";
+import { SaveFootprintAsDialog } from "./SaveFootprintAsDialog";
 
 /**
  * `DIALOG_GROUP_PROPERTIES` (common/dialogs/dialog_group_properties.cpp): the group's name and its member list. The plus button hides the
@@ -113,6 +114,7 @@ export function CommonDialogs() {
       <PageSettingsDialog />
       <GridOriginDialog />
       <GridsDialog />
+      <SaveFootprintAsDialog />
     </>
   );
 }

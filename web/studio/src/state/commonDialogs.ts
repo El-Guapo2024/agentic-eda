@@ -22,9 +22,11 @@ export interface CommonDialogsState {
   gridOrigin: boolean;
   /** `PANEL_GRID_SETTINGS` ("Edit Grids..."): the editor whose Grids page of the Preferences is showing, or null when the dialog is closed. */
   grids: GridEditor | null;
+  /** `SAVE_AS_DIALOG` ("Save Footprint As", the Footprint Editor's Save As): the footprint being saved and whether it is the one loaded, or null when closed. */
+  saveFootprintAs: { name: string; loaded: boolean } | null;
 }
 
-const CLOSED: CommonDialogsState = { group: null, about: false, page: null, gridOrigin: false, grids: null };
+const CLOSED: CommonDialogsState = { group: null, about: false, page: null, gridOrigin: false, grids: null, saveFootprintAs: null };
 
 let current: CommonDialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -73,4 +75,8 @@ export function setGridOriginDialogOpen(open: boolean): void {
 
 export function setGridsDialogOpen(editor: GridEditor | null): void {
   set({ ...current, grids: editor });
+}
+
+export function setSaveFootprintAs(request: { name: string; loaded: boolean } | null): void {
+  set({ ...current, saveFootprintAs: request });
 }
