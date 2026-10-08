@@ -203,6 +203,9 @@ Old #17 (open) and #18 (partial). Hit: every drag. Blocks: no. WP3 for the PCB, 
   (`toggleGridOverrides` is recorded unwired); the schematic grid is a constant (`components/schematic/layout.ts` `GRID`) with no
   pin or anchor snap in Move. A press followed by a one-grid jitter counts as a drag, because `drag.moved` is set when the snapped
   delta is non-zero (`Canvas.tsx`); KiCad starts a drag after 8 px of travel (on macOS also after 300 ms held).
+- Done since: the board, footprint and symbol editors have an editable grid list, fast grids and Edit Grids... (`PARITY-common.md`
+  section 10) and a grid origin the server's placement snap follows. The schematic's constant grid means it offers none of the grid
+  list, Next / Previous Grid, fast grids or Edit Grids; a grid choice there waits for the schematic's own snapping work.
 - Port from: `pcbnew/tools/pcb_grid_helper.cpp`, `common/tool/grid_helper.cpp`, `eeschema/tools/ee_grid_helper.cpp`, `common/tool/tool_dispatcher.cpp`.
 
 ### 15. Interaction details that differ
