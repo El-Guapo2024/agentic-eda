@@ -62,6 +62,7 @@ import { FootprintPositionDialog } from "./components/FootprintPositionDialog";
 import { BoardControlDialogs } from "./components/BoardControlDialogs";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
+import { Viewer3DAppearancePanel } from "./components/viewer3d/Viewer3DAppearancePanel";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
 import "./styles/global.css";
 import "./styles/layout.css";
@@ -187,6 +188,16 @@ function StudioFrame() {
           <div className="right-dock-col">
             <DockColumn side="right" label="Appearance">
               <RightDock />
+            </DockColumn>
+          </div>
+        )}
+        {/* The 3D viewer's Appearance manager (EDA_3D_ACTIONS::showLayersManager): what the viewer shows, and the face views. */}
+        {is3d && (
+          <div className="right-dock-col">
+            <DockColumn side="right" label="Appearance">
+              <div className="dock">
+                <Viewer3DAppearancePanel api={viewer3d} />
+              </div>
             </DockColumn>
           </div>
         )}

@@ -58,6 +58,11 @@ export interface Part {
   side?: Side;
   label?: LabelSide;
   courtyard?: CourtyardBox | null;
+  /**
+   * The part's body, board-space µm: the box of its footprint's `F.Fab` graphics (crates/cli/src/body_api.rs). The 3D tab sizes its placeholder boxes from this
+   * (kicad-port/partBody.ts) -- the courtyard is the body plus a clearance margin plus the pads' reach. `null` when no `F.Fab` is known for the footprint.
+   */
+  body?: CourtyardBox | null;
   pads?: Pad[];
 }
 

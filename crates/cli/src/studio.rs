@@ -277,9 +277,14 @@ const GLB_EXPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 ///    than retried, so a board that reliably fails/times out doesn't
 ///    get kicad-cli re-run on every poll; a genuinely new attempt has to
 ///    wait for the version to actually change.
-fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, glb: &GlbJob) -> Result<(), String> {
+fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, glb: &GlbJob, retry: bool) -> Result<(), String> {
     let ver = version_string(dir, job);
     let mut guard = glb.lock().map_err(|e| e.to_string())?;
+    // `?retry=1`, the 3D viewer's "Reload board": forget the finished answer for this version -- a failure is otherwise kept until the board changes -- so
+    // this request builds again. A build already running is left to finish.
+    if retry && matches!(guard.as_ref(), Some((v, GlbBuild::Done(_) | GlbBuild::Failed(_))) if *v == ver) {
+        *guard = None;
+    }
     match guard.as_ref() {
         Some((v, GlbBuild::Done(bytes))) if *v == ver => {
             let bytes = bytes.clone();
@@ -338,6 +343,20 @@ fn kill_process_group(child: &std::process::Child) {
     let _ = std::process::Command::new("kill").arg("-9").arg("--").arg(format!("-{}", child.id())).status();
 }
 
+/// The 3D view shows the copper the board HAS, whatever its netlist says. A track, via or pour on a net the netlist does not name (any more) makes the
+/// exporter refuse the whole board -- copper on KiCad's "net 0" is a different board for DRC, which is why it refuses -- and the 3D tab then fell back to its
+/// placeholder boxes for a board whose only fault was a net that was renamed after it was routed. For this export alone such nets are added to the netlist,
+/// without pins, so the copper is drawn where it is; every other export (DRC, fabrication) keeps refusing.
+fn ensure_routed_nets(design: &eda_model::ir::Design, model: &mut eda_model::ConstraintModel) {
+    let Some(routing) = &design.routing else { return };
+    let known: std::collections::BTreeSet<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+    let used = routing.tracks.iter().map(|t| t.net.as_str()).chain(routing.vias.iter().map(|v| v.net.as_str())).chain(routing.zones.iter().map(|z| z.net.as_str()));
+    let missing: std::collections::BTreeSet<String> = used.filter(|n| !n.is_empty() && !known.contains(n)).map(String::from).collect();
+    for name in missing {
+        model.nets.push(eda_model::Net { name, pins: vec![] });
+    }
+}
+
 /// The actual export: current design -> temp .kicad_pcb -> `kicad-cli
 /// pcb export glb` -> the produced file's bytes. Runs on the background
 /// thread [`serve_board_glb`] spawns, never on the request-handling
@@ -349,7 +368,8 @@ fn kill_process_group(child: &std::process::Child) {
 /// never pile up processes or run forever even though nothing is
 /// polling its stdout.
 fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
-    let (meta, design, model) = board::load(dir).map_err(|e| board::reasons(&e))?;
+    let (meta, design, mut model) = board::load(dir).map_err(|e| board::reasons(&e))?;
+    ensure_routed_nets(&design, &mut model);
     let title = Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
     let date = eda::now_rfc3339();
     let pcb_text = eda::export_kicad_pcb(&design, &model, &eda::ExportMeta { date: &date[..10], title: &title }).map_err(|e| board::reasons(&e))?;
@@ -576,7 +596,7 @@ fn handle(
             let v = symbol_library_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
-        ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job),
+        ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job, query_value(target, "retry") == "1"),
         // DRC and ERC are kicad-cli's (docs/ARCHITECTURE.md, "Engines"): the
         // current design.json revision is exported, kicad-cli runs (seconds),
         // and its report comes back mapped to our item ids, stamped with the
@@ -885,6 +905,9 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 LabelSide::Right => "right",
             });
             p["courtyard"] = json!(placed_courtyard(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
+            // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
+            p["body"] = json!(crate::body_api::placed_body(&design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             p["pads"] = json!(pads);
         }
         parts.push(p);
@@ -1874,6 +1897,24 @@ mod tests {
             sheet_contents: (!screens.is_empty()).then_some(screens),
             bus_aliases: vec![], symbol_library: None,
         }
+    }
+
+    /// The 3D export draws copper on a net the netlist no longer names (a net renamed after the board was routed) instead of refusing the board.
+    #[test]
+    fn the_3d_export_adds_the_nets_the_copper_uses() {
+        let mut d = design(sch(vec![]), Default::default());
+        d.routing = Some(
+            serde_json::from_value(json!({
+                "tracks": [{ "net": "GND", "layer": "F.Cu", "width": 200, "pts": [{ "x": 0, "y": 0 }, { "x": 1000, "y": 0 }] }, { "net": "", "layer": "F.Cu", "width": 200, "pts": [{ "x": 0, "y": 0 }, { "x": 0, "y": 500 }] }],
+                "vias": [{ "net": "VDD", "at": { "x": 0, "y": 0 }, "diameter": 600, "drill": 300, "from_layer": "F.Cu", "to_layer": "B.Cu" }],
+                "zones": []
+            }))
+            .expect("a routing section"),
+        );
+        let mut model: eda_model::ConstraintModel = serde_json::from_value(json!({ "parts": [], "nets": [{ "name": "VDD", "pins": [] }] })).expect("a model");
+        ensure_routed_nets(&d, &mut model);
+        let names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["VDD", "GND"], "GND is added once, VDD (already there) is not, and an unnamed net is not made up");
     }
 
     #[test]
