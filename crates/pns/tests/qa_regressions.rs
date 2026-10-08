@@ -378,3 +378,93 @@ fn walk_drag_seg_against_board_edge_keeps_the_board_clean() {
     let (accepted, shoved) = replay_drag("walk_drag_seg_against_board_edge", "ultrasound");
     eprintln!("accepted {accepted} previews, {shoved} of them shoved something");
 }
+
+/// xorshift64: the same sequence every run.
+struct Rng(u64);
+
+impl Rng {
+    fn below(&mut self, m: i64) -> i64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % (m as u64)) as i64
+    }
+}
+
+/// Routes from random pads to random points up to 12 mm away in Shove mode, on four real boards:
+/// whatever the router accepts leaves the board with no clearance violation it did not have.
+#[test]
+fn random_shove_routes_never_leave_a_new_violation() {
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    for board in ["simple", "pic_programmer", "backspace1", "dp_test"] {
+        let (design, model) = load(&root, board, "simple-shove-1");
+        let (node, _) = build_node(&design, &model);
+        let mut router = Router::new(&design, &model);
+        router.settings = RoutingSettings { mode: Mode::Shove, smart_pads: false, ..RoutingSettings::default() };
+        let mut anchors: Vec<(Point, String)> = node
+            .iter()
+            .filter_map(|(_, it)| match it {
+                Item::Solid(s) if s.net.is_some() && s.layers.overlaps_layer(0) => Some((s.pos, s.net.as_deref().unwrap().to_string())),
+                _ => None,
+            })
+            .collect();
+        anchors.sort_by_key(|(p, n)| (p.x, p.y, n.clone()));
+        let mut rng = Rng(0x2545F4914F6CDD1D);
+        let (mut accepted, mut shoved) = (0, 0);
+        for k in 0..50 {
+            let (start, _) = anchors[rng.below(anchors.len() as i64) as usize].clone();
+            let target = Point { x: start.x + rng.below(24_000) - 12_000, y: start.y + rng.below(24_000) - 12_000 };
+            router.start(start, "F.Cu", 250).expect("starts on a pad");
+            let pv = router.preview(target).unwrap();
+            if pv.colliding {
+                continue;
+            }
+            accepted += 1;
+            shoved += usize::from(!pv.displaced_lines.is_empty() || !pv.displaced_vias.is_empty());
+            let new_ones = new_item_violations(&node, &committed(&node, &pv), &model.board);
+            assert!(new_ones.is_empty(), "{board} #{k}: {start:?} -> {target:?} leaves {} new violations, e.g. {:?}", new_ones.len(), &new_ones[..new_ones.len().min(2)]);
+        }
+        eprintln!("{board}: {accepted} of 50 routes accepted, {shoved} of them shoved something");
+    }
+}
+
+/// The same for dragging a track's end: a drag the router accepts leaves no new violation.
+#[test]
+fn random_corner_drags_never_leave_a_new_violation() {
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    for board in ["simple", "pic_programmer"] {
+        let (design, model) = load(&root, board, "simple-shove-1");
+        let (node, _) = build_node(&design, &model);
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let mut tracks: Vec<(eda_pns::item::ItemId, Point)> = node
+            .iter()
+            .filter_map(|(id, it)| match it {
+                Item::Segment(s) => Some((id, Point { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 })),
+                _ => None,
+            })
+            .collect();
+        tracks.sort();
+        let mut rng = Rng(0x9E3779B97F4A7C15);
+        let (mut accepted, mut shoved) = (0, 0);
+        for k in 0..50 {
+            let (id, at) = tracks[rng.below(tracks.len() as i64) as usize];
+            let Some(d) = Dragger::start_with(&node, at, id, false) else { continue };
+            let to = Point { x: at.x + rng.below(6_000) - 3_000, y: at.y + rng.below(6_000) - 3_000 };
+            let pv = d.preview(&node, &model.board, &settings, to);
+            if pv.colliding {
+                continue;
+            }
+            accepted += 1;
+            shoved += usize::from(!pv.displaced_lines.is_empty() || !pv.displaced_vias.is_empty());
+            let new_ones = new_item_violations(&node, &dragged(&node, &d, &pv, to), &model.board);
+            assert!(new_ones.is_empty(), "{board} #{k}: dragging {at:?} to {to:?} leaves {} new violations, e.g. {:?}", new_ones.len(), &new_ones[..new_ones.len().min(2)]);
+        }
+        eprintln!("{board}: {accepted} of 50 drags accepted, {shoved} of them shoved something");
+    }
+}
