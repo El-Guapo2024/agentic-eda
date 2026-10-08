@@ -200,6 +200,19 @@ pub fn erc_pin_map(dir: &Path) -> Value {
     json!({ "ok": true, "matrix": matrix, "custom": custom })
 }
 
+/// `GET /api/sch/erc_severities`: the per-check severities Schematic Setup > Violation Severity edits -- the checks the schematic reports
+/// at a severity other than KiCad's default for them, plus the two library-link checks the derived project always ignores unless the
+/// table says otherwise (`eda_kicad::effective_erc_severities`), which is what kicad-cli's ERC runs with -- and whether the design
+/// stores a table of its own.
+pub fn erc_severities(dir: &Path) -> Value {
+    let (_, design, _) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let custom = design.schematic.as_ref().is_some_and(|s| !s.extras.erc_severities.is_empty());
+    json!({ "ok": true, "severities": eda_kicad::effective_erc_severities(&design), "custom": custom })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

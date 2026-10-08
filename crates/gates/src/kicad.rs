@@ -34,6 +34,10 @@ use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 /// own description. KiCad's severity carries over: an error fails the gate,
 /// a warning warns.
 fn gate_of(v: &Violation, check_name: &str) -> Option<CheckResult> {
+    // A violation the user waived (an exclusion in the design) is reported, flagged, but it is not a finding.
+    if v.excluded {
+        return None;
+    }
     let status = match v.severity.as_str() {
         "error" => CheckStatus::Fail,
         "warning" => CheckStatus::Warn,
@@ -135,7 +139,7 @@ mod tests {
     use eda_kicad_engine::Item;
 
     fn violation(kind: &str, severity: &str, first_item: &str, id: Option<&str>) -> Violation {
-        Violation { kind: kind.into(), description: format!("{kind} description"), severity: severity.into(), items: vec![Item { description: first_item.into(), pos: (0, 0), id: id.map(str::to_string), uuid: "u".into() }] }
+        Violation { kind: kind.into(), description: format!("{kind} description"), severity: severity.into(), items: vec![Item { description: first_item.into(), pos: (0, 0), id: id.map(str::to_string), uuid: "u".into() }], ..Default::default() }
     }
 
     /// kicad-cli's edge-clearance shape: the Edge.Cuts segment and the copper, in either order.
@@ -151,7 +155,7 @@ mod tests {
     }
 
     fn report(violations: Vec<Violation>) -> DrcReport {
-        DrcReport { engine: "kicad-cli test".into(), zones_refilled_by_kicad: false, violations, unconnected_items: vec![] }
+        DrcReport { engine: "kicad-cli test".into(), zones_refilled_by_kicad: false, violations, unconnected_items: vec![], schematic_parity: vec![], parity: None, ignored_checks: vec![] }
     }
 
     #[test]

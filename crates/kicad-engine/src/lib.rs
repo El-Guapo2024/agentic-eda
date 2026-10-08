@@ -17,7 +17,7 @@
 //! removed afterwards).
 
 use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
-use eda_model::ir::Design;
+use eda_model::ir::{Design, DrcExclusion};
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -292,13 +292,22 @@ pub struct Item {
 
 /// One kicad-cli report entry. `kind` is KiCad's own settings key
 /// (`clearance`, `courtyards_overlap`, `pin_not_connected`, ...).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Violation {
     pub kind: String,
     pub description: String,
-    /// `error`, `warning`, `exclusion` or `ignore`, as KiCad reports it.
+    /// `error` or `warning` (`exclusion` or `ignore` when KiCad says so): the severity of the check, as the report gives it. A waived
+    /// violation keeps the severity it would have had; [`excluded`](Self::excluded) says it is waived.
     pub severity: String,
     pub items: Vec<Item>,
+    /// `RC_JSON::VIOLATION::excluded`: the project lists this violation as waived and kicad-cli matched it. A report that asks for
+    /// exclusions (`--severity-exclusions`, which `--severity-all` includes) holds them; no gate or count may treat one as a finding.
+    pub excluded: bool,
+    /// The exclusion's comment (`RC_JSON::VIOLATION::comment`).
+    pub comment: String,
+    /// Where the violation's marker may sit, in nanometres: the positions worth writing an exclusion for ([`marker_candidates`]).
+    /// kicad-cli's report does not give the marker's position, only its items'.
+    pub markers_nm: Vec<(i64, i64)>,
 }
 
 impl Violation {
@@ -320,27 +329,122 @@ impl Violation {
                     .collect()
             })
             .unwrap_or_default();
-        Violation { kind: v["type"].as_str().unwrap_or("?").to_string(), description: v["description"].as_str().unwrap_or("").to_string(), severity: v["severity"].as_str().unwrap_or("error").to_string(), items }
+        let to_nm = |x: f64| if units_mm { (x * 1_000_000.0).round() as i64 } else { (x * 25_400_000.0).round() as i64 };
+        let at_nm: Vec<(i64, i64)> = v["items"].as_array().map(|is| is.iter().map(|it| (to_nm(it["pos"]["x"].as_f64().unwrap_or(0.0)), to_nm(it["pos"]["y"].as_f64().unwrap_or(0.0)))).collect()).unwrap_or_default();
+        Violation {
+            kind: v["type"].as_str().unwrap_or("?").to_string(),
+            description: v["description"].as_str().unwrap_or("").to_string(),
+            severity: v["severity"].as_str().unwrap_or("error").to_string(),
+            items,
+            excluded: v["excluded"].as_bool().unwrap_or(false),
+            comment: v["comment"].as_str().unwrap_or("").to_string(),
+            markers_nm: marker_candidates(&at_nm),
+        }
     }
 
     /// The studio's DRC shape: `type`, `description`, `severity`, `items`
-    /// (each with a `[x, y]` µm `pos`, our `id` or `null`, the KiCad `uuid`).
+    /// (each with a `[x, y]` µm `pos`, our `id` or `null`, the KiCad `uuid`), `excluded` and its `comment`, and `marker_nm`: where the
+    /// violation's marker may sit, in nanometres, which an exclusion keeps (see [`marker_candidates`]).
     pub fn to_json(&self) -> Value {
         json!({
             "type": self.kind,
             "description": self.description,
             "severity": self.severity,
             "items": self.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
+            "excluded": self.excluded,
+            "comment": self.comment,
+            "marker_nm": self.markers_nm.iter().map(|(x, y)| json!([x, y])).collect::<Vec<_>>(),
         })
     }
+
+    /// The uuids of the items, in the order the report names them: with the check, what identifies the violation to an exclusion
+    /// (`DrcExclusion::items`).
+    pub fn item_uuids(&self) -> Vec<String> {
+        self.items.iter().map(|i| i.uuid.clone()).collect()
+    }
+
+    /// Also try the positions the design itself gives for the items: the ends and the middle of a track segment, where a trace's marker
+    /// sits (`DRC_TEST_PROVIDER_TRACK_WIDTH` reports `(start + end) / 2`). The report gives a track at its start only.
+    fn add_design_anchors(&mut self, design: &Design) {
+        let ids: Vec<String> = self.items.iter().filter_map(|i| i.id.clone()).collect();
+        for id in ids {
+            self.markers_nm.extend(track_anchors(design, &id));
+        }
+        self.markers_nm.sort_unstable();
+        self.markers_nm.dedup();
+    }
+
+    /// Mark the violation waived when `exclusions` hold it. KiCad matches an exclusion to a marker by the marker's own text; kicad-cli has
+    /// already done that for the exclusions whose position it could guess (`excluded` is its answer), and this is the studio's own
+    /// match -- by the check and the items -- for the rest. Returns whether the studio's list holds it.
+    fn apply_exclusions(&mut self, exclusions: &[DrcExclusion]) -> bool {
+        let uuids = self.item_uuids();
+        match exclusions.iter().find(|e| e.matches(&self.kind, &uuids)) {
+            Some(e) => {
+                self.excluded = true;
+                self.comment = e.comment.clone();
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// The positions a violation's marker may sit at, in nanometres, from where its items are: each item's own (a via, a pad, a footprint,
+/// the first pad of an unconnected pair, a track's start) and the middle of the first two. kicad-cli's report carries no marker position
+/// -- `RC_ITEM::GetJsonViolation` writes `EDA_ITEM::GetPosition` of the items -- and KiCad matches an exclusion to a marker by the exact
+/// text of the marker, position included, so these are the guesses an exclusion offers (`eda_kicad::drc_exclusions`).
+pub fn marker_candidates(items_nm: &[(i64, i64)]) -> Vec<(i64, i64)> {
+    let mut out: Vec<(i64, i64)> = items_nm.to_vec();
+    if let [a, b, ..] = items_nm {
+        out.push(((a.0 + b.0) / 2, (a.1 + b.1) / 2));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The ends and the middle of one segment of the track `id` names (`<track id>` for the first segment, `<track id>#<n>` for the n-th), in
+/// nanometres. Empty for an id that is not a track's. The middle is KiCad's `(start + end) / 2` on integers.
+fn track_anchors(design: &Design, id: &str) -> Vec<(i64, i64)> {
+    let (base, n) = match id.rsplit_once('#') {
+        Some((b, n)) if n.parse::<usize>().is_ok() => (b, n.parse::<usize>().unwrap_or(0)),
+        _ => (id, 0),
+    };
+    let Some(track) = design.routing.as_ref().and_then(|r| r.tracks.iter().find(|t| t.id == base)) else {
+        return Vec::new();
+    };
+    let nm = |p: &eda_model::ir::Point| (p.x * 1000, p.y * 1000);
+    let (Some(a), Some(b)) = (track.pts.get(n), track.pts.get(n + 1)) else {
+        return Vec::new();
+    };
+    let (a, b) = (nm(a), nm(b));
+    vec![a, b, ((a.0 + b.0) / 2, (a.1 + b.1) / 2)]
 }
 
 fn counts_of<'a>(vs: impl Iterator<Item = &'a Violation>) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
-    for v in vs {
+    for v in vs.filter(|v| !v.excluded) {
         *m.entry(v.kind.clone()).or_default() += 1;
     }
     m
+}
+
+/// A check set to Ignore (`DRC_REPORT`'s `ignored_checks`, the Ignored Tests tab): its settings key and KiCad's name for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoredCheck {
+    pub key: String,
+    pub description: String,
+}
+
+impl IgnoredCheck {
+    fn from_json(v: &Value) -> IgnoredCheck {
+        IgnoredCheck { key: v["key"].as_str().unwrap_or("").to_string(), description: v["description"].as_str().unwrap_or("").to_string() }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({ "key": self.key, "description": self.description })
+    }
 }
 
 /// `kicad-cli pcb drc` on one design revision.
@@ -351,6 +455,15 @@ pub struct DrcReport {
     pub zones_refilled_by_kicad: bool,
     pub violations: Vec<Violation>,
     pub unconnected_items: Vec<Violation>,
+    /// `--schematic-parity`: the board's differences from the schematic (`DRC_TEST_PROVIDER_SCHEMATIC_PARITY`: a missing, extra or
+    /// duplicate footprint, a pad on another net than the schematic's, a footprint other than the symbol's, ...). Empty when the test did
+    /// not run -- see [`parity`](Self::parity).
+    pub schematic_parity: Vec<Violation>,
+    /// How the parity test went: `None` when it was not asked for, `Some(None)` when kicad-cli ran it, `Some(Some(why))` when it was asked for and
+    /// kicad-cli could not (no annotated schematic next to the board, no netlist), in its own words.
+    pub parity: Option<Option<String>>,
+    /// The checks whose severity is Ignore, which kicad-cli does not run (`ignored_checks`): the Ignored Tests tab.
+    pub ignored_checks: Vec<IgnoredCheck>,
 }
 
 impl DrcReport {
@@ -358,23 +471,73 @@ impl DrcReport {
         counts_of(self.violations.iter().chain(self.unconnected_items.iter()))
     }
 
-    /// `{ engine, zones_refilled_by_kicad, violations, unconnected_items, counts }`.
+    /// `{ engine, zones_refilled_by_kicad, violations, unconnected_items, schematic_parity, schematic_parity_run, ignored_checks, counts }`;
+    /// `schematic_parity_error` too when the test was asked for and could not run. See [`to_json_with`](Self::to_json_with).
     pub fn to_json(&self) -> Value {
-        json!({
-            "engine": self.engine,
-            "zones_refilled_by_kicad": self.zones_refilled_by_kicad,
-            "violations": self.violations.iter().map(Violation::to_json).collect::<Vec<_>>(),
-            "unconnected_items": self.unconnected_items.iter().map(Violation::to_json).collect::<Vec<_>>(),
-            "counts": self.counts(),
-        })
+        self.to_json_with(&[])
+    }
+
+    /// [`to_json`](Self::to_json) with the violations the design waived (`exclusions`) marked `excluded`, each with its `comment`, and a
+    /// `kicad_matched` flag saying whether kicad-cli itself matched it (the exclusion's marker position was one of its guesses). The
+    /// counts leave the waived ones out, as KiCad's badges do.
+    pub fn to_json_with(&self, exclusions: &[DrcExclusion]) -> Value {
+        let mut report = self.clone();
+        let mut kicad_matched = Vec::new();
+        for list in [&mut report.violations, &mut report.unconnected_items, &mut report.schematic_parity] {
+            for v in list.iter_mut() {
+                let by_kicad = v.excluded;
+                v.apply_exclusions(exclusions);
+                kicad_matched.push(by_kicad);
+            }
+        }
+        let mut matched = kicad_matched.into_iter();
+        let mut shape = |v: &Violation| {
+            let mut j = v.to_json();
+            j["kicad_matched"] = json!(matched.next().unwrap_or(false));
+            j
+        };
+        let violations: Vec<Value> = report.violations.iter().map(&mut shape).collect();
+        let unconnected: Vec<Value> = report.unconnected_items.iter().map(&mut shape).collect();
+        let parity: Vec<Value> = report.schematic_parity.iter().map(&mut shape).collect();
+        let mut out = json!({
+            "engine": report.engine,
+            "zones_refilled_by_kicad": report.zones_refilled_by_kicad,
+            "violations": violations,
+            "unconnected_items": unconnected,
+            "schematic_parity": parity,
+            "schematic_parity_run": matches!(report.parity, Some(None)),
+            "ignored_checks": report.ignored_checks.iter().map(IgnoredCheck::to_json).collect::<Vec<_>>(),
+            "counts": report.counts(),
+        });
+        if let Some(Some(why)) = &report.parity {
+            out["schematic_parity_error"] = json!(why);
+        }
+        out
     }
 }
 
 fn run_report(cmd: Command, report: &Path, what: &str) -> Result<Value, Vec<CheckResult>> {
+    run_report_with_output(cmd, report, what).map(|(raw, _)| raw)
+}
+
+/// [`run_report`], also giving what kicad-cli printed (its progress lines and the reasons it skipped a test).
+fn run_report_with_output(cmd: Command, report: &Path, what: &str) -> Result<(Value, String), Vec<CheckResult>> {
     let _ = std::fs::remove_file(report);
     let out = output_within(cmd, limit(REPORT_TIMEOUT))?;
-    let text = std::fs::read_to_string(report).map_err(|_| fail(&format!("kicad_cli_{what}"), "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))?;
-    serde_json::from_str(&text).map_err(|e| fail(&format!("kicad_cli_{what}"), &report.display().to_string(), e.to_string()))
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let text = std::fs::read_to_string(report).map_err(|_| fail(&format!("kicad_cli_{what}"), "kicad-cli", format!("no report: {said}")))?;
+    let raw = serde_json::from_str(&text).map_err(|e| fail(&format!("kicad_cli_{what}"), &report.display().to_string(), e.to_string()))?;
+    Ok((raw, said))
+}
+
+/// What a `kicad-cli pcb drc` run is asked for beyond the default.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DrcOptions {
+    /// "Refill all zones before performing DRC" (`--refill-zones`): see [`drc`].
+    pub refill_zones: bool,
+    /// "Test for parity between PCB and schematic" (`--schematic-parity`): the derived schematic goes next to the derived board, where kicad-cli looks for
+    /// it, and the report's `schematic_parity` holds what differs.
+    pub schematic_parity: bool,
 }
 
 /// `kicad-cli pcb drc` on `design` as it is.
@@ -390,8 +553,22 @@ fn run_report(cmd: Command, report: &Path, what: &str) -> Result<Value, Vec<Chec
 /// neither asks for its version nor probes its options: the version comes
 /// off the report.
 pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: bool) -> Result<DrcReport, Vec<CheckResult>> {
+    drc_with(design, model, work, DrcOptions { refill_zones, schematic_parity: false })
+}
+
+/// [`drc`] with options. The violations the design waived (`design.drawings.drc_exclusions`) are in the derived project
+/// ([`eda_kicad::export_kicad_pro_for`]), so kicad-cli flags the ones it can match as `excluded`; the report asks for every severity,
+/// exclusions included, and each [`Violation`] says whether it is one.
+pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: DrcOptions) -> Result<DrcReport, Vec<CheckResult>> {
     let cli = need_cli()?;
     let (pcb, map) = export_board(design, model, work, "board")?;
+    if opts.schematic_parity {
+        // kicad-cli reads the schematic next to the board (`<board stem>.kicad_sch`) to make the netlist the parity test compares with.
+        if design.schematic.is_none() {
+            return Err(fail("kicad_cli_parity", "schematic", "the parity test compares the board with the schematic, and this design has none"));
+        }
+        export_schematic(design, model, work, "board")?;
+    }
     let report = work.join("drc.json");
     let run = |refill: bool| {
         let mut cmd = Command::new(&cli);
@@ -399,10 +576,13 @@ pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: 
         if refill {
             cmd.arg("--refill-zones");
         }
+        if opts.schematic_parity {
+            cmd.arg("--schematic-parity");
+        }
         cmd.arg("-o").arg(&report).arg(&pcb);
-        run_report(cmd, &report, "drc")
+        run_report_with_output(cmd, &report, "drc")
     };
-    let (raw, refilled) = if refill_zones {
+    let ((raw, said), refilled) = if opts.refill_zones {
         match run(true) {
             Ok(raw) => (raw, true),
             Err(e) if e.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("refill-zones"))) => (run(false)?, false),
@@ -412,9 +592,32 @@ pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: 
         (run(false)?, false)
     };
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
-    let read = |key: &str| -> Vec<Violation> { raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default() };
+    let read = |key: &str| -> Vec<Violation> {
+        let mut list: Vec<Violation> = raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default();
+        for v in &mut list {
+            v.add_design_anchors(design);
+        }
+        list
+    };
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
-    Ok(DrcReport { engine: format!("kicad-cli {version}"), zones_refilled_by_kicad: refilled, violations: read("violations"), unconnected_items: read("unconnected_items") })
+    // `JobExportDrc` prints "Found N schematic parity issues" only when it ran the test; when it could not (no annotated schematic, no
+    // netlist) it says why on a line of its own and goes on without.
+    let parity = opts.schematic_parity.then(|| {
+        if said.contains("schematic parity issues") {
+            None
+        } else {
+            Some(said.lines().map(str::trim).find(|l| l.contains("parity")).map(str::to_string).unwrap_or_else(|| "kicad-cli did not run the parity test".to_string()))
+        }
+    });
+    Ok(DrcReport {
+        engine: format!("kicad-cli {version}"),
+        zones_refilled_by_kicad: refilled,
+        violations: read("violations"),
+        unconnected_items: read("unconnected_items"),
+        schematic_parity: if opts.schematic_parity { read("schematic_parity") } else { Vec::new() },
+        parity,
+        ignored_checks: raw["ignored_checks"].as_array().map(|cs| cs.iter().map(IgnoredCheck::from_json).collect()).unwrap_or_default(),
+    })
 }
 
 /// [`drc`] in a throwaway directory -- for a design that only exists in
@@ -429,6 +632,8 @@ pub fn drc_scratch(design: &Design, model: &ConstraintModel) -> Result<DrcReport
 pub struct ErcReport {
     pub engine: String,
     pub violations: Vec<Violation>,
+    /// The checks whose severity is Ignore, which kicad-cli does not run (`ignored_checks`): the Ignored Tests tab.
+    pub ignored_checks: Vec<IgnoredCheck>,
 }
 
 impl ErcReport {
@@ -450,14 +655,14 @@ impl ErcReport {
                 let item_desc: Vec<&str> = v.items.iter().map(|i| i.description.as_str()).filter(|d| !d.is_empty()).collect();
                 json!({
                     "check": v.kind,
-                    "severity": if excluded || v.severity == "exclusion" { "excluded" } else { v.severity.as_str() },
+                    "severity": if excluded || v.excluded || v.severity == "exclusion" { "excluded" } else { v.severity.as_str() },
                     "location": location,
                     "hint": format!("{}{}{}", v.description, if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
                     "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
                 })
             })
             .collect();
-        json!({ "engine": self.engine, "violations": violations, "counts": counts })
+        json!({ "engine": self.engine, "violations": violations, "counts": counts, "ignored_checks": self.ignored_checks.iter().map(IgnoredCheck::to_json).collect::<Vec<_>>() })
     }
 }
 
@@ -477,7 +682,8 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
         }
     }
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
-    Ok(ErcReport { engine: format!("kicad-cli {version}"), violations })
+    let ignored_checks = raw["ignored_checks"].as_array().map(|cs| cs.iter().map(IgnoredCheck::from_json).collect()).unwrap_or_default();
+    Ok(ErcReport { engine: format!("kicad-cli {version}"), violations, ignored_checks })
 }
 
 // ------------------------------------------------------------------ statistics
@@ -957,6 +1163,124 @@ mod tests {
     }
 
     #[test]
+    fn a_report_entry_reads_its_exclusion_and_offers_the_positions_its_marker_may_sit_at() {
+        let map = HashMap::from([("u-1".to_string(), "R1.1".to_string()), ("u-2".to_string(), "R2.1".to_string())]);
+        let v = json!({ "type": "clearance", "description": "x", "severity": "error", "excluded": true, "comment": "fine",
+            "items": [{ "description": "Pad 1", "pos": { "x": 1.5, "y": -2.0 }, "uuid": "u-1" },
+                      { "description": "Pad 2", "pos": { "x": 3.5, "y": 0.001 }, "uuid": "u-2" }] });
+        let v = Violation::from_json(&v, &map, true);
+        assert!(v.excluded && v.comment == "fine");
+        assert_eq!(v.severity, "error", "a waived violation keeps the severity it would have had");
+        // Each item's own position and the middle of the first two, in nanometres.
+        assert_eq!(v.markers_nm, vec![(1_500_000, -2_000_000), (2_500_000, -999_500), (3_500_000, 1_000)]);
+        let j = v.to_json();
+        assert_eq!(j["excluded"], true);
+        assert_eq!(j["marker_nm"][0], json!([1_500_000, -2_000_000]));
+        // A plain entry is not excluded.
+        let plain = Violation::from_json(&json!({ "type": "clearance", "description": "x", "severity": "warning", "items": [] }), &map, true);
+        assert!(!plain.excluded && plain.comment.is_empty() && plain.markers_nm.is_empty());
+    }
+
+    #[test]
+    fn a_track_segment_offers_its_ends_and_its_middle_as_the_markers_position() {
+        let mut design = empty_design().0;
+        design.routing = Some(eda_model::ir::RoutingSection {
+            tracks: vec![eda_model::ir::Track { id: "t7".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 100, pts: vec![eda_model::ir::Point { x: 1_000, y: 2_000 }, eda_model::ir::Point { x: 3_001, y: 2_000 }, eda_model::ir::Point { x: 3_001, y: 9_000 }], arc_mid_offset: None }],
+            vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default(),
+        });
+        // The first segment is the track's own id, the next ones `<id>#n`: `DRC_TEST_PROVIDER_TRACK_WIDTH` puts a trace's marker at (start + end) / 2.
+        assert_eq!(track_anchors(&design, "t7"), vec![(1_000_000, 2_000_000), (3_001_000, 2_000_000), (2_000_500, 2_000_000)]);
+        assert_eq!(track_anchors(&design, "t7#1"), vec![(3_001_000, 2_000_000), (3_001_000, 9_000_000), (3_001_000, 5_500_000)]);
+        assert!(track_anchors(&design, "t7#2").is_empty(), "there is no third segment");
+        assert!(track_anchors(&design, "R1.1").is_empty() && track_anchors(&design, "t8").is_empty());
+
+        let mut v = Violation { kind: "track_width".into(), items: vec![Item { description: "Track".into(), pos: (1_000, 2_000), id: Some("t7".into()), uuid: "u".into() }], markers_nm: vec![(1_000_000, 2_000_000)], ..Default::default() };
+        v.add_design_anchors(&design);
+        assert_eq!(v.markers_nm, vec![(1_000_000, 2_000_000), (2_000_500, 2_000_000), (3_001_000, 2_000_000)], "the start (the report's) is listed once");
+    }
+
+    #[test]
+    fn the_studio_marks_a_waived_violation_by_its_check_and_items_and_says_whether_kicad_matched_it() {
+        let item = |uuid: &str| Item { description: uuid.into(), pos: (0, 0), id: None, uuid: uuid.into() };
+        let found = |kind: &str, uuids: &[&str], by_kicad: bool| Violation { kind: kind.into(), severity: "error".into(), items: uuids.iter().map(|u| item(u)).collect(), excluded: by_kicad, ..Default::default() };
+        let rep = DrcReport {
+            engine: "kicad-cli test".into(),
+            zones_refilled_by_kicad: false,
+            violations: vec![found("clearance", &["a", "b"], false), found("clearance", &["a", "c"], false), found("annular_width", &["v"], true), found("hole_size", &["v"], false)],
+            unconnected_items: vec![found("unconnected_items", &["p", "q"], false)],
+            schematic_parity: vec![],
+            parity: None,
+            ignored_checks: vec![],
+        };
+        let waived = |check: &str, items: &[&str], comment: &str| DrcExclusion { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), ids: vec![], positions_nm: vec![], comment: comment.into() };
+        let j = rep.to_json_with(&[waived("clearance", &["a", "b"], "slot"), waived("annular_width", &["v"], ""), waived("unconnected_items", &["p", "q"], "")]);
+        let flags = |key: &str| j[key].as_array().unwrap().iter().map(|v| (v["excluded"].as_bool().unwrap(), v["kicad_matched"].as_bool().unwrap())).collect::<Vec<_>>();
+        assert_eq!(flags("violations"), vec![(true, false), (false, false), (true, true), (false, false)], "the studio's match by (check, items); kicad_matched only where kicad-cli said so");
+        assert_eq!(j["violations"][0]["comment"], "slot");
+        assert_eq!(flags("unconnected_items"), vec![(true, false)]);
+        assert_eq!(j["counts"], json!({ "clearance": 1, "hole_size": 1 }), "a waived violation is not counted");
+        // The same items under another check, or in the other order, are another violation.
+        let j = rep.to_json_with(&[waived("hole_size", &["x"], ""), waived("clearance", &["b", "a"], "")]);
+        assert!(j["violations"].as_array().unwrap().iter().filter(|v| v["excluded"] == true).count() == 1, "only kicad-cli's own flag: {j}");
+        assert_eq!(rep.to_json()["violations"][0]["excluded"], false, "nothing waived by the design");
+    }
+
+    #[test]
+    fn the_parity_test_is_asked_for_with_the_schematic_beside_the_board_and_its_answer_is_read() {
+        let mut env = Env::take();
+        let dir = std::env::temp_dir().join(format!("eda_kicad_engine_parity_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (design, model) = empty_design();
+        // Two canned reports: kicad-cli answers with the one that has parity entries, and prints the line it prints for them, only when
+        // it is given `--schematic-parity`.
+        let report = |parity: Value| json!({ "coordinate_units": "mm", "kicad_version": "10.99.0-fake", "violations": [], "unconnected_items": [], "schematic_parity": parity,
+            "ignored_checks": [{ "key": "missing_courtyard", "description": "Footprint has no courtyard defined" }] });
+        std::fs::write(dir.join("plain.json"), report(json!([])).to_string()).unwrap();
+        std::fs::write(dir.join("parity.json"), report(json!([{ "type": "net_conflict", "description": "Pad net (VDD) does not match", "severity": "warning", "items": [] }])).to_string()).unwrap();
+        env.set("FAKE_REPORT_PLAIN", dir.join("plain.json"));
+        env.set("FAKE_REPORT_PARITY", dir.join("parity.json"));
+        env.set(
+            "EDA_KICAD_CLI",
+            script(
+                &dir,
+                "parity.sh",
+                "out=\"\"; prev=\"\"; parity=no\nfor a in \"$@\"; do if [ \"$prev\" = \"-o\" ]; then out=\"$a\"; fi; if [ \"$a\" = \"--schematic-parity\" ]; then parity=yes; fi; prev=\"$a\"; done\nif [ $parity = yes ]; then echo \"Found 1 schematic parity issues\"; cp \"$FAKE_REPORT_PARITY\" \"$out\"; else cp \"$FAKE_REPORT_PLAIN\" \"$out\"; fi",
+            ),
+        );
+        let work = dir.join("work");
+        let plain = drc(&design, &model, &work, false).expect("a plain run");
+        assert!(plain.schematic_parity.is_empty() && plain.parity.is_none());
+        assert_eq!(plain.ignored_checks, vec![IgnoredCheck { key: "missing_courtyard".into(), description: "Footprint has no courtyard defined".into() }]);
+        assert!(!work.join("board.kicad_sch").exists(), "no schematic is needed when the test is not asked for");
+
+        let asked = drc_with(&design, &model, &work, DrcOptions { schematic_parity: true, ..Default::default() }).expect("a parity run");
+        assert!(work.join("board.kicad_sch").exists(), "kicad-cli reads the schematic that sits beside the board");
+        assert_eq!(asked.parity, Some(None), "it ran");
+        assert_eq!(asked.schematic_parity.len(), 1);
+        assert_eq!(asked.schematic_parity[0].kind, "net_conflict");
+        let j = asked.to_json();
+        assert_eq!(j["schematic_parity_run"], true);
+        assert_eq!(j["schematic_parity"][0]["type"], "net_conflict");
+        assert_eq!(j["ignored_checks"][0]["key"], "missing_courtyard");
+        assert!(j.get("schematic_parity_error").is_none());
+
+        // Asked for, with no schematic to compare with: said so, no run.
+        let mut bare = design.clone();
+        bare.schematic = None;
+        let e = drc_with(&bare, &model, &work, DrcOptions { schematic_parity: true, ..Default::default() }).unwrap_err();
+        assert_eq!(e[0].check, "kicad_cli_parity");
+
+        // Asked for, and kicad-cli says why it cannot (no annotated schematic): the reason is the report's, and the list is empty.
+        env.set("EDA_KICAD_CLI", script(&dir, "noparity.sh", "out=\"\"; prev=\"\"\nfor a in \"$@\"; do if [ \"$prev\" = \"-o\" ]; then out=\"$a\"; fi; prev=\"$a\"; done\necho \"Schematic parity tests require a fully annotated schematic.\"; cp \"$FAKE_REPORT_PLAIN\" \"$out\""));
+        let skipped = drc_with(&design, &model, &work, DrcOptions { schematic_parity: true, ..Default::default() }).expect("the run goes on without the test");
+        assert_eq!(skipped.parity, Some(Some("Schematic parity tests require a fully annotated schematic.".to_string())));
+        assert_eq!(skipped.to_json()["schematic_parity_error"], "Schematic parity tests require a fully annotated schematic.");
+        assert_eq!(skipped.to_json()["schematic_parity_run"], false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_derived_files_are_named_after_the_project_with_safe_characters() {
         assert_eq!(file_stem("mcu_board_30plus"), "mcu_board_30plus");
         assert_eq!(file_stem("my board/v2"), "my_board_v2");
@@ -976,9 +1300,10 @@ mod tests {
         let rep = ErcReport {
             engine: "kicad-cli test".into(),
             violations: vec![
-                Violation { kind: "pin_not_connected".into(), description: "Pin not connected".into(), severity: "error".into(), items: vec![Item { description: "Pin 1".into(), pos: (0, 0), id: Some("U1.1".into()), uuid: "a".into() }] },
-                Violation { kind: "pin_not_connected".into(), description: "Pin not connected".into(), severity: "error".into(), items: vec![Item { description: "Pin 2".into(), pos: (0, 0), id: Some("U1.2".into()), uuid: "b".into() }] },
+                Violation { kind: "pin_not_connected".into(), description: "Pin not connected".into(), severity: "error".into(), items: vec![Item { description: "Pin 1".into(), pos: (0, 0), id: Some("U1.1".into()), uuid: "a".into() }], ..Default::default() },
+                Violation { kind: "pin_not_connected".into(), description: "Pin not connected".into(), severity: "error".into(), items: vec![Item { description: "Pin 2".into(), pos: (0, 0), id: Some("U1.2".into()), uuid: "b".into() }], ..Default::default() },
             ],
+            ignored_checks: vec![],
         };
         let j = rep.to_json(&[("pin_not_connected".into(), "U1.2".into())]);
         assert_eq!(j["violations"][0]["severity"], "error");
