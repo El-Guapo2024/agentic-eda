@@ -14,6 +14,7 @@ import { useRef, useState } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { screenToWorld } from "../kicad-port/view";
 import { zoomToAreaView } from "../kicad-port/cursorControl";
+import { flipLocalX } from "../kicad-port/boardControl";
 
 interface Drag {
   x0: number;
@@ -39,8 +40,10 @@ export function ZoomAreaOverlay() {
   const view = isSch ? state.schematicView : state.view;
 
   const finish = (d: Drag) => {
-    const a = screenToWorld(view, d.x0 - rect.left, d.y0 - rect.top);
-    const b = screenToWorld(view, d.x1 - rect.left, d.y1 - rect.top);
+    // The Flip Board View mirror (pcbnew.Control.flipBoard): the box is dragged on the mirrored picture.
+    const flipped = !isSch && state.bcx.boardFlipped;
+    const a = screenToWorld(view, flipLocalX(flipped, rect.width, d.x0 - rect.left), d.y0 - rect.top);
+    const b = screenToWorld(view, flipLocalX(flipped, rect.width, d.x1 - rect.left), d.y1 - rect.top);
     const next = zoomToAreaView(view, rect.width, rect.height, { x: a[0], y: a[1] }, { x: b[0], y: b[1] }, d.button === 2);
     if (next) dispatch(isSch ? { type: "SET_SCHEMATIC_VIEW", view: next } : { type: "SET_VIEW", view: next });
     dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });

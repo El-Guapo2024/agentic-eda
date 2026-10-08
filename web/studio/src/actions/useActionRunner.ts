@@ -73,6 +73,8 @@ import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { registerSchEditActions } from "./schEditActions";
 import { deleteLastPoint } from "../components/schematic/schShapeTools";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
+import { registerBoardControlActions } from "./boardControlActions";
+import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
@@ -164,6 +166,8 @@ export function useActionRunner() {
       if (state.selection.size === 0 && refs.length > 0) dispatch({ type: "SET_SELECTION", refs });
       return refs;
     };
+    // The board-control actions (display options, net highlight and ratsnest, zone tools, exports, repair): actions/boardControlActions.ts.
+    registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
@@ -879,7 +883,14 @@ export function useActionRunner() {
     // app's /api/fill is always computed fresh (no per-zone fill cache to
     // mutate), so "fill" is just "go fetch it", and "unfill" is just
     // "stop showing what we fetched" -- see state.zoneFill's own doc.
-    m.set("pcbnew.ZoneFiller.zoneFillAll", pcbOnly(() => api.fillZones()));
+    // Fill All covers every zone, so it also forgets a draft fill of just some (`bcx.zoneFilled`, see ZoneFiller.zoneFill in boardControlActions.ts).
+    m.set(
+      "pcbnew.ZoneFiller.zoneFillAll",
+      pcbOnly(() => {
+        dispatch({ type: "BCX", patch: { zoneFilled: null } });
+        void api.fillZones();
+      })
+    );
     m.set("pcbnew.ZoneFiller.zoneUnfillAll", pcbOnly(() => api.unfillZones()));
     // pcb_control.cpp ZoneDisplayMode: independent of whether a zone HAS
     // fill data at all (above) -- how one that does paints. Source's
@@ -1413,6 +1424,8 @@ export function useActionRunner() {
         if (onCanvasTab) fn(...args);
       };
     const activeView = () => (state.tab === "schematic" ? state.schematicView : state.view);
+    /** `view->IsMirroredX()`: the PCB canvas is showing the board flipped (pcbnew.Control.flipBoard). */
+    const flippedView = state.tab === "pcb" && state.bcx.boardFlipped;
     const setActiveView = (view: typeof state.view) => dispatch(state.tab === "schematic" ? { type: "SET_SCHEMATIC_VIEW", view } : { type: "SET_VIEW", view });
     /** The grid CursorControl/PanControl step by: this app's PCB grid, or the schematic's fixed 50 mil (SCH_GRID_UM). */
     const activeGridUm = () => (state.tab === "schematic" ? SCH_GRID_UM : state.gridUm);
@@ -1431,7 +1444,7 @@ export function useActionRunner() {
       const rect = canvasRect();
       if (!el || !rect) return;
       const [sx, sy] = worldToScreen(viewOverride ?? activeView(), world.x, world.y);
-      const init = { bubbles: true, cancelable: true, composed: true, clientX: rect.left + sx, clientY: rect.top + sy, button: 0 };
+      const init = { bubbles: true, cancelable: true, composed: true, clientX: rect.left + flipLocalX(flippedView, rect.width, sx), clientY: rect.top + sy, button: 0 };
       if (type === "dblclick") el.dispatchEvent(new MouseEvent("dblclick", { ...init, detail: 2 }));
       else el.dispatchEvent(new PointerEvent(type, { ...init, pointerId: 1, pointerType: "mouse", isPrimary: true, buttons: type === "pointerdown" ? 1 : 0 }));
     };
@@ -1446,7 +1459,7 @@ export function useActionRunner() {
         const view = activeView();
         if (!rect || !(view.scale > 0)) return;
         const from = state.cursorUm ?? viewCenter(view, rect.width, rect.height);
-        const to = cursorMove(from, activeGridUm(), dir, fast);
+        const to = cursorMove(from, activeGridUm(), dir, fast, flippedView);
         const nextView = warpViewToInclude(view, rect.width, rect.height, to);
         dispatch({ type: "SET_CURSOR", at: to });
         if (nextView !== view) setActiveView(nextView);
@@ -1496,7 +1509,7 @@ export function useActionRunner() {
         const rect = canvasRect();
         const view = activeView();
         if (!rect || !(view.scale > 0)) return;
-        setActiveView(panByGrid(view, rect.width, rect.height, activeGridUm(), dir));
+        setActiveView(panByGrid(view, rect.width, rect.height, activeGridUm(), dir, flippedView));
       });
     m.set("common.Control.panUp", panView("up"));
     m.set("common.Control.panDown", panView("down"));

@@ -17,6 +17,8 @@
 //! ```
 
 mod board;
+mod board_control_api;
+mod board_output_api;
 mod bom_plugins;
 mod cleanup_api;
 mod convert_api;

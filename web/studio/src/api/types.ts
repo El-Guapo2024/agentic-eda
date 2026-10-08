@@ -515,6 +515,8 @@ export interface BoardState {
   checks: Check[];
   /** `BOARD_ITEM::IsLocked()` for every kind at once: a placed part's ref, or a track/via/zone/shape/text id (`DrawingsSection::locked_ids`, set by `set_locked`). Absent from an older backend = nothing locked. */
   locked?: string[];
+  /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` µm; null/absent = (0, 0). */
+  aux_origin?: [Um, Um] | null;
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */
@@ -667,6 +669,8 @@ export interface CmdZone extends Partial<ZoneSettingsFields>, Partial<RuleAreaFi
   outline: PointXY[];
 }
 
+export type ZonePriorityMove = "top" | "raise" | "lower" | "bottom";
+
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
   | { op: "place_edge"; part: string; edge: Dir; fraction: number }
@@ -748,6 +752,14 @@ export type Cmd =
   | { op: "swap_chain"; parts: string[] }
   /** `ZONE_CREATE_HELPER::performZoneCutout` -- subtract a closed polygon from one zone's outline. */
   | { op: "zone_cutout"; id: string; cutout: PointXY[] }
+  /** `pcbnew.EditorControl.zoneMerge` -- the zones among `ids` (selection order) that touch the first one, merged into it. */
+  | { op: "merge_zones"; ids: string[] }
+  /** `pcbnew.EditorControl.zonePriority{MoveToTop,Raise,Lower,MoveToBottom}` -- `to` is top | raise | lower | bottom. */
+  | { op: "set_zone_priority"; id: string; to: ZonePriorityMove }
+  /** `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin` -- the drill/place file origin; `null` resets it to (0, 0). */
+  | { op: "set_aux_origin"; at: PointXY | null }
+  /** `pcbnew.Control.repairBoard` -- refused ("No board problems found.") when there is nothing to repair; `POST /api/repair_board` wraps it with KiCad's report. */
+  | { op: "repair_board" }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**
@@ -1174,6 +1186,11 @@ export interface RatsnestEdge {
   net: string;
   from: [Um, Um];
   to: [Um, Um];
+  /** The items the two ends join (a pad is `REF.NUMBER`, anything else its own id), and the copper layers each spans (inclusive indexes into `BoardState.layers`) -- what the Local Ratsnest tool and the visible-layers ratsnest mode read, as `RATSNEST_VIEW_ITEM::ViewDraw` does. Absent from an older backend. */
+  from_id?: string;
+  to_id?: string;
+  from_layers?: [number, number];
+  to_layers?: [number, number];
 }
 
 export interface Ratsnest {
@@ -1197,6 +1214,8 @@ export interface FillZone {
   layer: string;
   area_um2: number;
   fragments: [Um, Um][][];
+  /** Only with `GET /api/fill?polys=1`: the same fill unfractured, one outline and its holes per island (what the triangulation display needs). */
+  polys?: { outline: [Um, Um][]; holes: [Um, Um][][] }[];
 }
 
 export interface FillReport {

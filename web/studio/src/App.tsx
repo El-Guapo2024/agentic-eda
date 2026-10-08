@@ -60,6 +60,7 @@ import { PlotSchematicDialog } from "./components/PlotSchematicDialog";
 import { ExportNetlistDialog } from "./components/ExportNetlistDialog";
 import { GenerateDrillDialog } from "./components/GenerateDrillDialog";
 import { FootprintPositionDialog } from "./components/FootprintPositionDialog";
+import { BoardControlDialogs } from "./components/BoardControlDialogs";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
@@ -244,6 +245,7 @@ function StudioFrame() {
       <GenerateDrillDialog />
       <FootprintPositionDialog />
       <SchControlHost />
+      <BoardControlDialogs />
     </div>
   );
 }

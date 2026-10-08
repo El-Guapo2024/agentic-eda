@@ -160,8 +160,9 @@ export async function fetchLint(): Promise<LintReport> {
 }
 
 /** `crates/zone-filler`'s real KiCad fill algorithm, run fresh server-side on every call (B/Ctrl+B -- see state/store.tsx's `zoneFill`). */
-export async function fetchFill(): Promise<FillReport> {
-  const r = await getJson<FillReport & { error?: string }>("/api/fill");
+export async function fetchFill(withPolys = false): Promise<FillReport> {
+  // `polys` (the fill unfractured, outline + holes per island) is what the "Draw Zone Fill Triangulation" display triangulates.
+  const r = await getJson<FillReport & { error?: string }>(withPolys ? "/api/fill?polys=1" : "/api/fill");
   if (r.error) throw new ApiError(r.error);
   return r;
 }
@@ -249,12 +250,14 @@ export interface FabReply {
   revision?: string;
 }
 
-export function postFabGerbers(layers?: string[]): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/gerbers", layers && layers.length > 0 ? { layers } : {});
+/** `useAuxOrigin`: the Plot dialog's "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
+export function postFabGerbers(layers?: string[], useAuxOrigin = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
 }
 
-export function postFabDrill(separateTh: boolean): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh });
+/** `useAuxOrigin`: the drill dialog's Origin choice, "Drill/place file origin" instead of "Absolute". */
+export function postFabDrill(separateTh: boolean, useAuxOrigin = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh, ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
 }
 
 export interface FabPosOptions {
@@ -263,6 +266,8 @@ export interface FabPosOptions {
   units_mm: boolean;
   smd_only: boolean;
   exclude_fp_th: boolean;
+  /** "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
+  use_aux_origin?: boolean;
 }
 
 export function postFabPos(opts: FabPosOptions): Promise<FabReply> {
