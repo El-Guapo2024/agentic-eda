@@ -818,6 +818,8 @@ export function useActionRunner() {
       if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch);
       // RouteSelected's loop (`m_cancelled = true` when Escape arrives while `m_inRouteSelected`): the whole run ends and the tool is popped.
       if (clearRouteQueue()) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      // `EDIT_TOOL::Duplicate` / `PCB_CONTROL::Paste`: cancelling the move that carries the new items takes them away again.
+      if (state.tab === "pcb" && state.activeTool === "move") void api.revertCarriedPlacement();
       dispatch({ type: "ESCAPE" });
     });
 

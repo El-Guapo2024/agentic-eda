@@ -1503,6 +1503,8 @@ export interface StudioApi {
   route: () => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
+  /** Escape while a Duplicate's or a Paste's new items are carried: takes them away again (one undo step), provided nothing else was edited since. True when it did. */
+  revertCarriedPlacement: () => Promise<boolean>;
   partByRef: (ref: string) => Part | undefined;
   trackById: (id: string) => Track | undefined;
   viaById: (id: string) => Via | undefined;
@@ -1582,6 +1584,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   }, [state.prefs]);
   const stateRef = useRef(state);
   stateRef.current = state;
+  /**
+   * `EDIT_TOOL::Duplicate` and `PCB_CONTROL::Paste` hand their new items to the Move tool inside the one commit the move finishes: cancelling the move
+   * reverts it (`commit.Revert()`), so Escape leaves nothing behind. Here the duplicate or the paste is a step of its own, so a cancel undoes exactly that
+   * step: this notes which one (the board's version right after it) while the new items are being carried.
+   */
+  const carriedPlacementRef = useRef<{ version: string } | null>(null);
+  useEffect(() => {
+    if (state.activeTool !== "move") carriedPlacementRef.current = null;
+  }, [state.activeTool]);
 
   const refresh = useCallback(async () => {
     try {
@@ -1991,6 +2002,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetUm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+      carriedPlacementRef.current = null; // dropped: the duplicate or paste stands
       // Any mix of PCB items: turned and flipped about where it was picked up, then moved, as one batch (`planCarry`).
       if (kind === "pcb") {
         const board = stateRef.current.board;
@@ -2088,6 +2100,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
     },
+    revertCarriedPlacement: async () => {
+      const token = carriedPlacementRef.current;
+      carriedPlacementRef.current = null;
+      if (!token || (await fetchVersion().catch(() => null)) !== token.version) return false;
+      const reply = await postUndo("pcb");
+      if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
+      await refresh();
+      return reply.ok;
+    },
     redo: async () => {
       dispatch({ type: "CLEAR_SELECTION" });
       const reply = await postRedo(stateRef.current.tab === "schematic" ? "schematic" : "pcb");
@@ -2096,12 +2117,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     // EDIT_TOOL::Duplicate hands straight off to doMoveSelection in
     // source -- the duplicate appears glued to the cursor until the user
-    // clicks to drop it (or Escape, which now -- see the "ESCAPE" reducer
-    // case -- cancels the in-progress move without touching the
-    // selection, so the fresh duplicate stays selected right where it
-    // was created rather than being un-done; a real cancel-removes-the-
-    // duplicate would need this move to carry its own undo token, which
-    // the backend's plain undo-stack doesn't expose per-ref).
+    // clicks to drop it, or cancels with Escape, which takes the duplicate
+    // away again (`commit.Revert()`; here `revertCarriedPlacement`, one undo
+    // step for the step the duplicate was).
     duplicateSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
@@ -2117,6 +2135,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!after) return;
       const newIds = newItemIds(before, after);
       if (newIds.length === 0) return;
+      const version = await fetchVersion().catch(() => null);
+      carriedPlacementRef.current = version ? { version } : null;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
@@ -2210,6 +2230,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!after) return;
       const newIds = newItemIds(before, after);
       if (newIds.length === 0) return;
+      const version = await fetchVersion().catch(() => null);
+      carriedPlacementRef.current = version ? { version } : null;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at });
