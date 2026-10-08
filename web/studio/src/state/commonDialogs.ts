@@ -15,9 +15,11 @@ export interface GroupDialog {
 export interface CommonDialogsState {
   group: GroupDialog | null;
   about: boolean;
+  /** `DIALOG_PAGES_SETTINGS`: which document's page is being edited, or null when the dialog is closed. */
+  page: "pcb" | "schematic" | null;
 }
 
-const CLOSED: CommonDialogsState = { group: null, about: false };
+const CLOSED: CommonDialogsState = { group: null, about: false, page: null };
 
 let current: CommonDialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -54,4 +56,8 @@ export function closeGroupDialog(): void {
 
 export function setAboutOpen(open: boolean): void {
   set({ ...current, about: open });
+}
+
+export function setPageSettingsOpen(target: "pcb" | "schematic" | null): void {
+  set({ ...current, page: target });
 }

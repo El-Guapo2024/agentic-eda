@@ -517,6 +517,9 @@ export interface BoardState {
   locked?: string[];
   /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` µm; null/absent = (0, 0). */
   aux_origin?: [Um, Um] | null;
+  /** The board's paper and title block (Page Settings, `common.Control.pageSettings`); null/absent are A4 landscape and an empty title block. */
+  page?: PageInfo | null;
+  title_block?: TitleBlock | null;
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */
@@ -760,6 +763,10 @@ export type Cmd =
   | { op: "set_zone_priority"; id: string; to: ZonePriorityMove }
   /** `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin` -- the drill/place file origin; `null` resets it to (0, 0). */
   | { op: "set_aux_origin"; at: PointXY | null }
+  /** `common.Control.pageSettings` -- the board's paper and title block, one undo step (`BOARD_EDITOR_CONTROL::PageSettings`). Refused when nothing changes. */
+  | { op: "set_board_page"; page: CmdPage; title_block: TitleBlock }
+  /** The same for the schematic (`SCH_EDITOR_CONTROL::PageSetup`). */
+  | { op: "set_schematic_page"; page: CmdPage; title_block: TitleBlock }
   /** `pcbnew.Control.repairBoard` -- refused ("No board problems found.") when there is nothing to repair; `POST /api/repair_board` wraps it with KiCad's report. */
   | { op: "repair_board" }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
@@ -1443,15 +1450,30 @@ export interface SchematicText {
   size_um: Um;
 }
 
+/** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */
 export interface TitleBlock {
   title: string;
   date: string;
   rev: string;
   company: string;
-  comment1: string;
-  comment2: string;
-  comment3: string;
-  comment4: string;
+  comments: string[];
+}
+
+/** A document's paper (`PAGE_INFO`) as the state JSON reports it: `size_um` is the resolved width and height in its orientation. */
+export interface PageInfo {
+  /** KiCad's name: A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal, USLedger or User. */
+  paper: string;
+  portrait: boolean;
+  /** A User paper's width and height, µm. */
+  user_size_um: [Um, Um] | null;
+  size_um: [Um, Um] | null;
+}
+
+/** What `set_board_page` / `set_schematic_page` take for the paper: `PageSettings` of the model (no `size_um`). */
+export interface CmdPage {
+  paper: string;
+  portrait?: boolean;
+  user_size_um?: [Um, Um] | null;
 }
 
 /** A hierarchical sheet pin (`SCH_SHEET_PIN`) on a placed sheet's own border -- GAPS.md #6. Tied *by name only* to a hierarchical label of the same name inside the sheet's own file (see crates/kicad/src/erc.rs's `check_hierarchy` doc for why shape is never compared). */
@@ -1490,6 +1512,8 @@ export interface Schematic {
   labels: SchematicLabel[];
   texts: SchematicText[];
   title_block: TitleBlock | null;
+  /** The sheet's paper (Page Settings); null/absent is A4 landscape. */
+  page?: PageInfo | null;
   /** Bus entries (GAPS.md #20) -- see `BusEntry`'s own doc. */
   bus_entries: BusEntry[];
   /** Explicit junctions (`J`) -- see `SchJunction`. Absent from a backend built before they existed. */

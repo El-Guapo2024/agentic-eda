@@ -29,7 +29,8 @@ import { paintSchematic } from "./schematic/painter";
 import { resolveLibSymbol } from "./schematic/libSymbol";
 import { GRID } from "./schematic/layout";
 import { layerColor } from "./canvas/layers";
-import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots } from "./schematic/drawingSheet";
+import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, schPageSize } from "./schematic/drawingSheet";
+import { paperOf } from "../kicad-port/pageSettings";
 import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, applyBoxSelectionModifiers, hasModifier } from "../kicad-port/selection";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { isMac } from "../platform";
@@ -260,15 +261,19 @@ export function SchematicView() {
     ctx.save();
     ctx.translate(state.schematicView.x, state.schematicView.y);
     ctx.scale(state.schematicView.scale || 1, state.schematicView.scale || 1);
-    drawPageAndFrame(ctx, state.schematicView);
-    drawGridDots(ctx, state.schematicView, width, height, GRID);
-    drawZoneReferences(ctx, state.schematicView);
+    const page = schPageSize(sch);
+    drawPageAndFrame(ctx, state.schematicView, page);
+    drawGridDots(ctx, state.schematicView, width, height, GRID, page);
+    drawZoneReferences(ctx, state.schematicView, page);
     const tb = sch.title_block;
     drawTitleBlock(ctx, state.schematicView, {
       title: tb?.title || state.board?.name || "untitled",
       date: tb?.date ?? new Date().toISOString().slice(0, 10),
       rev: tb?.rev ?? "",
       company: tb?.company,
+      comments: tb?.comments,
+      paper: paperOf(sch.page).paper,
+      page,
       fileName: `${state.board?.name || "schematic"}.kicad_sch`,
       sheetPath: "/",
     });

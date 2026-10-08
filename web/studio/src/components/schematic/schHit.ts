@@ -4,7 +4,7 @@ import type { Schematic } from "../../api/types";
 import { symbolBounds } from "./painter";
 import { nearestPointOnSegment } from "../../kicad-port/schBusUnfold";
 import { graphicBounds } from "../../kicad-port/schItemGeom";
-import { PAGE_WIDTH_UM, PAGE_HEIGHT_UM } from "./drawingSheet";
+import { schPageSize } from "./drawingSheet";
 
 /**
  * World-space bounds for the initial fit. KiCad opens a schematic framed
@@ -14,9 +14,10 @@ import { PAGE_WIDTH_UM, PAGE_HEIGHT_UM } from "./drawingSheet";
  * (this app doesn't clip/reflow existing symbol positions to the page).
  */
 export function schematicBounds(sch: Schematic): Array<[number, number]> {
+  const page = schPageSize(sch);
   const pts: Array<[number, number]> = [
     [0, 0],
-    [PAGE_WIDTH_UM, PAGE_HEIGHT_UM],
+    [page.width, page.height],
   ];
   for (const s of sch.symbols) {
     const b = symbolBounds(s, sch.lib_symbols);

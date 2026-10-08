@@ -12,7 +12,7 @@ import type { FootprintEditorApi, FootprintEditorState, FpAction } from "../stat
 import type { SymAction, SymbolEditorApi, SymbolEditorState } from "../state/symbolEditorStore";
 import { boxOfIds, boxOfPoints, footprintItemBoxes, pcbContentBox, pcbItemBoxes, symbolItemBoxes, unionBoxes, type Box, type ItemBoxes } from "../kicad-port/itemBoxes";
 import type { Schematic } from "../api/types";
-import { PAGE_HEIGHT_UM, PAGE_WIDTH_UM } from "../components/schematic/drawingSheet";
+import { PAGE_HEIGHT_UM, PAGE_WIDTH_UM, schPageSize } from "../components/schematic/drawingSheet";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
 import { DEFAULT_PCB_GRIDS_UM } from "../kicad-port/grid";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
@@ -217,7 +217,10 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         itemBoxes,
         selectionBox: () => boxOfIds(itemBoxes(), studio.selection),
         contentBox: () => unionBoxes(itemBoxes().values()),
-        defaultBox: () => [0, 0, PAGE_WIDTH_UM, PAGE_HEIGHT_UM],
+        defaultBox: () => {
+          const page = sch ? schPageSize(sch) : { width: PAGE_WIDTH_UM, height: PAGE_HEIGHT_UM };
+          return [0, 0, page.width, page.height];
+        },
         candidatesAt: (x, y) => {
           if (!sch) return [];
           const scale = studio.schematicView.scale || 1;

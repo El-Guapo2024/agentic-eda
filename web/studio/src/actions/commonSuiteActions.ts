@@ -3,7 +3,7 @@
 // Schematic from PCB. COMMON_CONTROL (common/tool/common_control.cpp) runs the first group in every editor frame; `registerCommonActions`
 // (commonActions.ts) calls `registerSuiteActions` once while the registry is built.
 import { downloadKicadPcb } from "../api/client";
-import { setAboutOpen } from "../state/commonDialogs";
+import { setAboutOpen, setPageSettingsOpen } from "../state/commonDialogs";
 import { URL_DONATE, URL_GET_INVOLVED, bugReportUrl, gettingStartedUrl, helpNameFor, helpUrl, languageOf, versionInfoText, type HelpTab } from "../kicad-port/appLinks";
 import { makeVersionEnv } from "./versionEnv";
 import { isCanvasTab } from "./editorAdapter";
@@ -52,6 +52,10 @@ export function registerSuiteActions(m: Map<string, ActionHandler>, ctx: CommonA
   // tab is the window.
   m.set("common.Control.showFootprintEditor", () => dispatch({ type: "SET_TAB", tab: "footprint" }));
   m.set("common.Control.showSymbolEditor", () => dispatch({ type: "SET_TAB", tab: "symbol" }));
+
+  // ACTIONS::pageSettings -- BOARD_EDITOR_CONTROL::PageSettings / SCH_EDITOR_CONTROL::PageSetup: the Page Settings dialog (paper and title
+  // block) of the board or of the schematic on screen (components/PageSettingsDialog.tsx); one undo step when it is accepted.
+  if (tab === "pcb" || tab === "schematic") m.set("common.Control.pageSettings", () => setPageSettingsOpen(tab));
 
   // ACTIONS::saveCopy -- BOARD_EDITOR_CONTROL::SaveCopy: `SaveBoard( true, true )`, the board written to another file while the editor
   // stays on its own. That is what the studio's Save As already is (design.json stays the master; the derived `.kicad_pcb` goes to the
