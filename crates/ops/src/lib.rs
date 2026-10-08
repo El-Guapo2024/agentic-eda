@@ -929,6 +929,9 @@ pub enum Cmd {
     /// The schematic editor's other edit and drawing tools (lock, break, convert text type, shapes, sheet pins,
     /// ...), one verb family -- see [`sch_edit::SchCmd`]. On the wire: `{"op": "sch_edit", "verb": "...", ...}`.
     SchEdit(sch_edit::SchCmd),
+    /// Move, Drag, Rotate, Mirror and Align to Grid for every kind of schematic item -- one verb family, one undo step per command, on the
+    /// sheet in view (`OnSheet`) -- see [`sch_move::SchMoveCmd`]. On the wire: `{"op": "sch_move", "verb": "drag", "ids": [...], ...}`.
+    SchMove(sch_move::SchMoveCmd),
     /// Run `cmd` on the sheet at `sheet` instead of the root: the root-to-here list of `SheetInstance::id`s joined by `/`
     /// (what `GET /api/schematic?sheet=` takes; empty is the root). KiCad edits whichever sheet is open
     /// (`SCH_EDIT_FRAME::GetCurrentSheet`); every schematic verb here acts on one screen, and this names which. A sheet that
@@ -1467,6 +1470,7 @@ impl Cmd {
             | Cmd::AddSheet { .. }
             | Cmd::SwapSchItems { .. }
             | Cmd::SchEdit(_)
+            | Cmd::SchMove(_)
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
             | Cmd::AddLabel { .. }
@@ -1547,6 +1551,7 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
+            Cmd::SchMove(c) => c.edits_connectivity(),
             _ => true,
         }
     }
@@ -1648,6 +1653,7 @@ impl Cmd {
             Cmd::AddSheet { name, .. } => vec![name.as_str()],
             Cmd::SwapSchItems { a, b } => vec![a, b],
             Cmd::SchEdit(c) => c.ids(),
+            Cmd::SchMove(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
@@ -2137,6 +2143,7 @@ impl<'a> Board<'a> {
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
+            Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
@@ -5357,3 +5364,8 @@ pub mod view;
 pub mod episode;
 pub mod flash;
 pub mod sch_edit;
+pub mod sch_move;
+mod sch_drag;
+mod sch_scene;
+#[cfg(test)]
+mod sch_move_tests;

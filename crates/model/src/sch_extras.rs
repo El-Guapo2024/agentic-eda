@@ -12,10 +12,11 @@
 //!   (`SCH_TEXTBOX`), rule areas (`SCH_RULE_AREA`) and directive labels (`SCH_DIRECTIVE_LABEL`, the
 //!   "netclass flag"). Decoration or annotation: none of them is part of any net.
 //! - `locked`: the ids of locked items (`SCH_ITEM::IsLocked`, set by Lock / Unlock / Toggle Lock).
+//! - `label_spins`: which way a label's text runs from its anchor (`SCH_LABEL_BASE::GetSpinStyle`), once Rotate or Mirror has set it.
 
 use crate::ir::{Millideg, Point, Um};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Items and annotations beyond the core schematic content -- see the module doc.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,11 +33,55 @@ pub struct SchExtras {
     /// `None` is KiCad's default, A4 landscape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<crate::page::PageSettings>,
+    /// A label's spin (`SCH_LABEL_BASE::GetSpinStyle`: which side of its anchor the text runs to), by label id. A label with no entry
+    /// has its spin read off the wire that ends at it (`labelShape.ts::inferSpin`), as every label did before Rotate and Mirror could
+    /// set one; an entry is written only when a turn or a mirror set it, so a design that never turned a label serializes as before.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub label_spins: BTreeMap<String, LabelSpin>,
+}
+
+/// `SPIN_STYLE`: which side of its anchor a label's text sits on and runs to. `Right` is the usual label (text to the right of a wire that
+/// comes from the left); `Up` reads upward from the anchor, `Left` ends at it, `Bottom` hangs below it reading upward.
+/// Turning a label counter-clockwise goes `Right`, `Up`, `Left`, `Bottom` (`SCH_TEXT::Rotate90`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelSpin {
+    Right,
+    Up,
+    Left,
+    Bottom,
+}
+
+impl LabelSpin {
+    /// One quarter turn: counter-clockwise when `ccw` (`SCH_TEXT::Rotate90( !ccw )`: the horizontal/vertical angle toggles and the
+    /// justification flips in two of the four cases, which is this cycle).
+    pub fn rotated(self, ccw: bool) -> LabelSpin {
+        use LabelSpin::*;
+        match (self, ccw) {
+            (Right, true) | (Left, false) => Up,
+            (Up, true) | (Bottom, false) => Left,
+            (Left, true) | (Right, false) => Bottom,
+            (Bottom, true) | (Up, false) => Right,
+        }
+    }
+
+    /// `SCH_LABEL_BASE::MirrorSpinStyle( aLeftRight )`: a left-right mirror swaps `Right` and `Left`, a top-bottom one `Up` and `Bottom`;
+    /// the other axis leaves the spin as it is.
+    pub fn mirrored(self, left_right: bool) -> LabelSpin {
+        use LabelSpin::*;
+        match (self, left_right) {
+            (Right, true) => Left,
+            (Left, true) => Right,
+            (Up, false) => Bottom,
+            (Bottom, false) => Up,
+            (s, _) => s,
+        }
+    }
 }
 
 impl SchExtras {
     pub fn is_empty(&self) -> bool {
-        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none()
+        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none() && self.label_spins.is_empty()
     }
 
     /// True when `id` is locked.
