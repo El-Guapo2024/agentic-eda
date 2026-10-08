@@ -349,29 +349,33 @@ lists, see section 9).
 
 ## 9. Board Setup
 
-Port of `pcbnew/dialogs/dialog_board_setup.cpp`, which is really a tree of
-~15 `panel_setup_*.cpp` pages. `BoardSetupDialog.tsx` only builds the pages
-this app's constraint model (`crates/model/src/lib.rs` `BoardRules`) has
-real data for; a page with no IR backing at all is left out.
+Port of `pcbnew/dialogs/dialog_board_setup.cpp`, a tree of `panel_setup_*.cpp` pages. `BoardSetupDialog.tsx` is that treebook (Board Stackup /
+Text & Graphics / Design Rules, with KiCad's own page names); the rule pages are in `components/boardSetup/*`, and what they share -- the net-class
+patterns, the checks each KiCad panel makes before OK, the default stackup, the severity table -- is in `kicad-port/boardSetupRules.ts` with node
+unit tests.
 
-A hard split runs through every page: `BoardRules` (net classes, hole/
-clearance/text defaults, stackup) lives on the *intent*-derived
-`ConstraintModel`, loaded read-only (`crates/cli/src/board.rs::load`) --
-there is no `Cmd` that can change it without a second edit/undo path into
-the intent file, which this session did not build (GAPS.md #10 sizes that
-"L", same size the custom-rule-language page would be). Only the new
-`RoutingSection.track_width_presets`/`via_presets` live on the editable
-`design.json` IR, so only that one page is genuinely editable -- every
-other page is a read-only mirror.
+Every page edits. A rule page keeps a copy of what the board says and Apply sends the whole page as one undoable command (`set_net_classes`,
+`set_constraints`, `set_mask_paste`, `set_text_graphics_defaults`, `set_stackup`, `set_rule_severities`, `set_custom_rules` --
+`crates/ops/src/board_setup.rs`). The backend keeps the page in `design.json` (`drawings.rules`, `eda_model::rules::RulesOverlay`) and
+`board::load` lays it over the intent's (or the imported project's) rules, so the router, DRC, the gates and the KiCad project kicad-cli reads
+(`.kicad_pro`, the `(setup ..)` and `(stackup ..)` of the `.kicad_pcb`, the `.kicad_dru`) follow one set of rules, and one Undo takes a page back. That
+overlay is the second edit/undo path into the intent's rules that this section used to say was missing. `crates/cli/src/board.rs` has the tests that a
+changed clearance, a net class assigned by a pattern, a minimum track width, an ignored check and a custom rule each change what kicad-cli reports.
+A page with edits not applied yet is marked in the tree; leaving the dialog asks first.
 
 | Page | Status | KiCad file |
 |---|---|---|
-| Net Classes: name, net-pattern list, track width, clearance, via size/drill, priority | read-only (no edit command -- see this section's intro) | `panel_setup_rules.cpp`'s net-class grid (the pattern-assignment side of it; `dialog_copper_zones.cpp`'s own net-class picker is the same gap) |
-| Track Widths & Vias: the W/Shift+W and via-size-cycle preset lists, add/remove entries | editable | `panel_setup_tracks_and_vias.cpp` -- `Cmd::SetTrackWidthPresets`/`SetViaPresets` (whole-list replace, no per-entry Cmd, same spirit `paste_items` already uses for several items in one commit) |
-| Design Rules: the custom per-net/per-item constraint expression language | not ported -- no IR concept at all | `panel_setup_rules.cpp`'s actual subject (a small expression language over `DRC_ENGINE::EvalRules`) -- shown instead: the board-wide numeric defaults `eda_drc` does check (clearance, track width, annular ring, hole-to-hole, hole clearance, silk clearance), read-only |
-| Text & Graphics Defaults: refdes font size, minimum silk text height/thickness | read-only | `panel_setup_text_and_graphics.cpp` |
-| Layer Stackup: name/material/thickness per layer | read-only, and usually empty (most intents never set one) | `panel_setup_layers.cpp` -- `crates/model/src/lib.rs` `Stackup`/`StackupLayer` already existed on `ConstraintModel`, just never exposed in `/api/state` before this session |
-| Constraints / Teardrops / Tuning Patterns / Mask & Paste / Formatting / Zones defaults / Severities | not ported -- no IR concept | no model field for any of these; left out entirely rather than faked |
+| Board Stackup > Physical Stackup (with Board Finish): the copper layer count (even, 2 to 32), each layer's type, material and thickness, the dielectrics' constant and loss tangent, copper finish, plated edge, edge connectors; the board thickness is what the layers add up to | editable. Not ported: colours, a dielectric's sub-layers, adding or removing a dielectric, Adjust Dielectric Thickness, impedance control. A smaller layer count is refused while a track, via or zone is on a layer that would go (KiCad deletes them) | `panel_board_stackup.cpp`, `panel_board_finish.cpp`, `board_stackup.cpp` -- the default stackup is computed in `eda_model::rules` and in `boardSetupRules.ts`, and both are held to `src/kicad/default_stackups.json` |
+| Board Stackup > Solder Mask/Paste: expansion, web width, mask-to-copper clearance, bridging inside footprints, via tenting, paste clearance and ratio | editable | `panel_setup_mask_and_paste.cpp` |
+| Text & Graphics > Defaults: line thickness, text size and thickness, italic and upright for each layer class | editable, and written to the derived project so KiCad uses them; this app's own drawing tools do not start new items from them yet | `panel_setup_text_and_graphics.cpp` |
+| Text & Graphics > Dimensions: units, format, precision, text position and style defaults, applied once at creation, never retroactively | editable (task item 7) | `panel_setup_dimensions.cpp` |
+| Design Rules > Constraints: minimum clearance, track width, connection width, annular width, via diameter, drill, micro-via size and drill, hole to hole, copper to hole, copper to edge, silk clearance, text height and thickness, arc deviation, thermal spoke count, external fillets, stackup height in lengths | editable; the ranges of `ValidateDesignRules` are checked in the page and again in the backend. An intent states no minimums, so DRC uses the narrowest sizes its classes ask for until the first Apply makes the shown ones the board's own | `panel_setup_constraints.cpp` |
+| Design Rules > Pre-defined Sizes: the W/Shift+W and via-size-cycle preset lists, add/remove entries | editable | `panel_setup_tracks_and_vias.cpp` -- `Cmd::SetTrackWidthPresets`/`SetViaPresets` (whole-list replace, no per-entry Cmd, same spirit `paste_items` already uses for several items in one commit) |
+| Design Rules > Teardrops | editable (task item 4) | `panel_setup_teardrops.cpp` |
+| Design Rules > Net Classes: the Default class and the others (clearance, track width, via size and hole, micro-via, differential pair), and the table of patterns that assign nets to a class, with the nets a pattern matches | editable. A pattern is `*` and `?` over the whole net name; `a\|b` and `prefix(a\|b)` become one pattern per alternative, KiCad's regular-expression mode and bus notation are not read. The first class in the table whose pattern matches a net owns it (KiCad merges every matching class by priority); "priority" here is the routing order, not KiCad's. Not ported: tuning profile, PCB colour, schematic wire columns | `panel_setup_netclasses.cpp` (its Assign Netclass dialog proposes patterns the same way: `proposePattern`) |
+| Design Rules > Custom Rules: the text of the `.kicad_dru` | editable as text; "Check rule syntax" asks kicad-cli (it has no checker, and drops a file it cannot parse without a word, so the backend loads the text beside a probe board and names the first top-level rule that stops it). Not ported: the highlighting editor, Syntax Help, the compiler's extra warnings, the rule-tree designer (`drcRuleEditor`) | `panel_setup_rules.cpp` |
+| Design Rules > Violation Severity: Error / Warning / Ignore for each of the 64 checks | editable; the list and the defaults come from `drc_item.cpp` (`tools/extract-drc-checks.js`). The two library-link checks start at Ignore (every footprint is embedded in the board) | `panel_setup_severities.cpp` |
+| Board Editor Layers, Zone Hatch Offsets, Formatting, Text Variables, Length-tuning Patterns, Tuning Profiles, Component Classes, Embedded Files | not ported -- nothing in the model holds them | |
 
 W/Shift+W (`pcbnew.EditorControl.trackWidthInc`/`Dec`) and the via-size
 cycle (`viaSizeInc`/`Dec`) now read this page's lists -- `useActionRunner.ts`:
@@ -380,10 +384,9 @@ Canvas.tsx's route/via tools for the *next* item) and, matching source's
 own dual-purpose behavior, also applies the new size to every selected
 track/via in the same keypress via `set_track_width`/`edit_via`.
 
-Rust: `crates/cli/src/studio.rs`'s `state()` gained `board_rules.
-net_classes`/`stackup`/the hole-clearance-and-text-default fields (plain
-JSON exposure, no new endpoint) and `routing.track_width_presets`/
-`via_presets`.
+Rust: `crates/cli/src/studio.rs`'s `state()` sends `board_rules` with the rules as the board is judged by them now (`default_class`,
+`constraints`, `mask_paste`, `text_graphics`, `layer_names`, `severities`, `custom_rules_text`, and `overlay`, the pages an edit has replaced) beside the
+older `net_classes`/`stackup` fields, and `routing.track_width_presets`/`via_presets`; `POST /api/check_rules` is Custom Rules' syntax check.
 
 ## 10. Property dialogs (GAPS.md #11)
 
