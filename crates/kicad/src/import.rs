@@ -162,6 +162,13 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
             }
         }
     }
+    // `(paper ...)` and `(title_block ...)`: the board's Page Settings. A4 landscape and an empty title block are the defaults and are not kept.
+    if let Some(page) = crate::page::import_page(root).filter(|p| !p.is_default()) {
+        design.drawings.get_or_insert_with(Default::default).page = Some(page);
+    }
+    if let Some(tb) = crate::sch_import::import_title_block(root).filter(|tb| *tb != eda_model::ir::TitleBlock::default()) {
+        design.drawings.get_or_insert_with(Default::default).title_block = Some(tb);
+    }
     // Every track/via this parse just built, and every shape/text, has no
     // id yet (the file does not carry ours) -- assign the same
     // deterministic ids a fresh route or a hand-add would get, so an

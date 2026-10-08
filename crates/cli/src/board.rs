@@ -842,6 +842,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetZonePriority { id, to } => format!("zone priority {id} --to {}", serde_json::to_value(to).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default()),
         Cmd::SetAuxOrigin { at: Some(p) } => format!("drill-origin --at {},{}", mm(p.x), mm(p.y)),
         Cmd::SetAuxOrigin { at: None } => "drill-origin --reset".to_string(),
+        Cmd::SetBoardPage { page, title_block } => format!("page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
+        Cmd::SetSchematicPage { page, title_block } => format!("schematic page --paper {}{} --title \"{}\"", page.paper, if page.portrait { " --portrait" } else { "" }, title_block.title),
         Cmd::RepairBoard => "repair".to_string(),
 
         Cmd::Batch { cmds } => format!("batch [{}]", cmds.iter().map(cmd_line).collect::<Vec<_>>().join("; ")),
@@ -1052,6 +1054,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::BooleanShapes { .. } => "shape",
         Cmd::ZoneCutout { .. } | Cmd::MergeZones { .. } | Cmd::SetZonePriority { .. } => "zone",
         Cmd::SetAuxOrigin { .. } => "drill-origin",
+        Cmd::SetBoardPage { .. } => "page",
+        Cmd::SetSchematicPage { .. } => "schematic-page",
         Cmd::RepairBoard => "repair",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",

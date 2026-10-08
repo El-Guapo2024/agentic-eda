@@ -23,6 +23,7 @@ mod cleanup_api;
 mod convert_api;
 mod fab_api;
 mod library_api;
+mod page_json;
 mod sch_api;
 mod fab_cmd;
 mod import_kicad;

@@ -1017,6 +1017,9 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         "locked": design.drawings.as_ref().map(|d| d.locked_ids.clone()).unwrap_or_default(),
         // The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`), `[x, y]` um, or null at (0, 0).
         "aux_origin": design.drawings.as_ref().and_then(|d| d.aux_origin).map(|p| json!([p.x, p.y])),
+        // The board's paper and title block (Page Settings); null is A4 landscape / an empty title block.
+        "page": design.drawings.as_ref().and_then(|d| d.page.as_ref()).map(crate::page_json::page_json),
+        "title_block": design.drawings.as_ref().and_then(|d| d.title_block.as_ref()).map(crate::page_json::title_block_json),
         "checks": checks,
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),
@@ -1352,7 +1355,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin }))
         .collect();
     let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "id": nc.id, "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
-    let title_block = sch.title_block.as_ref().map(|t| json!({ "title": t.title, "date": t.date, "rev": t.rev, "company": t.company, "comments": t.comments }));
+    let title_block = sch.title_block.as_ref().map(crate::page_json::title_block_json);
 
     // Resolved library-symbol graphics for every distinct lib_id this sheet
     // uses, so the frontend can draw KiCad's actual symbols instead of a
@@ -1408,6 +1411,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "graphics": graphics,
         "locked": locked,
         "title_block": title_block,
+        "page": sch.extras.page.as_ref().map(crate::page_json::page_json),
         "lib_symbols": lib_symbols,
         "sheets": sheets,
         "sheet_path": sheet_path,

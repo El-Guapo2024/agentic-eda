@@ -58,7 +58,12 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     writeln!(out, "\t\t(thickness 1.6)").unwrap();
     writeln!(out, "\t\t(legacy_teardrops no)").unwrap();
     writeln!(out, "\t)").unwrap();
-    writeln!(out, "\t(paper \"A4\")").unwrap();
+    // The board's paper and title block (Page Settings); A4 landscape and no title block when it never set them.
+    let page = design.drawings.as_ref().and_then(|d| d.page.as_ref());
+    writeln!(out, "\t{}", page.map(|p| p.to_sexpr()).unwrap_or_else(|| "(paper \"A4\")".to_string())).unwrap();
+    if let Some(tb) = design.drawings.as_ref().and_then(|d| d.title_block.as_ref()) {
+        crate::page::write_board_title_block(&mut out, tb);
+    }
 
     // ---- layers ----
     writeln!(out, "\t(layers").unwrap();
@@ -782,6 +787,33 @@ mod tests {
         // A board saved with the default origin imports with none set (no empty drawings section is invented for it).
         let (plain, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&fixture().0, &model, &meta()).unwrap()).unwrap();
         assert!(plain.drawings.and_then(|d| d.aux_origin).is_none());
+    }
+
+    #[test]
+    fn the_boards_paper_and_title_block_are_written_and_read_back_by_the_importer() {
+        let (mut design, model) = fixture();
+        let plain = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(plain.contains("(paper \"A4\")") && !plain.contains("(title_block"), "never set: A4 landscape, no title block");
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            page: Some(eda_model::page::PageSettings { paper: "A3".into(), portrait: true, user_size_um: None }),
+            title_block: Some(eda_model::ir::TitleBlock { title: "Blinky".into(), rev: "B".into(), comments: vec!["one".into()], ..Default::default() }),
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(paper \"A3\" portrait)"), "{out}");
+        assert!(out.contains("(title_block\n\t\t(title \"Blinky\")\n\t\t(rev \"B\")\n\t\t(comment 1 \"one\")\n\t)"), "{out}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let drawings = back.drawings.unwrap();
+        assert_eq!(drawings.page, Some(eda_model::page::PageSettings { paper: "A3".into(), portrait: true, user_size_um: None }));
+        assert_eq!(drawings.title_block, Some(eda_model::ir::TitleBlock { title: "Blinky".into(), rev: "B".into(), comments: vec!["one".into()], ..Default::default() }));
+        // A user size goes out in mm and comes back as the same size.
+        design.drawings.as_mut().unwrap().page = Some(eda_model::page::PageSettings { paper: "User".into(), portrait: false, user_size_um: Some((300_000, 200_500)) });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(paper \"User\" 300 200.5)"), "{out}");
+        assert_eq!(crate::import_kicad_pcb(&out).unwrap().0.drawings.unwrap().page.unwrap().user_size_um, Some((300_000, 200_500)));
+        // A board saved with the defaults imports with none of them (no empty drawings section is invented for it).
+        let (default_back, _, _) = crate::import_kicad_pcb(&plain).unwrap();
+        assert!(default_back.drawings.is_none() || default_back.drawings.as_ref().is_some_and(|d| d.page.is_none() && d.title_block.is_none()));
     }
 
     #[test]

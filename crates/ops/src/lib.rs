@@ -629,6 +629,12 @@ pub enum Cmd {
     /// `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin`: the drill/place file origin
     /// (`DrawingsSection::aux_origin`); `None` is the reset to (0, 0).
     SetAuxOrigin { at: Option<Point> },
+    /// `common.Control.pageSettings` on the board (`BOARD_EDITOR_CONTROL::PageSettings`): the board's paper and title block, set
+    /// together as one undo step -- see [`page_settings::set_board_page`]. Refused when nothing changes.
+    SetBoardPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
+    /// `common.Control.pageSettings` on the schematic (`SCH_EDITOR_CONTROL::PageSetup`): the same for the schematic -- see
+    /// [`page_settings::set_schematic_page`].
+    SetSchematicPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
     /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
     /// Refused when there is nothing to repair, so no empty undo step is pushed.
     RepairBoard,
@@ -1405,6 +1411,7 @@ impl Cmd {
             | Cmd::ReplaceText { .. }
             | Cmd::SetErcPinMapCell { .. }
             | Cmd::ResetErcPinMap
+            | Cmd::SetSchematicPage { .. }
             | Cmd::Annotate { .. } => Domain::Schematic,
             Cmd::OpenFootprintForEdit { .. }
             | Cmd::NewFootprint { .. }
@@ -1512,6 +1519,7 @@ impl Cmd {
             Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::SetZonePriority { id, .. } => vec![id.as_str()],
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
+            Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
             Cmd::RepairBoard => vec!["repair_board"],
 
             Cmd::MoveSymbol { id, .. }
@@ -1880,6 +1888,8 @@ impl<'a> Board<'a> {
             Cmd::MergeZones { ids } => board_control::merge_zones(&mut self.design, ids).map(|_| ()),
             Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
             Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
+            Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
+            Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
             Cmd::RepairBoard => {
                 let report = board_control::repair_board(&mut self.design, &self.model.nets);
                 if report.repaired == 0 {
@@ -5091,6 +5101,7 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 mod tests;
 
 pub mod board_control;
+pub mod page_settings;
 pub mod build;
 pub mod fields_table;
 pub mod convert;
