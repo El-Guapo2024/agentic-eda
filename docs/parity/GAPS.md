@@ -17,10 +17,10 @@ doc and the code disagree, the code wins and the doc is named.
   **6 closed, 14 partial, 2 open, 8 out of scope** (kicad-cli covers DRC, ERC and the exports).
 - **12 items are new**, found in `PARITY-*.md`, `CODE-COMPARE-*.md` and by reading the code. The ranked list marks them.
 - **Three findings change the picture.**
-  1. *A wired action is not a working feature.* `UI-ACTIONS.md` counts schematic Move, Drag, Rotate, Mirror,
-     Properties and Align as wired, but they act on symbols only: a label, wire, text, power symbol or sheet
-     cannot be moved or rotated. On the PCB, Move skips tracks and zones, Rotate and Flip take footprints and
-     vias only, and Duplicate and Copy skip footprints.
+  1. *A wired action is not a working feature.* `UI-ACTIONS.md` counted schematic Move, Drag, Rotate, Mirror,
+     Properties and Align as wired, but they acted on symbols only. **Fixed on 2026-10-08 for the schematic (item 1):
+     they act on every item kind, wires stretch, and Properties opens the dialog of the kind.** On the PCB, Move
+     skips tracks and zones, Rotate and Flip take footprints and vias only, and Duplicate and Copy skip footprints.
   2. *The KiCad files we write drop design data, and kicad-cli judges those files.* The PCB writer
      (`crates/kicad/src/pcb.rs`) gave every zone the board's default clearance and width instead of its own
      settings, wrote no keepout, no dimensions, no groups, no locks, and turned arc tracks into 32 segments; a
@@ -45,16 +45,27 @@ doc and the code disagree, the code wins and the doc is named.
 "Port from" paths are under the KiCad source root.
 
 ### 1. Schematic edit tools act on symbols only
-New (the residual of #1). **Partial.** Hit: every schematic session. Blocks: yes, moving a label or wire means delete and redraw. WP1, size L.
-- Exists: select, box-select, Select All, Delete, Lock, Change To and the context menu cover every item kind
-  (`kicad-port/schItemGeom.ts`, `schDelete.ts`, `schContextMenu.ts`, `components/schematic/SchContextMenu.tsx`).
-- Missing: Move and Drag (`M`, `G`, click-drag), Rotate, Mirror, Properties (`E`) and Align act on placed symbols
-  only. The handlers in `actions/useActionRunner.ts` (`eeschema.InteractiveMove.move/drag`, `InteractiveEdit.rotateCCW`,
-  `mirrorH`, `properties`) return unless the item is a symbol; `components/SchematicView.tsx` starts a drag only on
-  a symbol; `crates/ops` has `MoveSymbol` and `DragSymbol` and no verb that moves a wire, label, power symbol, text,
-  junction, no-connect, bus entry or sheet. A plain click on a wire toggles net highlight instead of selecting it.
-  No drag of a wire segment (`G` on a wire stretches its neighbours). Align and Align to Grid move symbols without
-  their wires, so pins leave the connection grid and stop connecting (`CODE-COMPARE-ui.md` item 9).
+New (the residual of #1). **Mostly done (2026-10-08).** Hit: every schematic session. Blocks: no longer; Move, Drag, Rotate, Mirror, Properties and Align work on every item kind. WP1, size L (step 1 done).
+- Done (`crates/ops/src/{sch_move,sch_drag,sch_scene,sch_props}.rs`, `kicad-port/{schMove,schAlign,schProperties}.ts`, `components/{SchematicView,SchPropertiesDialogs}.tsx`):
+  one verb family, `Cmd::SchMove`, moves, drags, turns, mirrors and aligns any set of symbols, power symbols, wires and bus wires, labels of every kind,
+  free text, text boxes, shapes, rule areas, directive labels, junctions, no-connects, bus entries, graphic lines and sheets (with their pins), as one undo
+  step on the sheet in view. Move leaves the wires where they are; Drag stretches the attached wires and adds the segments KiCad adds (right-angle bends,
+  the stub at an unselected junction, label and sheet-pin special cases), then does KiCad's finishing (junctions, trimming, merging, dangling segments);
+  dragging a wire segment drags its neighbours. Rotate and Mirror use KiCad's turn point (own anchor, or the half-grid-snapped centre of the selection) and
+  turn a label's spin (`SchExtras::label_spins`, drawn). R, Shift+R, X and Y work while items are held, and the view shows what the server computes for the
+  same command (`POST /api/sch/move_preview`). A plain click on a wire selects it, a click-drag works on any item, and Align and Align to Grid move each
+  item's wires with it so pins stay on the connection grid. Properties (`E`, a double-click) opens the dialog for the kind: label, text, sheet, wires /
+  buses / bus entries / graphic lines / junctions (width, style, colour, junction size), shapes, rule areas, text boxes and directive labels; strokes and
+  junction looks are drawn and written to the `.kicad_sch` as KiCad writes them, and read back.
+- Measured: 49 Rust tests for the move family (every kind moved, dragged with stretch, turned, mirrored and undone; the net list unchanged when items move with
+  their wires; every symbol of the user's board and of mcu30 as module sheets dragged keeps its wires on its pins), 17 for Properties, 4 in `board.rs`
+  (each verb is one undo step; the nets are untouched), a stroke round trip through a `.kicad_sch`, and 19 `node --test` cases; clicked through on a copy of mcu30
+  (wire segment drag with bends, held R during a move, rotate and mirror of five kinds together and Undo, Align Left, Align to Grid, each Properties dialog).
+- Missing: the net-collision overlay of a drag (`sch_drag_net_collision.cpp`); `AutoRotateItem` after a label lands; a text has no justification to flip
+  when it is mirrored; fonts, bold, italic and colours of text and labels, a sheet's border and fill, extra fields and a label's fields have no place in the
+  IR, so their dialog pages are absent; sheet pins cannot be selected one by one; a power symbol has no Properties dialog; the `.kicad_sch` writer still
+  writes every label at angle 0, so a label's spin is not in the file yet; symbols that this project drew (not imported) and are turned or mirrored place
+  their pins by `eda_engine::placed`, which disagrees with the drawn symbol for 90-degree and mirrored ones (older; the move tools use what is drawn).
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
 ### 2. The KiCad files we write drop design data
