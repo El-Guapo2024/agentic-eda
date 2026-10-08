@@ -24,12 +24,14 @@
 //! an edit or the /api/version poll never waits for one.
 
 use crate::board;
+use crate::bom_plugins;
 use crate::cleanup_api;
 use crate::convert_api;
 use crate::fab_api;
 use crate::kicad_lane::Lane;
 use crate::route_api;
 use crate::sch_api;
+use crate::sch_export_api;
 use crate::sch_output_api;
 use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
@@ -603,6 +605,8 @@ fn handle(
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
         ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir).to_string().as_bytes()),
+        // Export Symbols...: the library symbols the schematic uses as one `.kicad_sym` (a read; the browser saves it).
+        ("POST", "/api/sch/export_symbols") => respond(stream, "200 OK", "application/json", crate::sch_control_api::export_symbols(dir, &body).to_string().as_bytes()),
         ("GET", "/api/ratsnest") => {
             let v = ratsnest_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -763,6 +767,13 @@ fn handle(
         ("POST", "/api/fab/bom") => offload(stream, lane, dir, job, path, &body, |dir, _| fab_api::bom(dir)),
         ("POST", "/api/sch/plot") => offload(stream, lane, dir, job, path, &body, sch_output_api::plot),
         ("POST", "/api/sch/netlist") => offload(stream, lane, dir, job, path, &body, sch_output_api::netlist),
+        // The schematic control actions' outputs (`crate::sch_export_api`): the Fields Table's BOM file, a legacy BOM generator's output and one symbol's SVG.
+        // kicad-cli's, so off the loop like the plots above.
+        ("POST", "/api/sch/bom") => offload(stream, lane, dir, job, path, &body, sch_export_api::bom),
+        ("POST", "/api/sch/bom_legacy") => offload(stream, lane, dir, job, path, &body, sch_export_api::bom_legacy),
+        ("POST", "/api/sym/svg") => offload(stream, lane, dir, job, path, &body, sch_export_api::symbol_svg),
+        // The generator scripts KiCad ships, for the legacy BOM dialog's list: a folder read, no process.
+        ("GET", "/api/sch/bom_plugins") => respond(stream, "200 OK", "application/json", bom_plugins::listing().to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
         _ => respond(stream, "404 Not Found", "text/plain", b"not found"),
     }

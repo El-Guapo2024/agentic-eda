@@ -75,6 +75,18 @@ pub fn export_sch(dir: &Path, kind: &str, args: &[String]) -> Result<Value, Vec<
     eda_kicad_engine::export_sch(&design, &model, &work(dir), dir, &project_name(dir), kind, args)
 }
 
+/// `kicad-cli sch export bom` with the Symbol Fields Table's settings as KiCad's `BOM_PRESET` / `BOM_FMT_PRESET` JSON, into `output` (a path relative to the
+/// board directory; default `export/kicad/sch-bom/<name>.csv`): `{ ok, engine, files }`.
+pub fn export_sch_bom(dir: &Path, preset: &Value, fmt: &Value, output: Option<&Path>) -> Result<Value, Vec<CheckResult>> {
+    let (design, model) = load_with_schematic(dir)?;
+    eda_kicad_engine::export_sch_bom(&design, &model, &work(dir), dir, &project_name(dir), preset, fmt, output.map(|o| dir.join(o)).as_deref())
+}
+
+/// `kicad-cli sym export svg [args...]` on `kicad_sym` (a library file's text): `{ ok, engine, files }`, one SVG per unit.
+pub fn export_symbol_svg(dir: &Path, name: &str, kicad_sym: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+    eda_kicad_engine::export_symbol_svg(&work(dir), dir, name, kicad_sym, args)
+}
+
 /// Our own checks, the ones KiCad does not have: `{ pcb: { violations,
 /// counts }, schematic: { violations, counts } }`. `pcb` is shaped like a
 /// DRC report (`type`, `description`, `severity`, `items`, `fix`);
