@@ -11,7 +11,8 @@ import { Toolbar } from "./components/Toolbar";
 import { QuickActions } from "./components/QuickActions";
 import { PropertiesPanel } from "./components/panels/PropertiesPanel";
 import { RightDock } from "./components/panels/RightDock";
-import { SchSelectionFilterPanel } from "./components/panels/SchSelectionFilterPanel";
+import { DockColumn } from "./components/panels/Dock";
+import { SchematicDock } from "./components/panels/SchematicDock";
 import { MessagePanel } from "./components/MessagePanel";
 import { StatusBar } from "./components/StatusBar";
 import { Canvas } from "./components/canvas/Canvas";
@@ -129,10 +130,11 @@ function StudioFrame() {
   const hideBoardChrome = is3d || isFootprint || isSymbolEditor;
   // eeschema's default AUI layout has no layer/appearance manager at all
   // (that's a pcbnew-only concept -- a schematic has no copper/technical
-  // layers to toggle). Its right-hand dock is the drawing/placement toolbar
-  // (drawing-toolbar-col below, already tab-aware via Toolbar's own
-  // schToolbarsFile lookup) plus just the Selection Filter
-  // (panel_sch_selection_filter.cpp, rendered below) -- so the tabbed
+  // layers to toggle) and no dock on the right of the sheet either: its
+  // Hierarchy, Properties and Selection Filter panes all dock in the one
+  // left column (sch_edit_frame.cpp, SchematicDock), and the only thing on
+  // its right is the drawing toolbar (drawing-toolbar-col below, already
+  // tab-aware via Toolbar's own schToolbarsFile lookup) -- so the tabbed
   // Appearance/Filter/Activity dock only makes sense on the PCB tab.
   const showRightDock = state.tab === "pcb";
   return (
@@ -157,9 +159,10 @@ function StudioFrame() {
       <div className="app-body">
         {!hideBoardChrome && (
           <div className="properties-col">
-            <div className="dock">
-              <PropertiesPanel />
-            </div>
+            {/* eeschema docks every side pane in this one left column (sch_edit_frame.cpp: `.Left().Layer( 3 )`); it folds to a handle so the canvas keeps the width. */}
+            <DockColumn side="left" label={state.tab === "schematic" ? "Hierarchy & Properties" : "Properties"}>
+              <div className="dock">{state.tab === "schematic" ? <SchematicDock /> : <PropertiesPanel />}</div>
+            </DockColumn>
           </div>
         )}
         {!hideBoardChrome && (
@@ -182,17 +185,12 @@ function StudioFrame() {
         )}
         {showRightDock && (
           <div className="right-dock-col">
-            <RightDock />
+            <DockColumn side="right" label="Appearance">
+              <RightDock />
+            </DockColumn>
           </div>
         )}
-        {/* eeschema's right dock: the Selection Filter (panel_sch_selection_filter.cpp). */}
-        {state.tab === "schematic" && (
-          <div className="right-dock-col">
-            <div className="dock">
-              <SchSelectionFilterPanel />
-            </div>
-          </div>
-        )}
+        {/* The schematic has no right dock: its Selection Filter (panel_sch_selection_filter.cpp) is a pane of the left column (SchematicDock). */}
       </div>
       <div className="message-panel-row">
         <MessagePanel />

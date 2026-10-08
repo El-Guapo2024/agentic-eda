@@ -62,6 +62,7 @@ import { refDesPrefix } from "../kicad-port/packFootprints";
 import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
+import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { allItems, hitItems } from "../components/schematic/schItems";
@@ -742,8 +743,20 @@ export function useActionRunner() {
       })
     );
 
-    m.set("pcbnew.Control.showLayersManager", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "appearance" }));
-    m.set("common.Control.showProperties", () => {}); // properties panel is always visible in this layout; a no-op is the correct behavior, not a missing feature
+    // PCB_EDIT_FRAME::ToggleLayersManager: shows or hides the Appearance dock (here its column folds to a handle, kicad-port/dockLayout.ts); showing it picks the Appearance tab.
+    m.set("pcbnew.Control.showLayersManager", () => {
+      const layout = getDockLayout();
+      if (!layout.rightCollapsed && state.rightDockTab === "appearance") {
+        setDockColumnCollapsed("right", true);
+        return;
+      }
+      dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "appearance" });
+      setDockColumnCollapsed("right", false);
+    });
+    // ACTIONS::showProperties (`ToggleProperties`): shows or hides the Properties pane (the board editor's and the schematic's).
+    m.set("common.Control.showProperties", () => {
+      if (state.tab === "pcb" || state.tab === "schematic") toggleDockPane("properties");
+    });
 
     m.set(
       "pcbnew.InteractiveMove.move",
@@ -1329,14 +1342,13 @@ export function useActionRunner() {
     m.set("eeschema.NavigateTool.forward", navStep("forward"));
 
     // Ctrl+H -- SCH_EDITOR_CONTROL::ShowHierarchy (sch_editor_control.cpp)
-    // shows/raises the Hierarchy Navigator pane; HierarchyPanel is always
-    // docked here, so this brings it into view and focuses it.
+    // toggles the Schematic Hierarchy pane (`ToggleSchematicHierarchy`:
+    // `PANE_INFO.Show( !IsShown() )`); the pane lives in the left dock
+    // column (SchematicDock), which showing it brings back.
     m.set(
       "eeschema.EditorTool.showHierarchy",
       schematicOnly(() => {
-        const el = document.getElementById("hierarchy-panel");
-        el?.scrollIntoView({ block: "nearest" });
-        el?.focus();
+        toggleDockPane("hierarchy");
       })
     );
 

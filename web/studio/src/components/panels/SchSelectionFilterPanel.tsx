@@ -15,7 +15,6 @@ export function SchSelectionFilterPanel() {
   const [only, setOnly] = useState<{ x: number; y: number; key: SchFilterCategory; label: string } | null>(null);
   return (
     <div className="panel-section">
-      <h3>Selection Filter</h3>
       <label className="filter-row" title="Allow selection of locked items">
         <input type="checkbox" checked={f.lockedItems} onChange={(e) => set({ ...f, lockedItems: e.target.checked })} />
         Locked items
