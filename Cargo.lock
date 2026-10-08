@@ -713,6 +713,7 @@ dependencies = [
  "eda-connectivity",
  "eda-engine",
  "eda-gates",
+ "eda-kicad",
  "eda-model",
  "eda-shape-poly-set",
  "serde",
