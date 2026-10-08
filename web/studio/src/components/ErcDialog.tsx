@@ -174,8 +174,12 @@ export function ErcDialog() {
                 {STALE_NOTICE}
               </span>
             )}
-            {state.ercError && <span style={{ color: "var(--chrome-danger)" }}>{state.ercError}</span>}
           </div>
+          {state.ercError && (
+            <div className="run-error" role="alert">
+              {state.ercError}
+            </div>
+          )}
           {running && (
             <div className="run-banner" role="status">
               <span className="bar" />

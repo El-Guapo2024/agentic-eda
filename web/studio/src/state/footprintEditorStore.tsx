@@ -11,6 +11,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, CmdShape, CmdText, FootprintPropertiesFields, LibraryFootprint, LibraryPad, PointXY, Um } from "../api/types";
 import { downloadFootprintKicadMod, fetchFootprint, fetchFootprintLibraryNames, postCmd, postRedo, postUndo } from "../api/client";
+import { ensureFootprintInProject } from "../api/libraryClient";
 import { duplicatePads, uniqueFootprintName } from "../kicad-port/fpEditActions";
 import { highestPadNumber } from "../kicad-port/padNumbering";
 import { DEFAULT_PAD_MASTER, importPadSettings, settingsOf, type PadSettings } from "../kicad-port/padSettings";
@@ -56,6 +57,8 @@ export interface FootprintEditorState {
   error: string | null;
   view: ViewTransform;
   viewInitialized: boolean;
+  /** Bumped by Zoom to Fit (`REQUEST_FIT`): the canvas fits the view to the footprint again, whether or not the view was moved by hand since. */
+  fitRequest: number;
   selection: Set<string>;
   activeTool: FpToolId;
   drawState: FpDrawState | null;
@@ -105,6 +108,7 @@ const initialState: FootprintEditorState = {
   error: null,
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
+  fitRequest: 0,
   selection: new Set(),
   activeTool: "select",
   drawState: null,
@@ -138,6 +142,7 @@ export type FpAction =
   | { type: "FOOTPRINT_ERR"; message: string }
   | { type: "SET_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
+  | { type: "REQUEST_FIT" }
   | { type: "SET_SELECTION"; refs: string[] }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -191,6 +196,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, view: action.view };
     case "MARK_VIEW_INITIALIZED":
       return { ...state, viewInitialized: true };
+    case "REQUEST_FIT":
+      return { ...state, fitRequest: state.fitRequest + 1 };
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs) };
     case "CLEAR_SELECTION":
@@ -366,6 +373,7 @@ export function FootprintEditorProvider({ children }: { children: React.ReactNod
     getState: () => stateRef.current,
     openFootprint: async (name) => {
       dispatch({ type: "SET_NAME", name });
+      await ensureFootprintInProject(name); // an installed KiCad footprint is copied into the project library first, or the verb below would open a blank one
       await postCmd({ op: "open_footprint_for_edit", name }, false);
       const footprint = await fetchFootprint(name);
       dispatch({ type: "FOOTPRINT_OK", footprint });

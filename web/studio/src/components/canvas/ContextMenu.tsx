@@ -7,12 +7,16 @@
 // list: this app's version offers exactly the actions it actually
 // implements for the current selection, everything else the same
 // "(not ported yet)" a disabled menu item gets elsewhere.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 export interface MenuEntry {
   label: string;
   onSelect: () => void;
   disabled?: boolean;
+  /** A small icon drawn before the label (the toolbar's group menus show each member's KiCad icon). */
+  icon?: ReactNode;
+  /** Drawn pressed, like a checked menu item (the group's current member). */
+  checked?: boolean;
 }
 
 export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; entries: MenuEntry[]; onClose: () => void }) {
@@ -62,7 +66,14 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
             onClose();
           }}
         >
-          <span>{entry.label}</span>
+          {entry.icon || entry.checked ? (
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {entry.icon && <span style={{ display: "inline-flex", width: 18, height: 18, alignItems: "center", justifyContent: "center" }}>{entry.icon}</span>}
+              <span style={entry.checked ? { fontWeight: 600 } : undefined}>{entry.label}</span>
+            </span>
+          ) : (
+            <span>{entry.label}</span>
+          )}
         </div>
       ))}
     </div>

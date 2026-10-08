@@ -1003,7 +1003,7 @@ impl ConstraintModel {
         }
         for key in [part.footprint.as_deref(), part.package.as_deref()].into_iter().flatten() {
             if let Some(mut fp) = footprint::builtin(key) {
-                fp.model = footprint::builtin_model_path(&footprint::normalize_name(key), &part.reference);
+                fp.model = footprint::kicad_footprint_for(&footprint::normalize_name(key), &part.reference, part.value.as_deref()).map(|f| f.model_path());
                 return Some(fp);
             }
         }

@@ -35,7 +35,6 @@ export function HierarchyPanel() {
 
   return (
     <div className="panel-section" id="hierarchy-panel" tabIndex={-1}>
-      <h3>Hierarchy</h3>
       {rows.map((s) => {
         const current = samePath(s.path, here);
         const isRoot = s.path.length === 0;

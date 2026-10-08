@@ -175,8 +175,9 @@ export async function fetchFill(withPolys = false): Promise<FillReport> {
  * poll this themselves (see Viewer3D.tsx); this function makes exactly
  * one request.
  */
-export async function fetchBoardGlb(): Promise<BoardGlbResult> {
-  const r = await fetch("/api/board.glb", { cache: "no-store" });
+export async function fetchBoardGlb(retry = false): Promise<BoardGlbResult> {
+  // `retry`: "Reload board" -- build again even if the server holds a finished answer (a failed export is otherwise kept until the board changes).
+  const r = await fetch(retry ? "/api/board.glb?retry=1" : "/api/board.glb", { cache: "no-store" });
   const contentType = r.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const j = (await r.json()) as { status: "pending" } | { status: "failed"; error: string };
