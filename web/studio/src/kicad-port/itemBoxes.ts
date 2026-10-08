@@ -9,9 +9,8 @@
 //
 // Units are each editor's own internal space: micrometres, +y down (the board, the schematic, the footprint
 // editor and -- after the one Y-flip `resolveLibPoint` does -- the symbol editor).
-import type { BoardState, CmdShape, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, PointXY, Schematic, Shape } from "../api/types";
+import type { BoardState, CmdShape, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, PointXY, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
-import { symbolBounds } from "../components/schematic/libSymbol";
 import { libPointToInternalUm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 
 /** `[minX, minY, maxX, maxY]`. */
@@ -101,41 +100,7 @@ export function pcbContentBox(board: BoardState, boxes: ItemBoxes = pcbItemBoxes
   return unionBoxes([...(outline ? [outline] : []), ...boxes.values()]);
 }
 
-// ------------------------------------------------------------------------------------------------ schematic
-
-/** Half the side of the box that stands for a point item (a junction, a no-connect, a label's anchor): 0.5 mm. */
-const POINT_ITEM_HALF_UM = 500;
-
-/** Every item of the sheet that has an id: symbols, wires, junctions, lines, labels, text, power symbols, no-connects, bus entries and sheets. */
-export function schematicItemBoxes(sch: Schematic): ItemBoxes {
-  const out: ItemBoxes = new Map();
-  const point = (id: string, at: readonly [number, number]) => {
-    if (id) out.set(id, [at[0] - POINT_ITEM_HALF_UM, at[1] - POINT_ITEM_HALF_UM, at[0] + POINT_ITEM_HALF_UM, at[1] + POINT_ITEM_HALF_UM]);
-  };
-  for (const s of sch.symbols) {
-    const b = symbolBounds(s, sch.lib_symbols);
-    out.set(s.id, [b.minX, b.minY, b.maxX, b.maxY]);
-  }
-  for (const w of sch.wires) {
-    const b = boxOfPoints(w.pts);
-    if (b && w.id) out.set(w.id, b);
-  }
-  for (const l of sch.lines ?? []) {
-    const b = boxOfPoints(l.pts);
-    if (b && l.id) out.set(l.id, b);
-  }
-  for (const j of sch.junctions ?? []) point(j.id, j.at);
-  for (const n of sch.no_connects) point(n.id, n.at);
-  for (const l of sch.labels) point(l.id, l.at);
-  for (const t of sch.texts) point(t.id, t.at);
-  for (const p of sch.power_symbols) point(p.id, p.at);
-  for (const e of sch.bus_entries ?? []) {
-    const b = boxOfPoints([e.at, [e.at[0] + e.size[0], e.at[1] + e.size[1]]]);
-    if (b && e.id) out.set(e.id, b);
-  }
-  for (const s of sch.sheets ?? []) out.set(s.id, [s.at[0], s.at[1], s.at[0] + s.size[0], s.at[1] + s.size[1]]);
-  return out;
-}
+// (The schematic's items and their bounds are the catalog of components/schematic/schItems.ts; actions/editorAdapter.ts reads it.)
 
 // ------------------------------------------------------------------------------------------------ footprint editor
 

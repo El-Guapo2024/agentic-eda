@@ -1,16 +1,21 @@
-// What the shared tools draw over every editor's canvas: the cursor crosshair and the item bounding boxes.
+// What the shared tools draw over every editor's canvas: the cursor crosshair, the item bounding boxes, the lasso being drawn and the item
+// the picker highlights.
 //
-// KiCad paints both through the GAL, whichever editor is open: the cursor in `blitCursor` (small cross, full-window cross
-// or 45 degree cross; shown while a tool wants it or "Always show crosshairs" is on) and the boxes in each painter's
-// `m_drawBoundingBoxes` branch (PCB_PAINTER::draw, SCH_PAINTER::drawItemBoundingBox). The four canvases of the studio paint
-// themselves, so this transparent layer sits over whichever is on screen and draws the parts that are common to them -- the
-// canvases keep only their own content. It takes no pointer events.
+// KiCad paints the first two through the GAL, whichever editor is open: the cursor in `blitCursor` (small cross, full-window cross or 45
+// degree cross; shown while a tool wants it or "Always show crosshairs" is on) and the boxes in each painter's `m_drawBoundingBoxes`
+// branch (PCB_PAINTER::draw, SCH_PAINTER::drawItemBoundingBox); the lasso is a `KIGFX::PREVIEW::SELECTION_AREA` view item and the picker's
+// candidate is `BrightenItem`. The four canvases of the studio paint themselves, so this transparent layer sits over whichever is on screen
+// and draws the parts that are common to them -- the canvases keep only their own content. It takes no pointer events.
 import { useEffect, useRef, useState } from "react";
 import { useStudioState } from "../state/store";
 import { useFpState } from "../state/footprintEditorStore";
 import { useSymState } from "../state/symbolEditorStore";
 import { useCommonOptions } from "../state/commonOptions";
+import { useCommonTool } from "../state/commonTool";
 import { crosshairSegments, cursorVisible } from "../kicad-port/crosshair";
+import { lassoContained } from "../kicad-port/lasso";
+import { flipLocalX } from "../kicad-port/boardControl";
+import { usePickerSession } from "../actions/pcbPicker";
 import { makeEditorAdapter, isCanvasTab } from "../actions/editorAdapter";
 import { layerColor } from "./canvas/layers";
 
@@ -23,12 +28,16 @@ const PCB_FOOTPRINT_BOX_COLOR = "#ff00ff"; // COLOR4D( MAGENTA )
 const SCH_BOX_COLOR = "rgba(51,51,51,1)"; // COLOR4D( 0.2, 0.2, 0.2, 1 )
 /** `SCH_PAINTER::drawItemBoundingBox`: `SetLineWidth( schIUScale.MilsToIU( 3 ) )`. */
 const SCH_BOX_WIDTH_UM = 76.2;
+/** The brightened item of a picker (the interactive delete tool's candidate): a heavy cyan outline. */
+const HOVER_BOX_COLOR = "#33ddff";
 
 export function CommonOverlay() {
   const studio = useStudioState();
   const fp = useFpState();
   const sym = useSymState();
   const opts = useCommonOptions();
+  const tool = useCommonTool();
+  const picker = usePickerSession();
   const ref = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
@@ -59,26 +68,58 @@ export function CommonOverlay() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, size.width, size.height);
     if (!adapter || !(adapter.view.scale > 0)) return;
-    const { view } = adapter;
+    const { view, flipped } = adapter;
+    /** World -> canvas pixels, including the board's mirrored view. */
+    const sx = (x: number) => flipLocalX(flipped, size.width, x * view.scale + view.x);
+    const sy = (y: number) => y * view.scale + view.y;
+    const strokeBox = ([x0, y0, x1, y1]: readonly [number, number, number, number]) => {
+      const a = sx(x0);
+      const b = sx(x1);
+      ctx.strokeRect(Math.min(a, b), sy(y0), Math.abs(b - a), (y1 - y0) * view.scale);
+    };
 
     // `RENDER_SETTINGS::GetDrawBoundingBoxes`: one outline per item, red when it is selected.
     if (opts.drawBoundingBoxes) {
       const boardSide = tab === "pcb" || tab === "footprint";
       const parts = new Set(studio.board?.parts.map((p) => p.ref) ?? []);
       ctx.lineWidth = boardSide ? 1 : Math.max(1, SCH_BOX_WIDTH_UM * view.scale);
-      for (const [id, [x0, y0, x1, y1]] of adapter.itemBoxes()) {
+      for (const [id, box] of adapter.itemBoxes()) {
         const selected = adapter.selection.has(id);
         ctx.strokeStyle = selected ? SELECTED_BOX_COLOR : !boardSide ? SCH_BOX_COLOR : tab === "pcb" && parts.has(id) ? PCB_FOOTPRINT_BOX_COLOR : PCB_BOX_COLOR;
-        const sx = x0 * view.scale + view.x;
-        const sy = y0 * view.scale + view.y;
-        ctx.strokeRect(sx, sy, (x1 - x0) * view.scale, (y1 - y0) * view.scale);
+        strokeBox(box);
       }
     }
 
+    // The item a picker would take (`BrightenItem` of the delete tool's candidate).
+    if (picker && tool.hover) {
+      const box = adapter.itemBoxes().get(tool.hover);
+      if (box) {
+        ctx.strokeStyle = HOVER_BOX_COLOR;
+        ctx.lineWidth = 2;
+        strokeBox(box);
+      }
+    }
+
+    // The lasso (`SELECTION_AREA`): clockwise is inside (solid, yellow), counterclockwise touching (dashed, blue), the polygon closed to the cursor.
+    if (tool.lasso && tool.lasso.pts.length > 0) {
+      const pts = [...tool.lasso.pts, ...(adapter.cursor ? [[adapter.cursor.x, adapter.cursor.y] as [number, number]] : [])];
+      const inside = lassoContained(pts);
+      ctx.beginPath();
+      pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(sx(x), sy(y)) : ctx.lineTo(sx(x), sy(y))));
+      ctx.closePath();
+      ctx.fillStyle = inside ? "rgba(255,216,74,0.12)" : "rgba(74,163,255,0.12)";
+      ctx.strokeStyle = inside ? "#ffd84a" : "#4aa3ff";
+      ctx.setLineDash(inside ? [] : [4, 3]);
+      ctx.lineWidth = 1;
+      ctx.fill();
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     // `blitCursor`: at the cursor, in the chosen mode, when a tool wants it or the setting forces it.
-    if (adapter.cursor && cursorVisible(opts.alwaysShowCursor, !adapter.toolIdle)) {
-      const px = adapter.cursor.x * view.scale + view.x;
-      const py = adapter.cursor.y * view.scale + view.y;
+    if (adapter.cursor && cursorVisible(opts.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null)) {
+      const px = sx(adapter.cursor.x);
+      const py = sy(adapter.cursor.y);
       ctx.strokeStyle = cursorColor(tab);
       ctx.lineWidth = 1;
       ctx.beginPath();

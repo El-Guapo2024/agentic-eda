@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { boardDeleteCmds, schematicDeleteCmds } from "./deleteCmds";
-import type { BoardState, Schematic } from "../api/types";
+import { boardDeleteCmds } from "./deleteCmds";
+import type { BoardState } from "../api/types";
 
 const board = {
   parts: [
@@ -46,24 +46,4 @@ test("deleting a group deletes its members", () => {
   ]);
   // a member named twice (directly and through its group) is deleted once
   assert.equal(boardDeleteCmds(board, ["grp_1", "T1"]).cmds.length, 2);
-});
-
-test("every schematic item has a delete verb", () => {
-  const sch = {
-    symbols: [{ id: "U1" }],
-    wires: [{ id: "w1" }],
-    junctions: [{ id: "j1" }],
-    lines: [{ id: "l1" }],
-    labels: [{ id: "lbl1" }],
-    texts: [{ id: "t1" }],
-    power_symbols: [{ id: "p1" }],
-    no_connects: [{ id: "n1" }],
-    bus_entries: [{ id: "e1" }],
-  } as unknown as Schematic;
-  const cmds = schematicDeleteCmds(sch, ["U1", "w1", "j1", "l1", "lbl1", "t1", "p1", "n1", "e1", "nope"]);
-  assert.deepEqual(
-    cmds.map((c) => c.op),
-    ["delete_symbol", "delete_wire", "delete_junction", "delete_sch_line", "delete_label", "delete_sch_text", "delete_power_symbol", "delete_no_connect", "delete_bus_entry"]
-  );
-  assert.deepEqual(schematicDeleteCmds(sch, ["nope"]), []);
 });

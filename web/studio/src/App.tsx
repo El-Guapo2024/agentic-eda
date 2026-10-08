@@ -22,6 +22,7 @@ import { HotkeysDialog } from "./components/HotkeysDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
 import { CommonOverlay } from "./components/CommonOverlay";
+import { CommonToolHost } from "./components/CommonToolHost";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
@@ -175,6 +176,7 @@ function StudioFrame() {
           {isSymbolEditor && <SymbolEditorView />}
           {is3d && <Viewer3D onReady={setViewer3d} />}
           {!is3d && <CommonOverlay />}
+          {!is3d && <CommonToolHost />}
           <Toast />
         </div>
         {!hideBoardChrome && (

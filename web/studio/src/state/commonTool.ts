@@ -1,60 +1,39 @@
-// The shared interactive tools that run over any editor's canvas, and the one running now.
+// What the shared pointer tools show over any editor's canvas while they run: the lasso being drawn
+// (`SELECTION_TOOL::selectLasso` / `PCB_SELECTION_TOOL::SelectPolyArea`) and the item the picker's motion handler highlights
+// (`PICKER_TOOL` motion handler -> `BrightenItem`, as the interactive delete tool does).
 //
-// KiCad's `PICKER_TOOL` (common/tool/picker_tool.cpp) is a tool other tools borrow: it waits for the user to click a point,
-// calls the click handler of whoever started it (`SetClickHandler`) with the picked position -- the handler returns whether to go
-// on picking -- and the motion, cancel and finalize handlers on the way. The interactive delete tool, "place the grid origin" and
-// "pick a new group member" are all built on it. The selection tool's lasso (`selectLasso`) is the other tool here: a polygon the
-// user draws that selects what it touches.
-//
-// The store holds the running tool; `components/CommonToolHost.tsx` owns the pointer and draws the preview. Handlers are plain
-// functions kept here (not in a React reducer), so a tool started by an action can read the editor's state when its click arrives.
+// The picker itself is `actions/pcbPicker.ts` (`PickerHost`); `components/CommonToolHost.tsx` owns the pointer for the editors
+// whose canvases do not answer a picker themselves, and draws these two. Plain module state with subscribers, like
+// `state/commonOptions.ts`, so an action started from a menu and the canvas see the same tool.
 import { useSyncExternalStore } from "react";
 
-export interface PickPoint {
-  x: number;
-  y: number;
-}
-
-/** `PICKER_TOOL::Main`'s `finalize_state`: why the tool ended. */
-export type PickerEnd = "click" | "cancel" | "activate";
-
-export interface PickerRequest {
-  /** What the status bar says while it runs (`m_frame->PushTool( sourceEvent )` shows the starter's name). */
-  message: string;
-  /** `PICKER_TOOL_BASE::m_snap` (default true): hand the handlers the grid-snapped cursor, not the raw one. */
-  snap: boolean;
-  /** `SetCursor`: the pointer shown over the canvas (`ARROW`, `PLACE`, `REMOVE`). */
-  cursor: "default" | "place" | "remove";
-  /** `pickerSubTool`: runs inside another tool without ending it. */
-  sub?: boolean;
-  /** `SetClickHandler`: return true to keep picking (`getNext`), false (or nothing) to end after this click. */
-  onClick?: (pt: PickPoint) => boolean | void;
-  /** `SetMotionHandler`. */
-  onMotion?: (pt: PickPoint) => void;
-  /** `SetCancelHandler`: Escape or a right click. */
-  onCancel?: () => void;
-  /** `SetFinalizeHandler`: always, with why it ended. */
-  onFinalize?: (end: PickerEnd) => void;
-}
-
-/** The lasso being drawn (`SelectPolyArea` / `selectLasso`'s `points`). */
+/** The lasso being drawn (`points` of `SelectPolyArea`): world points in the editor's own space. */
 export interface LassoSession {
-  pts: [number, number][];
-  /** True while the button is down, i.e. while drag events add points. */
+  pts: readonly (readonly [number, number])[];
+  /** True while the button is down, i.e. while drag events add points (a click-by-click lasso goes on after the release). */
   dragging: boolean;
-  /** Held modifiers decide how the result changes the selection. */
+  /** Shift held at the start: the hits are added to the selection (`m_drag_additive`). */
   additive: boolean;
+  /** Ctrl+Shift held at the start: the hits are removed from it (`m_drag_subtractive`). */
   subtractive: boolean;
 }
 
-export interface CommonToolState {
-  picker: PickerRequest | null;
-  /** The id the picker's motion handler last found under the cursor, drawn highlighted (`BrightenItem`). */
-  hover: string | null;
-  lasso: LassoSession | null;
+/** The clarification menu (`SELECTION_TOOL::doSelectionMenu`): the items a click could mean, listed by description, where they were clicked. */
+export interface SelectionMenu {
+  at: { x: number; y: number };
+  items: { id: string; label: string }[];
+  /** What the choice does: `ids` is the one item picked, or all of them for "Select All" (null: the menu was dismissed). */
+  onChoose: (ids: string[] | null) => void;
 }
 
-const IDLE: CommonToolState = { picker: null, hover: null, lasso: null };
+export interface CommonToolState {
+  /** The id of the item under the cursor that the running picker highlights, or null. */
+  hover: string | null;
+  lasso: LassoSession | null;
+  menu: SelectionMenu | null;
+}
+
+const IDLE: CommonToolState = { hover: null, lasso: null, menu: null };
 
 let current: CommonToolState = IDLE;
 const listeners = new Set<() => void>();
@@ -77,40 +56,7 @@ export function useCommonTool(): CommonToolState {
   return useSyncExternalStore(subscribe, getCommonTool, getCommonTool);
 }
 
-/**
- * `ACTIONS::pickerTool` / `pickerSubTool`: start picking. Another picker that was running ends first ("Deactivate other tools;
- * particularly important if another PICKER is currently running" -- `Activate()` ends it, finalizing with `END_ACTIVATE`).
- */
-export function startPicker(request: PickerRequest): void {
-  endPicker("activate");
-  set({ ...current, picker: request, hover: null, lasso: null });
-}
-
-/** Ends the running picker, running its finalize handler. */
-export function endPicker(end: PickerEnd): void {
-  const p = current.picker;
-  if (!p) return;
-  set({ ...current, picker: null, hover: null });
-  try {
-    p.onFinalize?.(end);
-  } catch {
-    /* PICKER_TOOL::Main swallows a finalize handler's exception */
-  }
-}
-
-/** `evt->IsCancelInteractive()`: Escape or a right click cancels the picker, running its cancel handler first. */
-export function cancelPicker(): boolean {
-  const p = current.picker;
-  if (!p) return false;
-  try {
-    p.onCancel?.();
-  } catch {
-    /* swallowed, as in PICKER_TOOL::Main */
-  }
-  endPicker("cancel");
-  return true;
-}
-
+/** `BrightenItem` / `UnbrightenItem` for the picker's candidate. */
 export function setPickerHover(id: string | null): void {
   if (current.hover !== id) set({ ...current, hover: id });
 }
@@ -119,11 +65,34 @@ export function setLasso(lasso: LassoSession | null): void {
   set({ ...current, lasso });
 }
 
-/** Escape: cancels whichever shared tool is running (the picker, or a lasso in the making). True when one was. */
-export function cancelCommonTool(): boolean {
-  if (current.lasso) {
-    set({ ...current, lasso: null });
-    return true;
-  }
-  return cancelPicker();
+/** Where the pointer last was, in client pixels (`KIPLATFORM::UI::GetMousePosition()`): a menu opened from an action appears there. */
+let lastPointer = { x: 0, y: 0 };
+
+export function setLastPointer(x: number, y: number): void {
+  lastPointer = { x, y };
+}
+
+export function getLastPointer(): { x: number; y: number } {
+  return lastPointer;
+}
+
+/** `ACTIONS::selectionMenu`: show the clarification menu; a menu already open is dismissed first. */
+export function showSelectionMenu(menu: SelectionMenu): void {
+  closeSelectionMenu();
+  set({ ...current, menu });
+}
+
+/** The menu is gone (a choice was made, or it was dismissed): runs `onChoose` with the choice, or null. */
+export function closeSelectionMenu(choice: string[] | null = null): void {
+  const menu = current.menu;
+  if (!menu) return;
+  set({ ...current, menu: null, hover: null });
+  menu.onChoose(choice);
+}
+
+/** Escape while a lasso is being drawn (`evt->IsCancelInteractive()` in `SelectPolyArea`): nothing is selected. True when there was one. */
+export function cancelLasso(): boolean {
+  if (!current.lasso) return false;
+  set({ ...current, lasso: null });
+  return true;
 }

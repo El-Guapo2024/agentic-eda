@@ -20,7 +20,8 @@ import { isCanvasTab, type EditorAdapter } from "./editorAdapter";
 import { getCommonOptions, setCommonOptions } from "../state/commonOptions";
 import { crossHairModeForAction } from "../kicad-port/crosshair";
 import { LIBRARY_EDITOR_FIT_MARGIN, boxCentre, centerViewOn, setScaleAboutCentre, zoomFitBox, zoomListFor, zoomPresetScale } from "../kicad-port/zoomFit";
-import { worldToScreen } from "../kicad-port/view";
+import { canvasRect, emitCanvasEvent } from "./canvasEvents";
+import { registerSelectionActions } from "./commonSelectionActions";
 import { gridPresetIndex } from "../kicad-port/cursorControl";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { formatLength } from "../state/units";
@@ -38,26 +39,6 @@ export interface CommonActionContext {
   fpDispatch: Dispatch<FpAction>;
   symApi: SymbolEditorApi;
   symDispatch: Dispatch<SymAction>;
-}
-
-/** The canvas of whichever editor is on screen (they all use this class; only one is mounted at a time). */
-export function canvasRect(): DOMRect | null {
-  return document.querySelector(".pcb-canvas-container")?.getBoundingClientRect() ?? null;
-}
-
-/**
- * Stand-in for the warped pointer / `m_toolMgr->ProcessEvent( TC_MOUSE ... )`: re-dispatches a mouse event on the live
- * canvas at a world position, so every tool that follows the pointer (move preview, route and wire rubber bands, a
- * context menu) sees the keyboard cursor exactly as it would a real mouse at that spot.
- */
-export function emitCanvasEvent(adapter: EditorAdapter, type: "pointermove" | "contextmenu", world: { x: number; y: number }): void {
-  const el = document.querySelector(".pcb-canvas-container canvas") ?? document.querySelector(".pcb-canvas-container");
-  const rect = canvasRect();
-  if (!el || !rect) return;
-  const [sx, sy] = worldToScreen(adapter.view, world.x, world.y);
-  const init = { bubbles: true, cancelable: true, composed: true, clientX: rect.left + sx, clientY: rect.top + sy };
-  if (type === "contextmenu") el.dispatchEvent(new MouseEvent("contextmenu", { ...init, button: 2, buttons: 2 }));
-  else el.dispatchEvent(new PointerEvent("pointermove", { ...init, button: 0, buttons: 0, pointerId: 1, pointerType: "mouse", isPrimary: true }));
 }
 
 export function registerCommonActions(m: Map<string, ActionHandler>, ctx: CommonActionContext): void {
@@ -215,13 +196,14 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   m.set("common.Control.updatePreferences", refreshPreview);
 
   // ACTIONS::showContextMenu -- COMMON_TOOLS::CursorControl( CURSOR_RIGHT_CLICK ): a right-click event at the pointer, which
-  // opens the tool's context menu. The schematic has no context menu here.
-  if (tab === "pcb" || tab === "footprint" || tab === "symbol") {
-    m.set(
-      "common.Control.showContextMenu",
-      onCanvas((a) => {
-        if (a.cursor) emitCanvasEvent(a, "contextmenu", a.cursor);
-      })
-    );
-  }
+  // opens the tool's context menu.
+  m.set(
+    "common.Control.showContextMenu",
+    onCanvas((a) => {
+      if (a.cursor) emitCanvasEvent(a, "contextmenu", a.cursor);
+    })
+  );
+
+  // The selection tool's modes and events, the interactive delete tool and the picker (commonSelectionActions.ts).
+  registerSelectionActions(m, ctx);
 }

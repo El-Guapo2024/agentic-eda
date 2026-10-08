@@ -64,6 +64,7 @@ import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
+import { cancelLasso, getCommonTool } from "../state/commonTool";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { allItems, hitItems } from "../components/schematic/schItems";
@@ -769,7 +770,7 @@ export function useActionRunner() {
     // also empty does it clear the net highlight).
     m.set("common.Interactive.cancel", () => {
       // PICKER_TOOL::Main: Escape ends a running pick session (reference point, offset tool, a dialog's "Select ...") and nothing else.
-      if (picker.cancel()) return;
+      if (picker.cancel() || cancelLasso()) return;
       // Tell the backend's router session to end too (fire-and-forget --
       // see cancelInteractiveRoute's own doc comment) before the ordinary
       // ESCAPE reducer case clears `drawState` locally; otherwise the
@@ -1494,7 +1495,8 @@ export function useActionRunner() {
     m.set(
       "common.Interactive.finish",
       canvasOnly(() => {
-        if (state.drawState) dblClickAtCursor();
+        // End also closes a lasso being drawn (`selectLasso`: `evt->IsAction( &ACTIONS::finishInteractive )`).
+        if (state.drawState || getCommonTool().lasso) dblClickAtCursor();
       })
     );
 
@@ -2218,7 +2220,10 @@ export function useActionRunner() {
     // library editors' stores change without this registry being rebuilt.
     registerCommonActions(m, {
       tab: state.tab,
-      getAdapter: () => makeEditorAdapter({ tab: state.tab, studio: state, fp: fpApi.getState(), sym: symApi.getState(), dispatch, fpDispatch, symDispatch }),
+      getAdapter: () => {
+        const studio = api.getState();
+        return makeEditorAdapter({ tab: studio.tab, studio, fp: fpApi.getState(), sym: symApi.getState(), dispatch, fpDispatch, symDispatch, api, fpApi, symApi });
+      },
       state,
       dispatch,
       api,
