@@ -79,7 +79,7 @@ use eda_model::ir::Um;
 /// (segments `n` and `n+step`), accept the first collision-free candidate
 /// that strictly lowers corner cost. Returns the new point list on success.
 #[allow(clippy::too_many_arguments)] // mirrors the collision query's own (node, net, layer, width, rules, exclude) parameter set, threaded straight through.
-fn merge_step(pts: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> Option<Vec<eda_model::ir::Point>> {
+fn merge_step(pts: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], area: Option<Area>) -> Option<Vec<eda_model::ir::Point>> {
     if pts.len() < step + 3 {
         return None;
     }
@@ -93,12 +93,21 @@ fn merge_step(pts: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32
         let mut cost = [i64::MAX; 2];
         for (i, start_diagonal) in [false, true].into_iter().enumerate() {
             let bypass = Direction45::Undefined.build_initial_trace(p_a, p_b, start_diagonal, CornerMode::Mitered45);
+            // `checkColliding( aLine, bypass )`: only the replacement is tested -- the
+            // rest of the line is what it already was (and may already violate
+            // something, which must not block every merge).
+            if collides(node, &bypass, layer, width, net, rules, exclude) {
+                continue;
+            }
+            // `checkConstraints( n, n + step + 1, .. )`
+            if let Some(a) = area {
+                if !area_allows(a, n, n + step + 1, pts, &bypass) {
+                    continue;
+                }
+            }
             let mut candidate = pts[..n].to_vec();
             candidate.extend(bypass);
             candidate.extend(pts[(n + step + 2)..].to_vec());
-            if collides(node, &candidate, layer, width, net, rules, exclude) {
-                continue;
-            }
             let mut l = Line::from_points(net.clone(), layer, width, candidate);
             l.simplify(); // `Simplify2`
             cost[i] = corner_cost(&l.pts);
@@ -201,7 +210,8 @@ fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: 
 }
 
 /// `mergeFull`: the outer shrinking-span loop around [`merge_step`].
-fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId]) -> Vec<eda_model::ir::Point> {
+#[allow(clippy::too_many_arguments)] // same query-context parameter set every other pass in this module threads through unchanged.
+fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], area: Option<Area>) -> Vec<eda_model::ir::Point> {
     if pts.len() < 3 {
         return pts;
     }
@@ -219,7 +229,7 @@ fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um
         if step < 1 || pts.len() < 3 {
             break;
         }
-        match merge_step(&pts, step, node, layer, width, net, rules, exclude) {
+        match merge_step(&pts, step, node, layer, width, net, rules, exclude, area) {
             Some(new_pts) => pts = new_pts, // success: retry at the same (large) span
             None => step -= 1,              // failure: shrink the search radius
         }
@@ -249,10 +259,40 @@ pub mod effort {
 /// the passes this crate ports: merge segments, merge obtuse, merge
 /// collinear, smart pads, fanout cleanup.
 pub fn optimize_with(line: &Line, node: &Node, rules: &BoardRules, exclude: &[ItemId], flags: u32) -> Line {
+    optimize_in_area(line, node, rules, exclude, flags, None)
+}
+
+/// `OPTIMIZER::SetRestrictArea( area, false )` + `RESTRICT_AREA`: `x0, y0, x1, y1`.
+pub type Area = (Um, Um, Um, Um);
+
+/// `AREA_CONSTRAINT::Check` (`pns_optimizer.cpp:~210`), non-strict: a shortcut
+/// replacing vertices `v1..=v2` of `path` with `replacement` is allowed when
+/// both ends lie in the area, or when one end is outside but the replacement
+/// leaves the outside leg's heading alone (so the part of the line the shove
+/// never touched keeps its shape).
+fn area_allows(area: Area, v1: usize, v2: usize, path: &[eda_model::ir::Point], replacement: &[eda_model::ir::Point]) -> bool {
+    let inside = |p: eda_model::ir::Point| p.x >= area.0 && p.x <= area.2 && p.y >= area.1 && p.y <= area.3;
+    let parallel = |a: (eda_model::ir::Point, eda_model::ir::Point), b: (eda_model::ir::Point, eda_model::ir::Point)| (a.1.x - a.0.x) as i128 * (b.1.y - b.0.y) as i128 - (a.1.y - a.0.y) as i128 * (b.1.x - b.0.x) as i128 == 0;
+    let (p1_in, p2_in) = (inside(path[v1]), inside(path[v2]));
+    if p1_in && p2_in {
+        return true;
+    }
+    if v1 < path.len() - 1 && !p1_in && p2_in && inside(path[v1 + 1]) {
+        return parallel((replacement[0], replacement[1]), (path[v1], path[v1 + 1]));
+    }
+    if p1_in && !p2_in && v2 >= 1 && inside(path[v2 - 1]) {
+        let n = replacement.len();
+        return parallel((replacement[n - 2], replacement[n - 1]), (path[v2 - 1], path[v2]));
+    }
+    false
+}
+
+/// [`optimize_with`], with `RESTRICT_AREA` when `area` is given.
+pub fn optimize_in_area(line: &Line, node: &Node, rules: &BoardRules, exclude: &[ItemId], flags: u32, area: Option<Area>) -> Line {
     let mut out = line.clone();
     out.clear_links();
     if flags & effort::MERGE_SEGMENTS != 0 {
-        out.pts = merge_full(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
+        out.pts = merge_full(out.pts, node, out.layer, out.width, &out.net, rules, exclude, area);
     }
     if flags & effort::MERGE_OBTUSE != 0 {
         out.pts = merge_obtuse(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
@@ -513,7 +553,7 @@ mod tests {
     fn merge_full_simplifies_collinear_points() {
         let node = Node::new();
         let pt = |x, y| Point { x, y };
-        let out = merge_full(vec![pt(0, 0), pt(500, 0), pt(1000, 0), pt(1000, 1000)], &node, 0, 200, &net_of("SIG"), &rules(), &[]);
+        let out = merge_full(vec![pt(0, 0), pt(500, 0), pt(1000, 0), pt(1000, 1000)], &node, 0, 200, &net_of("SIG"), &rules(), &[], None);
         assert_eq!(out, vec![pt(0, 0), pt(1000, 0), pt(1000, 1000)]);
     }
 
@@ -560,6 +600,39 @@ mod tests {
         let optimized = optimize(&line, &node, &rules, &[]);
         assert!(optimized.segment_count() <= line.segment_count(), "optimizer must never add complexity");
         assert!(corner_cost(&optimized.pts) <= corner_cost(&line.pts));
+    }
+
+    /// `RESTRICT_AREA` (`AREA_CONSTRAINT`): a shortcut whose ends are outside the area the shove touched
+    /// is not taken; the same line with a big enough area is merged.
+    #[test]
+    fn a_restricted_area_keeps_the_optimizer_off_the_rest_of_the_line() {
+        let node = Node::new();
+        let rules = rules();
+        let zigzag = vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1500, y: 500 }, Point { x: 2500, y: 500 }, Point { x: 3000, y: 1000 }, Point { x: 4000, y: 1000 }];
+        let line = Line::from_points(net_of("SIG"), 0, 200, zigzag);
+        let free = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, None);
+        assert!(free.pts.len() < line.pts.len(), "unrestricted, it merges: {:?}", free.pts);
+        let whole = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, Some((-100, -100, 4100, 1100)));
+        assert_eq!(whole.pts, free.pts, "an area around the whole line changes nothing");
+        let elsewhere = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, Some((10_000, 10_000, 11_000, 11_000)));
+        assert_eq!(elsewhere.pts, line.pts, "an area the line never enters keeps it as it is");
+    }
+
+    /// `checkColliding( aLine, bypass )`: only the bypass is tested, so a line that already violates
+    /// something elsewhere can still be shortened where it is clear.
+    #[test]
+    fn a_violation_elsewhere_on_the_line_does_not_block_a_merge() {
+        use crate::item::{Item, Solid};
+        use crate::layer::LayerRange;
+        let mut node = Node::new();
+        // a pad the line's first leg already runs through
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 300 }, source: "U1.1".into() }));
+        let rules = rules();
+        let line = Line::from_points(net_of("SIG"), 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 3000, y: 0 }, Point { x: 3500, y: 500 }, Point { x: 5000, y: 500 }, Point { x: 5500, y: 1000 }, Point { x: 8000, y: 1000 }]);
+        let out = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, None);
+        assert!(out.pts.len() < line.pts.len(), "{:?}", out.pts);
+        assert_eq!(out.pts.first(), line.pts.first());
+        assert_eq!(out.pts.last(), line.pts.last());
     }
 
     #[test]

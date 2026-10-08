@@ -88,6 +88,45 @@ impl Line {
         std::mem::swap(&mut self.via_at_start, &mut self.via_at_end);
     }
 
+    /// `LINE::HasLoops`: some point comes back to an earlier non-adjacent one.
+    pub fn has_loops(&self) -> bool {
+        (0..self.pts.len()).any(|i| ((i + 2)..self.pts.len()).any(|j| self.pts[i] == self.pts[j]))
+    }
+
+    /// `SHAPE_LINE_CHAIN::Find( p )`: the index of the vertex that is exactly `p`.
+    pub fn find(&self, p: Point) -> Option<usize> {
+        self.pts.iter().position(|&q| q == p)
+    }
+
+    /// `LINE::DragCorner( aP, aIndex )` in its default 45-degree mode
+    /// (`dragCorner45` with no preferred ending direction): move vertex
+    /// `index` to `p` and re-solve the legs next to it so the line stays on
+    /// 45-degree headings, instead of leaving an arbitrary-angle leg.
+    pub fn drag_corner45(&mut self, p: Point, index: usize) {
+        let n_segs = self.pts.len().saturating_sub(1);
+        let width = self.width;
+        let new_pts = if index == 0 {
+            let mut rev = self.pts.clone();
+            rev.reverse();
+            let mut out = drag_corner_internal(&rev, p);
+            out.reverse();
+            out
+        } else if index >= n_segs {
+            drag_corner_internal(&self.pts, p)
+        } else {
+            let mut path = drag_corner_internal(&self.pts[..=index], p);
+            let mut tail: Vec<Point> = self.pts[index..].to_vec();
+            tail.reverse();
+            let mut tail = drag_corner_internal(&tail, p);
+            tail.reverse();
+            path.extend(tail);
+            path
+        };
+        self.pts = new_pts;
+        self.width = width;
+        self.simplify();
+    }
+
     /// Drop consecutive duplicate/collinear points -- `SHAPE_LINE_CHAIN::
     /// Simplify()`'s collinear-removal half (arc simplification doesn't
     /// apply; this port has no arc geometry). Exact collinearity only
@@ -113,6 +152,64 @@ impl Line {
     }
 }
 
+/// `dragCornerInternal` (`pns_line.cpp:668`): re-route the chain `origin`
+/// so its last vertex ends at `p`, keeping 45-degree headings. Walks back
+/// from the last segment looking for the first vertex from which a 45-degree
+/// trace to `p` leaves in that segment's own heading, or at least turns
+/// obtusely from the previous one; falls back to a fresh trace from the
+/// chain's first point.
+fn drag_corner_internal(origin: &[Point], p: Point) -> Vec<Point> {
+    use crate::direction45::{AngleType, CornerMode, Direction45};
+    let trace = |from: Point, diag: bool| Direction45::Undefined.build_initial_trace(from, p, diag, CornerMode::Mitered45);
+    if origin.len() == 1 {
+        return trace(origin[0], false);
+    }
+    if origin.len() == 2 {
+        // `DIRECTION_45 dir( P0 - P1 )`: note the reversed vector, as KiCad has it.
+        let dir = Direction45::from_vector(origin[0].x - origin[1].x, origin[0].y - origin[1].y);
+        return trace(origin[0], dir.is_diagonal());
+    }
+    let n_segs = origin.len() - 1;
+    let mut picked: Option<Vec<Point>> = None;
+    let mut i = n_segs as isize - 1;
+    while i >= 0 {
+        let iu = i as usize;
+        let d_start = Direction45::from_seg(origin[iu], origin[iu + 1]);
+        let p_start = origin[iu];
+        let d_prev = if iu > 0 { Direction45::from_seg(origin[iu - 1], origin[iu]) } else { Direction45::Undefined };
+        // `paths[j] = d_start.BuildInitialTrace( p_start, aP, j )`
+        let mut paths: Vec<(Vec<Point>, Direction45)> = Vec::new();
+        for j in 0..2 {
+            let path = d_start.build_initial_trace(p_start, p, j == 1, CornerMode::Mitered45);
+            if path.len() < 2 {
+                continue;
+            }
+            let dir = Direction45::from_seg(path[0], path[1]);
+            paths.push((path, dir));
+        }
+        picked = paths.iter().find(|(_, d)| *d == d_start).map(|(pp, _)| pp.clone());
+        if picked.is_none() {
+            picked = paths.iter().find(|(_, d)| d.angle_to(&d_prev) == AngleType::Obtuse).map(|(pp, _)| pp.clone());
+        }
+        if picked.is_some() {
+            break;
+        }
+        i -= 1;
+    }
+    match picked {
+        Some(path) => {
+            let mut out = origin[..=(i as usize)].to_vec();
+            out.extend(path.into_iter().skip(1)); // `Append` drops the duplicated joint
+            out
+        }
+        None => {
+            let n = origin.len();
+            let dir = Direction45::from_vector(origin[n - 1].x - origin[n - 2].x, origin[n - 1].y - origin[n - 2].y);
+            trace(origin[0], dir.is_diagonal())
+        }
+    }
+}
+
 fn on_segment(a: Point, c: Point, b: Point) -> bool {
     b.x >= a.x.min(c.x) && b.x <= a.x.max(c.x) && b.y >= a.y.min(c.y) && b.y <= a.y.max(c.y)
 }
@@ -133,6 +230,63 @@ mod tests {
         let mut l = Line::from_points(None, 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 500, y: 500 }]);
         l.simplify();
         assert_eq!(l.pts.len(), 3);
+    }
+
+    fn p(x: i64, y: i64) -> Point {
+        Point { x, y }
+    }
+
+    fn on_45(pts: &[Point]) -> bool {
+        pts.windows(2).all(|w| {
+            let (dx, dy) = ((w[1].x - w[0].x).abs(), (w[1].y - w[0].y).abs());
+            dx == 0 || dy == 0 || dx == dy
+        })
+    }
+
+    /// `LINE::DragCorner` (45-degree): dragging the end of a straight track just moves it along.
+    #[test]
+    fn drag_corner_keeps_a_straight_track_straight() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(2500, 3000), p(2500, 100)]);
+        l.drag_corner45(p(2500, 600), 1);
+        assert_eq!(l.pts, vec![p(2500, 3000), p(2500, 600)]);
+    }
+
+    /// The fan-out of a pushed via (`pushOrShoveVia`): a diagonal track whose via moved straight up gets a
+    /// new 45-degree leg and a straight one, never a leg at an odd angle.
+    #[test]
+    fn drag_corner_re_solves_the_last_leg_at_45_degrees() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(4500, 2100), p(2500, 100)]);
+        l.drag_corner45(p(2500, 600), 1);
+        assert_eq!(l.pts, vec![p(4500, 2100), p(3000, 600), p(2500, 600)]);
+        assert!(on_45(&l.pts));
+    }
+
+    #[test]
+    fn drag_corner_of_a_longer_line_only_changes_the_end() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(0, 0), p(2000, 0), p(2000, 2000), p(2000, 3000)]);
+        l.drag_corner45(p(2600, 3200), 3);
+        assert!(on_45(&l.pts), "{:?}", l.pts);
+        assert_eq!(l.pts.first(), Some(&p(0, 0)));
+        assert_eq!(l.pts.last(), Some(&p(2600, 3200)));
+        assert!(l.pts.contains(&p(2000, 0)), "the part far from the corner is left alone: {:?}", l.pts);
+    }
+
+    #[test]
+    fn drag_corner_at_the_start_works_on_the_reversed_line() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(0, 0), p(1000, 0), p(1000, 1000)]);
+        l.drag_corner45(p(-300, 100), 0);
+        assert!(on_45(&l.pts), "{:?}", l.pts);
+        assert_eq!(l.pts.first(), Some(&p(-300, 100)));
+        assert_eq!(l.pts.last(), Some(&p(1000, 1000)));
+    }
+
+    #[test]
+    fn has_loops_and_find() {
+        let l = Line::from_points(None, 0, 200, vec![p(0, 0), p(10, 0), p(10, 10), p(0, 10), p(0, 0)]);
+        assert!(l.has_loops());
+        assert!(!Line::from_points(None, 0, 200, vec![p(0, 0), p(10, 0), p(10, 10)]).has_loops());
+        assert_eq!(l.find(p(10, 10)), Some(2));
+        assert_eq!(l.find(p(7, 7)), None);
     }
 
     #[test]

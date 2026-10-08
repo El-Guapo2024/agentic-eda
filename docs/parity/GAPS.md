@@ -141,17 +141,23 @@ New (the schematic half of old #14). **Closed on 2026-10-08.** Hit: every sessio
 - Port from: `eeschema/tools/sch_editor_control.cpp` (`doCopy`, `Paste`), `common/clipboard.cpp`, `eeschema/sch_io/kicad_sexpr/`.
 
 ### 7. The router: shove and drag are not KiCad's
-Old #7. **Partial.** Hit: every routing session in Shove mode (Walkaround, the default, works). Blocks: shove, the router's headline feature. WP4, size XL.
+Old #7. **Partial.** Hit: dragging, a route that starts or ends mid-segment, differential pairs with obstacles (Shove, the headline feature, now works near pads, vias and tracks; see the status below). Blocks: partly. WP4, size XL.
 - Exists: `crates/pns` ports hulls, `LINE::Walkaround`, shove of tracks and vias, the optimizer with smart pads, loop removal,
   diff-pair routing, single-track and diff-pair length and skew tuning (dialog-driven), and `D`/`G` drag of a corner or via
   (`crates/pns/PARITY.md`; `CODE-COMPARE-router.md` D1-D4 and D8 are fixed).
-- Missing (`CODE-COMPARE-router.md`): shove gives up at the first pad (`crates/pns/src/shove.rs`, `Item::Solid(_) => return None`)
-  and has no solids-only pre-pass or `onCollidingSolid`, so near pads Shove degenerates to Walkaround (D5); via push over- and
-  under-shoots (D6); a drag moves the nearer end instead of sliding the segment, at any angle, and is refused onto obstacles in
-  the default mode (D7); shoved lines get no optimizer pass and widths are normalised (D10); a route cannot start or end mid-segment
+- **Status (2026-10-08): shove near pads is ported** (`CODE-COMPARE-router.md` D5, D6, D10, D12 closed). `crates/pns/src/shove.rs` now
+  follows `pns_shove.cpp`: a stack of lines with ranks, the nearest obstacle by path length (pads, then vias, then tracks),
+  `onCollidingSolid` walking the current line around the cluster of a pad, `pushOrShoveVia` with the minimum translation vector and a
+  45-degree re-shape of the via's tracks, `runOptimizer` over every shoved line, widths kept, and the head walked around pads first
+  (`rhShoveOnly`). KiCad's own `simple-shove-1` and `issue22749` pushes are replayed (`crates/pns/tests/qa_regressions.rs`): the same
+  13 and 5 tracks move, no new violation. Still open in Shove: a head that ends in a via is not shoved with its via, no springback or
+  time limit, the settings dialog exposes only mode and remove-loops (`shove_vias`, `jump_over_obstacles`, `optimizer_effort` are read
+  now but have no control).
+- Missing (`CODE-COMPARE-router.md`): a drag moves the nearer end instead of sliding the segment, at any angle, and is refused onto
+  obstacles in the default mode (D7), and a dragged via is never shoved against (`dragViaWalkaround`/`propagateViaForces`); a route cannot start or end mid-segment
   and Route From Other End works only before the first fix; a diff pair has no coupled shove or walkaround and no via; length tuning
   is a dialog on straight axis-aligned tracks that builds a 45-degree accordion, not KiCad's U meander (`meander.rs`); no arcs
-  (`ARC_T`), mouse-trail posture or springback; six `RoutingSettings` fields are never read (D16).
+  (`ARC_T`), mouse-trail posture or springback; three `RoutingSettings` fields are never read (`fix_all_segments`, `walkaround_hug_length_threshold`, `via_force_prop_iteration_limit`; D16).
 - Port from: `pcbnew/router/` (`pns_shove.cpp`, `pns_walkaround.cpp`, `pns_dragger.cpp`, `pns_line_placer.cpp`,
   `pns_diff_pair_placer.cpp`, `pns_meander*.cpp`, `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`.
 
@@ -344,7 +350,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
   `kicad-port/{routeTool,dpTool,dragTool}.ts`, `components/{RouterSettingsDialog,LengthTuningDialog}.tsx`, `actions/pcbRouterSweep.ts`.
 - KiCad: `pcbnew/router/` (`pns_shove`, `pns_walkaround`, `pns_dragger`, `pns_line_placer`, `pns_diff_pair_placer`, `pns_meander*`, `pns_optimizer`,
   `pns_router`, `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`.
-- Order: D5 solids pre-pass and `onCollidingSolid`; optimizer over shoved lines (D6, D10, D12); dragger segment slide and 45-degree corners (D7);
+- Order: ~~D5 solids pre-pass and `onCollidingSolid`; optimizer over shoved lines (D6, D10, D12)~~ (done 2026-10-08); dragger segment slide and 45-degree corners (D7);
   start and end mid-segment, Route From Other End; diff-pair coupling and vias; interactive tuning; arcs; the dead settings (D16).
 
 **WP5. Rules, zones and KiCad file fidelity** (items 2, 3, 11, 13). Size XL; split after step 2 if two agents are free.

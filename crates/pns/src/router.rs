@@ -243,9 +243,9 @@ impl Router {
                     });
                 }
             }
-            for (track_id, line) in s.placer.displaced_tracks() {
+            for (track_id, lines) in s.placer.displaced_tracks() {
                 commit.remove_track_ids.push(track_id.to_string());
-                if line.point_count() >= 2 {
+                for line in lines.iter().filter(|l| l.point_count() >= 2) {
                     commit.tracks.push(eda_model::ir::Track { id: String::new(), net: self.net_name_of(line), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts: line.pts.clone(), arc_mid_offset: None });
                 }
             }
@@ -550,6 +550,31 @@ mod tests {
         assert_eq!(moved_via.diameter, 600, "a shoved via's real diameter must survive, not the 0 placeholder");
         assert_eq!(moved_via.drill, 300);
         assert_eq!(moved_via.net, "GND");
+    }
+
+    /// An imported board has one IR track per segment, so a pushed line stands on several. The commit
+    /// removes every one of them and puts one polyline in their place -- not the first one replaced by the
+    /// whole line while the rest stay behind as copies.
+    #[test]
+    fn a_pushed_line_on_two_ir_tracks_is_replaced_by_one_track_in_the_commit() {
+        let (mut design, model) = two_pad_board();
+        let track = |id: &str, a: Point, b: Point| eda_model::ir::Track { id: id.into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None };
+        design.routing.as_mut().unwrap().tracks = vec![track("ta", Point { x: 2500, y: -2000 }, Point { x: 2500, y: -500 }), track("tb", Point { x: 2500, y: -500 }, Point { x: 2500, y: 2000 })];
+        let mut router = Router::new(&design, &model);
+        router.settings.mode = crate::settings::Mode::Shove;
+        router.start(Point { x: -825, y: 0 }, "F.Cu", 200).expect("starts on R1.1");
+        let preview = router.preview(Point { x: 4500, y: 0 }).expect("a route is in progress");
+        assert!(!preview.colliding);
+        assert_eq!(preview.displaced_lines.iter().filter(|d| d.line.point_count() >= 2).count(), 1, "one new shape");
+        let commit = router.finish(Point { x: 4500, y: 0 }).expect("the pushed route commits");
+        let mut removed = commit.remove_track_ids.clone();
+        removed.sort();
+        assert_eq!(removed, vec!["ta", "tb"], "both tracks the line stood on are removed");
+        let gnd: Vec<_> = commit.tracks.iter().filter(|t| t.net == "GND").collect();
+        assert_eq!(gnd.len(), 1, "and one polyline replaces them");
+        assert_eq!(gnd[0].width, 200);
+        assert_eq!(gnd[0].pts.first(), Some(&Point { x: 2500, y: -2000 }));
+        assert_eq!(gnd[0].pts.last(), Some(&Point { x: 2500, y: 2000 }));
     }
 
     #[test]
