@@ -51,6 +51,7 @@ pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
 pub mod library_editors;
+mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
 
@@ -926,6 +927,21 @@ pub enum Cmd {
     /// same library symbol, their orientations. A selection of more than two is a Batch of these in selection
     /// order, which `Swap`'s own loop (`sorted[i]` with `sorted[i + 1]`) turns into a rotation of the positions.
     SwapSchItems { a: String, b: String },
+    /// Paste (`common.Interactive.paste`, Ctrl+V), Paste Special (Ctrl+Shift+V) and Duplicate (Ctrl+D) on the schematic
+    /// (`SCH_EDITOR_CONTROL::Paste`): add a fragment of items -- what `eda_kicad::parse_clipboard` read from KiCad's clipboard format, or from
+    /// the copy of this very design -- to the sheet in view, moved by `(dx, dy)` (where the cursor carried it). The fragment's library symbols
+    /// are published into the project when the design has none by that name; the symbols are numbered per `mode` and unique across every
+    /// sheet; wires, labels, texts, junctions, no-connects, bus entries, lines and drawn graphics come in with new ids and without locks. One
+    /// command, so one undo step. Refused for an empty fragment.
+    PasteSch {
+        fragment: eda_model::sch_clipboard::SchFragment,
+        #[serde(default)]
+        dx: Um,
+        #[serde(default)]
+        dy: Um,
+        #[serde(default)]
+        mode: eda_model::sch_clipboard::PasteMode,
+    },
     /// The schematic editor's other edit and drawing tools (lock, break, convert text type, shapes, sheet pins,
     /// ...), one verb family -- see [`sch_edit::SchCmd`]. On the wire: `{"op": "sch_edit", "verb": "...", ...}`.
     SchEdit(sch_edit::SchCmd),
@@ -1466,6 +1482,7 @@ impl Cmd {
             | Cmd::DeleteSchLine { .. }
             | Cmd::AddSheet { .. }
             | Cmd::SwapSchItems { .. }
+            | Cmd::PasteSch { .. }
             | Cmd::SchEdit(_)
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
@@ -1647,6 +1664,7 @@ impl Cmd {
             Cmd::AddSchLine { .. } => vec!["sch_line"],
             Cmd::AddSheet { name, .. } => vec![name.as_str()],
             Cmd::SwapSchItems { a, b } => vec![a, b],
+            Cmd::PasteSch { .. } => vec!["paste"],
             Cmd::SchEdit(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
@@ -2136,6 +2154,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
+            Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
@@ -5344,6 +5363,8 @@ mod tests;
 mod sch_control_tests;
 #[cfg(test)]
 mod board_setup_tests;
+#[cfg(test)]
+mod sch_clipboard_tests;
 
 pub mod board_control;
 pub mod page_settings;

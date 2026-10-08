@@ -49,6 +49,14 @@ pub struct SchFragment {
     pub notes: Vec<String>,
 }
 
+/// A fragment is data from outside; commands compare by value (`eda_ops::Cmd: PartialEq`) and a section has no equality of its own -- two
+/// fragments are equal when they write the same JSON.
+impl PartialEq for SchFragment {
+    fn eq(&self, other: &Self) -> bool {
+        serde_json::to_string(self).ok() == serde_json::to_string(other).ok()
+    }
+}
+
 impl SchFragment {
     /// True when the fragment has nothing to paste.
     pub fn is_empty(&self) -> bool {
