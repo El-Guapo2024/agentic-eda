@@ -55,6 +55,7 @@ import type { BoardState, BoardText, Part, Shape, Side } from "../../api/types";
 import { layerColor } from "../canvas/layers";
 import { circleThrough, normalizeSweep } from "../canvas/painter";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { fallbackBodyHeightMm, partBodyBoxUm } from "../../kicad-port/partBody";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 
 // ---------------------------------------------------------------------
@@ -113,8 +114,8 @@ function silkY(side: Side): number {
 }
 
 /** Part bodies sit directly on the board surface (task spec: "top parts sit above +0.8mm ... extending further up"), not stacked on top of the copper/mask -- those are sub-0.05mm and not worth the extra offset the spec didn't ask for. */
-function partBodyCenterY(side: Side): number {
-  return surfaceY(side) + outwardSign(side) * (PART_HEIGHT_MM / 2);
+function partBodyCenterY(side: Side, heightMm = PART_HEIGHT_MM): number {
+  return surfaceY(side) + outwardSign(side) * (heightMm / 2);
 }
 
 /**
@@ -509,21 +510,24 @@ function addZoneFill(group: THREE.Group, outlineMm: ReadonlyArray<[number, numbe
 // ---------------------------------------------------------------------
 
 /**
- * Part body simplification: no real 3D model data exists for any part
- * (task spec: "There are no 3D models yet"). Every placed part renders
- * as a plain box sized to its courtyard footprint and PART_HEIGHT_MM
- * tall, sitting on the board surface on its own side. A lighter edge
+ * Part body simplification, for when KiCad's own render (the GLB, with the
+ * real 3D models) is not there -- still being exported, or it failed. Every
+ * placed part renders as a plain box on the part's BODY (the footprint's
+ * `F.Fab` box, `part.body`; the courtyard only for a footprint with none --
+ * kicad-port/partBody.ts) and a plausible height (`fallbackBodyHeightMm`),
+ * sitting on the board surface on its own side. A lighter edge
  * outline (PART_EDGE_MATERIAL) is drawn on top of the box so a mid-grey
  * body still reads as a raised part against the board, not a flat patch
  * -- see PART_EDGE_MATERIAL's own comment.
  */
-function addPartBody(group: THREE.Group, courtyardMm: readonly [number, number, number, number], side: Side, material: THREE.Material): void {
-  const [minX, minY, maxX, maxY] = courtyardMm;
+function addPartBody(group: THREE.Group, bodyMm: readonly [number, number, number, number], side: Side, material: THREE.Material): void {
+  const [minX, minY, maxX, maxY] = bodyMm;
   const width = Math.max(maxX - minX, 0.01);
   const depth = Math.max(maxY - minY, 0.01);
-  const geometry = new THREE.BoxGeometry(width, PART_HEIGHT_MM, depth);
+  const heightMm = fallbackBodyHeightMm(width, depth);
+  const geometry = new THREE.BoxGeometry(width, heightMm, depth);
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set((minX + maxX) / 2, partBodyCenterY(side), (minY + maxY) / 2);
+  mesh.position.set((minX + maxX) / 2, partBodyCenterY(side, heightMm), (minY + maxY) / 2);
   mesh.name = "part-body";
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), PART_EDGE_MATERIAL);
   mesh.add(edges);
@@ -825,13 +829,14 @@ function partIsThroughHole(part: Part): boolean {
 /** A translucent yellow wireframe box, matching KiCad's own debug bounding-box color closely enough for a toggle most users leave off (render.opengl_show_model_bbox default false, see BuildBoardOptions). */
 const BOUNDING_BOX_MATERIAL = new THREE.LineBasicMaterial({ color: 0xffff00 });
 
-function addBoundingBox(group: THREE.Group, courtyardMm: readonly [number, number, number, number], side: Side): void {
-  const [minX, minY, maxX, maxY] = courtyardMm;
+function addBoundingBox(group: THREE.Group, bodyMm: readonly [number, number, number, number], side: Side): void {
+  const [minX, minY, maxX, maxY] = bodyMm;
   const width = Math.max(maxX - minX, 0.01);
   const depth = Math.max(maxY - minY, 0.01);
-  const geometry = new THREE.BoxGeometry(width, PART_HEIGHT_MM, depth);
+  const heightMm = fallbackBodyHeightMm(width, depth);
+  const geometry = new THREE.BoxGeometry(width, heightMm, depth);
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), BOUNDING_BOX_MATERIAL);
-  edges.position.set((minX + maxX) / 2, partBodyCenterY(side), (minY + maxY) / 2);
+  edges.position.set((minX + maxX) / 2, partBodyCenterY(side, heightMm), (minY + maxY) / 2);
   edges.name = "part-bbox";
   group.add(edges);
 }
@@ -930,11 +935,13 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       if (refMesh) group.add(refMesh);
     }
     if (showComponents) {
-      const courtyard = part.courtyard;
-      if (courtyard) {
-        const courtyardMm: [number, number, number, number] = [mm(courtyard[0]), mm(courtyard[1]), mm(courtyard[2]), mm(courtyard[3])];
-        addPartBody(group, courtyardMm, side, isPassivePart(part) ? passiveMat : icMat);
-        if (showBoundingBoxes) addBoundingBox(group, courtyardMm, side);
+      // The box is the part's body (its footprint's F.Fab), the courtyard only for a footprint with none: the courtyard is the body plus its clearance and
+      // the pads' reach, which made every placeholder an oversized block.
+      const body = partBodyBoxUm(part);
+      if (body) {
+        const bodyMm: [number, number, number, number] = [mm(body[0]), mm(body[1]), mm(body[2]), mm(body[3])];
+        addPartBody(group, bodyMm, side, isPassivePart(part) ? passiveMat : icMat);
+        if (showBoundingBoxes) addBoundingBox(group, bodyMm, side);
       }
     }
   }

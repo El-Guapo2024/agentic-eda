@@ -23,7 +23,7 @@
 // TrackballCamera calls (mirroring HIDPI_GL_3D_CANVAS::OnMouseMoveCamera/
 // OnMouseWheelCamera's own structure), the render loop, and the
 // view-preset handle.
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { fetchBoardGlb } from "../../api/client";
@@ -79,6 +79,10 @@ export interface Viewer3DApi {
   setView(preset: ViewPreset): void;
   /** Every other camera action the KiCad 3D toolbar exposes (zoom in/out, rotate X/Y/Z CW/CCW, flip, move L/R/U/D) -- the same Action3D union the keyboard handler below dispatches, so the toolbar and the keyboard can never drift apart on what a given action actually does. "pivot" is accepted but is a no-op from the toolbar (it needs a live pointer position this handle doesn't carry -- KiCad's own Space hotkey and middle-click share this same limitation-free path only because they both originate from a real mouse event). */
   dispatchAction(action: Exclude<Action3D, { kind: "viewPreset" } | { kind: "reset" }>): void;
+  /** `EDA_3D_ACTIONS::reloadBoard`: build KiCad's render of the board again now (a failed export is otherwise kept until the board changes). */
+  reload(): void;
+  /** `EDA_3D_ACTIONS::copyToClipboard`: the current view as a PNG on the clipboard; resolves whether the browser took it. */
+  copyImage(): Promise<boolean>;
 }
 
 /**
@@ -154,6 +158,9 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   useEffect(() => {
     onReadyRef.current = onReady;
   }, [onReady]);
+  // "Reload board": bumps the nonce the GLB fetch effect below depends on, and asks its first request to build again (`?retry=1`).
+  const [reloadNonce, setReloadNonce] = useState(0);
+  const retryNextRef = useRef(false);
   // Same ref-not-dependency reasoning for the view-option toggles: read
   // fresh inside effects (stable, empty deps) rather than closed over.
   const viewer3dRef = useRef(state.viewer3d);
@@ -390,6 +397,22 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         runAction3D(camera3d, action, () => {
           if (lastPointerPx) pivotAtPointer(lastPointerPx);
         }),
+      reload: () => {
+        retryNextRef.current = true;
+        setReloadNonce((n) => n + 1);
+      },
+      copyImage: async () => {
+        // Render and read the canvas in the same task: a WebGL canvas without a preserved drawing buffer is only guaranteed to hold the frame until it is composited.
+        renderer.render(scene, camera3d.projection === "perspective" ? perspCamera : orthoCamera);
+        const blob = await new Promise<Blob | null>((resolve) => renderer.domElement.toBlob(resolve, "image/png"));
+        if (!blob) return false;
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+          return true;
+        } catch {
+          return false;
+        }
+      },
     });
 
     el.addEventListener("pointerdown", onPointerDown);
@@ -592,8 +615,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       dispatch({ type: "SET_GLB_STATUS", status: "failed", error });
     };
 
-    const poll = () => {
-      fetchBoardGlb()
+    const poll = (retry = false) => {
+      fetchBoardGlb(retry)
         .then((result) => {
           if (cancelled) return;
           if (result.status === "pending") {
@@ -622,14 +645,16 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         })
         .catch((e) => fail(String(e)));
     };
-    poll();
+    const retry = retryNextRef.current;
+    retryNextRef.current = false;
+    poll(retry);
 
     return () => {
       cancelled = true;
       if (timer !== null) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.version, state.viewer3d.kicadModels]);
+  }, [state.version, state.viewer3d.kicadModels, reloadNonce]);
 
   useEffect(() => {
     syncActiveGroupRef.current();

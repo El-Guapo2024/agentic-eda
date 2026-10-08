@@ -37,7 +37,8 @@ export function resolveCommit() {
   if (cachedCommit) return cachedCommit;
   if (KICAD_SRC_DIR) {
     const sha = readFileSync(join(KICAD_SRC_DIR, "COMMIT"), "utf8").trim();
-    cachedCommit = { sha, date: null }; // COMMIT is just the hash; no date file alongside it
+    // COMMIT is just the hash; no date file alongside it, so the date comes from KICAD_COMMIT_DATE when the caller knows it (else null).
+    cachedCommit = { sha, date: process.env.KICAD_COMMIT_DATE || null };
   } else {
     const sha = git(["rev-parse", KICAD_REF]).trim();
     const date = git(["show", "-s", "--format=%cI", sha]).trim();

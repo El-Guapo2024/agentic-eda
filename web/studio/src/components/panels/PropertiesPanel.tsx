@@ -8,7 +8,7 @@
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { formatXY } from "../../state/units";
 import type { Rule } from "../../api/types";
-import { HierarchyPanel } from "./HierarchyPanel";
+import { DockPanel } from "./Dock";
 
 /**
  * KiCad picks up an unplaced footprint through the Add Footprint tool's
@@ -64,14 +64,13 @@ function ruleLine(rule: Rule, ref: string): string | null {
  * position/side/courtyard, so it gets its own small render rather than
  * pretending a symbol is a placed PCB part.
  */
-function SchematicProperties() {
+export function SchematicProperties() {
   const state = useStudioState();
   const sch = state.schematic;
   const refs = [...state.selection];
   if (!sch || refs.length === 0) {
     return (
       <div className="panel-section">
-        <h3>Properties</h3>
         <div className="panel-empty">Nothing selected.</div>
       </div>
     );
@@ -81,7 +80,6 @@ function SchematicProperties() {
   const nets = [...new Set(sch.wires.filter((w) => w.pins.some((p) => p.startsWith(`${sym.id}.`))).map((w) => w.net))];
   return (
     <div className="panel-section">
-      <h3>Properties</h3>
       <div className="kv-grid">
         <span>Reference</span>
         <span>{sym.id}</span>
@@ -108,25 +106,25 @@ function SchematicProperties() {
   );
 }
 
+/** The board editor's Properties pane, docked left (`PCB_PROPERTIES_PANEL`); the schematic's is `SchematicDock`'s. */
 export function PropertiesPanel() {
+  return (
+    <DockPanel id="properties" title="Properties">
+      <PropertiesBody />
+    </DockPanel>
+  );
+}
+
+function PropertiesBody() {
   const state = useStudioState();
   const api = useStudioApi();
   const board = state.board;
   const refs = [...state.selection];
 
-  if (state.tab === "schematic")
-    return (
-      <>
-        <SchematicProperties />
-        <HierarchyPanel />
-      </>
-    );
-
   if (!board || refs.length === 0) {
     return (
       <>
         <div className="panel-section">
-          <h3>Properties</h3>
           <div className="panel-empty">Nothing selected.</div>
         </div>
         <UnplacedList />
@@ -137,7 +135,6 @@ export function PropertiesPanel() {
   if (refs.length > 1) {
     return (
       <div className="panel-section">
-        <h3>Properties</h3>
         <div className="kv-grid">
           <span>Selected</span>
           <span>{refs.length} parts</span>
@@ -158,7 +155,6 @@ export function PropertiesPanel() {
 
   return (
     <div className="panel-section">
-      <h3>Properties</h3>
       <div className="kv-grid">
         <span>Reference</span>
         <span>{p.ref}</span>

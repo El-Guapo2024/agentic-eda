@@ -1,9 +1,8 @@
 // The Net Navigator (`eeschema.EditorControl.showNetNavigator`, `SCH_EDIT_FRAME::RefreshNetNavigator`, eeschema/net_navigator.cpp): a tree of the sheet's
 // nets, each with the items on it (symbol pins, labels, power symbols, no-connects -- `kicad-port/netNavigator.ts`), a filter box with wildcards
 // (`net_nav_search_mode_wildcard`), and the same behaviour as KiCad's: with a net highlighted the tree shows that net alone and the filter is off;
-// clicking a net highlights it, clicking an item selects it on the sheet. Docked over the right edge of the sheet.
+// clicking a net highlights it, clicking an item selects it on the sheet. Docked in the schematic frame's left column (components/panels/SchematicDock.tsx).
 import { useMemo, useState } from "react";
-import { createPortal } from "react-dom";
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import { useSchControlDispatch, useSchControlState } from "../../state/schControlStore";
 import { netNavigatorItems, type NavSchematic } from "../../kicad-port/netNavigator";
@@ -38,7 +37,12 @@ export function netMatchesFilter(name: string, filter: string): boolean {
   return wildcardAnchoredMatch(glob.toLowerCase(), name.toLowerCase());
 }
 
-export function NetNavigatorPanel() {
+/**
+ * The Net Navigator's content -- the filter box and the net tree. The pane itself (its caption and close button) is a pane of the schematic frame's left
+ * column (components/panels/SchematicDock.tsx; KiCad's `defaultNetNavigatorPaneInfo`: `.Left().Layer( 3 ).Position( 0 )`, above the hierarchy), not an overlay
+ * on the sheet; whether it is open is `control.netNavigatorOpen`.
+ */
+export function NetNavigatorBody() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const control = useSchControlState();
@@ -51,17 +55,8 @@ export function NetNavigatorPanel() {
   const nav = useMemo(() => (sch ? navSchematic(sch) : null), [sch]);
   const shown = highlighted ? nets.filter((n) => n === highlighted) : nets.filter((n) => netMatchesFilter(n, control.netFilter));
 
-  const host = typeof document !== "undefined" ? document.querySelector(".app-body .canvas-col") : null;
-  if (!control.netNavigatorOpen || state.tab !== "schematic" || !host) return null;
-
-  return createPortal(
-    <div id="net-navigator-panel" style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: 300, zIndex: 20, display: "flex", flexDirection: "column", background: "var(--chrome-bg-raised)", borderLeft: "1px solid var(--chrome-border)", boxShadow: "-4px 0 12px var(--chrome-shadow)", fontSize: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", padding: "6px 8px", borderBottom: "1px solid var(--chrome-border)" }}>
-        <b style={{ flex: 1 }}>Net Navigator</b>
-        <button title="Close" onClick={() => controlDispatch({ type: "SET_NET_NAVIGATOR", open: false })}>
-          ×
-        </button>
-      </div>
+  return (
+    <div id="net-navigator-panel" style={{ display: "flex", flexDirection: "column", fontSize: 12, maxHeight: 360 }}>
       <div style={{ padding: "6px 8px" }}>
         <input
           style={{ width: "100%", boxSizing: "border-box" }}
@@ -100,7 +95,6 @@ export function NetNavigatorPanel() {
           );
         })}
       </div>
-    </div>,
-    host
+    </div>
   );
 }

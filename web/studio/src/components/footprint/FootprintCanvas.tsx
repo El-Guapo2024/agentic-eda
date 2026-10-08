@@ -14,6 +14,7 @@ import { paintFootprint } from "./footprintPainter";
 import { snapPoint } from "../canvas/gridHelper";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
+import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { isMac } from "../../platform";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
@@ -202,12 +203,23 @@ export function FootprintCanvas() {
   // (`fitName` is the footprint this view was last fitted for. Switching straight from one open footprint to another -- New
   // Footprint while one is open -- never passes through `fp == null`, so `fp != null` alone would not re-run this.)
   const fitNameRef = useRef<string | null>(null);
+  const fitRequestRef = useRef(state.fitRequest);
   useEffect(() => {
     if (fitNameRef.current !== state.name) {
       fitNameRef.current = state.name;
       userMovedRef.current = false;
     }
-    if (!fp || userMovedRef.current || containerSize.width < 50 || containerSize.height < 50) return;
+    // Zoom to Fit (`common.Control.zoomFitScreen`): fit again even though the view was moved by hand.
+    if (fitRequestRef.current !== state.fitRequest) {
+      fitRequestRef.current = state.fitRequest;
+      userMovedRef.current = false;
+    }
+    if (userMovedRef.current || containerSize.width < 50 || containerSize.height < 50) return;
+    if (!fp) {
+      // Nothing open: KiCad shows an empty canvas with its grid around the origin. 30 mm across, so the grid dots are readable at the default grid.
+      if (!state.name) dispatch({ type: "SET_VIEW", view: fitTransform({ minX: -15000, minY: -15000, maxX: 15000, maxY: 15000 }, containerSize.width, containerSize.height) });
+      return;
+    }
     const pts: [number, number][] = [];
     for (const p of fp.pads) {
       const [w, h] = p.size;
@@ -223,7 +235,7 @@ export function FootprintCanvas() {
     // Only once per footprint open, not on every pad edit -- see
     // state.name's own SET_NAME reset of viewInitialized.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp != null, state.name, containerSize, dispatch]);
+  }, [fp != null, state.name, state.fitRequest, containerSize, dispatch]);
 
   useEffect(() => {
     userMovedRef.current = false;
@@ -483,7 +495,7 @@ export function FootprintCanvas() {
     }
   };
 
-  const onWheel = (e: React.WheelEvent) => {
+  const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
@@ -491,6 +503,7 @@ export function FootprintCanvas() {
     const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
   };
+  useNonPassiveWheel(containerRef, onWheel); // React's onWheel is passive: preventDefault() would be ignored and logged
 
   const onDoubleClick = (e: React.MouseEvent) => {
     // The Renumber Pads tool owns the double click (it finishes the tool); it must not also open a pad's properties.
@@ -541,13 +554,8 @@ export function FootprintCanvas() {
       dispatch({ type: "CLEAR_SELECTION" });
       return;
     }
-    if ((e.key === "r" || e.key === "R") && state.activeTool === "select") {
-      for (const id of state.selection) {
-        const p = api.padById(id);
-        if (p) void api.rotatePad(id, e.shiftKey ? -1 : 1);
-      }
-      return;
-    }
+    // R / Shift+R (rotate the selected pads) is the registered action `pcbnew.InteractiveEdit.rotateCcw` / `rotateCw` (actions/editorFrameActions.ts), which
+    // the window-level hotkey runs -- and the top toolbar's Rotate buttons too -- so this canvas no longer handles the key itself (it would rotate twice).
     // `pcbnew.InteractiveEdit.properties` ("E"), same hotkey the PCB tab's
     // own `useActionRunner.ts` binds -- single-pad only, same as that
     // action's own single-item scope there.
@@ -591,11 +599,12 @@ export function FootprintCanvas() {
       onPointerUp={onPointerUp}
       onDoubleClick={onDoubleClick}
       onKeyDown={onKeyDown}
-      onWheel={onWheel}
       onContextMenu={onContextMenu}
     >
       <canvas ref={canvasRef} />
-      {!fp && <div className="pcb-canvas-empty">{state.error ?? (state.name ? "Loading footprint…" : "Open a footprint to begin")}</div>}
+      {!fp && state.name && <div className="pcb-canvas-empty">{state.error ?? "Loading footprint…"}</div>}
+      {/* Nothing open: the empty canvas and its grid, like KiCad's, with one quiet line saying how to open something. */}
+      {!fp && !state.name && <div className="canvas-empty-hint">No footprint loaded -- double-click one in Libraries, or press Ctrl+N for a new one</div>}
       {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} entries={contextMenu.entries} onClose={() => setContextMenu(null)} />}
     </div>
   );

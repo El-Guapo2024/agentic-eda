@@ -25,6 +25,7 @@ import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "..
 import { boundsOfPoints, fitTransform } from "./canvas/view";
 import { handleWheel, type WheelInput } from "../kicad-port/viewControls";
 import { useWheelPrefs } from "../actions/useWheelPrefs";
+import { useNonPassiveWheel } from "../hooks/useNonPassiveWheel";
 import { paintSchematic } from "./schematic/painter";
 import { resolveLibSymbol } from "./schematic/libSymbol";
 import { GRID } from "./schematic/layout";
@@ -383,31 +384,36 @@ export function SchematicView() {
     dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
   };
 
+  const onWheel = (e: WheelEvent) => {
+    // The canvas's context menu is a child of this container; a wheel over it is the menu's (React's own `onWheel={keep}` on the menu cannot stop a native listener).
+    if ((e.target as Element | null)?.closest?.(".menubar-dropdown")) return;
+    // Before the first fit the view has no scale yet (0): panning by 1/scale would make it NaN.
+    if (!sch || !(state.schematicView.scale > 0)) return;
+    e.preventDefault();
+    userMovedRef.current = true;
+    // wx_view_controls.cpp onWheel via handleWheel, the same as the PCB and library canvases: the wheel gestures and zoom speed
+    // are Preferences > Mouse and Touchpad's.
+    const rect = containerRef.current!.getBoundingClientRect();
+    const input: WheelInput = {
+      deltaX: e.deltaX,
+      deltaY: e.deltaY,
+      shiftKey: e.shiftKey,
+      ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
+      altKey: e.altKey,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+    const result = handleWheel(state.schematicView, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
+    if (result.kind !== "unhandled") dispatch({ type: "SET_SCHEMATIC_VIEW", view: result.view });
+  };
+  // React's own onWheel is passive, so its `preventDefault()` was ignored (and logged on every tick) while the page scrolled under the zoom.
+  useNonPassiveWheel(containerRef, onWheel);
+
   return (
     <div
       ref={containerRef}
       className="pcb-canvas-container"
       style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
-      onWheel={(e) => {
-        // Before the first fit the view has no scale yet (0): panning by 1/scale would make it NaN.
-        if (!sch || !(state.schematicView.scale > 0)) return;
-        e.preventDefault();
-        userMovedRef.current = true;
-        // wx_view_controls.cpp onWheel via handleWheel, the same as the PCB and library canvases: the wheel gestures and zoom speed
-        // are Preferences > Mouse and Touchpad's.
-        const rect = containerRef.current!.getBoundingClientRect();
-        const input: WheelInput = {
-          deltaX: e.deltaX,
-          deltaY: e.deltaY,
-          shiftKey: e.shiftKey,
-          ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
-          altKey: e.altKey,
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top,
-        };
-        const result = handleWheel(state.schematicView, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
-        if (result.kind !== "unhandled") dispatch({ type: "SET_SCHEMATIC_VIEW", view: result.view });
-      }}
       onPointerDown={(e) => {
         if (!sch) return;
         if (e.button === 1) {
