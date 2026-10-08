@@ -611,9 +611,9 @@ export function exportBom(spec: FieldsTableSpec, fmt: BomFmt, changes: StagedFie
   return postJson("/api/sch/bom_export", { spec, fmt, changes, path, preview });
 }
 
-/** POST /api/sch/find: ordered matches (ascending x, y -- `nextMatch` order). `scope` = owner ids for "search only selected objects". */
-export function fetchSchFind(search: SchSearchData, scope?: string[]): Promise<FindReply> {
-  return postJson("/api/sch/find", { search, scope });
+/** POST /api/sch/find: ordered matches (ascending x, y -- `nextMatch` order) on the sheet in view (`sheet`, root to here: Replace edits that sheet). `scope` = owner ids for "search only selected objects". */
+export function fetchSchFind(search: SchSearchData, scope?: string[], sheet: readonly string[] = []): Promise<FindReply> {
+  return postJson("/api/sch/find", { search, scope, sheet: sheet.join("/") });
 }
 
 export async function fetchErcPinMap(): Promise<ErcPinMapReply> {

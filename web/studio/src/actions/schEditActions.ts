@@ -12,6 +12,7 @@ import { alignToGrid } from "../kicad-port/gridSnap";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
+import { registerSchModuleSheetActions } from "./schModuleSheetActions";
 import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { registerSchSymbolActions } from "./schSymbolActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
@@ -91,8 +92,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   // each arms its tool, which stays armed for the next item until Esc (the click behaviour is components/schematic/schShapeTools.ts, called by SchematicView).
   const arm = (tool: ToolId) =>
     schematicOnly(() => {
-      // The verbs add to the root sheet's content: on a nested sheet a drawn item would land on the root sheet, out of sight of the one in view.
-      if (state.currentSheetPath.length > 0) return ctx.dispatch({ type: "TOAST", message: "The drawing tools work on the root sheet only; this sheet is a nested one.", kind: "info" });
+      // On a nested sheet the item lands on that sheet: `api.cmd` addresses every schematic command to the sheet in view (kicad-port/schSheetCmd.ts).
       ctx.dispatch({ type: "SET_DRAW_STATE", draw: null });
       ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool });
     });
@@ -216,6 +216,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   if (draw?.poly) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
 
   registerSchSheetPinActions(registry, ctx);
+  registerSchModuleSheetActions(registry, ctx);
   registerSchSymbolActions(registry, ctx);
   registerStackedPinActions(registry, ctx);
 }

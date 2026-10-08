@@ -26,7 +26,7 @@ fn work(dir: &Path) -> PathBuf {
 pub fn load_with_schematic(dir: &Path) -> Result<(Design, ConstraintModel), Vec<CheckResult>> {
     let (_, mut design, model) = board::load(dir)?;
     if design.schematic.is_none() {
-        design = eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?;
+        design = board::derived_schematic(&design, &model)?;
     }
     Ok((design, model))
 }

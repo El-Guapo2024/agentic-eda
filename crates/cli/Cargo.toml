@@ -23,6 +23,7 @@ eda-connectivity = { path = "../connectivity" }
 eda-kicad = { path = "../kicad" }
 eda-lint = { path = "../lint" }
 eda-kicad-engine = { path = "../kicad-engine" }
+eda-engine = { path = "../engine" }
 eda-clipper2 = { path = "../clipper2" }
 eda-shape-poly-set = { path = "../shape-poly-set" }
 eda-zone-filler = { path = "../zone-filler" }

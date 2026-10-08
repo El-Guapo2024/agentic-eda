@@ -498,6 +498,7 @@ dependencies = [
  "eda-clipper2",
  "eda-connectivity",
  "eda-drc",
+ "eda-engine",
  "eda-gates",
  "eda-judge",
  "eda-kicad",
@@ -564,6 +565,7 @@ dependencies = [
  "eda-layout",
  "eda-model",
  "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -655,9 +657,11 @@ dependencies = [
 name = "eda-kicad-engine"
 version = "0.1.0"
 dependencies = [
+ "eda-engine",
  "eda-kicad",
  "eda-model",
  "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
@@ -707,6 +711,7 @@ version = "0.1.0"
 dependencies = [
  "eda-clipper2",
  "eda-connectivity",
+ "eda-engine",
  "eda-gates",
  "eda-model",
  "eda-shape-poly-set",
