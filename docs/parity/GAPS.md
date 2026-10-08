@@ -20,7 +20,7 @@ doc and the code disagree, the code wins and the doc is named.
   1. *A wired action is not a working feature.* `UI-ACTIONS.md` counts schematic Move, Drag, Rotate, Mirror,
      Properties and Align as wired, but they act on symbols only: a label, wire, text, power symbol or sheet
      cannot be moved or rotated. On the PCB, Move skips tracks and zones, Rotate and Flip take footprints and
-     vias only, and Duplicate and Copy skip footprints.
+     vias only, and Duplicate and Copy skip footprints (**the PCB half is fixed, 2026-10-08, item 8**).
   2. *The KiCad files we write drop design data, and kicad-cli judges those files.* The PCB writer
      (`crates/kicad/src/pcb.rs`) gave every zone the board's default clearance and width instead of its own
      settings, wrote no keepout, no dimensions, no groups, no locks, and turned arc tracks into 32 segments; a
@@ -150,24 +150,30 @@ Old #7. **Partial.** Hit: every routing session in Shove mode (Walkaround, the d
   `pns_diff_pair_placer.cpp`, `pns_meander*.cpp`, `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`.
 
 ### 8. PCB edit tools skip item kinds
-Old #12, and the PCB parts of #14 and #25. **Open** for #12, partial for the rest. Hit: every layout session. Blocks: partly. WP3, size M-L.
-- Missing: Move and drag have no verb for tracks and zones (`kicad-port/pcbEditActions.ts::movableItem`: "tracks and zones have no
-  move Cmd"; Move Individually, Move with Reference and Position Relative skip them too). Rotate and Flip take footprints and vias
-  only (`state/store.tsx` `rotateSelection`, `flipSelection`), so `R` on text or a graphic does nothing. Duplicate, Copy and Paste skip
-  footprints, dimensions and groups, and the clipboard is in-app, not KiCad's format (`components/canvas/clipboard.ts`). Align and
-  Distribute take placed footprints only and ignore locks and the cursor target (`store.tsx` `alignSelection`,
-  `kicad-port/alignDistribute.ts`). Pads are not selectable (`SelectableKind` in `components/canvas/selectionCandidates.ts`).
-- Fix: client-side as one `commit_route` or `set_zone_outline` batch, or `MoveTrack` and `MoveZone` verbs.
-- Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcbnew/kicad_clipboard.cpp`.
+Old #12, and the PCB parts of #14 and #25. **Mostly done (2026-10-08).** Hit: every layout session. Blocks: no. WP3, size M-L (the edit tools done; the Properties panel is item 10, pad edits item 9).
+- Done (`PARITY-pcb.md` section 22): three verbs, `move_items`, `rotate_items` and `flip_items` (`crates/ops/src/pcb_transform.rs`), move, turn and flip
+  footprints, tracks (arcs stay arcs), vias, zones, graphics, text, dimensions and groups as KiCad's item classes do, one undo step each, and reach the
+  `.kicad_pcb` kicad-cli reads (test `a_moved_track_is_where_kicad_cli_finds_it`). Move, drag, Move Individually, Move with Reference, Position Relative,
+  Move Exactly, Rotate and Flip work for every kind, with `FilterCollectorForLockedItems`, `FilterCollectorForFreePads` and KiCad's rotation and flip points
+  (`kicad-port/pcbTransform.ts`); `R` turns counter-clockwise now (it turned clockwise), and `R` and `F` during a move act on the carried selection about the
+  point it was picked up at. Align and Distribute take every kind, a locked item is the Align target and never moves (`kicad-port/alignDistribute.ts`). Duplicate,
+  Copy, Cut and Paste take footprints (a copy is a part of the board, `DrawingsSection::board_parts`), dimensions and groups, in KiCad's clipboard format
+  (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `POST /api/clipboard/copy`): kicad-cli loads our text as a board and what KiCad 10 writes reads
+  back; Escape takes a carried duplicate or paste away again. Pads are selectable (click, box, Selection Filter, highlight, a Properties pane summary).
+  A footprint edit clears the routing only when copper is routed to its pads, so a copy can be placed and deleted on a routed board.
+- Missing: `BestSnapAnchor` beyond the grid and a footprint's own bounding box (the courtyard stands in); a footprint with copper on its pads still clears
+  the whole routing when edited; Duplicate and Paste are a step of their own and the drop a second one; a copy keeps the original's nets, so `--strict` refuses
+  moving it away; no rotation-step or flip-direction setting; Paste Special on the PCB; the pad edits (item 9).
+- Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are not editable objects
 New (the residual of old #11; blocks #26). **Open.** Hit: every board (silkscreen cleanup, mounting holes). Blocks: partly. WP6, size L.
 - Exists: pose, side and a four-way reference text side (`FootprintInstance` in `crates/model/src/ir.rs`, `Cmd::SetLabelSide`,
   `components/FootprintPropertiesDialog.tsx`).
 - Missing: reference and value text position, size, layer and visibility, user fields; per-instance attributes (DNP, exclude from
-  BOM or position files); pad selection and per-pad overrides; board-only footprints (mounting holes, fiducials, logos: the
+  BOM or position files); per-pad overrides (pads are selectable since 2026-10-08, item 8); board-only footprints (mounting holes, fiducials, logos: the
   microwave tools are declined for the same reason); Change Footprint(s), Update Footprints from Library and geographical
-  reannotate (recorded unwired: a part's footprint comes from the intent, which has no verb); new copies of a footprint (Duplicate, Array).
+  reannotate (recorded unwired: a part's footprint comes from the intent, which has no verb); new copies of a footprint by Array (Duplicate and Paste make them since 2026-10-08, item 8).
 - Port from: `pcbnew/dialogs/dialog_footprint_properties.cpp`, `dialog_exchange_footprints.cpp`, `dialog_update_pcb.cpp`,
   `pcbnew/pcb_field.cpp`, `pcbnew/tools/board_editor_control.cpp` (`PlaceFootprint`).
 
@@ -376,16 +382,16 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 9 | Board Setup | Partial | `BoardSetupDialog.tsx`: all 10 pages edit (rules overlay and 7 verbs, item 3); 8 of KiCad's pages have no model yet. |
 | 10 | Net classes and rules | Partial | importer (`crates/kicad/src/import.rs::merge_project_net_classes`, `custom_rules.rs`) and editing (Net Classes, Custom Rules, Assign Netclass) done, item 3; open: regex patterns, the rule-tree designer. |
 | 11 | Property dialogs | Partial | via, shape, zone, text, dimension and track width edit (`Cmd::EditVia`, `EditShape`, `EditZone`, `EditText`); footprint, pads, panel: items 9, 10. |
-| 12 | Move excludes tracks and zones | **Open** | `kicad-port/pcbEditActions.ts::movableItem`; no `MoveTrack` or `MoveZone` in `crates/ops`; item 8. |
+| 12 | Move excludes tracks and zones | **Closed** | `Cmd::MoveItems`, `RotateItems`, `FlipItems` (`crates/ops/src/pcb_transform.rs`), `kicad-port/pcbTransform.ts`, `pcbEditActions.ts::movableItem` for every kind; item 8. |
 | 13 | Selection modifiers and box select | **Closed** | `kicad-port/selection.ts`, `components/canvas/selectionCandidates.ts::collectBoxSelection`, `Canvas.tsx`; `PARITY-pcb.md` section 3. |
-| 14 | Clipboard | Partial | PCB tracks, vias, zones, shapes, text (`components/canvas/clipboard.ts`, `Cmd::PasteItems`, `Cmd::Duplicate`); schematic: item 6; footprints: item 8. |
+| 14 | Clipboard | Partial | PCB: every item kind, footprints included, in KiCad's clipboard format (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `Cmd::Duplicate`, `components/canvas/clipboard.ts`); schematic: item 6. |
 | 15 | Cross-tab undo | **Closed** | `crates/ops` `Domain`, `crates/cli/src/board.rs::restore_domain` (test `undo_redo_are_scoped_to_the_tab_that_asked`); the Footprint and Symbol tabs undo in their own scopes. |
 | 16 | Hotkey extraction | **Closed** | `web/studio/tools/lib/actionsParser.js::extractPlatformRaw` (with test), `src/kicad/actions.json` (`common.Interactive.redo` is Ctrl+Y), `actions/hotkeys.ts::effectiveHotkey`. |
 | 17 | Click-versus-drag threshold | **Open** | `Canvas.tsx` sets `drag.moved` on a non-zero snapped delta; item 14. |
 | 18 | Snapping | Partial | `kicad-port/gridSnap.ts`, `components/canvas/gridHelper.ts` (Move and picker); item 14. |
 | 19 | DRC schematic parity | Out of scope | kicad-cli has `--schematic-parity`; wiring the dialog is item 11. |
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
-| 25 | Align and distribute | Partial | PCB footprints only (`state/store.tsx`, `kicad-port/alignDistribute.ts`): item 8; schematic Align: item 1. |
+| 25 | Align and distribute | Partial | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`); schematic Align: item 1. |
 | 26 | Array tool | Partial | `Cmd::CreateArray`, `CreateArrayDialog.tsx`; item 22. |
 | 27 | Grouping | Partial | `Cmd::Group` family, `state/store.tsx::withGroupSubstitution`; item 17. |
 | 28 | Dimensions and measure | **Closed** | `crates/connectivity/src/dimension.rs`, `Cmd::AddDimension` family, `components/DimensionPropertiesDialog.tsx`, the measure tool. Left: the interactive height click, text border, manual text position, export (item 2). |
