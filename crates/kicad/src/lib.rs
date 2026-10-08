@@ -335,7 +335,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             let uuid = duid_for(&format!("{tag}:{}:{}:{}", w.net, i, j), &w.id);
             writeln!(out, "\t({tag}").unwrap();
             writeln!(out, "\t\t(pts (xy {x1} {y1}) (xy {x2} {y2}))").unwrap();
-            writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
+            writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(0, sch.extras.strokes.get(&w.id))).unwrap();
             writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
             if sch.extras.is_locked(&w.id) {
                 writeln!(out, "\t\t(locked yes)").unwrap();
@@ -354,7 +354,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let dy = mm(be.size.y);
         let uuid = if be.id.is_empty() { duid(&format!("bent:{}:{}", be.at.x, be.at.y)) } else { be.id.clone() };
         writeln!(out, "\t(bus_entry (at {x} {y}) (size {dx} {dy})").unwrap();
-        writeln!(out, "\t\t(stroke (width 0) (type default))").unwrap();
+        writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(0, sch.extras.strokes.get(&be.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&be.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
@@ -394,11 +394,13 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     // Net-scoped (not just by point), so two different nets whose wires
     // happen to cross at the same coordinate never draw a false short.
     let derived_junctions = eda_engine::geometry::wire_junction_points(&sch.wires);
+    // An explicit junction that sits where a derived one is written is not written twice, but its look (Junction Properties) is the dot's.
+    let looks_at: BTreeMap<eda_model::ir::Point, &eda_model::sch_extras::JunctionLook> = sch.junctions.iter().filter_map(|j| sch.extras.junction_looks.get(&j.id).map(|l| (j.at, l))).collect();
     for (net, pt) in &derived_junctions {
         let x = mm(pt.x);
         let y = mm(pt.y);
         let uuid = duid(&format!("junction:{net}:{}:{}", pt.x, pt.y));
-        writeln!(out, "\t(junction (at {x} {y}) (diameter 0) (color 0 0 0 0)").unwrap();
+        writeln!(out, "\t(junction (at {x} {y}) {}", sch_extras_io::junction_attrs(looks_at.get(pt).copied())).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         writeln!(out, "\t)").unwrap();
     }
@@ -409,7 +411,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let x = mm(j.at.x);
         let y = mm(j.at.y);
         let uuid = duid_for(&format!("junction:{}:{}", j.at.x, j.at.y), &j.id);
-        writeln!(out, "\t(junction (at {x} {y}) (diameter 0) (color 0 0 0 0)").unwrap();
+        writeln!(out, "\t(junction (at {x} {y}) {}", sch_extras_io::junction_attrs(sch.extras.junction_looks.get(&j.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&j.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
@@ -421,11 +423,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     lines.sort_by(|a, b| a.pts.cmp(&b.pts));
     for l in lines {
         let pts: String = l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
-        let width = mm(l.width_um);
         let uuid = duid_for(&format!("sch_line:{pts}"), &l.id);
         writeln!(out, "\t(polyline").unwrap();
         writeln!(out, "\t\t(pts{pts})").unwrap();
-        writeln!(out, "\t\t(stroke (width {width}) (type default))").unwrap();
+        writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(l.width_um, sch.extras.strokes.get(&l.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&l.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();

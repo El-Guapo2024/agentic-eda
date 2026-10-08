@@ -245,7 +245,7 @@ function convertSources(sch: Schematic, ids: readonly string[]): ConvertSource[]
   for (const id of ids) {
     const l = sch.labels.find((x) => x.id === id);
     if (l) {
-      out.push({ kind: "label", id, net: l.net, at: l.at, scope: l.scope, shape: l.shape, spin: inferSpin(sch.wires, l.at) });
+      out.push({ kind: "label", id, net: l.net, at: l.at, scope: l.scope, shape: l.shape, spin: l.spin ?? inferSpin(sch.wires, l.at) });
       continue;
     }
     const t = sch.texts.find((x) => x.id === id);

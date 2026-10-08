@@ -45,7 +45,7 @@ export function textItemBounds(t: SchematicText): Box {
 }
 
 export function labelBounds(sch: Schematic, l: SchematicLabel): Box {
-  const spin = inferSpin(sch.wires, l.at);
+  const spin = l.spin ?? inferSpin(sch.wires, l.at);
   if (l.scope !== "local" && l.shape) {
     const outline = l.scope === "global" ? globalLabelOutline(l.net, l.shape, spin, l.at) : hierLabelOutline(l.shape, spin, l.at);
     return boxOfPoints(outline as P[]) ?? { minX: l.at[0], minY: l.at[1], maxX: l.at[0], maxY: l.at[1] };

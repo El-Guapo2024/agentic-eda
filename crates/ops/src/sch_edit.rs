@@ -7,8 +7,8 @@
 //! cites the KiCad function it ports (eeschema at 8303b2ad).
 
 use crate::{Board, Cmd};
-use eda_model::ir::{LabelShape, Point, SchematicSection, SheetInstance, SheetPin};
-use eda_model::sch_extras::{SchGraphic, SchGraphicKind};
+use eda_model::ir::{LabelShape, Millideg, Point, SchematicSection, SheetInstance, SheetPin, Um};
+use eda_model::sch_extras::{LabelSpin, SchColor, SchGraphic, SchGraphicKind, SchLineStyle};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -63,6 +63,54 @@ pub enum SchCmd {
     /// "Update Symbol in Schematic" sets). Library ids with no edited symbol, or one already published, are skipped; refused when
     /// none was left to update.
     UpdateLibrarySymbols { lib_ids: Vec<String> },
+    /// Label Properties on a local, global or hierarchical label (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`): a field left out is
+    /// unchanged. `text` is the net name (refused when empty: "Label can not be empty."), `shape` the flag of a global or hierarchical label
+    /// (a local label has none), `spin` which way the text runs from the anchor (`SetSpinStyle`).
+    EditLabel {
+        id: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        shape: Option<LabelShape>,
+        #[serde(default)]
+        spin: Option<LabelSpin>,
+    },
+    /// Text Properties on a free-standing text (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`): its text, its size (0.01 to 1000 mm, "don't
+    /// allow text to disappear") and its angle (KiCad offers horizontal and vertical).
+    EditText {
+        id: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        size_um: Option<Um>,
+        #[serde(default)]
+        angle: Option<Millideg>,
+    },
+    /// Sheet Properties (`DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`): the sheet's name and the file it shows (`SCH_EDIT_FRAME::ChangeSheetFile`:
+    /// a file the project already has is linked to; a new name moves the content when this sheet is its only user and copies it when another
+    /// sheet shows it too).
+    EditSheet {
+        id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        file: Option<String>,
+    },
+    /// Wire/Bus, Line and Junction Properties (`DIALOG_WIRE_BUS_PROPERTIES::TransferDataFromWindow`, `DIALOG_LINE_PROPERTIES`, `DIALOG_JUNCTION_PROPS`):
+    /// the stroke of every listed wire, bus, bus entry and graphic line (`width_um` 0 is the default width, `style`, `color`) and the diameter and colour
+    /// of every listed junction (`diameter_um` 0 is the default). A colour with every channel 0 is `COLOR4D::UNSPECIFIED`, the layer's own colour. A
+    /// field left out is unchanged; one that does not apply to an item (a width on a junction, a diameter on a wire) is skipped for that item, as in KiCad.
+    SetStroke {
+        ids: Vec<String>,
+        #[serde(default)]
+        width_um: Option<Um>,
+        #[serde(default)]
+        style: Option<SchLineStyle>,
+        #[serde(default)]
+        color: Option<SchColor>,
+        #[serde(default)]
+        diameter_um: Option<Um>,
+    },
 }
 
 impl SchCmd {
@@ -73,6 +121,8 @@ impl SchCmd {
             SchCmd::AddGraphic { .. } => vec!["graphic"],
             SchCmd::UpdateLibrarySymbols { lib_ids } => lib_ids.iter().map(String::as_str).collect(),
             SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
+            SchCmd::EditLabel { id, .. } | SchCmd::EditText { id, .. } | SchCmd::EditSheet { id, .. } => vec![id.as_str()],
+            SchCmd::SetStroke { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
         }
     }
@@ -90,6 +140,10 @@ impl SchCmd {
             SchCmd::EditSheetPin { id, .. } => format!("schematic sheet-pin edit {id}"),
             SchCmd::ChangeSymbol { id, lib_id } => format!("schematic change-symbol {id} {lib_id}"),
             SchCmd::UpdateLibrarySymbols { lib_ids } => format!("schematic update-symbols {}", lib_ids.join(" ")),
+            SchCmd::EditLabel { id, .. } => format!("schematic edit-label {id}"),
+            SchCmd::EditText { id, .. } => format!("schematic edit-text {id}"),
+            SchCmd::EditSheet { id, .. } => format!("schematic edit-sheet {id}"),
+            SchCmd::SetStroke { ids, .. } => format!("schematic stroke {}", ids.join(" ")),
         }
     }
 
@@ -100,7 +154,16 @@ impl SchCmd {
             SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } => "schematic-graphic",
             SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
             SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } => "schematic-symbol",
+            SchCmd::EditLabel { .. } | SchCmd::EditText { .. } => "schematic-text",
+            SchCmd::EditSheet { .. } => "schematic-sheet",
+            SchCmd::SetStroke { .. } => "schematic-stroke",
         }
+    }
+
+    /// Can this verb change what is connected? A stroke or a free text never does; a label's text is its net's name and a sheet's name is part
+    /// of the names of the nets drawn inside it, so those are read from the drawing like any other edit (`Cmd::edits_connectivity`).
+    pub fn edits_connectivity(&self) -> bool {
+        !matches!(self, SchCmd::SetStroke { .. } | SchCmd::EditText { .. })
     }
 }
 
@@ -118,6 +181,10 @@ impl<'a> Board<'a> {
             SchCmd::EditSheetPin { id, name, shape, at } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
+            SchCmd::EditLabel { id, text, shape, spin } => self.edit_sch_label(id, text.as_deref(), *shape, *spin),
+            SchCmd::EditText { id, text, size_um, angle } => self.edit_sch_text(id, text.as_deref(), *size_um, *angle),
+            SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
+            SchCmd::SetStroke { ids, width_um, style, color, diameter_um } => self.set_sch_stroke(ids, *width_um, *style, *color, *diameter_um),
         }
     }
 

@@ -38,11 +38,9 @@
     "src/kicad/types.ts",
     "src/platform.ts",
     "tools/types/node-test-shims.d.ts",
-    // `G`'s attachment logic and its own dependency chain -- all plain
+    // The schematic's pure geometry and its dependency chain -- all plain
     // geometry/type modules, no React/DOM-component imports, same
     // "dependency-free pure port" criterion as the kicad-port glob above.
-    "src/components/schematic/wireAttachment.ts",
-    "src/components/schematic/wireAttachment.test.ts",
     "src/components/schematic/libSymbol.ts",
     "src/components/schematic/layout.ts",
     "src/components/schematic/transform.ts",

@@ -13,7 +13,7 @@ import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 /** `DEFAULT_LINE_WIDTH_MILS` (6 mil), um: the width of a stroke with none of its own. */
 const DEFAULT_WIDTH_UM = 152.4;
 
-function rgba(c: SchColor): string {
+export function rgba(c: SchColor): string {
   return `rgba(${c.r},${c.g},${c.b},${(c.a / 255).toFixed(3)})`;
 }
 

@@ -31,6 +31,7 @@ mod sch_api;
 mod sch_clipboard_api;
 mod sch_control_api;
 mod sch_export_api;
+mod sch_move_api;
 mod fab_cmd;
 mod import_kicad;
 mod route_api;

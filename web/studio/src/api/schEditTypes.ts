@@ -13,6 +13,17 @@ export interface SchColor {
   /** 0..255. */
   a: number;
 }
+/** The stroke Wire/Bus Properties set on a wire, bus, bus entry or graphic line (`SchExtras::strokes`); a field absent is the default (width 0 = the default width, style `default`, no colour = the layer's own). */
+export interface SchStroke {
+  width_um?: Um;
+  style?: SchLineStyle;
+  color?: SchColor;
+}
+/** How an explicit junction is drawn once Junction Properties set it (`SchExtras::junction_looks`); a field absent is the default (diameter 0 = 36 mil). */
+export interface JunctionLook {
+  diameter_um?: Um;
+  color?: SchColor;
+}
 export type SchHAlign = "left" | "center" | "right";
 export type SchVAlign = "top" | "center" | "bottom";
 /** The outline of a directive label's flag (`LABEL_FLAG_SHAPE`'s `F_*`). */
@@ -82,7 +93,13 @@ export type SchToolDialog =
   /** Change Symbols / Update Symbols (`DIALOG_CHANGE_SYMBOLS`), `selected` the references selected when it opened. */
   | { kind: "change_symbols"; mode: "change" | "update"; selected: string[] }
   /** Edit Text & Graphics Properties (`DIALOG_GLOBAL_EDIT_TEXT_AND_GRAPHICS`), `selected` the ids selected when it opened. */
-  | { kind: "edit_text_graphics"; selected: string[] };
+  | { kind: "edit_text_graphics"; selected: string[] }
+  /** Properties (`E`, a double-click; `SCH_EDIT_TOOL::Properties`) of a label, a free text, a sheet, a drawn graphic, and of wires / buses / bus entries / junctions / graphic lines. */
+  | { kind: "props_label"; id: string }
+  | { kind: "props_text"; id: string }
+  | { kind: "props_sheet"; id: string }
+  | { kind: "props_graphic"; id: string }
+  | { kind: "props_stroke"; ids: string[] };
 
 export type SchEditCmd =
   /** Lock / Unlock / Toggle Lock (`SCH_EDIT_TOOL::modifyLockSelected`). */
@@ -102,4 +119,52 @@ export type SchEditCmd =
   /** Give every placed unit of reference `id` the library symbol `lib_id` (`DIALOG_CHANGE_SYMBOLS`, change mode). */
   | { verb: "change_symbol"; id: string; lib_id: string }
   /** Update Symbol(s) from Library: the symbols placed with these library ids resolve from the project's edited library symbol (`published`). */
-  | { verb: "update_library_symbols"; lib_ids: string[] };
+  | { verb: "update_library_symbols"; lib_ids: string[] }
+  /** Label Properties: a field left out is unchanged (`shape` is for global and hierarchical labels, `spin` is which way the text runs from the anchor). */
+  | { verb: "edit_label"; id: string; text?: string; shape?: LabelShape; spin?: "right" | "up" | "left" | "bottom" }
+  /** Text Properties of a free text: its text, its size (um, 0.01 to 1000 mm) and its angle (millidegrees). */
+  | { verb: "edit_text"; id: string; text?: string; size_um?: Um; angle?: number }
+  /** Sheet Properties: the sheet's name and the file it shows (a bare name; one the project has is linked to, a new one gets the content). */
+  | { verb: "edit_sheet"; id: string; name?: string; file?: string }
+  /** Wire/Bus, Line and Junction Properties: the stroke of the wires, buses, bus entries and graphic lines named, the diameter and colour of the junctions (a colour with every channel 0 is the layer's own). */
+  | { verb: "set_stroke"; ids: string[]; width_um?: Um; style?: SchLineStyle; color?: SchColor; diameter_um?: Um };
+
+/** One turn made while the items are held (`R`, Shift+`R`, `X`, `Y`). */
+export type SchTurn = "rot_ccw" | "rot_cw" | "mirror_h" | "mirror_v";
+
+/**
+ * Move, Drag, Rotate, Mirror and Align to Grid for every kind of schematic item -- crates/ops/src/sch_move.rs (`SchMoveCmd`, sent as
+ * `{ op: "sch_move", verb: ..., ... }`). `ids` are item ids (a symbol's reference moves every placed unit, `U1#2` names one).
+ */
+export type SchMoveCmd =
+  /** `M`: every item moves rigidly; a wire on a moved pin is left where it is. `turns` are the R / Shift+R / X / Y pressed while the items were held (done after the move, about `about`, the point they are held at). */
+  | { verb: "move"; ids: string[]; dx: Um; dy: Um; turns?: SchTurn[]; about?: PointXY }
+  /** `G` and a click-drag: the items move and the wires, labels, junctions and no-connects attached follow; `vertices` names the picked points of a wire (`STARTPOINT` / `ENDPOINT`), a wire not in it is picked whole; `ortho` keeps right angles. */
+  | { verb: "drag"; ids: string[]; vertices?: Record<string, number[]>; dx: Um; dy: Um; ortho?: boolean; grid?: Um; turns?: SchTurn[]; about?: PointXY }
+  /** `R` / Shift+`R`: a quarter turn; `about` overrides the turn point (the cursor, while the selection is held). */
+  | { verb: "rotate"; ids: string[]; vertices?: Record<string, number[]>; ccw?: boolean; about?: PointXY; grid?: Um }
+  /** `X` (`vertical` false) / `Y`. */
+  | { verb: "mirror"; ids: string[]; vertices?: Record<string, number[]>; vertical?: boolean; about?: PointXY; grid?: Um }
+  /** Align Items to Grid: each item to the grid by where most of its connection points are, with the wires on it. */
+  | { verb: "align_to_grid"; ids: string[]; grid?: Um }
+  /** Align Left / Right / Top / Bottom / Center: each item by its own offset, snapped to the connection grid, with its wires. */
+  | { verb: "align"; moves: Array<{ id: string; dx: Um; dy: Um }>; grid?: Um };
+
+/**
+ * What a move preview changes on the sheet (`POST /api/sch/move_preview`): the moved items' new geometry, which the view lays over the
+ * sheet it already has. Collections with ids replace the item of that id; `wires`, `junctions`, `no_connects` and `bus_entries` are the
+ * whole list, since a drag adds and removes some.
+ */
+export interface SchMovePatch {
+  symbols: Array<{ id: string; unit: number; at: [number, number]; rot: number; mirror: "x" | "y" | null }>;
+  power_symbols: Array<{ id: string; at: [number, number]; rot: number }>;
+  wires: Array<{ id: string; net: string; pts: Array<[number, number]>; bus: boolean }>;
+  labels: Array<{ id: string; at: [number, number]; spin: "right" | "up" | "left" | "bottom" | null }>;
+  texts: Array<{ id: string; at: [number, number]; angle: number }>;
+  no_connects: Array<{ id: string; at: [number, number] }>;
+  bus_entries: Array<{ id: string; at: [number, number]; size: [number, number] }>;
+  junctions: Array<{ id: string; at: [number, number] }>;
+  lines: Array<{ id: string; pts: Array<[number, number]> }>;
+  graphics: SchGraphic[];
+  sheets: Array<{ id: string; at: [number, number]; size: [number, number]; pins: Array<{ id: string; at: [number, number] }> }>;
+}

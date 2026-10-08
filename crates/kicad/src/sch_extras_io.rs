@@ -6,7 +6,7 @@
 use crate::sexpr::{self, Sexpr};
 use crate::{duid_for, mm, sexpr_str};
 use eda_model::ir::{Millideg, Point, SchematicSection, Um};
-use eda_model::sch_extras::{DirectiveShape, SchColor, SchFill, SchGraphic, SchGraphicKind, SchHAlign, SchLineStyle, SchVAlign};
+use eda_model::sch_extras::{DirectiveShape, JunctionLook, SchColor, SchFill, SchGraphic, SchGraphicKind, SchHAlign, SchLineStyle, SchStroke, SchVAlign};
 use std::fmt::Write;
 
 fn yes(b: bool) -> &'static str {
@@ -34,12 +34,30 @@ fn color_str(c: SchColor) -> String {
 }
 
 fn stroke_str(g: &SchGraphic) -> String {
-    let mut s = format!("(stroke (width {}) (type {})", mm(g.width_um), g.line_style.token());
-    if let Some(c) = g.color {
+    stroke_params(g.width_um, g.line_style, g.color)
+}
+
+/// `(stroke (width w) (type t) [(color ...)])` (`STROKE_PARAMS::Format`).
+fn stroke_params(width_um: Um, style: SchLineStyle, color: Option<SchColor>) -> String {
+    let mut s = format!("(stroke (width {}) (type {})", mm(width_um), style.token());
+    if let Some(c) = color {
         let _ = write!(s, " (color {})", color_str(c));
     }
     s.push(')');
     s
+}
+
+/// The stroke of a wire, bus, bus entry or graphic line as `SCH_IO_KICAD_SEXPR::saveLine` / `saveBusEntry` write it: the stroke Wire/Bus Properties set
+/// (`SchExtras::strokes`), the default one when none was. A graphic line's width is its own (`width_um`), the entry carries the rest.
+pub(crate) fn line_stroke_str(width_um: Um, stroke: Option<&SchStroke>) -> String {
+    let st = stroke.copied().unwrap_or_default();
+    stroke_params(if width_um != 0 { width_um } else { st.width_um }, st.style, st.color)
+}
+
+/// `(diameter d) (color r g b a)` of a junction (`SCH_IO_KICAD_SEXPR::saveJunction`): zero diameter and a colour of all zeroes are the defaults.
+pub(crate) fn junction_attrs(look: Option<&JunctionLook>) -> String {
+    let look = look.copied().unwrap_or_default();
+    format!("(diameter {}) (color {})", mm(look.diameter_um), look.color.map(color_str).unwrap_or_else(|| "0 0 0 0".to_string()))
 }
 
 fn fill_str(g: &SchGraphic) -> String {
@@ -202,14 +220,14 @@ fn pts_of(node: &[Sexpr]) -> Vec<Point> {
     sexpr::find(node, "pts").map(|p| sexpr::find_all(p, "xy").filter_map(pt).collect()).unwrap_or_default()
 }
 
-fn parse_color(node: &[Sexpr]) -> Option<SchColor> {
+pub(crate) fn parse_color(node: &[Sexpr]) -> Option<SchColor> {
     let ch = |i: usize| sexpr::num(node, i).map(|v| v.round().clamp(0.0, 255.0) as u8);
     let a = sexpr::num(node, 4).map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8).unwrap_or(255);
     Some(SchColor { r: ch(1)?, g: ch(2)?, b: ch(3)?, a })
 }
 
 /// `(stroke (width w) (type t) (color ...))` -> width (um), style, colour.
-fn parse_stroke(node: &[Sexpr]) -> (Um, SchLineStyle, Option<SchColor>) {
+pub(crate) fn parse_stroke(node: &[Sexpr]) -> (Um, SchLineStyle, Option<SchColor>) {
     let Some(s) = sexpr::find(node, "stroke") else { return (0, SchLineStyle::Default, None) };
     let width = sexpr::find(s, "width").and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
     let style = sexpr::find(s, "type").and_then(|t| sexpr::txt(t, 1)).map(SchLineStyle::from_token).unwrap_or_default();

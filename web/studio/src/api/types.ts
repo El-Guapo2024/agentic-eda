@@ -9,7 +9,7 @@
 // board sizes this project deals with). Angles in `rot` are degrees
 // (the backend already divides millidegrees by 1000 before sending).
 
-import type { SchEditCmd, SchGraphic } from "./schEditTypes";
+import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
 
 export type Um = number;
 export type Degrees = number;
@@ -973,6 +973,8 @@ export type Cmd =
   | { op: "paste_sch"; fragment: unknown; dx?: Um; dy?: Um; mode?: "unique" | "keep" | "remove" }
   /** The schematic editor's other tool verbs (lock, break, convert text, shapes, sheet pins, ...) -- see api/schEditTypes.ts. */
   | ({ op: "sch_edit" } & SchEditCmd)
+  /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
+  | ({ op: "sch_move" } & SchMoveCmd)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
@@ -1544,6 +1546,8 @@ export interface NoConnect {
 export interface SchJunction {
   id: string;
   at: [Um, Um];
+  /** The diameter and colour Junction Properties set; absent or null is the default dot. */
+  look?: JunctionLook | null;
 }
 
 /** A graphic polyline on the schematic's notes layer (`SCH_LINE` on `LAYER_NOTES`, the `I` tool): decoration, never part of a net. `width_um` 0 is the default line width. */
@@ -1551,6 +1555,8 @@ export interface SchLine {
   id: string;
   pts: [Um, Um][];
   width_um: Um;
+  /** The style and colour Line Properties set (the width is `width_um`); absent or null is the default. */
+  stroke?: SchStroke | null;
 }
 
 export type LabelScope = "local" | "global" | "hierarchical";
@@ -1568,6 +1574,8 @@ export interface SchematicWire {
   bus: boolean;
   /** A bus's member nets (`D[0..3]` -> D0..D3, aliases and groups expanded) -- only sent for a bus wire; what the Unfold from Bus menu lists. */
   members?: string[];
+  /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
+  stroke?: SchStroke;
 }
 
 /** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
@@ -1575,6 +1583,8 @@ export interface BusEntry {
   id: string;
   at: [Um, Um];
   size: [Um, Um];
+  /** The stroke Wire/Bus Properties set; absent or null is the default one. */
+  stroke?: SchStroke | null;
 }
 
 export interface SchematicLabel {
@@ -1584,6 +1594,8 @@ export interface SchematicLabel {
   at: [Um, Um];
   scope: LabelScope;
   shape: LabelShape | null;
+  /** Which way the text runs from the anchor once Rotate or Mirror has set it (`SCH_LABEL_BASE::GetSpinStyle`); absent or null reads off the wire that ends at the label. */
+  spin?: "right" | "up" | "left" | "bottom" | null;
 }
 
 /** `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, deliberately minimal next to a PCB `BoardText` (no layer/justify/mirror -- a schematic has none of those concepts). */

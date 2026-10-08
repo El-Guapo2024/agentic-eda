@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use eda_model::ir::{Design, LabelKind, LabelShape, Millideg, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
+use eda_model::sch_extras::{JunctionLook, SchStroke};
 use eda_model::symbol::{LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
@@ -262,10 +263,13 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
     let mut wires: Vec<Wire> = Vec::new();
     let mut wire_locked: Vec<bool> = Vec::new();
+    // each wire's, bus's, bus entry's and polyline's `(stroke ...)` and each junction's `(diameter ...) (color ...)`, kept beside its lock flag
+    let mut wire_stroke: Vec<SchStroke> = Vec::new();
     for w in sexpr::find_all(root, "wire") {
         if let Some(pts) = import_pts(w) {
             wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: false });
             wire_locked.push(is_locked(w));
+            wire_stroke.push(stroke_of(w));
         }
     }
     // `(bus ...)` (GAPS.md #20): the exact same `SCH_LINE`/`(pts ...)` shape
@@ -275,17 +279,20 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         if let Some(pts) = import_pts(b) {
             wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: true });
             wire_locked.push(is_locked(b));
+            wire_stroke.push(stroke_of(b));
         }
     }
 
     let mut bus_entries: Vec<eda_model::ir::BusEntry> = Vec::new();
     let mut be_locked: Vec<bool> = Vec::new();
+    let mut be_stroke: Vec<SchStroke> = Vec::new();
     for be in sexpr::find_all(root, "bus_entry") {
         let Some(at) = sexpr::find(be, "at").and_then(point_mm) else { continue };
         let Some(size) = sexpr::find(be, "size").and_then(|sz| Some((sexpr::num(sz, 1)?, sexpr::num(sz, 2)?))) else { continue };
         let id = sexpr::find(be, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         bus_entries.push(eda_model::ir::BusEntry { id, at: mm_point_to_um(at), size: Point { x: crate::import::mm_to_um(size.0), y: crate::import::mm_to_um(size.1) } });
         be_locked.push(is_locked(be));
+        be_stroke.push(stroke_of(be));
     }
 
     // `(junction (at x y) ...)`: an explicit junction (`SCH_JUNCTION`) -- the only thing that joins two wires that merely cross
@@ -293,17 +300,20 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     // explicit ones too: harmless, they sit where the wires already join.
     let mut junctions: Vec<eda_model::ir::Junction> = Vec::new();
     let mut junction_locked: Vec<bool> = Vec::new();
+    let mut junction_look: Vec<JunctionLook> = Vec::new();
     for j in sexpr::find_all(root, "junction") {
         let Some(at) = sexpr::find(j, "at").and_then(point_mm) else { continue };
         let at = mm_point_to_um(at);
         if !junctions.iter().any(|x| x.at == at) {
             junctions.push(eda_model::ir::Junction { id: String::new(), at });
             junction_locked.push(is_locked(j));
+            junction_look.push(look_of(j));
         }
     }
     // `(polyline (pts ...) (stroke (width w) ...))`: a graphic line on the notes layer (`SchLine`).
     let mut lines: Vec<eda_model::ir::SchLine> = Vec::new();
     let mut line_locked: Vec<bool> = Vec::new();
+    let mut line_stroke: Vec<SchStroke> = Vec::new();
     for pl in sexpr::find_all(root, "polyline") {
         // A filled polyline is a polygon shape (`SchGraphic`), read below with the other shapes.
         let filled = sexpr::find(pl, "fill").and_then(|f| sexpr::find(f, "type")).and_then(|t| sexpr::txt(t, 1)).is_some_and(|t| t != "none");
@@ -314,6 +324,8 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
             let width_um = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
             lines.push(eda_model::ir::SchLine { id: String::new(), pts, width_um });
             line_locked.push(is_locked(pl));
+            // the width is the line's own (`SchLine::width_um`); the entry carries the style and the colour
+            line_stroke.push(SchStroke { width_um: 0, ..stroke_of(pl) });
         }
     }
 
@@ -443,6 +455,14 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         locked.extend(locked_refs);
         for id in locked.into_iter().filter(|id| !id.is_empty()) {
             sch.extras.set_locked(&id, true);
+        }
+        // Strokes and junction looks that are not KiCad's defaults (`SchExtras::strokes`, `junction_looks`).
+        let strokes: Vec<(String, SchStroke)> = sch.wires.iter().map(|w| w.id.clone()).zip(wire_stroke).chain(sch.bus_entries.iter().map(|b| b.id.clone()).zip(be_stroke)).chain(sch.lines.iter().map(|l| l.id.clone()).zip(line_stroke)).collect();
+        for (id, stroke) in strokes.into_iter().filter(|(id, st)| !id.is_empty() && !st.is_default()) {
+            sch.extras.strokes.insert(id, stroke);
+        }
+        for (id, look) in sch.junctions.iter().map(|j| j.id.clone()).zip(junction_look).filter(|(id, l)| !id.is_empty() && !l.is_default()) {
+            sch.extras.junction_looks.insert(id, look);
         }
     }
 
@@ -593,6 +613,19 @@ fn parse_instance_overrides(item: &[Sexpr], at: Point) -> Vec<eda_model::ir::Sym
 
 fn sheet_property_text(item: &[Sexpr], name: &str) -> Option<String> {
     sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).map(String::from)
+}
+
+/// A wire's, bus's, bus entry's or polyline's `(stroke (width w) (type t) (color ...))` (`SCH_IO_KICAD_SEXPR_PARSER::parseStroke`).
+fn stroke_of(node: &[Sexpr]) -> SchStroke {
+    let (width_um, style, color) = crate::sch_extras_io::parse_stroke(node);
+    SchStroke { width_um, style, color }
+}
+
+/// A junction's `(diameter d) (color r g b a)`; a colour of all zeroes is KiCad's "unspecified".
+fn look_of(node: &[Sexpr]) -> JunctionLook {
+    let diameter_um = sexpr::find(node, "diameter").and_then(|d| sexpr::num(d, 1)).map(crate::import::mm_to_um).unwrap_or(0);
+    let color = sexpr::find(node, "color").and_then(crate::sch_extras_io::parse_color).filter(|c| !(c.r == 0 && c.g == 0 && c.b == 0 && c.a == 0));
+    JunctionLook { diameter_um, color }
 }
 
 fn point_mm(at: &[Sexpr]) -> Option<SPoint> {
@@ -1389,6 +1422,64 @@ mod tests {
         assert_eq!(joined.lines[0].pts, vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }]);
         assert_eq!(joined.lines[0].width_um, 254);
         assert_eq!(joined.wires.len(), 2, "a graphic line is never read back as a wire");
+    }
+
+    /// The strokes Wire/Bus Properties sets on a wire, a bus, a bus entry and a graphic line, and the diameter and colour of a junction, are written as KiCad
+    /// writes them and read back; an item left at the defaults writes the defaults and reads back with no annotation at all.
+    #[test]
+    fn strokes_and_junction_looks_round_trip_through_a_kicad_sch_file() {
+        use eda_model::sch_extras::{JunctionLook, SchColor, SchLineStyle};
+        let p = |x: i64, y: i64| Point { x, y };
+        let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
+        let mut sch = SchematicSection::default();
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 0), p(20_000, 0)], bus: false });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 10_000), p(20_000, 10_000)], bus: true });
+        sch.wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts: vec![p(0, 20_000), p(20_000, 20_000)], bus: false });
+        sch.bus_entries.push(eda_model::ir::BusEntry { id: String::new(), at: p(5_000, 10_000), size: p(2_540, 2_540) });
+        sch.lines.push(eda_model::ir::SchLine { id: String::new(), pts: vec![p(0, 30_000), p(5_000, 30_000)], width_um: 254 });
+        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000, 0) });
+        sch.junctions.push(eda_model::ir::Junction { id: String::new(), at: p(10_000, 20_000) });
+        sch.assign_missing_ids();
+        let id_at = |sch: &SchematicSection, first: Point| sch.wires.iter().find(|w| w.pts[0] == first).unwrap().id.clone();
+        let (plain_id, bus_id) = (id_at(&sch, p(0, 0)), id_at(&sch, p(0, 10_000)));
+        let (bent_id, line_id) = (sch.bus_entries[0].id.clone(), sch.lines[0].id.clone());
+        let jct_id = sch.junctions[0].id.clone();
+        let plain = SchStroke { width_um: 300, style: SchLineStyle::Dash, color: Some(red) };
+        let bus = SchStroke { width_um: 0, style: SchLineStyle::Dot, color: None };
+        let bent = SchStroke { width_um: 200, style: SchLineStyle::Default, color: Some(SchColor { r: 0, g: 0, b: 255, a: 255 }) };
+        let line = SchStroke { width_um: 0, style: SchLineStyle::DashDot, color: Some(SchColor { r: 0, g: 128, b: 0, a: 255 }) };
+        sch.extras.strokes.extend([(plain_id, plain), (bus_id, bus), (bent_id, bent), (line_id, line)]);
+        sch.extras.junction_looks.insert(jct_id, JunctionLook { diameter_um: 900, color: Some(red) });
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(sch),
+            nets: None,
+            placement: None,
+            routing: None,
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+        };
+        let text = crate::export_kicad_sch(&design, &ConstraintModel::default(), &crate::ExportMeta { date: "2026-01-01", title: "strokes" }).expect("exports");
+        for token in ["(stroke (width 0.3) (type dash) (color 255 0 0 1))", "(stroke (width 0) (type dot))", "(stroke (width 0.2) (type default) (color 0 0 255 1))", "(stroke (width 0.254) (type dash_dot) (color 0 128 0 1))", "(junction (at 10 0) (diameter 0.9) (color 255 0 0 1)", "(junction (at 10 20) (diameter 0) (color 0 0 0 0)"] {
+            assert!(text.contains(token), "{token} in\n{text}");
+        }
+        let (back, _model, _notes) = import_kicad_sch(&text).expect("re-imports");
+        let back = back.schematic.expect("schematic");
+        let stroke_of_wire = |first: Point| back.extras.strokes.get(&id_at(&back, first)).copied();
+        assert_eq!(stroke_of_wire(p(0, 0)), Some(plain));
+        assert_eq!(stroke_of_wire(p(0, 10_000)), Some(bus));
+        assert_eq!(stroke_of_wire(p(0, 20_000)), None, "the default stroke is not an annotation");
+        assert_eq!(back.extras.strokes.get(&back.bus_entries[0].id), Some(&bent));
+        assert_eq!(back.extras.strokes.get(&back.lines[0].id), Some(&line));
+        assert_eq!(back.lines[0].width_um, 254, "a graphic line's width stays its own");
+        assert_eq!(back.extras.strokes.len(), 4);
+        let look_at = |at: Point| back.junctions.iter().find(|j| j.at == at).and_then(|j| back.extras.junction_looks.get(&j.id)).copied();
+        assert_eq!(look_at(p(10_000, 0)), Some(JunctionLook { diameter_um: 900, color: Some(red) }));
+        assert_eq!(look_at(p(10_000, 20_000)), None);
     }
 
     /// Shapes, text boxes, rule areas, directive labels and every item's lock survive the `.kicad_sch` round trip.

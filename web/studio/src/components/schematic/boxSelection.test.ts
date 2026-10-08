@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { collectBoxSelection } from "./boxSelection";
 import type { LibSymbols, Schematic, SchematicSymbol, SchematicWire } from "../../api/types";
 
-// Same minimal "Device:R" fixture wireAttachment.test.ts/ercMarkerPosition.test.ts already use.
+// Same minimal "Device:R" fixture ercMarkerPosition.test.ts uses.
 const R_LIB: LibSymbols = {
   "Device:R": {
     graphics: [],

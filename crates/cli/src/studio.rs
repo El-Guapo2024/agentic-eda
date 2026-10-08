@@ -32,6 +32,7 @@ use crate::kicad_lane::Lane;
 use crate::route_api;
 use crate::sch_api;
 use crate::sch_export_api;
+use crate::sch_move_api;
 use crate::sch_output_api;
 use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
@@ -620,6 +621,8 @@ fn handle(
         }
         // Symbol Fields Table / Find / ERC pin map backends: `crate::sch_api`.
         ("POST", "/api/sch/fields_table") => respond(stream, "200 OK", "application/json", sch_api::fields_table(dir, &body).to_string().as_bytes()),
+        // Move, Drag, Rotate and Mirror previews: the commands applied in memory, the moved geometry back (`crate::sch_move_api`).
+        ("POST", "/api/sch/move_preview") => respond(stream, "200 OK", "application/json", sch_move_api::move_preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
@@ -1389,6 +1392,10 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
         .iter()
         .map(|w| {
             let mut v = json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus });
+            // The stroke Wire/Bus Properties set (width, style, colour), when one was.
+            if let Some(stroke) = sch.extras.strokes.get(&w.id) {
+                v["stroke"] = json!(stroke);
+            }
             // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias name expansion (`eda_kicad::expand_bus_members`).
             if w.bus {
                 v["members"] = json!(eda_kicad::expand_bus_members(&w.net, &design.bus_aliases).unwrap_or_default());
@@ -1397,14 +1404,14 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
         })
         .collect();
     // Explicit junctions (`J`) and graphic lines on the notes layer (`I`) -- see `eda_model::ir::Junction`/`SchLine`.
-    let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y] })).collect();
-    let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um })).collect();
+    let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y], "look": sch.extras.junction_looks.get(&j.id) })).collect();
+    let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um, "stroke": sch.extras.strokes.get(&l.id) })).collect();
     // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
     let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
-    let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y] })).collect();
+    let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y], "stroke": sch.extras.strokes.get(&be.id) })).collect();
     let labels: Vec<Value> = sch
         .labels
         .iter()
@@ -1414,7 +1421,7 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                 eda_model::ir::LabelKind::Global { shape } => ("global", Some(*shape)),
                 eda_model::ir::LabelKind::Hierarchical { shape } => ("hierarchical", Some(*shape)),
             };
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str) })
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id) })
         })
         .collect();
     let texts: Vec<Value> = sch
