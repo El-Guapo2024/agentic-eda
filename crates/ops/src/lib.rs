@@ -1500,6 +1500,21 @@ impl Cmd {
 }
 
 impl Cmd {
+    /// Can this schematic command change what is connected? A symbol that only changes place or turns (`M`, `G`, `R`, `X`, `Y`) is layout: it
+    /// never rewrites the net list. `design.nets` is the electrical intent -- the one netlist the PCB and every export read -- and the drawing is
+    /// its picture, which kicad-cli's ERC judges (a wire left behind, a pin off its wire); a tidy-up must not turn a board's nets into whatever the
+    /// drawing happens to show. Every other edit is read from the drawing, before and after (`crates/cli/src/board.rs` `reconcile_schematic`).
+    pub fn edits_connectivity(&self) -> bool {
+        match self {
+            Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
+            Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
+            Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
+            _ => true,
+        }
+    }
+}
+
+impl Cmd {
     /// The parts this command touches, for logging and credit assignment.
     pub fn subjects(&self) -> Vec<&str> {
         match self {

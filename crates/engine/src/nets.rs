@@ -129,9 +129,31 @@ fn depths(screens: &[ScreenIn]) -> (Vec<usize>, Vec<String>) {
     (depth, path)
 }
 
-/// Trace the nets of every screen, write each wire's `net`/`pins`, each power symbol's and no-connect flag's `pin` back, and
-/// return the net list (sorted by name, each net's pins sorted).
+/// How the tracer names a net that no label, power symbol or sheet pin names.
+#[derive(Default, Clone, Copy)]
+pub struct Naming<'a> {
+    /// Take the name the net's wires already carry (what a derived schematic writes on them) before KiCad's default name.
+    pub wire_hints: bool,
+    /// "REF.PIN" -> the pin's shown name (empty or `~` for none). KiCad's default net name uses it: `Net-(U1-PA0)`.
+    pub pin_names: Option<&'a BTreeMap<String, String>>,
+}
+
+/// One traced net: its name, its pins (sorted), and whether a driver -- a label, a power symbol, a sheet pin -- named it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TracedNet {
+    pub name: String,
+    pub pins: Vec<String>,
+    pub driven: bool,
+}
+
+/// [`trace_nets_with`] naming a net nothing drives after the wires that carry its name, as a derived schematic does.
 pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
+    trace_nets_with(screens, &Naming { wire_hints: true, pin_names: None }).into_iter().map(|t| Net { name: t.name, pins: t.pins }).collect()
+}
+
+/// Trace the nets of every screen, write each wire's `net`/`pins`, each power symbol's and no-connect flag's `pin` back, and
+/// return the nets (sorted by name, each net's pins sorted). Only a net with a pin is returned.
+pub fn trace_nets_with(screens: &mut [ScreenIn], naming: &Naming) -> Vec<TracedNet> {
     let (depth, spath) = depths(screens);
 
     // ---- phase A: nodes and subgraphs, per screen ----
@@ -323,6 +345,8 @@ pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
         name: Option<String>,
         /// Whether the name came from a local or hierarchical label (so it is only unique inside its sheet).
         local_name: bool,
+        /// Whether a driver (label, power symbol, sheet pin) named it.
+        driven: bool,
         screen: usize,
     }
     let mut finals: Vec<Final> = Vec::new();
@@ -344,7 +368,7 @@ pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
         });
         let best = drivers.first();
         let screen = gids.iter().map(|&g| groups[g].screen).min_by_key(|&s| depth[s]).unwrap_or(0);
-        finals.push(Final { gids, pins, name: best.map(|d| d.name.clone()), local_name: best.is_some_and(|d| d.prio < GLOBAL_POWER_PIN), screen });
+        finals.push(Final { gids, pins, name: best.map(|d| d.name.clone()), local_name: best.is_some_and(|d| d.prio < GLOBAL_POWER_PIN), driven: best.is_some(), screen });
     }
 
     // Names are unique across the design: a local name two different nets share is told apart by its sheet path.
@@ -363,27 +387,33 @@ pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
             f.name = Some(unique);
         }
     }
-    // The unnamed: the name the wires already carry, if no other net took it; else the next free NET_<n>.
-    let mut next = used.iter().filter_map(|n| n.strip_prefix("NET_").and_then(|d| d.parse::<usize>().ok())).max().unwrap_or(0);
-    let mut order: Vec<usize> = (0..finals.len()).filter(|&i| finals[i].name.is_none()).collect();
+    // The undriven nets, the larger ones first. With `wire_hints` the name its wires already carry (a derived schematic writes the net's
+    // name on every wire); otherwise, or when there is none, what KiCad calls it. A group with no pin (a stray wire, a lone label) has no
+    // net and stays unnamed.
+    let shown_count = shown_name_counts(naming.pin_names);
+    let mut order: Vec<usize> = (0..finals.len()).filter(|&i| finals[i].name.is_none() && !finals[i].pins.is_empty()).collect();
     order.sort_by(|&a, &b| finals[b].pins.len().cmp(&finals[a].pins.len()).then_with(|| finals[a].pins.first().cmp(&finals[b].pins.first())));
     for i in order {
-        let mut hints: BTreeMap<&str, usize> = BTreeMap::new();
-        for &g in &finals[i].gids {
-            for n in &groups[g].wire_names {
-                *hints.entry(n.as_str()).or_default() += 1;
+        let hinted = if naming.wire_hints {
+            let mut hints: BTreeMap<&str, usize> = BTreeMap::new();
+            for &g in &finals[i].gids {
+                for n in &groups[g].wire_names {
+                    *hints.entry(n.as_str()).or_default() += 1;
+                }
             }
+            let mut ranked: Vec<(&str, usize)> = hints.into_iter().collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+            ranked.iter().map(|(n, _)| (*n).to_string()).find(|n| !used.contains(n))
+        } else {
+            None
+        };
+        let base = hinted.unwrap_or_else(|| kicad_net_name(&finals[i].pins, naming.pin_names, &shown_count));
+        let mut name = base.clone();
+        let mut k = 1;
+        while used.contains(&name) {
+            k += 1;
+            name = format!("{base}_{k}");
         }
-        let mut ranked: Vec<(&str, usize)> = hints.into_iter().collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let pick = ranked.iter().map(|(n, _)| (*n).to_string()).find(|n| !used.contains(n));
-        let name = pick.unwrap_or_else(|| loop {
-            next += 1;
-            let candidate = format!("NET_{next}");
-            if !used.contains(&candidate) {
-                break candidate;
-            }
-        });
         used.insert(name.clone());
         finals[i].name = Some(name);
     }
@@ -406,7 +436,10 @@ pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
         }
         for (wi, w) in screen.sch.wires.iter_mut().enumerate() {
             if let Some(g) = wire_group[si][wi] {
-                w.net = name_of_group[g].clone();
+                // a wire on no net (no pin, no driver) keeps the name it had
+                if !name_of_group[g].is_empty() {
+                    w.net = name_of_group[g].clone();
+                }
             }
             w.pins = w.pts.iter().filter_map(|p| pins_of_point.get(p)).flatten().cloned().collect::<BTreeSet<_>>().into_iter().collect();
         }
@@ -422,9 +455,137 @@ pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
             }
         }
     }
-    let mut nets: Vec<Net> = finals.into_iter().filter(|f| !f.pins.is_empty()).map(|f| Net { name: f.name.unwrap_or_default(), pins: f.pins }).collect();
+    let mut nets: Vec<TracedNet> = finals.into_iter().filter(|f| !f.pins.is_empty()).map(|f| TracedNet { name: f.name.unwrap_or_default(), pins: f.pins, driven: f.driven }).collect();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     nets
+}
+
+/// How many pins of each part share each shown name, for `has_multiple` of `SCH_PIN::GetDefaultNetName`.
+fn shown_name_counts(names: Option<&BTreeMap<String, String>>) -> BTreeMap<(String, String), usize> {
+    let mut out: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for (pin_ref, name) in names.into_iter().flatten() {
+        if let Some((reference, _)) = pin_ref.split_once('.') {
+            if !name.is_empty() && name != "~" {
+                *out.entry((reference.to_string(), name.clone())).or_default() += 1;
+            }
+        }
+    }
+    out
+}
+
+/// `SCH_PIN::GetDefaultNetName` (eeschema/sch_pin.cpp): the name a pin gives its net when nothing stronger does -- `Net-(R1-Pad1)`; the
+/// pin's name instead of "Pad<number>" when it has one that is not its number (`Net-(U1-PA0)`, with the pad number added when the part has
+/// several pins of that name); `unconnected-(...)` for a pin that is alone. `/` is written `{slash}`.
+fn default_net_name(pin_ref: &str, names: Option<&BTreeMap<String, String>>, shown_count: &BTreeMap<(String, String), usize>, unconnected: bool) -> String {
+    let (reference, number) = pin_ref.split_once('.').unwrap_or((pin_ref, ""));
+    let escape = |s: &str| s.replace('/', "{slash}").replace(['\n', '\r'], "");
+    let shown = names.and_then(|n| n.get(pin_ref)).map(String::as_str).filter(|s| !s.is_empty() && *s != "~").unwrap_or("");
+    let prefix = if unconnected { "unconnected-(" } else { "Net-(" };
+    if !shown.is_empty() && shown != number {
+        let has_multiple = shown_count.get(&(reference.to_string(), shown.to_string())).is_some_and(|&n| n > 1);
+        let pad = if unconnected || has_multiple { format!("-Pad{}", escape(number)) } else { String::new() };
+        format!("{prefix}{}-{}{pad})", escape(reference), escape(shown))
+    } else {
+        format!("{prefix}{}-Pad{})", escape(reference), escape(number))
+    }
+}
+
+/// The name KiCad gives a net nothing drives (`CONNECTION_SUBGRAPH::ResolveDrivers`, `compareDrivers`): among its pins' default names, one
+/// that is not a "-Pad" name first (a pin with a name beats a pin with only a number), then the alphabetically first; a net of one pin is
+/// `unconnected-(...)`.
+fn kicad_net_name(pins: &[String], names: Option<&BTreeMap<String, String>>, shown_count: &BTreeMap<(String, String), usize>) -> String {
+    if let [only] = pins {
+        return default_net_name(only, names, shown_count, true);
+    }
+    pins.iter().map(|p| default_net_name(p, names, shown_count, false)).min_by(|a, b| a.contains("-Pad").cmp(&b.contains("-Pad")).then_with(|| a.cmp(b))).unwrap_or_else(|| "Net-()".to_string())
+}
+
+/// What an edit did to the nets, from what was drawn before it and after it: the net list `prev` with only the nets the edit touched
+/// rewritten; `None` when the edit changed nothing about what is connected or what drives a net's name (a text, a field, a part that
+/// only changed place).
+///
+/// This is how a net list survives a drawing that does not say everything. A stored schematic whose labels do not quite touch their pins
+/// reads as many small nets, and an edit anywhere must not turn the list into that reading: a net the edit did not touch keeps its name
+/// and every pin, even when the drawing shows it in pieces. A net it did touch is read from the drawing, and is named
+/// - by its driver, when a label, a power symbol or a sheet pin drives it (a label joins the net that has its name, and renames the net
+///   it is put on);
+/// - else by the net of `prev` most of its pins come from (the larger overlap first, then the name), when no other net took that name:
+///   a net keeps its name through an edit that moves a pin in or out of it, and a net made of two joins as one, whole;
+/// - else by what KiCad calls it (`Net-(R1-Pad1)`; `unconnected-(R2-Pad1)` for a lone pin) -- the name the tracer gave the net.
+pub fn follow(prev: &[Net], before: &[TracedNet], after: &[TracedNet]) -> Option<Vec<Net>> {
+    let key = |t: &TracedNet| (t.pins.clone(), t.driven.then(|| t.name.clone()));
+    let before_keys: BTreeSet<_> = before.iter().map(key).collect();
+    let after_keys: BTreeSet<_> = after.iter().map(key).collect();
+    if before_keys == after_keys {
+        return None;
+    }
+    let changed: Vec<&TracedNet> = after.iter().filter(|t| !before_keys.contains(&key(t))).collect();
+    // Every pin of a net the edit made or unmade: a pin that left the nets altogether (a no-connect flag) is among them.
+    let mut touched: BTreeSet<&str> = changed.iter().flat_map(|t| t.pins.iter().map(String::as_str)).collect();
+    for gone in before.iter().filter(|b| !after_keys.contains(&key(b))) {
+        touched.extend(gone.pins.iter().map(String::as_str));
+    }
+
+    // The nets the design had, without the pins the edit touched.
+    let mut nets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut net_of: BTreeMap<&str, &str> = BTreeMap::new();
+    for n in prev {
+        for p in &n.pins {
+            net_of.entry(p.as_str()).or_insert(n.name.as_str());
+        }
+        let kept: BTreeSet<String> = n.pins.iter().filter(|p| !touched.contains(p.as_str())).cloned().collect();
+        if !kept.is_empty() {
+            nets.entry(n.name.clone()).or_default().extend(kept);
+        }
+    }
+
+    // Driven nets first -- their name is not negotiable -- then the larger ones.
+    let driven_names: BTreeSet<&str> = after.iter().filter(|t| t.driven).map(|t| t.name.as_str()).collect();
+    let mut order = changed;
+    order.sort_by(|a, b| b.driven.cmp(&a.driven).then_with(|| b.pins.len().cmp(&a.pins.len())).then_with(|| a.pins.first().cmp(&b.pins.first())));
+    let mut claimed: BTreeSet<String> = BTreeSet::new();
+    for t in order {
+        // The nets of `prev` this net's pins come from, the larger overlap first.
+        let mut overlap: BTreeMap<&str, usize> = BTreeMap::new();
+        for p in &t.pins {
+            if let Some(&name) = net_of.get(p.as_str()) {
+                *overlap.entry(name).or_default() += 1;
+            }
+        }
+        let mut ranked: Vec<(&str, usize)> = overlap.iter().map(|(n, c)| (*n, *c)).collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let name = if t.driven {
+            t.name.clone()
+        } else {
+            let inherited = ranked.iter().map(|(n, _)| *n).find(|n| !claimed.contains(*n) && !driven_names.contains(*n));
+            match inherited {
+                Some(n) => n.to_string(),
+                None => {
+                    let mut fresh = t.name.clone();
+                    let mut k = 1;
+                    while claimed.contains(&fresh) || nets.contains_key(&fresh) || driven_names.contains(fresh.as_str()) {
+                        k += 1;
+                        fresh = format!("{}_{k}", t.name);
+                    }
+                    fresh
+                }
+            }
+        };
+        // A net made of several joins them whole: what the others still had, untouched, comes along -- unless another net's driver or
+        // another change owns that name.
+        let joined: Vec<String> = ranked.iter().map(|(n, _)| n.to_string()).filter(|n| *n != name && !claimed.contains(n) && !driven_names.contains(n.as_str())).collect();
+        let mut pins: BTreeSet<String> = t.pins.iter().cloned().collect();
+        if t.driven || ranked.len() > 1 {
+            for other in joined {
+                if let Some(rest) = nets.remove(&other) {
+                    pins.extend(rest);
+                }
+            }
+        }
+        claimed.insert(name.clone());
+        nets.entry(name).or_default().extend(pins);
+    }
+    Some(nets.into_iter().map(|(name, pins)| Net { name, pins: pins.into_iter().collect() }).collect())
 }
 
 #[cfg(test)]
@@ -612,5 +773,133 @@ mod tests {
         let nets = trace_nets(&mut screens);
         assert!(nets.is_empty(), "{nets:?}");
         assert_eq!(root.no_connects[0].pin, "U1.5");
+    }
+
+    // ------------------------------------------------------------------------------------------- KiCad's names
+
+    fn shown(list: &[(&str, &str)]) -> BTreeMap<String, String> {
+        list.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// `SCH_PIN::GetDefaultNetName`: `Net-(R1-Pad1)`, the pin's name when it has one (`Net-(U1-PA0)`), the pad number added when the part has
+    /// several pins of that name, `unconnected-(...)` for a pin on its own.
+    #[test]
+    fn a_net_nothing_drives_is_named_the_way_kicad_names_it() {
+        let names = shown(&[("U1.3", "PA0"), ("U1.2", "GND"), ("U1.15", "GND"), ("R1.1", "~")]);
+        let count = shown_name_counts(Some(&names));
+        assert_eq!(default_net_name("R1.1", Some(&names), &count, false), "Net-(R1-Pad1)");
+        assert_eq!(default_net_name("U1.3", Some(&names), &count, false), "Net-(U1-PA0)");
+        assert_eq!(default_net_name("U1.2", Some(&names), &count, false), "Net-(U1-GND-Pad2)");
+        assert_eq!(default_net_name("R2.1", Some(&names), &count, true), "unconnected-(R2-Pad1)");
+        assert_eq!(default_net_name("U1.3", Some(&names), &count, true), "unconnected-(U1-PA0-Pad3)");
+        // a pin whose name is its number has no name to show
+        let same = shown(&[("J1.1", "1")]);
+        assert_eq!(default_net_name("J1.1", Some(&same), &shown_name_counts(Some(&same)), false), "Net-(J1-Pad1)");
+        // a net of several pins takes the name of its best pin: one with a name beats one with only a number, then the alphabetical order
+        let pins = vec!["R1.2".to_string(), "U1.3".to_string()];
+        assert_eq!(kicad_net_name(&pins, Some(&names), &count), "Net-(U1-PA0)");
+        let numbered = vec!["R2.1".to_string(), "R1.2".to_string()];
+        assert_eq!(kicad_net_name(&numbered, Some(&names), &count), "Net-(R1-Pad2)");
+        assert_eq!(kicad_net_name(&["R2.1".to_string()], Some(&names), &count), "unconnected-(R2-Pad1)");
+        assert_eq!(default_net_name("U1.1", None, &BTreeMap::new(), false), "Net-(U1-Pad1)");
+        assert_eq!(default_net_name("A/B.1", None, &BTreeMap::new(), false), "Net-(A{slash}B-Pad1)");
+    }
+
+    #[test]
+    fn without_wire_hints_a_wire_does_not_name_its_net() {
+        let mut root = section();
+        root.wires.push(wire("OLD_NAME", &[p(0, 0), p(1000, 0)]));
+        let mut screens = vec![ScreenIn { sch: &mut root, file: String::new(), pins: pins(&[("R1.1", p(0, 0)), ("R2.1", p(1000, 0))]) }];
+        let named = trace_nets_with(&mut screens, &Naming { wire_hints: false, pin_names: None });
+        assert_eq!(named.len(), 1);
+        assert_eq!((named[0].name.as_str(), named[0].driven), ("Net-(R1-Pad1)", false));
+        assert_eq!(root.wires[0].net, "Net-(R1-Pad1)");
+        // and a stray wire on no pin is no net, and keeps the name it had
+        let mut stray = section();
+        stray.wires.push(wire("KEPT", &[p(0, 0), p(10, 0)]));
+        let mut screens = vec![ScreenIn { sch: &mut stray, file: String::new(), pins: BTreeMap::new() }];
+        assert!(trace_nets_with(&mut screens, &Naming::default()).is_empty());
+        assert_eq!(stray.wires[0].net, "KEPT");
+    }
+
+    // ------------------------------------------------------------------------------------------- following an edit
+
+    fn tn(name: &str, pins: &[&str], driven: bool) -> TracedNet {
+        TracedNet { name: name.into(), pins: pins.iter().map(|p| p.to_string()).collect(), driven }
+    }
+    fn net(name: &str, pins: &[&str]) -> Net {
+        Net { name: name.into(), pins: pins.iter().map(|p| p.to_string()).collect() }
+    }
+    fn as_pairs(nets: &[Net]) -> Vec<(String, Vec<String>)> {
+        nets.iter().map(|n| (n.name.clone(), n.pins.clone())).collect()
+    }
+    fn expect(nets: &[Net], want: &[(&str, &[&str])]) {
+        let want: Vec<(String, Vec<String>)> = want.iter().map(|(n, p)| (n.to_string(), p.iter().map(|x| x.to_string()).collect())).collect();
+        assert_eq!(as_pairs(nets), want);
+    }
+
+    /// The case that broke a board: a drawing whose labels do not touch their pins reads as pieces, and the same pieces before and
+    /// after an edit that only moved a part are no change at all -- the net list stays, names and pins, whatever the pieces are called.
+    #[test]
+    fn an_edit_that_changes_nothing_connected_leaves_the_net_list_alone() {
+        let before = vec![tn("Net-(U1-GND-Pad2)", &["U1.15", "U1.2"], false), tn("unconnected-(C1-Pad2)", &["C1.2"], false), tn("unconnected-(C2-Pad2)", &["C2.2"], false)];
+        let after = vec![tn("NET_9", &["U1.15", "U1.2"], false), tn("NET_1", &["C1.2"], false), tn("NET_2", &["C2.2"], false)];
+        assert!(follow(&[net("GND", &["C1.2", "C2.2", "U1.15", "U1.2"])], &before, &after).is_none());
+        // and the drawing before and after is the same one
+        assert!(follow(&[], &before, &before).is_none());
+    }
+
+    #[test]
+    fn a_wire_that_joins_two_nets_joins_them_whole_under_the_name_that_wins() {
+        let prev = vec![net("N1", &["R1.1", "R3.1"]), net("N2", &["R2.1", "R4.1"]), net("N3", &["R5.1", "R6.1"])];
+        // the drawing shows every pin alone, as a stored drawing with loose labels does; the edit wires R1.1 to R2.1
+        let before: Vec<TracedNet> = ["R1.1", "R2.1", "R3.1", "R4.1", "R5.1", "R6.1"].iter().map(|p| tn("x", &[p], false)).collect();
+        let mut after = before.clone();
+        after.retain(|t| t.pins != vec!["R1.1".to_string()] && t.pins != vec!["R2.1".to_string()]);
+        after.push(tn("Net-(R1-Pad1)", &["R1.1", "R2.1"], false));
+        let out = follow(&prev, &before, &after).unwrap();
+        expect(&out, &[("N1", &["R1.1", "R2.1", "R3.1", "R4.1"]), ("N3", &["R5.1", "R6.1"])]);
+    }
+
+    #[test]
+    fn a_deleted_wire_splits_a_net_and_the_larger_part_keeps_the_name() {
+        let prev = vec![net("LED1", &["D1.1", "R1.2", "R9.1"])];
+        let before = vec![tn("Net-(D1-Pad1)", &["D1.1", "R1.2", "R9.1"], false)];
+        let after = vec![tn("Net-(D1-Pad1)", &["D1.1", "R1.2"], false), tn("unconnected-(R9-Pad1)", &["R9.1"], false)];
+        let out = follow(&prev, &before, &after).unwrap();
+        expect(&out, &[("LED1", &["D1.1", "R1.2"]), ("unconnected-(R9-Pad1)", &["R9.1"])]);
+    }
+
+    #[test]
+    fn a_label_renames_the_net_it_is_put_on_and_joins_the_net_of_its_name() {
+        let prev = vec![net("N1", &["a.1", "b.1"]), net("GND", &["c.1", "d.1"]), net("X", &["e.1"])];
+        let before = vec![tn("n", &["a.1", "b.1"], false), tn("n", &["c.1", "d.1"], false), tn("n", &["e.1"], false)];
+        // a label SIG on the first net renames it
+        let after = vec![tn("SIG", &["a.1", "b.1"], true), before[1].clone(), before[2].clone()];
+        expect(&follow(&prev, &before, &after).unwrap(), &[("GND", &["c.1", "d.1"]), ("SIG", &["a.1", "b.1"]), ("X", &["e.1"])]);
+        // a label GND on the third joins the net called GND
+        let after = vec![before[0].clone(), before[1].clone(), tn("GND", &["e.1"], true)];
+        expect(&follow(&prev, &before, &after).unwrap(), &[("GND", &["c.1", "d.1", "e.1"]), ("N1", &["a.1", "b.1"])]);
+    }
+
+    #[test]
+    fn a_no_connect_flag_takes_its_pin_out_of_the_net_and_a_renamed_part_keeps_its_net() {
+        let prev = vec![net("N", &["a.1", "b.1", "c.1"]), net("LED1", &["D1.1", "R1.2"])];
+        let before = vec![tn("n", &["a.1", "b.1", "c.1"], false), tn("n", &["D1.1", "R1.2"], false)];
+        let after = vec![tn("n", &["b.1", "c.1"], false), before[1].clone()];
+        expect(&follow(&prev, &before, &after).unwrap(), &[("LED1", &["D1.1", "R1.2"]), ("N", &["b.1", "c.1"])]);
+        let renamed = vec![before[0].clone(), tn("n", &["D1.1", "R100.2"], false)];
+        expect(&follow(&prev, &before, &renamed).unwrap(), &[("LED1", &["D1.1", "R100.2"]), ("N", &["a.1", "b.1", "c.1"])]);
+    }
+
+    /// An undriven net may not take the name of a net a driver names: the label's net is another net, whatever the list said.
+    #[test]
+    fn a_net_nothing_drives_does_not_take_the_name_of_a_driven_one() {
+        let prev = vec![net("GND", &["a.1", "b.1", "c.1"])];
+        let before = vec![tn("GND", &["a.1", "b.1"], true), tn("n", &["c.1"], false)];
+        // c.1 is wired to d.1 (new in the design): it overlaps GND, but a driver owns that name
+        let after = vec![before[0].clone(), tn("Net-(c-Pad1)", &["c.1", "d.1"], false)];
+        let out = follow(&prev, &before, &after).unwrap();
+        expect(&out, &[("GND", &["a.1", "b.1"]), ("Net-(c-Pad1)", &["c.1", "d.1"])]);
     }
 }
