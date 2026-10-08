@@ -16,7 +16,7 @@
 //! on in-memory designs, use [`drc_scratch`] (a fresh temp directory,
 //! removed afterwards).
 
-use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro_for, export_kicad_sch_mapped, ExportMeta};
+use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
 use eda_model::ir::Design;
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
@@ -244,15 +244,27 @@ fn export_board(design: &Design, model: &ConstraintModel, work: &Path, stem: &st
     Ok((path, map))
 }
 
-/// Export the design's schematic as `<stem>.kicad_sch` (+ project).
+/// Export the design's schematic as `<stem>.kicad_sch` (+ project), and one file beside it for every sheet of a hierarchical
+/// design (`Sheetfile` names are relative to the root's folder), so kicad-cli reads the whole tree.
 fn export_schematic(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
     let date = today();
-    let (sch, map) = export_kicad_sch_mapped(design, model, &ExportMeta { date: &date, title: stem })?;
-    let path = work.join(format!("{stem}.kicad_sch"));
-    write_file(&path, sch)?;
+    let root_name = format!("{stem}.kicad_sch");
+    let (files, map) = export_kicad_sch_tree_mapped(design, model, &ExportMeta { date: &date, title: stem }, &root_name)?;
+    // Sheet files of an earlier export that this design no longer has would still be read if a sheet named them; clear the folder's.
+    if let Ok(entries) = std::fs::read_dir(work) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "kicad_sch") && p.file_name().and_then(|n| n.to_str()) != Some(root_name.as_str()) && !files.iter().any(|(n, _)| Some(n.as_str()) == p.file_name().and_then(|n| n.to_str())) {
+                let _ = std::fs::remove_file(&p);
+            }
+        }
+    }
+    for (name, text) in &files {
+        write_file(&work.join(name), text)?;
+    }
     write_project(work, stem, design, model)?;
-    Ok((path, map))
+    Ok((work.join(&root_name), map))
 }
 
 /// Run `f` with a fresh temp directory, removed afterwards.

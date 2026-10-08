@@ -656,9 +656,11 @@ dependencies = [
 name = "eda-kicad-engine"
 version = "0.1.0"
 dependencies = [
+ "eda-engine",
  "eda-kicad",
  "eda-model",
  "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]
