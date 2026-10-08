@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Dimension, Part, Pad } from "../api/types";
-import { editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
+import { carryStart, editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
 import { padById, padIds, padParent, itemKind, itemPosition, itemBounds } from "./pcbItems";
 
 function board(partial: Partial<BoardState>): BoardState {
@@ -157,4 +157,16 @@ test("a dimension and a group have a position and a box too", () => {
   assert.ok(g[0] <= 0 && g[2] >= 21_000, "the group's box joins its members' boxes");
   const c = itemPosition(b, "g")!;
   assert.ok(Math.abs(c[0] - (g[0] + g[2]) / 2) < 1, "PCB_GROUP::GetPosition is the centre of its box");
+});
+
+test("carryStart: the editable selection with the points a turn and a flip act about; locked items stay out", () => {
+  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 0, 2000)]), part("U2", [9000, 2000]), part("U3", [20000, 2000])], locked: ["U3"] });
+  const start = carryStart(b, ["U1.1", "U2", "U3"]);
+  assert.deepEqual(start.refs, ["U1", "U2"], "the pad stands for its footprint, the locked footprint stays");
+  assert.equal(start.lockedOut, true);
+  // U1 courtyard x 0..2000 and U2 8000..10000: centre x = 5000
+  assert.deepEqual(start.pivotUm, [5000, 2000]);
+  assert.deepEqual(start.flipPivotUm, [5000, 2000]);
+  assert.deepEqual(carryStart(b, ["U3"]), { refs: [], lockedOut: true });
+  assert.deepEqual(carryStart(b, ["U2"]).pivotUm, [9000, 2000], "a lone item turns about its own position");
 });

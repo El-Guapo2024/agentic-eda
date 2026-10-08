@@ -1098,7 +1098,7 @@ export type Action =
  * members can be picked while "inside" the group. A ref naming a group
  * directly, or not in any group, also passes through unchanged.
  */
-function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
+export function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
   if (!groups || groups.length === 0) return refs;
   const byMember = new Map<string, string>();
   for (const g of groups) for (const m of g.member_ids) byMember.set(m, g.id);

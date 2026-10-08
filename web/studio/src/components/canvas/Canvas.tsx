@@ -17,7 +17,9 @@
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
-import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
+import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
+import { carryStart } from "../../kicad-port/pcbTransform";
+import { padById } from "../../kicad-port/pcbItems";
 import type { ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
@@ -62,8 +64,11 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
   return out as unknown as ZoneSettingsFields & RuleAreaFields;
 }
 
-/** A candidate's own kind determines which Cmd a drag of it would commit through -- tracks/zones have no move_* Cmd (api/types.ts), so they're selectable but never draggable, same as before this session. */
-const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "via", "shape", "text", "dimension"]);
+/**
+ * What a plain drag of a clicked item picks up. Every kind can be: the drop is one `move_items` (kicad-port/pcbTransform.ts `planCarry`), and a pad
+ * stands for its footprint (`FilterCollectorForFreePads`) -- dragging a pad drags the footprint, as in pcbnew.
+ */
+const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad"]);
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
@@ -122,7 +127,7 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, ShapeToolKind>> = {
 
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
-  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text" | "dimension"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
+  | { kind: "move"; refs: string[]; pivotUm?: [number, number]; flipPivotUm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
   | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] }
@@ -418,6 +423,10 @@ export function Canvas() {
         case "dimension": {
           const kind = api.dimensionById(c.id)?.kind ?? "dimension";
           return `${kind[0]!.toUpperCase()}${kind.slice(1)} Dimension`;
+        }
+        case "pad": {
+          const hit = board ? padById(board, c.id) : null;
+          return hit ? `Pad ${hit.pad.num} of ${hit.part.ref}${hit.pad.net ? ` (${hit.pad.net})` : ""}` : `Pad ${c.id}`;
         }
       }
     },
@@ -852,9 +861,16 @@ export function Canvas() {
         refs = applySingleClickModifier(state.selection, hit.id, modifiers);
         dispatch({ type: "SET_SELECTION", refs });
       }
-      if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0) {
-        const soleRef = refs.length === 1 ? refs[0] : undefined;
-        dragRef.current = { kind: "move", refs, moveKind: hit.kind as "part" | "via" | "shape" | "text" | "dimension", startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, soleRef), moved: false };
+      if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0 && board) {
+        // What the drag picks up: the selection as the click leaves it (a group stands for its members, a pad for its footprint), locked items out
+        // (`FilterCollectorForLockedItems`), and the points an R / F pressed on the way acts about.
+        const start = carryStart(board, withGroupSubstitution(refs, board.drawings?.groups, state.enteredGroupId), (p) => snapPoint(p[0], p[1], board.snap ?? state.gridUm));
+        if (start.refs.length > 0) {
+          const soleRef = start.refs.length === 1 ? start.refs[0] : undefined;
+          dragRef.current = { kind: "move", refs: start.refs, pivotUm: start.pivotUm, flipPivotUm: start.flipPivotUm, startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, soleRef), moved: false };
+        } else if (start.lockedOut) {
+          dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+        }
       }
       return;
     }
@@ -932,10 +948,20 @@ export function Canvas() {
       else if (draw.bezier) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, bezier: bezierMotion(draw.bezier, [sx, sy]) } });
     }
 
-    if (moveMode && state.selection.size > 0) {
+    if (moveMode && state.selection.size > 0 && board) {
       const origin = state.moveOriginUm ?? { x: wx, y: wy };
-      const first = [...state.selection][0]!;
-      const kind = api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part";
+      // Pack and Move (`P`) carries footprints, each with its own packed shift; every other move is the one `pcb` kind -- any mix of items, taken in the hand
+      // once (the first pointer move) so the points an R / F acts about stay where the selection was picked up.
+      const packing = state.movePreview?.perRefOffsetUm != null;
+      const held = state.movePreview?.kind === "pcb" ? state.movePreview : null;
+      const start = packing || held ? null : carryStart(board, [...state.selection], (p) => snapPoint(p[0], p[1], board.snap ?? state.gridUm));
+      if (!packing && !held && start && start.refs.length === 0) {
+        if (start.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+        return;
+      }
+      const kind = packing ? "part" : "pcb";
+      const refs = packing ? [...state.selection] : (held?.refs ?? start!.refs);
       // pcb_grid_helper.cpp BestSnapAnchor applied to both ends: the
       // delta is "where the (snapped) cursor is now" minus "where the
       // (snapped) cursor started" -- not a plain grid-rounded delta --
@@ -945,7 +971,7 @@ export function Canvas() {
       // the dragged item's own anchors for a single-item move; a
       // multi-select drag doesn't exclude any member (a reasonable,
       // documented simplification -- see PARITY-pcb.md).
-      const soleRef = state.selection.size === 1 ? first : undefined;
+      const soleRef = refs.length === 1 ? refs[0] : undefined;
       const [ox, oy] = snapRef(origin.x, origin.y, e, soleRef);
       const [sx, sy] = snapRef(wx, wy, e, soleRef);
       // Preserve whatever R/Shift+R/F have already accumulated on this
@@ -953,7 +979,7 @@ export function Canvas() {
       // pointer-move must not reset the live rotate/flip state.
       // (`perRefOffsetUm` is Pack and Move's per-footprint packed shift -- it rides along until the drop.)
       const { rotateQuarterTurns, flipped, perRefOffsetUm } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetUm } });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetUm, pivotUm: held?.pivotUm ?? start?.pivotUm, flipPivotUm: held?.flipPivotUm ?? start?.flipPivotUm } });
       return;
     }
 
@@ -969,7 +995,7 @@ export function Canvas() {
       const dy = sy - drag.snapOrigin[1];
       if (dx !== 0 || dy !== 0) drag.moved = true;
       const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: drag.moveKind, dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped } : null });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "pcb", dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped, pivotUm: drag.pivotUm, flipPivotUm: drag.flipPivotUm } : null });
     } else if (drag.kind === "zoneCorner") {
       const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
       setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });

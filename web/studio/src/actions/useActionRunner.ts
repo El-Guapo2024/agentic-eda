@@ -30,6 +30,7 @@ import { pickSelectionCandidates } from "../components/canvas/selectionCandidate
 import { snapPoint } from "../components/canvas/gridHelper";
 import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
 import { editableSelection, flipPivot, rotationPivot } from "../kicad-port/pcbTransform";
+import { itemKind, padParent } from "../kicad-port/pcbItems";
 import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
@@ -166,7 +167,9 @@ export function useActionRunner() {
       if (state.tab !== "pcb" || !state.board) return [];
       const toleranceUm = Math.max(150, 6 / state.view.scale);
       const cands = pickSelectionCandidates(state.board, state.cursorUm.x, state.cursorUm.y, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
-      return cands[0] ? [cands[0].id] : [];
+      const hit = cands[0];
+      // `FilterCollectorForFreePads`: a pad under the cursor stands for its footprint -- the edit tools work on that.
+      return hit ? [hit.kind === "pad" ? (padParent(state.board, hit.id) ?? hit.id) : hit.id] : [];
     };
     /** RequestSelection for dialog/tool hand-offs that read `state.selection`: adopt the hovered item as the selection first. */
     const adoptHovered = (): string[] => {
@@ -256,8 +259,8 @@ export function useActionRunner() {
 
     // align_distribute_tool.cpp -- no default hotkey in source either
     // (reached from its own right-click submenu there); this app surfaces
-    // them from Canvas.tsx's context menu the same way. Placed footprints
-    // only -- see kicad-port/alignDistribute.ts's scope note.
+    // them from Canvas.tsx's context menu the same way. Every kind of item;
+    // a locked one is a target that never moves -- see kicad-port/alignDistribute.ts.
     m.set("pcbnew.AlignAndDistribute.alignTop", pcbOnly(() => api.alignSelection("top")));
     m.set("pcbnew.AlignAndDistribute.alignBottom", pcbOnly(() => api.alignSelection("bottom")));
     m.set("pcbnew.AlignAndDistribute.alignLeft", pcbOnly(() => api.alignSelection("left")));
@@ -287,7 +290,18 @@ export function useActionRunner() {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
       // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
-      deleteRefs(requestSelection());
+      const refs = requestSelection();
+      // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
+      // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
+      // user wanted)."
+      if (state.tab === "pcb" && state.board && refs.some((id) => itemKind(state.board!, id) === "pad")) {
+        const promoted = editableSelection(state.board, refs).ids;
+        if (promoted.filter((id) => itemKind(state.board!, id) === "part").length > refs.filter((id) => itemKind(state.board!, id) === "part").length) {
+          dispatch({ type: "SET_SELECTION", refs: promoted });
+          return;
+        }
+      }
+      deleteRefs(refs);
     });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
     // AttemptFinish's while actively routing -- KiCad's own tool stack
@@ -773,12 +787,13 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveMove.move",
       pcbOnly(() => {
-        const first = requestSelection()[0];
-        if (!first) return;
-        // Tracks and zones have no move_* Cmd (api/types.ts) -- nothing
-        // for M to do for them, same as they're excluded from dragging
-        // in Canvas.tsx's onPointerDown.
-        if (api.trackById(first) || api.zoneById(first)) return;
+        if (!state.board) return;
+        // `EDIT_TOOL::Move`: whatever `RequestSelection` hands it -- any kind of item, locked ones filtered out (`FilterCollectorForLockedItems`).
+        const { ids, lockedOut } = editableSelection(state.board, requestSelection());
+        if (ids.length === 0) {
+          if (lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+          return;
+        }
         adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
@@ -1717,7 +1732,8 @@ export function useActionRunner() {
       // items are picked up one at a time (selection order), each glued to the cursor by its anchor; a click drops it and picks up the next, Tab leaves it where it was.
       const startMoveIndividually = (refs: string[]) => {
         if (!board) return;
-        const movable = refs.filter((r) => movableItem(board, r));
+        // `RequestSelection` with the free-pad and locked-item filters: a pad stands for its footprint, a locked item stays.
+        const movable = editableSelection(board, refs).ids.filter((r) => movableItem(board, r));
         const [first, ...rest] = movable;
         if (!first) return;
         const at = movableItem(board, first)!.at;

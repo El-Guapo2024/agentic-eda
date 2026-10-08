@@ -12,11 +12,12 @@
 // track right under the cursor, but its much larger area loses the
 // size-ratio pass -- see pcb_selection_tool.cpp's own comment: "If the
 // user clicked on a small item within a much larger one...").
-import type { BoardState, Dimension, Part } from "../../api/types";
+import type { BoardState, Dimension, Pad, Part } from "../../api/types";
+import { padIds } from "../../kicad-port/pcbItems";
 import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
 
-export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension";
+export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad";
 
 export interface SelectionCandidate extends GuessCandidate {
   kind: SelectableKind;
@@ -25,13 +26,13 @@ export interface SelectionCandidate extends GuessCandidate {
 
 /**
  * pcbnew's real Selection Filter panel categories, narrowed to the kinds
- * this app actually has as distinct selectable items (no separate "pads"
- * item -- a pad is only ever reached through its parent footprint here --
- * and no locked/keepouts/points/otherItems, which this app's model has no
- * equivalent of). `footprints`/`tracks`/`vias` predate this session;
- * `zones`/`graphics`/`text` and `dimensions` (task item 7) are new so
- * every selectable kind has a real, working toggle
- * (panels/SelectionFilterPanel.tsx).
+ * this app actually has as distinct selectable items (no keepouts/points/
+ * otherItems, which this app's model has no equivalent of). `footprints`/
+ * `tracks`/`vias` predate this session; `zones`/`graphics`/`text` and
+ * `dimensions` (task item 7) are new so every selectable kind has a real,
+ * working toggle (panels/SelectionFilterPanel.tsx). `pads` (`m_filter.pads`):
+ * a pad is an item of its own to click, highlight and read the properties
+ * of -- the edit tools take its footprint (`FilterCollectorForFreePads`).
  */
 export interface SelectionFilter {
   /** `PCB_SELECTION_FILTER_OPTIONS::lockedItems` ("Allow selection of locked items") -- default OFF, exactly like `m_filter.lockedItems = false` in `PCB_SELECTION_TOOL`'s constructor: a locked item (`L`, `set_locked`) can't be picked by a click/box until this is on. */
@@ -43,9 +44,10 @@ export interface SelectionFilter {
   graphics: boolean;
   text: boolean;
   dimensions: boolean;
+  pads: boolean;
 }
 
-export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true };
+export const DEFAULT_SELECTION_FILTER: SelectionFilter = { lockedItems: false, footprints: true, tracks: true, vias: true, zones: true, graphics: true, text: true, dimensions: true, pads: true };
 
 function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
   switch (kind) {
@@ -63,7 +65,24 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
       return filter.text;
     case "dimension":
       return filter.dimensions;
+    case "pad":
+      return filter.pads;
   }
+}
+
+/** How far (um) `(x, y)` is outside a pad -- 0 or less on it: a round pad is a circle or a stadium, any other a box. */
+export function padHitDistance(pad: Pad, x: number, y: number): number {
+  const hw = pad.w / 2;
+  const hh = pad.h / 2;
+  if (pad.round) {
+    // the two end circles of the stadium lie on the pad's long axis
+    const r = Math.min(hw, hh);
+    const [ax, ay, bx, by] = hw >= hh ? [pad.x - (hw - r), pad.y, pad.x + (hw - r), pad.y] : [pad.x, pad.y - (hh - r), pad.x, pad.y + (hh - r)];
+    return distToSegment(x, y, ax, ay, bx, by) - r;
+  }
+  const dx = Math.max(Math.abs(x - pad.x) - hw, 0);
+  const dy = Math.max(Math.abs(y - pad.y) - hh, 0);
+  return dx === 0 && dy === 0 ? Math.max(Math.abs(x - pad.x) - hw, Math.abs(y - pad.y) - hh) : Math.hypot(dx, dy);
 }
 
 /**
@@ -103,11 +122,11 @@ export function collectSelectionCandidates(
 ): SelectionCandidate[] {
   const out: SelectionCandidate[] = [];
   const locked = new Set(board.locked ?? []);
-  const consider = (kind: SelectableKind, id: string, slopUm: number, areaUm2: number, layer: string | null) => {
+  const consider = (kind: SelectableKind, id: string, slopUm: number, areaUm2: number, layer: string | null, lockedId: string = id) => {
     if (slopUm > toleranceUm) return;
     if (!filterAllows(filter, kind)) return;
     // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected.
-    if (!filter.lockedItems && locked.has(id)) return;
+    if (!filter.lockedItems && locked.has(lockedId)) return;
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
     if (subtractiveOnly && !selection.has(id)) return;
     out.push({ kind, id, slopUm: Math.max(slopUm, 0), areaUm2: Math.max(areaUm2, 1), layer });
@@ -124,6 +143,16 @@ export function collectSelectionCandidates(
     const [x0, y0, x1, y1] = p.courtyard;
     if (xUm < x0 || xUm > x1 || yUm < y0 || yUm > y1) continue;
     consider("part", p.ref, 0, Math.max((x1 - x0) * (y1 - y0), 1), null);
+  }
+
+  // Pads: `PAD::IsLocked()` is the footprint's. A pad is a copper item on its footprint's side (a through-hole one is on every layer); its area is the
+  // pad's own, so a click on it picks it over the footprint it sits in -- "if the user clicked on a small item within a much larger one, they want the small item".
+  for (const p of board.parts as Part[]) {
+    if (!p.placed || !p.pads?.length) continue;
+    const ids = padIds(p);
+    p.pads.forEach((pad, i) => {
+      consider("pad", ids[i]!, padHitDistance(pad, xUm, yUm), Math.max(pad.w * pad.h, 1), pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref);
+    });
   }
 
   for (const t of board.routing?.tracks ?? []) {
@@ -234,13 +263,14 @@ function boxMatches(itemBox: Box, selBox: Box, crossing: boolean): boolean {
  */
 export function collectBoxSelection(board: BoardState, selBox: Box, crossing: boolean, filter: SelectionFilter, layerVisible: Record<string, boolean>, activeLayer: string | null, highContrast: boolean): BoxSelectHit[] {
   const out: BoxSelectHit[] = [];
+  const padHits: BoxSelectHit[] = [];
   const locked = new Set(board.locked ?? []);
-  const consider = (kind: SelectableKind, id: string, itemBox: Box, layer: string | null) => {
+  const consider = (kind: SelectableKind, id: string, itemBox: Box, layer: string | null, lockedId: string = id) => {
     if (!filterAllows(filter, kind)) return;
-    if (!filter.lockedItems && locked.has(id)) return; // itemPassesFilter, as above
+    if (!filter.lockedItems && locked.has(lockedId)) return; // itemPassesFilter, as above
 
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
-    if (boxMatches(itemBox, selBox, crossing)) out.push({ kind, id });
+    if (boxMatches(itemBox, selBox, crossing)) (kind === "pad" ? padHits : out).push({ kind, id });
   };
 
   for (const p of board.parts as Part[]) {
@@ -270,8 +300,15 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   for (const dim of board.drawings?.dimensions ?? []) {
     consider("dimension", dim.id, dimensionHit(dim, dim.text_at[0], dim.text_at[1]).box, dim.layer);
   }
+  for (const p of board.parts as Part[]) {
+    if (!p.placed || !p.pads?.length) continue;
+    const ids = padIds(p);
+    p.pads.forEach((pad, i) => consider("pad", ids[i]!, [pad.x - pad.w / 2, pad.y - pad.h / 2, pad.x + pad.w / 2, pad.y + pad.h / 2], pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref));
+  }
 
-  return out;
+  // `PCB_SELECTION_TOOL::SelectMultiple`: "If we selected nothing but pads, allow them to be selected" -- a box that takes a footprint (or anything else)
+  // never takes the pads inside it as well.
+  return out.length > 0 ? out : padHits;
 }
 
 export function pickSelectionCandidates(

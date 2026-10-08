@@ -180,3 +180,24 @@ export function planCarry(board: BoardState, selection: readonly string[], dx: n
   if (dx !== 0 || dy !== 0) cmds.push({ op: "move_items", ids, dx: Math.round(dx), dy: Math.round(dy) });
   return { cmds, ids, lockedOut };
 }
+
+// ------------------------------------------------------------- picking up
+
+export interface CarryStart {
+  /** What the Move (or drag) takes in the hand: the selection `RequestSelection` hands it, locked items out, pads as their footprints. */
+  refs: string[];
+  /** The point R turns the selection about, and the point F mirrors it about -- measured where it was picked up. */
+  pivotUm?: [number, number];
+  flipPivotUm?: [number, number];
+  /** Part of the selection was locked and stayed where it was. */
+  lockedOut: boolean;
+}
+
+/** `EDIT_TOOL::Move` picking a selection up: the items it works on and the points a turn or a flip during the move acts about. */
+export function carryStart(board: BoardState, selection: readonly string[], snap: Snap = NO_SNAP): CarryStart {
+  const { ids, lockedOut } = editableSelection(board, selection);
+  if (ids.length === 0) return { refs: [], lockedOut };
+  const pivot = rotationPivot(board, ids, snap);
+  const flip = flipPivot(board, ids);
+  return { refs: ids, pivotUm: pivot ?? undefined, flipPivotUm: flip ?? undefined, lockedOut };
+}
