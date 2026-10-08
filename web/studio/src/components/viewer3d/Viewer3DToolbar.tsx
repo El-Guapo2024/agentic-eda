@@ -72,8 +72,9 @@ export function Viewer3DToolbar({ api }: { api: Viewer3DApi | null }) {
       enabled: ready,
     },
     "3DViewer.Control.toggleRaytacing": { run: () => {}, enabled: false, reason: "not ported: this viewer has one render engine (KiCad's own render, or the live scene), not a raytracer" },
-    // Zoom Redraw repaints from current state every frame already; Zoom In / Out step the camera, Zoom to Fit is the home view.
-    "common.Control.zoomRedraw": { run: () => {}, enabled: ready },
+    // Zoom In / Out step the camera, Zoom to Fit is the home view. Zoom Redraw would repaint a view that repaints every frame already: it stays on the
+    // toolbar (KiCad's has it), dimmed with that reason, rather than a button that visibly does nothing.
+    "common.Control.zoomRedraw": { run: () => {}, enabled: false, reason: "nothing to do: this view repaints on every frame" },
     "common.Control.zoomInCenter": { run: () => api?.dispatchAction({ kind: "zoomIn" }), enabled: ready },
     "common.Control.zoomOutCenter": { run: () => api?.dispatchAction({ kind: "zoomOut" }), enabled: ready },
     "common.Control.zoomFitScreen": { run: () => api?.setView("reset"), enabled: ready },
