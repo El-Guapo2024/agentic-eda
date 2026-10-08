@@ -149,7 +149,9 @@ impl<'a> Board<'a> {
         if changes.is_empty() {
             return Err(fail("ops_nothing_to_change", "library links", "no library link changes"));
         }
-        let mut resolved = BTreeMap::new();
+        // each target's datasheet, from the symbol it names: the project library first (a symbol drawn in the Symbol Editor, or one an export put there), then the model's
+        // library files and built-in symbols
+        let mut resolved: BTreeMap<String, String> = BTreeMap::new();
         for (from, to) in changes {
             if !lib_id_is_valid(to) {
                 return Err(fail("ops_bad_lib_id", to, format!("Symbol library identifier {to} is not valid.")));
@@ -157,9 +159,10 @@ impl<'a> Board<'a> {
             if self.schematic()?.symbols.iter().all(|s| &s.lib_id != from) {
                 return Err(fail("ops_unknown_lib_id", from, "no placed symbol uses this library identifier"));
             }
-            match self.model.symbol_of(to) {
-                Some(sym) => {
-                    resolved.insert(to.clone(), sym);
+            let datasheet = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(to)).map(|s| s.datasheet.clone()).or_else(|| self.model.symbol_of(to).map(|s| s.datasheet.clone()));
+            match datasheet {
+                Some(d) => {
+                    resolved.insert(to.clone(), d);
                 }
                 None => return Err(fail("ops_unknown_symbol", to, format!("Error loading symbol {}: the library has no such symbol.", item_name(to)))),
             }
@@ -175,10 +178,10 @@ impl<'a> Board<'a> {
                     s.value = new_name.clone();
                 }
                 if update_fields {
-                    if let Some(sym) = resolved.get(to) {
+                    if let Some(datasheet) = resolved.get(to) {
                         s.value = new_name.clone();
                         s.footprint = String::new();
-                        s.datasheet = sym.datasheet.clone();
+                        s.datasheet = datasheet.clone();
                     }
                 }
                 s.lib_id = to.clone();

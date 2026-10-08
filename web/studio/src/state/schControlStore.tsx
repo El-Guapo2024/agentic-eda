@@ -17,16 +17,12 @@ export type SchControlDialog =
   | { kind: "legacy_bom" }
   | { kind: "symbol_check" }
   /** Compare a placed symbol (by reference) with its library symbol. */
-  | { kind: "symbol_diff"; ref: string }
-  | { kind: "design_blocks_save"; source: "sheet" | "selection" }
-  | { kind: "design_block_properties"; id: string };
+  | { kind: "symbol_diff"; ref: string };
 
 export interface SchControlState {
   display: SchDisplayOptions;
   /** View > Panels > Net Navigator. */
   netNavigatorOpen: boolean;
-  /** View > Panels > Design Blocks. */
-  designBlocksOpen: boolean;
   /** The Net Navigator's filter text (`m_netNavigatorFilterValue`). */
   netFilter: string;
   dialog: SchControlDialog | null;
@@ -37,7 +33,6 @@ export interface SchControlState {
 export type SchControlAction =
   | { type: "TOGGLE_DISPLAY"; key: keyof SchDisplayOptions }
   | { type: "SET_NET_NAVIGATOR"; open: boolean }
-  | { type: "SET_DESIGN_BLOCKS_PANEL"; open: boolean }
   | { type: "SET_NET_FILTER"; text: string }
   | { type: "OPEN_DIALOG"; dialog: SchControlDialog }
   | { type: "CLOSE_DIALOG" }
@@ -64,7 +59,7 @@ function loadDisplay(): SchDisplayOptions {
 }
 
 export function initialSchControlState(display: SchDisplayOptions = DEFAULT_SCH_DISPLAY): SchControlState {
-  return { display, netNavigatorOpen: false, designBlocksOpen: false, netFilter: "", dialog: null, fieldsTableOnExport: false };
+  return { display, netNavigatorOpen: false, netFilter: "", dialog: null, fieldsTableOnExport: false };
 }
 
 export function schControlReducer(state: SchControlState, action: SchControlAction): SchControlState {
@@ -73,8 +68,6 @@ export function schControlReducer(state: SchControlState, action: SchControlActi
       return { ...state, display: { ...state.display, [action.key]: !state.display[action.key] } };
     case "SET_NET_NAVIGATOR":
       return { ...state, netNavigatorOpen: action.open };
-    case "SET_DESIGN_BLOCKS_PANEL":
-      return { ...state, designBlocksOpen: action.open };
     case "SET_NET_FILTER":
       return { ...state, netFilter: action.text };
     case "OPEN_DIALOG":

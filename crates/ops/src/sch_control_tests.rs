@@ -141,6 +141,39 @@ fn the_library_link_of_a_group_moves_with_its_value_proxy_and_is_checked_first()
 }
 
 #[test]
+fn a_symbol_of_the_project_library_is_a_link_target_even_when_it_was_put_there_a_moment_ago() {
+    // Export Symbols... with "Update schematic symbols to link to exported symbols": the symbols go into the project library under the
+    // new nickname and the placed ones are linked to them, in one batch -- the model knows nothing of the new entries.
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    place(&mut b, "R1", "Device:R", 1, 0);
+    let sym = eda_model::ir::LibrarySymbol {
+        lib_id: "mylib:R".into(),
+        reference_prefix: "R".into(),
+        description: String::new(),
+        keywords: String::new(),
+        datasheet: "http://example.com/r.pdf".into(),
+        power: false,
+        in_bom: true,
+        on_board: true,
+        pin_numbers_hidden: false,
+        pin_names_hidden: false,
+        pin_name_offset_mm: 0.508,
+        unit_count: 1,
+        has_alternate_body_style: false,
+        footprint_filters: vec![],
+        graphics: vec![],
+        pins: vec![],
+        published: false,
+    };
+    b.apply(&Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "mylib:R".into())], update_fields: false }).unwrap_err();
+    b.apply(&Cmd::PutLibrarySymbol { symbol: sym, overwrite: false }).unwrap();
+    b.apply(&Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "mylib:R".into())], update_fields: true }).unwrap();
+    let r1 = symbols(&b).into_iter().find(|s| s.id == "R1").unwrap();
+    assert_eq!((r1.lib_id.as_str(), r1.datasheet.as_str()), ("mylib:R", "http://example.com/r.pdf"), "linked, and the datasheet follows the new library symbol");
+}
+
+#[test]
 fn incrementing_annotations_moves_the_references_together_and_carries_the_pins() {
     let m = ConstraintModel::default();
     let mut b = Board::new(empty_design(), &m, 100, 300);

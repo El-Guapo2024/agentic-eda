@@ -15,7 +15,7 @@ import { fetchHierarchy } from "../api/schControlClient";
 import { neighbourSheet, samePath } from "../kicad-port/sheetPages";
 import { ATTRIBUTE_ACTIONS, attributeChecked, hitSheet, INCREMENT_PARAMS, nearestTextItem, nextAttributeState, planIncrement, type IncrementTarget, type SymbolAttrKey } from "../kicad-port/schControl";
 import { netAtPoint } from "../kicad-port/schNetAtPoint";
-import { saveSheetCopy } from "./schControlExports";
+import { copySheetImage, exportSymbolSvg, saveSheetCopy } from "./schControlExports";
 import { importFootprintAssignments } from "./schControlImports";
 
 export interface SchControlContext {
@@ -39,6 +39,8 @@ export function schControlChecked(name: string, ctx: Pick<SchControlContext, "co
   switch (name) {
     case "eeschema.EditorControl.showHiddenPins":
       return d.showHiddenPins;
+    case "eeschema.EditorControl.showDirectiveLabels":
+      return d.showDirectiveLabels;
     case "eeschema.EditorControl.showERCErrors":
       return d.showErcErrors;
     case "eeschema.EditorControl.showERCWarnings":
@@ -49,8 +51,6 @@ export function schControlChecked(name: string, ctx: Pick<SchControlContext, "co
       return d.markSimExclusions;
     case "eeschema.EditorControl.showNetNavigator":
       return ctx.control.netNavigatorOpen;
-    case "eeschema.SchDesignBlockControl.showDesignBlockPanel":
-      return ctx.control.designBlocksOpen;
     default: {
       const key = ATTRIBUTE_ACTIONS[name];
       if (!key) return undefined;
@@ -121,10 +121,11 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
 
   // Switch to PCB Editor -- `ShowPcbNew` -> `OnOpenPcbnew`: the board editor; here its tab.
   m.set("eeschema.EditorControl.showPcbNew", onSchematic(() => dispatch({ type: "SET_TAB", tab: "pcb" })));
-  // Show Hidden Pins / Show ERC Errors / Show ERC Warnings / Show ERC Exclusions / Mark items excluded from simulation -- `ToggleHiddenPins`,
-  // `ToggleERCErrors`, `ToggleERCWarnings`, `ToggleERCExclusions`, `MarkSimExclusions`: `cfg->m_Appearance.<flag> = !cfg->m_Appearance.<flag>`, then a repaint.
+  // Show Hidden Pins / Show Directive Labels / Show ERC Errors / Show ERC Warnings / Show ERC Exclusions / Mark items excluded from simulation -- `ToggleHiddenPins`,
+  // `ToggleDirectiveLabels`, `ToggleERCErrors`, `ToggleERCWarnings`, `ToggleERCExclusions`, `MarkSimExclusions`: `cfg->m_Appearance.<flag> = !cfg->m_Appearance.<flag>`, then a repaint.
   const toggleDisplay = (key: keyof SchControlState["display"]) => onSchematic(() => controlDispatch({ type: "TOGGLE_DISPLAY", key }));
   m.set("eeschema.EditorControl.showHiddenPins", toggleDisplay("showHiddenPins"));
+  m.set("eeschema.EditorControl.showDirectiveLabels", toggleDisplay("showDirectiveLabels"));
   m.set("eeschema.EditorControl.showERCErrors", toggleDisplay("showErcErrors"));
   m.set("eeschema.EditorControl.showERCWarnings", toggleDisplay("showErcWarnings"));
   m.set("eeschema.EditorControl.showERCExclusions", toggleDisplay("showErcExclusions"));
@@ -170,20 +171,22 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
 
   // Do not Populate / Exclude from Bill of Materials / Exclude from Board / Exclude from Simulation -- `SCH_EDIT_TOOL::SetAttribute`: the whole selection (every unit of a
   // multi-unit symbol) goes to one state -- set when any of it lacks the attribute, cleared when all of it has it.
-  for (const [name, key] of Object.entries(ATTRIBUTE_ACTIONS) as [string, SymbolAttrKey][]) {
-    m.set(
-      name,
-      onSchematic(
-        rootOnly(() => {
-          if (!sch) return;
-          const ids = [...new Set(ctx.requestSelection().filter((id) => api.symbolById(id)))];
-          if (ids.length === 0) return;
-          const items = sch.symbols.filter((s) => ids.includes(s.id));
-          void api.cmd({ op: "set_symbol_attrs", ids, [key]: nextAttributeState(items, key) });
-        })
-      )
+  const setAttribute = (name: string) => {
+    const key: SymbolAttrKey = ATTRIBUTE_ACTIONS[name]!;
+    return onSchematic(
+      rootOnly(() => {
+        if (!sch) return;
+        const ids = [...new Set(ctx.requestSelection().filter((id) => api.symbolById(id)))];
+        if (ids.length === 0) return;
+        const items = sch.symbols.filter((s) => ids.includes(s.id));
+        void api.cmd({ op: "set_symbol_attrs", ids, [key]: nextAttributeState(items, key) });
+      })
     );
-  }
+  };
+  m.set("eeschema.EditorControl.setDNP", setAttribute("eeschema.EditorControl.setDNP"));
+  m.set("eeschema.EditorControl.setExcludeFromBOM", setAttribute("eeschema.EditorControl.setExcludeFromBOM"));
+  m.set("eeschema.EditorControl.setExcludeFromBoard", setAttribute("eeschema.EditorControl.setExcludeFromBoard"));
+  m.set("eeschema.EditorControl.setExcludeFromSimulation", setAttribute("eeschema.EditorControl.setExcludeFromSimulation"));
 
   // Increment Annotations From... -- `IncrementAnnotations`: asks for the first reference and the step, then moves every reference with those letters from that number up.
   m.set("eeschema.EditorControl.incrementAnnotations", onSchematic(rootOnly(() => open({ kind: "increment_annotations" }))));
@@ -214,8 +217,14 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       dispatch({ type: "SET_SCH_DIALOG", dialog: "fields_table" });
     })
   );
+  // Generate Legacy Bill of Materials... -- `GenerateBOMLegacy` -> `InvokeDialogCreateBOM`: KiCad's BOM generator scripts over the intermediate XML netlist.
+  m.set("eeschema.EditorControl.generateBOMLegacy", onSchematic(() => open({ kind: "legacy_bom" })));
   // Save Current Sheet Copy As... -- `SaveCurrSheetCopyAs`: the sheet being shown, as a `.kicad_sch` file.
   m.set("eeschema.EditorControl.saveCurrSheetCopyAs", onSchematic(() => void saveSheetCopy(ctx)));
+  // Export Drawing to Clipboard -- `DrawSheetOnClipboard`: the whole page of the sheet being shown, as a picture.
+  m.set("eeschema.EditorControl.drawSheetOnClipboard", onSchematic(() => void copySheetImage(ctx)));
+  // Export > Symbols... -- `ExportSymbolsToLibrary`: the library symbols the schematic uses, into a library file.
+  m.set("eeschema.EditorControl.exportSymbolsToLibrary", onSchematic(() => open({ kind: "export_symbols" })));
 
   // ============================================================================================ SCH_INSPECTION_TOOL
 
@@ -238,6 +247,9 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
     })
   );
 
+  // Export Symbol as SVG... -- `SYMBOL_EDITOR_CONTROL::ExportSymbolAsSVG`: the symbol being edited, in its unit and body style, plotted by kicad-cli.
+  m.set("eeschema.SymbolLibraryControl.exportSymbolAsSVG", onSymbolEditor(() => void exportSymbolSvg(ctx)));
+
   // ============================================================================================ SYMBOL_EDITOR_CONTROL::ChangeUnit
 
   // Next / Previous Symbol Unit -- `ChangeUnit`: `newUnit = ( ( unit - 1 + delta + nUnits ) % nUnits ) + 1`.
@@ -256,21 +268,24 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
 
   // Increment / Increment Primary / Decrement Primary / Increment Secondary / Decrement Secondary -- `Increment`: the selected labels (or texts) change by
   // `delta` in their `index`-th incrementable part; a selection of mixed kinds does nothing. `RequestSelection( incrementable )` is the selection, else the item under the cursor.
-  for (const [name, { delta, index }] of Object.entries(INCREMENT_PARAMS)) {
-    m.set(
-      name,
-      onSchematic(
-        rootOnly(() => {
-          if (!sch) return;
-          const targets = incrementTargets(ctx);
-          const plan = planIncrement(targets, delta, index, { skipIOSQXZ: false });
-          if (!plan || plan.length === 0) return;
-          const cmds: Cmd[] = plan.map((p) => ({ op: "set_sch_item_text", id: p.id, text: p.text }));
-          void api.cmdBatch(cmds);
-        })
-      )
+  const increment = (name: string) => {
+    const { delta, index } = INCREMENT_PARAMS[name]!;
+    return onSchematic(
+      rootOnly(() => {
+        if (!sch) return;
+        const targets = incrementTargets(ctx);
+        const plan = planIncrement(targets, delta, index, { skipIOSQXZ: false });
+        if (!plan || plan.length === 0) return;
+        const cmds: Cmd[] = plan.map((p) => ({ op: "set_sch_item_text", id: p.id, text: p.text }));
+        void api.cmdBatch(cmds);
+      })
     );
-  }
+  };
+  m.set("eeschema.Interactive.increment", increment("eeschema.Interactive.increment"));
+  m.set("eeschema.Interactive.incrementPrimary", increment("eeschema.Interactive.incrementPrimary"));
+  m.set("eeschema.Interactive.decrementPrimary", increment("eeschema.Interactive.decrementPrimary"));
+  m.set("eeschema.Interactive.incrementSecondary", increment("eeschema.Interactive.incrementSecondary"));
+  m.set("eeschema.Interactive.decrementSecondary", increment("eeschema.Interactive.decrementSecondary"));
 }
 
 /** The labels and texts `Increment` may act on: the selected ones, else the one nearest the cursor. */
