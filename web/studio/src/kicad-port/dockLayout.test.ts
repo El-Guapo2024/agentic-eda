@@ -57,6 +57,15 @@ test("collapsing one column leaves the other and the panes alone", () => {
   assert.equal(l.shown.properties, true);
 });
 
+test("the library editors' tree column folds on its own and starts open even in a narrow window (the tree is how an item is opened)", () => {
+  assert.equal(defaultDockLayout(800).treeCollapsed, false);
+  const l = setColumnCollapsed(defaultDockLayout(800), "tree", true);
+  assert.equal(l.treeCollapsed, true);
+  assert.equal(l.leftCollapsed, true, "the frame's own left column keeps its own state");
+  assert.equal(setColumnCollapsed(l, "tree", false).treeCollapsed, false);
+  assert.equal(parseDockLayout({ treeCollapsed: true }, 1600).treeCollapsed, true);
+});
+
 test("a stored layout is read back leniently: wrong types and missing fields fall back to the default for the window", () => {
   assert.deepEqual(parseDockLayout(null, 800), defaultDockLayout(800));
   assert.deepEqual(parseDockLayout("nope", 1600), defaultDockLayout(1600));

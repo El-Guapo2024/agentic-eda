@@ -5,7 +5,7 @@
 // A plain module-level store read through `useSyncExternalStore`: the handlers of the toolbar actions (`showProperties`, `showHierarchy`,
 // `showLayersManager`) are not React and call `toggleDockPane` directly.
 import { useSyncExternalStore } from "react";
-import { defaultDockLayout, parseDockLayout, setColumnCollapsed, toggleFolded, togglePane, type DockLayout, type DockPaneId } from "../kicad-port/dockLayout";
+import { defaultDockLayout, parseDockLayout, setColumnCollapsed, toggleFolded, togglePane, type DockColumnId, type DockLayout, type DockPaneId } from "../kicad-port/dockLayout";
 
 const STORAGE_KEY = "eda-studio.dock-layout.v1";
 
@@ -68,7 +68,7 @@ export function toggleDockPaneFolded(id: DockPaneId): void {
   commit(toggleFolded(current, id));
 }
 
-export function setDockColumnCollapsed(column: "left" | "right", collapsed: boolean): void {
+export function setDockColumnCollapsed(column: DockColumnId, collapsed: boolean): void {
   commit(setColumnCollapsed(current, column, collapsed));
 }
 

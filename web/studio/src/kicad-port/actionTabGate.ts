@@ -39,6 +39,9 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.InteractiveDrawing.circle",
   "pcbnew.InteractiveDrawing.graphicPolygon",
   "pcbnew.InteractiveDrawing.text",
+  // Rotate Counterclockwise / Clockwise (R / Shift+R): the footprint editor's top toolbar rotates the selected pads (actions/editorFrameActions.ts).
+  "pcbnew.InteractiveEdit.rotateCcw",
+  "pcbnew.InteractiveEdit.rotateCw",
 ]);
 
 /** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */

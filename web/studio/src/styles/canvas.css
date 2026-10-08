@@ -12,6 +12,17 @@
 .pcb-canvas-container[data-armed="true"] {
   cursor: copy;
 }
+/* The Footprint and Symbol editors' canvas with nothing open: the grid shows through, this is one quiet line over it. */
+.canvas-empty-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14px;
+  text-align: center;
+  color: var(--chrome-text-dim);
+  font-size: 12px;
+  pointer-events: none;
+}
 .pcb-canvas-empty {
   position: absolute;
   inset: 0;

@@ -88,6 +88,14 @@ test("the extra icons the 3D viewer's appearance panel and view presets use exis
   for (const v of ["viewFront", "viewBack", "viewLeft", "viewRight", "viewTop", "viewBottom"]) assert.ok(names.has(`3DViewer.Control.${v}`), `3DViewer.Control.${v} is not in viewer3d_toolbars.json`);
 });
 
+test("the studio's own toolbar button (Route, components/QuickActions.tsx) uses an icon that exists", () => {
+  const source = readFileSync(join(ROOT, "src/components/QuickActions.tsx"), "utf8");
+  const names = [...source.matchAll(/iconName="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(names.length >= 1, "QuickActions draws its buttons with ActionIcon");
+  for (const name of names) assert.equal(iconProblem(name), null, `${name}: ${iconProblem(name)}`);
+  assert.ok(!/<span aria-hidden>/.test(source), "no glyph-only buttons are left in QuickActions");
+});
+
 test("a toolbar button without an icon is caught (the check itself works)", () => {
   assert.ok(iconProblem(null));
   assert.ok(iconProblem("INVALID_BITMAP"));

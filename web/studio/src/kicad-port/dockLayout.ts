@@ -27,7 +27,12 @@ export const DOCK_COLUMN_WIDTH_PX = 240;
 /** Below this window width a frame starts with its side columns folded to their handles. */
 export const NARROW_WINDOW_PX = 1100;
 
+/** The columns that fold: the frame's left and right docks, and the library editors' tree column (`Libraries`, a separate pane at the far left of those frames). */
+export type DockColumnId = "left" | "right" | "tree";
+
 export interface DockLayout {
+  /** The Footprint and Symbol editors' library tree column is folded to its handle. Open to begin with: the tree is how an item is opened there. */
+  treeCollapsed: boolean;
   /** The left column is folded to its handle (the canvas takes the width). */
   leftCollapsed: boolean;
   /** The right column (the board editor's Appearance dock, which is not a closable pane) is folded to its handle. */
@@ -42,6 +47,7 @@ export interface DockLayout {
 export function defaultDockLayout(windowWidth: number): DockLayout {
   const narrow = windowWidth < NARROW_WINDOW_PX;
   return {
+    treeCollapsed: false,
     leftCollapsed: narrow,
     rightCollapsed: narrow,
     // `show_schematic_hierarchy` and `show_properties` default true; the Appearance manager is shown by default in pcbnew too.
@@ -82,8 +88,15 @@ export function toggleFolded(layout: DockLayout, id: DockPaneId): DockLayout {
   return { ...layout, folded: { ...layout.folded, [id]: !layout.folded[id] } };
 }
 
-export function setColumnCollapsed(layout: DockLayout, column: "left" | "right", collapsed: boolean): DockLayout {
-  return column === "left" ? { ...layout, leftCollapsed: collapsed } : { ...layout, rightCollapsed: collapsed };
+export function setColumnCollapsed(layout: DockLayout, column: DockColumnId, collapsed: boolean): DockLayout {
+  switch (column) {
+    case "left":
+      return { ...layout, leftCollapsed: collapsed };
+    case "right":
+      return { ...layout, rightCollapsed: collapsed };
+    case "tree":
+      return { ...layout, treeCollapsed: collapsed };
+  }
 }
 
 /** Panes of the left column of the schematic frame that are drawn, top to bottom (`Position` order). */
@@ -107,6 +120,7 @@ export function parseDockLayout(raw: unknown, windowWidth: number): DockLayout {
     return out;
   };
   return {
+    treeCollapsed: typeof o.treeCollapsed === "boolean" ? o.treeCollapsed : base.treeCollapsed,
     leftCollapsed: typeof o.leftCollapsed === "boolean" ? o.leftCollapsed : base.leftCollapsed,
     rightCollapsed: typeof o.rightCollapsed === "boolean" ? o.rightCollapsed : base.rightCollapsed,
     shown: flags(o.shown, base.shown),

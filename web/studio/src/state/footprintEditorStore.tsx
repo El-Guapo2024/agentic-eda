@@ -57,6 +57,8 @@ export interface FootprintEditorState {
   error: string | null;
   view: ViewTransform;
   viewInitialized: boolean;
+  /** Bumped by Zoom to Fit (`REQUEST_FIT`): the canvas fits the view to the footprint again, whether or not the view was moved by hand since. */
+  fitRequest: number;
   selection: Set<string>;
   activeTool: FpToolId;
   drawState: FpDrawState | null;
@@ -106,6 +108,7 @@ const initialState: FootprintEditorState = {
   error: null,
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
+  fitRequest: 0,
   selection: new Set(),
   activeTool: "select",
   drawState: null,
@@ -139,6 +142,7 @@ export type FpAction =
   | { type: "FOOTPRINT_ERR"; message: string }
   | { type: "SET_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
+  | { type: "REQUEST_FIT" }
   | { type: "SET_SELECTION"; refs: string[] }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -192,6 +196,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, view: action.view };
     case "MARK_VIEW_INITIALIZED":
       return { ...state, viewInitialized: true };
+    case "REQUEST_FIT":
+      return { ...state, fitRequest: state.fitRequest + 1 };
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs) };
     case "CLEAR_SELECTION":

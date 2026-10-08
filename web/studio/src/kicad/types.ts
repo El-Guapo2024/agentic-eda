@@ -86,7 +86,11 @@ export interface ToolbarsFile {
 
 // --------------------------------------------------------------- menus
 
-export type MenuNode = { type: "separator" } | { type: "item"; action: string } | { type: "submenu"; label: string; items: MenuNode[] };
+export type MenuNode =
+  | { type: "separator" }
+  /** `label`: only for an entry this studio adds itself (kicad/menuExtras.ts), whose action is not one of KiCad's in actions.json. */
+  | { type: "item"; action: string; label?: string }
+  | { type: "submenu"; label: string; items: MenuNode[] };
 
 export interface MenuConfig {
   label: string;

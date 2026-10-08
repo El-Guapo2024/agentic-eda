@@ -3,16 +3,17 @@
 // a close button that hides it until its toolbar button shows it again -- `CloseButton( true )` in the AUI pane info). The layout rules and the
 // default arrangement are kicad-port/dockLayout.ts's; where it is kept is state/dockLayoutStore.ts's.
 import type { ReactNode } from "react";
-import { paneVisible, type DockPaneId } from "../../kicad-port/dockLayout";
+import { paneVisible, type DockColumnId, type DockPaneId } from "../../kicad-port/dockLayout";
 import { setDockColumnCollapsed, toggleDockPane, toggleDockPaneFolded, useDockLayout } from "../../state/dockLayoutStore";
 
-export function DockColumn({ side, label, children }: { side: "left" | "right"; label: string; children: ReactNode }) {
+/** `column` names the fold state when it is not the side's own: the library editors' tree column sits on the left but folds on its own. */
+export function DockColumn({ side, column = side, label, children }: { side: "left" | "right"; column?: DockColumnId; label: string; children: ReactNode }) {
   const layout = useDockLayout();
-  const collapsed = side === "left" ? layout.leftCollapsed : layout.rightCollapsed;
+  const collapsed = column === "left" ? layout.leftCollapsed : column === "right" ? layout.rightCollapsed : layout.treeCollapsed;
   // The chevron points where the column goes when the button is pressed.
   const chevron = side === "left" ? (collapsed ? "›" : "‹") : collapsed ? "‹" : "›";
   return (
-    <div className={`dock-column ${side}${collapsed ? " collapsed" : ""}`} data-dock-column={side}>
+    <div className={`dock-column ${side}${collapsed ? " collapsed" : ""}`} data-dock-column={column}>
       {!collapsed && children}
       <button
         type="button"
@@ -20,7 +21,7 @@ export function DockColumn({ side, label, children }: { side: "left" | "right"; 
         aria-expanded={!collapsed}
         aria-label={collapsed ? `Show ${label}` : `Hide ${label}`}
         title={collapsed ? `Show ${label}` : `Hide ${label}`}
-        onClick={() => setDockColumnCollapsed(side, !collapsed)}
+        onClick={() => setDockColumnCollapsed(column, !collapsed)}
       >
         <span className="dock-handle-chevron" aria-hidden>
           {chevron}

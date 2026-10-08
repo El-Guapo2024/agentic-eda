@@ -62,6 +62,7 @@ import { refDesPrefix } from "../kicad-port/packFootprints";
 import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
+import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
@@ -2224,6 +2225,8 @@ export function useActionRunner() {
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
+    // The frame-wide actions (zoom, grid, save, print, library tree, select) of those two editors, on their own canvas and store, and the unregistering of the toolbar actions they do not support.
+    registerEditorFrameActions(m, { tab: state.tab, fpApi, fpDispatch, symApi, symDispatch });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch]);
