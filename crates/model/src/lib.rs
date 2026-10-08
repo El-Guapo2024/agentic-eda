@@ -11,6 +11,7 @@ pub mod ir;
 pub mod modules;
 pub mod page;
 pub mod rules;
+pub mod sch_clipboard;
 pub mod sch_extras;
 pub mod symbol;
 
