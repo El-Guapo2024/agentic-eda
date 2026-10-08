@@ -866,6 +866,16 @@ export type Cmd =
   | { op: "set_rule_severities"; severities: Record<string, RuleSeverity> }
   /** The text of the board's `.kicad_dru`, verbatim; empty = no custom rules. */
   | { op: "set_custom_rules"; text: string }
+  /**
+   * `dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
+   * Marker): waive the DRC violations as one undo step. An exclusion whose `(check, items)` is waived already is replaced (that edits its comment).
+   * Persisted in `design.drawings.drc_exclusions` and written into the derived `.kicad_pro` for kicad-cli (`DrcExclusionSpec`).
+   */
+  | { op: "add_drc_exclusions"; exclusions: DrcExclusionSpec[] }
+  /** "Remove exclusion for this violation" (and "Remove all exclusions ..."): put the violations back in the report. */
+  | { op: "delete_drc_exclusions"; exclusions: Array<{ check: string; items: string[] }> }
+  /** Schematic Setup > Violation Severity (`panel_setup_severities.cpp`): ERC settings key -> severity, the whole table (see `ErcSeveritiesReply`). */
+  | { op: "set_erc_severities"; severities: Record<string, RuleSeverity> }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
   | { op: "swap_layers"; mapping: [string, string][] }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
@@ -1829,6 +1839,8 @@ export interface DrcItem {
   pos: [Um, Um];
   /** Our id for the referenced item (track/via/zone id, or `<ref>.<pad>`/`<ref>` for a footprint/pad; `outline` for the Edge.Cuts outline) -- enough to select it without re-matching on position. `null` for an item that isn't one of ours (e.g. a fill polygon KiCad computed). */
   id: string | null;
+  /** The item's uuid in the derived board (kicad-cli's own name for it); what an exclusion is keyed on. Absent on a lint finding. */
+  uuid?: string;
 }
 
 /** `crates/lint`'s agent-repair metadata for a placement finding: which part to move, toward what, how far. kicad-cli's report has no such thing, so only lint findings carry one. */
@@ -1846,10 +1858,38 @@ export interface DrcViolation {
   /** KiCad's own DRC type name ("clearance", "courtyards_overlap", ...) for a kicad-cli violation; the check's own name ("placement_proximity", ...) for a lint finding. */
   type: string;
   description: string;
+  /** The severity the check has -- a waived violation keeps the one it would have had (`excluded` says it is waived). */
   severity: DrcSeverity;
   items: DrcItem[];
   /** Lint findings only. */
   fix?: DrcFix | null;
+  /** `RC_JSON::VIOLATION::excluded`: the violation is waived (`design.drawings.drc_exclusions`). Absent on a lint finding and on a report from an older server. */
+  excluded?: boolean;
+  /** Why it was waived (`PCB_MARKER::GetComment`); empty for none. */
+  comment?: string;
+  /** Whether kicad-cli itself matched the exclusion in the derived project. KiCad keys an exclusion by the marker's exact position, which a report does not give, so an exclusion the studio holds can be one kicad-cli's own report still lists. */
+  kicad_matched?: boolean;
+  /** Where the violation's marker may sit, in nanometres: the positions an exclusion keeps for the derived project (`eda_kicad_engine::marker_candidates`). */
+  marker_nm?: Array<[number, number]>;
+}
+
+/** What `add_drc_exclusions` takes for one violation (`eda_model::ir::DrcExclusion`). */
+export interface DrcExclusionSpec {
+  /** The check's KiCad settings key (`DrcViolation.type`). */
+  check: string;
+  /** The uuids of the items in the derived board, main item first (`DrcItem.uuid`). */
+  items: string[];
+  /** Our ids for the same items (empty string for an item that is not one of ours). */
+  ids?: string[];
+  /** `DrcViolation.marker_nm`. */
+  positions_nm?: Array<[number, number]>;
+  comment?: string;
+}
+
+/** A check set to Ignore, which kicad-cli does not run (`ignored_checks` of its report): the Ignored Tests tab. */
+export interface IgnoredCheck {
+  key: string;
+  description: string;
 }
 
 export interface DrcReport {
@@ -1864,6 +1904,14 @@ export interface DrcReport {
   zones_refilled_by_kicad?: boolean;
   /** The design revision this run started from: the stamp GET /api/version served at that moment. The report is out of date once the board's revision is another one (kicad-port/checkRevision.ts). Absent from a server that does not stamp. */
   revision?: string;
+  /** `--schematic-parity`: where the board differs from the schematic (the Schematic Parity tab). Empty unless the test ran (`schematic_parity_run`). */
+  schematic_parity?: DrcViolation[];
+  /** Whether kicad-cli ran the parity test on this report. */
+  schematic_parity_run?: boolean;
+  /** Set when the test was asked for and kicad-cli could not run it, in its own words ("Schematic parity tests require a fully annotated schematic."). */
+  schematic_parity_error?: string;
+  /** The checks whose severity is Ignore (the Ignored Tests tab). */
+  ignored_checks?: IgnoredCheck[];
 }
 
 // ---------------------------------------------------------------- ERC
@@ -1892,6 +1940,8 @@ export interface ErcViolation {
   /** KiCad's own ERC type name ("pin_not_connected", "wire_dangling", ...) for a kicad-cli violation; the readability check's own name ("schematic_wire_overlap", ...) for a lint finding. */
   check: string;
   severity: ErcSeverity;
+  /** What the finding is when it is not excluded (`severity` folds the two together): `error` or `warning`. kicad-cli findings only. */
+  base_severity?: "error" | "warning";
   /**
    * Our id for the first item the violation names (see the block comment
    * above). A lint finding's `location` keeps the shapes those checks have
@@ -1913,6 +1963,18 @@ export interface ErcReport {
   engine?: string;
   /** The design revision this run started from -- see `DrcReport.revision`. */
   revision?: string;
+  /** The checks whose severity is Ignore (the Ignored Tests tab). */
+  ignored_checks?: IgnoredCheck[];
+}
+
+/** GET /api/sch/erc_severities: the ERC severities Schematic Setup > Violation Severity edits. */
+export interface ErcSeveritiesReply {
+  ok: boolean;
+  message?: string;
+  /** ERC settings key -> severity, for the checks that differ from KiCad's default (plus the two library-link checks the derived project ignores unless the table says otherwise). */
+  severities: Record<string, RuleSeverity>;
+  /** True when the design stores a table of its own. */
+  custom: boolean;
 }
 
 // ---------------------------------------------------------------- Lint

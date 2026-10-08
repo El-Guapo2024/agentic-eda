@@ -39,6 +39,13 @@ import { nextReference } from "../kicad-port/nextReference";
 import { wireTail } from "../kicad-port/schLineMode";
 import { boxItems, hitItems } from "./schematic/schItems";
 import { SchContextMenu } from "./schematic/SchContextMenu";
+import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
+import { ercSeverityShown } from "./schematic/displayOptions";
+import { ercMarkerPosition } from "./schematic/ercMarkerPosition";
+import { ERC_MARKER_HIT_UM, nearestMarker } from "../kicad-port/markerHit";
+import { ercKey, rcMenu } from "../kicad-port/rcItems";
+import { ercSettingSeverity, ercTitle, isPinMapCheck, runMarkerMenu, toMenuEntries } from "../actions/checkerOps";
+import { askExclusionComment } from "../state/checkerView";
 import { summarizeSelection } from "./schematic/schSelectionSummary";
 import { schContextMenu } from "../kicad-port/schContextMenu";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
@@ -193,6 +200,8 @@ export function SchematicView() {
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   /** The right-click menu (`SCH_SELECTION_TOOL`'s context menu): where it is and what it offers for the selection. */
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodes: MenuNode[] } | null>(null);
+  /** The menu of an ERC marker the last right click was on (kicad-port/rcItems.ts `rcMenu`). */
+  const [markerMenu, setMarkerMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const sch = state.schematic;
   /** `SCH_SELECTION_TOOL::itemPassesFilter`: an item of a category the selection filter has off, or a locked one without its "Locked items", cannot be picked. */
   const selectable = sch ? schSelectable(sch, state.schSelectionFilter) : () => true;
@@ -735,6 +744,24 @@ export function SchematicView() {
         // `SCH_SELECTION_TOOL`: a right-click on an item that is not selected selects it first, on empty space clears the selection; then the
         // menu for whatever is selected (kicad-port/schContextMenu.ts).
         const [wx, wy] = toWorld(e.clientX, e.clientY);
+        // A right click on an ERC marker (a circle the last run left on the sheet) opens the marker's menu -- Exclude, Exclude all of this type, Change
+        // severity, Show in the dialog -- instead of the item menu: an `SCH_MARKER` is an item of its own with its own entries.
+        const found = state.erc?.violations ?? [];
+        const markerIndex = nearestMarker(
+          found.map((v) => (ercSeverityShown(v.severity, schControl.display) ? (ercMarkerPosition(v.location, sch)?.at ?? null) : null)),
+          wx,
+          wy,
+          ERC_MARKER_HIT_UM
+        );
+        if (markerIndex >= 0) {
+          const v = found[markerIndex]!;
+          dispatch({ type: "SET_ERC_SELECTED", index: markerIndex });
+          const spec = rcMenu({ domain: "erc", title: ercTitle(v.check), excluded: v.severity === "excluded", severity: ercSettingSeverity(v), pinMap: isPinMapCheck(v.check), onCanvas: true, comments: false });
+          setContextMenu(null);
+          setMarkerMenu({ x: e.clientX, y: e.clientY, entries: toMenuEntries(spec, (id) => void runMarkerMenu({ api, dispatch }, { domain: "erc", index: markerIndex }, id, askExclusionComment), ercKey(v) !== null) });
+          return;
+        }
+        setMarkerMenu(null);
         // The menu opens at the cursor, which is where the actions it offers (Break, Slice, ...) read their position from.
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
         const scale = state.schematicView.scale || 1;
@@ -805,6 +832,7 @@ export function SchematicView() {
       <canvas ref={canvasRef} />
       {empty && <div className="pcb-canvas-empty">{empty}</div>}
       {contextMenu && <SchContextMenu x={contextMenu.x} y={contextMenu.y} nodes={contextMenu.nodes} onClose={() => setContextMenu(null)} />}
+      {markerMenu && <ContextMenu x={markerMenu.x} y={markerMenu.y} entries={markerMenu.entries} onClose={() => setMarkerMenu(null)} />}
     </div>
   );
 }

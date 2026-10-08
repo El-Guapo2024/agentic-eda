@@ -11,6 +11,7 @@ import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimens
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
+import { patchDrcExcluded, patchDrcSeverity, patchErcSeverity } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
@@ -736,6 +737,8 @@ export interface StudioState {
   drcVersion: string | null;
   /** "Refill all zones before performing DRC" (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills. */
   drcRefillZones: boolean;
+  /** "Test for parity between PCB and schematic" (`--schematic-parity`): the next run also compares the board with the schematic (the Schematic Parity tab). */
+  drcParity: boolean;
   /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
   drcSelected: number | null;
   /** Same, for the dialog's Lint tab (`lint.pcb.violations`). */
@@ -921,6 +924,7 @@ const initialState: StudioState = {
   drcError: null,
   drcVersion: null,
   drcRefillZones: false,
+  drcParity: false,
   drcSelected: null,
   drcLintSelected: null,
   ercDialogOpen: false,
@@ -1016,6 +1020,13 @@ export type Action =
   /** `BOARD::DeleteMARKERs` (Global Deletions > Delete Markers): the last report and its markers go. */
   | { type: "DRC_CLEAR" }
   | { type: "SET_DRC_REFILL"; refill: boolean }
+  | { type: "SET_DRC_PARITY"; parity: boolean }
+  /** Waive or restore DRC violations in the report on screen without running kicad-cli again (the exclusion itself is a persisted `Cmd`); `version` as for `ERC_MARK_EXCLUDED`. */
+  | { type: "DRC_PATCH_EXCLUDED"; keys: ReadonlyArray<{ check: string; items: string[] }>; excluded: boolean; comment: string; version: string | null }
+  /** A check's severity changed (`set_rule_severities`): the report on screen takes it (`patchDrcSeverity`) -- an ignored check leaves the list and joins the ignored ones. */
+  | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
+  /** The same for the schematic (`set_erc_severities`). */
+  | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
   | { type: "SET_ERC_DIALOG_OPEN"; open: boolean }
@@ -1329,6 +1340,17 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drc: null, drcVersion: null, drcSelected: null };
     case "SET_DRC_REFILL":
       return { ...state, drcRefillZones: action.refill };
+    case "SET_DRC_PARITY":
+      return { ...state, drcParity: action.parity };
+    case "DRC_PATCH_EXCLUDED":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcExcluded(state.drc, action.keys, action.excluded, action.comment), drcVersion: action.version };
+    case "DRC_PATCH_SEVERITY":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcSeverity(state.drc, action.check, action.severity, action.description), drcVersion: action.version, drcSelected: null };
+    case "ERC_PATCH_SEVERITY":
+      if (!state.erc) return state;
+      return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description), ercVersion: action.version, ercSelected: null };
     case "SET_DRC_SELECTED":
       return { ...state, drcSelected: action.index, drcLintSelected: action.index === null ? state.drcLintSelected : null };
     case "SET_DRC_LINT_SELECTED":
@@ -1348,7 +1370,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         if (v.check !== action.check || v.location !== action.location) return v;
         if (action.excluded && v.severity !== "excluded") counts[v.check] = Math.max(0, (counts[v.check] ?? 0) - 1);
         if (!action.excluded && v.severity === "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
-        return { ...v, severity: action.excluded ? ("excluded" as const) : ("error" as const) };
+        return { ...v, severity: action.excluded ? ("excluded" as const) : (v.base_severity ?? ("error" as const)) };
       });
       return { ...state, erc: { ...state.erc, violations, counts }, ercVersion: action.version };
     }
@@ -1622,7 +1644,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     const askedAt = stateRef.current.version;
     dispatch({ type: "DRC_RUNNING" });
     try {
-      const drc = await fetchDrc(stateRef.current.drcRefillZones);
+      const drc = await fetchDrc(stateRef.current.drcRefillZones, stateRef.current.drcParity);
       dispatch({ type: "DRC_OK", drc, version: revisionOf(drc, askedAt) });
     } catch (e) {
       dispatch({ type: "DRC_ERR", message: e instanceof Error ? e.message : String(e) });

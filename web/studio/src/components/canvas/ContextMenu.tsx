@@ -13,6 +13,10 @@ export interface MenuEntry {
   label: string;
   onSelect: () => void;
   disabled?: boolean;
+  /** A line between groups of entries (the entry's other fields are ignored). */
+  separator?: boolean;
+  /** Help text for the entry (KiCad's status-bar help), shown as a tooltip. */
+  hint?: string;
   /** A small icon drawn before the label (the toolbar's group menus show each member's KiCad icon). */
   icon?: ReactNode;
   /** Drawn pressed, like a checked menu item (the group's current member). */
@@ -54,11 +58,15 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
   const keep = (e: { stopPropagation: () => void }) => e.stopPropagation();
   return (
     <div ref={ref} className="menubar-dropdown" style={{ position: "fixed", left: at.left, top: at.top, minWidth: 180, maxHeight: "calc(100vh - 8px)", overflowY: "auto", zIndex: 4000 }} onPointerDown={keep} onPointerUp={keep}>
-      {entries.map((entry, i) => (
+      {entries.map((entry, i) =>
+        entry.separator ? (
+          <div key={i} className="menu-separator" role="separator" />
+        ) : (
         <div
           key={i}
           className="menu-node-item"
           role="menuitem"
+          title={entry.hint}
           aria-disabled={entry.disabled}
           onClick={() => {
             if (entry.disabled) return;
@@ -75,7 +83,8 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
             <span>{entry.label}</span>
           )}
         </div>
-      ))}
+        )
+      )}
     </div>
   );
 }

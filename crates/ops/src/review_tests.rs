@@ -98,25 +98,28 @@ fn the_review_verbs_belong_to_the_editor_they_work_in() {
 }
 
 #[test]
-fn erc_severities_keep_only_the_checks_that_differ_from_kicads_default() {
+fn erc_severities_are_stored_as_sent_and_replace_the_whole_table() {
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, 100, 300);
     let sev = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
-    // pin_not_connected is an error by default, single_global_label is ignored by default.
-    b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_not_connected", "warning"), ("single_global_label", "ignore"), ("label_dangling", "error")]) }).unwrap();
-    let stored = b.design().schematic.as_ref().unwrap().extras.erc_severities.clone();
-    assert_eq!(stored, sev(&[("pin_not_connected", "warning")]), "a check at its default is not a choice");
+    let stored = |b: &Board| b.design().schematic.as_ref().unwrap().extras.erc_severities.clone();
+    // A check may be named at its own default: the derived project ignores the library-link checks unless the table says otherwise,
+    // so "warning" for `lib_symbol_mismatch` (its default) has to be kept to mean anything.
+    let table = sev(&[("pin_not_connected", "warning"), ("lib_symbol_mismatch", "warning"), ("single_global_label", "ignore")]);
+    b.apply(&Cmd::SetErcSeverities { severities: table.clone() }).unwrap();
+    assert_eq!(stored(&b), table);
 
     // The whole table is replaced.
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[("wire_dangling", "ignore")]) }).unwrap();
-    assert_eq!(b.design().schematic.as_ref().unwrap().extras.erc_severities, sev(&[("wire_dangling", "ignore")]));
+    assert_eq!(stored(&b), sev(&[("wire_dangling", "ignore")]));
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[]) }).unwrap();
-    assert!(b.design().schematic.as_ref().unwrap().extras.erc_severities.is_empty());
+    assert!(stored(&b).is_empty());
 
     for bad in [("not_a_check", "error"), ("pin_not_connected", "fatal")] {
         let e = b.apply(&Cmd::SetErcSeverities { severities: sev(&[bad]) }).unwrap_err();
         assert_eq!(e[0].check, "ops_bad_severity", "{bad:?}");
     }
+    assert!(stored(&b).is_empty(), "a refused table stores nothing");
     // The pin conflicts map's row takes the same words.
     b.apply(&Cmd::SetErcSeverities { severities: sev(&[("pin_to_pin", "ignore")]) }).unwrap();
 }

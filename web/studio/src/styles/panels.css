@@ -157,6 +157,60 @@
   color: var(--chrome-text-dim);
 }
 
+/* The Checker list (components/RcList.tsx), after RC_TREE_MODEL: the marker's own line in bold, the items it names under it, an exclusion's comment last;
+   an excluded marker is dim and italic. */
+.problem-row .rc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.problem-row .rc-title {
+  font-weight: 600;
+}
+.problem-row.excluded .rc-title,
+.problem-row small.rc-comment {
+  font-style: italic;
+}
+.problem-row small.rc-item,
+.problem-row small.rc-comment {
+  padding-left: 14px;
+}
+.problem-row .rc-button {
+  font-size: 10px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+.rc-badges {
+  display: flex;
+  gap: 12px;
+  font-weight: 400;
+  font-size: 11px;
+}
+.rc-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+.rc-show {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.rc-ignored-row {
+  padding: 4px 6px;
+  font-size: 11px;
+  cursor: default;
+}
+.rc-ignored-row:hover {
+  background: var(--chrome-hover);
+}
+
 /* A kicad-cli run is on its way (DRC/ERC dialogs): an indeterminate bar and a line saying what is happening. */
 .run-banner {
   display: flex;

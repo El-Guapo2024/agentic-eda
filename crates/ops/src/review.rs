@@ -63,9 +63,10 @@ pub(crate) fn delete_drc_exclusions(design: &mut Design, keys: &[DrcExclusionKey
     Ok(())
 }
 
-/// `Cmd::SetErcSeverities`: Schematic Setup > Violation Severity (`panel_setup_severities.cpp`), the whole table. `severities` names the
-/// checks whose severity differs from KiCad's default for them; a check at its default is dropped so the table only holds choices, and an
-/// empty one is "KiCad's defaults".
+/// `Cmd::SetErcSeverities`: Schematic Setup > Violation Severity (`panel_setup_severities.cpp`), the whole table, stored as sent (the page
+/// names the checks whose severity differs from KiCad's default, and the ones the table already named: the derived project ignores the two
+/// library-link checks unless the table says otherwise, so going back to their default has to be said, as for the board's table). An empty
+/// table is "KiCad's defaults".
 pub(crate) fn set_erc_severities(design: &mut Design, severities: &BTreeMap<String, String>) -> Done {
     for (key, severity) in severities {
         if !erc_checks::is_erc_check(key) {
@@ -76,6 +77,6 @@ pub(crate) fn set_erc_severities(design: &mut Design, severities: &BTreeMap<Stri
         }
     }
     let sch = design.schematic.get_or_insert_with(crate::empty_schematic_section);
-    sch.extras.erc_severities = severities.iter().filter(|(k, v)| erc_checks::default_severity(k) != Some(v.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+    sch.extras.erc_severities = severities.clone();
     Ok(())
 }

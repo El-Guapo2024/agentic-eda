@@ -656,6 +656,8 @@ impl ErcReport {
                 json!({
                     "check": v.kind,
                     "severity": if excluded || v.excluded || v.severity == "exclusion" { "excluded" } else { v.severity.as_str() },
+                    // What the finding is when it is not excluded: the report folds the two together, and un-excluding must give the severity back.
+                    "base_severity": if v.severity == "warning" { "warning" } else { "error" },
                     "location": location,
                     "hint": format!("{}{}{}", v.description, if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
                     "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
@@ -1310,6 +1312,7 @@ mod tests {
         assert_eq!(j["violations"][1]["severity"], "excluded");
         assert_eq!(j["counts"]["pin_not_connected"], 1);
         assert_eq!(j["violations"][0]["location"], "U1.1");
+        assert_eq!(j["violations"][1]["base_severity"], "error", "an excluded finding says what it is when it is not");
         assert_eq!(j["violations"][0]["hint"], "Pin not connected: Pin 1");
     }
 
