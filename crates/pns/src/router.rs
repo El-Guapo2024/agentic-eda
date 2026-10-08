@@ -243,9 +243,9 @@ impl Router {
                     });
                 }
             }
-            for (track_id, line) in s.placer.displaced_tracks() {
+            for (track_id, lines) in s.placer.displaced_tracks() {
                 commit.remove_track_ids.push(track_id.to_string());
-                if line.point_count() >= 2 {
+                for line in lines.iter().filter(|l| l.point_count() >= 2) {
                     commit.tracks.push(eda_model::ir::Track { id: String::new(), net: self.net_name_of(line), pins: Vec::new(), layer: self.layer_name(line.layer).to_string(), width: line.width, pts: line.pts.clone(), arc_mid_offset: None });
                 }
             }

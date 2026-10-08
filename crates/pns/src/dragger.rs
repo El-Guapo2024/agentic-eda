@@ -227,35 +227,52 @@ impl Dragger {
         // sequentially against the same (unbranched, read-only) `node`
         // and merging their displaced sets is a reasonable approximation
         // at this project's board sizes -- each leg almost always touches
-        // disjoint obstacles.
-        let mut displaced_lines = std::collections::HashMap::new();
-        let mut displaced_vias = std::collections::HashMap::new();
+        // disjoint obstacles. A pusher the shove had to walk around a pad
+        // (`onCollidingSolid`) comes back with its walked shape, which is the
+        // shape the drag then has.
+        let mut displaced_lines: std::collections::BTreeMap<String, Vec<DisplacedLine>> = std::collections::BTreeMap::new();
+        let mut displaced_vias = std::collections::BTreeMap::new();
         let mut colliding = false;
 
-        let mut push = |pts: &[Point], net: &Net, layer: i32, width: Um| {
+        let mut push = |pts: &[Point], net: &Net, layer: i32, width: Um| -> Option<Vec<Point>> {
             match shove::shove_line(node, pts, net, layer, width, rules, settings) {
                 Some(outcome) => {
+                    // the latest shove's lines for a track replace an earlier one's
+                    let mut fresh: std::collections::BTreeMap<String, Vec<DisplacedLine>> = std::collections::BTreeMap::new();
                     for d in outcome.displaced_lines {
-                        if let Some(id) = &d.source_track {
-                            displaced_lines.insert(id.clone(), d.line);
+                        if let Some(id) = d.source_track.clone() {
+                            fresh.entry(id).or_default().push(d);
                         }
                     }
+                    displaced_lines.extend(fresh);
                     for d in outcome.displaced_vias {
                         displaced_vias.insert(d.source_via.clone(), d.pos);
                     }
+                    Some(outcome.head)
                 }
-                None => colliding = true,
+                None => {
+                    colliding = true;
+                    None
+                }
             }
         };
-        push(&main_pts, &self.net, self.layer, self.width.max(1));
-        for l in &fanout {
-            push(&l.pts, &l.net, l.layer, l.width.max(1));
+        let mut main_pts = main_pts;
+        if let Some(head) = push(&main_pts, &self.net, self.layer, self.width.max(1)) {
+            if self.kind == DragKind::Corner {
+                main_pts = head;
+            }
+        }
+        let mut fanout = fanout;
+        for l in fanout.iter_mut() {
+            if let Some(head) = push(&l.pts, &l.net, l.layer, l.width.max(1)) {
+                l.pts = head;
+            }
         }
 
         DragPreview {
             pts: main_pts,
             colliding,
-            displaced_lines: displaced_lines.into_iter().map(|(source_track, line)| DisplacedLine { source_track: Some(source_track), line }).collect(),
+            displaced_lines: displaced_lines.into_values().flatten().collect(),
             displaced_vias: displaced_vias.into_iter().map(|(source_via, pos)| DisplacedVia { source_via, pos }).collect(),
             fanout,
         }
@@ -299,7 +316,10 @@ impl Dragger {
 
         for d in &preview.displaced_lines {
             if let Some(id) = &d.source_track {
-                commit.remove_track_ids.push(id.clone());
+                // a track can be named once per line that stood on it
+                if !commit.remove_track_ids.contains(id) {
+                    commit.remove_track_ids.push(id.clone());
+                }
                 commit.tracks.push(d.line.clone());
             }
         }

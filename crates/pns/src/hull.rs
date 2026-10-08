@@ -212,7 +212,7 @@ fn kiround(v: f64) -> Um {
 }
 
 /// `VECTOR2I::Resize` (integral): same direction, length `len`.
-fn resize(x: Um, y: Um, len: Um) -> (Um, Um) {
+pub(crate) fn resize(x: Um, y: Um, len: Um) -> (Um, Um) {
     if x == 0 && y == 0 {
         return (0, 0);
     }
