@@ -37,7 +37,7 @@ doc and the code disagree, the code wins and the doc is named.
 - **Docs.** Action level: `UI-ACTIONS.md`. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 200 added since have not been compared) and
   `CODE-COMPARE-router.md`, `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md`. Measured round trip and
-  connectivity: `REPORT.md` (2026-10-04, needs a re-run). Engines: `ARCHITECTURE.md`.
+  connectivity: `REPORT.md` (the real-board re-export part re-measured 2026-10-08; each part of it says its own date). Engines: `ARCHITECTURE.md`.
 
 ## Ranked list: open and partial items, by user impact
 

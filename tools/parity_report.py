@@ -227,6 +227,7 @@ def render_report(conn, rt, scores):
 
     lines.append("## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`\n")
     if conn:
+        lines.append(f"_Measured {conn['measured_at']}._\n" if conn.get("measured_at") else "_Measurement date not recorded._\n")
         lines.append(f"Boards evaluated: {len([b for b in conn['boards'] if not b.get('error')])} (of {len(conn['boards'])} attempted).\n")
         lines.append(f"Totals -- ours: {conn['totals_ours']}, oracle: {conn['totals_oracle']}.\n")
         lines.append(f"**Exact per-board-per-field match rate: {conn['exact_matches']}/{conn['total_checks']} ({fmt(conn['exact_match_rate'])}).**\n")

@@ -340,8 +340,11 @@ fn parity_connectivity_harness() {
         exact_matches: usize,
         total_checks: usize,
         import_failures: &'a [String],
+        /// The day (UTC) this was measured; `tools/parity_report.py` prints it with the numbers.
+        measured_at: String,
     }
-    let report = Report { boards: &boards, totals_ours, totals_oracle, exact_match_rate: match_rate, exact_matches, total_checks, import_failures: &import_failures };
+    let today = std::process::Command::new("date").args(["-u", "+%Y-%m-%d"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let report = Report { boards: &boards, totals_ours, totals_oracle, exact_match_rate: match_rate, exact_matches, total_checks, import_failures: &import_failures, measured_at: today };
     let out_dir = repo.join("docs/parity/raw");
     std::fs::create_dir_all(&out_dir).unwrap();
     std::fs::write(out_dir.join("connectivity.json"), serde_json::to_string_pretty(&report).unwrap()).unwrap();

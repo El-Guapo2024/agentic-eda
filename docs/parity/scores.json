@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-04T00:40:09.280630+00:00",
+  "generated_at": "2026-10-08T21:01:33.995675+00:00",
   "metrics": [
     {
       "name": "connectivity_boards_evaluated",
@@ -38,8 +38,8 @@
     },
     {
       "name": "roundtrip_reexport_fidelity_rate",
-      "current": 0.3333333333333333,
-      "floor": 0.3333333333333333
+      "current": 0.5,
+      "floor": 0.5
     }
   ]
 }

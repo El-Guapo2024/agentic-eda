@@ -1043,14 +1043,13 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "via_diameter": model.board.via_diameter,
             "clearance": model.board.clearance,
             // Board Setup dialog (dialog_board_setup.cpp) material this
-            // project's constraint model actually holds. Net classes,
-            // per-class track/via sizing, and text/graphics defaults live
-            // on the *intent*-derived `ConstraintModel` (`model`,
-            // immutable here), not the editable `design.json` IR, so
-            // there is no `Cmd` to change them yet -- exposed read-only,
-            // same "no command exists for this field yet" convention
-            // ItemPropertiesDialog already uses for other fields. See
-            // GAPS.md #10 and PARITY-pcb.md's Board Setup section.
+            // project's constraint model holds, as the board is judged by it
+            // now: the intent's (or the imported project's) values with any
+            // Board Setup edit laid over them (`board::load` applies
+            // `design.drawings.rules`). The pages edit these through the
+            // `set_*` verbs of `crates/ops/src/board_setup.rs`; the fields
+            // below that Board Setup does not edit stay as the intent says.
+            // See GAPS.md #3 and PARITY-pcb.md's Board Setup section.
             "net_classes": model.board.net_classes,
             "hole_to_hole_min_um": model.board.hole_to_hole_min_um,
             "hole_clearance_um": model.board.hole_clearance_um,
