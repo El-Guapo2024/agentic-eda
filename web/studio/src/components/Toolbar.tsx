@@ -173,6 +173,16 @@ function ToolbarControl({ item, editor }: { item: Extract<ToolbarItem, { type: "
   return <BoardToolbarControl item={item} />;
 }
 
+/**
+ * Whether a button is drawn pressed: the registry's own answer first (`isChecked`: the schematic editor's View toggles, its Net Navigator and the attributes of the
+ * selection, actions/schControlActions.ts), then the toggles of the other editors and the panes (actions/useActionChecked.ts). `undefined` = not a toggle.
+ */
+function useChecked(): (name: string) => boolean | undefined {
+  const { isChecked } = useActionRunner();
+  const mine = useActionChecked();
+  return (name) => isChecked(name) ?? mine(name);
+}
+
 /** The members a group's choice is remembered for (per editor and group), the way KiCad's group button keeps showing the last tool picked from it. */
 const groupChoice = new Map<string, string>();
 
@@ -182,7 +192,7 @@ const groupChoice = new Map<string, string>();
  */
 function GroupButton({ item, editor }: { item: Extract<ToolbarItem, { type: "group" }>; editor: ToolbarEditor }) {
   const { run, isEnabled } = useActionRunner();
-  const checked = useActionChecked();
+  const checked = useChecked();
   const [, bump] = useState(0);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const key = `${editor}/${item.label}`;
@@ -235,7 +245,7 @@ function GroupButton({ item, editor }: { item: Extract<ToolbarItem, { type: "gro
 
 function ToolbarItemView({ item, editor }: { item: ToolbarItem; editor: ToolbarEditor }) {
   const { run, isEnabled } = useActionRunner();
-  const checked = useActionChecked();
+  const checked = useChecked();
 
   if (item.type === "separator") return <div className="toolbar-separator" role="separator" />;
 

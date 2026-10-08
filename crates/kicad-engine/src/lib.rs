@@ -562,6 +562,8 @@ fn sch_ext(kind: &str) -> &'static str {
         "dxf" => "dxf",
         "svg" => "svg",
         "png" => "png",
+        // the legacy BOM generators' input: the intermediate XML netlist
+        "python-bom" => "xml",
         _ => "out",
     }
 }
@@ -642,6 +644,73 @@ pub fn export_sch(design: &Design, model: &ConstraintModel, work: &Path, root: &
     run_export(&cli, "sch", kind, args, &sch, &out_dir, SCH_DIR_KINDS.contains(&kind), sch_ext(kind), &stem, root)
 }
 
+/// Puts a BOM preset and a BOM format preset (the JSON KiCad keeps in a project's `schematic.bom_presets` / `schematic.bom_fmt_presets`) into the derived
+/// project file, where `kicad-cli sch export bom --preset <name> --format-preset <name>` finds them. The command line itself has no way to say everything a
+/// preset does (it cannot sort descending: an explicit `--sort-asc false` crashes kicad-cli), so the table's settings travel as presets.
+fn set_bom_presets(work: &Path, stem: &str, preset: &Value, fmt: &Value) -> Result<(), Vec<CheckResult>> {
+    let path = work.join(format!("{stem}.kicad_pro"));
+    let text = std::fs::read_to_string(&path).map_err(|e| fail("kicad_engine_file", "kicad_pro", e.to_string()))?;
+    let mut pro: Value = serde_json::from_str(&text).map_err(|e| fail("kicad_engine_file", "kicad_pro", format!("the derived project file is not JSON: {e}")))?;
+    let Some(root) = pro.as_object_mut() else { return Err(fail("kicad_engine_file", "kicad_pro", "the derived project file is not a JSON object")) };
+    let schematic = root.entry("schematic").or_insert_with(|| json!({}));
+    if !schematic.is_object() {
+        *schematic = json!({});
+    }
+    schematic["bom_presets"] = json!([preset]);
+    schematic["bom_fmt_presets"] = json!([fmt]);
+    write_file(&path, serde_json::to_string_pretty(&pro).unwrap_or(text))
+}
+
+/// `kicad-cli sch export bom` with the Symbol Fields Table's settings, written to `output` (a file under `root`; default
+/// `<root>/export/kicad/sch-bom/<name>.csv`). `preset` and `fmt` are KiCad's `BOM_PRESET` / `BOM_FMT_PRESET` JSON, both with a `name`.
+/// Returns `{ ok, engine, files }` like [`export_sch`], the one file relative to `root`.
+#[allow(clippy::too_many_arguments)]
+pub fn export_sch_bom(design: &Design, model: &ConstraintModel, work: &Path, root: &Path, name: &str, preset: &Value, fmt: &Value, output: Option<&Path>) -> Result<Value, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let stem = file_stem(name);
+    let (sch, _) = export_schematic(design, model, work, &stem)?;
+    set_bom_presets(work, &stem, preset, fmt)?;
+    let output = output.map(Path::to_path_buf).unwrap_or_else(|| root.join("export").join("kicad").join("sch-bom").join(format!("{stem}.csv")));
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| fail("kicad_engine_dir", "export", format!("could not create '{}': {e}", parent.display())))?;
+    }
+    let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
+    let named = |v: &Value| v.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut cmd = Command::new(&cli);
+    cmd.args(["sch", "export", "bom", "--preset"]).arg(named(preset)).arg("--format-preset").arg(named(fmt)).arg("-o").arg(&output).arg(&sch);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    let written = output.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started);
+    if !out.status.success() || !written {
+        return Err(fail("kicad_cli_export", "bom", format!("kicad-cli sch export bom failed: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))));
+    }
+    let rel = output.strip_prefix(root).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| output.to_string_lossy().to_string());
+    Ok(json!({ "ok": true, "engine": format!("kicad-cli {}", cli_version(&cli)), "files": [rel] }))
+}
+
+/// `kicad-cli sym export svg [args...]` on `kicad_sym`, a library file's text (one symbol, or several), into `<root>/export/kicad/sym-svg/`:
+/// one SVG per unit and body style, which kicad-cli names `<symbol>_unit<N>[_demorgan].svg`. Returns `{ ok, engine, files }`, files relative to `root`.
+pub fn export_symbol_svg(work: &Path, root: &Path, name: &str, kicad_sym: &str, args: &[String]) -> Result<Value, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    work_dir(work)?;
+    let stem = file_stem(name);
+    let input = work.join(format!("{stem}.kicad_sym"));
+    write_file(&input, kicad_sym)?;
+    let out_dir = root.join("export").join("kicad").join("sym-svg");
+    run_export(&cli, "sym", "svg", args, &input, &out_dir, true, "svg", &stem, root)
+}
+
+/// KiCad's stock plugin scripts (the legacy BOM generators): `EDA_KICAD_PLUGINS`, else the folder of the installed KiCad that kicad-cli belongs to
+/// (`Contents/SharedSupport/plugins` in the macOS app, `share/kicad/plugins` elsewhere).
+pub fn bom_plugins_dir() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("EDA_KICAD_PLUGINS").map(PathBuf::from).filter(|p| p.is_dir()) {
+        return Some(p);
+    }
+    let cli = find_cli()?;
+    let bin = cli.canonicalize().unwrap_or(cli);
+    let up = bin.parent()?.parent()?;
+    ["SharedSupport/plugins", "share/kicad/plugins"].iter().map(|rel| up.join(rel)).find(|p| p.is_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,6 +769,27 @@ mod tests {
         let b = with_scratch(|d| d.to_path_buf());
         assert_ne!(a, b);
         assert!(!a.exists());
+    }
+
+    #[test]
+    fn bom_presets_go_into_the_schematic_section_of_the_derived_project_file() {
+        with_scratch(|dir| {
+            std::fs::create_dir_all(dir).unwrap();
+            // the project file as `write_project` leaves it: JSON with no `schematic` section yet
+            std::fs::write(dir.join("p.kicad_pro"), "{\n  \"erc\": {},\n  \"meta\": { \"version\": 1 }\n}").unwrap();
+            let preset = json!({ "name": "Studio export", "sort_asc": false });
+            let fmt = json!({ "name": "Studio export", "field_delimiter": ";" });
+            set_bom_presets(dir, "p", &preset, &fmt).unwrap();
+            let pro: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("p.kicad_pro")).unwrap()).unwrap();
+            assert_eq!(pro["schematic"]["bom_presets"], json!([preset]));
+            assert_eq!(pro["schematic"]["bom_fmt_presets"], json!([fmt]));
+            assert_eq!(pro["meta"]["version"], 1, "the rest of the project is untouched");
+            // a second export replaces the presets of the first, it does not pile them up
+            set_bom_presets(dir, "p", &json!({ "name": "Studio export", "sort_asc": true }), &fmt).unwrap();
+            let pro: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("p.kicad_pro")).unwrap()).unwrap();
+            assert_eq!(pro["schematic"]["bom_presets"].as_array().map(Vec::len), Some(1));
+            assert_eq!(pro["schematic"]["bom_presets"][0]["sort_asc"], true);
+        });
     }
 
     // ---------------------------------------------------------- the time limit

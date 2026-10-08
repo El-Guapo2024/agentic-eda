@@ -411,11 +411,10 @@ fn write_symbol(out: &mut String, sym: &eda_model::ir::LibrarySymbol) {
     }
 
     let prop = |out: &mut String, key: &str, value: &str, y: f64, hidden: bool| {
-        write!(out, "\t\t(property {} {} (at 0 {} 0) (effects (font (size 1.27 1.27)))", crate::sexpr_str(key), crate::sexpr_str(value), crate::fmt_mm_f(y)).unwrap();
-        if hidden {
-            write!(out, " hide").unwrap();
-        }
-        writeln!(out, ")").unwrap();
+        // `hide` goes inside `effects` (`(effects (font ...) (hide yes))`, as the schematic writer has it): a bare `hide` after the closing
+        // parenthesis is no KiCad syntax, and kicad-cli answers "Unable to load library" to a file that has one.
+        let effects = if hidden { "(effects (font (size 1.27 1.27)) (hide yes))" } else { "(effects (font (size 1.27 1.27)))" };
+        writeln!(out, "\t\t(property {} {} (at 0 {} 0) {effects})", crate::sexpr_str(key), crate::sexpr_str(value), crate::fmt_mm_f(y)).unwrap();
     };
     prop(out, "Reference", if sym.reference_prefix.is_empty() { "U" } else { &sym.reference_prefix }, 5.08, false);
     prop(out, "Value", bare_name, 2.54, false);
@@ -781,6 +780,35 @@ mod tests {
         assert_eq!(export_kicad_sym(&a), export_kicad_sym_library(&[&a]));
         // an empty library is a valid, empty file
         assert!(parse_symbol_library(&export_kicad_sym_library(&[])).expect("empty library parses").is_empty());
+    }
+
+    #[test]
+    fn a_hidden_property_is_hidden_inside_its_effects() {
+        // kicad-cli refuses a library whose hidden properties carry a bare `hide` after `(effects ...)` ("Unable to load library"): the token lives inside.
+        let sym = eda_model::ir::LibrarySymbol {
+            lib_id: "eda:Alpha".into(),
+            reference_prefix: "U".into(),
+            description: "d".into(),
+            keywords: String::new(),
+            datasheet: String::new(),
+            power: false,
+            in_bom: true,
+            on_board: true,
+            pin_numbers_hidden: false,
+            pin_names_hidden: false,
+            pin_name_offset_mm: 0.508,
+            unit_count: 1,
+            has_alternate_body_style: false,
+            footprint_filters: vec![],
+            graphics: vec![],
+            pins: vec![],
+            published: false,
+        };
+        let text = export_kicad_sym(&sym);
+        assert!(text.contains("(property \"Footprint\" \"\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))"), "{text}");
+        assert!(text.contains("(property \"Description\" \"d\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))"), "{text}");
+        assert!(!text.contains(")) hide)"), "a bare `hide` after `(effects ...)` is not KiCad syntax");
+        assert!(text.contains("(property \"Reference\" \"U\" (at 0 5.08 0) (effects (font (size 1.27 1.27))))"), "{text}");
     }
 
     #[test]

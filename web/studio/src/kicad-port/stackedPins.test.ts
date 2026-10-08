@@ -95,3 +95,15 @@ test("the menu offers Convert for pins sharing a place and Explode for one stack
   assert.deepEqual(stackedPinMenuState(pins, ["d", "a"]), { canConvert: false, canExplode: false });
   assert.deepEqual(stackedPinMenuState(pins, []), { canConvert: false, canExplode: false });
 });
+
+test("a pin number without brackets is one pin, and bracketed lists keep their letters", () => {
+  assert.deepEqual(expandStackedPinNotation("A12"), { numbers: ["A12"], valid: true });
+  assert.deepEqual(expandStackedPinNotation("[A1-A3, B7]"), { numbers: ["A1", "A2", "A3", "B7"], valid: true });
+  assert.deepEqual(expandStackedPinNotation("[ 4 ]"), { numbers: ["4"], valid: true });
+});
+
+test("a bracket on one end only, a backwards range, mixed letters or an empty list comes back as it was", () => {
+  for (const bad of ["[1,2", "1,2]", "[5-3]", "[A1-B3]", "[1-x]", "[]", "[,]"]) {
+    assert.deepEqual(expandStackedPinNotation(bad), { numbers: [bad], valid: false }, bad);
+  }
+});

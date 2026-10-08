@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { StudioProvider, useStudioDispatch, useStudioState } from "./state/store";
 import { FootprintEditorProvider } from "./state/footprintEditorStore";
 import { SymbolEditorProvider } from "./state/symbolEditorStore";
+import { SchControlProvider } from "./state/schControlStore";
+import { SchControlHost } from "./components/schControl/SchControlHost";
 import { useFootprintEditHotkey } from "./actions/useFootprintEditHotkey";
 import { FootprintEditorView } from "./components/footprint/FootprintEditorView";
 import { SymbolEditorView } from "./components/symbol/SymbolEditorView";
@@ -251,6 +253,7 @@ function StudioFrame() {
       <ExportNetlistDialog />
       <GenerateDrillDialog />
       <FootprintPositionDialog />
+      <SchControlHost />
       <BoardControlDialogs />
     </div>
   );
@@ -261,7 +264,9 @@ export default function App() {
     <StudioProvider>
       <FootprintEditorProvider>
         <SymbolEditorProvider>
-          <StudioFrame />
+          <SchControlProvider>
+            <StudioFrame />
+          </SchControlProvider>
         </SymbolEditorProvider>
       </FootprintEditorProvider>
     </StudioProvider>

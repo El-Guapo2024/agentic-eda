@@ -49,6 +49,10 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set([
   "eeschema.SymbolDrawing.placeSymbolPin",
   "eeschema.SymbolLibraryControl.newSymbol",
   "eeschema.SymbolLibraryControl.saveLibraryAs",
+  // Next / Previous Symbol Unit are `SYMBOL_EDITOR_CONTROL::ChangeUnit` (`if( !m_isSymbolEditor ) return 0`), the Symbol Checker is the editor's Inspect menu.
+  "eeschema.EditorControl.nextUnit",
+  "eeschema.EditorControl.previousUnit",
+  "eeschema.InspectionTool.checkSymbol",
   // `SYMBOL_EDITOR_EDIT_TOOL`'s stacked-pin tools.
   "eeschema.InteractiveEdit.convertStackedPins",
   "eeschema.InteractiveEdit.explodeStackedPin",

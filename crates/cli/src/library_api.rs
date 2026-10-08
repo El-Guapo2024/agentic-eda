@@ -80,21 +80,23 @@ fn resolve_footprint(model: &ConstraintModel, name: &str) -> Option<eda_model::F
 /// A symbol by `lib_id` from the project library, else KiCad's installed libraries, else the resolved one (the board's model, the builtin table).
 fn symbol_any(dir: &Path, lib_id: &str) -> Result<(LibrarySymbol, bool), Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
+    symbol_in(&design, &model, lib_id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the project library or anything it loads")])
+}
+
+/// [`symbol_any`]'s lookup over a design and model that are already loaded (a caller that resolves many symbols loads the board once).
+pub(crate) fn symbol_in(design: &eda_model::ir::Design, model: &ConstraintModel, lib_id: &str) -> Option<(LibrarySymbol, bool)> {
     if let Some(sym) = design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)) {
-        return Ok((sym.clone(), true));
+        return Some((sym.clone(), true));
     }
     // The installed library file first: the builtin table's hand-ported `Device:R` is a stand-in for it.
     if let Some(sym) = installed_symbol_in(&eda_kicad::default_symbol_library_root(), lib_id) {
-        return Ok((sym, false));
+        return Some((sym, false));
     }
-    model
-        .symbol_of(lib_id)
-        .map(|s| {
-            let mut sym = LibrarySymbol::from_engine_symbol(&s);
-            sym.assign_missing_ids();
-            (sym, false)
-        })
-        .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the project library or anything it loads")])
+    model.symbol_of(lib_id).map(|s| {
+        let mut sym = LibrarySymbol::from_engine_symbol(&s);
+        sym.assign_missing_ids();
+        (sym, false)
+    })
 }
 
 /// `GET /api/library/symbol?lib_id=` -- one symbol for the library actions that read without editing (Duplicate, Save Copy As,
