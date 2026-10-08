@@ -53,6 +53,7 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
   },
 ];
 const PAGE_IDS: Page[] = TREE.flatMap((g) => g.pages.map((p) => p.id));
+const PAGE_LABEL = Object.fromEntries(TREE.flatMap((g) => g.pages.map((p) => [p.id, p.label]))) as Record<Page, string>;
 
 // `BOARD_DESIGN_SETTINGS`'s own real defaults (task item 7) -- see
 // `eda_model::ir::DimensionSettings`'s own `impl Default` doc.
@@ -103,6 +104,8 @@ export function BoardSetupDialog() {
   const [dimMessage, setDimMessage] = useState<string | null>(null);
   // The pages that have edits not applied yet (the rule pages say so themselves), marked in the tree and asked about on Close.
   const [unapplied, setUnapplied] = useState<ReadonlySet<Page>>(new Set());
+  // Close was asked for while some page has such edits: the footer asks whether to drop them.
+  const [askDiscard, setAskDiscard] = useState(false);
   const markers = useMemo(
     () =>
       Object.fromEntries(
@@ -133,6 +136,7 @@ export function BoardSetupDialog() {
     setDimSettings(drawings?.dimension_settings ?? DEFAULT_DIMENSION_SETTINGS);
     setDimMessage(null);
     setUnapplied(new Set());
+    setAskDiscard(false);
     if (state.boardSetupInitialPage) {
       const wanted = state.boardSetupInitialPage as Page;
       if (PAGE_IDS.includes(wanted)) setPage(wanted);
@@ -141,27 +145,33 @@ export function BoardSetupDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Close asks first when a rule page has edits that were never applied (they would be lost with the page).
+  // Close asks first when a rule page has edits that were never applied (they would be lost with the page); the question is in the footer,
+  // not a native dialog, so a window that cannot show one still closes.
+  const leave = useCallback(() => dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: false }), [dispatch]);
   const close = useCallback(() => {
-    if (unapplied.size > 0 && !window.confirm("Discard the changes that have not been applied?")) return;
-    dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: false });
-  }, [unapplied, dispatch]);
+    if (unapplied.size > 0) setAskDiscard(true);
+    else leave();
+  }, [unapplied, leave]);
 
-  // Escape closes the dialog (and is the dialog's: the canvas' own Escape must not also run).
+  useEffect(() => {
+    if (unapplied.size === 0) setAskDiscard(false);
+  }, [unapplied]);
+
+  // Escape closes the dialog (and is the dialog's: the canvas' own Escape must not also run); with the question asked it answers "keep editing".
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
-      // A select or a text field in the middle of an edit keeps its own Escape.
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "SELECT") return;
+      // A select in the middle of a choice keeps its own Escape.
+      if ((e.target as HTMLElement | null)?.tagName === "SELECT") return;
       e.stopPropagation();
       e.preventDefault();
-      close();
+      if (askDiscard) setAskDiscard(false);
+      else close();
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [open, close]);
+  }, [open, close, askDiscard]);
 
   if (!open) return null;
 
@@ -461,9 +471,21 @@ export function BoardSetupDialog() {
           </section>
         </div>
         <div className="dialog-footer">
-          <button className="primary" onClick={close}>
-            Close
-          </button>
+          {askDiscard && unapplied.size > 0 ? (
+            <>
+              <span className="bs-error" role="alert" style={{ marginRight: "auto", alignSelf: "center" }}>
+                Not applied yet: {[...unapplied].map((id) => PAGE_LABEL[id]).join(", ")}. Discard these changes?
+              </span>
+              <button onClick={() => setAskDiscard(false)}>Keep editing</button>
+              <button className="primary" onClick={leave}>
+                Discard and close
+              </button>
+            </>
+          ) : (
+            <button className="primary" onClick={close}>
+              Close
+            </button>
+          )}
         </div>
       </div>
     </div>
