@@ -1024,6 +1024,24 @@ impl ConstraintModel {
         }
         symbol::builtin(lib_id)
     }
+    /// The library id a derivation draws `part` with: what [`resolve_lib_id`] names, unless that is a library symbol the model holds that
+    /// does not take all of the part's pins (an `nc` pin the library's symbol has no pin for): drawing it under the library's name would be a
+    /// box of our own passing for the library's, so the part gets a generated symbol.
+    pub fn lib_id_of(&self, part: &Part) -> String {
+        self.fitting_lib_id(part, resolve_lib_id(part))
+    }
+    /// `lib_id` as it is, or the generated symbol's id when `lib_id` is a library symbol the model holds that does not take all of
+    /// `part`'s pins.
+    pub fn fitting_lib_id(&self, part: &Part, lib_id: String) -> String {
+        if !lib_id.is_empty() && !symbol::is_synthetic_lib_id(&lib_id) {
+            if let Some(sym) = self.symbol_of(&lib_id) {
+                if !part.pins.iter().all(|p| sym.pin_by_number(&p.number).is_some()) {
+                    return format!("{}{}", gensym::GENERATED_PREFIX, part.reference);
+                }
+            }
+        }
+        lib_id
+    }
     /// [`Self::symbol_of`], but `None` outright for an empty or synthetic
     /// (`"eda:..."`) lib_id, without even trying `self.symbols`/`builtin` --
     /// and `None` too when the symbol that *did* resolve doesn't actually

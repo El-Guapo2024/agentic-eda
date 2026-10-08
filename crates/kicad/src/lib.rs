@@ -660,26 +660,13 @@ fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
 /// there (to the right of a wire that comes from the left, upward from one that comes from below, and so on). A label no wire ends at
 /// reads to the right.
 fn label_spin(sch: &eda_model::ir::SchematicSection, l: &NetLabel) -> (u32, &'static str) {
-    let mut from = None;
-    for w in &sch.wires {
-        for (i, p) in w.pts.iter().enumerate() {
-            if *p != l.at {
-                continue;
-            }
-            // the neighbour along the wire, the other way from the label
-            let q = if i + 1 < w.pts.len() { Some(w.pts[i + 1]) } else { None }.or(if i > 0 { Some(w.pts[i - 1]) } else { None });
-            if let Some(q) = q.filter(|q| *q != l.at) {
-                from = Some(((q.x - l.at.x).signum(), (q.y - l.at.y).signum()));
-            }
-        }
-    }
-    match from {
+    match eda_engine::obstacles::label_run_dir(sch, l) {
         // the wire is above the label: the text hangs below it, reading up and ending at the anchor
-        Some((0, -1)) => (90, "right"),
+        (0, 1) => (90, "right"),
         // the wire is below: the text rises from the anchor
-        Some((0, 1)) => (90, "left"),
+        (0, -1) => (90, "left"),
         // the wire is on the right: the text runs left
-        Some((1, 0)) => (0, "right"),
+        (-1, 0) => (0, "right"),
         _ => (0, "left"),
     }
 }
@@ -781,18 +768,16 @@ fn baked_real_point(sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64, p: ed
     eda_model::symbol::SPoint::new(x, y)
 }
 
-/// A real pin's own `angle_deg`, composed with the instance's mirror the
-/// same way [`baked_real_point`] composes position (rotation, never
-/// non-zero today, is left for whoever adds rotated-instance support).
-/// Mirroring is a flip across a vertical axis, so it swaps East/West
-/// (0<->180) and leaves North/South (90/270) alone -- the standard
-/// `angle -> 180 - angle` reflection.
+/// A real pin's own `angle_deg`, composed with the instance's mirror and turn the
+/// same way [`baked_real_point`] composes position. Mirroring is a flip across a
+/// vertical axis, so it swaps East/West (0<->180) and leaves North/South
+/// (90/270) alone -- the standard `angle -> 180 - angle` reflection -- and a
+/// turn adds its own angle (a symbol turned half a turn has every pin pointing
+/// the other way: a pin line that ran in from the left runs in from the right).
 fn baked_real_angle(sym: &SymbolInstance, angle_deg: f64) -> f64 {
-    if sym.mirrored {
-        (180.0 - angle_deg).rem_euclid(360.0)
-    } else {
-        angle_deg
-    }
+    let mirrored = if sym.mirrored { 180.0 - angle_deg } else { angle_deg };
+    // the instance's turn is clockwise on the sheet, which the library's y-up frame reads as the opposite sense
+    (mirrored - sym.rot as f64 / 1000.0).rem_euclid(360.0)
 }
 
 /// [`write_symbol_graphic`]'s input, but with every point run through

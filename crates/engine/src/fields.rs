@@ -220,8 +220,9 @@ fn pin_side(o: PinOrient) -> Side {
 }
 
 /// Autoplace Fields for one symbol (`AUTOPLACER::DoAutoplace`, auto mode): the anchor and the justification of each visible field on
-/// the sheet, horizontal text. `fields` are the visible ones, in order.
-fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&FieldSpec]) -> Vec<((f64, f64), TextJustify, TextVAlign)> {
+/// the sheet, horizontal text. `fields` are the visible ones, in order. `force` puts them on a side of the symbol KiCad would not have
+/// chosen, `push` grid steps (50 mil) further from it: where the schematic needs the room the symbol's own side has not got.
+fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&FieldSpec], force: Option<(Side, i64)>) -> Vec<((f64, f64), TextJustify, TextVAlign)> {
     let pen = default_pen_iu(DEFAULT_TEXT_SIZE_IU);
     let sizes: Vec<(i64, i64)> = fields
         .iter()
@@ -250,12 +251,16 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
         order.swap(1, 3);
     }
     // `chooseSideForFields`: the most preferred side with no pins, else the most preferred of those with the fewest
-    let chosen = order.iter().find(|(_, n)| *n == 0).copied().unwrap_or_else(|| {
-        let min = order.iter().map(|(_, n)| *n).min().unwrap_or(0);
-        order.iter().find(|(_, n)| *n == min).copied().unwrap_or(order[0])
-    });
+    let chosen = match force {
+        Some((s, _)) => (s, count(s)),
+        None => order.iter().find(|(_, n)| *n == 0).copied().unwrap_or_else(|| {
+            let min = order.iter().map(|(_, n)| *n).min().unwrap_or(0);
+            order.iter().find(|(_, n)| *n == min).copied().unwrap_or(order[0])
+        }),
+    };
     let (side, npins) = chosen;
     let sv = side.vec();
+    let push = force.map(|(_, p)| p).unwrap_or(0);
 
     // `fieldBoxPlacement`
     let mut offs_x = (bw + fbox_w) / 2;
@@ -265,7 +270,7 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
     } else if sv.1 != 0 {
         offs_y += VPADDING;
     }
-    let fc = (center.0 + sv.0 * offs_x, center.1 + sv.1 * offs_y);
+    let fc = (center.0 + sv.0 * (offs_x + push * GRID_IU), center.1 + sv.1 * (offs_y + push * GRID_IU));
     let (mut fx, mut fy) = (fc.0 - fbox_w / 2, fc.1 - fbox_h / 2);
     if npins > 0 {
         let mut pins_box: Option<Rect> = None;
@@ -275,9 +280,9 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
         }
         if let Some(pb) = pins_box {
             if matches!(side, Side::Top | Side::Bottom) {
-                fx = iu(pb.x1) + HPADDING * 2;
+                fx = iu(pb.x1) + HPADDING * 2 + push * GRID_IU;
             } else {
-                fy = iu(pb.y0) - (fbox_h + VPADDING * 2);
+                fy = iu(pb.y0) - (fbox_h + VPADDING * 2) - push * GRID_IU;
             }
         }
     }
@@ -321,8 +326,12 @@ fn autoplace_page(geom: &SymbolGeom, at: Point, mirrored: bool, fields: &[&Field
 /// The placements Autoplace Fields gives a symbol's fields, in the symbol's own frame: one per spec, in order. A hidden field takes the
 /// reference's place.
 pub fn autoplace_symbol(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec]) -> Vec<FieldPlacement> {
+    place_fields(sym, geom, specs, None)
+}
+
+fn place_fields(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec], force: Option<(Side, i64)>) -> Vec<FieldPlacement> {
     let visible: Vec<&FieldSpec> = specs.iter().filter(|s| s.visible).collect();
-    let placed = autoplace_page(geom, sym.at, sym.mirrored, &visible);
+    let placed = autoplace_page(geom, sym.at, sym.mirrored, &visible, force);
     let mut by_name = std::collections::BTreeMap::new();
     for (spec, (anchor, h, v)) in visible.iter().zip(placed) {
         by_name.insert(spec.name.clone(), local_placement(sym.at, sym.rot, sym.mirrored, geom.width, &spec.name, anchor, h, v, true));
@@ -339,6 +348,24 @@ pub fn autoplace_symbol(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldS
             })
         })
         .collect()
+}
+
+/// How far (in 50 mil steps) the fields are pushed out from a side they are tried on when the symbol's own sides have no room.
+const MAX_FIELD_PUSH: i64 = 4;
+
+/// Every way the fields of a symbol can be placed, the one Autoplace Fields gives first, then each side in KiCad's order of preference,
+/// then each pushed further out.
+pub fn placement_candidates(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec]) -> Vec<Vec<FieldPlacement>> {
+    let mut out = vec![place_fields(sym, geom, specs, None)];
+    for push in 0..=MAX_FIELD_PUSH {
+        for side in [Side::Right, Side::Top, Side::Left, Side::Bottom] {
+            let c = place_fields(sym, geom, specs, Some((side, push)));
+            if !out.contains(&c) {
+                out.push(c);
+            }
+        }
+    }
+    out
 }
 
 /// The fields of a placed symbol on the sheet: the placements the section keeps for it, else Autoplace Fields', the specs' texts, in order.
@@ -428,23 +455,97 @@ pub fn sheet_fields(sch: &SchematicSection, sheet: &SheetInstance) -> Vec<PageFi
         .collect()
 }
 
+/// How much of `a` lies inside `b` (square micrometres), the edges trimmed by a hair so boxes that only touch are not counted.
+fn overlap_area(a: crate::hier::kit::Rect, b: crate::hier::kit::Rect) -> i64 {
+    const HAIR: i64 = 30;
+    let w = (a.x1 - HAIR).min(b.x1 - HAIR) - (a.x0 + HAIR).max(b.x0 + HAIR);
+    let h = (a.y1 - HAIR).min(b.y1 - HAIR) - (a.y0 + HAIR).max(b.y0 + HAIR);
+    if w > 0 && h > 0 {
+        w * h
+    } else {
+        0
+    }
+}
+
+/// A symbol whose fields are waiting to be placed: each way of placing them, and the boxes the way it is at now has.
+struct Pending {
+    key: String,
+    sym: SymbolInstance,
+    geom: SymbolGeom,
+    specs: Vec<FieldSpec>,
+    candidates: Vec<Vec<FieldPlacement>>,
+    pick: usize,
+}
+
+impl Pending {
+    /// The boxes of the visible fields placed as candidate `c` has them.
+    fn boxes(&self, c: usize) -> Vec<crate::hier::kit::Rect> {
+        self.specs
+            .iter()
+            .zip(self.candidates[c].iter())
+            .filter(|(spec, p)| spec.visible && p.visible && !spec.text.is_empty())
+            .map(|(spec, p)| {
+                let f = page_field(self.sym.at, self.sym.rot, self.sym.mirrored, self.geom.width, p, &spec.text);
+                crate::hier::kit::text_rect(&f.text, f.at, f.h, f.v, f.vertical)
+            })
+            .collect()
+    }
+}
+
 /// Give every symbol, power symbol and sheet of a section that has no placements the ones KiCad's Autoplace Fields would: what a
-/// derivation stores, so the drawing carries its own field geometry. Items that already have an entry keep it.
+/// derivation stores, so the drawing carries its own field geometry. Items that already have an entry keep it. Where those fields would
+/// run over something drawn on the sheet (a wire that passes the symbol, a label, the next symbol), the fields take the nearest other
+/// place that is free: another side of the symbol, further out.
 pub fn fill_layout(sch: &mut SchematicSection, model: &eda_model::ConstraintModel) {
     let mut add: Vec<(String, Vec<FieldPlacement>)> = Vec::new();
+    let mut pending: Vec<Pending> = Vec::new();
+    // the fields of the symbols that keep theirs are drawn where they are
+    let mut fixed: Vec<crate::hier::kit::Rect> = Vec::new();
     for sym in &sch.symbols {
         let key = field_key(&sym.id, sym.unit);
-        if sch.field_layout.contains_key(&key) {
-            continue;
-        }
         let Some(part) = model.part(&sym.id) else { continue };
         let lib_id = if sym.lib_id.is_empty() { format!("eda:{}", sym.id) } else { sym.lib_id.clone() };
         let resolved = model.real_symbol_of(&lib_id, part);
         let mut sym = sym.clone();
         sym.lib_id = lib_id;
         let geom = SymbolGeom::of(&sym, part, resolved.as_ref());
+        if sch.field_layout.contains_key(&key) {
+            for f in symbol_fields(sch, &sym, Some(part), resolved.as_ref(), &geom) {
+                if f.visible && !f.text.is_empty() {
+                    fixed.push(crate::hier::kit::text_rect(&f.text, f.at, f.h, f.v, f.vertical));
+                }
+            }
+            continue;
+        }
         let specs = symbol_specs(&sym, Some(part), resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
-        add.push((key, autoplace_symbol(&sym, &geom, &specs)));
+        let candidates = placement_candidates(&sym, &geom, &specs);
+        pending.push(Pending { key, sym, geom, specs, candidates, pick: 0 });
+    }
+    if !pending.is_empty() {
+        let obstacles = crate::obstacles::of_section(sch, model);
+        let cost = |boxes: &[crate::hier::kit::Rect], others: &[crate::hier::kit::Rect]| -> i64 {
+            boxes.iter().map(|b| obstacles.iter().map(|o| overlap_area(*b, o.rect)).sum::<i64>() + others.iter().map(|o| overlap_area(*b, *o)).sum::<i64>()).sum()
+        };
+        for i in 0..pending.len() {
+            // the boxes of every other symbol's fields, where they are for now
+            let others: Vec<crate::hier::kit::Rect> = fixed.iter().copied().chain(pending.iter().enumerate().filter(|(j, _)| *j != i).flat_map(|(_, p)| p.boxes(p.pick))).collect();
+            let mut best = (cost(&pending[i].boxes(0), &others), 0usize);
+            if best.0 > 0 {
+                for c in 1..pending[i].candidates.len() {
+                    let k = cost(&pending[i].boxes(c), &others);
+                    if k < best.0 {
+                        best = (k, c);
+                        if k == 0 {
+                            break;
+                        }
+                    }
+                }
+            }
+            pending[i].pick = best.1;
+        }
+    }
+    for p in pending {
+        add.push((p.key, p.candidates[p.pick].clone()));
     }
     for ps in &sch.power_symbols {
         if !sch.field_layout.contains_key(&ps.id) {

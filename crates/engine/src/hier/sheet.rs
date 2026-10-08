@@ -9,7 +9,6 @@
 use eda_layout::Side;
 use eda_model::ir::Point;
 use eda_model::modules::{is_anchor_part, natural_cmp, FunctionalModule, ModuleKind};
-use eda_model::resolve_lib_id;
 
 use super::items::{Ctx, Items, NetClass, RailPin, View};
 use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G, PAPERS};
@@ -18,7 +17,10 @@ use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G, PAPERS};
 pub fn placed(ctx: &Ctx, reference: &str) -> Placed {
     let part = ctx.model.part(reference).unwrap_or_else(|| panic!("module part {reference} is in the model"));
     let kept = ctx.keep.symbols.get(reference);
-    let lib_id = kept.map(|k| k.lib_id.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| resolve_lib_id(part));
+    let lib_id = match kept.map(|k| k.lib_id.clone()).filter(|l| !l.is_empty()) {
+        Some(kept_id) => ctx.model.fitting_lib_id(part, kept_id),
+        None => ctx.model.lib_id_of(part),
+    };
     let resolved = ctx.model.real_symbol_of(&lib_id, part);
     let value = kept.map(|k| k.value.clone()).unwrap_or_else(|| part.value.clone().unwrap_or_default());
     let footprint = kept.map(|k| k.footprint.clone()).filter(|f| !f.is_empty()).or_else(|| part.package.clone()).unwrap_or_default();

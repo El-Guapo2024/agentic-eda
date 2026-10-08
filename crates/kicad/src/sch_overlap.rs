@@ -26,6 +26,10 @@ use crate::sexpr::{self, find, find_all, num, tag, txt, Sexpr};
 /// Boxes that overlap by less than this (micrometres) in either direction only touch.
 const TOL: f64 = 3.0;
 
+/// Two drawn boxes, each of which already reaches half its own pen past its strokes, that go into one another by less than a pen's
+/// width (micrometres) touch: their strokes do not cross. Only deeper than this is an overlap.
+const CONTACT_UM: f64 = 100.0;
+
 // ------------------------------------------------------------------------------------------------------- items
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -616,7 +620,9 @@ fn exempt(a: &Item, b: &Item) -> bool {
     }
     // a no-connect flag sits on its pin's end, over that pin's own texts
     let nc_on_texts = |nc: &Item, t: &Item| nc.kind == Kind::NoConnect && matches!(t.kind, Kind::PinName | Kind::PinNumber) && t.pin_tip.is_some_and(|tip| nc.anchors.iter().any(|p| same_point(*p, tip)));
-    nc_on_texts(a, b) || nc_on_texts(b, a)
+    // a power symbol or flag stands on a pin's end, over that pin's own texts, where KiCad's own schematics put them
+    let power_on_texts = |p: &Item, t: &Item| p.power && p.kind == Kind::Body && matches!(t.kind, Kind::PinName | Kind::PinNumber) && t.pin_tip.is_some_and(|tip| p.anchors.iter().any(|q| same_point(*q, tip)));
+    nc_on_texts(a, b) || nc_on_texts(b, a) || power_on_texts(a, b) || power_on_texts(b, a)
 }
 
 /// How far the segment runs through the inside of the box (shrunk by the tolerance), if it does.
@@ -690,7 +696,7 @@ fn segs_conflict(a: (Pt, Pt), b: (Pt, Pt)) -> Option<f64> {
 
 fn conflict(a: &Item, b: &Item) -> Option<f64> {
     match (a.seg, b.seg) {
-        (None, None) => a.rect.shared(&b.rect, TOL).map(|(w, h)| w.min(h)),
+        (None, None) => a.rect.shared(&b.rect, TOL).map(|(w, h)| w.min(h)).filter(|d| *d > CONTACT_UM),
         (Some(s), None) => seg_through(s, &b.rect),
         (None, Some(s)) => seg_through(s, &a.rect),
         (Some(s), Some(t)) => segs_conflict(s, t),

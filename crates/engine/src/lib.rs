@@ -10,12 +10,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use eda_layout::{graph, layout, EdgeEndpoint, LayoutGraph, LayoutOptions, Node};
 use eda_model::ir::{Design, LabelKind, NetLabel, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SymbolInstance, Wire};
-use eda_model::{resolve_lib_id, CheckResult, ConstraintModel, Part, Pin, PinKind};
+use eda_model::{CheckResult, ConstraintModel, Part, Pin, PinKind};
 
 pub mod fields;
 pub mod geometry;
 pub mod hier;
 pub mod nets;
+pub mod obstacles;
 pub mod placed;
 pub mod symgeom;
 
@@ -132,7 +133,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     let mut node_of: BTreeMap<String, Node> = BTreeMap::new();
     let mut pin_port_of: BTreeMap<String, Vec<Option<usize>>> = BTreeMap::new();
     for part in &model.parts {
-        let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
+        let resolved = model.real_symbol_of(&model.lib_id_of(part), part);
         // `derive_schematic` never splits a part across multiple placed
         // units (see `SymbolInstance::unit`'s own doc) -- every node it
         // builds is unit 1, regardless of how many units the resolved real
@@ -281,7 +282,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             rot: 0,
             mirrored: false,
             mirror_y: false,
-            lib_id: resolve_lib_id(part),
+            lib_id: model.lib_id_of(part),
             unit: 1,
             value: part.value.clone().unwrap_or_default(),
             footprint: part.footprint.clone().unwrap_or_default(),
@@ -299,7 +300,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     for part in &model.parts {
         let Some(top_left) = positions.get(&part.reference).copied() else { continue };
         let node = &node_of[&part.reference];
-        let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
+        let resolved = model.real_symbol_of(&model.lib_id_of(part), part);
         for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height, resolved.as_ref(), 1) {
             let at = graph::Point { x: top_left.x + local.x, y: top_left.y + local.y };
             no_connects.push(NoConnect { id: String::new(), at: Point { x: at.x, y: at.y }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
