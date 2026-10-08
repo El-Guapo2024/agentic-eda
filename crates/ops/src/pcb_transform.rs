@@ -140,28 +140,9 @@ fn named_footprints<'d>(design: &'d Design, ids: &[String]) -> Vec<&'d Footprint
     placement.footprints.iter().filter(|f| named.contains(f.id.as_str())).collect()
 }
 
-/// Whether the segment `a`-`b` touches the box `(x0, y0, x1, y1)` (Liang-Barsky clipping; a lone point is a segment of no length).
-fn segment_touches_box(a: Point, b: Point, (x0, y0, x1, y1): (f64, f64, f64, f64)) -> bool {
-    let (ax, ay, dx, dy) = (a.x as f64, a.y as f64, (b.x - a.x) as f64, (b.y - a.y) as f64);
-    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
-    for (p, q) in [(-dx, ax - x0), (dx, x1 - ax), (-dy, ay - y0), (dy, y1 - ay)] {
-        if p == 0.0 {
-            if q < 0.0 {
-                return false;
-            }
-        } else {
-            let t = q / p;
-            if p < 0.0 {
-                t0 = t0.max(t);
-            } else {
-                t1 = t1.min(t);
-            }
-            if t0 > t1 {
-                return false;
-            }
-        }
-    }
-    true
+/// Whether `p` lies in the box `(x0, y0, x1, y1)`.
+fn in_box(p: Point, (x0, y0, x1, y1): (f64, f64, f64, f64)) -> bool {
+    (x0..=x1).contains(&(p.x as f64)) && (y0..=y1).contains(&(p.y as f64))
 }
 
 /// A piece of routed copper, by where it is in the routing.
@@ -171,7 +152,8 @@ enum Copper {
     Via(usize),
 }
 
-/// The routed copper that touches `pad`: a track that runs into or over it, a via on it.
+/// The routed copper held by `pad`: a track that starts or ends on it (a router's track runs from pad to pad) and a via on it. A track
+/// that merely passes over a pad is not routed to it.
 fn copper_on(routing: &RoutingSection, pad: &PlacedPad) -> Vec<Copper> {
     let (hw, hh) = (pad.size.0 as f64 / 2.0, pad.size.1 as f64 / 2.0);
     let (cx, cy) = (pad.center.x as f64, pad.center.y as f64);
@@ -179,12 +161,12 @@ fn copper_on(routing: &RoutingSection, pad: &PlacedPad) -> Vec<Copper> {
     let mut out = vec![];
     for (i, t) in routing.tracks.iter().enumerate() {
         let near = reaches(t.width / 2);
-        if t.pts.len() == 1 && segment_touches_box(t.pts[0], t.pts[0], near) || t.pts.windows(2).any(|w| segment_touches_box(w[0], w[1], near)) {
+        if [t.pts.first(), t.pts.last()].into_iter().flatten().any(|&p| in_box(p, near)) {
             out.push(Copper::Track(i));
         }
     }
     for (i, v) in routing.vias.iter().enumerate() {
-        if segment_touches_box(v.at, v.at, reaches(v.diameter / 2)) {
+        if in_box(v.at, reaches(v.diameter / 2)) {
             out.push(Copper::Via(i));
         }
     }
@@ -198,7 +180,7 @@ fn pads_overlap(a: &PlacedPad, b: &PlacedPad) -> bool {
 
 impl Board<'_> {
     /// Whether moving, turning, flipping or taking away the footprints `ids` name (directly, or as members of a group) would leave routed
-    /// copper behind: a track or via that touches a pad of theirs and is not still held by a pad of a footprint that stays where it
+    /// copper behind: a track that ends on, or a via that sits on, a pad of theirs and is not still held by a pad of a footprint that stays where it
     /// is *at that very spot* (the original under a fresh copy of it). This model answers it by clearing the routing
     /// (`Cmd::clears_routing`); copper, graphics and text on their own never do, and neither does a footprint nothing was routed to.
     /// A footprint whose pads cannot be worked out counts as routed -- the safe answer.

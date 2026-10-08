@@ -503,7 +503,7 @@ fn a_copy_sitting_on_its_original_holds_the_copper_so_moving_either_one_leaves_n
 }
 
 #[test]
-fn a_via_on_a_pad_or_a_track_passing_over_it_counts_as_copper_on_it() {
+fn copper_is_routed_to_a_footprint_when_a_track_ends_on_a_pad_or_a_via_sits_on_it() {
     let m = model(&["F.Cu", "B.Cu"]);
     let moved = |d: Design| Cmd::MoveItems { ids: ids(&["U2"]), dx: 1, dy: 1 }.clears_routing_in(&Board::new(d, &m, 100, 300));
     // U2 at (60 000, 20 000) turned 90 degrees: its pads are at (60 000 + local y, 20 000 + local x)
@@ -512,12 +512,15 @@ fn a_via_on_a_pad_or_a_track_passing_over_it_counts_as_copper_on_it() {
     let mut with_via = design();
     with_via.routing.as_mut().unwrap().vias.push(via("via_pad", (at.x, at.y), "F.Cu", "B.Cu"));
     assert!(moved(with_via), "a via on a pad");
+    let mut ending = design();
+    ending.routing.as_mut().unwrap().tracks.push(track("trk_end", "F.Cu", &[(at.x + 100, at.y - 100), (at.x + 9_000, at.y - 100)]));
+    assert!(moved(ending), "a track that ends on a pad is routed to it");
     let mut across = design();
     across.routing.as_mut().unwrap().tracks.push(track("trk_over", "F.Cu", &[(at.x - 5_000, at.y), (at.x + 5_000, at.y)]));
-    assert!(moved(across), "a track passing straight over a pad touches it");
+    assert!(!moved(across), "a track merely passing over a pad is not routed to it");
     let mut beside = design();
     beside.routing.as_mut().unwrap().tracks.push(track("trk_beside", "F.Cu", &[(at.x - 5_000, at.y + 8_000), (at.x + 5_000, at.y + 8_000)]));
-    assert!(!moved(beside), "a track 8 mm away from every pad does not");
+    assert!(!moved(beside), "a track 8 mm away from every pad is not either");
 }
 
 #[test]
