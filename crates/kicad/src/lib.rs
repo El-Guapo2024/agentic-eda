@@ -49,6 +49,8 @@ pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad
 mod bus;
 pub use bus::expand_bus_members;
 
+mod sch_clipboard;
+pub use sch_clipboard::{parse_clipboard, write_clipboard, CopyInput, CopyOutput};
 mod sch_extras_io;
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};

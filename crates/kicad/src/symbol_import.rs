@@ -47,17 +47,25 @@ pub fn parse_library_symbols(text: &str) -> Result<ParsedSymbols, String> {
     let tree = sexpr::parse(source).map_err(|e| format!("not a valid s-expression file: {e}"))?;
     let root = tree.as_list().filter(|l| sexpr::tag(l) == Some("kicad_symbol_lib")).ok_or("the top-level form is not (kicad_symbol_lib ...); not a KiCad symbol library file")?;
 
-    let items: Vec<(&str, &[Sexpr])> = sexpr::find_all(root, "symbol").filter_map(|it| Some((sexpr::txt(it, 1)?, it))).collect();
-    if items.is_empty() {
+    let parsed = symbols_of(root);
+    if parsed.symbols.is_empty() {
         return Err("the file holds no symbol".into());
     }
+    Ok(parsed)
+}
+
+/// Every `(symbol "Name" ...)` child of `list` as an editable [`LibrarySymbol`], named as the node names it -- a bare name in a library
+/// file, the full `Library:Name` in a schematic's `(lib_symbols ...)` cache, whose units are still `Name_<unit>_<style>` (the part
+/// after the colon). The reader behind both the Symbol Editor's import and the schematic clipboard.
+pub(crate) fn symbols_of(list: &[Sexpr]) -> ParsedSymbols {
+    let items: Vec<(&str, &[Sexpr])> = sexpr::find_all(list, "symbol").filter_map(|it| Some((sexpr::txt(it, 1)?, it))).collect();
     let by_name: HashMap<&str, &[Sexpr]> = items.iter().copied().collect();
 
     let mut warnings = Vec::new();
     let symbols = items.iter().map(|(name, item)| build(name, item, &by_name, &mut warnings)).collect();
     warnings.sort();
     warnings.dedup();
-    Ok(ParsedSymbols { symbols, warnings })
+    ParsedSymbols { symbols, warnings }
 }
 
 /// `(hide yes)` or a bare `hide` among `list`'s own children.
