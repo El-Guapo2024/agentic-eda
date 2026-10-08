@@ -7,7 +7,7 @@
 // POSTs straight to /api/fab/gerbers (crates/cli/src/fab_api.rs), which
 // runs `kicad-cli pcb export gerbers --layers ...` on the exported board and
 // writes into this board's own export/kicad/gerbers/ folder.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { postFabGerbers } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
 
@@ -23,6 +23,21 @@ export function PlotDialog() {
   const dispatch = useStudioDispatch();
   const copperLayers = state.board?.layers ?? ["F.Cu", "B.Cu"];
   const [checked, setChecked] = useState<Set<string>>(() => new Set(defaultLayers(copperLayers)));
+  // Board Setup > Physical Stackup changes the number of copper layers while this dialog's state lives on: a copper layer the board gained
+  // starts checked (the default is every layer the board has) and one it lost is dropped, whatever else was ticked or cleared stays.
+  const knownCopper = useRef(copperLayers);
+  const copperKey = copperLayers.join(",");
+  useEffect(() => {
+    const before = knownCopper.current;
+    knownCopper.current = copperLayers;
+    setChecked((prev) => {
+      const next = new Set(prev);
+      for (const l of copperLayers) if (!before.includes(l)) next.add(l);
+      for (const l of before) if (!copperLayers.includes(l)) next.delete(l);
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [copperKey]);
   const [useAuxOrigin, setUseAuxOrigin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);

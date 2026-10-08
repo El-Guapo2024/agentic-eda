@@ -48,6 +48,9 @@ export function pcbSweepMenuEntries(state: StudioState, api: StudioApi, refs: re
   add("pcbnew.InteractiveRouter.BreakTrack", count === 1 && kinds[0] === "track");
   add("pcbnew.InteractiveEdit.filletTracks", only((i) => kinds[i] === "track" || kinds[i] === "via"));
 
+  // Assign Netclass... (EDIT_TOOL::Init: `OnlyTypes( connectedTypes )`, connectedTypes = track, arc, via, pad, zone -- a placed footprint is none of them)
+  add("pcbnew.EditorControl.assignNetclass", only((i) => kinds[i] === "track" || kinds[i] === "via" || kinds[i] === "zone"));
+
   // Routing submenu (`isRoutable`)
   add("pcbnew.InteractiveSelection.unrouteSelected", has((i) => kinds[i] === "track" || kinds[i] === "via" || kinds[i] === "part"));
 
