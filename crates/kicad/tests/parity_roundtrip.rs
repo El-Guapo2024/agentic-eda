@@ -157,6 +157,7 @@ struct PcbCorpusStats {
     import_failed: usize,
     zones_skipped: usize,
     track_arcs_approximated: usize,
+    track_arcs_kept: usize,
     non_rect_pad_shapes_approximated: usize,
     outline_open: usize,
     outline_source_counts: BTreeMap<String, usize>,
@@ -177,6 +178,7 @@ fn pcb_corpus_notes(root: &Path) -> PcbCorpusStats {
                 s.imported_ok += 1;
                 s.zones_skipped += notes.zones_skipped;
                 s.track_arcs_approximated += notes.track_arcs_approximated;
+                s.track_arcs_kept += notes.track_arcs_kept;
                 s.non_rect_pad_shapes_approximated += notes.non_rect_pad_shapes_approximated;
                 if notes.outline_open {
                     s.outline_open += 1;

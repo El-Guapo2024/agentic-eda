@@ -32,13 +32,16 @@
 //! - **Footprint-level zones**: imported as zones tagged with `parent_footprint`.
 //!   Board-level zones (pours, teardrops, rule areas) are imported by
 //!   [`import_zones`]; their stored fills are not read, fills are derived.
-//! - **Track/board-edge arcs**: KiCad's `(arc ...)`/`(gr_arc ...)` have no
-//!   analogue in our polyline-only `Track`/`outline`; both are tessellated
-//!   into short straight segments (see [`eda_model::ir::tessellate_arc`]), counted in
+//! - **Board-edge arcs**: KiCad's `(gr_arc ...)` on Edge.Cuts has no
+//!   analogue in our polyline-only `outline`; it is tessellated into short
+//!   straight segments (see [`eda_model::ir::tessellate_arc`]), counted in
 //!   [`ImportNotes::track_arcs_approximated`]. Exact at the sampled points,
-//!   not bit-identical on re-export. A board-level `gr_arc` *not* on
-//!   Edge.Cuts becomes a [`eda_model::ir::Shape::Arc`] instead, exactly
-//!   (KiCad's own three-point arc storage is our `Arc`'s storage too).
+//!   not bit-identical on re-export. A track `(arc ...)` is kept as an arc
+//!   ([`eda_model::ir::Track::new_arc`], counted in
+//!   [`ImportNotes::track_arcs_kept`], and written back as an arc), and a
+//!   board-level `gr_arc` *not* on Edge.Cuts becomes a
+//!   [`eda_model::ir::Shape::Arc`], exactly (KiCad's own three-point arc
+//!   storage is our `Arc`'s storage too).
 //! - **Non-rect/roundrect/circle/oval pads** (trapezoid, custom): mapped to
 //!   `PadShape::Rect` at the pad's nominal `size`, counted in
 //!   [`ImportNotes::non_rect_pad_shapes_approximated`].
@@ -47,9 +50,12 @@
 //!   stays outline-only as before): imported into `design.drawings` as
 //!   [`eda_model::ir::Shape`]/[`eda_model::ir::Text`] (see
 //!   [`import_drawings`]).
-//! - **3D models, stackup dielectric/material/thickness, net ties,
-//!   group/generator objects, footprint-local graphics/text (`fp_line`,
-//!   `fp_text` other than Reference/Value)**: not imported at all.
+//! - **Not imported at all**: barcodes, generator objects, and the
+//!   project-level component classes and tuning profiles (a board that
+//!   depends on them is judged differently by kicad-cli once re-exported;
+//!   `docs/parity/REPORT.md` lists the boards). Groups, dimensions, locks,
+//!   the stackup, net ties, 3D model references and footprint-local
+//!   graphics and text are read.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -64,7 +70,11 @@ use crate::sexpr::{self, Sexpr};
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ImportNotes {
     pub zones_skipped: usize,
+    /// Edge.Cuts arcs, tessellated into the outline's straight segments (a track `(arc ...)` is exact: [`Self::track_arcs_kept`]).
     pub track_arcs_approximated: usize,
+    /// Track `(arc ...)`s kept as arcs (`Track::arc_mid_offset`); informational, nothing was lost.
+    #[serde(default)]
+    pub track_arcs_kept: usize,
     pub non_rect_pad_shapes_approximated: usize,
     /// A `(pad ...)` whose own `(layers ...)` list names no copper layer at
     /// all (no `F.Cu`/`B.Cu`/`*.Cu`/inner `.Cu`) -- dropped on import rather
@@ -1547,7 +1557,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let net = net_ref(sexpr::find(arc, "net"), net_names);
         let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
-        notes.track_arcs_approximated += 1;
+        notes.track_arcs_kept += 1;
         tracks.push(Track::new_arc(net, layer, width, s, m, e));
         refs.tracks.push(ItemRef::of(arc));
     }

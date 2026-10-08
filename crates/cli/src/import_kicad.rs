@@ -101,7 +101,7 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
         eprintln!("  {} zone(s)/pour(s) skipped -- not imported (see report for a proposed model shape)", notes.zones_skipped);
     }
     if notes.track_arcs_approximated > 0 {
-        eprintln!("  {} arc(s) approximated as short straight segments (our model has no arc primitive)", notes.track_arcs_approximated);
+        eprintln!("  {} board-outline arc(s) approximated as short straight segments (the outline is a polyline)", notes.track_arcs_approximated);
     }
     if notes.non_rect_pad_shapes_approximated > 0 {
         eprintln!("  {} pad(s) with an unsupported shape (trapezoid/custom) approximated as rect", notes.non_rect_pad_shapes_approximated);
