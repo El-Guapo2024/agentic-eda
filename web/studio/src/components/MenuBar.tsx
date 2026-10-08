@@ -16,6 +16,7 @@ import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/typ
 import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
 import { useStudioState } from "../state/store";
+import { HELP_MENU } from "../kicad-port/helpMenu";
 
 const menusFile = menusData as MenusFile;
 const schMenusFile = schMenusData as MenusFile;
@@ -87,7 +88,7 @@ export function MenuBar() {
 
   return (
     <div className="menubar" ref={ref}>
-      {activeMenus.menus.map((menu, i) => (
+      {[...activeMenus.menus, HELP_MENU].map((menu, i) => (
         <div key={menu.label} className={`menubar-item${openIndex === i ? " open" : ""}`} onClick={() => setOpenIndex(openIndex === i ? null : i)} onMouseEnter={() => openIndex !== null && setOpenIndex(i)}>
           {menu.label}
           {openIndex === i && (

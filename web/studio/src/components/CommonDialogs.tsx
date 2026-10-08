@@ -5,6 +5,7 @@ import { closeGroupDialog, updateGroupDialog, useCommonDialogs } from "../state/
 import { removeMemberAt } from "../kicad-port/groupEdit";
 import { describeBoardItem } from "../actions/editorAdapter";
 import { useActionRunner } from "../actions/useActionRunner";
+import { AboutDialog } from "./AboutDialog";
 
 /**
  * `DIALOG_GROUP_PROPERTIES` (common/dialogs/dialog_group_properties.cpp): the group's name and its member list. The plus button hides the
@@ -105,6 +106,7 @@ export function CommonDialogs() {
   return (
     <>
       <GroupPropertiesDialog />
+      <AboutDialog />
     </>
   );
 }
