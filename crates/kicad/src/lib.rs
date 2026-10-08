@@ -69,11 +69,58 @@ pub fn export_kicad_sch_mapped(design: &Design, model: &ConstraintModel, meta: &
     r.map(|s| (s, map))
 }
 
+/// Where one screen sits in the hierarchy, as its own file has to say so: the uuid of the file, the path(s) its symbols' `instances`
+/// blocks are filed under (`/<root uuid>` for the root, `/<root uuid>/<sheet uuid>` for a sheet; a screen placed twice has two), the
+/// text its uuids are seeded with (so two screens never mint the same uuid) and the page number of every sheet drawn on it.
+#[derive(Debug, Clone)]
+pub struct ScreenCtx {
+    pub file_uuid: String,
+    pub instance_paths: Vec<String>,
+    pub seed: String,
+    /// Sheet uuid -> page number.
+    pub sheet_pages: BTreeMap<String, usize>,
+}
+
+impl ScreenCtx {
+    /// The root screen of an ordinary single-sheet design (what `export_kicad_sch` has always written).
+    pub fn root() -> ScreenCtx {
+        let file_uuid = duid_plain("sheet:/");
+        ScreenCtx { instance_paths: vec![format!("/{file_uuid}")], file_uuid, seed: String::new(), sheet_pages: BTreeMap::new() }
+    }
+}
+
+/// A sheet's own uuid: its id when that already is one, else one derived from it. KiCad reads a sheet's identity from the uuid, and
+/// both the sheet block and the instance paths of the symbols inside it must spell it the same way.
+pub fn sheet_uuid(s: &eda_model::ir::SheetInstance) -> String {
+    if s.id.is_empty() {
+        duid_plain(&format!("sheet:{}:{}", s.file, s.at.x))
+    } else if looks_like_uuid(&s.id) {
+        s.id.clone()
+    } else {
+        duid_plain(&format!("sheetid:{}", s.id))
+    }
+}
+
+fn looks_like_uuid(s: &str) -> bool {
+    s.len() == 36 && s.char_indices().all(|(i, c)| if matches!(i, 8 | 13 | 18 | 23) { c == '-' } else { c.is_ascii_hexdigit() })
+}
+
 pub fn export_kicad_sch(
     design: &Design,
     model: &ConstraintModel,
     meta: &ExportMeta,
 ) -> Result<String, Vec<CheckResult>> {
+    export_screen(design, model, meta, &ScreenCtx::root())
+}
+
+fn export_screen(design: &Design, model: &ConstraintModel, meta: &ExportMeta, ctx: &ScreenCtx) -> Result<String, Vec<CheckResult>> {
+    let previous = SEED_PREFIX.with(|p| std::mem::replace(&mut *p.borrow_mut(), ctx.seed.clone()));
+    let r = export_screen_inner(design, model, meta, ctx);
+    SEED_PREFIX.with(|p| *p.borrow_mut() = previous);
+    r
+}
+
+fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMeta, ctx: &ScreenCtx) -> Result<String, Vec<CheckResult>> {
     let Some(sch) = &design.schematic else {
         return Err(vec![CheckResult::fail("kicad.no_schematic", "design", "design has no schematic section")]);
     };
@@ -119,13 +166,14 @@ pub fn export_kicad_sch(
     let mut out = String::new();
 
     // ---- header ----
-    let sheet_uuid = duid("sheet:/");
+    let file_uuid = ctx.file_uuid.as_str();
+    let paper = sch.title_block.as_ref().map(|t| t.paper.as_str()).filter(|p| !p.is_empty()).unwrap_or("A4");
     writeln!(out, "(kicad_sch").unwrap();
     writeln!(out, "\t(version 20250114)").unwrap();
     writeln!(out, "\t(generator \"eda-kicad\")").unwrap();
     writeln!(out, "\t(generator_version \"9.0\")").unwrap();
-    writeln!(out, "\t(uuid \"{sheet_uuid}\")").unwrap();
-    writeln!(out, "\t(paper \"A4\")").unwrap();
+    writeln!(out, "\t(uuid \"{file_uuid}\")").unwrap();
+    writeln!(out, "\t(paper \"{paper}\")").unwrap();
     writeln!(out, "\t(title_block").unwrap();
     let tb = sch.title_block.as_ref();
     let title = tb.map(|t| t.title.as_str()).filter(|s| !s.is_empty()).unwrap_or(meta.title);
@@ -225,10 +273,12 @@ pub fn export_kicad_sch(
         }
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
-        writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\"").unwrap();
-        writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&sym.id)).unwrap();
-        writeln!(out, "\t\t\t\t\t(unit {})", sym.unit).unwrap();
-        writeln!(out, "\t\t\t\t)").unwrap();
+        for path in &ctx.instance_paths {
+            writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
+            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&sym.id)).unwrap();
+            writeln!(out, "\t\t\t\t\t(unit {})", sym.unit).unwrap();
+            writeln!(out, "\t\t\t\t)").unwrap();
+        }
         writeln!(out, "\t\t\t)").unwrap();
         writeln!(out, "\t\t)").unwrap();
         writeln!(out, "\t)").unwrap();
@@ -253,10 +303,12 @@ pub fn export_kicad_sch(
         writeln!(out, "\t\t(pin \"1\" (uuid \"{pin_uuid}\"))").unwrap();
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
-        writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\"").unwrap();
-        writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&ps.id)).unwrap();
-        writeln!(out, "\t\t\t\t\t(unit 1)").unwrap();
-        writeln!(out, "\t\t\t\t)").unwrap();
+        for path in &ctx.instance_paths {
+            writeln!(out, "\t\t\t\t(path \"{path}\"").unwrap();
+            writeln!(out, "\t\t\t\t\t(reference {})", sexpr_str(&ps.id)).unwrap();
+            writeln!(out, "\t\t\t\t\t(unit 1)").unwrap();
+            writeln!(out, "\t\t\t\t)").unwrap();
+        }
         writeln!(out, "\t\t\t)").unwrap();
         writeln!(out, "\t\t)").unwrap();
         writeln!(out, "\t)").unwrap();
@@ -434,7 +486,8 @@ pub fn export_kicad_sch(
         let y = mm(s.at.y);
         let w = mm(s.size.0);
         let h = mm(s.size.1);
-        let uuid = if s.id.is_empty() { duid(&format!("sheet:{}:{}", s.file, s.at.x)) } else { s.id.clone() };
+        let uuid = sheet_uuid(s);
+        let page = ctx.sheet_pages.get(&uuid).copied().unwrap_or(1);
         writeln!(out, "\t(sheet").unwrap();
         writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
         writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
@@ -450,16 +503,29 @@ pub fn export_kicad_sch(
         for p in &s.pins {
             let px = mm(p.at.x);
             let py = mm(p.at.y);
-            let pin_uuid = if p.id.is_empty() { duid(&format!("sheetpin:{uuid}:{}", p.name)) } else { p.id.clone() };
+            let pin_uuid = if looks_like_uuid(&p.id) { p.id.clone() } else { duid(&format!("sheetpin:{uuid}:{}:{}:{}", p.name, p.at.x, p.at.y)) };
+            // The angle is the side of the sheet the pin sits on (`SCH_SHEET_PIN::SetSide`: 0 right, 90 top, 180 left, 270 bottom):
+            // KiCad moves the pin onto that edge when it reads the file, so a pin on the left written as 0 would jump to the right.
+            let angle = if p.at.x <= s.at.x {
+                180
+            } else if p.at.x >= s.at.x + s.size.0 {
+                0
+            } else if p.at.y <= s.at.y {
+                90
+            } else {
+                270
+            };
             writeln!(out, "\t\t(pin {} {}", sexpr_str(&p.name), label_shape_token(p.shape)).unwrap();
-            writeln!(out, "\t\t\t(at {px} {py} 0)").unwrap();
+            writeln!(out, "\t\t\t(at {px} {py} {angle})").unwrap();
             writeln!(out, "\t\t\t(uuid \"{pin_uuid}\")").unwrap();
             writeln!(out, "\t\t\t(effects (font (size 1.27 1.27)) (justify left)))").unwrap();
         }
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
-        let page = if s.page.is_empty() { "1" } else { s.page.as_str() };
-        writeln!(out, "\t\t\t\t(path \"/{sheet_uuid}\" (page {}))", sexpr_str(page)).unwrap();
+        // The sheet is filed under the path of the screen it is drawn on (its parent), with its own page number: the one the
+        // user set (Edit Sheet Page Number), else the sheet's place in the hierarchy.
+        let page = if s.page.is_empty() { page.to_string() } else { s.page.clone() };
+        writeln!(out, "\t\t\t\t(path \"{}\" (page {}))", ctx.instance_paths.first().map(String::as_str).unwrap_or("/"), sexpr_str(&page)).unwrap();
         writeln!(out, "\t\t\t)").unwrap();
         writeln!(out, "\t\t)").unwrap();
         writeln!(out, "\t)").unwrap();
@@ -487,16 +553,63 @@ pub fn export_kicad_sch(
 /// `crate::sch_import::import_kicad_sch_tree`'s own doc for the inverse
 /// direction's equivalent "caller resolves paths" choice).
 pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &ExportMeta, root_filename: &str) -> Result<Vec<(String, String)>, Vec<CheckResult>> {
-    let mut out = vec![(root_filename.to_string(), export_kicad_sch(design, model, meta)?)];
+    let root = ScreenCtx::root();
+    let root_path = root.instance_paths[0].clone();
+    let Some(root_sch) = &design.schematic else {
+        return Err(vec![CheckResult::fail("kicad.no_schematic", "design", "design has no schematic section")]);
+    };
+
+    // The hierarchy, depth first: where every screen is placed (its path of sheet uuids) and the page each sheet gets (the root is
+    // page 1, then 2, 3, ... in the order the sheets are met).
+    let mut placements: BTreeMap<String, Vec<String>> = BTreeMap::new(); // file -> instance paths
+    let mut pages: BTreeMap<String, usize> = BTreeMap::new(); // sheet uuid -> page
+    let mut sheet_pages_of: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new(); // file ("" = root) -> sheets drawn on it
+    fn walk(design: &Design, sch: &eda_model::ir::SchematicSection, here: &str, file: &str, in_progress: &mut Vec<String>, placements: &mut BTreeMap<String, Vec<String>>, pages: &mut BTreeMap<String, usize>, sheet_pages_of: &mut BTreeMap<String, BTreeMap<String, usize>>) {
+        for s in &sch.sheets {
+            let uuid = sheet_uuid(s);
+            let page = pages.len() + 2;
+            pages.insert(uuid.clone(), page);
+            sheet_pages_of.entry(file.to_string()).or_default().insert(uuid.clone(), page);
+            let Some(child) = design.sheet_contents.as_ref().and_then(|c| c.get(&s.file)) else { continue };
+            let path = format!("{here}/{uuid}");
+            placements.entry(s.file.clone()).or_default().push(path.clone());
+            if in_progress.contains(&s.file) {
+                continue; // a sheet placed inside itself: not followed again
+            }
+            in_progress.push(s.file.clone());
+            walk(design, child, &path, &s.file, in_progress, placements, pages, sheet_pages_of);
+            in_progress.pop();
+        }
+    }
+    walk(design, root_sch, &root_path, "", &mut Vec::new(), &mut placements, &mut pages, &mut sheet_pages_of);
+
+    let root_ctx = ScreenCtx { sheet_pages: sheet_pages_of.get("").cloned().unwrap_or_default(), ..root };
+    let mut out = vec![(root_filename.to_string(), export_screen(design, model, meta, &root_ctx)?)];
     if let Some(screens) = &design.sheet_contents {
         for (file, sch) in screens {
             let child_design = Design { schematic: Some(sch.clone()), sheet_contents: None, nets: None, ..design.clone() };
             let title = file.strip_suffix(".kicad_sch").unwrap_or(file);
             let child_meta = ExportMeta { date: meta.date, title };
-            out.push((file.clone(), export_kicad_sch(&child_design, model, &child_meta)?));
+            let ctx = ScreenCtx {
+                file_uuid: duid_plain(&format!("screen:{file}")),
+                // a screen no sheet places still gets one path, so its symbols are annotated
+                instance_paths: placements.get(file).cloned().unwrap_or_else(|| vec![format!("{root_path}/{}", duid_plain(&format!("unplaced:{file}")))]),
+                seed: format!("{file}|"),
+                sheet_pages: sheet_pages_of.get(file).cloned().unwrap_or_default(),
+            };
+            out.push((file.clone(), export_screen(&child_design, model, &child_meta, &ctx)?));
         }
     }
     Ok(out)
+}
+
+/// [`export_kicad_sch_tree`] plus every exported item's KiCad uuid -> our id, across all the files: how a kicad-cli ERC report on
+/// the whole hierarchy is pointed back at `design.json`.
+pub fn export_kicad_sch_tree_mapped(design: &Design, model: &ConstraintModel, meta: &ExportMeta, root_filename: &str) -> Result<(Vec<(String, String)>, std::collections::HashMap<String, String>), Vec<CheckResult>> {
+    start_uuid_map();
+    let r = export_kicad_sch_tree(design, model, meta, root_filename);
+    let map = take_uuid_map();
+    r.map(|files| (files, map))
 }
 
 /// A `SymbolInstance`'s lib_id, with the pre-`lib_id`-field
@@ -1042,7 +1155,19 @@ pub(crate) fn take_uuid_map() -> std::collections::HashMap<String, String> {
     UUID_MAP.with(|m| m.borrow_mut().take().unwrap_or_default())
 }
 
+thread_local! {
+    /// Text every uuid of the screen being written is seeded with: empty for the root (its uuids are what they always were), the
+    /// file name for a sheet, so two screens never mint the same uuid for items that look alike.
+    static SEED_PREFIX: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
 fn duid_raw(seed: &str) -> String {
+    let prefix = SEED_PREFIX.with(|p| p.borrow().clone());
+    duid_plain(&format!("{prefix}{seed}"))
+}
+
+/// A uuid from `seed` alone: for the ids that several screens must agree on (a sheet's uuid, the root's), never prefixed.
+pub(crate) fn duid_plain(seed: &str) -> String {
     let hash = blake3::hash(seed.as_bytes());
     let b = hash.as_bytes();
     let mut bytes = [0u8; 16];
@@ -1314,5 +1439,61 @@ mod tests {
         assert!(back_child.labels.iter().any(|l| l.net == "AD0" && matches!(l.kind, LabelKind::Hierarchical { .. })));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What KiCad needs to read a hierarchy: each sheet's symbols filed under `/<root uuid>/<sheet uuid>`, the sheet pins on the side
+    /// their angle names, a page number for every sheet, a paper that fits, and no two files minting the same uuid.
+    #[test]
+    fn module_sheets_are_written_so_kicad_can_read_the_hierarchy() {
+        let model: ConstraintModel = serde_yaml::from_str(include_str!("../../../examples/mcu_board_30plus.yaml")).unwrap();
+        let design = eda_engine::derive_schematic_modules(&model, &EngineOptions::new(1, "t")).unwrap();
+        let files = export_kicad_sch_tree(&design, &model, &ExportMeta { date: "2026-01-01", title: "board" }, "board.kicad_sch").unwrap();
+        assert_eq!(files.len(), 4, "the root and one file per module");
+        let (root_name, root) = &files[0];
+        assert_eq!(root_name, "board.kicad_sch");
+        let root_uuid = root.lines().find_map(|l| l.trim().strip_prefix("(uuid \"")).and_then(|r| r.strip_suffix("\")")).unwrap().to_string();
+
+        // Every sheet of the root: its own uuid, a page number, the pins on the side their angle names.
+        let sheets: Vec<&str> = root.split("\t(sheet\n").skip(1).collect();
+        assert_eq!(sheets.len(), 3);
+        let mut pages = Vec::new();
+        for (i, s) in sheets.iter().enumerate() {
+            let uuid = s.lines().find_map(|l| l.trim().strip_prefix("(uuid \"")).and_then(|r| r.strip_suffix("\")")).unwrap();
+            let page: usize = s.split("(page \"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
+            pages.push(page);
+            assert!(s.contains(&format!("(path \"/{root_uuid}\" (page \"{page}\"))")), "sheet {i} is filed under the root");
+            // the file of this sheet holds symbols filed under /<root>/<this sheet>
+            let file = s.split("(property \"Sheetfile\" \"").nth(1).unwrap().split('"').next().unwrap();
+            let child = &files.iter().find(|(n, _)| n == file).unwrap().1;
+            assert!(child.contains(&format!("(path \"/{root_uuid}/{uuid}\"")), "{file} files its symbols under the sheet that places it");
+            assert!(!child.contains(&format!("(path \"/{root_uuid}\"")), "{file} no longer files them under the root");
+            for pin in s.split("\t\t(pin ").skip(1) {
+                let (x, angle) = {
+                    let at = pin.split("(at ").nth(1).unwrap().split(')').next().unwrap();
+                    let v: Vec<f64> = at.split_whitespace().map(|n| n.parse().unwrap()).collect();
+                    (v[0], v[2])
+                };
+                let sx: f64 = s.split("(at ").nth(1).unwrap().split_whitespace().next().unwrap().parse().unwrap();
+                let wide: f64 = s.split("(size ").nth(1).unwrap().split_whitespace().next().unwrap().parse().unwrap();
+                let want = if (x - sx).abs() < 1e-6 { 180.0 } else if (x - (sx + wide)).abs() < 1e-6 { 0.0 } else { f64::NAN };
+                assert_eq!(angle, want, "a sheet pin's angle is the side it is on");
+            }
+        }
+        pages.sort();
+        assert_eq!(pages, vec![2, 3, 4], "the root is page 1; each sheet has its own");
+
+        // Uuids are unique across the whole project.
+        let mut seen = std::collections::BTreeSet::new();
+        for (name, text) in &files {
+            for l in text.lines() {
+                if let Some(u) = l.trim().strip_prefix("(uuid \"").and_then(|r| r.split('"').next()) {
+                    if name != "board.kicad_sch" || !l.starts_with("\t(uuid") {
+                        assert!(seen.insert(u.to_string()), "{name}: uuid {u} appears twice");
+                    }
+                }
+            }
+        }
+        // The paper is the one the sheet was laid out for.
+        assert!(files.iter().all(|(_, t)| t.contains("(paper \"A4\")")), "mcu30's sheets fit A4");
     }
 }

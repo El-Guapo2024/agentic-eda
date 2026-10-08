@@ -8,3 +8,7 @@ description = "kicad-cli as the batch engine: DRC, ERC and every export, run on 
 serde_json = { workspace = true }
 eda-model = { path = "../model" }
 eda-kicad = { path = "../kicad" }
+
+[dev-dependencies]
+eda-engine = { path = "../engine" }
+serde_yaml = { workspace = true }

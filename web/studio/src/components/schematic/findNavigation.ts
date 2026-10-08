@@ -54,7 +54,7 @@ export async function findNextMatch(state: StudioState, dispatch: Dispatch<Actio
     dispatch({ type: "SET_SCH_DIALOG", dialog: "find" });
     return null;
   }
-  const reply = await fetchSchFind({ ...search, search_and_replace: false });
+  const reply = await fetchSchFind({ ...search, search_and_replace: false }, undefined, state.currentSheetPath);
   if (!reply.ok) {
     dispatch({ type: "SET_SCH_FIND", find: { status: reply.message ?? "Find failed." } });
     return null;

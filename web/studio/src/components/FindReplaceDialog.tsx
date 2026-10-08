@@ -53,7 +53,7 @@ export function FindReplaceDialog() {
       findNext(backward);
       return;
     }
-    const before = await fetchSchFind({ ...search, search_and_replace: true });
+    const before = await fetchSchFind({ ...search, search_and_replace: true }, undefined, state.currentSheetPath);
     const at = before.matches.findIndex((m) => m.key === cursor);
     if (at === -1) {
       findNext(backward);
@@ -64,7 +64,7 @@ export function FindReplaceDialog() {
     if (!ok) return;
     // Continue after where the replaced item was: its own key if it still
     // matches (so it is skipped, as `m_afterItem` is), else the match before it.
-    const after = await fetchSchFind({ ...search, search_and_replace: false });
+    const after = await fetchSchFind({ ...search, search_and_replace: false }, undefined, state.currentSheetPath);
     const next = after.matches.some((m) => m.key === cursor) ? cursor : after.matches.some((m) => m.key === prevKey) ? prevKey : null;
     await findNextMatch(state, dispatch, backward, next);
   };
@@ -75,7 +75,7 @@ export function FindReplaceDialog() {
     let items: string[] | null = null;
     const scope = scopeFromSelection(state.selection, selectedOnly);
     if (scope) {
-      const found = await fetchSchFind({ ...search, search_and_replace: true }, scope);
+      const found = await fetchSchFind({ ...search, search_and_replace: true }, scope, state.currentSheetPath);
       items = found.matches.map((m) => m.key);
       if (items.length === 0) {
         dispatch({ type: "SET_SCH_FIND", find: { status: "Nothing to replace in the selection." } });
