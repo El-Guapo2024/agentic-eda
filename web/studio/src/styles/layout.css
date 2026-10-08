@@ -269,17 +269,50 @@
   background: currentColor;
   opacity: 0.25;
 }
-/* The Footprint and Symbol editors' toolbars are labelled buttons (no extracted icon set for these two frames), so they size to their text
-   and wrap instead of overlapping in a 30px box. */
-.toolbar[data-toolbar="footprint"],
-.toolbar[data-toolbar="symbol"] {
-  flex-wrap: wrap;
+/* A group button (the Units, Crosshair modes, Selection modes, ... dropdowns): KiCad draws a small corner arrow on it; a click on the arrow, or a
+   right click, opens the list of its members (components/Toolbar.tsx GroupButton). */
+.toolbar-button.has-menu {
+  position: relative;
 }
-.toolbar[data-toolbar="footprint"] .toolbar-button,
-.toolbar[data-toolbar="symbol"] .toolbar-button {
-  width: auto;
-  padding: 0 8px;
-  white-space: nowrap;
+.toolbar-button.has-menu::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 5px 5px;
+  border-color: transparent transparent var(--chrome-text-dim) transparent;
+}
+/* Frames of the Footprint and Symbol editors (pcbnew/footprint_edit_frame.cpp, eeschema/symbol_editor/symbol_edit_frame.cpp): the top toolbar, then
+   the Libraries tree, the left (options) toolbar, the canvas and the right (drawing) toolbar. */
+.editor-frame {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+.editor-frame-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.editor-frame-body > .toolbar.vertical {
+  min-height: 0;
+}
+/* The right (drawing) toolbar sits against the canvas's right edge: its border faces the canvas. */
+.editor-frame-body > .toolbar.vertical:last-child {
+  border-right: none;
+  border-left: 1px solid var(--chrome-border);
+}
+.editor-canvas-col {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
 }
 .toolbar-separator {
   width: 1px;

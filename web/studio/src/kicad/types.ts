@@ -84,9 +84,31 @@ export interface ToolbarsFile {
   toolbars: ToolbarConfig[];
 }
 
+/** One `EDA_3D_ACTIONS` TOOL_ACTION (3d-viewer/3d_viewer/tools/eda_3d_actions.cpp), which actions.json does not hold. */
+export interface Viewer3dAction {
+  name: string;
+  label: string;
+  tooltip: string;
+  hotkey: string | null;
+  /** `BITMAPS::` enumerator name. */
+  icon: string | null;
+  /** `ToolbarState( TOGGLE )`: a button that stays pressed while on. */
+  toggle: boolean;
+}
+
+/** viewer3d_toolbars.json: the 3D viewer's one toolbar (TOP_MAIN) with the actions it names, plus the other 3D actions that have an icon (the face views, the model-attribute toggles). */
+export interface Viewer3dToolbarsFile extends ToolbarsFile {
+  actions: Viewer3dAction[];
+  otherActions: Viewer3dAction[];
+}
+
 // --------------------------------------------------------------- menus
 
-export type MenuNode = { type: "separator" } | { type: "item"; action: string } | { type: "submenu"; label: string; items: MenuNode[] };
+export type MenuNode =
+  | { type: "separator" }
+  /** `label`: only for an entry this studio adds itself (kicad/menuExtras.ts), whose action is not one of KiCad's in actions.json. */
+  | { type: "item"; action: string; label?: string }
+  | { type: "submenu"; label: string; items: MenuNode[] };
 
 export interface MenuConfig {
   label: string;

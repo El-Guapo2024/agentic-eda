@@ -41,18 +41,36 @@ export function CommonOverlay() {
   const tool = useCommonTool();
   const picker = usePickerSession();
   const ref = useRef<HTMLCanvasElement>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
+  /** Where the editor's canvas is inside the column the layer sits in: the library editors draw their tree and toolbars in the same column, so the layer is placed over the canvas itself. */
+  const [place, setPlace] = useState({ left: 0, top: 0, width: 0, height: 0 });
+  const size = place;
 
-  // The layer is as large as the canvas column it sits in.
+  // The layer is as large as, and exactly over, the canvas container of the editor on screen (`.pcb-canvas-container`: all four editors use it).
   useEffect(() => {
-    const el = ref.current?.parentElement;
-    if (!el) return;
-    const measure = () => setSize({ width: el.clientWidth, height: el.clientHeight });
+    const parent = ref.current?.parentElement;
+    if (!parent) return;
+    const measure = () => {
+      const container = parent.querySelector<HTMLElement>(".pcb-canvas-container");
+      const outer = parent.getBoundingClientRect();
+      const r = container?.getBoundingClientRect() ?? outer;
+      const next = { left: Math.round(r.left - outer.left + parent.scrollLeft), top: Math.round(r.top - outer.top + parent.scrollTop), width: Math.round(r.width), height: Math.round(r.height) };
+      setPlace((prev) => (prev.left === next.left && prev.top === next.top && prev.width === next.width && prev.height === next.height ? prev : next));
+    };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    ro.observe(parent);
+    const container = parent.querySelector<HTMLElement>(".pcb-canvas-container");
+    if (container) ro.observe(container);
+    // The container comes and goes with the tab, and moves when a dock column folds.
+    const mo = new MutationObserver(measure);
+    mo.observe(parent, { childList: true, subtree: true });
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [studio.tab]);
 
   const tab = studio.tab;
   const adapter = isCanvasTab(tab) ? makeEditorAdapter({ tab, studio, fp, sym, dispatch: () => {}, fpDispatch: () => {}, symDispatch: () => {} }) : null;
@@ -144,5 +162,5 @@ export function CommonOverlay() {
     }
   });
 
-  return <canvas ref={ref} aria-hidden style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none", zIndex: 5 }} />;
+  return <canvas ref={ref} aria-hidden style={{ position: "absolute", left: place.left, top: place.top, pointerEvents: "none", zIndex: 5 }} />;
 }

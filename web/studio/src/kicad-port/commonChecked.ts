@@ -1,7 +1,8 @@
 // Which shared toggle actions show a check mark, and whether it is on: the state a menu entry or toolbar button of an action with
 // `ACTION_MENU::CHECK` / `TOOLBAR_STATE::TOGGLE` displays. KiCad reads each from the same setting the action flips (the frame's
-// `CHECK( cond )` conditions in `SetConditions`): `GAL_DISPLAY_OPTIONS` for the crosshair, `RENDER_SETTINGS::GetDrawBoundingBoxes`,
-// the selection tool's mode and `IsLibraryTreeShown()`. Pure; the studio passes the stores' values (actions/useActionRunner.ts).
+// `CHECK( cond )` conditions in `SetConditions`): `GAL_DISPLAY_OPTIONS` for the crosshair, `RENDER_SETTINGS::GetDrawBoundingBoxes` and the
+// selection tool's mode. Pure; the studio passes the stores' values (actions/useActionRunner.ts). (The panes' and the editors' other toggles --
+// the grid, the units, the library tree -- are kicad-port/actionChecked.ts's.)
 
 export interface ToggleSnapshot {
   /** `cursor.cross_hair_mode`. */
@@ -12,11 +13,9 @@ export interface ToggleSnapshot {
   drawBoundingBoxes: boolean;
   /** The selection tool's rectangle or lasso mode. */
   selectionMode: "rect" | "lasso";
-  /** `IsLibraryTreeShown()` of the library editor on screen; null in an editor that has no library tree. */
-  libraryTreeShown: boolean | null;
 }
 
-/** `true` / `false` for a toggle of the shared tools, `undefined` for an action that has no check. */
+/** `true` / `false` for a toggle of the shared tools, `undefined` for an action that has no check here. */
 export function commonChecked(name: string, s: ToggleSnapshot): boolean | undefined {
   switch (name) {
     case "common.Control.toggleCursor":
@@ -33,8 +32,6 @@ export function commonChecked(name: string, s: ToggleSnapshot): boolean | undefi
       return s.selectionMode === "rect";
     case "common.Interactive.selectSetLasso":
       return s.selectionMode === "lasso";
-    case "common.Control.showLibraryTree":
-      return s.libraryTreeShown ?? undefined;
     default:
       return undefined;
   }

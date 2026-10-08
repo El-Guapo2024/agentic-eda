@@ -640,60 +640,117 @@ pub fn builtin(name: &str) -> Option<Footprint> {
     Some(fp)
 }
 
-/// KiCad's own `(model "...")` path for a built-in package -- checked
-/// directly against this machine's installed KiCad 10.99.0 library
-/// files (`grep "(model " .../footprints/**/*.kicad_mod`), not guessed.
-/// `${KICAD10_3DMODEL_DIR}` is the exact variable those files use;
-/// older KiCad releases use `KICAD6_3DMODEL_DIR`/`KICAD9_3DMODEL_DIR`/
-/// etc instead, but `kicad-cli pcb export glb` resolves whichever
-/// variable its own installed version defines, so this only needs to
-/// match the version actually running this exporter.
+/// A footprint of KiCad's own libraries that a generic package name stands for, and with it the 3D model of that footprint. This is the small explicit
+/// table behind the 3D view: a part whose footprint is a bare `0603`, `SOIC-16` or `PINHEADER-4` (what a netlist says, not a library id) is drawn and
+/// exported as the real thing -- a resistor, an LED, an SOIC-16, a 1x04 header -- instead of a placeholder box.
 ///
-/// `key` is the *pre-normalized* name (`builtin`'s own `key`, e.g. from
-/// `normalize_name(part.package)`) -- takes the already-normalized form
-/// so a caller that already has it (like `ConstraintModel::footprint_of`)
-/// doesn't normalize twice. The shared two-pad passive shapes ("0402"/
-/// "0603"/"0805") are the exact same footprint for a resistor, a
-/// capacitor or an LED, so those three need `reference`'s own R/C/D
-/// prefix to know which library to point at -- same convention the
-/// schematic passive-glyph heuristic already uses elsewhere in this app
-/// (web/studio's isTwoPinPassive / schematic/layout.ts).
-pub fn builtin_model_path(key: &str, reference: &str) -> Option<String> {
-    const DIR: &str = "${KICAD10_3DMODEL_DIR}";
+/// KiCad's 3D libraries mirror its footprint libraries one to one (`Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod` has
+/// `Resistor_SMD.3dshapes/R_0603_1608Metric.step`), so the footprint id is all the table has to say; every entry was checked against the installed KiCad
+/// 10.99.0 libraries (both files exist), not guessed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KicadFootprintRef {
+    /// The library nickname: `Resistor_SMD`.
+    pub library: String,
+    /// The footprint in it: `R_0603_1608Metric`.
+    pub name: String,
+}
+
+impl KicadFootprintRef {
+    fn new(library: &str, name: impl Into<String>) -> Self {
+        Self { library: library.to_string(), name: name.into() }
+    }
+
+    /// `Lib:Name`, the footprint's id in KiCad's libraries.
+    pub fn id(&self) -> String {
+        format!("{}:{}", self.library, self.name)
+    }
+
+    /// KiCad's own `(model "...")` path for it: `${KICAD10_3DMODEL_DIR}` is the exact variable the installed KiCad 10.99.0 footprint files use (checked with
+    /// `grep "(model " .../footprints/**/*.kicad_mod`); older releases name it `KICAD6_3DMODEL_DIR` ... `KICAD9_3DMODEL_DIR`, but `kicad-cli pcb export glb`
+    /// resolves whichever variable its own version defines, so this only has to match the version that runs the export.
+    pub fn model_path(&self) -> String {
+        format!("${{KICAD10_3DMODEL_DIR}}/{}.3dshapes/{}.step", self.library, self.name)
+    }
+}
+
+/// The KiCad footprint a generic package `key` stands for, given the part's reference designator and value; `None` when nothing in the table matches.
+///
+/// `key` is the *normalized* name (`normalize_name( part.package )`), so `Resistor_SMD:R_0603_1608Metric` arrives as `0603` too. The two-pad passive
+/// shapes (`0402`/`0603`/`0805`) are the same footprint for a resistor, a capacitor, an inductor, an LED or a diode, so those need the reference
+/// designator's own R/C/L/D prefix to pick the library -- the same convention the schematic's passive-glyph heuristic uses (web/studio's isTwoPinPassive /
+/// schematic/layout.ts); a `D` is an LED unless its value says it is a diode (`LED` or no value stays an LED, which is what every `D` of the studio's example
+/// boards is).
+pub fn kicad_footprint_for(key: &str, reference: &str, value: Option<&str>) -> Option<KicadFootprintRef> {
     match key {
         "0402" | "0603" | "0805" => {
-            let (lib, prefix) = match reference.chars().next().unwrap_or('?').to_ascii_uppercase() {
-                'R' => ("Resistor_SMD", "R"),
-                'C' => ("Capacitor_SMD", "C"),
-                'D' => ("LED_SMD", "LED"),
-                _ => return None,
-            };
             let metric = match key {
                 "0402" => "1005Metric",
                 "0603" => "1608Metric",
-                "0805" => "2012Metric",
-                _ => unreachable!(),
+                _ => "2012Metric",
             };
-            Some(format!("{DIR}/{lib}.3dshapes/{prefix}_{key}_{metric}.step"))
+            let is_diode = value.is_some_and(|v| {
+                let v = v.to_ascii_lowercase();
+                !v.contains("led") && (v.starts_with("1n") || v.contains("diode") || v.contains("schottky") || v.contains("zener") || v.starts_with("bat") || v.starts_with("ss") || v.starts_with("bas"))
+            });
+            let (lib, prefix) = match reference.chars().next().unwrap_or('?').to_ascii_uppercase() {
+                'R' => ("Resistor_SMD", "R"),
+                'C' => ("Capacitor_SMD", "C"),
+                'L' => ("Inductor_SMD", "L"),
+                'D' if is_diode => ("Diode_SMD", "D"),
+                'D' => ("LED_SMD", "LED"),
+                _ => return None,
+            };
+            // KiCad ships a 0402 diode footprint but no 3D model for it: a model path that names no file would only make the export complain.
+            if lib == "Diode_SMD" && key == "0402" {
+                return None;
+            }
+            Some(KicadFootprintRef::new(lib, format!("{prefix}_{key}_{metric}")))
         }
-        "SOT-223" => Some(format!("{DIR}/Package_TO_SOT_SMD.3dshapes/SOT-223.step")),
-        "TSSOP-20" => Some(format!("{DIR}/Package_SO.3dshapes/TSSOP-20_4.4x6.5mm_P0.65mm.step")),
-        "SOIC-8" => Some(format!("{DIR}/Package_SO.3dshapes/SOIC-8_3.9x4.9mm_P1.27mm.step")),
-        "SOIC-14" => Some(format!("{DIR}/Package_SO.3dshapes/SOIC-14_3.9x8.7mm_P1.27mm.step")),
-        "SOIC-16" => Some(format!("{DIR}/Package_SO.3dshapes/SOIC-16_3.9x9.9mm_P1.27mm.step")),
+        "SOT-23" => Some(KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-23")),
+        "SOT-23-5" => Some(KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-23-5")),
+        "SOT-23-6" => Some(KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-23-6")),
+        "SOT-223" => Some(KicadFootprintRef::new("Package_TO_SOT_SMD", "SOT-223")),
+        "SOIC-8" => Some(KicadFootprintRef::new("Package_SO", "SOIC-8_3.9x4.9mm_P1.27mm")),
+        "SOIC-14" => Some(KicadFootprintRef::new("Package_SO", "SOIC-14_3.9x8.7mm_P1.27mm")),
+        "SOIC-16" => Some(KicadFootprintRef::new("Package_SO", "SOIC-16_3.9x9.9mm_P1.27mm")),
+        "TSSOP-8" => Some(KicadFootprintRef::new("Package_SO", "TSSOP-8_4.4x3mm_P0.65mm")),
+        "TSSOP-14" => Some(KicadFootprintRef::new("Package_SO", "TSSOP-14_4.4x5mm_P0.65mm")),
+        "TSSOP-16" => Some(KicadFootprintRef::new("Package_SO", "TSSOP-16_4.4x5mm_P0.65mm")),
+        "TSSOP-20" => Some(KicadFootprintRef::new("Package_SO", "TSSOP-20_4.4x6.5mm_P0.65mm")),
+        "MSOP-8" => Some(KicadFootprintRef::new("Package_SO", "MSOP-8_3x3mm_P0.65mm")),
+        "MSOP-10" => Some(KicadFootprintRef::new("Package_SO", "MSOP-10_3x3mm_P0.5mm")),
         _ => {
-            // Generic headers -- same trailing-digit extraction `builtin`'s
-            // own fallback branch uses, since `key` here can be any of
-            // several spellings ("PINHEADER-4", "PIN-HEADER-4", "1X04").
+            // Generic headers -- same trailing-digit extraction `builtin`'s own fallback branch uses, since `key` here can be any of several spellings
+            // ("PINHEADER-4", "PIN-HEADER-4", "1X04").
             let digits: String = key.chars().rev().take_while(|c| c.is_ascii_digit()).collect::<String>().chars().rev().collect();
             if (key.starts_with("PINHEADER") || key.starts_with("PIN-HEADER") || key.contains("1X")) && !digits.is_empty() {
                 let n: u32 = digits.parse().ok()?;
-                Some(format!("{DIR}/Connector_PinHeader_2.54mm.3dshapes/PinHeader_1x{n:02}_P2.54mm_Vertical.step"))
+                Some(KicadFootprintRef::new("Connector_PinHeader_2.54mm", format!("PinHeader_1x{n:02}_P2.54mm_Vertical")))
             } else {
                 None
             }
         }
     }
+}
+
+/// KiCad's own `(model "...")` path for a built-in package: [`kicad_footprint_for`]'s footprint's 3D model. `key` is the *pre-normalized* name (`builtin`'s
+/// own `key`, e.g. from `normalize_name(part.package)`), so a caller that already has it (like `ConstraintModel::footprint_of`) does not normalize twice.
+/// Without the part's value a `D` is an LED.
+pub fn builtin_model_path(key: &str, reference: &str) -> Option<String> {
+    kicad_footprint_for(key, reference, None).map(|f| f.model_path())
+}
+
+/// The KiCad footprint a part's `footprint` / `package` name stands for through the table (`Part::footprint` first, then `package` -- the order
+/// `ConstraintModel::footprint_of` resolves pads in); a real library id (`Resistor_SMD:R_0603_1608Metric`) normalizes to its generic key and maps back to the
+/// same footprint.
+pub fn kicad_footprint_of_part(part: &crate::Part) -> Option<KicadFootprintRef> {
+    [part.footprint.as_deref(), part.package.as_deref()].into_iter().flatten().find_map(|name| kicad_footprint_for(&normalize_name(name), &part.reference, part.value.as_deref()))
+}
+
+/// The `(model ...)` path an exported footprint of this part gets when the footprint itself carries none -- an explicit definition (a project-library entry, a
+/// `.kicad_mod` read for its pads) has no model of its own, and without one `kicad-cli pcb export glb` leaves the part out of the 3D view altogether.
+pub fn model_path_for_part(part: &crate::Part) -> Option<String> {
+    kicad_footprint_of_part(part).map(|f| f.model_path())
 }
 
 #[cfg(test)]
@@ -707,6 +764,70 @@ mod tests {
         assert_eq!(normalize_name("Package_TO_SOT_SMD:SOT-23-5"), "SOT-23-5");
         assert_eq!(normalize_name("sot23"), "SOT-23");
         assert_eq!(normalize_name("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"), "SOIC-8_3.9X4.9MM_P1.27MM".replace('_', "-"));
+    }
+
+    fn part(reference: &str, package: &str, value: Option<&str>) -> crate::Part {
+        crate::Part { reference: reference.into(), mpn: None, lcsc: None, value: value.map(String::from), package: Some(package.into()), footprint: Some(package.into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None }
+    }
+
+    /// The four footprints of the 3D-view brief, through the table: a bare package name stands for the real KiCad footprint and model.
+    #[test]
+    fn generic_package_names_map_to_kicads_footprints_and_models() {
+        let id = |p: &crate::Part| kicad_footprint_of_part(p).map(|f| f.id());
+        assert_eq!(id(&part("R1", "0603", Some("330"))).as_deref(), Some("Resistor_SMD:R_0603_1608Metric"));
+        assert_eq!(id(&part("D1", "0603", Some("LED"))).as_deref(), Some("LED_SMD:LED_0603_1608Metric"));
+        assert_eq!(id(&part("U1", "SOIC-16", None)).as_deref(), Some("Package_SO:SOIC-16_3.9x9.9mm_P1.27mm"));
+        assert_eq!(id(&part("J1", "PINHEADER-4", None)).as_deref(), Some("Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical"));
+        assert_eq!(model_path_for_part(&part("R1", "0603", None)).as_deref(), Some("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step"));
+        assert_eq!(model_path_for_part(&part("U1", "SOIC-16", None)).as_deref(), Some("${KICAD10_3DMODEL_DIR}/Package_SO.3dshapes/SOIC-16_3.9x9.9mm_P1.27mm.step"));
+        assert_eq!(model_path_for_part(&part("J1", "PINHEADER-4", None)).as_deref(), Some("${KICAD10_3DMODEL_DIR}/Connector_PinHeader_2.54mm.3dshapes/PinHeader_1x04_P2.54mm_Vertical.step"));
+    }
+
+    #[test]
+    fn the_reference_letter_and_value_pick_the_passive_library() {
+        let id = |r: &str, v: Option<&str>| kicad_footprint_of_part(&part(r, "0402", v)).map(|f| f.id());
+        assert_eq!(id("C3", Some("100nF")).as_deref(), Some("Capacitor_SMD:C_0402_1005Metric"));
+        assert_eq!(id("L1", Some("10uH")).as_deref(), Some("Inductor_SMD:L_0402_1005Metric"));
+        assert_eq!(id("D2", None).as_deref(), Some("LED_SMD:LED_0402_1005Metric"), "a D with no value is an LED, as every D of the example boards is");
+        assert_eq!(id("D2", Some("LED")).as_deref(), Some("LED_SMD:LED_0402_1005Metric"));
+        assert_eq!(kicad_footprint_of_part(&part("D3", "0603", Some("1N4148"))).map(|f| f.id()).as_deref(), Some("Diode_SMD:D_0603_1608Metric"));
+        assert_eq!(id("D3", Some("1N4148")), None, "KiCad has no 0402 diode 3D model, so no model path rather than one that names no file");
+        assert_eq!(id("X1", None), None, "a crystal is not a resistor: no guess from a letter the table does not know");
+    }
+
+    #[test]
+    fn a_real_kicad_footprint_id_maps_back_to_the_same_footprint() {
+        let mut p = part("R2", "0603", None);
+        p.footprint = Some("Resistor_SMD:R_0603_1608Metric".into());
+        assert_eq!(kicad_footprint_of_part(&p).map(|f| f.id()).as_deref(), Some("Resistor_SMD:R_0603_1608Metric"));
+        let mut q = part("U2", "Whatever", None);
+        q.footprint = Some("Package_TO_SOT_SMD:SOT-23-5".into());
+        assert_eq!(kicad_footprint_of_part(&q).map(|f| f.id()).as_deref(), Some("Package_TO_SOT_SMD:SOT-23-5"));
+        assert_eq!(model_path_for_part(&part("U3", "QFN-48", None)), None, "a package the table does not know has no model");
+    }
+
+    /// Every entry of the table names files KiCad.app really has -- a footprint and its 3D model -- when it is installed here.
+    #[test]
+    fn every_table_entry_names_files_kicad_ships() {
+        let (fp_root, m3_root) = (std::path::Path::new("/Applications/KiCad/KiCad.app/Contents/SharedSupport/footprints"), std::path::Path::new("/Applications/KiCad/KiCad.app/Contents/SharedSupport/3dmodels"));
+        if !fp_root.is_dir() || !m3_root.is_dir() {
+            return; // no KiCad install on this machine
+        }
+        let mut parts = Vec::new();
+        for key in ["0402", "0603", "0805"] {
+            for r in ["R", "C", "L", "D"] {
+                parts.push(part(&format!("{r}1"), key, Some(if r == "D" { "LED" } else { "x" })));
+            }
+        }
+        for key in ["SOT-23", "SOT-23-5", "SOT-23-6", "SOT-223", "SOIC-8", "SOIC-14", "SOIC-16", "TSSOP-8", "TSSOP-14", "TSSOP-16", "TSSOP-20", "MSOP-8", "MSOP-10", "PINHEADER-1", "PINHEADER-4", "PINHEADER-12"] {
+            parts.push(part("U1", key, None));
+        }
+        for p in &parts {
+            let Some(f) = kicad_footprint_of_part(p) else { continue };
+            assert!(fp_root.join(format!("{}.pretty", f.library)).join(format!("{}.kicad_mod", f.name)).is_file(), "{} has no footprint file", f.id());
+            assert!(m3_root.join(format!("{}.3dshapes", f.library)).join(format!("{}.step", f.name)).is_file(), "{} has no 3D model", f.id());
+        }
+        assert!(parts.iter().filter(|p| kicad_footprint_of_part(p).is_some()).count() >= 25, "the table covers the built-in packages");
     }
 
     #[test]

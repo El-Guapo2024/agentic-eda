@@ -99,7 +99,12 @@ Old #6. **Partial.** Hit: every multi-sheet design. Blocks: yes. WP2, size L.
 New (the old "library browsers" mention). **Open.** Hit: every session that adds a part. Blocks: yes, a part must come from a library the design already uses, or the built-in catalog. WP6, size L.
 - Exists: the Symbol Chooser with search and preview (`components/SymbolChooserDialog.tsx`); library trees for the
   project library (`components/library/`); `.kicad_sym` and `.kicad_mod` reading from one root set by
-  `EDA_KICAD_SYMBOLS` and `EDA_KICAD_FOOTPRINTS`.
+  `EDA_KICAD_SYMBOLS` and `EDA_KICAD_FOOTPRINTS`. The Footprint and Symbol editors' trees also list every installed
+  KiCad library (155 footprint, 223 symbol) beside the project's own: names one library at a time, cached
+  (`crates/cli/src/library_index.rs`, `GET /api/library/index|items|all`, `components/library/LibraryTree.tsx`); opening an
+  installed item copies it into the project library first. The two choosers do not use that index yet: placing an installed
+  symbol needs `add_symbol` to resolve its definition into the schematic's `lib_symbols`, search needs the symbols' descriptions
+  (names only are indexed), and KiCad's chooser is a tree rather than a flat list.
 - Missing: `GET /api/symbol_library` (`crates/cli/src/studio.rs::symbol_library_json`) lists only libraries the design
   references plus the built-in catalog; footprints resolve by name and are never enumerated
   (`crates/kicad/src/footprint_lib.rs`). No library tables (user and project libraries, Add and New Library, Configure
@@ -262,9 +267,13 @@ Old #26. **Partial.** Hit: connector rows, LED grids. Blocks: partly. WP6 (after
 
 ### 23. The 3D viewer
 Old honorable mention. **Partial.** Backlog, size L.
-- Camera, trackball, view presets, lighting and materials follow `3d-viewer` (`PARITY-3d.md`). The instant scene draws parts as boxes;
-  the real board with its models comes from kicad-cli's GLB export in the background and takes minutes (`components/viewer3d/Viewer3D.tsx`,
-  `GET /api/board.glb`). Missing: the Appearance Manager, stackup colours, hover highlight, raytracing, camera animation, a zone toggle.
+- Camera, trackball, view presets, lighting and materials follow `3d-viewer` (`PARITY-3d.md`); the toolbar is KiCad's own, with its icons, and
+  the Appearance manager is a first version (view, show, render). The instant scene draws parts as boxes sized from the footprint's `F.Fab` body
+  (courtyard when it has none); the real board with its models comes from kicad-cli's GLB export in the background and takes minutes
+  (`components/viewer3d/Viewer3D.tsx`, `GET /api/board.glb`). A footprint without a `(model ...)` gets KiCad's model for its package from an
+  explicit table (`crates/model/src/footprint.rs::kicad_footprint_for`: 0402/0603/0805 passives and LEDs by reference prefix, SOT-23 and SOT-223, SOIC, TSSOP, MSOP, pin headers), and the export draws
+  copper on a net the netlist lost instead of refusing the board. Missing: the Appearance manager's layer tree and stackup colours, models for
+  every other package, hover highlight, raytracing, camera animation, a zone toggle.
 
 ### 24. Item kinds the IR does not have
 New. **Open, deferred.** Backlog.

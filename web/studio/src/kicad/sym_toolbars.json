@@ -1,0 +1,271 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": "2026-05-04T07:39:57+03:00",
+    "extractedAt": "2026-10-08T04:49:22.790Z",
+    "sourceFiles": [
+      "eeschema/symbol_editor/toolbars_symbol_editor.cpp",
+      "common/tool/action_toolbar.cpp",
+      "pcbnew/tools/pcb_actions.cpp",
+      "common/tool/actions.cpp",
+      "pcbnew/router/router_tool.cpp",
+      "common/hotkey_store.cpp",
+      "eeschema/tools/sch_actions.cpp"
+    ],
+    "note": "group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call; TOOLBAR_LOC::TOP_AUX returns std::nullopt in source: this editor has no auxiliary toolbar; control labels are the real source strings (ACTION_TOOLBAR_CONTROL's 2nd constructor argument) where the constructor is in common/tool/action_toolbar.cpp or the editor's own file, else the enumerator name"
+  },
+  "toolbars": [
+    {
+      "id": "main",
+      "orientation": "horizontal",
+      "items": [
+        {
+          "type": "action",
+          "action": "eeschema.SymbolLibraryControl.newSymbol"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.saveAll"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.save"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.undo"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.redo"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.find"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.findAndReplace"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomRedraw"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomInCenter"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomOutCenter"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomFitScreen"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomTool"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.rotateCCW"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.rotateCW"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.mirrorV"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.mirrorH"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.symbolProperties"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveEdit.pinTable"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.showDatasheet"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InspectionTool.checkSymbol"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "control",
+          "control": "bodyStyleSelector",
+          "label": "Symbol body style selector"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "control",
+          "control": "unitSelector",
+          "label": "Symbol unit selector"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolLibraryControl.toggleSyncedPinsMode"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolLibraryControl.addSymbolToSchematic"
+        }
+      ]
+    },
+    {
+      "id": "options",
+      "orientation": "vertical",
+      "items": [
+        {
+          "type": "action",
+          "action": "common.Control.toggleGrid"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.toggleGridOverrides"
+        },
+        {
+          "type": "group",
+          "label": "Units",
+          "icon": "unit_mm",
+          "items": [
+            "common.Control.metricUnits",
+            "common.Control.imperialUnits",
+            "common.Control.mils"
+          ]
+        },
+        {
+          "type": "group",
+          "label": "Crosshair modes",
+          "icon": "cursor_shape",
+          "items": [
+            "common.Control.cursorSmallCrosshairs",
+            "common.Control.cursorFullCrosshairs",
+            "common.Control.cursor45Crosshairs"
+          ]
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolLibraryControl.showElectricalTypes"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolLibraryControl.showHiddenPins"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolLibraryControl.showHiddenFields"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.showLibraryTree"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.showProperties"
+        }
+      ]
+    },
+    {
+      "id": "drawing",
+      "orientation": "vertical",
+      "items": [
+        {
+          "type": "action",
+          "action": "common.InteractiveSelection.selectionTool"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolDrawing.placeSymbolPin"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolDrawing.placeSymbolText"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolDrawing.drawSymbolTextBox"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawRectangle"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawCircle"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawArc"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.InteractiveDrawing.drawBezier"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolDrawing.drawSymbolLines"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolDrawing.drawSymbolPolygon"
+        },
+        {
+          "type": "action",
+          "action": "eeschema.SymbolDrawing.placeSymbolAnchor"
+        },
+        {
+          "type": "action",
+          "action": "common.Interactive.deleteTool"
+        }
+      ]
+    }
+  ]
+}

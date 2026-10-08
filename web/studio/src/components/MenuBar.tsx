@@ -12,21 +12,28 @@ import schMenusData from "../kicad/sch_menus.json";
 import fpMenusData from "../kicad/fp_menus.json";
 import symMenusData from "../kicad/sym_menus.json";
 import actionsData from "../kicad/actions.json";
+import { SYMBOL_EDITOR_MENU_EXTRAS } from "../kicad/menuExtras";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
 import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
+import { useChecked } from "../actions/useChecked";
 import { useStudioState } from "../state/store";
 import { HELP_MENU } from "../kicad-port/helpMenu";
 
 const menusFile = menusData as MenusFile;
 const schMenusFile = schMenusData as MenusFile;
 const fpMenusFile = fpMenusData as MenusFile;
-const symMenusFile = symMenusData as MenusFile;
+/** The Symbol Editor's menus with this studio's own entries appended (kicad/menuExtras.ts) -- the generated JSON stays KiCad's. */
+const symMenusFile: MenusFile = {
+  ...(symMenusData as MenusFile),
+  menus: (symMenusData as MenusFile).menus.map((m) => (SYMBOL_EDITOR_MENU_EXTRAS[m.label] ? { ...m, items: [...m.items, ...SYMBOL_EDITOR_MENU_EXTRAS[m.label]!] } : m)),
+};
 const actionsFile = actionsData as ActionsFile;
 const actionsByName = new Map<string, KicadAction>(actionsFile.actions.map((a) => [a.name, a]));
 
 export function MenuNodeView({ node }: { node: MenuNode }) {
-  const { run, isEnabled, isChecked } = useActionRunner();
+  const { run, isEnabled } = useActionRunner();
+  const isChecked = useChecked();
   if (node.type === "separator") return <div className="menu-separator" role="separator" />;
   if (node.type === "submenu") {
     return (
@@ -45,10 +52,10 @@ export function MenuNodeView({ node }: { node: MenuNode }) {
   }
   const action = actionsByName.get(node.action);
   const enabled = isEnabled(node.action);
-  const label = action?.label ?? node.action;
+  const label = node.label ?? action?.label ?? node.action;
   const tooltip = enabled ? action?.tooltip : `${action?.tooltip ?? ""} (not ported yet)`.trim();
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
-  // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate ...) shows its state as a check mark.
+  // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate, the panes under View > Panels, Units ...) shows its state as a check mark.
   const checked = enabled ? isChecked(node.action) : undefined;
   return (
     <div className="menu-node-item" role={checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={checked} aria-disabled={!enabled} title={tooltip} onClick={() => enabled && run(node.action)}>

@@ -1,34 +1,53 @@
-// What the library tree of the two library editors remembers: which libraries are folded (Expand All / Collapse All), which are pinned (Pin
+// What the library tree of the two library editors remembers: which libraries are open or folded (Expand All / Collapse All), which are pinned (Pin
 // Library / Unpin Library) and the rules that read them. Ported from common/tool/library_editor_control.cpp (`LIBRARY_EDITOR_CONTROL::
 // changeSelectedPinStatus`, `AddContextMenuItems`), common/lib_tree_model.cpp (`LIB_TREE_NODE::Compare`: pinned libraries sort first) and
 // common/lib_tree_model_adapter.cpp (`GetPinningSymbol`, "☆ " in front of a pinned library's name), commit 8303b2ad. Pure: the store is
-// state/libraryTree.ts and the tree is components/library/LibraryTree.tsx.
+// state/libraryTree.ts and the tree is components/library/LibraryTree.tsx. (Whether the tree is shown at all is the dock layout's: the Libraries column.)
 
-/** `LIB_TREE_MODEL_ADAPTER::GetPinningSymbol()`: not an ASCII7 character, a unicode one. */
+/** `GetPinningSymbol()`: not an ASCII7 character, a unicode one. */
 export const PIN_GLYPH = "☆ ";
 
 /**
- * Which libraries are folded. Expand All and Collapse All set a default for every library, present and future, and the libraries clicked
- * since are the exceptions to it; a tree that has just been made shows every library open.
+ * Which libraries are open. A group starts the way the tree decides (`auto`: the libraries holding entries the editor already lists are open, an installed
+ * library nobody asked for is folded and loads when it is opened); Expand All and Collapse All set every group at once (`open`, `closed`), and the
+ * libraries clicked since are the exceptions (`explicit`).
  */
 export interface TreeFold {
-  readonly defaultCollapsed: boolean;
-  readonly flipped: ReadonlySet<string>;
+  readonly mode: "auto" | "open" | "closed";
+  readonly explicit: ReadonlyMap<string, boolean>;
 }
 
+export const FOLD_AUTO: TreeFold = { mode: "auto", explicit: new Map() };
 /** `wxDataViewCtrl::ExpandAll` / `CollapseAll`, `LIB_TREE::onKeyDown` and the tree's configuration menu. */
-export const ALL_EXPANDED: TreeFold = { defaultCollapsed: false, flipped: new Set() };
-export const ALL_COLLAPSED: TreeFold = { defaultCollapsed: true, flipped: new Set() };
+export const ALL_EXPANDED: TreeFold = { mode: "open", explicit: new Map() };
+export const ALL_COLLAPSED: TreeFold = { mode: "closed", explicit: new Map() };
 
-export function isFolded(fold: TreeFold, lib: string): boolean {
-  return fold.defaultCollapsed !== fold.flipped.has(lib);
+/** What the tree knows about a group that its open state depends on. */
+export interface GroupFacts {
+  /** The group lists items now (the project's, the board's, or an installed library's that has been loaded). */
+  hasItems: boolean;
+  /** Whether the group opens by itself when nobody chose (`defaultGroupOpen` of kicad-port/libraryTreeModel.ts). */
+  defaultOpen: boolean;
 }
 
-/** A click on a library's row or its arrow: open it when folded, fold it when open. */
-export function toggleFold(fold: TreeFold, lib: string): TreeFold {
-  const flipped = new Set(fold.flipped);
-  if (!flipped.delete(lib)) flipped.add(lib);
-  return { defaultCollapsed: fold.defaultCollapsed, flipped };
+/**
+ * Whether `lib` is open. A choice made on it wins; else Expand All opens the libraries that have items listed (an installed library nobody has
+ * loaded stays folded: opening it is what loads its items, and expanding all of a hundred and fifty libraries would load every one), Collapse
+ * All folds every one, and with neither the tree's own default holds.
+ */
+export function isGroupOpen(fold: TreeFold, lib: string, facts: GroupFacts): boolean {
+  const chosen = fold.explicit.get(lib);
+  if (chosen !== undefined) return chosen;
+  if (fold.mode === "open") return facts.hasItems;
+  if (fold.mode === "closed") return false;
+  return facts.defaultOpen;
+}
+
+/** A click on a library's row or its arrow: the group goes to `open`. */
+export function setGroupOpen(fold: TreeFold, lib: string, open: boolean): TreeFold {
+  const explicit = new Map(fold.explicit);
+  explicit.set(lib, open);
+  return { mode: fold.mode, explicit };
 }
 
 /**

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { commonChecked, type ToggleSnapshot } from "./commonChecked";
 
-const base: ToggleSnapshot = { crossHairMode: "small", alwaysShowCursor: true, drawBoundingBoxes: false, selectionMode: "rect", libraryTreeShown: null };
+const base: ToggleSnapshot = { crossHairMode: "small", alwaysShowCursor: true, drawBoundingBoxes: false, selectionMode: "rect" };
 
 test("the crosshair modes are a radio group: exactly the current one is checked", () => {
   const modes = ["common.Control.cursorSmallCrosshairs", "common.Control.cursorFullCrosshairs", "common.Control.cursor45Crosshairs"];
@@ -24,12 +24,7 @@ test("the selection modes: rectangle and lasso are one choice", () => {
   assert.equal(commonChecked("common.Interactive.selectSetLasso", { ...base, selectionMode: "lasso" }), true);
 });
 
-test("the library tree entry is checked only in an editor that has a tree", () => {
-  assert.equal(commonChecked("common.Control.showLibraryTree", base), undefined);
-  assert.equal(commonChecked("common.Control.showLibraryTree", { ...base, libraryTreeShown: true }), true);
-  assert.equal(commonChecked("common.Control.showLibraryTree", { ...base, libraryTreeShown: false }), false);
-});
-
 test("an action with no check says so", () => {
   assert.equal(commonChecked("common.Control.zoomIn", base), undefined);
+  assert.equal(commonChecked("common.Control.showLibraryTree", base), undefined, "the library tree's check is the dock layout's");
 });

@@ -121,6 +121,9 @@ fn check_trees(board: &Board, dump: &str) -> (usize, Vec<String>) {
 
 #[test]
 fn boards_read_and_tree_shapes_match_freerouting() {
+    if slow_tests_off() {
+        return;
+    }
     let (mut boards, mut shapes, mut failures) = (0, 0, Vec::new());
     for path in dumps() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -178,6 +181,9 @@ fn route(dump: &str) -> Option<(i32, u32)> {
 
 #[test]
 fn routing_controls_match_freerouting() {
+    if slow_tests_off() {
+        return;
+    }
     use eda_freeroute::autoroute::Control;
     let (mut checked, mut failures) = (0, Vec::new());
     for path in dumps() {
@@ -400,6 +406,9 @@ mod search {
 
 #[test]
 fn maze_search_matches_freerouting() {
+    if slow_tests_off() {
+        return;
+    }
     let (mut searched, mut steps, mut failures) = (0, 0, Vec::new());
     for path in dumps() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -591,6 +600,9 @@ fn replay_insertion(dump: &str) -> Option<Result<(), String>> {
 /// listed but do not fail the test; any other stop or difference does.
 #[test]
 fn insertion_matches_freerouting() {
+    if slow_tests_off() {
+        return;
+    }
     let (mut checked, mut unported, mut failures) = (0, Vec::new(), Vec::new());
     for path in dumps() {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -836,6 +848,9 @@ fn replay_pass(dump: &str) -> Option<(usize, Option<String>)> {
 /// not fail the test; any other stop or difference does.
 #[test]
 fn pass_matches_freerouting() {
+    if slow_tests_off() {
+        return;
+    }
     let (mut boards, mut connections, mut unported, mut failures) = (0, 0, Vec::new(), Vec::new());
     for path in pass_dumps() {
         // A design's dump is named for its directory.
@@ -867,4 +882,15 @@ fn pass_matches_freerouting() {
         eprintln!("  {u}");
     }
     assert!(failures.is_empty(), "{} passes differ from FreeRouting:\n{}", failures.len(), failures.join("\n"));
+}
+
+/// Replays the freerouting dumps: most of a minute in release and many minutes in debug, so it
+/// runs only when `EDA_SLOW_TESTS` is set. `tools/check.sh full`, the check
+/// before a merge lands on main, sets it.
+fn slow_tests_off() -> bool {
+    let off = std::env::var_os("EDA_SLOW_TESTS").is_none();
+    if off {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+    }
+    off
 }

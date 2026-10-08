@@ -98,8 +98,8 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
     })
   );
 
-  // The library editors do not register Zoom to Fit in `useActionRunner.ts` (that is the board's and the schematic's):
-  // COMMON_TOOLS::ZoomFitScreen / ZoomFitObjects -> doZoomFit( ZOOM_FIT_ALL / ZOOM_FIT_OBJECTS ) frames
+  // Zoom to Fit (COMMON_TOOLS::ZoomFitScreen / ZoomFitObjects) of the board and the schematic is `useActionRunner.ts`'s, and the library editors' is
+  // `editorFrameActions.ts`'s. What the zoom list's "Zoom Auto" does in the library editors is the same function: `doZoomFit( ZOOM_FIT_ALL )` frames
   // `GetDocumentExtents()`, with the bigger margin the symbol and footprint editors get ("1.48").
   const boardOrSheetFit = m.get("common.Control.zoomFitScreen");
   const fitAll = (a: EditorAdapter, rect: DOMRect) => {
@@ -107,10 +107,6 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
     const view = zoomFitBox(box ?? a.defaultBox(), a.defaultBox(), rect.width, rect.height, LIBRARY_EDITOR_FIT_MARGIN);
     if (view) a.setView(view);
   };
-  if (tab === "footprint" || tab === "symbol") {
-    m.set("common.Control.zoomFitScreen", onCanvas(fitAll));
-    m.set("common.Control.zoomFitObjects", onCanvas(fitAll));
-  }
 
   // ACTIONS::zoomPreset -- COMMON_TOOLS::ZoomPreset( idx ) -> doZoomToPreset( idx, false ): entry `idx` of the editor's
   // zoom list, set about the view centre, or Zoom Auto (zoom to fit the page / document) for 0 -- the action's default

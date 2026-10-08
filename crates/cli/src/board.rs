@@ -769,9 +769,22 @@ fn actor() -> String {
     std::env::var("EDA_ACTOR").ok().filter(|a| !a.is_empty()).unwrap_or_else(|| "cli".into())
 }
 
-/// The failures' messages, one line.
+/// The failures' messages, one line. A sentence several failures share is said once, with how many said it: a board with 200 tracks on a net its netlist lacks
+/// refuses with 200 copies of the same message, and a dialog showing all of them is a wall of text nobody reads (`message (x200)`).
 pub(crate) fn reasons(e: &[CheckResult]) -> String {
-    e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; ")
+    let mut said: Vec<(String, usize)> = Vec::new();
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for c in e {
+        let message = c.hint.clone().unwrap_or_else(|| c.check.clone());
+        match index.get(&message) {
+            Some(&i) => said[i].1 += 1,
+            None => {
+                index.insert(message.clone(), said.len());
+                said.push((message, 1));
+            }
+        }
+    }
+    said.into_iter().map(|(m, n)| if n > 1 { format!("{m} (x{n})") } else { m }).collect::<Vec<_>>().join("; ")
 }
 
 /// Append what was done, by whom, to the board's `activity.jsonl`.
@@ -2606,5 +2619,21 @@ mod tests {
         step(&dir, Cmd::UpdateSymbolOnBoard { lib_id: "TEST:R".into() }, false, "test").unwrap();
         let (_, _, model) = load(&dir).unwrap();
         assert_eq!(model.symbol_of("TEST:R").unwrap().pins.len(), 2, "an explicit Update Symbol on Board must republish the edited definition");
+    }
+
+    #[test]
+    fn reasons_says_a_repeated_sentence_once_with_how_many() {
+        let track = |net: &str| CheckResult::fail("kicad.unknown_net", net.to_string(), format!("a track is on net {net:?}, which is not in the netlist"));
+        let mut failures: Vec<CheckResult> = (0..200).map(|_| track("GND")).collect();
+        failures.push(track("PA7"));
+        failures.push(CheckResult::fail("one_off", "x".to_string(), "a different problem"));
+        failures.push(track("GND"));
+        assert_eq!(
+            reasons(&failures),
+            "a track is on net \"GND\", which is not in the netlist (x201); a track is on net \"PA7\", which is not in the netlist; a different problem",
+            "each distinct message once, in the order first met, with the number of times it was said"
+        );
+        assert_eq!(reasons(&[]), "");
+        assert_eq!(reasons(&[CheckResult::pass("only_a_name")]), "only_a_name", "a failure with no hint says its check name, as before");
     }
 }

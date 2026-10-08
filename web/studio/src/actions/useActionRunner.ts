@@ -67,7 +67,8 @@ import { makeEditorAdapter } from "./editorAdapter";
 import { cancelLasso, getCommonTool } from "../state/commonTool";
 import { commonChecked } from "../kicad-port/commonChecked";
 import { useCommonOptions } from "../state/commonOptions";
-import { useLibraryTree } from "../state/libraryTree";
+import { registerEditorFrameActions } from "./editorFrameActions";
+import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { registerSchControlActions, schControlChecked } from "./schControlActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
@@ -108,8 +109,6 @@ export function useActionRunner() {
   const schControlDispatch = useSchControlDispatch();
   // The shared tools' toggles (Always Show Crosshairs, Library Tree ...), read by `isChecked`; being subscribed here re-renders a menu or a toolbar when one changes.
   const commonOptions = useCommonOptions();
-  const fpTree = useLibraryTree("footprint");
-  const symTree = useLibraryTree("symbol");
   /** `m_afterItem` of find-next-marker (SCH_FIND_REPLACE_TOOL): the last ERC marker visited, so the next press continues from it. */
   const markerCursor = useRef<string | null>(null);
   /** The net navigator's own tree selection (`m_netNavigator->GetSelection()`): which item of the highlighted net Tab/Shift+Tab last landed on. */
@@ -757,8 +756,20 @@ export function useActionRunner() {
       })
     );
 
-    m.set("pcbnew.Control.showLayersManager", () => dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "appearance" }));
-    m.set("common.Control.showProperties", () => {}); // properties panel is always visible in this layout; a no-op is the correct behavior, not a missing feature
+    // PCB_EDIT_FRAME::ToggleLayersManager: shows or hides the Appearance dock (here its column folds to a handle, kicad-port/dockLayout.ts); showing it picks the Appearance tab.
+    m.set("pcbnew.Control.showLayersManager", () => {
+      const layout = getDockLayout();
+      if (!layout.rightCollapsed && state.rightDockTab === "appearance") {
+        setDockColumnCollapsed("right", true);
+        return;
+      }
+      dispatch({ type: "SET_RIGHT_DOCK_TAB", tab: "appearance" });
+      setDockColumnCollapsed("right", false);
+    });
+    // ACTIONS::showProperties (`ToggleProperties`): shows or hides the Properties pane (the board editor's and the schematic's).
+    m.set("common.Control.showProperties", () => {
+      if (state.tab === "pcb" || state.tab === "schematic") toggleDockPane("properties");
+    });
 
     m.set(
       "pcbnew.InteractiveMove.move",
@@ -1343,14 +1354,13 @@ export function useActionRunner() {
     m.set("eeschema.NavigateTool.forward", navStep("forward"));
 
     // Ctrl+H -- SCH_EDITOR_CONTROL::ShowHierarchy (sch_editor_control.cpp)
-    // shows/raises the Hierarchy Navigator pane; HierarchyPanel is always
-    // docked here, so this brings it into view and focuses it.
+    // toggles the Schematic Hierarchy pane (`ToggleSchematicHierarchy`:
+    // `PANE_INFO.Show( !IsShown() )`); the pane lives in the left dock
+    // column (SchematicDock), which showing it brings back.
     m.set(
       "eeschema.EditorTool.showHierarchy",
       schematicOnly(() => {
-        const el = document.getElementById("hierarchy-panel");
-        el?.scrollIntoView({ block: "nearest" });
-        el?.focus();
+        toggleDockPane("hierarchy");
       })
     );
 
@@ -2227,7 +2237,6 @@ export function useActionRunner() {
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
-
     // The shared actions that work in every editor (actions/commonActions.ts). The adapter is built when an action runs: the
     // library editors' stores change without this registry being rebuilt.
     registerCommonActions(m, {
@@ -2244,6 +2253,10 @@ export function useActionRunner() {
       symApi,
       symDispatch,
     });
+
+    // The frame-wide actions (zoom, grid, save, print, library tree, select) of those two editors, on their own canvas and store, and the unregistering of the toolbar actions they do not support.
+    // After the shared actions above: on those two tabs the frame's own handler is the one that stands where both have one.
+    registerEditorFrameActions(m, { tab: state.tab, fpApi, fpDispatch, symApi, symDispatch });
 
     // The schematic editor's control actions (eeschema.EditorControl / NavigateTool / InspectionTool / Interactive.increment*).
     registerSchControlActions(m, { tab: state.tab, state, api, dispatch, requestSelection, symApi, symDispatch, control: schControl, controlDispatch: schControlDispatch });
@@ -2289,7 +2302,7 @@ export function useActionRunner() {
     (name: string): boolean | undefined => {
       // The shared tools' toggles (Always Show Crosshairs, the crosshair mode, Draw Bounding Boxes, the selection mode, Library Tree), in every editor.
       if (registry.has(name)) {
-        const shared = commonChecked(name, { ...commonOptions, libraryTreeShown: state.tab === "footprint" ? fpTree.shown : state.tab === "symbol" ? symTree.shown : null });
+        const shared = commonChecked(name, commonOptions);
         if (shared !== undefined) return shared;
       }
       if (state.tab !== "schematic" || !registry.has(name)) return undefined;
@@ -2301,7 +2314,9 @@ export function useActionRunner() {
         requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
       });
     },
-    [registry, schControl, state, commonOptions, fpTree, symTree]
+    [registry, schControl, state, commonOptions]
   );
-  return { run, isEnabled, isChecked };
+  /** Every action id the registry has a handler for on this tab (the scripted test hook, `window.__eda`, lists them). */
+  const actionNames = useMemo(() => [...registry.keys()], [registry]);
+  return { run, isEnabled, isChecked, actionNames };
 }

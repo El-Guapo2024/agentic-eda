@@ -137,8 +137,12 @@ export function DrcDialog() {
                 {STALE_NOTICE}
               </span>
             )}
-            {state.drcError && <span style={{ color: "var(--chrome-danger)" }}>{state.drcError}</span>}
           </div>
+          {state.drcError && (
+            <div className="run-error" role="alert">
+              {state.drcError}
+            </div>
+          )}
           {running && (
             <div className="run-banner" role="status">
               <span className="bar" />

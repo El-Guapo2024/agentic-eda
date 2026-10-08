@@ -116,6 +116,13 @@ defines is read-only until it is opened (which makes an editable copy). Copy, Ex
 (`GET /api/library/symbol`); Delete and Rename need a project entry. The editor's view starts as KiCad's settings do
 (`SYMBOL_EDITOR_SETTINGS`): electrical types and hidden pins shown, pin numbers not forced.
 
+The tree lists the project library and every installed KiCad `.kicad_sym` library (223), one library at a time on expand and cached
+(`crates/cli/src/library_index.rs`, `GET /api/library/index|items|all`: the top-level `(symbol "Name"` entries of the file, without parsing it);
+opening an installed symbol copies it into the project library first (`put_library_symbol`), so the installed original is never touched. The frame is
+KiCad's (`symbol_edit_frame.cpp`): the three icon toolbars are the symbol editor's `toolbars_symbol_editor.cpp` extracted into
+`src/kicad/sym_toolbars.json`, each button with its KiCad icon; one whose action needs an unported subsystem (rotate, mirror, ...) is dimmed with its
+reason (`src/kicad/editor_toolbar_support.json`). With nothing open the canvas is empty, with its grid and a hint.
+
 | Action | Status | KiCad file:function |
 |---|---|---|
 | Edit / Cut / Copy / Paste / Duplicate / Delete / Rename Symbol | **done** | `symbol_editor_control.cpp`: `EditSymbol`, `CutCopyDelete`, `DuplicateSymbol` (Paste is `DuplicateSymbol( true )`: each clipboard symbol lands in the target library under a free name), `DeleteSymbolFromLibrary`, `RenameSymbol` (an existing name asks "Overwrite"). The clipboard holds the bare `(symbol ...)` forms (`kicad-port/symClipboard.ts`), as KiCad's own does; the editor also keeps its copy, so Paste works where the browser denies the clipboard. Verbs `put_library_symbol`, `rename_library_symbol`, `delete_library_symbol` |

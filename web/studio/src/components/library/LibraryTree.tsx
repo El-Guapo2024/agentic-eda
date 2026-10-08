@@ -4,28 +4,39 @@
 // build. Generic over what the items are: the two panels (`SymbolLibraryPanel`, `FootprintLibraryPanel`) feed it names and
 // the entries of the menu.
 //
-// What the tree remembers -- shown or hidden, which libraries are folded, which are pinned, which library rows are selected -- lives in
-// `state/libraryTree.ts`, so the shared actions (Library Tree, Hide Library Tree, Expand All, Collapse All, Pin Library, Unpin Library)
-// and the tree act on the same state. A library row is selectable like a symbol row (`LIB_TREE_NODE::TYPE::LIBRARY`); a pinned library
-// is listed first with a star in front of its name.
-import { useMemo, useRef, useState } from "react";
-import { libraryGroups, splitLibName } from "../../kicad-port/libraryNames";
-import { isFolded, libraryLabel, pinnedFirst } from "../../kicad-port/libraryTreeState";
-import { collapseAllLibraries, expandAllLibraries, selectLibraries, toggleLibraryFold, useLibraryTree, type TreeKind } from "../../state/libraryTree";
+// The libraries are the project's own plus KiCad's installed ones (155 footprint and 223 symbol libraries): every installed library is a
+// collapsed group from the start, and its items are fetched when the group opens (`onLoadLibrary`), so a tree of thousands of footprints
+// costs one request per library the person actually looks into. The search box filters across every library; the first time it is used it
+// asks for the whole index (`onSearch`). The merge, ordering and search rules are kicad-port/libraryTreeModel.ts's.
+//
+// What the tree remembers -- which libraries are open, which are pinned, which library rows are selected -- lives in `state/libraryTree.ts`, so the
+// shared actions (Expand All, Collapse All, Pin Library, Unpin Library) and the tree act on the same state. A library row is selectable like a
+// symbol row (`LIB_TREE_NODE::TYPE::LIBRARY`); a pinned library is listed first with a star in front of its name. Whether the tree is shown is the
+// dock layout's (the Libraries column folds to its handle).
+import { useEffect, useMemo, useRef, useState } from "react";
+import { splitLibName } from "../../kicad-port/libraryNames";
+import { buildTreeGroups, defaultGroupOpen, needsLoading, type InstalledLib, type TreeGroup, type TreeItem } from "../../kicad-port/libraryTreeModel";
+import { isGroupOpen, libraryLabel, pinnedFirst } from "../../kicad-port/libraryTreeState";
+import { collapseAllLibraries, expandAllLibraries, selectLibraries, setLibraryOpen, useLibraryTree, type TreeKind } from "../../state/libraryTree";
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 
-export interface TreeItem {
-  /** The library key: `Lib:Name`, or a bare name. */
-  name: string;
-  /** In the project library (editable in place); otherwise it comes from a library file or the built-in table. */
-  project: boolean;
-}
+export type { TreeItem };
 
 export interface LibraryTreeProps {
   /** Which editor's tree this is (the state it shares with the shared actions). */
   kind: TreeKind;
   title: string;
+  /** The names the editor already lists (the project's own entries, what the board's model resolves, the built-in table). */
   items: readonly TreeItem[];
+  /** KiCad's installed libraries, and the item names of the ones loaded so far. */
+  installed?: readonly InstalledLib[];
+  loaded?: ReadonlyMap<string, readonly string[]>;
+  loading?: ReadonlySet<string>;
+  /** An installed library's group opened: fetch its items. */
+  onLoadLibrary?: (lib: string) => void;
+  /** The search box has text: make sure every library's names are available. */
+  onSearch?: () => void;
+  searchIndex?: "idle" | "loading" | "ready";
   selected: readonly string[];
   /** The item open in the editor (drawn bold). */
   current: string | null;
@@ -37,20 +48,35 @@ export interface LibraryTreeProps {
   menu: (selected: string[], libs: string[]) => MenuEntry[];
 }
 
-export function LibraryTree({ kind, title, items, selected, current, multi, onSelect, onOpen, menu }: LibraryTreeProps) {
+const NO_LIBS: readonly InstalledLib[] = [];
+const NOTHING_LOADED: ReadonlyMap<string, readonly string[]> = new Map();
+const NOT_LOADING: ReadonlySet<string> = new Set();
+
+export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = NOTHING_LOADED, loading = NOT_LOADING, onLoadLibrary, onSearch, searchIndex = "idle", selected, current, multi, onSelect, onOpen, menu }: LibraryTreeProps) {
   const ui = useLibraryTree(kind);
   const [filter, setFilter] = useState("");
   const [ctx, setCtx] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const anchor = useRef<string | null>(null);
 
-  const q = filter.trim().toLowerCase();
-  const visible = useMemo(() => items.filter((it) => !q || it.name.toLowerCase().includes(q)), [items, q]);
-  const groups = useMemo(() => pinnedFirst(libraryGroups(visible), ui.pinned), [visible, ui.pinned]);
-  const flat = useMemo(() => groups.flatMap((g) => (isFolded(ui.fold, g.lib) && !q ? [] : g.items.map((i) => i.name))), [groups, ui.fold, q]);
+  const q = filter.trim();
+  const built = useMemo(() => buildTreeGroups(items, installed, loaded, q), [items, installed, loaded, q]);
+  const { truncated } = built;
+  const groups = useMemo(() => pinnedFirst(built.groups, ui.pinned), [built.groups, ui.pinned]);
+  /** Whether a group is open: a search opens them all (the matches are what it is for); else the fold decides. */
+  const isOpen = (g: TreeGroup) => (q ? true : isGroupOpen(ui.fold, g.lib, { hasItems: g.items.length > 0, defaultOpen: defaultGroupOpen(g) }));
+  const flat = useMemo(() => groups.flatMap((g) => (isOpen(g) ? g.items.map((i) => i.name) : [])), [groups, ui.fold, q]); // eslint-disable-line react-hooks/exhaustive-deps
   const projectOf = useMemo(() => new Map(items.map((i) => [i.name, i.project])), [items]);
 
-  // `ToggleLibraryTree` hid the pane: nothing is drawn, the state stays.
-  if (!ui.shown) return null;
+  // An open group of an installed library gets its items (the groups KiCad has libraries for open by default only when the editor already lists names in them).
+  useEffect(() => {
+    if (!onLoadLibrary) return;
+    for (const g of groups) if (needsLoading(g, isOpen(g), loaded)) onLoadLibrary(g.lib);
+  }, [groups, ui.fold, loaded, onLoadLibrary]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The search box asks for every library's names the first time it has text (KiCad's tree searches all of them).
+  useEffect(() => {
+    if (q && onSearch) onSearch();
+  }, [q, onSearch]);
 
   const click = (name: string, e: React.MouseEvent) => {
     const toggle = multi && (e.metaKey || e.ctrlKey);
@@ -67,9 +93,9 @@ export function LibraryTree({ kind, title, items, selected, current, multi, onSe
   };
 
   /** A library row: it opens or folds, and is the selection (a library and symbols are not selected together). */
-  const clickLibrary = (lib: string) => {
-    toggleLibraryFold(kind, lib);
-    selectLibraries(kind, [lib]);
+  const clickLibrary = (g: TreeGroup) => {
+    setLibraryOpen(kind, g.lib, !isOpen(g));
+    selectLibraries(kind, [g.lib]);
     if (selected.length > 0) onSelect([]);
   };
 
@@ -121,6 +147,7 @@ export function LibraryTree({ kind, title, items, selected, current, multi, onSe
     });
   };
 
+  const nothing = items.length === 0 && installed.length === 0;
   return (
     <div
       className="library-tree"
@@ -133,7 +160,7 @@ export function LibraryTree({ kind, title, items, selected, current, multi, onSe
     >
       <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--chrome-border)", display: "flex", gap: 6, alignItems: "center" }}>
         <strong style={{ fontSize: 12 }}>{title}</strong>
-        <span style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>{items.length}</span>
+        <span style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>{groups.length}</span>
       </div>
       <div style={{ padding: "6px 8px", display: "flex", gap: 4 }}>
         <input
@@ -149,16 +176,20 @@ export function LibraryTree({ kind, title, items, selected, current, multi, onSe
         </button>
       </div>
       <div style={{ overflowY: "auto", flex: 1, minHeight: 0, paddingBottom: 8 }}>
-        {groups.length === 0 && <div style={{ padding: "8px 10px", color: "var(--chrome-text-dim)", fontSize: 12 }}>{items.length === 0 ? "Nothing in the library yet." : "No match."}</div>}
+        {q && searchIndex === "loading" && <div style={{ padding: "2px 10px 6px", color: "var(--chrome-text-dim)", fontSize: 11 }}>Searching every installed library…</div>}
+        {groups.length === 0 && <div style={{ padding: "8px 10px", color: "var(--chrome-text-dim)", fontSize: 12 }}>{nothing ? "Nothing in the library yet." : "No match."}</div>}
         {groups.map((g) => {
-          const open = q ? true : !isFolded(ui.fold, g.lib);
+          const isGroupOpenNow = isOpen(g);
+          const isLoading = loading.has(g.lib);
+          const count = g.installed && loaded.has(g.lib) ? Math.max(g.items.length, loaded.get(g.lib)!.length) : (g.count ?? g.items.length);
           const libSelected = ui.selectedLibs.includes(g.lib);
           return (
             <div key={g.lib}>
               <div
                 role="treeitem"
-                aria-expanded={open}
+                aria-expanded={isGroupOpenNow}
                 aria-selected={libSelected}
+                data-library={g.lib}
                 className="library-tree-group"
                 style={{
                   padding: "3px 8px",
@@ -171,14 +202,14 @@ export function LibraryTree({ kind, title, items, selected, current, multi, onSe
                   color: libSelected ? "var(--chrome-selected-text)" : undefined,
                   background: libSelected ? "var(--chrome-selected-bg)" : "transparent",
                 }}
-                onClick={() => clickLibrary(g.lib)}
+                onClick={() => clickLibrary(g)}
                 onContextMenu={(e) => onContextMenu(e, null, g.lib)}
               >
-                <span style={{ width: 10 }}>{open ? "▾" : "▸"}</span>
-                <span>{libraryLabel(g.lib, ui.pinned)}</span>
-                <span style={{ color: libSelected ? "inherit" : "var(--chrome-text-dim)", fontWeight: 400 }}>{g.items.length}</span>
+                <span style={{ width: 10 }}>{isGroupOpenNow ? "▾" : "▸"}</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{libraryLabel(g.lib, ui.pinned)}</span>
+                <span style={{ color: libSelected ? "inherit" : "var(--chrome-text-dim)", fontWeight: 400 }}>{isLoading ? "…" : count}</span>
               </div>
-              {open &&
+              {isGroupOpenNow &&
                 g.items.map((it) => {
                   const isSel = selected.includes(it.name);
                   const project = projectOf.get(it.name) ?? false;
@@ -188,7 +219,7 @@ export function LibraryTree({ kind, title, items, selected, current, multi, onSe
                       role="treeitem"
                       aria-selected={isSel}
                       data-name={it.name}
-                      title={project ? it.name : `${it.name} -- from a library file or the built-in table; opening it makes an editable copy in the project`}
+                      title={project ? it.name : `${it.name} -- from an installed library or the built-in table; opening it makes an editable copy in the project`}
                       onClick={(e) => click(it.name, e)}
                       onDoubleClick={() => onOpen(it.name)}
                       onContextMenu={(e) => onContextMenu(e, it.name)}
@@ -213,6 +244,7 @@ export function LibraryTree({ kind, title, items, selected, current, multi, onSe
             </div>
           );
         })}
+        {truncated && <div style={{ padding: "6px 10px", color: "var(--chrome-text-dim)", fontSize: 11 }}>Showing the first matches only -- type more to narrow the search.</div>}
       </div>
       {ctx && <ContextMenu x={ctx.x} y={ctx.y} entries={ctx.entries} onClose={() => setCtx(null)} />}
     </div>

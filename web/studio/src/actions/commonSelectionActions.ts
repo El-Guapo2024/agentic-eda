@@ -51,6 +51,17 @@ export function registerSelectionActions(m: Map<string, ActionHandler>, ctx: Com
   // ACTIONS::selectionClear -- PCB_SELECTION_TOOL::ClearSelection / SCH_SELECTION_TOOL::ClearSelection.
   m.set("common.InteractiveSelection.clear", () => fresh()?.setSelection([]));
 
+  // ACTIONS::selectAll / unselectAll in the library editors (the board's and the schematic's are `useActionRunner.ts`'s, which does nothing on these two
+  // tabs): `SelectAll` selects every item of the footprint or the symbol that is open (the symbol's: those of the unit and body style on show),
+  // `ClearSelection` empties the selection.
+  if (ctx.tab === "footprint" || ctx.tab === "symbol") {
+    m.set("common.Interactive.selectAll", () => {
+      const a = fresh();
+      if (a) a.setSelection([...a.itemBoxes().keys()]);
+    });
+    m.set("common.Interactive.unselectAll", () => fresh()?.setSelection([]));
+  }
+
   // ACTIONS::selectionCursor -- PCB_SELECTION_TOOL::CursorSelection -> selectCursor( false ): with nothing selected, the item under the
   // cursor is selected (the "hover" selection every edit hotkey relies on); a selection that already holds something is left alone.
   m.set("common.InteractiveSelection.cursor", () => {

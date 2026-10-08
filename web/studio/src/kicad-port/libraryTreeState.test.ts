@@ -1,26 +1,39 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ALL_COLLAPSED, ALL_EXPANDED, PIN_GLYPH, isFolded, libraryLabel, pinMenu, pinnedFirst, toggleFold, withPinned } from "./libraryTreeState";
+import { ALL_COLLAPSED, ALL_EXPANDED, FOLD_AUTO, PIN_GLYPH, isGroupOpen, libraryLabel, pinMenu, pinnedFirst, setGroupOpen, withPinned } from "./libraryTreeState";
 
-test("a tree starts with every library open; a click folds one and another click opens it again", () => {
-  assert.equal(isFolded(ALL_EXPANDED, "a"), false);
-  const folded = toggleFold(ALL_EXPANDED, "a");
-  assert.equal(isFolded(folded, "a"), true);
-  assert.equal(isFolded(folded, "b"), false);
-  assert.equal(isFolded(toggleFold(folded, "a"), "a"), false);
+const facts = (hasItems: boolean, defaultOpen: boolean) => ({ hasItems, defaultOpen });
+
+test("with nothing chosen a group is open the way the tree decides", () => {
+  assert.equal(isGroupOpen(FOLD_AUTO, "project", facts(true, true)), true);
+  assert.equal(isGroupOpen(FOLD_AUTO, "installed", facts(false, false)), false);
+});
+
+test("a click on a group is a choice that wins over everything", () => {
+  const opened = setGroupOpen(FOLD_AUTO, "installed", true);
+  assert.equal(isGroupOpen(opened, "installed", facts(false, false)), true);
+  assert.equal(isGroupOpen(opened, "other", facts(false, false)), false);
+  const closed = setGroupOpen(ALL_EXPANDED, "a", false);
+  assert.equal(isGroupOpen(closed, "a", facts(true, true)), false);
+  assert.equal(isGroupOpen(closed, "b", facts(true, true)), true);
+});
+
+test("Expand All opens every library that has items listed and leaves an unloaded installed one folded", () => {
+  assert.equal(isGroupOpen(ALL_EXPANDED, "a", facts(true, false)), true);
+  assert.equal(isGroupOpen(ALL_EXPANDED, "unloaded", facts(false, false)), false);
 });
 
 test("Collapse All folds every library, also ones that appear later; a click then opens just that one", () => {
-  assert.equal(isFolded(ALL_COLLAPSED, "anything"), true);
-  const one = toggleFold(ALL_COLLAPSED, "a");
-  assert.equal(isFolded(one, "a"), false);
-  assert.equal(isFolded(one, "b"), true);
+  assert.equal(isGroupOpen(ALL_COLLAPSED, "anything", facts(true, true)), false);
+  const one = setGroupOpen(ALL_COLLAPSED, "a", true);
+  assert.equal(isGroupOpen(one, "a", facts(true, true)), true);
+  assert.equal(isGroupOpen(one, "b", facts(true, true)), false);
 });
 
-test("Expand All after some folds opens them all", () => {
-  const some = toggleFold(toggleFold(ALL_EXPANDED, "a"), "b");
-  assert.equal(isFolded(some, "a"), true);
-  assert.equal(isFolded(ALL_EXPANDED, "a"), false);
+test("setting a group does not change the fold it came from", () => {
+  const next = setGroupOpen(FOLD_AUTO, "a", true);
+  assert.equal(FOLD_AUTO.explicit.size, 0);
+  assert.equal(next.explicit.size, 1);
 });
 
 test("pinned libraries sort first, each group keeping its order", () => {

@@ -13,7 +13,8 @@ import { Toolbar } from "./components/Toolbar";
 import { QuickActions } from "./components/QuickActions";
 import { PropertiesPanel } from "./components/panels/PropertiesPanel";
 import { RightDock } from "./components/panels/RightDock";
-import { SchSelectionFilterPanel } from "./components/panels/SchSelectionFilterPanel";
+import { DockColumn } from "./components/panels/Dock";
+import { SchematicDock, useOpenDockWithNetNavigator } from "./components/panels/SchematicDock";
 import { MessagePanel } from "./components/MessagePanel";
 import { StatusBar } from "./components/StatusBar";
 import { Canvas } from "./components/canvas/Canvas";
@@ -66,7 +67,9 @@ import { FootprintPositionDialog } from "./components/FootprintPositionDialog";
 import { BoardControlDialogs } from "./components/BoardControlDialogs";
 import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
+import { Viewer3DAppearancePanel } from "./components/viewer3d/Viewer3DAppearancePanel";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
+import { useEdaTestHook } from "./actions/useEdaTestHook";
 import "./styles/global.css";
 import "./styles/layout.css";
 import "./styles/panels.css";
@@ -105,7 +108,9 @@ function Toast() {
 function StudioFrame() {
   const state = useStudioState();
   useGlobalHotkeys();
+  useEdaTestHook(); // window.__eda: the scripted test hook (actions/useEdaTestHook.ts)
   useFootprintEditHotkey();
+  useOpenDockWithNetNavigator();
   // Ctrl+Shift+E / Ctrl+E on the Schematic tab are now the registered actions
   // eeschema.EditorControl.editLibSymbolWithSymbolEditor / editWithSymbolEditor
   // (useActionRunner.ts); useSymbolEditHotkey.ts is superseded and no longer called.
@@ -134,10 +139,11 @@ function StudioFrame() {
   const hideBoardChrome = is3d || isFootprint || isSymbolEditor;
   // eeschema's default AUI layout has no layer/appearance manager at all
   // (that's a pcbnew-only concept -- a schematic has no copper/technical
-  // layers to toggle). Its right-hand dock is the drawing/placement toolbar
-  // (drawing-toolbar-col below, already tab-aware via Toolbar's own
-  // schToolbarsFile lookup) plus just the Selection Filter
-  // (panel_sch_selection_filter.cpp, rendered below) -- so the tabbed
+  // layers to toggle) and no dock on the right of the sheet either: its
+  // Hierarchy, Properties and Selection Filter panes all dock in the one
+  // left column (sch_edit_frame.cpp, SchematicDock), and the only thing on
+  // its right is the drawing toolbar (drawing-toolbar-col below, already
+  // tab-aware via Toolbar's own schToolbarsFile lookup) -- so the tabbed
   // Appearance/Filter/Activity dock only makes sense on the PCB tab.
   const showRightDock = state.tab === "pcb";
   return (
@@ -162,9 +168,10 @@ function StudioFrame() {
       <div className="app-body">
         {!hideBoardChrome && (
           <div className="properties-col">
-            <div className="dock">
-              <PropertiesPanel />
-            </div>
+            {/* eeschema docks every side pane in this one left column (sch_edit_frame.cpp: `.Left().Layer( 3 )`); it folds to a handle so the canvas keeps the width. */}
+            <DockColumn side="left" label={state.tab === "schematic" ? "Hierarchy & Properties" : "Properties"}>
+              <div className="dock">{state.tab === "schematic" ? <SchematicDock /> : <PropertiesPanel />}</div>
+            </DockColumn>
           </div>
         )}
         {!hideBoardChrome && (
@@ -189,17 +196,22 @@ function StudioFrame() {
         )}
         {showRightDock && (
           <div className="right-dock-col">
-            <RightDock />
+            <DockColumn side="right" label="Appearance">
+              <RightDock />
+            </DockColumn>
           </div>
         )}
-        {/* eeschema's right dock: the Selection Filter (panel_sch_selection_filter.cpp). */}
-        {state.tab === "schematic" && (
+        {/* The 3D viewer's Appearance manager (EDA_3D_ACTIONS::showLayersManager): what the viewer shows, and the face views. */}
+        {is3d && (
           <div className="right-dock-col">
-            <div className="dock">
-              <SchSelectionFilterPanel />
-            </div>
+            <DockColumn side="right" label="Appearance">
+              <div className="dock">
+                <Viewer3DAppearancePanel api={viewer3d} />
+              </div>
+            </DockColumn>
           </div>
         )}
+        {/* The schematic has no right dock: its Selection Filter (panel_sch_selection_filter.cpp) is a pane of the left column (SchematicDock). */}
       </div>
       <div className="message-panel-row">
         <MessagePanel />

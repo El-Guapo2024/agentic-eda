@@ -279,9 +279,14 @@ const GLB_EXPORT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1
 ///    than retried, so a board that reliably fails/times out doesn't
 ///    get kicad-cli re-run on every poll; a genuinely new attempt has to
 ///    wait for the version to actually change.
-fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, glb: &GlbJob) -> Result<(), String> {
+fn serve_board_glb(stream: &mut TcpStream, dir: &Path, job: &Job, glb: &GlbJob, retry: bool) -> Result<(), String> {
     let ver = version_string(dir, job);
     let mut guard = glb.lock().map_err(|e| e.to_string())?;
+    // `?retry=1`, the 3D viewer's "Reload board": forget the finished answer for this version -- a failure is otherwise kept until the board changes -- so
+    // this request builds again. A build already running is left to finish.
+    if retry && matches!(guard.as_ref(), Some((v, GlbBuild::Done(_) | GlbBuild::Failed(_))) if *v == ver) {
+        *guard = None;
+    }
     match guard.as_ref() {
         Some((v, GlbBuild::Done(bytes))) if *v == ver => {
             let bytes = bytes.clone();
@@ -340,6 +345,20 @@ fn kill_process_group(child: &std::process::Child) {
     let _ = std::process::Command::new("kill").arg("-9").arg("--").arg(format!("-{}", child.id())).status();
 }
 
+/// The 3D view shows the copper the board HAS, whatever its netlist says. A track, via or pour on a net the netlist does not name (any more) makes the
+/// exporter refuse the whole board -- copper on KiCad's "net 0" is a different board for DRC, which is why it refuses -- and the 3D tab then fell back to its
+/// placeholder boxes for a board whose only fault was a net that was renamed after it was routed. For this export alone such nets are added to the netlist,
+/// without pins, so the copper is drawn where it is; every other export (DRC, fabrication) keeps refusing.
+fn ensure_routed_nets(design: &eda_model::ir::Design, model: &mut eda_model::ConstraintModel) {
+    let Some(routing) = &design.routing else { return };
+    let known: std::collections::BTreeSet<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+    let used = routing.tracks.iter().map(|t| t.net.as_str()).chain(routing.vias.iter().map(|v| v.net.as_str())).chain(routing.zones.iter().map(|z| z.net.as_str()));
+    let missing: std::collections::BTreeSet<String> = used.filter(|n| !n.is_empty() && !known.contains(n)).map(String::from).collect();
+    for name in missing {
+        model.nets.push(eda_model::Net { name, pins: vec![] });
+    }
+}
+
 /// The actual export: current design -> temp .kicad_pcb -> `kicad-cli
 /// pcb export glb` -> the produced file's bytes. Runs on the background
 /// thread [`serve_board_glb`] spawns, never on the request-handling
@@ -351,7 +370,8 @@ fn kill_process_group(child: &std::process::Child) {
 /// never pile up processes or run forever even though nothing is
 /// polling its stdout.
 fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
-    let (meta, design, model) = board::load(dir).map_err(|e| board::reasons(&e))?;
+    let (meta, design, mut model) = board::load(dir).map_err(|e| board::reasons(&e))?;
+    ensure_routed_nets(&design, &mut model);
     let title = Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
     let date = eda::now_rfc3339();
     let pcb_text = eda::export_kicad_pcb(&design, &model, &eda::ExportMeta { date: &date[..10], title: &title }).map_err(|e| board::reasons(&e))?;
@@ -578,7 +598,7 @@ fn handle(
             let v = symbol_library_json(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
-        ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job),
+        ("GET", "/api/board.glb") => serve_board_glb(stream, dir, job, glb_job, query_value(target, "retry") == "1"),
         // DRC and ERC are kicad-cli's (docs/ARCHITECTURE.md, "Engines"): the
         // current design.json revision is exported, kicad-cli runs (seconds),
         // and its report comes back mapped to our item ids, stamped with the
@@ -612,9 +632,9 @@ fn handle(
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/footprint") => {
-            let query = target.split('?').nth(1).unwrap_or("");
-            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
-            let v = footprint_json(dir, name).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // Percent-decoded, like the symbol routes: the client sends `encodeURIComponent( name )`, and a `Lib:Name` arrives as `Lib%3AName`.
+            let name = query_value(target, "name");
+            let v = footprint_json(dir, &name).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/footprint_library") => {
@@ -622,9 +642,8 @@ fn handle(
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/footprint/export") => {
-            let query = target.split('?').nth(1).unwrap_or("");
-            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
-            match footprint_kicad_mod(dir, name) {
+            let name = query_value(target, "name");
+            match footprint_kicad_mod(dir, &name) {
                 Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
                 Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
             }
@@ -652,6 +671,19 @@ fn handle(
         // The library editors' read-only lookups of ANY symbol / footprint (project entry or resolved), for Duplicate, Save Copy As, Copy.
         ("GET", "/api/library/symbol") => respond(stream, "200 OK", "application/json", crate::library_api::symbol(dir, &query_value(target, "lib_id")).to_string().as_bytes()),
         ("GET", "/api/library/footprint") => respond(stream, "200 OK", "application/json", crate::library_api::footprint(dir, &query_value(target, "name")).to_string().as_bytes()),
+        // The installed KiCad libraries (155 footprint, 223 symbol libraries) for the library trees: names only, one library at a time, cached
+        // (`crate::library_index`) -- the libraries are too big to send or parse whole.
+        ("GET", "/api/library/index" | "/api/library/items" | "/api/library/all") => {
+            let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
+                None => json!({ "error": "kind is footprint or symbol" }),
+                Some(kind) => match path {
+                    "/api/library/index" => crate::library_index::libraries(kind),
+                    "/api/library/items" => crate::library_index::items(kind, &query_value(target, "lib")),
+                    _ => crate::library_index::all(kind),
+                },
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
@@ -886,6 +918,9 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 LabelSide::Right => "right",
             });
             p["courtyard"] = json!(placed_courtyard(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
+            // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
+            p["body"] = json!(crate::body_api::placed_body(&design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             p["pads"] = json!(pads);
         }
         parts.push(p);
@@ -1641,10 +1676,11 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// OpenFootprintForEdit`, issued once when the tab/footprint opens,
 /// through the ordinary `/api/cmd` route) -- this route never
 /// materializes one on its own, matching every other GET route here being
-/// a pure read of `design.json`. `name` is sent unencoded in the query
-/// string, same convention (and the same reasoning -- a real footprint
-/// name is plain ASCII letters/digits/`_.:-`, nothing a query string needs
-/// to escape) as `/api/3dmodel?name=...`.
+/// a pure read of `design.json`. `name` is percent-decoded
+/// (`query_value`): the client sends `encodeURIComponent( name )`, which
+/// makes a library footprint's `Lib:Name` arrive as `Lib%3AName` -- read
+/// raw, as this route once did, no footprint with a library nickname
+/// (every installed KiCad one) could be fetched back after opening it.
 fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
     let (_, design, _) = board::load(dir)?;
     let fp = design
@@ -1892,6 +1928,24 @@ mod tests {
         }
     }
 
+    /// The 3D export draws copper on a net the netlist no longer names (a net renamed after the board was routed) instead of refusing the board.
+    #[test]
+    fn the_3d_export_adds_the_nets_the_copper_uses() {
+        let mut d = design(sch(vec![]), Default::default());
+        d.routing = Some(
+            serde_json::from_value(json!({
+                "tracks": [{ "net": "GND", "layer": "F.Cu", "width": 200, "pts": [{ "x": 0, "y": 0 }, { "x": 1000, "y": 0 }] }, { "net": "", "layer": "F.Cu", "width": 200, "pts": [{ "x": 0, "y": 0 }, { "x": 0, "y": 500 }] }],
+                "vias": [{ "net": "VDD", "at": { "x": 0, "y": 0 }, "diameter": 600, "drill": 300, "from_layer": "F.Cu", "to_layer": "B.Cu" }],
+                "zones": []
+            }))
+            .expect("a routing section"),
+        );
+        let mut model: eda_model::ConstraintModel = serde_json::from_value(json!({ "parts": [], "nets": [{ "name": "VDD", "pins": [] }] })).expect("a model");
+        ensure_routed_nets(&d, &mut model);
+        let names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["VDD", "GND"], "GND is added once, VDD (already there) is not, and an unnamed net is not made up");
+    }
+
     #[test]
     fn a_library_symbol_reaches_the_painter_with_the_names_it_reads() {
         // `Device:R`: a body (rectangle) and two pins. The painter drops an item whose `body_style` is neither 0 nor the placed symbol's -- a symbol
@@ -1933,6 +1987,8 @@ mod tests {
     #[test]
     fn a_lib_id_query_value_is_percent_decoded() {
         assert_eq!(query_value("/api/symbol?lib_id=Device%3AR", "lib_id"), "Device:R");
+        // The footprint routes read `name` the same way: the client encodes the `:` of a library footprint's `Lib:Name`.
+        assert_eq!(query_value("/api/footprint?name=Package_SO%3ASOIC-16_3.9x9.9mm_P1.27mm", "name"), "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm");
         assert_eq!(query_value("/api/symbol?x=1&lib_id=eda%3AMy%20Part", "lib_id"), "eda:My Part");
         assert_eq!(query_value("/api/symbol?lib_id=Device:R", "lib_id"), "Device:R", "an unescaped colon still works");
         assert_eq!(query_value("/api/symbol?lib_idx=1", "lib_id"), "", "a longer key is not the key");

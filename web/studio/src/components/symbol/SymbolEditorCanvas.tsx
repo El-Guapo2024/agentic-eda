@@ -21,6 +21,7 @@ import { resolvePin } from "../schematic/transform";
 import { snapPoint } from "../canvas/gridHelper";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
+import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
@@ -176,8 +177,19 @@ export function SymbolEditorCanvas() {
 
   // Fit to content once, same "until the user pans/zooms by hand" rule
   // `FootprintCanvas.tsx`'s own board-outline fit uses.
+  const fitRequestRef = useRef(state.fitRequest);
   useEffect(() => {
-    if (!sym || userMovedRef.current || containerSize.width < 50 || containerSize.height < 50) return;
+    // Zoom to Fit (`common.Control.zoomFitScreen`): fit again even though the view was moved by hand.
+    if (fitRequestRef.current !== state.fitRequest) {
+      fitRequestRef.current = state.fitRequest;
+      userMovedRef.current = false;
+    }
+    if (userMovedRef.current || containerSize.width < 50 || containerSize.height < 50) return;
+    if (!sym) {
+      // Nothing open: KiCad shows an empty canvas with its grid around the origin. An inch across (the symbol editor's own minimum fit span below).
+      if (!state.libId) dispatch({ type: "SET_VIEW", view: fitTransform({ minX: -25400, minY: -25400, maxX: 25400, maxY: 25400 }, containerSize.width, containerSize.height) });
+      return;
+    }
     const pts: [number, number][] = [];
     for (const p of sym.pins) {
       const rp = resolvePin(toLibPin(p), IDENTITY, [0, 0]);
@@ -195,7 +207,7 @@ export function SymbolEditorCanvas() {
     dispatch({ type: "SET_VIEW", view: fitTransform({ minX, minY, maxX, maxY }, containerSize.width, containerSize.height) });
     dispatch({ type: "MARK_VIEW_INITIALIZED" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sym != null, containerSize, dispatch]);
+  }, [sym != null, state.libId, state.fitRequest, containerSize, dispatch]);
 
   useEffect(() => {
     userMovedRef.current = false;
@@ -433,7 +445,7 @@ export function SymbolEditorCanvas() {
     }
   };
 
-  const onWheel = (e: React.WheelEvent) => {
+  const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
@@ -441,6 +453,7 @@ export function SymbolEditorCanvas() {
     const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
   };
+  useNonPassiveWheel(containerRef, onWheel); // React's onWheel is passive: preventDefault() would be ignored and logged
 
   const onDoubleClick = (e: React.MouseEvent) => {
     if (state.drawState) {
@@ -546,11 +559,12 @@ export function SymbolEditorCanvas() {
       onPointerUp={onPointerUp}
       onDoubleClick={onDoubleClick}
       onKeyDown={onKeyDown}
-      onWheel={onWheel}
       onContextMenu={onContextMenu}
     >
       <canvas ref={canvasRef} />
-      {!sym && <div className="pcb-canvas-empty">{state.error ?? (state.libId ? "Loading symbol…" : "Open a symbol to begin")}</div>}
+      {!sym && state.libId && <div className="pcb-canvas-empty">{state.error ?? "Loading symbol…"}</div>}
+      {/* Nothing open: the empty canvas and its grid, like KiCad's, with one quiet line saying how to open something. */}
+      {!sym && !state.libId && <div className="canvas-empty-hint">No symbol loaded -- double-click one in Libraries, or press Ctrl+N for a new one</div>}
       {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} entries={contextMenu.entries} onClose={() => setContextMenu(null)} />}
     </div>
   );

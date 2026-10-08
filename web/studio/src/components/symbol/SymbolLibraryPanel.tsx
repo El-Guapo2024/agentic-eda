@@ -41,7 +41,7 @@ export function SymbolLibraryPanel() {
   const state = useSymState();
   const dispatch = useSymDispatch();
   const api = useSymApi();
-  const { items } = useLibraryNames("symbol");
+  const names = useLibraryNames("symbol");
   const { run, isEnabled } = useActionRunner();
 
   const selected = useMemo(() => state.treeSelection, [state.treeSelection]);
@@ -65,7 +65,13 @@ export function SymbolLibraryPanel() {
     <LibraryTree
       kind="symbol"
       title="Symbol Libraries"
-      items={items}
+      items={names.items}
+      installed={names.installed}
+      loaded={names.loaded}
+      loading={names.loading}
+      onLoadLibrary={names.load}
+      onSearch={names.ensureSearchIndex}
+      searchIndex={names.searchIndex}
       selected={selected}
       current={state.libId}
       multi

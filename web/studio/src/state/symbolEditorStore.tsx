@@ -24,6 +24,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
 import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchLibrarySymbol, fetchSymbolEditorNames, postCmd, postRedo, postUndo } from "../api/client";
+import { ensureSymbolInProject } from "../api/libraryClient";
 import { uniqueSymbolLibId } from "../kicad-port/symEditActions";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
 import type { ViewTransform } from "./store";
@@ -79,6 +80,8 @@ export interface SymbolEditorState {
   error: string | null;
   view: ViewTransform;
   viewInitialized: boolean;
+  /** Bumped by Zoom to Fit (`REQUEST_FIT`): the canvas fits the view to the symbol again, whether or not the view was moved by hand since. */
+  fitRequest: number;
   selection: Set<string>;
   activeTool: SymToolId;
   drawState: SymDrawState | null;
@@ -125,6 +128,7 @@ const initialState: SymbolEditorState = {
   error: null,
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
+  fitRequest: 0,
   selection: new Set(),
   activeTool: "select",
   drawState: null,
@@ -159,6 +163,7 @@ export type SymAction =
   | { type: "SYMBOL_ERR"; message: string }
   | { type: "SET_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
+  | { type: "REQUEST_FIT" }
   | { type: "SET_SELECTION"; refs: string[] }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -214,6 +219,8 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, view: action.view };
     case "MARK_VIEW_INITIALIZED":
       return { ...state, viewInitialized: true };
+    case "REQUEST_FIT":
+      return { ...state, fitRequest: state.fitRequest + 1 };
     case "SET_SELECTION":
       return { ...state, selection: new Set(action.refs) };
     case "CLEAR_SELECTION":
@@ -367,6 +374,7 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     getState: () => stateRef.current,
     openSymbol: async (libId) => {
       dispatch({ type: "SET_LIB_ID", libId });
+      await ensureSymbolInProject(libId); // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one
       await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
       const symbol = await fetchLibrarySymbol(libId);
       dispatch({ type: "SYMBOL_OK", symbol });

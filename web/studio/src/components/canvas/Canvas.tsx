@@ -39,6 +39,7 @@ import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
+import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
 import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
 import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
@@ -1048,7 +1049,7 @@ export function Canvas() {
   };
 
   /** wx_view_controls.cpp WX_VIEW_CONTROLS::onWheel, via kicad-port/viewControls.ts's handleWheel -- plain wheel zooms about the cursor (ConstantZoomController/AcceleratingZoomController per platform, not an ad hoc factor), Ctrl+wheel pans horizontally, Shift/Alt+wheel pans vertically, matching KiCad's default scroll_modifier_zoom/scroll_modifier_pan_h settings. */
-  const onWheel = (e: React.WheelEvent) => {
+  const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
@@ -1064,6 +1065,8 @@ export function Canvas() {
     const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.kind === "zoom" ? result.view : flipPan(state.bcx.boardFlipped, state.view, result.view) });
   };
+  // React's own onWheel is passive, so the `preventDefault()` above would log an error on every tick and let the page scroll under the zoom.
+  useNonPassiveWheel(containerRef, onWheel);
 
   /** KiCad builds this per-selection from whatever tool/edit actions apply (pcb_selection_tool.cpp/edit_tool.cpp) -- ported here as exactly the actions this app implements, everything else the usual disabled "(not ported yet)". */
   const onContextMenu = (e: React.MouseEvent) => {
@@ -1318,7 +1321,6 @@ export function Canvas() {
       onPointerUp={onPointerUp}
       onDoubleClick={onDoubleClick}
       onKeyDown={onCanvasKeyDown}
-      onWheel={onWheel}
       onContextMenu={onContextMenu}
       data-armed={state.armed ? "true" : "false"}
     >

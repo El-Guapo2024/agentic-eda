@@ -4,10 +4,12 @@
 //   window.__eda.actions({ all? })   every action id the runner handles on the current tab, as { id, label, enabled, reason? } -- `reason` says why a
 //                                    disabled one is (not offered on this tab / no handler); `all: true` adds the KiCad actions that have no handler.
 //   await window.__eda.run(id, args?) runs the action exactly as a menu click does (a disabled one is refused, not run), waits for every /api/ round
-//                                    trip it started to finish and the view to catch up, and resolves to { ok, error?, revision, dialog? }: `revision`
-//                                    is the design revision after it, `dialog` the title of the dialog it opened, if any.
-//   window.__eda.state()             a small snapshot: { tab, revision, tool, selection: [{ id, kind }], counts: { footprints, tracks, vias, zones, symbols,
-//                                    wires, labels }, dialogs: [titles of the dialogs on screen], open: [names of the open dialog/panel flags] }.
+//                                    trip it started to finish and the view to catch up, and resolves to { ok, error?, revision, dialog?, toast?, pending? }:
+//                                    `revision` is the design revision after it, `dialog` the title of the dialog it opened, `toast` the last toast it showed,
+//                                    `pending` true when it stopped waiting for a request that is still running (a long kicad-cli run).
+//   window.__eda.state()             a small snapshot: { tab, revision, tool, picker, selection: [{ id, kind }], counts: { footprints, tracks, vias, zones,
+//                                    symbols, wires, labels }, dialogs: [titles of the dialogs on screen], open: [names of the open dialog/panel flags] };
+//                                    `picker` is the prompt of the picker session running (the delete tool's), else null.
 //   window.__eda.errors(since?)      the errors since the page loaded as { time, message }: console.error, uncaught errors and rejected promises, the
 //                                    error toasts and notices of the three stores. Passive-listener noise is left out. `since` is an epoch ms to filter from.
 //
@@ -254,6 +256,10 @@ export interface RunResult {
   revision: string | null;
   /** The title of the first dialog the action opened, when it opened one. */
   dialog?: string;
+  /** The last toast shown while it ran (a one-line result such as "Saved ..."), any kind. */
+  toast?: string;
+  /** True when requests were still in flight when the run stopped waiting (a long kicad-cli run): the work goes on, the result is not final. */
+  pending?: boolean;
 }
 
 /**
