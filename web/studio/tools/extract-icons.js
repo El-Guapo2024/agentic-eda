@@ -28,6 +28,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 const ACTIONS_JSON = join(ROOT, "src", "kicad", "actions.json");
 const TOOLBARS_JSON = join(ROOT, "src", "kicad", "toolbars.json");
+// The other editors' toolbars (extract-sch-toolbars.js, extract-editor-toolbars.js): their groups name an icon too, and the 3D viewer's own actions
+// (which actions.json does not hold) carry theirs next to the toolbar.
+const OTHER_TOOLBARS_JSON = ["sch_toolbars.json", "fp_toolbars.json", "sym_toolbars.json", "viewer3d_toolbars.json"].map((f) => join(ROOT, "src", "kicad", f));
 const ICONS_JSON = join(ROOT, "src", "kicad", "icons.json");
 const ICONS_ROOT = join(ROOT, "public", "icons");
 const BITMAPS_LIST_FILE = "include/bitmaps/bitmaps_list.h";
@@ -42,9 +45,13 @@ function readJsonIfPresent(path) {
 function collectWantedIcons() {
   const wanted = new Set();
   const actionsFile = readJsonIfPresent(ACTIONS_JSON);
-  for (const a of actionsFile?.actions ?? []) if (a.icon) wanted.add(a.icon);
-  const toolbarsFile = readJsonIfPresent(TOOLBARS_JSON);
-  for (const t of toolbarsFile?.toolbars ?? []) for (const item of t.items) if (item.type === "group" && item.icon) wanted.add(item.icon);
+  // INVALID_BITMAP is KiCad's "no icon" sentinel, not an icon.
+  for (const a of actionsFile?.actions ?? []) if (a.icon && a.icon !== "INVALID_BITMAP") wanted.add(a.icon);
+  for (const path of [TOOLBARS_JSON, ...OTHER_TOOLBARS_JSON]) {
+    const toolbarsFile = readJsonIfPresent(path);
+    for (const t of toolbarsFile?.toolbars ?? []) for (const item of t.items) if (item.type === "group" && item.icon) wanted.add(item.icon);
+    for (const a of [...(toolbarsFile?.actions ?? []), ...(toolbarsFile?.otherActions ?? [])]) if (a.icon) wanted.add(a.icon);
+  }
   return wanted;
 }
 
