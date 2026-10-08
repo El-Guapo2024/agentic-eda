@@ -8,12 +8,8 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/sto
 import { postExportSymbols } from "../../api/schControlClient";
 import { fetchAnySymbol, saveTextFile } from "../../api/libraryClient";
 import type { Cmd } from "../../api/types";
+import { isLibraryNickname } from "../../kicad-port/libLinks";
 import { SchDialogFrame } from "./SchDialogFrame";
-
-/** A library nickname: no colon (it separates the nickname from the symbol), no path characters, not blank. */
-export function isLibraryNickname(name: string): boolean {
-  return /^[A-Za-z0-9_.+\- ]+$/.test(name) && name.trim() === name;
-}
 
 export function ExportSymbolsDialog({ onClose }: { onClose: () => void }) {
   const state = useStudioState();

@@ -36,6 +36,11 @@ export function libIdIsValid(libId: string): boolean {
   return at > 0 && at < libId.length - 1 && !libId.slice(at + 1).includes(":");
 }
 
+/** A library nickname the Export Symbols dialog may name a new library: letters, digits and `_ - . + `, with a space only inside (no colon, which separates it from the item, and no path characters). */
+export function isLibraryNickname(name: string): boolean {
+  return /^[A-Za-z0-9_.+\- ]+$/.test(name) && name.trim() === name;
+}
+
 /**
  * `onClickOrphansButton` ("Map Orphans"): for each orphan row, the known library symbols with the same item name -- the first one fills the cell, the
  * rest are the candidates to choose from. Returns, per orphan libId, the candidate list (empty when none was found).

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { libIdIsValid, libLinkChanges, libLinkRows, orphanCandidates } from "./libLinks";
+import { isLibraryNickname, libIdIsValid, libLinkChanges, libLinkRows, orphanCandidates } from "./libLinks";
 
 const syms = [
   { id: "R2", lib_id: "Device:R" },
@@ -27,6 +27,13 @@ test("symbols group by library id, each reference once, sorted; a group no libra
 test("a library id needs a nickname and an item, and only one colon", () => {
   assert.equal(libIdIsValid("Device:R"), true);
   for (const bad of ["R", ":R", "Device:", "a:b:c", ""]) assert.equal(libIdIsValid(bad), false, bad);
+});
+
+test("a library nickname is a plain name: no colon, no path, no blank ends", () => {
+  for (const ok of ["mylib", "board_symbols", "My Lib-2.0+", "a"]) assert.equal(isLibraryNickname(ok), true, ok);
+  for (const bad of ["", " ", "a:b", "a/b", "..\\x", " lead", "trail ", "naïve"]) assert.equal(isLibraryNickname(bad), false, bad);
+  // and a nickname makes a valid library id with an item
+  assert.equal(libIdIsValid("my lib:R"), true);
 });
 
 test("Map Orphans offers the symbols that share the orphan's item name", () => {
