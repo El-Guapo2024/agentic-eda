@@ -3423,7 +3423,7 @@ impl<'a> Board<'a> {
         let known = self.lockable_ids();
         for id in ids {
             if !known.contains(id) {
-                return Err(vec![CheckResult::fail("ops_unknown_item", id, "no placed part, track, via, zone, shape or text with this id")]);
+                return Err(vec![CheckResult::fail("ops_unknown_item", id, "no placed part, track, via, zone, shape, text, dimension or group with this id")]);
             }
         }
         let dr = self.drawings_mut();
@@ -3451,6 +3451,10 @@ impl<'a> Board<'a> {
         if let Some(dr) = &self.design.drawings {
             out.extend(dr.shapes.iter().map(|s| s.id().to_string()));
             out.extend(dr.texts.iter().map(|t| t.id.clone()));
+            // Dimensions and groups are lockable in KiCad too (`(dimension .. (locked yes))`, `(group .. (locked yes))`),
+            // and the `.kicad_pcb` writer and importer carry both.
+            out.extend(dr.dimensions.iter().map(|d| d.id.clone()));
+            out.extend(dr.groups.iter().map(|g| g.id.clone()));
         }
         out
     }
