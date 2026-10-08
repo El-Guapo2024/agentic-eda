@@ -14,7 +14,7 @@ use eda_model::ir::{LabelKind, LabelShape, NetLabel, Point, SheetInstance, Sheet
 use eda_model::modules::{natural_cmp, FunctionalModule, ModuleKind};
 
 use super::items::Items;
-use super::kit::{cap, label_rect, sheet_pin_rect, smallest_paper, snap_down, snap_up, text_w, Paper, Rect, G, SHEET_FILE_FONT, SHEET_NAME_FONT, SHEET_PIN_FONT};
+use super::kit::{label_rect, sheet_pin_rect, smallest_paper, snap_down, snap_up, text_rect, text_w, Paper, Rect, G, SHEET_FILE_FONT, SHEET_NAME_FONT};
 
 #[derive(Debug, Clone)]
 struct PinSpec {
@@ -122,13 +122,14 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
         let mut right: Vec<PinSpec> = pins.iter().filter(|p| p.side == Side::Right).cloned().collect();
         left.sort_by(order);
         right.sort_by(order);
-        let lmax = left.iter().map(|p| text_w(SHEET_PIN_FONT, &p.net)).max().unwrap_or(0);
-        let rmax = right.iter().map(|p| text_w(SHEET_PIN_FONT, &p.net)).max().unwrap_or(0);
+        // each pin's flag and name, read into the sheet from its own edge
+        let lmax = left.iter().map(|p| sheet_pin_rect(Point { x: 0, y: 0 }, true, &p.net).w()).max().unwrap_or(0);
+        let rmax = right.iter().map(|p| sheet_pin_rect(Point { x: 0, y: 0 }, false, &p.net).w()).max().unwrap_or(0);
         let rows = left.len().max(right.len());
         let h = if rows == 0 { 8 * G } else { snap_up(SheetBox::pin_y(rows - 1) + 3 * G).max(8 * G) };
         let name_w = text_w(SHEET_NAME_FONT, &modules[m].name).max(text_w(SHEET_FILE_FONT, &files[m]));
-        // each side's names start past the flag (1.77 mm) and the two columns of names keep a gap between them
-        let w = snap_up((lmax + rmax + 2 * (1_770) + 4 * G).max(name_w + 2 * G)).max(14 * G);
+        // the two columns of names keep a gap between them
+        let w = snap_up((lmax + rmax + 4 * G).max(name_w + 2 * G)).max(14 * G);
         boxes.push(SheetBox { w, h, left, right });
     }
 
@@ -214,11 +215,13 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
             pins.push(SheetPin { id: String::new(), name: p.net.clone(), shape: LabelShape::Bidirectional, at: pt });
             items.rects.push(sheet_pin_rect(pt, false, &p.net));
         }
-        sheets.push(SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (b.w, b.h), pins, page: String::new() });
-        // the symbol, its name above and its file below
-        let name_w = text_w(SHEET_NAME_FONT, &modules[m].name);
-        let file_base = at.y + b.h + 400 + SHEET_FILE_FONT;
-        let r = Rect::new(at.x, at.y - 400 - cap(SHEET_NAME_FONT), at.x + b.w.max(name_w), at.y + b.h).union(Rect::new(at.x, file_base - cap(SHEET_FILE_FONT), at.x + text_w(SHEET_FILE_FONT, &files[m]), file_base));
+        let sheet = SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (b.w, b.h), pins, page: String::new() };
+        // the symbol, its name above and its file below, where KiCad's Autoplace Fields puts them
+        let mut r = Rect::new(at.x, at.y, at.x + b.w, at.y + b.h);
+        for f in crate::fields::sheet_fields(&eda_model::ir::SchematicSection::default(), &sheet) {
+            r = r.union(text_rect(&f.text, f.at, f.h, f.v, f.vertical));
+        }
+        sheets.push(sheet);
         items.rects.push(r);
         items.keepouts.push((modules[m].name.clone(), r));
     }

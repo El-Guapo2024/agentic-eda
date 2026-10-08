@@ -1,18 +1,19 @@
-//! The measuring kit the schematic layouts share: rectangles, text widths, the footprint of a drawn symbol, the paper sizes and the
-//! drawing sheet's frame.
+//! The measuring kit the schematic layouts share: rectangles, the boxes KiCad draws text in, the footprint of a drawn symbol, the paper
+//! sizes and the drawing sheet's frame.
 //!
-//! Text is not stored anywhere in `design.json` (a symbol's Reference and Value are drawn where the painter puts them), so a layout
-//! that promises "no overlapping text" has to *model* the painter. The rules below are the studio's own
-//! (`web/studio/src/components/schematic/painter.ts`: `drawFieldsAbout`, `drawSheet`, `drawPowerSymbolText`, `labelShape.ts`), in
-//! micrometres, with a margin for the stroke font being wider than a character count says. The same functions measure the output
-//! in the tests, so a layout and its check cannot drift apart.
+//! What a layout promises ("no overlapping text") is only worth what its measuring is: a symbol's pin names and numbers, its fields,
+//! a label with its flag and a power symbol with its value are measured here with eeschema's own rules (`eda_model::kicad_geom`, the
+//! stroke font's widths, `crate::fields` for where Autoplace Fields puts the fields), the same ones the overlap checker
+//! (`eda_kicad::sch_overlap`) holds the written `.kicad_sch` files to. Everything is micrometres, rounded outward to whole ones.
 
 use eda_layout::{Point as LPoint, Side};
-use eda_model::ir::Point;
+use eda_model::ir::{Point, PowerSymbol, SymbolInstance};
+use eda_model::kicad_font::{HJustify, VJustify};
+use eda_model::kicad_geom::{self as kg, TextStyle};
 use eda_model::symbol::LibSymbol;
 use eda_model::Part;
 
-use crate::geometry::{GRID, STUB};
+use crate::geometry::GRID;
 use crate::placed::{part_box, PartBox};
 
 pub const G: i64 = GRID;
@@ -68,25 +69,29 @@ pub fn union_all(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
 
 // ------------------------------------------------------------------------------------------------------- text
 
-pub const REF_FONT: i64 = 1600;
-pub const VALUE_FONT: i64 = 1400;
-pub const FIELD_FONT: i64 = 1000;
-pub const LABEL_FONT: i64 = 1270;
-pub const SHEET_NAME_FONT: i64 = 1270;
-pub const SHEET_FILE_FONT: i64 = 1016;
-pub const SHEET_PIN_FONT: i64 = 1000;
+/// Every schematic text is 50 mils.
+pub const TEXT_FONT: i64 = 1270;
+pub const SHEET_NAME_FONT: i64 = TEXT_FONT;
+pub const SHEET_FILE_FONT: i64 = TEXT_FONT;
+pub const SHEET_PIN_FONT: i64 = TEXT_FONT;
 
-/// Advance of one character as a fraction of the font size. KiCad's stroke font averages a little over 0.6; 0.75 leaves room for
-/// the wide capitals of a net name.
-const ADVANCE: f64 = 0.75;
-
-pub fn text_w(font: i64, s: &str) -> i64 {
-    (s.chars().count() as f64 * font as f64 * ADVANCE).ceil() as i64
+/// KiCad's box (floating point) as a whole-micrometre one that holds it.
+pub fn outward(r: kg::Rect) -> Rect {
+    Rect { x0: r.x0.floor() as i64, y0: r.y0.floor() as i64, x1: r.x1.ceil() as i64, y1: r.y1.ceil() as i64 }
 }
 
-/// A glyph's height above its baseline.
-pub fn cap(font: i64) -> i64 {
-    font * 95 / 100
+fn fpt(p: Point) -> (f64, f64) {
+    (p.x as f64, p.y as f64)
+}
+
+/// `EDA_TEXT::GetTextBox` of one line of 1.27 mm text at `anchor`, justified `h`/`v`, turned a quarter when `vertical`.
+pub fn text_rect(text: &str, anchor: (f64, f64), h: HJustify, v: VJustify, vertical: bool) -> Rect {
+    outward(TextStyle::new(h, v).text_box(text, anchor, vertical as i32))
+}
+
+/// The width of a text's box, pen included: `GetTextBox`'s width.
+pub fn text_w(_font: i64, s: &str) -> i64 {
+    text_rect(s, (0.0, 0.0), HJustify::Left, VJustify::Center, false).w()
 }
 
 // ------------------------------------------------------------------------------------------------------ frame
@@ -239,110 +244,115 @@ impl Placed {
         Rect { x0: self.x, y0: self.y, x1: self.x + self.w(), y1: self.y + self.h() }
     }
 
-    /// Sides that carry a drawn pin.
-    fn sides(&self) -> Vec<Side> {
-        let mut v: Vec<Side> = self.b.node.ports.iter().map(|p| if self.flip { flip_side(p.side) } else { p.side }).collect();
-        v.sort_by_key(|s| *s as u8);
-        v.dedup();
-        v
+    /// This symbol as an instance on the sheet, for measuring.
+    pub fn instance(&self) -> SymbolInstance {
+        SymbolInstance {
+            id: self.part.reference.clone(),
+            at: self.at(),
+            rot: self.rot(),
+            mirrored: false,
+            mirror_y: false,
+            lib_id: self.lib_id.clone(),
+            unit: 1,
+            value: self.value.clone(),
+            footprint: self.footprint.clone(),
+            datasheet: String::new(),
+            dnp: false,
+            exclude_from_bom: false,
+            exclude_from_board: false,
+            exclude_from_sim: false,
+        }
     }
 
-    /// The box with its pin stubs: what the painter's own bounding box for the symbol is.
+    /// Where its body, its pins and their texts are, as KiCad draws them.
+    pub fn geom(&self) -> crate::symgeom::SymbolGeom {
+        crate::symgeom::SymbolGeom::of(&self.instance(), &self.part, self.resolved.as_ref())
+    }
+
+    /// The fields where Autoplace Fields puts them (`crate::fields`), on the sheet.
+    pub fn page_fields(&self) -> Vec<crate::fields::PageField> {
+        let sym = self.instance();
+        let geom = self.geom();
+        let specs = crate::fields::symbol_specs(&sym, Some(&self.part), self.resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
+        let placed = crate::fields::autoplace_symbol(&sym, &geom, &specs);
+        specs.iter().zip(placed.iter()).map(|(spec, p)| crate::fields::page_field(sym.at, sym.rot, sym.mirrored, geom.width, p, &spec.text)).collect()
+    }
+
+    /// The box of each drawn field's text.
+    pub fn field_rects(&self) -> Vec<Rect> {
+        self.page_fields().iter().filter(|f| f.visible && !f.text.is_empty()).map(|f| text_rect(&f.text, f.at, f.h, f.v, f.vertical)).collect()
+    }
+
+    /// The boxes of the pins' names and numbers.
+    pub fn pin_text_rects(&self) -> Vec<Rect> {
+        let g = self.geom();
+        g.pin_rects().into_iter().filter(|(_, p)| p.length >= 0.0).map(|(r, _)| outward(r)).collect()
+    }
+
+    /// The body and the pin lines: what the painter's own bounding box for the symbol is.
     pub fn body_rect(&self) -> Rect {
-        let mut r = self.box_rect();
-        for s in self.sides() {
-            match s {
-                Side::Top => r.y0 -= STUB,
-                Side::Bottom => r.y1 += STUB,
-                Side::Left => r.x0 -= STUB,
-                Side::Right => r.x1 += STUB,
-            }
+        let g = self.geom();
+        let mut r = g.body.map(outward).unwrap_or_else(|| self.box_rect());
+        for p in &g.pins {
+            let end = (p.tip.0 + p.orient.dir().0 * p.length, p.tip.1 + p.orient.dir().1 * p.length);
+            r = r.union(outward(kg::Rect::new(p.tip, end)));
         }
         r
     }
 
-    /// Exactly two pins, both at the top and bottom: a resistor or capacitor standing up. The painter puts its fields beside it.
-    pub fn is_vertical_two_pin(&self) -> bool {
-        let wired: Vec<usize> = self.b.pin_port.iter().flatten().copied().collect();
-        wired.len() == 2 && self.part.pins.len() == 2 && wired.iter().all(|&i| matches!(self.b.node.ports[i].side, Side::Top | Side::Bottom))
-    }
-
-    /// The painter's Reference / Value / footprint text rectangles (`drawFieldsAbout`, as the studio draws it).
-    pub fn field_rects(&self) -> Vec<Rect> {
-        let body = self.body_rect();
-        let reference = self.part.reference.as_str();
-        let mut out = Vec::new();
-        if self.is_vertical_two_pin() {
-            // Beside the body, ref above the middle line and value below it, left-aligned.
-            let x0 = body.x1 + 800;
-            let cy = (body.y0 + body.y1) / 2;
-            out.push(Rect::new(x0, cy - 300 - cap(REF_FONT), x0 + text_w(REF_FONT, reference), cy - 300));
-            if !self.value.is_empty() {
-                out.push(Rect::new(x0, cy + 1500 - cap(VALUE_FONT), x0 + text_w(VALUE_FONT, &self.value), cy + 1500));
-            }
-            if !self.footprint.is_empty() {
-                let base = cy + 1500 + 1150;
-                out.push(Rect::new(x0, base - cap(FIELD_FONT), x0 + text_w(FIELD_FONT, &self.footprint), base));
-            }
-        } else {
-            // Above and below, centred on the body.
-            let cx = (body.x0 + body.x1) / 2;
-            let tw = text_w(REF_FONT, reference);
-            out.push(Rect::new(cx - tw / 2, body.y0 - 400 - cap(REF_FONT), cx + tw / 2, body.y0 - 400));
-            if !self.value.is_empty() {
-                let tw = text_w(VALUE_FONT, &self.value);
-                out.push(Rect::new(cx - tw / 2, body.y1 + 1800 - cap(VALUE_FONT), cx + tw / 2, body.y1 + 1800));
-            }
-            if !self.footprint.is_empty() {
-                let tw = text_w(FIELD_FONT, &self.footprint);
-                let base = body.y1 + 1800 + 1150;
-                out.push(Rect::new(cx - tw / 2, base - cap(FIELD_FONT), cx + tw / 2, base));
-            }
-        }
-        out
-    }
-
-    /// The body with stubs, and every text it draws.
+    /// The body with its pins, and every text it draws.
     pub fn keepout(&self) -> Rect {
         let mut r = self.body_rect();
         for f in self.field_rects() {
             r = r.union(f);
         }
+        for t in self.pin_text_rects() {
+            r = r.union(t);
+        }
         r
     }
 }
 
-/// The painter's rectangle for a power symbol's glyph and its net-name text, `up` when the glyph rises from the tip.
-pub fn power_rect(tip: Point, net: &str, up: bool) -> Rect {
-    let text = text_w(VALUE_FONT, net);
-    let (y0, y1) = if up { (tip.y - 2640, tip.y + 600) } else { (tip.y - 900, tip.y + 2640) };
-    Rect { x0: tip.x - 1270, y0, x1: tip.x + 508 + text, y1 }
+/// A power symbol with its value: `rot` turns it (0 hangs a ground symbol down and raises a supply one), `lib_id` says which glyph.
+pub fn power_rect(at: Point, rot: u32, net: &str, lib_id: &str) -> Rect {
+    let ps = PowerSymbol { id: String::new(), lib_id: lib_id.to_string(), at, rot, net: net.to_string(), pin: String::new() };
+    let lib = eda_model::symbol::builtin(lib_id);
+    let mut r = outward(kg::Rect::point(fpt(at)));
+    if let Some(lib) = &lib {
+        if let Some(b) = crate::symgeom::SymbolGeom::of_origin_symbol(at, rot, lib).body {
+            r = r.union(outward(b));
+        }
+    }
+    let sch = eda_model::ir::SchematicSection::default();
+    for f in crate::fields::power_fields(&sch, &ps) {
+        if f.visible && !f.text.is_empty() {
+            r = r.union(text_rect(&f.text, f.at, f.h, f.v, f.vertical));
+        }
+    }
+    r
 }
 
-/// A label at the end of a wire that leaves along `dir`: what the painter draws beyond the anchor. A hierarchical label is a flag
-/// with its text a text-width further out (`hierLabelTextPlacement`), centred on the wire line; a local label is the text alone,
-/// set just above the line (`localLabelTextPlacement`). Vertical wires turn the text, so the same ranges apply across x.
+/// A label at the end of a wire that leaves along `dir`: its text runs on away from the wire, a hierarchical one with its flag
+/// (`SCH_HIERLABEL::GetBodyBoundingBox`), a local one as `SCH_LABEL::GetBodyBoundingBox` has it.
 pub fn label_rect(at: Point, dir: (i64, i64), net: &str, hierarchical: bool) -> Rect {
-    let tw = text_w(LABEL_FONT, net);
-    let (len, lo, hi) = if hierarchical { (190 + 2 * tw, -800, 800) } else { (tw + 300, -1600, 200) };
-    match dir {
-        (-1, 0) => Rect { x0: at.x - len, y0: at.y + lo, x1: at.x, y1: at.y + hi },
-        (1, 0) => Rect { x0: at.x, y0: at.y + lo, x1: at.x + len, y1: at.y + hi },
-        (0, -1) => Rect { x0: at.x + lo, y0: at.y - len, x1: at.x + hi, y1: at.y },
-        _ => Rect { x0: at.x + lo, y0: at.y, x1: at.x + hi, y1: at.y + len },
+    let (spin, turns) = match dir {
+        (-1, 0) => (kg::Spin::Left, 0),
+        (0, -1) => (kg::Spin::Up, 1),
+        (0, 1) => (kg::Spin::Bottom, 1),
+        _ => (kg::Spin::Right, 0),
+    };
+    let h = if matches!(spin, kg::Spin::Left | kg::Spin::Bottom) { HJustify::Right } else { HJustify::Left };
+    if hierarchical {
+        outward(kg::hier_label_rect(&TextStyle::new(h, VJustify::Center), net, fpt(at), spin))
+    } else {
+        outward(kg::local_label_rect(&TextStyle::new(h, VJustify::Bottom), net, fpt(at), turns))
     }
 }
 
-/// The name of a sheet pin: written inside the sheet, past the flag (`drawSheet`), `left` for a pin on the left border.
+/// A sheet's pin on its left edge (`left`) or right edge: the flag and the name read into the sheet.
 pub fn sheet_pin_rect(pin: Point, left: bool, name: &str) -> Rect {
-    let tw = text_w(SHEET_PIN_FONT, name);
-    let gap = 1_270 + 500;
-    let (y0, y1) = (pin.y - 700, pin.y + 700);
-    if left {
-        Rect { x0: pin.x, y0, x1: pin.x + gap + tw, y1 }
-    } else {
-        Rect { x0: pin.x - gap - tw, y0, x1: pin.x, y1 }
-    }
+    let (h, spin) = if left { (HJustify::Left, kg::Spin::Right) } else { (HJustify::Right, kg::Spin::Left) };
+    outward(kg::hier_label_rect(&TextStyle::new(h, VJustify::Center), name, fpt(pin), spin))
 }
 
 /// A no-connect flag.
@@ -353,6 +363,7 @@ pub fn nc_rect(at: Point) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::STUB;
     use eda_model::{Pin, PinKind};
 
     fn two_pin(reference: &str, value: &str) -> Part {
@@ -389,7 +400,6 @@ mod tests {
     fn a_standing_resistor_keeps_its_fields_beside_it_and_a_flipped_one_swaps_its_tips() {
         let resolved = eda_model::symbol::builtin("Device:R");
         let mut r = Placed::new(&two_pin("R1", "330"), "Device:R", resolved, "330", "0603");
-        assert!(r.is_vertical_two_pin());
         r.x = 10 * G;
         r.y = 10 * G;
         let (top, side) = r.tip("1").unwrap();

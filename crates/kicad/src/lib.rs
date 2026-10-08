@@ -979,11 +979,18 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
             let (bx, by) = baked_local(baker, width as f64, local.x as f64, local.y as f64);
             let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
             let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
+            // a library symbol draws its no-connect pin like any other, along its own line; only a pin the symbol does not have is a point
+            let (angle, length) = match resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)) {
+                Some(rp) => (baked_real_angle(baker, rp.angle_deg), rp.length_mm),
+                None => (0.0, 0.0),
+            };
             writeln!(
                 out,
-                "\t\t\t\t(pin {etype} line (at {} {} 0) (length 0)\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
                 fmt_mm_f(bx),
                 fmt_mm_f(by),
+                fmt_mm_f(angle),
+                fmt_mm_f(length),
                 sexpr_str(&name),
                 sexpr_str(&pin.number),
             )
@@ -1392,7 +1399,11 @@ mod tests {
     #[test]
     fn pin_coordinates_round_trip_within_1um() {
         let model = ldo_model();
-        let design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
+        let mut design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
+        // the box the layout engine sized for a part with no library symbol: what a design written before generated symbols holds
+        for s in design.schematic.as_mut().unwrap().symbols.iter_mut().filter(|s| s.id == "U1") {
+            s.lib_id = "eda:U1".to_string();
+        }
         let sch = design.schematic.as_ref().unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();

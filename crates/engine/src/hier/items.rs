@@ -24,6 +24,10 @@ pub struct Keep {
     pub locked: Vec<String>,
 }
 
+/// The room kept around what hangs on a pin (micrometres), and how many cells a stub may be made longer to find it.
+const HANG_GAP: i64 = 150;
+const MAX_PUSH: i64 = 24;
+
 /// A pin on a supply or ground rail, waiting to be drawn (`Items::rail_pins`).
 #[derive(Debug, Clone)]
 pub struct RailPin {
@@ -31,6 +35,8 @@ pub struct RailPin {
     pub tip: Point,
     pub side: Side,
     pub net: String,
+    /// The net's `PWR_FLAG` goes on this pin's end: the stub is long enough to take it and still leave the rail's symbol clear of it.
+    pub flag: bool,
 }
 
 fn side_index(s: Side) -> u8 {
@@ -62,6 +68,8 @@ pub struct Ctx<'a> {
     pub rail: BTreeMap<String, bool>,
     /// "REF.PIN" -> net name.
     pub net_of_pin: BTreeMap<String, String>,
+    /// The pins that carry a `PWR_FLAG` (the first pin of every net that needs one).
+    pub flag_pins: std::collections::BTreeSet<String>,
 }
 
 impl<'a> Ctx<'a> {
@@ -90,7 +98,9 @@ impl<'a> Ctx<'a> {
             }
             net_pins.insert(n.name.clone(), pins);
         }
-        Ctx { model, keep, net_pins, rail, net_of_pin }
+        let mut ctx = Ctx { model, keep, net_pins, rail, net_of_pin, flag_pins: Default::default() };
+        ctx.flag_pins = super::flag_nets(&ctx).into_iter().filter_map(|(_, pins)| pins.into_iter().next()).collect();
+        ctx
     }
 
     pub fn is_rail(&self, net: &str) -> bool {
@@ -169,10 +179,14 @@ pub struct Items {
     pub ncs: Vec<NoConnect>,
     /// "REF.PIN" -> where its wire meets it.
     pub tips: BTreeMap<String, Point>,
+    /// "REF.PIN" -> the side of its part the pin is on (the way a wire leaves it).
+    pub tip_sides: BTreeMap<String, Side>,
     /// Everything drawn, as rectangles.
     pub rects: Vec<Rect>,
     /// The symbol keepouts alone, by reference, so a later part can steer clear of an earlier one.
     pub keepouts: Vec<(String, Rect)>,
+    /// What hangs off the pins (stubs, power symbols, labels), so a later one steers clear of an earlier one on the next pin.
+    pub hung: Vec<Rect>,
     /// The box of the part a block is built around, kept through every move so the sheet can centre it.
     pub core: Option<Rect>,
 }
@@ -221,6 +235,9 @@ impl Items {
         for (_, r) in &mut self.keepouts {
             *r = r.translate(dx, dy);
         }
+        for r in &mut self.hung {
+            *r = r.translate(dx, dy);
+        }
         self.core = self.core.map(|c| c.translate(dx, dy));
     }
 
@@ -238,8 +255,10 @@ impl Items {
         self.power.extend(o.power);
         self.ncs.extend(o.ncs);
         self.tips.extend(o.tips);
+        self.tip_sides.extend(o.tip_sides);
         self.rects.extend(o.rects);
         self.keepouts.extend(o.keepouts);
+        self.hung.extend(o.hung);
         self.core = self.core.or(o.core);
     }
 
@@ -269,8 +288,9 @@ impl Items {
         self.rects.push(keep);
         self.keepouts.push((p.part.reference.clone(), keep));
         for pin in &p.part.pins {
-            if let Some((tip, _)) = p.tip(&pin.number) {
+            if let Some((tip, side)) = p.tip(&pin.number) {
                 self.tips.insert(format!("{}.{}", p.part.reference, pin.number), tip);
+                self.tip_sides.insert(format!("{}.{}", p.part.reference, pin.number), side);
             }
         }
         // `nc` pins: a flag on the point the engine reports for them.
@@ -288,17 +308,56 @@ impl Items {
         self.wires.push(Wire { id: String::new(), net: net.to_string(), pins, pts, bus: false });
     }
 
-    /// A power symbol on a pin tip; the glyph points away from the part.
-    pub fn power_at(&mut self, pin_ref: &str, tip: Point, side: Side, net: &str) {
-        let up_glyph = !is_ground_net_name(net);
-        // A ground glyph hangs down and a supply glyph rises; where that would run back into the part, turn it half a turn.
-        let rot = match (side, up_glyph) {
-            (Side::Top, false) | (Side::Bottom, true) => 180_000,
-            _ => 0,
-        };
-        let glyph_up = if rot == 0 { up_glyph } else { !up_glyph };
-        self.power.push(PowerSymbol { id: String::new(), lib_id: power_lib_id(net), at: tip, rot, net: net.to_string(), pin: pin_ref.to_string() });
-        self.rects.push(power_rect(tip, net, glyph_up));
+    /// Is the thing at `end` (its box `item`), joined to the pin at `tip` by a wire, clear of everything hung on the other pins and of the
+    /// other parts? The pin's own part is not in its way: the wire leaves it.
+    fn hangs_clear(&self, pin_ref: &str, tip: Point, end: Point, item: Rect) -> bool {
+        let own = pin_ref.split('.').next().unwrap_or("");
+        let wire = Rect::new(tip.x.min(end.x) - 200, tip.y.min(end.y) - 200, tip.x.max(end.x) + 200, tip.y.max(end.y) + 200);
+        let clear = |r: Rect| self.hung.iter().all(|h| !h.overlaps(&r)) && self.keepouts.iter().all(|(who, k)| who == own || !k.overlaps(&r));
+        clear(item.inflate(HANG_GAP)) && clear(wire)
+    }
+
+    /// The nearest stub, from `min` cells, at whose end `item_at` (the box of the thing there) leaves it clear.
+    fn stub_cells(&self, pin_ref: &str, tip: Point, side: Side, min: i64, item_at: impl Fn(Point) -> Rect) -> i64 {
+        let (dx, dy) = side_dir(side);
+        let end = |c: i64| Point { x: tip.x + dx * c * G, y: tip.y + dy * c * G };
+        (min..=min + MAX_PUSH).find(|&c| self.hangs_clear(pin_ref, tip, end(c), item_at(end(c)))).unwrap_or(min)
+    }
+
+    /// Remember the wire from `tip` to `end` and the box of what it ends in.
+    fn hang(&mut self, tip: Point, end: Point, item: Rect) {
+        let wire = Rect::new(tip.x.min(end.x) - 200, tip.y.min(end.y) - 200, tip.x.max(end.x) + 200, tip.y.max(end.y) + 200);
+        self.rects.push(wire);
+        self.hung.push(wire);
+        self.rects.push(item);
+        self.hung.push(item);
+    }
+
+    /// A power symbol at `at`, its stem running on out along `side` (away from the part): KiCad's way of drawing one on a pin that is not on
+    /// the top or the bottom, where a symbol hung across the pins would run over the next pin's wire. A ground glyph hangs down at rest and
+    /// a supply glyph rises; turned so that the way it points is outward.
+    pub fn power_symbol_at(&mut self, pin_ref: &str, at: Point, side: Side, net: &str) {
+        let rot = outward_rot(!is_ground_net_name(net), side);
+        let lib_id = power_lib_id(net);
+        self.power.push(PowerSymbol { id: String::new(), lib_id: lib_id.clone(), at, rot, net: net.to_string(), pin: pin_ref.to_string() });
+        let r = power_rect(at, rot, net, &lib_id);
+        self.rects.push(r);
+        self.hung.push(r);
+    }
+
+    /// A power symbol off a pin: a wire two cells long out of the tip, the symbol on its end; three when a flag stands on the tip, so the flag's
+    /// glyph and the symbol's do not touch; longer when what hangs on the pin next to it is in the way.
+    pub fn power_at(&mut self, pin_ref: &str, tip: Point, side: Side, net: &str, flag: bool) {
+        let (dx, dy) = side_dir(side);
+        let rot = outward_rot(!is_ground_net_name(net), side);
+        let lib_id = power_lib_id(net);
+        let cells = self.stub_cells(pin_ref, tip, side, if flag { 3 } else { 2 }, |end| power_rect(end, rot, net, &lib_id));
+        let end = Point { x: tip.x + dx * cells * G, y: tip.y + dy * cells * G };
+        self.wire(net, vec![pin_ref.to_string()], vec![tip, end]);
+        let wire = Rect::new(tip.x.min(end.x) - 200, tip.y.min(end.y) - 200, tip.x.max(end.x) + 200, tip.y.max(end.y) + 200);
+        self.rects.push(wire);
+        self.hung.push(wire);
+        self.power_symbol_at(pin_ref, end, side, net);
     }
 
     /// The rail pins of one part, drawn the way a person draws them: pins of one rail that sit side by side on one side of the part (at most three
@@ -327,7 +386,7 @@ impl Items {
             }
             for run in runs {
                 if let [only] = run.as_slice() {
-                    self.power_at(&only.pin_ref, only.tip, only.side, &net);
+                    self.power_at(&only.pin_ref, only.tip, only.side, &net, only.flag);
                     continue;
                 }
                 let (dx, dy) = side_dir(side);
@@ -335,39 +394,58 @@ impl Items {
                 let anchor = if horizontal || is_ground_net_name(&net) { run.len() - 1 } else { 0 };
                 for (i, p) in run.iter().enumerate() {
                     self.wire(&net, vec![p.pin_ref.clone()], vec![p.tip, ends[i]]);
-                    self.rects.push(Rect::new(p.tip.x.min(ends[i].x) - 200, p.tip.y.min(ends[i].y) - 200, p.tip.x.max(ends[i].x) + 200, p.tip.y.max(ends[i].y) + 200));
+                    let w = Rect::new(p.tip.x.min(ends[i].x) - 200, p.tip.y.min(ends[i].y) - 200, p.tip.x.max(ends[i].x) + 200, p.tip.y.max(ends[i].y) + 200);
+                    self.rects.push(w);
+                    self.hung.push(w);
                     if i + 1 < run.len() {
                         self.wire(&net, Vec::new(), vec![ends[i], ends[i + 1]]);
-                        self.rects.push(Rect::new(ends[i].x.min(ends[i + 1].x) - 200, ends[i].y.min(ends[i + 1].y) - 200, ends[i].x.max(ends[i + 1].x) + 200, ends[i].y.max(ends[i + 1].y) + 200));
+                        let j = Rect::new(ends[i].x.min(ends[i + 1].x) - 200, ends[i].y.min(ends[i + 1].y) - 200, ends[i].x.max(ends[i + 1].x) + 200, ends[i].y.max(ends[i + 1].y) + 200);
+                        self.rects.push(j);
+                        self.hung.push(j);
                     }
                 }
-                self.power_at(&run[anchor].pin_ref, ends[anchor], side, &net);
+                self.power_symbol_at(&run[anchor].pin_ref, ends[anchor], side, &net);
             }
         }
     }
 
-    /// A wire from a pin tip straight out `len`, ending in a label.
+    /// A wire from a pin tip straight out `len` (more when what hangs on the pin next to it is in the way), ending in a label.
     pub fn labelled(&mut self, pin_ref: &str, tip: Point, side: Side, net: &str, hierarchical: bool, len: i64) {
         let (dx, dy) = side_dir(side);
-        let end = Point { x: tip.x + dx * len, y: tip.y + dy * len };
+        let cells = self.stub_cells(pin_ref, tip, side, len / G, |end| label_rect(end, (dx, dy), net, hierarchical));
+        let end = Point { x: tip.x + dx * cells * G, y: tip.y + dy * cells * G };
         self.wire(net, vec![pin_ref.to_string()], vec![tip, end]);
         let kind = if hierarchical { LabelKind::Hierarchical { shape: LabelShape::Bidirectional } } else { LabelKind::Local };
         self.labels.push(NetLabel { id: String::new(), net: net.to_string(), at: end, kind });
-        self.rects.push(label_rect(end, (dx, dy), net, hierarchical));
+        self.hang(tip, end, label_rect(end, (dx, dy), net, hierarchical));
     }
 
     /// Draw whatever `pin_ref`'s net needs at its tip: a power symbol, or a wire to a label.
     pub fn connect(&mut self, ctx: &Ctx, view: &View, pin_ref: &str, tip: Point, side: Side) {
         let Some(net) = ctx.net_of_pin.get(pin_ref) else { return };
+        // a flag on the pin's end takes the first two cells of the wire: the label stands clear of it
+        let flag = ctx.flag_pins.contains(pin_ref);
+        let len = if flag { 3 * G } else { 2 * G };
         match view.class_of(net) {
-            Some(NetClass::Rail) => self.power_at(pin_ref, tip, side, net),
+            Some(NetClass::Rail) => self.power_at(pin_ref, tip, side, net, flag),
             Some(NetClass::Cross) => {
                 let carrier = view.carrier.get(net).is_some_and(|c| c == pin_ref);
-                self.labelled(pin_ref, tip, side, net, carrier, 2 * G)
+                self.labelled(pin_ref, tip, side, net, carrier, len)
             }
-            Some(NetClass::Internal) => self.labelled(pin_ref, tip, side, net, false, 2 * G),
+            Some(NetClass::Internal) => self.labelled(pin_ref, tip, side, net, false, len),
             None => {}
         }
+    }
+}
+
+/// The turn that makes a power glyph run on out along `side`: a ground glyph hangs down at rest and a supply glyph (or a flag) rises; the engine's
+/// `rot` turns clockwise on the sheet, so a quarter takes "down" to "left".
+pub fn outward_rot(rises_at_rest: bool, side: Side) -> u32 {
+    match (rises_at_rest, side) {
+        (false, Side::Bottom) | (true, Side::Top) => 0,
+        (false, Side::Top) | (true, Side::Bottom) => 180_000,
+        (false, Side::Left) | (true, Side::Right) => 90_000,
+        (false, Side::Right) | (true, Side::Left) => 270_000,
     }
 }
 

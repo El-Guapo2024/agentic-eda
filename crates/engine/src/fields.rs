@@ -357,11 +357,26 @@ pub fn symbol_fields(sch: &SchematicSection, sym: &SymbolInstance, part: Option<
 
 // -------------------------------------------------------------------------------------------------- power symbols
 
-/// Where KiCad's power library puts a power symbol's Value: 3.81 mm below a ground symbol, 3.556 mm above a supply one, centred; the
-/// reference is hidden.
+/// How far a power symbol's glyph reaches from its pin along its axis, pen included (micrometres).
+fn glyph_reach(lib_id: &str) -> f64 {
+    let Some(lib) = eda_model::symbol::builtin(lib_id) else { return 2_540.0 };
+    SymbolGeom::of_origin_symbol(Point { x: 0, y: 0 }, 0, &lib).body.map(|b| b.y0.abs().max(b.y1.abs())).unwrap_or(2_540.0)
+}
+
+/// Where a power symbol's Value is. KiCad's power library puts it 3.81 mm below a ground symbol and 3.556 mm above a supply one, centred. A
+/// symbol turned a quarter, to run out along a row of pins, would show that text turned too, and the names of two such symbols a pitch apart
+/// would run into one another: its Value is read along the row instead, just past the glyph's tip. A flag shows none.
 pub fn power_value_placement(ps: &PowerSymbol, lib_id: &str) -> FieldPlacement {
     let ground_like = lib_id == "power:GND";
     let flag = lib_id == "power:PWR_FLAG";
+    // the way the glyph points on the sheet
+    let glyph = Lin::of_symbol(ps.rot, false).apply((0, if ground_like { 1 } else { -1 }));
+    if glyph.0 != 0 && !flag {
+        let reach = glyph_reach(lib_id) + 640.0;
+        let anchor = (ps.at.x as f64 + glyph.0 as f64 * reach, ps.at.y as f64);
+        let h = if glyph.0 > 0 { TextJustify::Left } else { TextJustify::Right };
+        return local_placement(ps.at, ps.rot, false, 0.0, "Value", anchor, h, TextVAlign::Center, true);
+    }
     let dy = if ground_like {
         3_810
     } else if flag {
@@ -369,8 +384,8 @@ pub fn power_value_placement(ps: &PowerSymbol, lib_id: &str) -> FieldPlacement {
     } else {
         -3_556
     };
-    let _ = ps;
-    FieldPlacement { name: "Value".into(), dx: 0, dy, angle: 0, h: TextJustify::Center, v: TextVAlign::Center, visible: true }
+    // a flag's own name says nothing about the net, and it is wider than the room beside the symbol it stands on
+    FieldPlacement { name: "Value".into(), dx: 0, dy, angle: 0, h: TextJustify::Center, v: TextVAlign::Center, visible: !flag }
 }
 
 /// The placements of a power symbol's fields in its own frame (origin at its pin), with the text each shows: the Reference, hidden, and

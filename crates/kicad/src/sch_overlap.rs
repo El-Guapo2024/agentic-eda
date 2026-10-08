@@ -64,11 +64,16 @@ pub struct Item {
     pub anchors: Vec<Pt>,
     /// For a pin's name and number: the pin's connection point.
     pub pin_tip: Option<Pt>,
+    /// The item belongs to a power symbol (whose value sits where the power library puts it, a hair into its own glyph's box).
+    pub power: bool,
+    /// A pin, or the name or number of one, of a symbol KiCad's own library draws: where its texts meet is its authors' drawing, which a
+    /// schematic cannot change (a generated symbol's are ours, and checked).
+    pub library_pin: bool,
 }
 
 impl Item {
     fn boxed(kind: Kind, owner: &str, what: String, rect: Rect) -> Item {
-        Item { kind, owner: owner.to_string(), what, rect, seg: None, anchors: Vec::new(), pin_tip: None }
+        Item { kind, owner: owner.to_string(), what, rect, seg: None, anchors: Vec::new(), pin_tip: None, power: false, library_pin: false }
     }
 }
 
@@ -369,18 +374,28 @@ impl Builder {
         if let Some(rect) = body {
             let mut it = Item::boxed(Kind::Body, &owner, format!("{owner} body"), rect);
             it.anchors = anchors;
+            it.power = lib.power;
             self.push(it);
         }
 
         // the pins
+        let before = self.items.len();
         for p in pins.iter().filter(|p| !p.hide) {
             self.pin(&owner, &lib, &xf, pos, p);
+        }
+        let from_library = !lib_id.starts_with("eda:") && !lib_id.starts_with("gen:");
+        for it in &mut self.items[before..] {
+            it.library_pin = from_library;
         }
 
         // the fields
         for prop in find_all(inst, "property") {
             let (Some(name), Some(value)) = (txt(prop, 1), txt(prop, 2)) else { continue };
+            let before = self.items.len();
             self.field(&owner, name, value, prop, &xf, pos);
+            for it in &mut self.items[before..] {
+                it.power = lib.power;
+            }
         }
     }
 
@@ -583,6 +598,14 @@ fn exempt(a: &Item, b: &Item) -> bool {
         if (a.kind == Kind::SheetBody && b.kind == Kind::SheetPin) || (a.kind == Kind::SheetPin && b.kind == Kind::SheetBody) {
             return true;
         }
+    }
+    // the pins and pin texts of a library symbol are as its authors drew them
+    if a.library_pin && b.library_pin && a.owner == b.owner {
+        return true;
+    }
+    // a power symbol's value is set a hair into its own glyph's box, as KiCad's own power library has it
+    if a.power && b.power && a.owner == b.owner && ((a.kind == Kind::Body && b.kind == Kind::Field) || (b.kind == Kind::Body && a.kind == Kind::Field)) {
+        return true;
     }
     // two pins of one symbol never meet: they are two pins at one spot
     if a.kind == Kind::Pin && b.kind == Kind::Pin && a.owner == b.owner {

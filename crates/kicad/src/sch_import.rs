@@ -987,13 +987,14 @@ mod tests {
         let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "mirror_roundtrip" }).unwrap();
         assert!(!text.contains("(mirror "), "sanity: our own exporter never emits a mirror tag on the instance (it bakes the transform instead)");
 
-        let with_mirror_x = text.replacen("(lib_id \"eda:U1\") (at ", "(lib_id \"eda:U1\") (mirror x) (at ", 1);
+        let lib_id = design.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "U1").unwrap().lib_id.clone();
+        let with_mirror_x = text.replacen(&format!("(lib_id \"{lib_id}\") (at "), &format!("(lib_id \"{lib_id}\") (mirror x) (at "), 1);
         let (design_x, _, _) = import_kicad_sch(&with_mirror_x).expect("parses with an injected (mirror x)");
         let u1_x = design_x.schematic.unwrap().symbols.into_iter().find(|s| s.id == "U1").unwrap();
         assert!(u1_x.mirror_y, "(mirror x) must set mirror_y");
         assert!(!u1_x.mirrored, "(mirror x) must not also set mirrored");
 
-        let with_mirror_y = text.replacen("(lib_id \"eda:U1\") (at ", "(lib_id \"eda:U1\") (mirror y) (at ", 1);
+        let with_mirror_y = text.replacen(&format!("(lib_id \"{lib_id}\") (at "), &format!("(lib_id \"{lib_id}\") (mirror y) (at "), 1);
         let (design_y, _, _) = import_kicad_sch(&with_mirror_y).expect("parses with an injected (mirror y)");
         let u1_y = design_y.schematic.unwrap().symbols.into_iter().find(|s| s.id == "U1").unwrap();
         assert!(u1_y.mirrored, "(mirror y) must set mirrored");

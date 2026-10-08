@@ -79,7 +79,7 @@ fn validate(model: &ConstraintModel) -> Vec<CheckResult> {
 
 /// Nets that need a `PWR_FLAG`: a power or ground pin on them and no power output (a regulator's output), exactly the rule
 /// `derive_schematic` uses.
-fn flag_nets(ctx: &Ctx) -> Vec<(String, Vec<String>)> {
+pub(super) fn flag_nets(ctx: &Ctx) -> Vec<(String, Vec<String>)> {
     let mut nets = ctx.model.nets.clone();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     let mut out = Vec::new();
@@ -147,7 +147,7 @@ pub fn fit_flat(sch: &mut SchematicSection, model: &ConstraintModel) {
         rects.push(label_rect(l.at, (1, 0), &l.net, false).union(label_rect(l.at, (-1, 0), &l.net, false)));
     }
     for p in &sch.power_symbols {
-        rects.push(power_rect(p.at, &p.net, true).union(power_rect(p.at, &p.net, false)));
+        rects.push(power_rect(p.at, p.rot, &p.net, &p.lib_id));
     }
     for n in &sch.no_connects {
         rects.push(nc_rect(n.at));
@@ -188,8 +188,12 @@ fn number_power(ctx: &Ctx, modules: &[FunctionalModule], outs: &mut [sheet::Shee
                     continue;
                 }
                 let Some(tip) = outs[mi].items.tips.get(pin_ref).copied() else { continue };
+                let side = outs[mi].items.tip_sides.get(pin_ref).copied().unwrap_or(eda_layout::Side::Top);
                 flag_n += 1;
-                outs[mi].items.power.push(PowerSymbol { id: format!("#FLG{flag_n:02}"), lib_id: "power:PWR_FLAG".to_string(), at: tip, rot: if ground { 180_000 } else { 0 }, net: net.clone(), pin: String::new() });
+                // on the pin's end, its glyph running out along the wire to the rail's symbol (its value is not shown)
+                let _ = ground;
+                let rot = items::outward_rot(true, side);
+                outs[mi].items.power.push(PowerSymbol { id: format!("#FLG{flag_n:02}"), lib_id: "power:PWR_FLAG".to_string(), at: tip, rot, net: net.clone(), pin: String::new() });
                 break 'find;
             }
         }

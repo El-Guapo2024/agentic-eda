@@ -1385,8 +1385,9 @@ mod tests {
         let sch = d.schematic.unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();
-        let (width, height) = geometry::node_size(part, None, 1);
-        let (ports, pin_port) = geometry::build_ports(part, width, height, None, 1);
+        let resolved = model.real_symbol_of(&u1.lib_id, part);
+        let (width, height) = geometry::node_size(part, resolved.as_ref(), 1);
+        let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref(), 1);
         // U1 pin "2" (GND) -> its port -> stub tip, must equal the power
         // symbol's own `at`.
         let port_idx = pin_port[1].unwrap();

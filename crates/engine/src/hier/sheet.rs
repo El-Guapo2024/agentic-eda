@@ -271,17 +271,21 @@ fn single_block(ctx: &Ctx, view: &View, r: &str) -> Block {
     items.symbol(ctx, &p);
     items.core = Some(p.box_rect());
     let mut rail: Vec<RailPin> = Vec::new();
+    let mut others: Vec<(String, Point, Side)> = Vec::new();
     for pin in &p.part.pins {
         if let Some((tip, side)) = p.tip(&pin.number) {
             let pin_ref = format!("{r}.{}", pin.number);
             match ctx.net_of_pin.get(&pin_ref).filter(|n| view.class_of(n) == Some(NetClass::Rail)) {
-                Some(net) => rail.push(RailPin { pin_ref, tip, side, net: net.clone() }),
-                None => items.connect(ctx, view, &pin_ref, tip, side),
+                Some(net) => rail.push(RailPin { flag: ctx.flag_pins.contains(&pin_ref), pin_ref, tip, side, net: net.clone() }),
+                None => others.push((pin_ref, tip, side)),
             }
         }
     }
-    // the rails last: pins side by side on one rail share a symbol, out beyond the part's texts
+    // the rails first: pins side by side on one rail share a symbol, out beyond the part's texts; the labels then keep clear of them
     items.rail_pins(rail);
+    for (pin_ref, tip, side) in others {
+        items.connect(ctx, view, &pin_ref, tip, side);
+    }
     finish(items)
 }
 

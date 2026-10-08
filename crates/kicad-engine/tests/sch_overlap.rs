@@ -33,8 +33,19 @@ fn model_of(path: &Path) -> Option<ConstraintModel> {
     Some(model)
 }
 
-fn reports_of(design: &Design, model: &ConstraintModel) -> Vec<SheetReport> {
+/// With `EDA_SCH_DUMP=<dir>` the exported sheets are left in `<dir>/<example>/<how>/`, to be rendered with kicad-cli.
+fn dump(name: &str, how: &str, files: &[(String, String)]) {
+    let Some(dir) = std::env::var_os("EDA_SCH_DUMP") else { return };
+    let dir = Path::new(&dir).join(name.trim_end_matches(".yaml")).join(how.replace(' ', "_"));
+    std::fs::create_dir_all(&dir).expect("the dump directory");
+    for (file, text) in files {
+        std::fs::write(dir.join(file), text).expect("a sheet is written");
+    }
+}
+
+fn reports_of(name: &str, how: &str, design: &Design, model: &ConstraintModel) -> Vec<SheetReport> {
     let files = export_kicad_sch_tree(design, model, &ExportMeta { date: "2026-10-08", title: "t" }, "root.kicad_sch").expect("the design exports");
+    dump(name, how, &files);
     check_tree(&files).expect("the exported sheets read back")
 }
 
@@ -54,8 +65,8 @@ fn measure(path: &Path) -> Option<(usize, usize)> {
     let model = model_of(path)?;
     let name = path.file_name()?.to_string_lossy().to_string();
     let opts = EngineOptions::new(1, "t");
-    let flat = derive_schematic(&model, &opts).ok().map(|d| reports_of(&d, &model));
-    let modules = derive_schematic_modules(&model, &opts).ok().map(|d| reports_of(&d, &model));
+    let flat = derive_schematic(&model, &opts).ok().map(|d| reports_of(&name, "flat", &d, &model));
+    let modules = derive_schematic_modules(&model, &opts).ok().map(|d| reports_of(&name, "module sheets", &d, &model));
     if let Some(r) = &flat {
         print(&name, "flat", r);
     }
@@ -73,23 +84,23 @@ fn measure(path: &Path) -> Option<(usize, usize)> {
 /// mixed_track_widths 142 / 140, nc_pins 67 / 68, opamp_filter 153 / 168, passive_divider_ladder 91 / 86, star_net 51 / 42,
 /// through_hole_headers 104 / 94, two_pin_nets 14 / 12, unroutable_tiny_outline 56 / 56.
 const KNOWN: &[(&str, usize, usize)] = &[
-    ("all_power_ground_net.yaml", 9, 5),
+    ("all_power_ground_net.yaml", 4, 0),
     ("dense_small_outline.yaml", 3, 0),
-    ("l1_usb_mcu.yaml", 372, 314),
-    ("l2_sensor_hub.yaml", 406, 225),
-    ("l3_motor_hub.yaml", 743, 429),
-    ("l4_control_hub.yaml", 1053, 574),
-    ("ldo.yaml", 19, 10),
-    ("ldo_proximity_heavy.yaml", 13, 9),
-    ("mcu_board_30plus.yaml", 136, 76),
-    ("mixed_track_widths.yaml", 19, 10),
-    ("nc_pins.yaml", 16, 16),
-    ("opamp_filter.yaml", 14, 13),
-    ("passive_divider_ladder.yaml", 8, 2),
+    ("l1_usb_mcu.yaml", 91, 3),
+    ("l2_sensor_hub.yaml", 229, 1),
+    ("l3_motor_hub.yaml", 362, 1),
+    ("l4_control_hub.yaml", 603, 1),
+    ("ldo.yaml", 16, 0),
+    ("ldo_proximity_heavy.yaml", 11, 0),
+    ("mcu_board_30plus.yaml", 100, 0),
+    ("mixed_track_widths.yaml", 16, 0),
+    ("nc_pins.yaml", 12, 4),
+    ("opamp_filter.yaml", 12, 0),
+    ("passive_divider_ladder.yaml", 7, 0),
     ("star_net.yaml", 5, 0),
-    ("through_hole_headers.yaml", 34, 6),
+    ("through_hole_headers.yaml", 30, 0),
     ("two_pin_nets.yaml", 0, 0),
-    ("unroutable_tiny_outline.yaml", 6, 5),
+    ("unroutable_tiny_outline.yaml", 4, 0),
 ];
 
 #[test]

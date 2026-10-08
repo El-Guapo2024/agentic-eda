@@ -4,7 +4,7 @@ use eda_model::ir::{Design, LabelKind, Point, SchematicSection};
 use eda_model::modules::infer_modules;
 use eda_model::{resolve_lib_id, ConstraintModel, PinKind};
 
-use super::kit::{cap, label_rect, paper_named, power_rect, sheet_pin_rect, text_w, Paper, Placed, Rect, G, SHEET_FILE_FONT, SHEET_NAME_FONT};
+use super::kit::{label_rect, paper_named, power_rect, sheet_pin_rect, text_rect, Paper, Placed, Rect, G};
 use super::{derive_hierarchy, Keep};
 use crate::nets::{trace_nets, ScreenIn};
 use crate::{derive_schematic_modules, EngineOptions};
@@ -105,10 +105,8 @@ fn drawn(model: &ConstraintModel, sch: &SchematicSection) -> Vec<Drawn> {
         if ps.lib_id == "power:PWR_FLAG" {
             continue;
         }
-        let ground = ps.net.to_ascii_uppercase().starts_with("GND");
-        let up = (!ground) == (ps.rot == 0);
         let owner = ps.pin.split('.').next().unwrap_or("").to_string();
-        out.push(Drawn { owner, what: format!("power {} {}", ps.id, ps.net), rect: power_rect(ps.at, &ps.net, up) });
+        out.push(Drawn { owner, what: format!("power {} {}", ps.id, ps.net), rect: power_rect(ps.at, ps.rot, &ps.net, &ps.lib_id) });
     }
     for l in &sch.labels {
         // the way the label's wire leaves it
@@ -126,9 +124,9 @@ fn drawn(model: &ConstraintModel, sch: &SchematicSection) -> Vec<Drawn> {
     for s in &sch.sheets {
         let b = Rect::new(s.at.x, s.at.y, s.at.x + s.size.0, s.at.y + s.size.1);
         out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("sheet {}", s.name), rect: b });
-        out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("name {}", s.name), rect: Rect::new(s.at.x, s.at.y - 400 - cap(SHEET_NAME_FONT), s.at.x + text_w(SHEET_NAME_FONT, &s.name), s.at.y - 400) });
-        let base = s.at.y + s.size.1 + 400 + SHEET_FILE_FONT;
-        out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("file {}", s.file), rect: Rect::new(s.at.x, base - cap(SHEET_FILE_FONT), s.at.x + text_w(SHEET_FILE_FONT, &s.file), base) });
+        for f in crate::fields::sheet_fields(sch, s) {
+            out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("{} {}", f.name, f.text), rect: text_rect(&f.text, f.at, f.h, f.v, f.vertical) });
+        }
         for p in &s.pins {
             out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("pin {}", p.name), rect: sheet_pin_rect(p.at, p.at.x == s.at.x, &p.name) });
         }
