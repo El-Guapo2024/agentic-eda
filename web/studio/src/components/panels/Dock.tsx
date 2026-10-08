@@ -36,9 +36,13 @@ export function DockColumn({ side, column = side, label, children }: { side: "le
   );
 }
 
-export function DockPanel({ id, title, children }: { id: DockPaneId; title: string; children: ReactNode }) {
+/**
+ * `visible` / `onClose` are for a pane whose open state lives elsewhere (the Net Navigator's is the schematic control store's, read by its action and its
+ * check mark): the pane is drawn while `visible`, and its close button calls `onClose` instead of hiding it in the layout.
+ */
+export function DockPanel({ id, title, children, visible, onClose }: { id: DockPaneId; title: string; children: ReactNode; visible?: boolean; onClose?: () => void }) {
   const layout = useDockLayout();
-  if (!paneVisible(layout, id)) return null;
+  if (!(visible ?? paneVisible(layout, id))) return null;
   const folded = layout.folded[id];
   return (
     <section className={`dock-panel${folded ? " folded" : ""}`} data-pane={id}>
@@ -69,7 +73,8 @@ export function DockPanel({ id, title, children }: { id: DockPaneId; title: stri
             title={`Hide ${title}`}
             onClick={(e) => {
               e.stopPropagation();
-              toggleDockPane(id);
+              if (onClose) onClose();
+              else toggleDockPane(id);
             }}
           >
             {"×"}

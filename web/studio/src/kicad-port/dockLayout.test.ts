@@ -13,8 +13,17 @@ test("a wide window starts with every pane open; an 800 px window starts with bo
   assert.equal(defaultDockLayout(NARROW_WINDOW_PX - 1).leftCollapsed, true);
 });
 
-test("the schematic's left column holds Hierarchy, Properties and Selection Filter in KiCad's Position order", () => {
+test("the schematic's left column holds Hierarchy, Properties and Selection Filter in KiCad's Position order, with the Net Navigator above them when it is open", () => {
   assert.deepEqual(schLeftColumn(defaultDockLayout(1600)), ["hierarchy", "properties", "selectionFilter"]);
+  assert.deepEqual(schLeftColumn(defaultDockLayout(1600), true), ["netNavigator", "hierarchy", "properties", "selectionFilter"], "Position 0: the first pane of the column");
+});
+
+test("the Net Navigator alone keeps the Selection Filter on screen (updateSelectionFilterVisbility counts it)", () => {
+  let l = defaultDockLayout(1600);
+  l = togglePane(togglePane(l, "hierarchy"), "properties");
+  assert.equal(selectionFilterShown(l), false);
+  assert.equal(selectionFilterShown(l, true), true);
+  assert.deepEqual(schLeftColumn(l, true), ["netNavigator", "selectionFilter"]);
 });
 
 test("the Selection Filter has no switch of its own: it shows while the hierarchy or the properties pane is shown", () => {

@@ -16,10 +16,10 @@
 // `NARROW_WINDOW_PX` starts with both columns folded, so the canvas keeps most of the width. The studio's own panes (the Appearance dock)
 // follow the same two switches.
 
-export type DockPaneId = "hierarchy" | "properties" | "selectionFilter";
+export type DockPaneId = "netNavigator" | "hierarchy" | "properties" | "selectionFilter";
 
 /** `wxAuiPaneInfo::Position()` of each pane of the schematic frame's left column (lower = higher up); the order panes are drawn in. */
-export const SCH_LEFT_COLUMN_ORDER: readonly DockPaneId[] = ["hierarchy", "properties", "selectionFilter"];
+export const SCH_LEFT_COLUMN_ORDER: readonly DockPaneId[] = ["netNavigator", "hierarchy", "properties", "selectionFilter"];
 
 /** The width, in CSS px, of the docked column: Properties' `MinSize( 240, 60 )`; the Selection Filter is narrower (180) and fits inside it. */
 export const DOCK_COLUMN_WIDTH_PX = 240;
@@ -51,22 +51,27 @@ export function defaultDockLayout(windowWidth: number): DockLayout {
     leftCollapsed: narrow,
     rightCollapsed: narrow,
     // `show_schematic_hierarchy` and `show_properties` default true; the Appearance manager is shown by default in pcbnew too.
-    shown: { hierarchy: true, properties: true, selectionFilter: true },
-    folded: { hierarchy: false, properties: false, selectionFilter: false },
+    // `show_net_nav_panel` defaults false. Whether the Net Navigator is OPEN is the schematic control store's (`netNavigatorOpen`, which its action and its check
+    // mark read), passed in below; this flag is not read for it.
+    shown: { netNavigator: false, hierarchy: true, properties: true, selectionFilter: true },
+    folded: { netNavigator: false, hierarchy: false, properties: false, selectionFilter: false },
   };
 }
 
 /**
  * `SCH_EDIT_FRAME::updateSelectionFilterVisbility`: "Don't give the selection filter its own visibility controls; instead show it if anything else
- * is visible" -- the hierarchy, the net navigator or the properties pane, docked. (The studio has no net navigator pane.)
+ * is visible" -- the hierarchy, the net navigator or the properties pane, docked. `netNavigatorOpen` is the Net Navigator's own state (the schematic
+ * control store's): that pane is opened by its action, not by this layout's `shown` flags.
  */
-export function selectionFilterShown(layout: DockLayout): boolean {
-  return layout.shown.hierarchy || layout.shown.properties;
+export function selectionFilterShown(layout: DockLayout, netNavigatorOpen = false): boolean {
+  return layout.shown.hierarchy || layout.shown.properties || netNavigatorOpen;
 }
 
-/** Whether `id` is drawn at all: the filter by `updateSelectionFilterVisbility`'s rule, every other pane by its own flag. */
-export function paneVisible(layout: DockLayout, id: DockPaneId): boolean {
-  return id === "selectionFilter" ? selectionFilterShown(layout) : layout.shown[id];
+/** Whether `id` is drawn at all: the filter by `updateSelectionFilterVisbility`'s rule, the Net Navigator by its own open state, every other pane by its flag. */
+export function paneVisible(layout: DockLayout, id: DockPaneId, netNavigatorOpen = false): boolean {
+  if (id === "selectionFilter") return selectionFilterShown(layout, netNavigatorOpen);
+  if (id === "netNavigator") return netNavigatorOpen;
+  return layout.shown[id];
 }
 
 /**
@@ -100,8 +105,8 @@ export function setColumnCollapsed(layout: DockLayout, column: DockColumnId, col
 }
 
 /** Panes of the left column of the schematic frame that are drawn, top to bottom (`Position` order). */
-export function schLeftColumn(layout: DockLayout): DockPaneId[] {
-  return SCH_LEFT_COLUMN_ORDER.filter((id) => paneVisible(layout, id));
+export function schLeftColumn(layout: DockLayout, netNavigatorOpen = false): DockPaneId[] {
+  return SCH_LEFT_COLUMN_ORDER.filter((id) => paneVisible(layout, id, netNavigatorOpen));
 }
 
 /** Read a stored layout back: anything missing or of the wrong type falls back to the default for this window (a layout from an older build must not break the app). */

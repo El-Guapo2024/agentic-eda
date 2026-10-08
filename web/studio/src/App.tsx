@@ -14,7 +14,7 @@ import { QuickActions } from "./components/QuickActions";
 import { PropertiesPanel } from "./components/panels/PropertiesPanel";
 import { RightDock } from "./components/panels/RightDock";
 import { DockColumn } from "./components/panels/Dock";
-import { SchematicDock } from "./components/panels/SchematicDock";
+import { SchematicDock, useOpenDockWithNetNavigator } from "./components/panels/SchematicDock";
 import { MessagePanel } from "./components/MessagePanel";
 import { StatusBar } from "./components/StatusBar";
 import { Canvas } from "./components/canvas/Canvas";
@@ -105,6 +105,7 @@ function StudioFrame() {
   const state = useStudioState();
   useGlobalHotkeys();
   useFootprintEditHotkey();
+  useOpenDockWithNetNavigator();
   // Ctrl+Shift+E / Ctrl+E on the Schematic tab are now the registered actions
   // eeschema.EditorControl.editLibSymbolWithSymbolEditor / editWithSymbolEditor
   // (useActionRunner.ts); useSymbolEditHotkey.ts is superseded and no longer called.
