@@ -720,6 +720,8 @@ export type Cmd =
   | { op: "add_to_group"; group_id: string; ids: string[] }
   /** Remove `ids` from whatever group each belongs to; a group left with fewer than 2 members dissolves. */
   | { op: "remove_from_group"; ids: string[] }
+  /** Group Properties' OK (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): rename the group and make its members exactly `member_ids` (each pulled out of any other group; under 2 members dissolves it). */
+  | { op: "edit_group"; id: string; name: string; member_ids: string[] }
   /**
    * Ctrl+T (task item 6): `pcbnew.Array.createArray`. `arrange: false`
    * (the dialog's "Duplicate" default) creates `geometry`'s size minus

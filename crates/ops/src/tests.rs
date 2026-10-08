@@ -1040,6 +1040,43 @@ fn add_to_group_and_remove_from_group_round_trip() {
 }
 
 #[test]
+fn edit_group_renames_it_and_replaces_its_members() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402"), part("C3", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    b.apply(&Cmd::Group { ids: vec!["C2".into(), "C3".into()] }).unwrap();
+    let first = b.design().drawings.as_ref().unwrap().groups.iter().find(|g| g.member_ids.contains(&"U1".to_string())).unwrap().id.clone();
+
+    // rename it and take C2 from the other group: that group is left with C3 alone, so it dissolves
+    b.apply(&Cmd::EditGroup { id: first.clone(), name: "power".into(), member_ids: vec!["U1".into(), "C1".into(), "C2".into(), "C2".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    assert_eq!(groups[0].name, "power");
+    assert_eq!(groups[0].id, first, "the group keeps its id");
+    let mut members = groups[0].member_ids.clone();
+    members.sort();
+    assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()], "a member listed twice is one member");
+
+    // a group left with fewer than two members dissolves, as everywhere else
+    b.apply(&Cmd::EditGroup { id: first, name: "x".into(), member_ids: vec!["U1".into()] }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().groups.is_empty());
+}
+
+#[test]
+fn edit_group_refuses_an_unknown_group_and_a_group_inside_a_group() {
+    let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402"), part("C3", "0402")], &[], vec![]);
+    let mut b = board(&m);
+    b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
+    b.apply(&Cmd::Group { ids: vec!["C2".into(), "C3".into()] }).unwrap();
+    let groups = b.design().drawings.as_ref().unwrap().groups.clone();
+    let e = b.apply(&Cmd::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: vec!["U1".into(), "C1".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_group");
+    let e = b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[1].id.clone(), "U1".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_group", "no nested groups");
+    assert_eq!(b.design().drawings.as_ref().unwrap().groups.len(), 2, "a refused edit changes nothing");
+}
+
+#[test]
 fn removing_from_a_group_that_stays_above_two_members_keeps_it_alive() {
     let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
     let mut b = board(&m);

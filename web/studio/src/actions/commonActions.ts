@@ -22,6 +22,7 @@ import { crossHairModeForAction } from "../kicad-port/crosshair";
 import { LIBRARY_EDITOR_FIT_MARGIN, boxCentre, centerViewOn, setScaleAboutCentre, zoomFitBox, zoomListFor, zoomPresetScale } from "../kicad-port/zoomFit";
 import { canvasRect, emitCanvasEvent } from "./canvasEvents";
 import { registerSelectionActions } from "./commonSelectionActions";
+import { registerGroupActions } from "./commonGroupActions";
 import { gridPresetIndex } from "../kicad-port/cursorControl";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { formatLength } from "../state/units";
@@ -204,6 +205,8 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
     })
   );
 
-  // The selection tool's modes and events, the interactive delete tool and the picker (commonSelectionActions.ts).
+  // The selection tool's modes and events, the interactive delete tool and the picker (commonSelectionActions.ts), the group tool's
+  // membership edits (commonGroupActions.ts).
   registerSelectionActions(m, ctx);
+  registerGroupActions(m, ctx);
 }

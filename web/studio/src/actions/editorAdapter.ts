@@ -107,7 +107,7 @@ function schematicItemBoxes(sch: Schematic): ItemBoxes {
 const LIBRARY_EDITOR_DEFAULT_BOX: Box = [-50_000, -50_000, 50_000, 50_000];
 
 /** `GetItemDescription` of a board item, from the lists the board state holds. */
-function describeBoardItem(board: StudioState["board"], item: PickedItem): string {
+export function describeBoardItem(board: StudioState["board"], item: PickedItem): string {
   if (!board) return item.kind;
   const part = board.parts.find((p) => p.ref === item.id);
   if (part) return `Footprint ${part.ref}${part.value ? ` ${part.value}` : ""}`;

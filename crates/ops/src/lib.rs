@@ -523,6 +523,12 @@ pub enum Cmd {
     /// `GROUP_TOOL::RemoveFromGroup`'s own `if (group->GetItems().size() <
     /// 2) group->RemoveAll()` rule, ported exactly.
     RemoveFromGroup { ids: Vec<String> },
+    /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow` (`ACTIONS::groupProperties`, Group Properties...): rename the group `id` and
+    /// make its members exactly `member_ids` -- each one pulled out of whatever other group it was in (an item is in one group at a
+    /// time), the group's own previous members that are not listed released. A group left with fewer than 2 members dissolves, as
+    /// everywhere else. The name is `PCB_GROUP::SetName`; the dialog's other two fields (locked, design-block link) have no
+    /// counterpart in this model. A group cannot hold itself or another group (no nested groups).
+    EditGroup { id: String, name: String, member_ids: Vec<String> },
 
     // ------------------------------------------------------------ arrays
     //
@@ -1493,6 +1499,7 @@ impl Cmd {
             Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
+            Cmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
             Cmd::CreateArray { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::AddDimension { .. } => vec!["dimension"],
             Cmd::DeleteDimension { id } | Cmd::MoveDimension { id, .. } | Cmd::EditDimension { id, .. } => vec![id.as_str()],
@@ -1858,6 +1865,7 @@ impl<'a> Board<'a> {
             Cmd::Ungroup { ids } => self.ungroup_items(ids),
             Cmd::AddToGroup { group_id, ids } => self.add_to_group(group_id, ids),
             Cmd::RemoveFromGroup { ids } => self.remove_from_group(ids),
+            Cmd::EditGroup { id, name, member_ids } => self.edit_group(id, name, member_ids),
             Cmd::CreateArray { ids, geometry, arrange } => self.create_array(ids, geometry, *arrange),
             Cmd::AddDimension { dimension } => self.add_dimension(dimension.clone()),
             Cmd::DeleteDimension { id } => self.delete_dimension(id),
@@ -3013,6 +3021,27 @@ impl<'a> Board<'a> {
             }
             prune_empty_groups(dr);
         }
+        Ok(())
+    }
+
+    /// `Cmd::EditGroup`.
+    fn edit_group(&mut self, id: &str, name: &str, member_ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        let dr = self.drawings_mut();
+        if !dr.groups.iter().any(|g| g.id == id) {
+            return Err(vec![CheckResult::fail("ops_unknown_group", id, "no group with this id")]);
+        }
+        if member_ids.iter().any(|m| m == id || dr.groups.iter().any(|g| &g.id == m)) {
+            return Err(vec![CheckResult::fail("ops_bad_group", id, "a group cannot hold a group")]);
+        }
+        let mut seen = BTreeSet::new();
+        let members: Vec<String> = member_ids.iter().filter(|m| seen.insert((*m).clone())).cloned().collect();
+        for g in dr.groups.iter_mut().filter(|g| g.id != id) {
+            g.member_ids.retain(|m| !members.contains(m));
+        }
+        let g = dr.groups.iter_mut().find(|g| g.id == id).expect("the group was checked present");
+        g.name = name.to_string();
+        g.member_ids = members;
+        prune_empty_groups(dr);
         Ok(())
     }
 
