@@ -127,11 +127,17 @@ New (the old "library browsers" mention). **Open.** Hit: every session that adds
   `pcbnew/footprint_chooser_frame.cpp`, `pcbnew/footprint_library_adapter.cpp`.
 
 ### 6. The schematic has no clipboard
-New (the schematic half of old #14). **Open.** Hit: every session. Blocks: partly; Repeat Last Item (`kicad-port/schRepeat.ts`) is the only workaround. WP1, size M.
-- Missing: cut, copy, paste, duplicate and Paste Special do nothing on the Schematic tab (`common.Interactive.copy/paste` are
-  `pcbOnly`; `duplicate` serves the PCB and footprint tabs, `actions/useActionRunner.ts`). Needed: selected items with their
-  wires and labels, paste carried by the cursor, annotation of pasted symbols, paste across sheets, and KiCad's clipboard
-  format so copy and paste work with real KiCad.
+New (the schematic half of old #14). **Closed on 2026-10-08.** Hit: every session. Blocks: no longer. WP1, size M.
+- Done: Cut, Copy, Paste, Paste Special and Duplicate on the Schematic tab, in KiCad's own clipboard format (`(lib_symbols ...)` and the selected items, no
+  `(kicad_sch ...)` around them). Copy puts it on the system clipboard (`crates/kicad/src/sch_clipboard.rs::write_clipboard`, `POST /api/sch/clipboard/copy`); Paste reads
+  KiCad's (`parse_clipboard`) and shows what it would add following the cursor until a click places it (`kicad-port/schClipboard.ts`, `components/SchematicView.tsx`); one verb
+  adds the batch to the sheet in view, one undo step (`Cmd::PasteSch`, `crates/ops/src/sch_clipboard.rs`). Pasted symbols are numbered unique across every sheet
+  (`eda_model::sch_clipboard::annotate_paste`, a port of `ReannotateDuplicates`), Paste Special offers KiCad's three reference-designator options
+  (`components/SchPasteSpecialDialog.tsx`), Duplicate copies into a buffer of its own and carries the copy by the connection point nearest the cursor. Proven against real KiCad both ways:
+  kicad-cli reads what a copy writes and finds the same nets (`crates/kicad/tests/sch_clipboard.rs`, `EDA_SLOW_TESTS=1`), and forms taken out of KiCad's QA schematics read as the files do.
+- Left: hierarchical sheets are not copied or pasted (KiCad keeps their screens in a side buffer); a field's position and a label's rotation are not in the IR, so a copy carries
+  neither (the fields are marked `fields_autoplaced`, so KiCad lays them out when the pasted symbol moves); Keep annotations cannot make a duplicate reference (a design here names a part
+  by its reference), so a taken one is numbered anew; Clear annotations numbers at once instead of leaving `R?`; Copy as Text; tables, images and groups; a part's MPN and LCSC from the intent.
 - Port from: `eeschema/tools/sch_editor_control.cpp` (`doCopy`, `Paste`), `common/clipboard.cpp`, `eeschema/sch_io/kicad_sexpr/`.
 
 ### 7. The router: shove and drag are not KiCad's
@@ -314,7 +320,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 - KiCad: `eeschema/tools/` (`sch_move_tool`, `sch_edit_tool`, `sch_selection_tool`, `sch_editor_control`, `sch_align_tool`,
   `sch_drag_net_collision`, `sch_group_tool`, `ee_grid_helper`), `eeschema/{sch_field,sch_label,sch_symbol,sch_line}.cpp`,
   `eeschema/autoplace_fields.cpp`, `eeschema/dialogs/dialog_{label,field,symbol,wire_bus}_properties.cpp`, `common/view/wx_view_controls.cpp`.
-- Order: move, drag, rotate and mirror for every item kind with wire stretch (1); clipboard (6); fields and labels (12); view controls and snap.
+- Order: move, drag, rotate and mirror for every item kind with wire stretch (1); clipboard (6, done 2026-10-08); fields and labels (12); view controls and snap.
 
 **WP2. Schematic hierarchy and connectivity** (item 4). Size L. Go first.
 - Files: `crates/ops/src/lib.rs` (add a sheet path to the schematic verbs and `schematic_mut`), `crates/cli/src/board.rs` (`reconcile_schematic`,
@@ -378,7 +384,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 11 | Property dialogs | Partial | via, shape, zone, text, dimension and track width edit (`Cmd::EditVia`, `EditShape`, `EditZone`, `EditText`); footprint, pads, panel: items 9, 10. |
 | 12 | Move excludes tracks and zones | **Open** | `kicad-port/pcbEditActions.ts::movableItem`; no `MoveTrack` or `MoveZone` in `crates/ops`; item 8. |
 | 13 | Selection modifiers and box select | **Closed** | `kicad-port/selection.ts`, `components/canvas/selectionCandidates.ts::collectBoxSelection`, `Canvas.tsx`; `PARITY-pcb.md` section 3. |
-| 14 | Clipboard | Partial | PCB tracks, vias, zones, shapes, text (`components/canvas/clipboard.ts`, `Cmd::PasteItems`, `Cmd::Duplicate`); schematic: item 6; footprints: item 8. |
+| 14 | Clipboard | Partial | PCB tracks, vias, zones, shapes, text (`components/canvas/clipboard.ts`, `Cmd::PasteItems`, `Cmd::Duplicate`); schematic: done in KiCad's format (`Cmd::PasteSch`, item 6); footprints: item 8. |
 | 15 | Cross-tab undo | **Closed** | `crates/ops` `Domain`, `crates/cli/src/board.rs::restore_domain` (test `undo_redo_are_scoped_to_the_tab_that_asked`); the Footprint and Symbol tabs undo in their own scopes. |
 | 16 | Hotkey extraction | **Closed** | `web/studio/tools/lib/actionsParser.js::extractPlatformRaw` (with test), `src/kicad/actions.json` (`common.Interactive.redo` is Ctrl+Y), `actions/hotkeys.ts::effectiveHotkey`. |
 | 17 | Click-versus-drag threshold | **Open** | `Canvas.tsx` sets `drag.moved` on a non-zero snapped delta; item 14. |

@@ -81,7 +81,13 @@ test("a selected polygon or rule area offers Create / Remove Corner only under t
   assert.equal(actionsOf(schContextMenu(sel({ ruleAreas: 2, canAddCorner: true }))).includes("eeschema.PointEditor.addCorner"), false);
 });
 
-test("an empty selection offers Select All and nothing about an item", () => {
+test("an empty selection offers Paste, Paste Special and Select All and nothing about an item", () => {
   const a = actionsOf(schContextMenu(sel({})));
-  assert.deepEqual(a, ["common.Interactive.selectAll"]);
+  assert.deepEqual(a, ["common.Interactive.paste", "common.Interactive.pasteSpecial", "common.Interactive.selectAll"]);
+});
+
+test("a selection offers the clipboard group in KiCad's order: Cut, Copy, Paste, Paste Special, Delete, Duplicate", () => {
+  const a = actionsOf(schContextMenu(sel({ symbols: 1 })));
+  const tail = a.slice(a.indexOf("common.Interactive.cut"));
+  assert.deepEqual(tail, ["common.Interactive.cut", "common.Interactive.copy", "common.Interactive.paste", "common.Interactive.pasteSpecial", "common.Interactive.delete", "common.Interactive.duplicate", "common.Interactive.selectAll"]);
 });

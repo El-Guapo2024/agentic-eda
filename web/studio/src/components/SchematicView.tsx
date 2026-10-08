@@ -19,7 +19,7 @@
 // wired. Wire/label/power-symbol/no-connect drawing tools and a real
 // Properties('E') dialog are not yet -- a click still only ever selects a
 // symbol or highlights a wire's net.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { LabelScope, Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
@@ -54,6 +54,9 @@ import { useSchControlState } from "../state/schControlStore";
 import { hitSheet } from "../kicad-port/schControl";
 import { netAtClick } from "../actions/schControlActions";
 import type { Cmd } from "../api/types";
+import { placeSchPaste } from "../actions/schClipboardActions";
+import { pasteOffset, previewIds, withPaste } from "../kicad-port/schClipboard";
+import { cancelSchPaste, useSchPaste } from "../state/schPasteStore";
 import "../styles/canvas.css";
 
 type DragState =
@@ -176,6 +179,8 @@ export function SchematicView() {
   const api = useStudioApi();
   const wheelPrefs = useWheelPrefs();
   const schControl = useSchControlState();
+  /** The paste being carried (`SCH_EDITOR_CONTROL::Paste` -> the Move tool): the items it would add, until a click drops them or Escape throws them away. */
+  const paste = useSchPaste();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -232,7 +237,7 @@ export function SchematicView() {
   const breaking = state.drawState?.kind === "sch_shape" ? state.drawState.brk : undefined;
   const breakSnap = breaking && state.cursorUm ? alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false }) : null;
   const breakCursor: [number, number] | null = breakSnap ? [breakSnap.x, breakSnap.y] : null;
-  const displaySch: Schematic | null = dragPreviewActive
+  const baseDisplaySch: Schematic | null = dragPreviewActive
     ? {
         ...sch!,
         symbols: sch!.symbols.map((s) => (state.movePreview!.refs.includes(s.id) ? { ...s, at: [s.at[0] + state.movePreview!.dxUm, s.at[1] + state.movePreview!.dyUm] as [number, number] } : s)),
@@ -241,6 +246,19 @@ export function SchematicView() {
     : sch && breaking && breakCursor
       ? breakPreviewSheet(sch, breaking, breakCursor)
       : sch;
+  // A paste in progress: what it would add, shifted so its anchor sits on the grid-snapped cursor (`SCH_MOVE_TOOL::Main`'s `delta = m_cursor - *m_anchorPos`) and drawn
+  // selected, as KiCad selects the pasted items. The sheet itself is untouched until the click (kicad-port/schClipboard.ts).
+  const pasteSnap = paste && state.cursorUm ? alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false }) : null;
+  const pasteDx = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap.x, pasteSnap.y])[0] : 0;
+  const pasteDy = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap.x, pasteSnap.y])[1] : 0;
+  const pasteShown = paste != null && pasteSnap != null;
+  const displaySch: Schematic | null = useMemo(() => (baseDisplaySch && paste && pasteShown ? withPaste(baseDisplaySch, paste.preview, pasteDx, pasteDy) : baseDisplaySch), [baseDisplaySch, paste, pasteShown, pasteDx, pasteDy]);
+  const pasteSelection = useMemo(() => (paste && pasteShown ? new Set(previewIds(paste.preview)) : null), [paste, pasteShown]);
+  // A paste belongs to the sheet it was started on and to the select tool: leaving the sheet, the tab or the tool throws it away.
+  useEffect(() => {
+    if (paste && (paste.sheet.join("/") !== state.currentSheetPath.join("/") || state.activeTool !== "select")) cancelSchPaste();
+  }, [paste, state.currentSheetPath, state.activeTool]);
+  useEffect(() => () => void cancelSchPaste(), []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -282,7 +300,7 @@ export function SchematicView() {
       },
       page
     );
-    paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display });
+    paintSchematic(ctx, state.schematicView, displaySch, { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display });
     if (state.drawState?.kind === "wire") {
       // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the
       // rubber band from the last click to the cursor is two segments (an
@@ -341,7 +359,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display]);
+  }, [sch, displaySch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -433,6 +451,12 @@ export function SchematicView() {
         }
         if (e.button !== 0) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
+
+        // A paste in progress: this click drops it where the cursor holds it (`SCH_MOVE_TOOL`'s click, then `commit.Push( _( "Paste" ) )`).
+        if (paste) {
+          void placeSchPaste(api, dispatch, snapToGrid(wx, wy));
+          return;
+        }
 
         // Highlight Nets (`SCH_EDITOR_CONTROL::HighlightNetCursor`'s picker): a click is `highlightNet` at that point -- the net of the wire, label or power symbol there,
         // or, over nothing, the highlight cleared. The tool stays armed.
@@ -707,7 +731,7 @@ export function SchematicView() {
       }}
       onContextMenu={(e) => {
         e.preventDefault();
-        if (!sch) return;
+        if (!sch || paste) return;
         // `SCH_SELECTION_TOOL`: a right-click on an item that is not selected selects it first, on empty space clears the selection; then the
         // menu for whatever is selected (kicad-port/schContextMenu.ts).
         const [wx, wy] = toWorld(e.clientX, e.clientY);

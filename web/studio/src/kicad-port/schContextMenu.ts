@@ -143,6 +143,9 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
     add({ type: "submenu", label: "Locking", items: [...(s.unlocked > 0 ? [item("eeschema.InteractiveEdit.lock")] : []), ...(s.locked > 0 ? [item("eeschema.InteractiveEdit.unlock")] : []), item("eeschema.InteractiveEdit.toggleLock")] });
   }
 
-  add(sep, s.total > 0 && item("common.Interactive.delete"), sep, item("common.Interactive.selectAll"));
+  // The clipboard group (`selToolMenu.AddItem( ACTIONS::cut ... ACTIONS::duplicate, ..., 300 )`): Cut and Copy for a selection, Paste and Paste Special
+  // always (`S_C::Idle`), then Delete and Duplicate for a selection. Copy as Text (`canCopyText`) is not ported.
+  const some = s.total > 0;
+  add(sep, some && item("common.Interactive.cut"), some && item("common.Interactive.copy"), item("common.Interactive.paste"), item("common.Interactive.pasteSpecial"), some && item("common.Interactive.delete"), some && item("common.Interactive.duplicate"), sep, item("common.Interactive.selectAll"));
   return out;
 }

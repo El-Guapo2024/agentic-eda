@@ -623,6 +623,9 @@ fn handle(
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
+        // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
+        ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
         ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir).to_string().as_bytes()),
         // Export Symbols...: the library symbols the schematic uses as one `.kicad_sym` (a read; the browser saves it).
@@ -1311,7 +1314,12 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         design.schematic = derived.schematic;
         design.sheet_contents = derived.sheet_contents;
     }
-    let (sch, breadcrumb) = resolve_sheet(&design, sheet_path);
+    Ok(schematic_json_of(&design, &model, sheet_path))
+}
+
+/// [`schematic_json`] of a design that is already loaded (the schematic clipboard asks it of a design a paste has just been tried on).
+pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str) -> Value {
+    let (sch, breadcrumb) = resolve_sheet(design, sheet_path);
     let symbols: Vec<Value> = sch
         .symbols
         .iter()
@@ -1447,7 +1455,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 }
             }
             let resolved = if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) };
-            let value = resolved.unwrap_or_else(|| synthesize_generic_symbol(lib_id, &model));
+            let value = resolved.unwrap_or_else(|| synthesize_generic_symbol(lib_id, model));
             (lib_id.clone(), lib_symbol_json(&value))
         })
         .collect::<serde_json::Map<_, _>>()
@@ -1475,9 +1483,9 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
     // (the layout engine writes it per sheet); A4 landscape when neither.
     let page = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or(""));
     let (paper_w, paper_h) = page.size_um().unwrap_or((297_000, 210_000));
-    let file = viewed_file(&design, &breadcrumb);
+    let file = viewed_file(design, &breadcrumb);
 
-    Ok(json!({
+    json!({
         "paper": { "name": page.paper, "width_um": paper_w, "height_um": paper_h },
         "file": file,
         "symbols": symbols,
@@ -1496,7 +1504,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "lib_symbols": lib_symbols,
         "sheets": sheets,
         "sheet_path": sheet_path,
-    }))
+    })
 }
 
 /// The file of the screen the breadcrumb ends on (`""` for the root): the title block of the sheet in view names it. The sheets

@@ -28,6 +28,7 @@ mod library_api;
 mod library_index;
 mod page_json;
 mod sch_api;
+mod sch_clipboard_api;
 mod sch_control_api;
 mod sch_export_api;
 mod fab_cmd;
