@@ -319,16 +319,29 @@ pub fn power_rect(tip: Point, net: &str, up: bool) -> Rect {
     Rect { x0: tip.x - 1270, y0, x1: tip.x + 508 + text, y1 }
 }
 
-/// A label at the end of a wire that leaves along `dir`: the flag and the text beyond the anchor.
+/// A label at the end of a wire that leaves along `dir`: what the painter draws beyond the anchor. A hierarchical label is a flag
+/// with its text a text-width further out (`hierLabelTextPlacement`), centred on the wire line; a local label is the text alone,
+/// set just above the line (`localLabelTextPlacement`). Vertical wires turn the text, so the same ranges apply across x.
 pub fn label_rect(at: Point, dir: (i64, i64), net: &str, hierarchical: bool) -> Rect {
     let tw = text_w(LABEL_FONT, net);
-    let len = if hierarchical { 1270 + 600 + tw } else { 400 + tw };
-    let across = 900;
+    let (len, lo, hi) = if hierarchical { (190 + 2 * tw, -800, 800) } else { (tw + 300, -1600, 200) };
     match dir {
-        (-1, 0) => Rect { x0: at.x - len, y0: at.y - across, x1: at.x, y1: at.y + across },
-        (1, 0) => Rect { x0: at.x, y0: at.y - across, x1: at.x + len, y1: at.y + across },
-        (0, -1) => Rect { x0: at.x - across, y0: at.y - len, x1: at.x + across, y1: at.y },
-        _ => Rect { x0: at.x - across, y0: at.y, x1: at.x + across, y1: at.y + len },
+        (-1, 0) => Rect { x0: at.x - len, y0: at.y + lo, x1: at.x, y1: at.y + hi },
+        (1, 0) => Rect { x0: at.x, y0: at.y + lo, x1: at.x + len, y1: at.y + hi },
+        (0, -1) => Rect { x0: at.x + lo, y0: at.y - len, x1: at.x + hi, y1: at.y },
+        _ => Rect { x0: at.x + lo, y0: at.y, x1: at.x + hi, y1: at.y + len },
+    }
+}
+
+/// The name of a sheet pin: written inside the sheet, past the flag (`drawSheet`), `left` for a pin on the left border.
+pub fn sheet_pin_rect(pin: Point, left: bool, name: &str) -> Rect {
+    let tw = text_w(SHEET_PIN_FONT, name);
+    let gap = 1_270 + 500;
+    let (y0, y1) = (pin.y - 700, pin.y + 700);
+    if left {
+        Rect { x0: pin.x, y0, x1: pin.x + gap + tw, y1 }
+    } else {
+        Rect { x0: pin.x - gap - tw, y0, x1: pin.x, y1 }
     }
 }
 

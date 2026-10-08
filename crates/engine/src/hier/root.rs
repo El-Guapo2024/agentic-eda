@@ -14,7 +14,7 @@ use eda_model::ir::{LabelKind, LabelShape, NetLabel, Point, SheetInstance, Sheet
 use eda_model::modules::{natural_cmp, FunctionalModule, ModuleKind};
 
 use super::items::Items;
-use super::kit::{cap, label_rect, smallest_paper, snap_down, snap_up, text_w, Paper, Rect, G, SHEET_FILE_FONT, SHEET_NAME_FONT, SHEET_PIN_FONT};
+use super::kit::{cap, label_rect, sheet_pin_rect, smallest_paper, snap_down, snap_up, text_w, Paper, Rect, G, SHEET_FILE_FONT, SHEET_NAME_FONT, SHEET_PIN_FONT};
 
 #[derive(Debug, Clone)]
 struct PinSpec {
@@ -127,7 +127,8 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
         let rows = left.len().max(right.len());
         let h = if rows == 0 { 8 * G } else { snap_up(SheetBox::pin_y(rows - 1) + 3 * G).max(8 * G) };
         let name_w = text_w(SHEET_NAME_FONT, &modules[m].name).max(text_w(SHEET_FILE_FONT, &files[m]));
-        let w = snap_up((lmax + rmax + 6 * G).max(name_w + 2 * G)).max(14 * G);
+        // each side's names start past the flag (1.77 mm) and the two columns of names keep a gap between them
+        let w = snap_up((lmax + rmax + 2 * (1_770) + 4 * G).max(name_w + 2 * G)).max(14 * G);
         boxes.push(SheetBox { w, h, left, right });
     }
 
@@ -205,15 +206,13 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
             let pt = Point { x: at.x, y: at.y + SheetBox::pin_y(i) };
             pin_at.insert((m, p.net.clone()), pt);
             pins.push(SheetPin { id: String::new(), name: p.net.clone(), shape: LabelShape::Bidirectional, at: pt });
-            let tw = text_w(SHEET_PIN_FONT, &p.net);
-            items.rects.push(Rect::new(pt.x + 600, pt.y - cap(SHEET_PIN_FONT) / 2 - 100, pt.x + 600 + tw, pt.y + cap(SHEET_PIN_FONT) / 2 + 100));
+            items.rects.push(sheet_pin_rect(pt, true, &p.net));
         }
         for (i, p) in b.right.iter().enumerate() {
             let pt = Point { x: at.x + b.w, y: at.y + SheetBox::pin_y(i) };
             pin_at.insert((m, p.net.clone()), pt);
             pins.push(SheetPin { id: String::new(), name: p.net.clone(), shape: LabelShape::Bidirectional, at: pt });
-            let tw = text_w(SHEET_PIN_FONT, &p.net);
-            items.rects.push(Rect::new(pt.x - 600 - tw, pt.y - cap(SHEET_PIN_FONT) / 2 - 100, pt.x - 600, pt.y + cap(SHEET_PIN_FONT) / 2 + 100));
+            items.rects.push(sheet_pin_rect(pt, false, &p.net));
         }
         sheets.push(SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (b.w, b.h), pins });
         // the symbol, its name above and its file below

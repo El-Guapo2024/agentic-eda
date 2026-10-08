@@ -4,7 +4,7 @@ use eda_model::ir::{Design, LabelKind, Point, SchematicSection};
 use eda_model::modules::infer_modules;
 use eda_model::{resolve_lib_id, ConstraintModel, PinKind};
 
-use super::kit::{label_rect, paper_named, power_rect, text_w, Paper, Placed, Rect, SHEET_FILE_FONT, SHEET_NAME_FONT, SHEET_PIN_FONT, cap, G};
+use super::kit::{cap, label_rect, paper_named, power_rect, sheet_pin_rect, text_w, Paper, Placed, Rect, G, SHEET_FILE_FONT, SHEET_NAME_FONT};
 use super::{derive_hierarchy, Keep};
 use crate::nets::{trace_nets, ScreenIn};
 use crate::{derive_schematic_modules, EngineOptions};
@@ -130,10 +130,7 @@ fn drawn(model: &ConstraintModel, sch: &SchematicSection) -> Vec<Drawn> {
         let base = s.at.y + s.size.1 + 400 + SHEET_FILE_FONT;
         out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("file {}", s.file), rect: Rect::new(s.at.x, base - cap(SHEET_FILE_FONT), s.at.x + text_w(SHEET_FILE_FONT, &s.file), base) });
         for p in &s.pins {
-            let tw = text_w(SHEET_PIN_FONT, &p.name);
-            let left = p.at.x == s.at.x;
-            let r = if left { Rect::new(p.at.x + 600, p.at.y - cap(SHEET_PIN_FONT) / 2, p.at.x + 600 + tw, p.at.y + cap(SHEET_PIN_FONT) / 2) } else { Rect::new(p.at.x - 600 - tw, p.at.y - cap(SHEET_PIN_FONT) / 2, p.at.x - 600, p.at.y + cap(SHEET_PIN_FONT) / 2) };
-            out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("pin {}", p.name), rect: r });
+            out.push(Drawn { owner: format!("sheet {}", s.name), what: format!("pin {}", p.name), rect: sheet_pin_rect(p.at, p.at.x == s.at.x, &p.name) });
         }
     }
     out
