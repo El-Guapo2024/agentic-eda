@@ -12,7 +12,7 @@ import actionsData from "../kicad/actions.json";
 import iconsData from "../kicad/icons.json";
 import type { ToolbarsFile, ToolbarId, ActionsFile, IconsFile, ToolbarItem } from "../kicad/types";
 import { useActionRunner } from "../actions/useActionRunner";
-import { useActionChecked } from "../actions/useActionChecked";
+import { useChecked } from "../actions/useChecked";
 import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useStudioDispatch, useStudioState } from "../state/store";
@@ -171,16 +171,6 @@ function ToolbarControl({ item, editor }: { item: Extract<ToolbarItem, { type: "
   if (editor === "footprint") return <FootprintToolbarControl control={item.control} />;
   if (editor === "symbol") return <SymbolToolbarControl control={item.control} />;
   return <BoardToolbarControl item={item} />;
-}
-
-/**
- * Whether a button is drawn pressed: the registry's own answer first (`isChecked`: the schematic editor's View toggles, its Net Navigator and the attributes of the
- * selection, actions/schControlActions.ts), then the toggles of the other editors and the panes (actions/useActionChecked.ts). `undefined` = not a toggle.
- */
-function useChecked(): (name: string) => boolean | undefined {
-  const { isChecked } = useActionRunner();
-  const mine = useActionChecked();
-  return (name) => isChecked(name) ?? mine(name);
 }
 
 /** The members a group's choice is remembered for (per editor and group), the way KiCad's group button keeps showing the last tool picked from it. */

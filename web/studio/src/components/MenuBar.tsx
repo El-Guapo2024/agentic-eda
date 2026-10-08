@@ -16,6 +16,7 @@ import { SYMBOL_EDITOR_MENU_EXTRAS } from "../kicad/menuExtras";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
 import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
+import { useChecked } from "../actions/useChecked";
 import { useStudioState } from "../state/store";
 
 const menusFile = menusData as MenusFile;
@@ -30,7 +31,8 @@ const actionsFile = actionsData as ActionsFile;
 const actionsByName = new Map<string, KicadAction>(actionsFile.actions.map((a) => [a.name, a]));
 
 export function MenuNodeView({ node }: { node: MenuNode }) {
-  const { run, isEnabled, isChecked } = useActionRunner();
+  const { run, isEnabled } = useActionRunner();
+  const isChecked = useChecked();
   if (node.type === "separator") return <div className="menu-separator" role="separator" />;
   if (node.type === "submenu") {
     return (
@@ -52,7 +54,7 @@ export function MenuNodeView({ node }: { node: MenuNode }) {
   const label = node.label ?? action?.label ?? node.action;
   const tooltip = enabled ? action?.tooltip : `${action?.tooltip ?? ""} (not ported yet)`.trim();
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
-  // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate ...) shows its state as a check mark.
+  // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate, the panes under View > Panels, Units ...) shows its state as a check mark.
   const checked = enabled ? isChecked(node.action) : undefined;
   return (
     <div className="menu-node-item" role={checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={checked} aria-disabled={!enabled} title={tooltip} onClick={() => enabled && run(node.action)}>
