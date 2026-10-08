@@ -493,6 +493,11 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         power_symbols.push(PowerSymbol { id: format!("#FLG{flag_n:02}"), lib_id: "power:PWR_FLAG".to_string(), at: anchor_at, rot: 0, net: net.name.clone(), pin: String::new() });
     }
 
+    // The pack above starts at the origin, which is the sheet's corner, not its drawing area: move everything inside the frame (and
+    // onto the smallest paper that holds it) so the first row no longer sits on the border.
+    let mut schematic = SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default() };
+    hier::fit_flat(&mut schematic, model);
+
     Ok(Design {
         schema: 1,
         provenance: Provenance {
@@ -501,7 +506,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
             seed: opts.seed,
             stage_hashes: Vec::new(),
         },
-        schematic: Some(SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default() }),
+        schematic: Some(schematic),
         nets: None,
         placement: None,
         routing: None,

@@ -49,6 +49,7 @@ use std::sync::Arc;
 pub use pcb_edit::BooleanOp;
 
 pub mod library_editors;
+mod sheets;
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
@@ -890,6 +891,17 @@ pub enum Cmd {
     /// The schematic editor's other edit and drawing tools (lock, break, convert text type, shapes, sheet pins,
     /// ...), one verb family -- see [`sch_edit::SchCmd`]. On the wire: `{"op": "sch_edit", "verb": "...", ...}`.
     SchEdit(sch_edit::SchCmd),
+    /// Run `cmd` on the sheet at `sheet` instead of the root: the root-to-here list of `SheetInstance::id`s joined by `/`
+    /// (what `GET /api/schematic?sheet=` takes; empty is the root). KiCad edits whichever sheet is open
+    /// (`SCH_EDIT_FRAME::GetCurrentSheet`); every schematic verb here acts on one screen, and this names which. A sheet that
+    /// is placed more than once shows one screen, so the edit shows in every placement (`SCH_SCREEN` is shared). Refused when the
+    /// path names no sheet, or a sheet whose content was never read. One undo step, like the command it carries.
+    OnSheet { sheet: String, cmd: Box<Cmd> },
+    /// Tools > Reorganize into Module Sheets: turn the current flat schematic into one sheet per functional module (an IC with the
+    /// passives that serve it, repeated channels, each connector) with a sheet symbol for each on the root, nets that cross modules
+    /// as sheet pins and power as power symbols. Every symbol keeps its reference, value, footprint and fields; only places change,
+    /// and the nets stay the nets. Refused when the schematic already has sheets, holds a multi-unit part, or is one module.
+    ReorganizeSheets,
 
     /// `dialog_erc.cpp`'s own "Exclude this violation" (right-click a
     /// finding, or the dialog's own Exclude button): accepts one ERC
@@ -1365,6 +1377,8 @@ impl Cmd {
     pub fn domain(&self) -> Domain {
         match self {
             Cmd::Batch { cmds } => cmds.first().map_or(Domain::Pcb, Cmd::domain),
+            Cmd::OnSheet { cmd, .. } => cmd.domain(),
+            Cmd::ReorganizeSheets => Domain::Schematic,
             Cmd::MoveSymbol { .. }
             | Cmd::DragSymbol { .. }
             | Cmd::RotateSymbol { .. }
@@ -1484,6 +1498,8 @@ impl Cmd {
             Cmd::PasteItems { .. } => vec!["paste"],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
+            Cmd::OnSheet { cmd, .. } => cmd.subjects(),
+            Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
@@ -1627,6 +1643,12 @@ pub struct Board<'a> {
     /// [`unruled_decoupling_pairs`] both ways round, computed once: every
     /// neighbour query reads it.
     decoupling: Arc<BTreeMap<String, BTreeSet<String>>>,
+    /// The screen the schematic verbs act on: the `Design::sheet_contents` key of the sheet [`Cmd::OnSheet`] named, or `None` for
+    /// the root (`design.schematic`) -- KiCad's "current sheet". Only ever set while one `OnSheet` runs.
+    focus: Option<String>,
+    /// The intent's own nets, when the caller supplied them (`Board::with_intent_nets`): lets Reorganize give a net its declared
+    /// name back. `None` for every board built without them.
+    intent_nets: Option<Vec<eda_model::Net>>,
 }
 
 /// Decoupling pairs `(cap, ic)` that no proximity rule already places --
@@ -1679,7 +1701,7 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling) }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None }
     }
 
     pub fn design(&self) -> &Design {
@@ -1703,6 +1725,8 @@ impl<'a> Board<'a> {
             snap: self.snap,
             spacing: self.spacing,
             decoupling: Arc::clone(&self.decoupling),
+            focus: self.focus.clone(),
+            intent_nets: self.intent_nets.clone(),
         }
     }
 
@@ -1985,6 +2009,8 @@ impl<'a> Board<'a> {
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
+            Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
+            Cmd::ReorganizeSheets => self.reorganize_sheets(),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
             Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
             Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
@@ -3755,12 +3781,21 @@ impl<'a> Board<'a> {
 
     // ---------------------------------------------------------- eeschema
 
+    /// The screen the verbs act on: the root's, or the sheet [`Cmd::OnSheet`] focused.
     fn schematic(&self) -> Result<&SchematicSection, Vec<CheckResult>> {
-        self.design.schematic.as_ref().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])
+        let found = match &self.focus {
+            None => self.design.schematic.as_ref(),
+            Some(file) => self.design.sheet_contents.as_ref().and_then(|c| c.get(file)),
+        };
+        found.ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])
     }
 
     fn schematic_mut(&mut self) -> Result<&mut SchematicSection, Vec<CheckResult>> {
-        self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])
+        let found = match &self.focus {
+            None => self.design.schematic.as_mut(),
+            Some(file) => self.design.sheet_contents.as_mut().and_then(|c| c.get_mut(file)),
+        };
+        found.ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])
     }
 
     /// Creates an empty schematic section on first use -- `AddSymbol`/
@@ -3769,7 +3804,43 @@ impl<'a> Board<'a> {
     /// `derive_schematic` never ran); everything else targets an id that
     /// can only already exist inside a section that is already there.
     fn schematic_mut_or_create(&mut self) -> &mut SchematicSection {
-        self.design.schematic.get_or_insert_with(empty_schematic_section)
+        match self.focus.clone() {
+            None => self.design.schematic.get_or_insert_with(empty_schematic_section),
+            Some(file) => self.design.sheet_contents.get_or_insert_with(BTreeMap::new).entry(file).or_insert_with(empty_schematic_section),
+        }
+    }
+
+    /// The screen (`sheet_contents` key) a `/`-joined path of sheet-instance ids names, walking down from the focused screen (the
+    /// root when none is). `Ok(None)` for the empty path, which is the focused screen itself.
+    fn screen_at(&self, path: &str) -> Result<Option<String>, Vec<CheckResult>> {
+        let mut file: Option<String> = self.focus.clone();
+        for id in path.split('/').filter(|s| !s.is_empty()) {
+            let here = match &file {
+                None => self.design.schematic.as_ref(),
+                Some(f) => self.design.sheet_contents.as_ref().and_then(|c| c.get(f)),
+            };
+            let Some(sheet) = here.and_then(|s| s.sheets.iter().find(|s| s.id == id)) else {
+                return Err(vec![CheckResult::fail("ops_unknown_sheet", id, "no sheet with this id on the path")]);
+            };
+            if !self.design.sheet_contents.as_ref().is_some_and(|c| c.contains_key(&sheet.file)) {
+                return Err(vec![CheckResult::fail("ops_sheet_not_read", &sheet.file, format!("the content of '{}' was never read, so it cannot be edited", sheet.file))]);
+            }
+            file = Some(sheet.file.clone());
+        }
+        Ok(file)
+    }
+
+    /// [`Cmd::OnSheet`]: run one command with the schematic verbs pointed at another sheet. All or nothing, like a `Batch`.
+    fn on_sheet(&mut self, sheet: &str, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
+        let target = self.screen_at(sheet)?;
+        let saved_design = self.design.clone();
+        let saved_focus = std::mem::replace(&mut self.focus, target);
+        let r = self.apply(cmd);
+        self.focus = saved_focus;
+        if r.is_err() {
+            self.design = saved_design;
+        }
+        r
     }
 
     fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {

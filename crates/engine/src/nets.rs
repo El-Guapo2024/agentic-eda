@@ -377,9 +377,12 @@ pub fn trace_nets(screens: &mut [ScreenIn]) -> Vec<Net> {
         let mut ranked: Vec<(&str, usize)> = hints.into_iter().collect();
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
         let pick = ranked.iter().map(|(n, _)| (*n).to_string()).find(|n| !used.contains(n));
-        let name = pick.unwrap_or_else(|| {
+        let name = pick.unwrap_or_else(|| loop {
             next += 1;
-            format!("NET_{next}")
+            let candidate = format!("NET_{next}");
+            if !used.contains(&candidate) {
+                break candidate;
+            }
         });
         used.insert(name.clone());
         finals[i].name = Some(name);

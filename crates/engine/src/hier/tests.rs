@@ -227,20 +227,47 @@ fn every_example_with_modules_traces_back_and_is_tidy() {
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "yaml")).collect();
     files.extend(std::fs::read_dir(dir.join("ladder")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "yaml")));
     files.sort();
-    let mut hierarchical = 0;
+    let (mut hierarchical, mut single) = (0, 0);
     for f in files {
         let Ok(model) = serde_yaml::from_str::<ConstraintModel>(&std::fs::read_to_string(&f).unwrap()) else { continue };
         let modules = infer_modules(&model, &[]);
-        if modules.len() < 2 {
-            continue;
-        }
-        let d = derive_hierarchy(&model, &opts(), &modules, &Keep::default()).unwrap_or_else(|e| panic!("{}: {e:?}", f.display()));
+        let d = derive_schematic_modules(&model, &opts()).unwrap_or_else(|e| panic!("{}: {e:?}", f.display()));
         let label = f.file_name().unwrap().to_string_lossy().to_string();
         assert_eq!(traced(&model, &d), drawn_nets(&model), "{label}: the sheets do not trace back to the intent's nets");
         assert_tidy(&model, &d, &label);
-        hierarchical += 1;
+        if modules.len() >= 2 {
+            hierarchical += 1;
+            assert_eq!(d.sheet_contents.as_ref().map(|c| c.len()), Some(modules.len()), "{label}");
+        } else {
+            single += 1;
+            assert!(d.sheet_contents.is_none() && d.schematic.as_ref().unwrap().sheets.is_empty(), "{label}: one module stays one sheet");
+        }
     }
     assert!(hierarchical >= 3, "only {hierarchical} examples are hierarchical");
+    assert!(single >= 2, "only {single} examples are a single sheet");
+}
+
+/// The flat derivation still exists (`derive_schematic`): its first row used to sit on the frame line, off the top of the page.
+#[test]
+fn the_flat_derivation_sits_inside_the_frame_on_a_paper_that_holds_it() {
+    for file in ["mcu_board_30plus.yaml", "ldo.yaml", "dense_small_outline.yaml", "ladder/l4_control_hub.yaml"] {
+        let model = model_of(file);
+        let d = crate::derive_schematic(&model, &opts()).unwrap();
+        let sch = d.schematic.as_ref().unwrap();
+        let usable = paper_of(sch).usable();
+        let rects = drawn(&model, sch);
+        assert!(!rects.is_empty(), "{file}");
+        for it in &rects {
+            assert!(usable.contains(&it.rect), "{file}: {} {:?} is outside the drawing area {:?}", it.what, it.rect, usable);
+        }
+        for w in &sch.wires {
+            for p in &w.pts {
+                assert!(usable.contains(&Rect { x0: p.x, y0: p.y, x1: p.x, y1: p.y }), "{file}: wire point {p:?}");
+            }
+        }
+        // The grid is kept: every symbol and every wire point is still a multiple of 1.27 mm.
+        assert!(sch.symbols.iter().all(|s| s.at.x % G == 0 && s.at.y % G == 0), "{file}");
+    }
 }
 
 #[test]

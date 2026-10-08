@@ -96,6 +96,138 @@ fn flag_nets(ctx: &Ctx) -> Vec<(String, Vec<String>)> {
     out
 }
 
+/// Move every item of a section by `(dx, dy)`.
+pub fn translate_section(sch: &mut SchematicSection, dx: i64, dy: i64) {
+    let shift = |p: &mut eda_model::ir::Point| {
+        p.x += dx;
+        p.y += dy;
+    };
+    sch.symbols.iter_mut().for_each(|s| shift(&mut s.at));
+    sch.wires.iter_mut().flat_map(|w| w.pts.iter_mut()).for_each(shift);
+    sch.labels.iter_mut().for_each(|l| shift(&mut l.at));
+    sch.texts.iter_mut().for_each(|t| shift(&mut t.at));
+    sch.power_symbols.iter_mut().for_each(|p| shift(&mut p.at));
+    sch.no_connects.iter_mut().for_each(|n| shift(&mut n.at));
+    sch.bus_entries.iter_mut().for_each(|b| shift(&mut b.at));
+    sch.junctions.iter_mut().for_each(|j| shift(&mut j.at));
+    sch.lines.iter_mut().flat_map(|l| l.pts.iter_mut()).for_each(shift);
+    for s in sch.sheets.iter_mut() {
+        shift(&mut s.at);
+        s.pins.iter_mut().for_each(|p| shift(&mut p.at));
+    }
+}
+
+/// Put a flat schematic inside the drawing sheet's frame: choose the smallest paper that holds what is drawn and shift everything
+/// onto it, on the grid, centred across and with the top at the frame's margin. (`derive_schematic` packs from the origin, so its
+/// first row used to sit on the frame line, off the top of the page.)
+pub fn fit_flat(sch: &mut SchematicSection, model: &ConstraintModel) {
+    use kit::{label_rect, nc_rect, power_rect, smallest_paper, snap_down, snap_up, union_all, Placed, Rect};
+    let mut rects: Vec<Rect> = Vec::new();
+    for s in &sch.symbols {
+        let Some(part) = model.part(&s.id) else { continue };
+        let lib_id = if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() };
+        let resolved = model.real_symbol_of(&lib_id, part);
+        let package = part.package.clone().unwrap_or_default();
+        let mut p = Placed::new(part, &lib_id, resolved, &s.value, &package);
+        p.flip = s.rot == 180_000;
+        p.x = if p.flip { s.at.x - p.w() } else { s.at.x };
+        p.y = if p.flip { s.at.y - p.h() } else { s.at.y };
+        rects.push(p.keepout());
+    }
+    for l in &sch.labels {
+        rects.push(label_rect(l.at, (1, 0), &l.net, false).union(label_rect(l.at, (-1, 0), &l.net, false)));
+    }
+    for p in &sch.power_symbols {
+        rects.push(power_rect(p.at, &p.net, true).union(power_rect(p.at, &p.net, false)));
+    }
+    for n in &sch.no_connects {
+        rects.push(nc_rect(n.at));
+    }
+    for w in &sch.wires {
+        for p in &w.pts {
+            rects.push(Rect { x0: p.x, y0: p.y, x1: p.x, y1: p.y });
+        }
+    }
+    let Some(bb) = union_all(rects) else { return };
+    let (w, h) = (snap_up(bb.x1) - snap_down(bb.x0), snap_up(bb.y1) - snap_down(bb.y0));
+    let paper = smallest_paper(w, h);
+    let u = paper.usable();
+    let dx = u.x0 + snap_down((u.w() - w) / 2) - snap_down(bb.x0);
+    let dy = u.y0 - snap_down(bb.y0);
+    translate_section(sch, dx, dy);
+    let tb = sch.title_block.get_or_insert_with(TitleBlock::default);
+    tb.paper = paper.name.to_string();
+}
+
+/// Number the power symbols across the whole design, in sheet order, and drop one `PWR_FLAG` per net that needs a source on the
+/// first sheet with a pin on it.
+fn number_power(ctx: &Ctx, modules: &[FunctionalModule], outs: &mut [sheet::SheetOut]) {
+    let mut n = 0;
+    for o in outs.iter_mut() {
+        for p in o.items.power.iter_mut() {
+            n += 1;
+            p.id = format!("#PWR{n:02}");
+        }
+    }
+    let mut flag_n = n;
+    for (net, pins) in flag_nets(ctx) {
+        let ground = is_ground_net_name(&net);
+        'find: for pin_ref in &pins {
+            for (mi, m) in modules.iter().enumerate() {
+                let r = pin_ref.split('.').next().unwrap_or("");
+                if !m.refs.iter().any(|x| x == r) {
+                    continue;
+                }
+                let Some(tip) = outs[mi].items.tips.get(pin_ref).copied() else { continue };
+                flag_n += 1;
+                outs[mi].items.power.push(PowerSymbol { id: format!("#FLG{flag_n:02}"), lib_id: "power:PWR_FLAG".to_string(), at: tip, rot: if ground { 180_000 } else { 0 }, net: net.clone(), pin: String::new() });
+                break 'find;
+            }
+        }
+    }
+}
+
+/// A design that is one module: one sheet, laid out like a module sheet (the anchor in the middle, the passives that serve it
+/// beside it, everything inside the frame), no root above it.
+pub fn derive_single_sheet(model: &ConstraintModel, opts: &EngineOptions, module: &FunctionalModule, keep: &Keep) -> Result<Design, Vec<CheckResult>> {
+    let errors = validate(model);
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let ctx = Ctx::new(model, keep);
+    let modules = std::slice::from_ref(module);
+    let mut outs = vec![sheet::layout_module(&ctx, module)];
+    number_power(&ctx, modules, &mut outs);
+    let o = &mut outs[0];
+    let sec = SchematicSection {
+        symbols: std::mem::take(&mut o.items.symbols),
+        wires: std::mem::take(&mut o.items.wires),
+        labels: std::mem::take(&mut o.items.labels),
+        power_symbols: std::mem::take(&mut o.items.power),
+        no_connects: std::mem::take(&mut o.items.ncs),
+        user_fields: keep.user_fields.clone(),
+        erc_exclusions: keep.erc_exclusions.clone(),
+        erc_pin_map: keep.erc_pin_map.clone(),
+        title_block: Some(TitleBlock { paper: o.paper.name.to_string(), ..keep.title_block.clone().unwrap_or_default() }),
+        ..Default::default()
+    };
+    let mut design = Design {
+        schema: 1,
+        provenance: Provenance { engine_version: opts.engine_version.clone(), intent_hash: opts.intent_hash.clone(), seed: opts.seed, stage_hashes: Vec::new() },
+        schematic: Some(sec),
+        nets: None,
+        placement: None,
+        routing: None,
+        drawings: None,
+        footprint_library: None,
+        sheet_contents: None,
+        bus_aliases: vec![],
+        symbol_library: None,
+    };
+    design.assign_missing_ids();
+    Ok(design)
+}
+
 /// The sheets of a hierarchical schematic and the paper each is drawn on.
 pub struct Derived {
     pub design: Design,
@@ -124,32 +256,7 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
     let crossing: Vec<Vec<String>> = modules.iter().map(|m| sheet::crossing_nets(&ctx, m)).collect();
 
     let mut outs: Vec<sheet::SheetOut> = modules.iter().map(|m| sheet::layout_module(&ctx, m)).collect();
-
-    // Power symbols are numbered across the whole design, in sheet order.
-    let mut n = 0;
-    for o in outs.iter_mut() {
-        for p in o.items.power.iter_mut() {
-            n += 1;
-            p.id = format!("#PWR{n:02}");
-        }
-    }
-    // One PWR_FLAG per net that needs a source, on the first sheet with a pin on it.
-    let mut flag_n = n;
-    for (net, pins) in flag_nets(&ctx) {
-        let ground = is_ground_net_name(&net);
-        'find: for pin_ref in &pins {
-            for (mi, m) in modules.iter().enumerate() {
-                let r = pin_ref.split('.').next().unwrap_or("");
-                if !m.refs.iter().any(|x| x == r) {
-                    continue;
-                }
-                let Some(tip) = outs[mi].items.tips.get(pin_ref).copied() else { continue };
-                flag_n += 1;
-                outs[mi].items.power.push(PowerSymbol { id: format!("#FLG{flag_n:02}"), lib_id: "power:PWR_FLAG".to_string(), at: tip, rot: if ground { 180_000 } else { 0 }, net: net.clone(), pin: String::new() });
-                break 'find;
-            }
-        }
-    }
+    number_power(&ctx, modules, &mut outs);
 
     let root = root::layout_root(modules, &files, &crossing);
 
@@ -209,11 +316,13 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
 }
 
 /// The module-sheet schematic of `model`: modules inferred from the netlist (or taken from `recorded`, a placement's modules);
-/// a design with only one module stays one flat sheet.
+/// a design with only one module is one sheet, laid out the same way. A model with no parts at all gets `derive_schematic`'s
+/// empty one.
 pub fn derive_schematic_modules_with(model: &ConstraintModel, opts: &EngineOptions, recorded: &[eda_model::ir::ModuleRegion]) -> Result<Design, Vec<CheckResult>> {
     let modules = infer_modules(model, recorded);
-    if modules.len() < 2 {
-        return crate::derive_schematic(model, opts);
+    match modules.len() {
+        0 => crate::derive_schematic(model, opts),
+        1 => derive_single_sheet(model, opts, &modules[0], &Keep::default()),
+        _ => derive_hierarchy(model, opts, &modules, &Keep::default()),
     }
-    derive_hierarchy(model, opts, &modules, &Keep::default())
 }

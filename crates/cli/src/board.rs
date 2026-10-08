@@ -158,7 +158,9 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
 /// every one of them exactly as before this function existed, and
 /// `load`'s `model.nets` override above never fires).
 fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut ConstraintModel) {
-    let Some(sch) = design.schematic.as_mut() else { return };
+    if design.schematic.is_none() {
+        return;
+    }
 
     let resolve = |lib_id: &str, model: &ConstraintModel| -> Option<eda_model::LibSymbol> {
         if lib_id.is_empty() || eda_model::is_synthetic_lib_id(lib_id) {
@@ -168,7 +170,12 @@ fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut Constrain
         }
     };
 
-    for sym in sch.symbols.clone() {
+    // A part for every symbol the model has not heard of yet, on every sheet.
+    let mut every_symbol: Vec<eda_model::ir::SymbolInstance> = design.schematic.iter().flat_map(|s| s.symbols.clone()).collect();
+    if let Some(screens) = &design.sheet_contents {
+        every_symbol.extend(screens.values().flat_map(|s| s.symbols.clone()));
+    }
+    for sym in every_symbol {
         if model.part(&sym.id).is_some() {
             continue;
         }
@@ -195,27 +202,58 @@ fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut Constrain
         });
     }
 
-    let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
-    for sym in &sch.symbols {
-        let lib = resolve(&sym.lib_id, model).unwrap_or_else(|| crate::studio::synthesize_generic_symbol(&format!("eda:{}", sym.id), model));
-        let angle_deg = sym.rot as f64 / 1000.0;
-        // Multi-unit: this placed instance only seeds `pin_world` for the
-        // pins that are actually drawn on its own unit (plus any `unit ==
-        // 0` pin, common to every unit) -- a pin belonging to a *different*
-        // unit of the same reference is positioned when *that* unit's own
-        // `SymbolInstance` is visited, not here. Without this filter, two
-        // instances sharing one reference would both claim every pin
-        // number the whole part has, and whichever was iterated last would
-        // silently win for every pin the other unit actually owns.
-        for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
-            let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
-            pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
+    // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
+    // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
+    let pins_of = |sch: &eda_model::ir::SchematicSection, model: &ConstraintModel| -> std::collections::BTreeMap<String, Point> {
+        let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
+        for sym in &sch.symbols {
+            if !sch.imported_from_kicad {
+                if let Some(part) = model.part(&sym.id) {
+                    let resolved = model.real_symbol_of(&sym.lib_id, part);
+                    for (number, at) in eda_engine::placed::pin_points(sym, part, resolved.as_ref()) {
+                        pin_world.insert(format!("{}.{number}", sym.id), at);
+                    }
+                }
+                continue;
+            }
+            let lib = resolve(&sym.lib_id, model).unwrap_or_else(|| crate::studio::synthesize_generic_symbol(&format!("eda:{}", sym.id), model));
+            let angle_deg = sym.rot as f64 / 1000.0;
+            // Multi-unit: this placed instance only seeds `pin_world` for the pins that are actually drawn on its own unit
+            // (plus any `unit == 0` pin, common to every unit) -- a pin of a *different* unit of the same reference is
+            // positioned when *that* unit's own `SymbolInstance` is visited, not here.
+            for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
+                let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
+                pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
+            }
         }
-    }
+        pin_world
+    };
 
-    let junctions: Vec<Point> = sch.junctions.iter().map(|j| j.at).collect();
-    let nets = eda_kicad::reconcile(&pin_world, &mut sch.wires, &sch.labels, &mut sch.power_symbols, &mut sch.no_connects, &junctions);
+    // The nets of the whole hierarchy at once (`eda_engine::nets`): a sheet pin and the hierarchical label of the same name, global
+    // labels and power symbols are one net across sheets, and a retrace keeps the names the wires already carry.
+    let mut contents = design.sheet_contents.take();
+    let mut root = design.schematic.take().expect("checked above");
+    let root_pins = pins_of(&root, model);
+    let mut child_pins: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Point>> = contents.iter().flatten().map(|(f, s)| (f.clone(), pins_of(s, model))).collect();
+    let nets = {
+        let mut screens = vec![eda_engine::nets::ScreenIn { sch: &mut root, file: String::new(), pins: root_pins }];
+        if let Some(c) = contents.as_mut() {
+            for (file, sec) in c.iter_mut() {
+                screens.push(eda_engine::nets::ScreenIn { sch: sec, file: file.clone(), pins: child_pins.remove(file).unwrap_or_default() });
+            }
+        }
+        eda_engine::nets::trace_nets(&mut screens)
+    };
+    design.schematic = Some(root);
+    design.sheet_contents = contents;
     design.nets = Some(nets);
+}
+
+/// The schematic a board with none stored shows and edits: derived from its intent as module sheets (one sheet per functional
+/// module, a sheet symbol for each on the root; a design that is a single module stays one sheet). The modules a placement
+/// recorded are used when there are any. Always the same for the same board, so what is shown is what a first edit stores.
+pub(crate) fn derived_schematic(design: &eda_model::ir::Design, model: &ConstraintModel) -> Result<eda_model::ir::Design, Vec<CheckResult>> {
+    eda_engine::derive_schematic_modules_with(model, &eda_engine::EngineOptions::default(), design.placement.as_ref().map(|p| p.modules.as_slice()).unwrap_or(&[]))
 }
 
 pub(crate) fn save(dir: &Path, design: &eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
@@ -560,7 +598,8 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
         None => snapshot,
         Some(Domain::Schematic) => {
             let symbol_library = follow_published(current.symbol_library, snapshot.symbol_library.as_ref());
-            eda_model::ir::Design { schematic: snapshot.schematic, nets: snapshot.nets, symbol_library, ..current }
+            // The sheets' own content (`sheet_contents`) is schematic too: an edit inside a sheet is undone with the root.
+            eda_model::ir::Design { schematic: snapshot.schematic, sheet_contents: snapshot.sheet_contents, nets: snapshot.nets, symbol_library, ..current }
         }
         // GAPS.md #8: the Footprint Editor's own scope touches only
         // `footprint_library`, same reasoning `Schematic`'s own arm
@@ -571,7 +610,7 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
         // The Symbol Editor tab's own scope, same independence
         // `FootprintEditor`'s own arm documents.
         Some(Domain::SymbolEditor) => eda_model::ir::Design { symbol_library: snapshot.symbol_library, ..current },
-        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, nets: current.nets, footprint_library: current.footprint_library, symbol_library: current.symbol_library, ..snapshot },
+        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, sheet_contents: current.sheet_contents, nets: current.nets, footprint_library: current.footprint_library, symbol_library: current.symbol_library, ..snapshot },
     }
 }
 
@@ -665,9 +704,19 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
     if cmd.domain() == Domain::Schematic && design.schematic.is_none() {
-        design.schematic = eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic;
+        // The schematic the studio shows -- module sheets for a design of more than one module -- so the edit lands on what is on
+        // screen, in whichever sheet the command names.
+        let derived = derived_schematic(&design, &model)?;
+        design.schematic = derived.schematic;
+        design.sheet_contents = derived.sheet_contents;
     }
     let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+    // Reorganizing into sheets draws the design's nets anew: let it give a net back the name the intent declared for it.
+    if matches!(cmd, Cmd::ReorganizeSheets) {
+        if let Some(intent) = std::fs::read_to_string(&meta.intent).ok().and_then(|t| serde_yaml::from_str::<ConstraintModel>(&t).ok()) {
+            board = board.with_intent_nets(intent.nets);
+        }
+    }
     let before = all_failures(&board, &model);
     let was = board.fork();
 
@@ -901,6 +950,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
+        Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
         Cmd::Annotate { reset_existing, order, ids } => format!(
             "schematic annotate{}{}{}",
             if *reset_existing { " --reset" } else { "" },
@@ -1074,6 +1125,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
         Cmd::AddSymbol { .. } => "schematic-place",
+        Cmd::OnSheet { cmd, .. } => cmd_name(cmd),
+        Cmd::ReorganizeSheets => "schematic-reorganize-sheets",
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
         Cmd::RenameSymbol { .. } => "schematic-rename",
         Cmd::SetSymbolFields { .. } => "schematic-fields-table",
@@ -1722,7 +1775,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![], bus_entries: vec![],
-                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
