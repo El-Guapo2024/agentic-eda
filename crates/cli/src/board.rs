@@ -1830,6 +1830,9 @@ mod tests {
             description: String::new(),
             reference_prefix: "R".into(),
             unit_count: 1,
+            pin_names_hidden: false,
+            pin_numbers_hidden: false,
+            pin_name_offset_mm: 0.508,
         };
         let model = ConstraintModel {
             parts: vec![part("R1"), part("R2")],
@@ -1852,7 +1855,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![], bus_entries: vec![],
-                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: true,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),

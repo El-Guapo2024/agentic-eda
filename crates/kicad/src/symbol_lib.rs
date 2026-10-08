@@ -205,6 +205,17 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
         sexpr::find(item, key).and_then(|f| sexpr::txt(f, 1)).map(|v| v == "yes").unwrap_or(default)
     };
 
+    // `(pin_names (offset x) (hide yes))` and `(pin_numbers (hide yes))` (or the bare `hide` of older files); a derived symbol takes
+    // its base's when it says nothing itself
+    let hidden = |node: &[Sexpr]| {
+        node.iter().skip(1).any(|c| match c {
+            Sexpr::Atom(a) => a == "hide",
+            Sexpr::List(l) => sexpr::tag(l) == Some("hide") && sexpr::txt(l, 1).map(|v| v == "yes").unwrap_or(true),
+        })
+    };
+    let pin_names = sexpr::find(item, "pin_names").or_else(|| base.and_then(|b| sexpr::find(b, "pin_names")));
+    let pin_numbers = sexpr::find(item, "pin_numbers").or_else(|| base.and_then(|b| sexpr::find(b, "pin_numbers")));
+
     LibSymbol {
         lib_id: name.to_string(),
         graphics,
@@ -216,6 +227,9 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
         description: prop("Description"),
         reference_prefix: prop("Reference"),
         unit_count: unit_count.max(1),
+        pin_names_hidden: pin_names.map(hidden).unwrap_or(false),
+        pin_numbers_hidden: pin_numbers.map(hidden).unwrap_or(false),
+        pin_name_offset_mm: pin_names.and_then(|p| sexpr::find(p, "offset")).and_then(|o| sexpr::num(o, 1)).unwrap_or(eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM),
     }
 }
 

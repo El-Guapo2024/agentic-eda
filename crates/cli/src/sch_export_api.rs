@@ -353,7 +353,7 @@ mod tests {
         let sym = |id: &str| SymbolInstance { id: id.into(), at: eda_model::ir::Point { x: 0, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: String::new(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let sch = |ids: &[&str]| SchematicSection {
             symbols: ids.iter().map(|i| sym(i)).collect(),
-            wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(),
+            wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(),
             title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], imported_from_kicad: false, extras: Default::default(),
         };
         let mut d = Design {

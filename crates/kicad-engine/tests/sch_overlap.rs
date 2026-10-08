@@ -65,27 +65,31 @@ fn measure(path: &Path) -> Option<(usize, usize)> {
     Some((flat.as_deref().map(summary).unwrap_or(0), modules.as_deref().map(summary).unwrap_or(0)))
 }
 
-/// What each example has today, (flat, module sheets). Every step of the cleanup lowers these; they end at zero. Measured before any
-/// of it, with the fields of every symbol stacked at the page's corner, the labels reading over the pin names, the generated symbols
-/// with their pins one grid apart and their texts on one another.
+/// What each example has today, (flat, module sheets). Every step of the cleanup lowers these; they end at zero.
+///
+/// Before the cleanup began (fields of every symbol stacked at the page's corner, labels reading over pin names, generated symbols with
+/// their pins one grid apart): all_power_ground_net 46 / 49, dense_small_outline 36 / 30, l1_usb_mcu 2147 / 957, l2_sensor_hub 5298 / 1414,
+/// l3_motor_hub 15262 / 2238, l4_control_hub 37401 / 3617, ldo 142 / 140, ldo_proximity_heavy 217 / 167, mcu_board_30plus 3100 / 1536,
+/// mixed_track_widths 142 / 140, nc_pins 67 / 68, opamp_filter 153 / 168, passive_divider_ladder 91 / 86, star_net 51 / 42,
+/// through_hole_headers 104 / 94, two_pin_nets 14 / 12, unroutable_tiny_outline 56 / 56.
 const KNOWN: &[(&str, usize, usize)] = &[
-    ("all_power_ground_net.yaml", 46, 49),
-    ("dense_small_outline.yaml", 36, 30),
-    ("l1_usb_mcu.yaml", 2147, 957),
-    ("l2_sensor_hub.yaml", 5298, 1414),
-    ("l3_motor_hub.yaml", 15262, 2238),
-    ("l4_control_hub.yaml", 37401, 3617),
-    ("ldo.yaml", 142, 140),
-    ("ldo_proximity_heavy.yaml", 217, 167),
-    ("mcu_board_30plus.yaml", 3100, 1536),
-    ("mixed_track_widths.yaml", 142, 140),
-    ("nc_pins.yaml", 67, 68),
-    ("opamp_filter.yaml", 153, 168),
-    ("passive_divider_ladder.yaml", 91, 86),
-    ("star_net.yaml", 51, 42),
-    ("through_hole_headers.yaml", 104, 94),
-    ("two_pin_nets.yaml", 14, 12),
-    ("unroutable_tiny_outline.yaml", 56, 56),
+    ("all_power_ground_net.yaml", 9, 5),
+    ("dense_small_outline.yaml", 3, 0),
+    ("l1_usb_mcu.yaml", 372, 314),
+    ("l2_sensor_hub.yaml", 406, 225),
+    ("l3_motor_hub.yaml", 743, 429),
+    ("l4_control_hub.yaml", 1053, 574),
+    ("ldo.yaml", 19, 10),
+    ("ldo_proximity_heavy.yaml", 13, 9),
+    ("mcu_board_30plus.yaml", 136, 76),
+    ("mixed_track_widths.yaml", 19, 10),
+    ("nc_pins.yaml", 16, 16),
+    ("opamp_filter.yaml", 14, 13),
+    ("passive_divider_ladder.yaml", 8, 2),
+    ("star_net.yaml", 5, 0),
+    ("through_hole_headers.yaml", 34, 6),
+    ("two_pin_nets.yaml", 0, 0),
+    ("unroutable_tiny_outline.yaml", 6, 5),
 ];
 
 #[test]

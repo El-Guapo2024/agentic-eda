@@ -1336,6 +1336,21 @@ export interface LibSymbol {
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
 export type LibSymbols = Record<string, LibSymbol>;
 
+/** One field of a symbol, power symbol or sheet as `GET /api/schematic` sends it: the text and where KiCad draws it on the sheet (`eda_engine::fields::PageField`). */
+export interface SchField {
+  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
+  name: string;
+  text: string;
+  /** The text's anchor on the sheet, micrometres. */
+  at: [Um, Um];
+  /** The text runs upward: a quarter turn counter-clockwise about the anchor. */
+  vertical: boolean;
+  /** How the text is justified against the anchor, in its own axes. */
+  h: "left" | "center" | "right";
+  v: "top" | "center" | "bottom";
+  visible: boolean;
+}
+
 export interface SchematicSymbol {
   /** Reference designator ("U1") -- the same id PCB parts use. */
   id: string;
@@ -1361,6 +1376,8 @@ export interface SchematicSymbol {
   exclude_from_bom?: boolean;
   exclude_from_board?: boolean;
   exclude_from_sim?: boolean;
+  /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
+  fields?: SchField[];
 }
 
 /**
@@ -1386,6 +1403,8 @@ export interface PowerSymbol {
   rot: Degrees;
   net: string;
   pin: SchematicPin;
+  /** The Value (its net name) where KiCad draws it, and the hidden Reference. */
+  fields?: SchField[];
 }
 
 export interface NoConnect {
@@ -1479,6 +1498,8 @@ export interface Sheet {
   at: [Um, Um];
   size: [Um, Um];
   pins: SheetPin[];
+  /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
+  fields?: SchField[];
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */

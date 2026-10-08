@@ -106,6 +106,17 @@ impl SymbolGraphic {
     }
 }
 
+/// `DEFAULT_PIN_NAME_OFFSET`: 20 mils.
+pub const DEFAULT_PIN_NAME_OFFSET_MM: f64 = 0.508;
+
+fn d_pin_name_offset() -> f64 {
+    DEFAULT_PIN_NAME_OFFSET_MM
+}
+
+fn is_default_pin_name_offset(v: &f64) -> bool {
+    (*v - DEFAULT_PIN_NAME_OFFSET_MM).abs() < 1e-9
+}
+
 fn d_shape() -> String {
     "line".to_string()
 }
@@ -188,6 +199,16 @@ pub struct LibSymbol {
     /// doc.
     #[serde(default = "d_unit_one")]
     pub unit_count: u32,
+    /// `(pin_names (hide yes))`: the symbol draws no pin names (`Connector_Generic:Conn_01xNN`, the power symbols).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pin_names_hidden: bool,
+    /// `(pin_numbers (hide yes))`: the symbol draws no pin numbers (`Device:R`, `C`, `L`, `D`, `LED`, the power symbols).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pin_numbers_hidden: bool,
+    /// `(pin_names (offset x))`, mm: the pin names sit inside the body, this far from the end of the pin; 0 draws them over
+    /// the pin line. KiCad's default when the symbol says nothing is 0.508 (`DEFAULT_PIN_NAME_OFFSET`, 20 mils).
+    #[serde(default = "d_pin_name_offset", skip_serializing_if = "is_default_pin_name_offset")]
+    pub pin_name_offset_mm: f64,
 }
 
 impl LibSymbol {
@@ -336,6 +357,9 @@ fn device_r() -> LibSymbol {
         description: "Resistor".into(),
         reference_prefix: "R".into(),
         unit_count: 1,
+        pin_names_hidden: false,
+        pin_numbers_hidden: true,
+        pin_name_offset_mm: 0.0,
     }
 }
 
@@ -355,6 +379,9 @@ fn device_c() -> LibSymbol {
         description: "Capacitor".into(),
         reference_prefix: "C".into(),
         unit_count: 1,
+        pin_names_hidden: false,
+        pin_numbers_hidden: true,
+        pin_name_offset_mm: 0.254,
     }
 }
 
@@ -374,6 +401,9 @@ fn device_l() -> LibSymbol {
         description: "Inductor".into(),
         reference_prefix: "L".into(),
         unit_count: 1,
+        pin_names_hidden: true,
+        pin_numbers_hidden: true,
+        pin_name_offset_mm: 1.016,
     }
 }
 
@@ -398,6 +428,9 @@ fn device_d() -> LibSymbol {
         description: "Diode".into(),
         reference_prefix: "D".into(),
         unit_count: 1,
+        pin_names_hidden: true,
+        pin_numbers_hidden: true,
+        pin_name_offset_mm: 1.016,
     }
 }
 
@@ -434,6 +467,9 @@ fn conn_01x(n: u32) -> LibSymbol {
         description: format!("Generic connector, single row, 01x{n:02}"),
         reference_prefix: "J".into(),
         unit_count: 1,
+        pin_names_hidden: true,
+        pin_numbers_hidden: false,
+        pin_name_offset_mm: 1.016,
     }
 }
 
@@ -455,6 +491,9 @@ fn power_gnd() -> LibSymbol {
         description: "Power symbol creates a global label with name \"GND\", ground".into(),
         reference_prefix: "#PWR".into(),
         unit_count: 1,
+        pin_names_hidden: true,
+        pin_numbers_hidden: true,
+        pin_name_offset_mm: 0.0,
     }
 }
 
@@ -478,6 +517,9 @@ fn power_flag() -> LibSymbol {
         description: "Special symbol for telling ERC where power comes from".into(),
         reference_prefix: "#PWR".into(),
         unit_count: 1,
+        pin_names_hidden: true,
+        pin_numbers_hidden: true,
+        pin_name_offset_mm: 0.0,
     }
 }
 
@@ -502,6 +544,9 @@ fn power_rail(net: &str) -> LibSymbol {
         description: format!("Power symbol creates a global label with name \"{net}\""),
         reference_prefix: "#PWR".into(),
         unit_count: 1,
+        pin_names_hidden: true,
+        pin_numbers_hidden: true,
+        pin_name_offset_mm: 0.0,
     }
 }
 

@@ -38,7 +38,8 @@ import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
 import { resolveLibSymbol, symbolBounds as libSymbolBounds, type ResolvedGraphic } from "./libSymbol";
 import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
 import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement, type LabelSpin } from "./labelShape";
-import { drawStrokeText } from "../text/strokeFont";
+import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { defaultPenUm, FIELD_SIZE_UM, textOrigin, type SchField } from "../../kicad-port/schText";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { unitLetter } from "../../kicad-port/unitLetter";
@@ -265,7 +266,7 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
     }
   });
 
-  drawFieldsAbout(ctx, symbol, { minX: 0, minY: 0, maxX: width, maxY: height }, false, unitSuffix);
+  if (!symbol.fields?.length) drawFieldsAbout(ctx, symbol, { minX: 0, minY: 0, maxX: width, maxY: height }, false, unitSuffix);
   ctx.restore();
 }
 
@@ -332,6 +333,45 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
       ctx.stroke();
       return;
     }
+  }
+}
+
+/**
+ * One line of text where KiCad puts it: `anchor` and the justification in the text's own axes, a vertical text turned a quarter
+ * counter-clockwise about the anchor (`kicad-port/schText.ts`, `FONT::Draw`'s placement).
+ */
+function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [number, number], o: { sizeUm: number; h: "left" | "center" | "right"; v: "top" | "center" | "bottom"; vertical: boolean; color: string; thicknessUm?: number }) {
+  if (!text) return;
+  const thickness = o.thicknessUm ?? defaultPenUm(o.sizeUm);
+  const [dx, dy] = textOrigin(measureStrokeText(text, o.sizeUm), o.sizeUm, thickness, o.h, o.v);
+  ctx.save();
+  ctx.translate(anchor[0], anchor[1]);
+  if (o.vertical) ctx.rotate(-Math.PI / 2);
+  drawStrokeText(ctx, text, dx, dy, { sizeUm: o.sizeUm, thicknessUm: thickness, justify: "left", color: o.color });
+  ctx.restore();
+}
+
+/** The colour KiCad draws a field of that name in. */
+function fieldColor(name: string): string {
+  switch (name) {
+    case "Reference":
+      return layerColor("LAYER_REFERENCEPART");
+    case "Value":
+      return layerColor("LAYER_VALUEPART");
+    case "Sheetname":
+      return layerColor("LAYER_SHEETNAME");
+    case "Sheetfile":
+      return layerColor("LAYER_SHEETFILENAME");
+    default:
+      return layerColor("LAYER_FIELDS");
+  }
+}
+
+/** The fields of one item where the server says they are (`SchField`): every visible one, a Reference with its unit letter, in the item's own field colours (or `color`, when it is drawn selected). */
+function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSuffix = "", color?: string) {
+  for (const f of fields) {
+    if (!f.visible || !f.text) continue;
+    drawKicadText(ctx, f.name === "Reference" ? f.text + unitSuffix : f.text, f.at, { sizeUm: FIELD_SIZE_UM, h: f.h, v: f.v, vertical: f.vertical, color: color ?? fieldColor(f.name) });
   }
 }
 
@@ -623,7 +663,7 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
   }
 
   drawPins(ctx, view, pins, showHiddenPins);
-  drawFieldsAbout(ctx, instance, bbox, isVerticalTwoPin(pins), unitSuffix);
+  if (!instance.fields?.length) drawFieldsAbout(ctx, instance, bbox, isVerticalTwoPin(pins), unitSuffix);
 }
 
 /**
@@ -638,6 +678,10 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
  * reasonable default matching where GND/power text conventionally sits.
  */
 function drawPowerSymbolText(ctx: CanvasRenderingContext2D, ps: PowerSymbol, resolvedPin: ResolvedPin | null, on: boolean) {
+  if (ps.fields?.length) {
+    drawSchFields(ctx, ps.fields, "", on ? layerColor("LAYER_SELECTION_SHADOWS") : undefined);
+    return;
+  }
   const sizeUm = VALUE_FONT * 1000;
   const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_VALUEPART");
   if (resolvedPin && (resolvedPin.dir[0] !== 0 || resolvedPin.dir[1] !== 0)) {
@@ -746,8 +790,12 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   ctx.restore();
 
   const nameSizeUm = 1270;
-  drawStrokeText(ctx, s.name, x, y - 400, { sizeUm: nameSizeUm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
-  drawStrokeText(ctx, s.file, x, y + h + 400 + nameSizeUm * 0.8, { sizeUm: nameSizeUm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
+  if (s.fields?.length) {
+    drawSchFields(ctx, s.fields);
+  } else {
+    drawStrokeText(ctx, s.name, x, y - 400, { sizeUm: nameSizeUm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
+    drawStrokeText(ctx, s.file, x, y + h + 400 + nameSizeUm * 0.8, { sizeUm: nameSizeUm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
+  }
 
   // A sheet pin sits on the border it names (`SCH_SHEET_PIN::SetSide`): its flag points into the sheet from that edge and its name is
   // written inside, after the flag -- so a wire reaches the pin from outside and the name never runs over it.
@@ -987,6 +1035,8 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
       const r = resolveSymbol(s);
       drawBoxSymbol(ctx, view, r, selected, unitSuffix);
     }
+    // Its fields, where KiCad puts them on the sheet (not turned with the symbol's own frame).
+    if (s.fields?.length) drawSchFields(ctx, s.fields, unitSuffix);
     // Do not Populate / Exclude from Simulation marks over the symbol body.
     if (s.dnp || s.exclude_from_sim) {
       const all = real ? real.bbox : libSymbolBounds(s, sch.lib_symbols);

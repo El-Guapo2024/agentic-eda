@@ -12,10 +12,12 @@ use eda_layout::{graph, layout, EdgeEndpoint, LayoutGraph, LayoutOptions, Node};
 use eda_model::ir::{Design, LabelKind, NetLabel, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SymbolInstance, Wire};
 use eda_model::{resolve_lib_id, CheckResult, ConstraintModel, Part, Pin, PinKind};
 
+pub mod fields;
 pub mod geometry;
 pub mod hier;
 pub mod nets;
 pub mod placed;
+pub mod symgeom;
 
 pub use hier::{derive_hierarchy, derive_schematic_modules_with, Keep};
 
@@ -496,8 +498,9 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
 
     // The pack above starts at the origin, which is the sheet's corner, not its drawing area: move everything inside the frame (and
     // onto the smallest paper that holds it) so the first row no longer sits on the border.
-    let mut schematic = SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default() };
+    let mut schematic = SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), field_layout: Default::default() };
     hier::fit_flat(&mut schematic, model);
+    fields::fill_layout(&mut schematic, model);
 
     Ok(Design {
         schema: 1,

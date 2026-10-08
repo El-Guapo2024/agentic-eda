@@ -181,6 +181,9 @@ pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, un
         description: String::new(),
         reference_prefix,
         unit_count: 1,
+        pin_names_hidden: false,
+        pin_numbers_hidden: false,
+        pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
     }
 }
 

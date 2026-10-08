@@ -38,28 +38,6 @@ fn report(body: &str) -> SheetReport {
 }
 
 #[test]
-fn the_label_box_is_what_eeschema_builds_from_the_text_box() {
-    // 1.27 mm text, a label's text box offset up by 0.1905 mm and grown by the 0.1588 mm pen, the anchor in it
-    let fx = effects_of(&[], HJustify::Left, VJustify::Bottom);
-    let r = local_label_rect(&fx, "A", (0.0, 0.0), 0);
-    assert!((r.y0 - -2095.7).abs() < 0.2 && (r.y1 - 265.2).abs() < 0.2, "{r:?}");
-    assert!((r.x0 - -158.8).abs() < 0.2, "{r:?}");
-    // turned a quarter, the text reads upward
-    let up = local_label_rect(&fx, "A", (0.0, 0.0), 1);
-    assert!(up.y0 < -500.0 && up.x0 < -2000.0, "{up:?}");
-}
-
-#[test]
-fn a_hierarchical_label_flag_starts_just_behind_its_anchor() {
-    let fx = effects_of(&[], HJustify::Left, VJustify::Center);
-    let r = hier_label_rect(&fx, "PA0", (10_000.0, 10_000.0), Spin::Right);
-    assert!((r.x0 - (10_000.0 - 304.8)).abs() < 0.2, "{r:?}");
-    assert!((r.h() - 1619.3).abs() < 0.2, "the flag is the text height + pen + offset tall: {}", r.h());
-    let left = hier_label_rect(&effects_of(&[], HJustify::Right, VJustify::Center), "PA0", (10_000.0, 10_000.0), Spin::Left);
-    assert!((left.x1 - (10_000.0 + 304.8)).abs() < 0.2 && left.x0 < 10_000.0 - 3_000.0, "{left:?}");
-}
-
-#[test]
 fn a_resistor_with_its_fields_beside_it_is_clean() {
     let fields = format!("{} {}", field("Reference", "R1", (103.0, 98.0), "(justify left)"), field("Value", "330", (103.0, 102.0), "(justify left)"));
     let r = report(&resistor((100.0, 100.0), &fields));

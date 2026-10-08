@@ -235,6 +235,9 @@ pub fn derive_single_sheet(model: &ConstraintModel, opts: &EngineOptions, module
         symbol_library: None,
     };
     design.assign_missing_ids();
+    if let Some(sec) = design.schematic.as_mut() {
+        crate::fields::fill_layout(sec, model);
+    }
     Ok(design)
 }
 
@@ -323,6 +326,12 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
         symbol_library: None,
     };
     design.assign_missing_ids();
+    if let Some(sec) = design.schematic.as_mut() {
+        crate::fields::fill_layout(sec, model);
+    }
+    for sec in design.sheet_contents.iter_mut().flat_map(|c| c.values_mut()) {
+        crate::fields::fill_layout(sec, model);
+    }
     Ok(Derived { design, papers })
 }
 
