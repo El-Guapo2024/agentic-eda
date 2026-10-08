@@ -32,8 +32,9 @@
 //! runs regardless.
 //!
 //! Knobs (all optional):
-//! - `EDA_KICAD_QA_BOARDS`: the corpus root (`<root>/pcbnew/*.kicad_pcb`, each with an
-//!   optional `.kicad_pro` and `.kicad_dru` beside it).
+//! - `EDA_KICAD_QA_BOARDS` / `KICAD_QA_DATA`: the corpus root (`<root>/pcbnew/*.kicad_pcb`, each with an
+//!   optional `.kicad_pro` and `.kicad_dru` beside it). Default: `qa/data` of the KiCad sources at
+//!   `/Users/juanantonioluera/ws/kicad-src-8303b2ad`.
 //! - `EDA_PARITY_PARTS`: which parts to run, a comma list of `own`, `corpus`, `reexport`
 //!   (default all). A partial run keeps the other parts' results from the `roundtrip.json`
 //!   already on disk instead of erasing them.
@@ -85,13 +86,18 @@ fn repo_root() -> PathBuf {
 }
 
 const QA_ROOT_ENV: &str = "EDA_KICAD_QA_BOARDS";
-const QA_ROOT_DEFAULT: &str = "/private/tmp/claude-501/-Users-juanantonioluera-ws/8eb77140-1019-4605-b5f4-960e15f5bf6d/scratchpad/kicad_qa_boards/qa/data";
+/// KiCad's own QA data (`qa/data` of the KiCad source at commit 8303b2ad), as one directory: `KICAD_QA_DATA` names it; the default is the
+/// copy kept beside the KiCad sources this port was read from (a persistent place, not a scratch directory).
+const QA_DATA_ENV: &str = "KICAD_QA_DATA";
+const QA_ROOT_DEFAULT: &str = "/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data";
 
 fn qa_root() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var(QA_ROOT_ENV) {
-        let pb = PathBuf::from(p);
-        if pb.exists() {
-            return Some(pb);
+    for var in [QA_ROOT_ENV, QA_DATA_ENV] {
+        if let Ok(p) = std::env::var(var) {
+            let pb = PathBuf::from(p);
+            if pb.exists() {
+                return Some(pb);
+            }
         }
     }
     let d = PathBuf::from(QA_ROOT_DEFAULT);
@@ -159,7 +165,7 @@ struct PcbCorpusStats {
 
 fn pcb_corpus_notes(root: &Path) -> PcbCorpusStats {
     let mut s = PcbCorpusStats::default();
-    for pcb in find_all(root, "kicad_pcb") {
+    for pcb in find_all(&root.join("pcbnew"), "kicad_pcb") {
         s.total += 1;
         let name = pcb.strip_prefix(root).unwrap_or(&pcb).display().to_string();
         let result = catch(AssertUnwindSafe(|| {
@@ -202,7 +208,7 @@ struct SchCorpusStats {
 
 fn sch_corpus_notes(root: &Path) -> SchCorpusStats {
     let mut s = SchCorpusStats::default();
-    for sch in find_all(root, "kicad_sch") {
+    for sch in find_all(&root.join("pcbnew"), "kicad_sch") {
         s.total += 1;
         let name = sch.strip_prefix(root).unwrap_or(&sch).display().to_string();
         let result = catch(AssertUnwindSafe(|| {

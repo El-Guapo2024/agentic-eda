@@ -42,8 +42,11 @@ fn find_kicad_cli_any() -> Option<PathBuf> {
     mac.exists().then_some(mac)
 }
 
+/// KiCad's own QA boards: `<KICAD_QA_DATA>/pcbnew`, where `KICAD_QA_DATA` names `qa/data` of the KiCad sources (commit 8303b2ad); the default is the copy
+/// kept beside them, a persistent place and not a scratch directory.
 fn qa_boards_dir() -> PathBuf {
-    PathBuf::from("/private/tmp/claude-501/-Users-juanantonioluera-ws/8eb77140-1019-4605-b5f4-960e15f5bf6d/scratchpad/kicad_qa_boards/qa/data/pcbnew")
+    let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
+    root.join("pcbnew")
 }
 
 /// The balanced-paren block of the (positional index `start`) `(zone` at or
