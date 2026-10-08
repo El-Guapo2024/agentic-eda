@@ -14,6 +14,7 @@ import { paintFootprint } from "./footprintPainter";
 import { snapPoint } from "../canvas/gridHelper";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
+import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { useActionRunner } from "../../actions/useActionRunner";
 import { isMac } from "../../platform";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
@@ -483,7 +484,7 @@ export function FootprintCanvas() {
     }
   };
 
-  const onWheel = (e: React.WheelEvent) => {
+  const onWheel = (e: WheelEvent) => {
     e.preventDefault();
     userMovedRef.current = true;
     const rect = containerRef.current!.getBoundingClientRect();
@@ -491,6 +492,7 @@ export function FootprintCanvas() {
     const result = handleWheel(state.view, { width: rect.width, height: rect.height }, input, wheelPrefs.settings, wheelPrefs.controller);
     if (result.kind !== "unhandled") dispatch({ type: "SET_VIEW", view: result.view });
   };
+  useNonPassiveWheel(containerRef, onWheel); // React's onWheel is passive: preventDefault() would be ignored and logged
 
   const onDoubleClick = (e: React.MouseEvent) => {
     // The Renumber Pads tool owns the double click (it finishes the tool); it must not also open a pad's properties.
@@ -591,7 +593,6 @@ export function FootprintCanvas() {
       onPointerUp={onPointerUp}
       onDoubleClick={onDoubleClick}
       onKeyDown={onKeyDown}
-      onWheel={onWheel}
       onContextMenu={onContextMenu}
     >
       <canvas ref={canvasRef} />
