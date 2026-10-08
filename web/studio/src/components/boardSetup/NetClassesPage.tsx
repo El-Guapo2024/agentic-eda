@@ -8,7 +8,7 @@
 // their precedence; the Up and Down buttons move a class. Not ported: the tuning profile, the PCB colour and the schematic wire columns.
 import { useEffect, useMemo, useState } from "react";
 import { useStudioState } from "../../state/store";
-import { addAssignment, applyAssignments, assignmentRows, boardNetNames, classOfNet, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
+import { applyAssignments, assignmentRows, boardNetNames, classOfNet, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
 import type { NetClass } from "../../api/types";
 import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
@@ -47,8 +47,8 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
 
   const source = useMemo<Draft | undefined>(() => {
     if (!rules) return undefined;
-    const def: NetClass = rules.default_class ?? { name: "Default", nets: [], track_width: rules.track_width, clearance: rules.clearance, via_diameter: rules.via_diameter, via_drill: rules.via_drill, priority: 0 };
-    return { def, classes: rules.net_classes, rows: assignmentRows(rules.net_classes) };
+    const { default: def, classes } = netClassSettingsOf(rules);
+    return { def, classes, rows: assignmentRows(classes) };
   }, [rules]);
   const page = usePageDraft<Draft>(source);
   const apply = usePageApply();
@@ -286,6 +286,3 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
     </PageFrame>
   );
 }
-
-/** Pre-add a pattern assignment to a draft the way the Assign Netclass dialog does (shared with components/AssignNetclassDialog.tsx via kicad-port). */
-export { addAssignment };
