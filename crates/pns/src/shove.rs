@@ -229,7 +229,7 @@ fn via_changed_area(a: &Via, b: &Via) -> Option<Area> {
 fn pushout_force(c: Point, r: Um, seg: Seg, clearance: Um) -> (i64, i64) {
     let nearest = seg.nearest_point(c);
     let dist = norm(nearest, c);
-    let min_dist = clearance as i64 + r as i64;
+    let min_dist = clearance + r;
     if dist >= min_dist {
         return (0, 0);
     }
@@ -241,7 +241,7 @@ fn pushout_force(c: Point, r: Um, seg: Seg, clearance: Um) -> (i64, i64) {
             break;
         }
     }
-    (f.0 as i64, f.1 as i64)
+    f
 }
 
 /// `Collide( SHAPE_CIRCLE, SHAPE_LINE_CHAIN_BASE, clearance, .., &mtv )` for an
@@ -270,7 +270,7 @@ fn circle_chain_mtv(c: Point, r: Um, chain: &[Point], clearance: Um) -> Option<(
 /// vector from `a` to `b` resized to what is missing, plus the "apparent
 /// rounding error" 3.
 fn circle_circle_mtv(a: Point, ra: Um, b: Point, rb: Um, clearance: Um) -> Option<(i64, i64)> {
-    let min_dist = clearance as i64 + ra as i64 + rb as i64;
+    let min_dist = clearance + ra + rb;
     let (dx, dy) = ((b.x - a.x) as i128, (b.y - a.y) as i128);
     let dist_sq = dx * dx + dy * dy;
     if dist_sq == 0 || dist_sq < (min_dist as i128) * (min_dist as i128) {
@@ -829,8 +829,9 @@ impl<'a> Shove<'a> {
         }
         let obstacle_width = obstacle_line.line.width;
         let clearance = self.clearance(&cur.line.net, &obstacle_line.line.net);
-        let mut extra = 0;
         for attempt in 0..3 {
+            // the hulls grow by `cHullFailureExpansionFactor` after each failed attempt
+            let extra = attempt * HULL_FAILURE_EXPANSION;
             let mut hulls: Vec<Vec<Point>> = cur.line.segs().map(|(a, b)| crate::hull::segment_hull(a, b, cur.line.width, clearance + extra + crate::hull::HULL_ROUNDING_GUARD, obstacle_width)).filter(|h| h.len() >= 3).collect();
             if let Some(lv) = &cur.via {
                 let via_clearance = self.clearance(&lv.data.net, &obstacle_line.line.net);
@@ -841,7 +842,6 @@ impl<'a> Shove<'a> {
                 result.via = obs_via;
                 return true;
             }
-            extra += HULL_FAILURE_EXPANSION;
         }
         false
     }
@@ -920,20 +920,17 @@ impl<'a> Shove<'a> {
                 if walk_line.line.has_loops() {
                     continue;
                 }
-                match self.line_stack.first() {
-                    Some(last_line) => {
-                        if self.lines_collide(last_line, &walk_line) {
-                            let mut dummy = last_line.clone();
-                            if self.shove_obstacle_line(&walk_line, last_line, &mut dummy) {
-                                found = Some((walk_line, next_rank));
-                                break;
-                            }
-                        } else {
+                if let Some(last_line) = self.line_stack.first() {
+                    if self.lines_collide(last_line, &walk_line) {
+                        let mut dummy = last_line.clone();
+                        if self.shove_obstacle_line(&walk_line, last_line, &mut dummy) {
                             found = Some((walk_line, next_rank));
                             break;
                         }
+                    } else {
+                        found = Some((walk_line, next_rank));
+                        break;
                     }
-                    None => {}
                 }
             }
             found

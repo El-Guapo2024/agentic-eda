@@ -339,24 +339,27 @@ impl Node {
         let mut back_segs: Vec<ItemId> = Vec::new();
         let (mut cur, mut cur_end) = (start, seg0.a);
         let mut via_start = None;
-        while !guard_hit {
-            let Some(joint) = self.joint_at(cur_end, &net) else { break };
-            if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
-                let Item::Segment(ns) = &self.items[&next_id] else { break };
-                if !opts.allow_width_mismatch && ns.width != width {
+        // `AssembleLine`: only walk backward `if( !guardHit )` -- a closed loop was already
+        // walked all the way round going forward.
+        if !guard_hit {
+            while let Some(joint) = self.joint_at(cur_end, &net) {
+                if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
+                    let Item::Segment(ns) = &self.items[&next_id] else { break };
+                    if !opts.allow_width_mismatch && ns.width != width {
+                        break;
+                    }
+                    let other_end = if ns.a == cur_end { ns.b } else { ns.a };
+                    if next_id == start || back_pts.len() >= ASSEMBLE_MAX_VERTS {
+                        break;
+                    }
+                    back_pts.push(other_end);
+                    back_segs.push(next_id);
+                    cur = next_id;
+                    cur_end = other_end;
+                } else {
+                    via_start = joint.links.iter().find(|&&id| matches!(self.items.get(&id), Some(Item::Via(_)))).copied();
                     break;
                 }
-                let other_end = if ns.a == cur_end { ns.b } else { ns.a };
-                if next_id == start || back_pts.len() >= ASSEMBLE_MAX_VERTS {
-                    break;
-                }
-                back_pts.push(other_end);
-                back_segs.push(next_id);
-                cur = next_id;
-                cur_end = other_end;
-            } else {
-                via_start = joint.links.iter().find(|&&id| matches!(self.items.get(&id), Some(Item::Via(_)))).copied();
-                break;
             }
         }
 

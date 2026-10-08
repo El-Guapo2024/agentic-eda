@@ -382,7 +382,7 @@ impl<'a> Walker<'a> {
 
     fn single_step(&mut self, out: &mut WalkOutcome, net: &Net, layer: i32, width: Um) {
         let mut pending: [Vec<ItemId>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-        for i in 0..3 {
+        for (i, cluster) in pending.iter_mut().enumerate() {
             if !self.policies[i] || out.status[i] != WalkStatus::InProgress {
                 continue;
             }
@@ -390,7 +390,7 @@ impl<'a> Walker<'a> {
                 None => out.status[i] = WalkStatus::Done,
                 Some(hit) => {
                     let skip = &self.skip;
-                    pending[i] = self.node.assemble_cluster(hit.id, layer, 0.0, Some(net), &|id| skip.contains(&id));
+                    *cluster = self.node.assemble_cluster(hit.id, layer, 0.0, Some(net), &|id| skip.contains(&id));
                 }
             }
         }
@@ -498,6 +498,7 @@ impl<'a> Walker<'a> {
 /// (`OPTIMIZER::Optimize( &line, MERGE_SEGMENTS, node )`, whose collision
 /// test ignores the kind mask), and the shorter of the two returned.
 /// `None` when neither winding got through (`rhWalkBase` returns false).
+#[allow(clippy::too_many_arguments)] // the node/rules/net/layer/width query context, plus the head, the kind mask and the iteration limit this is specific to.
 pub fn walk_masked(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Um, head: &[Point], mask: u8, iteration_limit: u32) -> Option<Vec<Point>> {
     let mut w = Walker::new(node, rules);
     w.item_mask = mask;

@@ -37,13 +37,8 @@ fn track(node: &mut Node, net: &str, id: &str, pts: &[Point], width: Um) {
     }
 }
 
-#[allow(dead_code)]
 fn pad(net: &str, name: &str, c: Point, r: Um) -> Item {
     Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: name.into() })
-}
-
-fn rect_pad(net: &str, name: &str, c: Point, w: Um, h: Um) -> Item {
-    Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Rect { x0: c.x - w / 2, y0: c.y - h / 2, x1: c.x + w / 2, y1: c.y + h / 2 }, source: name.into() })
 }
 
 fn via(net: &str, id: &str, c: Point) -> Item {

@@ -210,6 +210,7 @@ fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: 
 }
 
 /// `mergeFull`: the outer shrinking-span loop around [`merge_step`].
+#[allow(clippy::too_many_arguments)] // same query-context parameter set every other pass in this module threads through unchanged.
 fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], area: Option<Area>) -> Vec<eda_model::ir::Point> {
     if pts.len() < 3 {
         return pts;
