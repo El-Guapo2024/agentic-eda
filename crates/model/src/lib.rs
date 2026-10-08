@@ -4,11 +4,13 @@
 
 pub mod bezier;
 pub mod board;
+mod drc_checks;
 pub mod floorplan;
 pub mod footprint;
 pub mod ir;
 pub mod modules;
 pub mod page;
+pub mod rules;
 pub mod sch_extras;
 pub mod symbol;
 
@@ -260,6 +262,58 @@ pub struct BoardRules {
     /// `m_TentVias*`), read by `eda_drc`'s solder-mask provider.
     #[serde(default, skip_serializing_if = "SolderMaskRules::is_default")]
     pub solder_mask: SolderMaskRules,
+
+    // ---- the rest of Board Setup (`rules::RulesOverlay` edits these; the defaults are KiCad's own) ----
+    /// `rules.min_connection`: the narrowest copper neck a connection may have. KiCad's default is 0.
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub min_connection_um: ir::Um,
+    /// `rules.min_microvia_diameter`.
+    #[serde(default = "d_microvia_diameter_min")]
+    pub microvia_diameter_min_um: ir::Um,
+    /// `rules.min_microvia_drill`.
+    #[serde(default = "d_microvia_drill_min")]
+    pub microvia_drill_min_um: ir::Um,
+    /// `rules.min_groove_width`.
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub min_groove_width_um: ir::Um,
+    /// `rules.min_resolved_spokes`: fewer connected thermal spokes than this is a starved thermal.
+    #[serde(default = "d_min_resolved_spokes")]
+    pub min_resolved_spokes: u32,
+    /// `rules.max_error`: how closely arcs are approximated by segments (`ARC_HIGH_DEF`, 5 um).
+    #[serde(default = "d_max_error")]
+    pub max_error_um: ir::Um,
+    /// `rules.use_height_for_length_calcs`.
+    #[serde(default = "d_true")]
+    pub use_height_for_length_calcs: bool,
+    /// `zones_allow_external_fillets`.
+    #[serde(default)]
+    pub zones_allow_external_fillets: bool,
+    /// Whether the `*_min_um` constraints above were stated -- by a `.kicad_pro` the board came with or by Board
+    /// Setup -- rather than left at KiCad's factory values. A board built from an intent never states them, and
+    /// its derived `.kicad_pro` lowers them to the narrowest class it uses (an escape class routed under the
+    /// default 0.2 mm is not a violation of rules nobody wrote); a stated floor is written exactly.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub constraints_explicit: bool,
+    /// `BOARD_DESIGN_SETTINGS::GetBoardThickness()`, um: the board's thickness in the `.kicad_pcb`'s
+    /// `(general (thickness ..))` and the 3D export. KiCad's default is 1.6 mm.
+    #[serde(default = "d_board_thickness")]
+    pub board_thickness_um: ir::Um,
+    /// Text & Graphics > Defaults: the line widths and text the layer classes start from.
+    #[serde(default, skip_serializing_if = "rules::TextGraphicsDefaults::is_default")]
+    pub text_graphics: rules::TextGraphicsDefaults,
+    /// The Default net class as Board Setup shows it: its microvia and differential-pair sizes, which have no
+    /// board-wide field of their own. Its track width, clearance and via size are `track_width`, `clearance`,
+    /// `via_diameter` and `via_drill` above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_class: Option<NetClass>,
+}
+
+fn is_zero_um(v: &ir::Um) -> bool {
+    *v == 0
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 /// The board-wide solder-mask settings `drc_test_provider_solder_mask.cpp`
@@ -287,6 +341,12 @@ pub struct SolderMaskRules {
     pub tent_vias_front: bool,
     #[serde(default = "d_true")]
     pub tent_vias_back: bool,
+    /// `m_SolderPasteMargin`: `(setup (pad_to_paste_clearance ..))`, the absolute paste margin, um.
+    #[serde(default)]
+    pub paste_margin_um: ir::Um,
+    /// `m_SolderPasteMarginRatio`: `(setup (pad_to_paste_clearance_ratio ..))`, the margin as a fraction of the pad.
+    #[serde(default)]
+    pub paste_margin_ratio: f64,
 }
 
 fn d_true() -> bool {
@@ -295,7 +355,7 @@ fn d_true() -> bool {
 
 impl Default for SolderMaskRules {
     fn default() -> Self {
-        SolderMaskRules { expansion_um: 0, min_width_um: 0, to_copper_clearance_um: 0, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true }
+        SolderMaskRules { expansion_um: 0, min_width_um: 0, to_copper_clearance_um: 0, allow_bridges_in_footprints: false, tent_vias_front: true, tent_vias_back: true, paste_margin_um: 0, paste_margin_ratio: 0.0 }
     }
 }
 
@@ -614,6 +674,11 @@ fn d_min_silk_text_thickness() -> ir::Um { 80 }
 fn d_track_width_min() -> ir::Um { 200 }
 fn d_via_diameter_min() -> ir::Um { 500 }
 fn d_via_drill_min() -> ir::Um { 300 }
+fn d_microvia_diameter_min() -> ir::Um { 200 }
+fn d_microvia_drill_min() -> ir::Um { 100 }
+fn d_min_resolved_spokes() -> u32 { 2 }
+fn d_max_error() -> ir::Um { 5 }
+fn d_board_thickness() -> ir::Um { 1600 }
 impl BoardRules {
     /// The class owning `net`, if any: first match wins.
     pub fn class_of(&self, net: &str) -> Option<&NetClass> {
@@ -694,6 +759,9 @@ impl Default for BoardRules {
             track_width_min_um: d_track_width_min(), min_clearance_um: 0, via_diameter_min_um: d_via_diameter_min(), via_drill_min_um: d_via_drill_min(),
             rule_severities: BTreeMap::new(), custom_rules_text: None, custom_rules: Vec::new(), outline_closed: None,
             copper_edge_clearance_um: None, solder_mask: SolderMaskRules::default(),
+            min_connection_um: 0, microvia_diameter_min_um: d_microvia_diameter_min(), microvia_drill_min_um: d_microvia_drill_min(), min_groove_width_um: 0,
+            min_resolved_spokes: d_min_resolved_spokes(), max_error_um: d_max_error(), use_height_for_length_calcs: true, zones_allow_external_fillets: false,
+            constraints_explicit: false, board_thickness_um: d_board_thickness(), text_graphics: rules::TextGraphicsDefaults::default(), default_class: None,
         }
     }
 }
@@ -836,13 +904,29 @@ pub enum PlacementRule {
     ThermalGroup { refs: Vec<String> },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Stackup {
     pub layers: Vec<StackupLayer>,
+    /// `(copper_finish ..)`: "ENIG", "HASL", ... ; `None` = not specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copper_finish: Option<String>,
+    /// `(dielectric_constraints yes)`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dielectric_constraints: bool,
+    /// `(edge_connector yes|bevelled)`: 0 none, 1 yes, 2 bevelled.
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub edge_connector: u8,
+    /// `(edge_plating yes)`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub edge_plating: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn is_zero_u8(v: &u8) -> bool {
+    *v == 0
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StackupLayer {
     pub name: String,
@@ -850,6 +934,17 @@ pub struct StackupLayer {
     pub material: Option<String>,
     #[serde(default)]
     pub thickness_mm: Option<f64>,
+    /// KiCad's stackup item type, as the file names it: `copper`, `core`, `prepreg`, `Top Silk Screen`,
+    /// `Top Solder Paste`, `Top Solder Mask` and their bottom counterparts. `None` = a layer written before
+    /// the stackup was editable: `copper` when the name is a copper layer, else not written to the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// `(epsilon_r ..)`, the dielectric constant of the material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epsilon_r: Option<f64>,
+    /// `(loss_tangent ..)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loss_tangent: Option<f64>,
 }
 
 /// A group of nets that route alike. Matched by glob over the net name.
@@ -919,9 +1014,10 @@ pub struct NetClass {
 }
 
 impl NetClass {
-    /// Whether `net` belongs to this class. `*` is the only wildcard and
-    /// matches any run of characters, which covers the way power nets are
-    /// actually named (`VBAT_RAW`, `VBAT_FUSED`).
+    /// Whether `net` belongs to this class. `*` matches any run of characters,
+    /// which covers the way power nets are actually named (`VBAT_RAW`,
+    /// `VBAT_FUSED`), and `?` any one character; the pattern must match the
+    /// whole name (KiCad's `EDA_PATTERN_MATCH_WILDCARD_ANCHORED`).
     pub fn matches(&self, net: &str) -> bool {
         self.nets.iter().any(|pat| glob_match(pat, net))
     }
@@ -1063,16 +1159,19 @@ impl ConstraintModel {
 }
 
 pub fn glob_match(pattern: &str, s: &str) -> bool {
-    // '*' matches any run (incl. empty); everything else literal.
-    fn rec(p: &[u8], s: &[u8]) -> bool {
+    // '*' matches any run (incl. empty) and '?' any one character -- the wildcards
+    // `EDA_PATTERN_MATCH_WILDCARD_ANCHORED` reads in a net class pattern; everything else literal.
+    fn rec(p: &[char], s: &[char]) -> bool {
         match (p.first(), s.first()) {
             (None, None) => true,
-            (Some(b'*'), _) => rec(&p[1..], s) || (!s.is_empty() && rec(p, &s[1..])),
+            (Some('*'), _) => rec(&p[1..], s) || (!s.is_empty() && rec(p, &s[1..])),
+            (Some('?'), Some(_)) => rec(&p[1..], &s[1..]),
             (Some(a), Some(b)) if a == b => rec(&p[1..], &s[1..]),
             _ => false,
         }
     }
-    rec(pattern.as_bytes(), s.as_bytes())
+    let (p, s): (Vec<char>, Vec<char>) = (pattern.chars().collect(), s.chars().collect());
+    rec(&p, &s)
 }
 
 #[cfg(test)]

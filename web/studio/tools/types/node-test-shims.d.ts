@@ -24,3 +24,8 @@ declare module "node:assert/strict" {
   const assert: Assert;
   export default assert;
 }
+
+// Reading a fixture file shared with the Rust tests (src/kicad/*.json): the unit-test build has no JSON module import.
+declare module "node:fs" {
+  export function readFileSync(path: string, encoding: "utf8"): string;
+}

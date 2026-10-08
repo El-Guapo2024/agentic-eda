@@ -22,18 +22,22 @@ doc and the code disagree, the code wins and the doc is named.
      cannot be moved or rotated. On the PCB, Move skips tracks and zones, Rotate and Flip take footprints and
      vias only, and Duplicate and Copy skip footprints.
   2. *The KiCad files we write drop design data, and kicad-cli judges those files.* The PCB writer
-     (`crates/kicad/src/pcb.rs`) gives every zone the board's default clearance and width instead of its own
-     settings, writes no keepout, no dimensions, no groups, no locks, and turns arc tracks into 32 segments.
-     By reading the code (not run), a rule area has no net and the writer's net check rejects it, so a board
-     with a keepout cannot be DRC'd or exported. Confirm that with a test first; it is the quickest win here.
+     (`crates/kicad/src/pcb.rs`) gave every zone the board's default clearance and width instead of its own
+     settings, wrote no keepout, no dimensions, no groups, no locks, and turned arc tracks into 32 segments; a
+     rule area has no net, so the writer's net check rejected it and a board with a keepout could not be DRC'd or
+     exported (confirmed by a test, then fixed). **Fixed on 2026-10-08 (item 2); what is left there is footprint
+     graphics, library nicknames, component classes and tuning profiles.**
   3. *One root sits under several gaps:* the constraint model built from the intent has no edit verbs. Net
      classes, custom rules, adding or renaming a part, assigning a footprint and importing a netlist are all
      recorded as unwired for that reason. `design.json` already overrides the model in places (`design.nets`,
-     the footprint and symbol libraries); extending that overlay unlocks items 3, 5 and 9.
+     the footprint and symbol libraries); extending that overlay unlocks items 3, 5 and 9. **The rules now have
+     their overlay (`drawings.rules`, applied in `board::load`) and seven undoable verbs; every Board Setup page
+     edits through them (item 3). Items 5 and 9 (parts and footprints on the board) still wait for the same kind
+     of overlay.**
 - **Docs.** Action level: `UI-ACTIONS.md`. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 200 added since have not been compared) and
   `CODE-COMPARE-router.md`, `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md`. Measured round trip and
-  connectivity: `REPORT.md` (2026-10-04, needs a re-run). Engines: `ARCHITECTURE.md`.
+  connectivity: `REPORT.md` (the real-board re-export part re-measured 2026-10-08; each part of it says its own date). Engines: `ARCHITECTURE.md`.
 
 ## Ranked list: open and partial items, by user impact
 
@@ -54,30 +58,38 @@ New (the residual of #1). **Partial.** Hit: every schematic session. Blocks: yes
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
 ### 2. The KiCad files we write drop design data
-New (the old "round trip" mention). **Partial.** Hit: any board with a pour, keepout or dimension; every export. Blocks: yes for keepouts (by reading), silently wrong otherwise. WP5, size L.
-- Exists: tracks, vias, pads, footprints, shapes, text, net classes, the drill origin, fills from `crates/zone-filler`;
-  the schematic writer carries its extras and sub-sheets (`crates/kicad/src/lib.rs`, `sch_extras_io.rs`); the importer reads
-  zones, net classes, project rules and `.kicad_dru` (`import.rs`, `custom_rules.rs`).
-- Missing, read from `crates/kicad/src/pcb.rs` (`:285-291` is the zone block): each zone gets the board's default clearance and
-  minimum width and none of its own priority, pad connection, thermal gap and spoke, hatch or island settings; a rule area is
-  written as a pour and, having no net, fails the net check (`kicad.unknown_net`) that rejects the whole export, so DRC and
-  every output on a board with a keepout fail (not run; `PARITY-pcb.md` section 14 contradicts itself on this); dimensions,
-  groups, locks and teardrop flags are not written, and the importer reads neither dimensions nor groups; arc tracks
-  (`Track::arc`) are written as 32 segments. `REPORT.md` (2026-10-04) measured re-export changing kicad-cli's verdict on 8
-  of 12 real boards (`scores.json`, 33.3%); re-measure after the fixes.
+New (the old "round trip" mention). **Mostly done (2026-10-08).** Hit: any board with a pour, keepout or dimension; every export. Blocks: no longer for keepouts; the rest changes what kicad-cli reports on some real boards. WP5, size L (step 1 done).
+- Done (WP5 step 1; `crates/kicad/src/{pcb,pcb_items,import_items,import}.rs`): a rule area is written as a keepout zone, and one a footprint owns is
+  written inside that footprint (as a board-level copy it reported its own footprint as a keepout violation); before, it failed the whole export with
+  `kicad.unknown_net`, so DRC and every output on a board with a keepout failed (test `kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers`:
+  the track inside is `items_not_allowed`, Gerbers plot). Every zone writes its own clearance, minimum width, priority, pad connection, thermal gap and
+  spoke, hatch, island and fill settings. Arc tracks are arcs (`Track::arc_mid_offset`). Locks, dimensions, groups, zone names and teardrop flags are
+  written and read back (round-trip tests in `pcb.rs`). The parity harness re-exports a real board with its own project beside it.
+- Measured (`REPORT.md`, `scores.json`, 2026-10-08, kicad-cli 10.99 on `qa/data` of the KiCad sources): the re-export of a real board gives kicad-cli the same
+  violation counts as the original on **6 of 12** boards (50.0%), up from 4 of 12 (33.3%) before the fixes; `bad_triangulation_case` (zones, isolated
+  copper) and `fill_bad` now match. All 12 re-exports load.
+- Missing: footprint-local graphics and texts (`fp_line`, `fp_circle`, `fp_text`) are imported into `drawings.footprint_extras`, which only the in-house DRC
+  reads, and never written back (512 `fp_line`s on `complex_hierarchy`, hence its silkscreen and mask differences); a footprint that had no library is written
+  as `eda:<name>`, so a project that turns `lib_footprint_issues` on gets a violation for a library that does not exist; barcodes, component classes and
+  tuning profiles are not read (the `api_kitchen_sink`, `component_classes_drc` and `drc_missing_tuning_profile` differences).
 - Port from: `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.cpp` and `pcb_io_kicad_sexpr_parser.cpp`.
 
 ### 3. Board Setup and the rules cannot be edited
-Old #9 and #10. **Partial.** Hit: the start of every project. Blocks: yes, clearances, net classes and the stackup change only by editing the intent file. WP5, size L.
-- Exists: `components/BoardSetupDialog.tsx` has 7 pages; 3 edit (Track Widths and Vias, Teardrops, Dimensions:
-  `Cmd::SetTrackWidthPresets`, `SetViaPresets`, `SetTeardropSettings`, `SetDimensionSettings`) and 4 mirror read-only
-  (Net Classes, Design Rules, Text and Graphics, Layer Stackup). The importer reads net classes, project rules, severities
-  and `.kicad_dru`; the writer emits net classes.
-- Missing: editing net classes and their net-name patterns (`assignNetclass`), constraints (minimum clearance, track,
-  annular ring, hole, edge), solder mask and paste, zone defaults, text defaults, the physical stackup (layer count,
-  thickness), tuning profiles, violation severities, the custom rule editor (`DRETool.drcRuleEditor`). The cause is that
-  `BoardRules` comes from the intent and has no edit verb or undo (header of `BoardSetupDialog.tsx`;
-  `ui-parity-missing.json`). Fix pattern: a `design.json` overlay applied in `crates/cli/src/board.rs::load`, as `design.nets` is.
+Old #9 and #10. **Mostly done (2026-10-08).** Hit: the start of every project. Blocks: no; the pages that do not exist yet need a model first. WP5, size L (step 2 done).
+- Done (WP5 step 2): `eda_model::rules::RulesOverlay` (`crates/model/src/rules.rs`) holds one optional page per Board Setup page in `design.json`
+  (`drawings.rules`); `board::load` lays it over the intent's (or the imported project's) rules, as `design.nets` is, so the router, the gates, the studio and the
+  derived `.kicad_pro`, `.kicad_pcb` and `.kicad_dru` that kicad-cli reads all follow an edit. Seven undoable verbs (`set_net_classes`, `set_constraints`,
+  `set_mask_paste`, `set_text_graphics_defaults`, `set_stackup`, `set_rule_severities`, `set_custom_rules`; `crates/ops/src/board_setup.rs`) refuse a bad page
+  with the setting's name, after the checks `ValidateDesignRules` and the panels make. `components/BoardSetupDialog.tsx` is KiCad's page tree and all ten pages
+  edit: Physical Stackup, Solder Mask/Paste, Defaults, Dimensions, Constraints, Pre-defined Sizes, Teardrops, Net Classes (with the net-name patterns and the
+  nets each matches), Custom Rules (as text, "Check rule syntax" through kicad-cli: `POST /api/check_rules`) and Violation Severity (KiCad's own list of 64
+  checks, `tools/extract-drc-checks.js`). Assign Netclass... works from the board and the schematic. A changed clearance, a net class assigned by a pattern, a
+  minimum track width, an ignored check and a custom rule each change what kicad-cli reports, and Undo restores it (`crates/cli/src/board.rs`).
+- Missing: the Board Editor Layers, Zone Hatch Offsets, Formatting, Text Variables, Length-tuning Patterns, Tuning Profiles, Component Classes and Embedded Files
+  pages (nothing in the model holds them); the rule-tree designer (`DRETool.drcRuleEditor`; the `.kicad_dru` is edited as text, without KiCad's highlighting,
+  completion or compiler warnings); KiCad's regular-expression net patterns, bus notation and composite net classes (a pattern here is `*` and `?`, first class
+  wins); dielectric sub-layers, colours and impedance control on the stackup; and this app's drawing tools do not start new items from the Text & Graphics defaults
+  yet (they reach the derived `.kicad_pro` only).
 - Port from: `pcbnew/dialogs/dialog_board_setup.cpp` and `panel_setup_*.cpp`, `common/dialogs/panel_setup_netclasses.cpp`,
   `panel_setup_severities.cpp`, `pcbnew/drc/drc_rule_parser.cpp`, `pcbnew/tools/drc_rule_editor_tool.cpp`.
 
@@ -336,8 +348,9 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 - KiCad: `pcbnew/pcb_io/kicad_sexpr/` (writer and parser), `eeschema/sch_io/kicad_sexpr/`, `pcbnew/dialogs/dialog_board_setup.cpp` and `panel_setup_*.cpp`,
   `common/dialogs/panel_setup_{netclasses,severities}.cpp`, `pcbnew/drc/drc_rule_parser.cpp`, `pcbnew/tools/drc_rule_editor_tool.cpp`, `pcbnew/dialogs/dialog_drc.cpp`,
   `eeschema/dialogs/dialog_{schematic_setup,erc}.cpp`, `pcbnew/zone_filler.cpp`, `pcbnew/zone.cpp`, `pcbnew/teardrop/`.
-- Order: (1) writer: keepouts, per-zone settings, dimensions, groups, locks, arcs, teardrops, with a round-trip test and a fresh `scores.json`;
-  (2) the `design.json` overlay for `BoardRules` and the Board Setup pages; (3) severities and the DRC and ERC review workflow; (4) zone filler fidelity.
+- Order: (1) writer: keepouts, per-zone settings, dimensions, groups, locks, arcs, teardrops, with a round-trip test and a fresh `scores.json` (**done 2026-10-08**);
+  (2) the `design.json` overlay for `BoardRules` and the Board Setup pages (**done 2026-10-08**); (3) severities and the DRC and ERC review workflow (Violation Severity is a
+  Board Setup page now; the DRC exclusions, per-check severities in the DRC and ERC dialogs, `--schematic-parity` and the empty DRC tabs are open); (4) zone filler fidelity.
 
 **WP6. Libraries, parts and footprints on the board** (items 5, 9, 19, 22). Size XL.
 - Files: `crates/kicad/src/{symbol_lib,footprint_lib}.rs`, `crates/cli/src/{studio,library_api}.rs`, `crates/model/src/{ir,footprint,symbol}.rs` (`FootprintInstance`,
@@ -360,8 +373,8 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 6 | Hierarchical sheets | Partial | IR, import, export, panel, navigation exist (`ir.rs`, `sch_import.rs`, `HierarchyPanel.tsx`); item 4. |
 | 7 | Routing | Partial | `crates/pns`; item 7. |
 | 8 | Footprint editor and pad tool | Partial | editor, pad tools, dialogs, import and export (`components/footprint/`, `crates/ops/src/library_editors.rs`); item 19. |
-| 9 | Board Setup | Partial | `BoardSetupDialog.tsx`, 3 of 7 pages edit; item 3. |
-| 10 | Net classes and rules | Partial | importer done (`crates/kicad/src/import.rs::merge_project_net_classes`, `custom_rules.rs`); editing open, item 3. |
+| 9 | Board Setup | Partial | `BoardSetupDialog.tsx`: all 10 pages edit (rules overlay and 7 verbs, item 3); 8 of KiCad's pages have no model yet. |
+| 10 | Net classes and rules | Partial | importer (`crates/kicad/src/import.rs::merge_project_net_classes`, `custom_rules.rs`) and editing (Net Classes, Custom Rules, Assign Netclass) done, item 3; open: regex patterns, the rule-tree designer. |
 | 11 | Property dialogs | Partial | via, shape, zone, text, dimension and track width edit (`Cmd::EditVia`, `EditShape`, `EditZone`, `EditText`); footprint, pads, panel: items 9, 10. |
 | 12 | Move excludes tracks and zones | **Open** | `kicad-port/pcbEditActions.ts::movableItem`; no `MoveTrack` or `MoveZone` in `crates/ops`; item 8. |
 | 13 | Selection modifiers and box select | **Closed** | `kicad-port/selection.ts`, `components/canvas/selectionCandidates.ts::collectBoxSelection`, `Canvas.tsx`; `PARITY-pcb.md` section 3. |

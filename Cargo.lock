@@ -639,6 +639,7 @@ name = "eda-kicad"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "eda-connectivity",
  "eda-drc",
  "eda-engine",
  "eda-freeroute",

@@ -1,39 +1,59 @@
-// pcbnew.EditorControl.boardSetup ("Board Setup...") -- port of
-// pcbnew/dialogs/dialog_board_setup.cpp, which is really a tree of
-// ~15 panel_setup_*.cpp pages. Pages below map onto what this app's
-// constraint model (crates/model/src/lib.rs `BoardRules`) actually holds;
-// a page with no IR backing at all (vias/zones-only panels already
-// covered by their own dialogs, tuning patterns, custom DRC-rule text) is
-// left out entirely rather than faked. Teardrops (task item 4) now has
-// real IR backing (`RoutingSection.teardrop_settings`) and is a genuinely
-// editable page, like Track Widths & Vias.
+// pcbnew.EditorControl.boardSetup ("Board Setup...") -- port of pcbnew/dialogs/dialog_board_setup.cpp, which is a tree of panel_setup_*.cpp
+// pages: the page tree on the left (Board Stackup, Text & Graphics, Design Rules, with KiCad's own page names) and the page on the right.
 //
-// A hard split runs through every page here: `BoardRules` (net classes,
-// hole/clearance/text defaults, stackup) lives on the *intent*-derived
-// `ConstraintModel` this app loads read-only (`crates/cli/src/board.rs`'s
-// `load`) -- there is no `Cmd` that can change it, because doing so needs
-// a second edit/undo path into the intent file this session did not build
-// (GAPS.md #10 sizes that "L", same as the custom-rule-language page would
-// be). `RoutingSection.track_width_presets`/`via_presets`/
-// `teardrop_settings` live on the editable `design.json` IR, so those
-// pages are genuinely editable; every other page is a read-only mirror,
-// same "no command exists for this field yet" convention this app's
-// other dialogs already use.
-import { useEffect, useState } from "react";
+// Every page edits. The rule pages (Physical Stackup, Solder Mask/Paste, Defaults, Constraints, Net Classes, Custom Rules, Violation
+// Severity -- components/boardSetup/*) edit a copy of what the board says and send the whole page on Apply as one undoable command
+// (`set_stackup`, `set_mask_paste`, ... crates/ops/src/board_setup.rs). The backend keeps the page in design.json (`drawings.rules`) and
+// `board::load` lays it over the board's description, so the router, DRC, the gates and the KiCad project kicad-cli reads all follow it, and
+// Undo takes it back. Pre-defined Sizes, Teardrops and Dimensions edit the design directly (`set_track_width_presets` ...), as before.
+//
+// Not ported: Board Editor Layers (the board's layers are its copper layers; the technical layers are fixed), Zone Hatch Offsets, Formatting,
+// Text Variables, Length-tuning Patterns, Tuning Profiles, Component Classes and Embedded Files -- nothing in the model holds them yet.
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { formatLength, umFrom, umTo } from "../state/units";
+import { umFrom, umTo } from "../state/units";
 import type { DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Um } from "../api/types";
+import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
+import { CustomRulesPage } from "./boardSetup/CustomRulesPage";
+import { MaskPastePage } from "./boardSetup/MaskPastePage";
+import { NetClassesPage } from "./boardSetup/NetClassesPage";
+import { SeveritiesPage } from "./boardSetup/SeveritiesPage";
+import { StackupPage } from "./boardSetup/StackupPage";
+import { TextGraphicsPage } from "./boardSetup/TextGraphicsPage";
+import "../styles/boardSetup.css";
 
-type Page = "classes" | "tracks_vias" | "teardrops" | "dimensions" | "rules" | "text_graphics" | "stackup";
-const PAGES: { id: Page; label: string }[] = [
-  { id: "classes", label: "Net Classes" },
-  { id: "tracks_vias", label: "Track Widths & Vias" },
-  { id: "teardrops", label: "Teardrops" },
-  { id: "dimensions", label: "Dimension Properties" },
-  { id: "rules", label: "Design Rules" },
-  { id: "text_graphics", label: "Text & Graphics" },
-  { id: "stackup", label: "Layer Stackup" },
+export type Page = "stackup" | "mask_paste" | "text_graphics" | "dimensions" | "constraints" | "tracks_vias" | "teardrops" | "classes" | "custom_rules" | "severities";
+
+/** KiCad's page tree (`DIALOG_BOARD_SETUP`'s treebook), with its page names; the pages that are not here have nothing in the model to edit. */
+const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; label: string }> }> = [
+  {
+    title: "Board Stackup",
+    pages: [
+      { id: "stackup", label: "Physical Stackup" },
+      { id: "mask_paste", label: "Solder Mask/Paste" },
+    ],
+  },
+  {
+    title: "Text & Graphics",
+    pages: [
+      { id: "text_graphics", label: "Defaults" },
+      { id: "dimensions", label: "Dimensions" },
+    ],
+  },
+  {
+    title: "Design Rules",
+    pages: [
+      { id: "constraints", label: "Constraints" },
+      { id: "tracks_vias", label: "Pre-defined Sizes" },
+      { id: "teardrops", label: "Teardrops" },
+      { id: "classes", label: "Net Classes" },
+      { id: "custom_rules", label: "Custom Rules" },
+      { id: "severities", label: "Violation Severity" },
+    ],
+  },
 ];
+const PAGE_IDS: Page[] = TREE.flatMap((g) => g.pages.map((p) => p.id));
+const PAGE_LABEL = Object.fromEntries(TREE.flatMap((g) => g.pages.map((p) => [p.id, p.label]))) as Record<Page, string>;
 
 // `BOARD_DESIGN_SETTINGS`'s own real defaults (task item 7) -- see
 // `eda_model::ir::DimensionSettings`'s own `impl Default` doc.
@@ -82,6 +102,27 @@ export function BoardSetupDialog() {
   const [dimSettings, setDimSettings] = useState<DimensionSettings>(DEFAULT_DIMENSION_SETTINGS);
   const [dimBusy, setDimBusy] = useState(false);
   const [dimMessage, setDimMessage] = useState<string | null>(null);
+  // The pages that have edits not applied yet (the rule pages say so themselves), marked in the tree and asked about on Close.
+  const [unapplied, setUnapplied] = useState<ReadonlySet<Page>>(new Set());
+  // Close was asked for while some page has such edits: the footer asks whether to drop them.
+  const [askDiscard, setAskDiscard] = useState(false);
+  const markers = useMemo(
+    () =>
+      Object.fromEntries(
+        PAGE_IDS.map((id) => [
+          id,
+          (dirty: boolean) =>
+            setUnapplied((prev) => {
+              if (prev.has(id) === dirty) return prev;
+              const next = new Set(prev);
+              if (dirty) next.add(id);
+              else next.delete(id);
+              return next;
+            }),
+        ])
+      ) as Record<Page, (dirty: boolean) => void>,
+    []
+  );
 
   // (Re)seed the editable lists from the board every time the dialog
   // opens -- not on every render, so mid-edit keystrokes survive the
@@ -94,15 +135,45 @@ export function BoardSetupDialog() {
     setTdMessage(null);
     setDimSettings(drawings?.dimension_settings ?? DEFAULT_DIMENSION_SETTINGS);
     setDimMessage(null);
+    setUnapplied(new Set());
+    setAskDiscard(false);
     if (state.boardSetupInitialPage) {
-      setPage(state.boardSetupInitialPage as Page);
+      const wanted = state.boardSetupInitialPage as Page;
+      if (PAGE_IDS.includes(wanted)) setPage(wanted);
       dispatch({ type: "SET_BOARD_SETUP_INITIAL_PAGE", page: null });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  // Close asks first when a rule page has edits that were never applied (they would be lost with the page); the question is in the footer,
+  // not a native dialog, so a window that cannot show one still closes.
+  const leave = useCallback(() => dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: false }), [dispatch]);
+  const close = useCallback(() => {
+    if (unapplied.size > 0) setAskDiscard(true);
+    else leave();
+  }, [unapplied, leave]);
+
+  useEffect(() => {
+    if (unapplied.size === 0) setAskDiscard(false);
+  }, [unapplied]);
+
+  // Escape closes the dialog (and is the dialog's: the canvas' own Escape must not also run); with the question asked it answers "keep editing".
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      // A select in the middle of a choice keeps its own Escape.
+      if ((e.target as HTMLElement | null)?.tagName === "SELECT") return;
+      e.stopPropagation();
+      e.preventDefault();
+      if (askDiscard) setAskDiscard(false);
+      else close();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open, close, askDiscard]);
+
   if (!open) return null;
-  const close = () => dispatch({ type: "SET_BOARD_SETUP_DIALOG_OPEN", open: false });
 
   const applyTrackVia = async () => {
     await api.cmd({ op: "set_track_width_presets", widths });
@@ -163,64 +234,35 @@ export function BoardSetupDialog() {
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 640, maxHeight: "80vh" }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog bs-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <span>Board Setup...</span>
+          <span>Board Setup</span>
         </div>
-        <div className="editor-tabs" style={{ padding: "4px 12px 0" }}>
-          {PAGES.map((p) => (
-            <button key={p.id} className={`editor-tab${page === p.id ? " active" : ""}`} onClick={() => setPage(p.id)}>
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <div className="dialog-body" style={{ overflowY: "auto" }}>
-          {page === "classes" && (
-            <>
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
-                Read-only: net classes live on the board's intent/constraints file, which this app has no edit command for yet (dialog_copper_zones.cpp's net-class picker and panel_setup_rules.cpp's
-                pattern-assignment editor are the same gap -- see GAPS.md #10).
-              </p>
-              <table className="setup-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Nets</th>
-                    <th>Track Width</th>
-                    <th>Clearance</th>
-                    <th>Via Size</th>
-                    <th>Via Drill</th>
-                    <th>Priority</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>Default</td>
-                    <td>everything else</td>
-                    <td>{formatLength(rules?.track_width ?? 200, units)}</td>
-                    <td>{formatLength(rules?.clearance ?? 200, units)}</td>
-                    <td>{formatLength(rules?.via_diameter ?? 600, units)}</td>
-                    <td>{formatLength(rules?.via_drill ?? 300, units)}</td>
-                    <td>0</td>
-                  </tr>
-                  {(rules?.net_classes ?? []).map((c) => (
-                    <tr key={c.name}>
-                      <td>{c.name}</td>
-                      <td>{c.nets.join(", ")}</td>
-                      <td>{c.track_width != null ? formatLength(c.track_width, units) : "—"}</td>
-                      <td>{c.clearance != null ? formatLength(c.clearance, units) : "—"}</td>
-                      <td>{c.via_diameter != null ? formatLength(c.via_diameter, units) : "—"}</td>
-                      <td>{c.via_drill != null ? formatLength(c.via_drill, units) : "—"}</td>
-                      <td>{c.priority}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
+        <div className="dialog-body bs-body">
+          <nav className="bs-nav" aria-label="Board Setup pages">
+            {TREE.map((group) => (
+              <div key={group.title}>
+                <div className="bs-nav-group">{group.title}</div>
+                {group.pages.map((p) => (
+                  <button key={p.id} className={`bs-nav-item${page === p.id ? " active" : ""}`} aria-current={page === p.id ? "page" : undefined} onClick={() => setPage(p.id)}>
+                    <span>{p.label}</span>
+                    {unapplied.has(p.id) && <span className="bs-dot" title="Changes not applied yet" />}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </nav>
 
-          {page === "tracks_vias" && (
-            <>
+          <StackupPage hidden={page !== "stackup"} onDirty={markers.stackup} />
+          <MaskPastePage hidden={page !== "mask_paste"} onDirty={markers.mask_paste} />
+          <TextGraphicsPage hidden={page !== "text_graphics"} onDirty={markers.text_graphics} />
+          <ConstraintsPage hidden={page !== "constraints"} onDirty={markers.constraints} />
+          <NetClassesPage hidden={page !== "classes"} onDirty={markers.classes} />
+          <CustomRulesPage hidden={page !== "custom_rules"} onDirty={markers.custom_rules} />
+          <SeveritiesPage hidden={page !== "severities"} onDirty={markers.severities} />
+
+          <section className="bs-page" hidden={page !== "tracks_vias"} aria-label="Pre-defined Sizes">
+            <h3 className="bs-title">Pre-defined Sizes</h3>
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)" }}>Track Widths (W / Shift+W cycle these, plus the board default above)</p>
               {widths.map((w, i) => (
                 <div key={i} className="filter-row" style={{ gap: 8 }}>
@@ -279,11 +321,10 @@ export function BoardSetupDialog() {
                   Apply
                 </button>
               </div>
-            </>
-          )}
+          </section>
 
-          {page === "teardrops" && (
-            <>
+          <section className="bs-page" hidden={page !== "teardrops"} aria-label="Teardrops">
+            <h3 className="bs-title">Teardrops</h3>
               <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
                 `pcbnew/teardrop/*` (task item 4). Round anchors only -- a via, or a round through-hole/SMD pad; a rectangular or round-rect pad never gets one (see `eda_connectivity::teardrop`'s own
                 doc for the full scope: straight edges only, single track segment only, no track-to-track teardrops).
@@ -361,11 +402,10 @@ export function BoardSetupDialog() {
                 </button>
               </div>
               {tdMessage && <p style={{ fontSize: 11, marginTop: 8 }}>{tdMessage}</p>}
-            </>
-          )}
+          </section>
 
-          {page === "dimensions" && (
-            <>
+          <section className="bs-page" hidden={page !== "dimensions"} aria-label="Dimensions">
+            <h3 className="bs-title">Dimensions</h3>
               <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
                 `panel_setup_dimensions.cpp` (task item 7): defaults a newly drawn dimension starts from (`StyleFromSettings`). Changing these never touches a dimension already on the board -- edit it directly (its own Properties dialog) instead.
               </p>
@@ -428,77 +468,24 @@ export function BoardSetupDialog() {
                 </button>
               </div>
               {dimMessage && <p style={{ fontSize: 11, marginTop: 8 }}>{dimMessage}</p>}
-            </>
-          )}
-
-          {page === "rules" && (
-            <>
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
-                Read-only. This app's DRC engine has no custom rule language (`panel_setup_rules.cpp`'s expression-based constraints) -- see GAPS.md #10. The board-wide defaults it does check against:
-              </p>
-              <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
-                <span>Minimum clearance</span>
-                <span>{formatLength(rules?.clearance ?? 200, units)}</span>
-                <span>Minimum track width</span>
-                <span>{formatLength(rules?.track_width ?? 200, units)}</span>
-                <span>Minimum via annular ring</span>
-                <span>{formatLength(rules?.annular_width_min_um ?? 100, units)}</span>
-                <span>Minimum hole to hole</span>
-                <span>{formatLength(rules?.hole_to_hole_min_um ?? 250, units)}</span>
-                <span>Minimum hole clearance</span>
-                <span>{formatLength(rules?.hole_clearance_um ?? 250, units)}</span>
-                <span>Minimum silk clearance</span>
-                <span>{formatLength(rules?.silk_clearance_um ?? 0, units)}</span>
-              </div>
-            </>
-          )}
-
-          {page === "text_graphics" && (
-            <>
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>Read-only (`panel_setup_text_and_graphics.cpp`'s defaults) -- same model-split reasoning as the other pages here.</p>
-              <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
-                <span>Reference designator size</span>
-                <span>{rules?.refdes_font_um != null ? formatLength(rules.refdes_font_um, units) : "auto (1/40 of the shorter board side)"}</span>
-                <span>Minimum silk text height</span>
-                <span>{formatLength(rules?.min_silk_text_height_um ?? 800, units)}</span>
-                <span>Minimum silk text thickness</span>
-                <span>{formatLength(rules?.min_silk_text_thickness_um ?? 80, units)}</span>
-              </div>
-            </>
-          )}
-
-          {page === "stackup" && (
-            <>
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>Read-only (`panel_setup_layers.cpp`'s stackup table) -- same model-split reasoning as the other pages here.</p>
-              {rules?.stackup && rules.stackup.layers.length > 0 ? (
-                <table className="setup-table">
-                  <thead>
-                    <tr>
-                      <th>Layer</th>
-                      <th>Material</th>
-                      <th>Thickness</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rules.stackup.layers.map((l, i) => (
-                      <tr key={i}>
-                        <td>{l.name}</td>
-                        <td>{l.material ?? "—"}</td>
-                        <td>{l.thickness_mm != null ? `${l.thickness_mm} mm` : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>No stackup defined for this board -- copper layers: {(state.board?.layers ?? []).join(", ") || "none"}.</p>
-              )}
-            </>
-          )}
+          </section>
         </div>
         <div className="dialog-footer">
-          <button className="primary" onClick={close}>
-            Close
-          </button>
+          {askDiscard && unapplied.size > 0 ? (
+            <>
+              <span className="bs-error" role="alert" style={{ marginRight: "auto", alignSelf: "center" }}>
+                Not applied yet: {[...unapplied].map((id) => PAGE_LABEL[id]).join(", ")}. Discard these changes?
+              </span>
+              <button onClick={() => setAskDiscard(false)}>Keep editing</button>
+              <button className="primary" onClick={leave}>
+                Discard and close
+              </button>
+            </>
+          ) : (
+            <button className="primary" onClick={close}>
+              Close
+            </button>
+          )}
         </div>
       </div>
     </div>

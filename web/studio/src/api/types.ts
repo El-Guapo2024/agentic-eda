@@ -544,11 +544,8 @@ export interface BoardState {
     via_diameter: Um;
     clearance: Um;
     /**
-     * `crates/model/src/lib.rs` `NetClass` -- read-only here: net classes
-     * live on the *intent*-derived `ConstraintModel`, not the editable
-     * `design.json` IR this app's `Cmd`s mutate, so there is no command
-     * to change them yet (GAPS.md #10; see BoardSetupDialog.tsx's Net
-     * Classes panel, which shows this list but cannot edit it).
+     * `crates/model/src/lib.rs` `NetClass`, the classes other than Default. They start in the intent (or the imported project); Board
+     * Setup > Net Classes edits them with `set_net_classes`, the edit lives in `design.json` and `board::load` lays it over the intent.
      */
     net_classes: NetClass[];
     hole_to_hole_min_um: Um;
@@ -559,13 +556,107 @@ export interface BoardState {
     min_silk_text_thickness_um: Um;
     refdes_font_um: Um | null;
     stackup: Stackup | null;
+    /*
+     * Board Setup's pages (`eda_model::rules`), as the board is judged by them right now -- the intent's (or the imported
+     * project's) values with any Board Setup edit laid over them. Optional: an older `eda` binary does not send them.
+     */
+    /** The Default net class: its sizes (and the micro-via / differential-pair ones, when set). `name` is "Default", `nets` empty. */
+    default_class?: NetClass;
+    constraints?: Constraints;
+    /** True when the minimums are stated (an imported project, or an edit); false for the unstated ones of an intent. */
+    constraints_explicit?: boolean;
+    mask_paste?: MaskPaste;
+    text_graphics?: TextGraphicsDefaults;
+    /** `BOARD_DESIGN_SETTINGS::GetBoardThickness`, µm. */
+    board_thickness_um?: Um;
+    copper_layers?: number;
+    /** Copper layer names in stack order: `F.Cu`, `In1.Cu` .. `B.Cu`. */
+    layer_names?: string[];
+    /** DRC settings key -> `error` | `warning` | `ignore`, for the checks whose severity is not KiCad's default (or is fixed by this app). */
+    severities?: Record<string, RuleSeverity>;
+    /** The text of the board's custom DRC rules (`.kicad_dru`); null = none. */
+    custom_rules_text?: string | null;
+    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`. */
+    overlay?: string[];
   };
 }
 
-/** `crates/model/src/lib.rs` `NetClass` -- read-only, see `BoardState.board_rules.net_classes`'s doc. */
+export type RuleSeverity = "error" | "warning" | "ignore";
+
+/** `eda_model::rules::NetClassSettings` -- Board Setup > Net Classes: the Default class and the others, with the net-name patterns that assign nets to each. */
+export interface NetClassSettings {
+  default: NetClass;
+  classes: NetClass[];
+}
+
+/** `eda_model::rules::Constraints` -- Board Setup > Design Rules > Constraints (`rules.*` of the `.kicad_pro`), µm unless noted. */
+export interface Constraints {
+  min_clearance_um: Um;
+  min_connection_um: Um;
+  min_track_width_um: Um;
+  min_annular_width_um: Um;
+  min_via_diameter_um: Um;
+  min_through_hole_um: Um;
+  min_microvia_diameter_um: Um;
+  min_microvia_drill_um: Um;
+  min_hole_to_hole_um: Um;
+  min_hole_clearance_um: Um;
+  min_copper_edge_clearance_um: Um;
+  min_silk_clearance_um: Um;
+  min_groove_width_um: Um;
+  min_silk_text_height_um: Um;
+  min_silk_text_thickness_um: Um;
+  max_error_um: Um;
+  min_resolved_spokes: number;
+  use_height_for_length_calcs: boolean;
+  zones_allow_external_fillets: boolean;
+}
+
+/** `eda_model::SolderMaskRules` -- Board Setup > Board Stackup > Solder Mask/Paste. */
+export interface MaskPaste {
+  expansion_um: Um;
+  min_width_um: Um;
+  to_copper_clearance_um: Um;
+  allow_bridges_in_footprints: boolean;
+  tent_vias_front: boolean;
+  tent_vias_back: boolean;
+  /** `pad_to_paste_clearance`: the absolute margin, µm (negative shrinks the opening). */
+  paste_margin_um: Um;
+  /** `pad_to_paste_clearance_ratio`: a fraction of the pad (-0.05 = -5 %). */
+  paste_margin_ratio: number;
+}
+
+/** One row of Board Setup > Text & Graphics > Defaults. */
+export interface LayerClassDefaults {
+  line_width_um: Um;
+  text_width_um: Um;
+  text_height_um: Um;
+  text_thickness_um: Um;
+  italic: boolean;
+  upright: boolean;
+}
+
+/** `eda_model::rules::TextGraphicsDefaults`. */
+export interface TextGraphicsDefaults {
+  silk: LayerClassDefaults;
+  copper: LayerClassDefaults;
+  edge_cuts_line_width_um: Um;
+  courtyard_line_width_um: Um;
+  fab: LayerClassDefaults;
+  others: LayerClassDefaults;
+}
+
+/** `eda_model::rules::StackupSettings` -- Board Setup > Board Stackup > Physical Stackup. */
+export interface StackupSettings {
+  /** 2, 4, .. 32. */
+  copper_layers: number;
+  stackup: Stackup;
+}
+
+/** `crates/model/src/lib.rs` `NetClass`; see `BoardState.board_rules.net_classes`'s doc. */
 export interface NetClass {
   name: string;
-  /** Globs over net names, e.g. `["GND", "VBAT*"]` -- first class whose pattern matches a net owns it. */
+  /** Patterns over net names (`*` any run, `?` any one character, anchored), e.g. `["GND", "VBAT*"]` -- first class whose pattern matches a net owns it. */
   nets: string[];
   track_width?: Um;
   clearance?: Um;
@@ -579,14 +670,24 @@ export interface NetClass {
   priority: number;
 }
 
-/** `crates/model/src/lib.rs` `Stackup`/`StackupLayer` -- read-only, same reasoning as `NetClass`. */
+/** `crates/model/src/lib.rs` `Stackup`/`StackupLayer`. Edited whole through `set_stackup`. */
 export interface Stackup {
   layers: StackupLayer[];
+  /** `(copper_finish ..)`: "ENIG", "HASL", .. ; absent = not specified. */
+  copper_finish?: string;
+  dielectric_constraints?: boolean;
+  /** 0 none, 1 yes, 2 bevelled. */
+  edge_connector?: number;
+  edge_plating?: boolean;
 }
 export interface StackupLayer {
   name: string;
   material: string | null;
   thickness_mm: number | null;
+  /** KiCad's stackup item type: `copper`, `core`, `prepreg`, `Top Silk Screen`, `Top Solder Paste`, `Top Solder Mask` and their bottom counterparts. */
+  kind?: string;
+  epsilon_r?: number;
+  loss_tangent?: number;
 }
 
 // ---------------------------------------------------------------- Cmd
@@ -752,6 +853,19 @@ export type Cmd =
   | { op: "edit_dimension"; id: string; dimension: CmdDimension }
   /** Board Setup > Dimension Properties: applied to new dimensions from then on only. */
   | { op: "set_dimension_settings"; settings: DimensionSettings }
+  /*
+   * Board Setup's rule pages (`eda_ops::board_setup`): each replaces one whole page after the checks KiCad's own panel makes (a
+   * refusal names the setting), and is one undo step. The board's rules, the router, DRC and the derived KiCad project all see the edit.
+   */
+  | { op: "set_net_classes"; settings: NetClassSettings }
+  | { op: "set_constraints"; constraints: Constraints }
+  | { op: "set_mask_paste"; settings: MaskPaste }
+  | { op: "set_text_graphics_defaults"; settings: TextGraphicsDefaults }
+  | { op: "set_stackup"; settings: StackupSettings }
+  /** DRC settings key -> severity, for the checks that differ from KiCad's default. */
+  | { op: "set_rule_severities"; severities: Record<string, RuleSeverity> }
+  /** The text of the board's `.kicad_dru`, verbatim; empty = no custom rules. */
+  | { op: "set_custom_rules"; text: string }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
   | { op: "swap_layers"; mapping: [string, string][] }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
@@ -966,6 +1080,23 @@ export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelS
 export interface CmdReply {
   ok: boolean;
   message: string;
+}
+
+/**
+ * POST /api/check_rules (crates/cli/src/kicad_engine.rs `check_rules`): kicad-cli's verdict on a custom-rules (`.kicad_dru`) text. kicad-cli
+ * has no checker of its own and drops a rules file it cannot parse without saying so, so the backend loads the text on a probe board and,
+ * when it does not load, finds the first top-level form that stops it. `ok: false` = the check itself could not run (`message` says why).
+ */
+export interface RulesCheckReply {
+  ok: boolean;
+  message: string;
+  engine?: string;
+  /** Every rule in the text loaded. */
+  valid?: boolean;
+  /** How many top-level forms the text has (the `(version 1)` header is one). */
+  forms?: number;
+  /** When the text does not load: the first form kicad-cli refuses (position among the forms from 0, its first line from 1, its text cut at 400 characters). */
+  bad?: { index: number; line: number; text: string } | null;
 }
 
 export interface RouteReply {

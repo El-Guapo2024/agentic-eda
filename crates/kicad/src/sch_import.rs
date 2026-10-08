@@ -1275,7 +1275,9 @@ mod tests {
     /// corpus isn't present in this environment.
     #[test]
     fn real_qa_shared_screen_gets_a_different_reference_per_sheet_instance() {
-        let root = std::path::PathBuf::from("/private/tmp/claude-501/-Users-juanantonioluera-ws/8eb77140-1019-4605-b5f4-960e15f5bf6d/scratchpad/kicad_qa_boards/qa/data/pcbnew/issue21739/topology_mismatch.kicad_sch");
+        // `KICAD_QA_DATA` names `qa/data` of the KiCad sources (commit 8303b2ad); the default is the copy kept beside them.
+        let data = std::env::var_os("KICAD_QA_DATA").map(std::path::PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| std::path::PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
+        let root = data.join("pcbnew/issue21739/topology_mismatch.kicad_sch");
         if !root.exists() {
             eprintln!("QA corpus not found at {}; skipping", root.display());
             return;

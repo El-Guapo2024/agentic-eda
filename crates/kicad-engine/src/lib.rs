@@ -516,6 +516,166 @@ pub fn stats(design: &Design, model: &ConstraintModel, work: &Path, opts: StatsO
     std::fs::read_to_string(&out_file).map_err(|_| fail("kicad_cli_stats", "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))
 }
 
+// ------------------------------------------------------------ custom rules
+
+/// What kicad-cli says about a `.kicad_dru` text ([`check_rules`]).
+#[derive(Debug, Clone)]
+pub struct RulesCheck {
+    /// "kicad-cli 10.99.0".
+    pub engine: String,
+    /// Every rule in the text loaded.
+    pub valid: bool,
+    /// How many top-level forms the text has (the `(version 1)` header is one).
+    pub forms: usize,
+    /// When the text does not load: the first form kicad-cli cannot load.
+    pub bad: Option<BadRuleForm>,
+}
+
+/// The first top-level form of a rules text that kicad-cli does not load.
+#[derive(Debug, Clone)]
+pub struct BadRuleForm {
+    /// Position among the text's top-level forms, from 0.
+    pub index: usize,
+    /// The line the form starts on, from 1.
+    pub line: usize,
+    /// The form's text (cut at 400 characters).
+    pub text: String,
+}
+
+impl RulesCheck {
+    /// `{ ok, engine, valid, forms, bad: { index, line, text } | null, message }`.
+    pub fn to_json(&self) -> Value {
+        let message = match (&self.bad, self.valid) {
+            (_, true) => format!("kicad-cli loaded all {} part(s) of the rules.", self.forms),
+            (Some(b), false) => format!("kicad-cli could not load the rules; the first part it refuses starts on line {}.", b.line),
+            (None, false) => "kicad-cli could not load the rules: the parentheses do not balance.".to_string(),
+        };
+        json!({
+            "ok": true,
+            "engine": self.engine,
+            "valid": self.valid,
+            "forms": self.forms,
+            "bad": self.bad.as_ref().map(|b| json!({ "index": b.index, "line": b.line, "text": b.text })),
+            "message": message,
+        })
+    }
+}
+
+/// The byte ranges of the top-level `( ... )` forms of an s-expression text; `None` when the parentheses do not balance
+/// (or a string is left open). Strings and `#` comments are skipped, nothing else is read: which forms are rules, and
+/// whether they make sense, is kicad-cli's to say.
+pub fn top_level_forms(text: &str) -> Option<Vec<(usize, usize)>> {
+    let bytes = text.as_bytes();
+    let (mut depth, mut start, mut i) = (0usize, 0usize, 0usize);
+    let mut forms = Vec::new();
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                if i >= bytes.len() {
+                    return None;
+                }
+            }
+            b'#' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'(' => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+            }
+            b')' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    forms.push((start, i + 1));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (depth == 0).then_some(forms)
+}
+
+/// Two nets 0.8 mm apart on one layer inside an outline: nothing is wrong with it under any ordinary rule, and
+/// a rule asking for 1000 mm of clearance has to say so -- which it does only if the rules file loaded.
+const RULES_PROBE_PCB: &str = r#"(kicad_pcb
+	(version 20241229)
+	(generator "eda-probe")
+	(general (thickness 1.6) (legacy_teardrops no))
+	(paper "A4")
+	(layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+	(setup (pad_to_mask_clearance 0))
+	(net 0 "")
+	(net 1 "A")
+	(net 2 "B")
+	(segment (start 10 10) (end 15 10) (width 0.2) (layer "F.Cu") (net 1) (uuid "6a1d0000-0000-4000-8000-000000000001"))
+	(segment (start 10 11) (end 15 11) (width 0.2) (layer "F.Cu") (net 2) (uuid "6a1d0000-0000-4000-8000-000000000002"))
+	(gr_rect (start 5 5) (end 20 16) (stroke (width 0.05) (type default)) (fill no) (layer "Edge.Cuts") (uuid "6a1d0000-0000-4000-8000-000000000003"))
+)
+"#;
+
+/// A rule that fires on the probe board, appended after the text being checked.
+const RULES_PROBE_SENTINEL: &str = "(rule \"eda_probe_sentinel\"\n  (constraint clearance (min 1000mm)))\n";
+
+/// Does kicad-cli load `rules` (a `.kicad_dru` text) whole? It does when the sentinel rule appended after it takes
+/// effect on the probe board. kicad-cli has no rules checker of its own, and a rules file that does not parse is
+/// dropped without a word (DRC then runs on the board's implicit rules alone), so a rule that must show itself is the
+/// only way to see that the file was read.
+fn rules_load(cli: &Path, dir: &Path, rules: &str) -> Result<bool, Vec<CheckResult>> {
+    work_dir(dir)?;
+    write_file(&dir.join("probe.kicad_pcb"), RULES_PROBE_PCB)?;
+    write_file(&dir.join("probe.kicad_dru"), format!("{rules}\n{RULES_PROBE_SENTINEL}"))?;
+    let report = dir.join("probe.drc.json");
+    let mut cmd = Command::new(cli);
+    cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(dir.join("probe.kicad_pcb"));
+    let raw = run_report(cmd, &report, "rules")?;
+    Ok(raw["violations"].as_array().is_some_and(|vs| vs.iter().any(|v| v["type"].as_str() == Some("clearance"))))
+}
+
+/// Ask kicad-cli whether `text` (a `.kicad_dru`) loads: once for the whole text, and, if it does not, once per step of a
+/// binary search over its top-level forms to find the first form it refuses. Runs on a scratch probe board; the
+/// design is not involved.
+pub fn check_rules(text: &str) -> Result<RulesCheck, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let engine = format!("kicad-cli {}", cli_version(&cli));
+    let Some(forms) = top_level_forms(text) else {
+        return Ok(RulesCheck { engine, valid: false, forms: 0, bad: None });
+    };
+    with_scratch(|dir| {
+        if rules_load(&cli, dir, text)? {
+            return Ok(RulesCheck { engine, valid: true, forms: forms.len(), bad: None });
+        }
+        // The first k forms load for k = 0 (the header alone) and not for k = forms.len(); find where that changes.
+        let upto = |k: usize| -> String { forms[..k].iter().map(|&(a, b)| &text[a..b]).collect::<Vec<_>>().join("\n") };
+        let (mut lo, mut hi) = (0usize, forms.len());
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if rules_load(&cli, dir, &upto(mid))? {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let (a, b) = forms[hi - 1];
+        let line = 1 + text[..a].matches('\n').count();
+        let shown: String = text[a..b].chars().take(400).collect();
+        Ok(RulesCheck { engine, valid: false, forms: forms.len(), bad: Some(BadRuleForm { index: hi - 1, line, text: shown }) })
+    })
+}
+
 // --------------------------------------------------------------------- exports
 
 /// kicad-cli `pcb export` subcommands that write a directory of files; every
@@ -726,6 +886,62 @@ pub fn bom_plugins_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn top_level_forms_are_found_past_strings_and_comments_and_unbalanced_text_is_refused() {
+        let text = "(version 1)\n# a comment with ( an open paren\n(rule \"a ) b\"\n  (constraint clearance (min 0.2mm)))\n(rule two (condition \"x\\\"y\"))";
+        let forms = top_level_forms(text).expect("balanced");
+        let texts: Vec<&str> = forms.iter().map(|&(a, b)| &text[a..b]).collect();
+        assert_eq!(texts.len(), 3);
+        assert_eq!(texts[0], "(version 1)");
+        assert!(texts[1].starts_with("(rule \"a ) b\"") && texts[1].ends_with("0.2mm)))"));
+        assert!(texts[2].starts_with("(rule two"));
+        for bad in ["(version 1", "(version 1))", "(rule \"open string)", ""] {
+            assert!(top_level_forms(bad).is_none() || bad.is_empty(), "{bad:?}");
+        }
+        assert_eq!(top_level_forms("").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn kicad_cli_says_whether_a_rules_text_loads() {
+        // The real kicad-cli, so not while another test has the environment pointing at a fake one or a one-second limit.
+        let _env = Env::take();
+        if find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let good = "(version 1)\n(rule \"wide power\"\n  (constraint clearance (min 0.5mm))\n  (condition \"A.NetClass == 'power'\"))\n";
+        let r = check_rules(good).unwrap();
+        assert!(r.valid, "{r:?}");
+        assert_eq!(r.forms, 2);
+        // Parentheses that do not balance are refused without asking kicad-cli, which would drop the text without saying so.
+        let r = check_rules("(version 1)\n(rule \"x\"").unwrap();
+        assert!(!r.valid && r.bad.is_none() && r.forms == 0);
+    }
+
+    /// Slow tier: finding the refused rule takes one kicad-cli run per top-level form.
+    #[test]
+    fn kicad_cli_names_the_part_of_a_rules_text_it_refuses() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let _env = Env::take();
+        if find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        // The second rule's condition is not an expression kicad-cli can compile.
+        let bad = "(version 1)\n(rule \"fine\"\n  (constraint clearance (min 0.5mm)))\n(rule \"broken\"\n  (constraint clearance (min 0.5mm))\n  (condition \"A.NetClass == \"))\n(rule \"after\"\n  (constraint track_width (min 0.1mm)))\n";
+        let r = check_rules(bad).unwrap();
+        assert!(!r.valid, "{r:?}");
+        let b = r.bad.expect("the refused part is named");
+        assert_eq!((b.index, b.line), (2, 4), "{b:?}");
+        assert!(b.text.starts_with("(rule \"broken\""), "{b:?}");
+
+        // No header.
+        assert!(!check_rules("(rule \"x\" (constraint clearance (min 1mm)))").unwrap().valid, "kicad-cli wants (version 1) first");
+    }
 
     #[test]
     fn maps_report_items_back_to_our_ids() {

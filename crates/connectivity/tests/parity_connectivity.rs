@@ -66,13 +66,18 @@ fn repo_root() -> PathBuf {
 }
 
 const QA_ROOT_ENV: &str = "EDA_KICAD_QA_BOARDS";
-const QA_ROOT_DEFAULT: &str = "/private/tmp/claude-501/-Users-juanantonioluera-ws/8eb77140-1019-4605-b5f4-960e15f5bf6d/scratchpad/kicad_qa_boards/qa/data";
+/// KiCad's own QA data (`qa/data` of the KiCad source at commit 8303b2ad), as one directory: `KICAD_QA_DATA` names it; the default is the
+/// copy kept beside the KiCad sources this port was read from (a persistent place, not a scratch directory).
+const QA_DATA_ENV: &str = "KICAD_QA_DATA";
+const QA_ROOT_DEFAULT: &str = "/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data";
 
 fn qa_root() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var(QA_ROOT_ENV) {
-        let pb = PathBuf::from(p);
-        if pb.exists() {
-            return Some(pb);
+    for var in [QA_ROOT_ENV, QA_DATA_ENV] {
+        if let Ok(p) = std::env::var(var) {
+            let pb = PathBuf::from(p);
+            if pb.exists() {
+                return Some(pb);
+            }
         }
     }
     let d = PathBuf::from(QA_ROOT_DEFAULT);
@@ -335,8 +340,11 @@ fn parity_connectivity_harness() {
         exact_matches: usize,
         total_checks: usize,
         import_failures: &'a [String],
+        /// The day (UTC) this was measured; `tools/parity_report.py` prints it with the numbers.
+        measured_at: String,
     }
-    let report = Report { boards: &boards, totals_ours, totals_oracle, exact_match_rate: match_rate, exact_matches, total_checks, import_failures: &import_failures };
+    let today = std::process::Command::new("date").args(["-u", "+%Y-%m-%d"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let report = Report { boards: &boards, totals_ours, totals_oracle, exact_match_rate: match_rate, exact_matches, total_checks, import_failures: &import_failures, measured_at: today };
     let out_dir = repo.join("docs/parity/raw");
     std::fs::create_dir_all(&out_dir).unwrap();
     std::fs::write(out_dir.join("connectivity.json"), serde_json::to_string_pretty(&report).unwrap()).unwrap();

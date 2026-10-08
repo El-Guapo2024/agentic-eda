@@ -158,38 +158,42 @@ def type_table(totals):
     return "\n".join(lines)
 
 
-# UI parity (pcbnew, eeschema, the 3D viewer) is a qualitative source-reading
-# audit, not something `kicad-cli` can re-measure by re-running a test --
-# there's no oracle CLI for "does this menu item do the right thing". It was
-# produced once by two research passes (one per editor) reading
-# `web/studio/src`'s action registry/dialogs/canvas code against
-# `pcbnew/tools/*`, `eeschema/tools/*`, and `common/tool|view/*` in the real
-# KiCad source, cross-checked against the extracted `kicad/*.json` catalogs.
-# Baked in here (rather than hand-edited into REPORT.md directly) so this
-# script stays the single source of truth for the whole report: re-running
-# it regenerates section 1-5 from fresh `kicad-cli` data *and* keeps this
-# section, instead of a plain file overwrite silently deleting it. Refresh
-# this text by re-running that audit, not by editing REPORT.md.
-UI_PARITY_SECTION = """## 4. UI parity -- pcbnew, eeschema, the 3D viewer
+REEXPORT_NOTES = """
+What the remaining differences are (read from the two kicad-cli reports of each board; every re-export parses):
 
-Method: every KiCad action/menu/toolbar/dialog relevant to each editor was classified identical / partial / stub / missing against `web/studio/src`'s actual wiring (`actions/useActionRunner.ts`'s registry, dialog components, canvas interaction code), using the extracted `web/studio/src/kicad/*.json` catalogs as the ground-truth list of what KiCad exposes and the real `.cpp` source as the ground truth for *behavior*. Full per-action tables, hotkey/menu/dialog breakdowns, and mouse-semantics comparisons are in the session that produced this report; `docs/parity/GAPS.md` carries the actionable subset. Percentages below are each audit's own best estimate; see their stated method and confidence.
-
-| editor | parity | confidence | one-line why |
-|---|---:|---|---|
-| eeschema | **~5%** | high | it's a read-only viewer -- 0 of 240 cataloged actions are wired; the only things that work are view-only (pan/zoom/select-one/properties-panel-read) |
-| pcbnew | **~20-25%** | medium | core draw/select/route/view mostly work in simplified form; the bulk of real pcbnew (footprint editor, board setup, net classes, push-and-shove routing, most dialogs) is stub or missing |
-| 3D viewer | **~30%** | low (KiCad's `3d-viewer/` source wasn't in the read snapshot) | orbit/pan/zoom/view-presets/layer-toggles work on procedural geometry; real per-footprint 3D models only load via a separate, best-effort async path |
-
-Headline findings worth reading in full (see GAPS.md for the ranked, actionable version of each):
-
-- **eeschema has no edit commands at all**, confirmed three ways in the source: `SchematicView.tsx`'s own header comment ("Read-only for now"), zero `eeschema.*` entries in the action registry, and no mutating ops in `api/types.ts`'s `Schematic` interface (compare to the PCB `Cmd` union's ~20 mutating ops). The schematic data model also has no sheet/hierarchy concept at all.
-- **ERC now runs from the UI** (closed 2026-10-03): Inspect > Electrical Rules Checker runs `kicad-cli sch erc` on the exported schematic, with a running state, a Lint tab for our own readability checks, and markers on the sheet.
-- **A genuine correctness bug, not just a gap**: `common.Interactive.undo`/`redo` are wired without the `pcbOnly()` guard every sibling action uses, so pressing Ctrl+Z while viewing the Schematic tab silently undoes the last *PCB* edit.
-- **A systemic hotkey-extraction bug**: every KiCad action whose default hotkey is behind a `#ifdef __WXMAC__`/`#else` platform conditional extracts wrong (Ctrl+Y doesn't redo, Home doesn't zoom-fit, F1/F2 zoom in/out don't exist as hotkeys at all -- the studio authors noticed and worked around that last one by excluding both rather than fixing the extractor).
-- **pcbnew's box-select direction rule is correctly ported** (left-right drag = fully-enclosed, right-left = crossing, matching `pcb_selection_tool.cpp`'s exact comment) -- but scoped to footprints only; tracks/vias/zones/shapes/text are never box-selectable.
-- **No click-vs-drag threshold anywhere**: KiCad promotes a mouse-down to a drag only past 8px or 300ms (`tool_dispatcher.cpp`); studio flags "moved" the instant a grid-snapped delta is non-zero, so a sub-pixel jitter on a click can silently nudge a part by one grid step.
-- Dialogs are the starkest surface-area gap: roughly **6 of pcbnew's ~75 dialogs** and **1 of eeschema's ~45** (the shared Hotkeys list) have any counterpart at all, and most of those that exist are explicitly read-only by their own code comments.
+- `lib_footprint_issues` / `lib_footprint_mismatch` (`api_kitchen_sink`, `component_classes`): the writer names a footprint `eda:<name>` when the source
+  gave it no library (`D5`, `bornier2`), and the board's own project reports library links as warnings, so kicad-cli flags a library that does not
+  exist. The studio's derived project ignores both checks unless the project sets them (`effective_rule_severities`).
+- `silk_overlap`, `silk_over_copper`, `silk_edge_clearance`, `solder_mask_bridge`, `clearance` (`complex_hierarchy`, `api_kitchen_sink`): footprint-local
+  graphics (`fp_line`, `fp_circle`: 512 and 6 on `complex_hierarchy`) are imported into `drawings.footprint_extras`, which only the in-house DRC reads,
+  and the writer does not write them back. `api_kitchen_sink` also has a barcode item, which has no IR item.
+- `assertion_failure` (`component_classes_drc`): its rules test `A.Component_Class`; component classes are project data this importer does not read.
+- `missing_tuning_profile` (`drc_missing_tuning_profile`): tuning profiles are not read either.
+- `connection_width_rules`: one extra `clearance` violation, not analysed.
 """
+
+
+def ui_parity_section():
+    """Section 4: the counts come from the generated action audit (docs/parity/UI-ACTIONS.md, written by web/studio/tools/ui-parity-audit.mjs)."""
+    lines = ["## 4. UI parity -- KiCad actions vs the studio\n"]
+    audit = REPO_ROOT / "docs/parity/UI-ACTIONS.md"
+    rows = []
+    if audit.exists():
+        for line in audit.read_text().splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) == 7 and cells[0] in ("pcbnew", "eeschema", "common") and cells[1].isdigit():
+                rows.append(cells)
+    if rows:
+        lines.append("Every KiCad action in `web/studio/src/kicad/actions.json` is classified against the studio's action registry by `web/studio/tools/ui-parity-audit.mjs` (it rewrites `docs/parity/UI-ACTIONS.md`). A \"missing with a reason\" action is one the studio deliberately does not wire, with the reason recorded in `web/studio/tools/ui-parity-missing.json`.\n")
+        lines.append("| editor | actions | handled | referenced | missing | missing with a reason | hotkeyed & not handled |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|")
+        for c in rows:
+            lines.append("| " + " | ".join(c) + " |")
+        lines.append("")
+    else:
+        lines.append("_`docs/parity/UI-ACTIONS.md` not found. Run `node web/studio/tools/ui-parity-audit.mjs`._\n")
+    lines.append("Behavior (not just the presence of an action) is tracked per feature in `web/studio/PARITY-pcb.md` and the ranked, actionable gaps in `docs/parity/GAPS.md`.\n")
+    return "\n".join(lines)
 
 
 def render_report(conn, rt, scores):
@@ -205,9 +209,11 @@ def render_report(conn, rt, scores):
     lines.append(
         "\nNeeds `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips cleanly "
         "(prints a line, exits 0) if it's absent. The KiCad QA-corpus portions additionally skip "
-        "cleanly if their corpus directory isn't present (see `EDA_KICAD_QA_BOARDS` / the default "
-        "path in each test file's source) -- the examples/ladder/work-based measurements still run "
-        "either way. `cargo test` (no `--ignored`) runs `crates/kicad/tests/parity_ratchet.rs`, which "
+        "cleanly if their corpus directory isn't present (`KICAD_QA_DATA`, default `qa/data` of the KiCad "
+        "sources at `~/ws/kicad-src-8303b2ad`; `EDA_KICAD_QA_BOARDS` still wins when set) -- the "
+        "examples/ladder/work-based measurements still run either way. `EDA_PARITY_PARTS=own,corpus,reexport` "
+        "(a comma list) runs part of the round-trip harness and keeps the other parts' last results. "
+        "`cargo test` (no `--ignored`) runs `crates/kicad/tests/parity_ratchet.rs`, which "
         "reads the committed `docs/parity/scores.json` below and fails if `current` has dropped below "
         "its recorded `floor` for any metric -- that test needs neither kicad-cli nor the QA corpus.\n"
     )
@@ -221,6 +227,7 @@ def render_report(conn, rt, scores):
 
     lines.append("## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`\n")
     if conn:
+        lines.append(f"_Measured {conn['measured_at']}._\n" if conn.get("measured_at") else "_Measurement date not recorded._\n")
         lines.append(f"Boards evaluated: {len([b for b in conn['boards'] if not b.get('error')])} (of {len(conn['boards'])} attempted).\n")
         lines.append(f"Totals -- ours: {conn['totals_ours']}, oracle: {conn['totals_oracle']}.\n")
         lines.append(f"**Exact per-board-per-field match rate: {conn['exact_matches']}/{conn['total_checks']} ({fmt(conn['exact_match_rate'])}).**\n")
@@ -234,7 +241,13 @@ def render_report(conn, rt, scores):
 
     lines.append("## 2. Round-trips\n")
     if rt:
+        measured = rt.get("measured_at", {})
+
+        def when(part):
+            return f"_Measured {measured[part]}._\n" if part in measured else "_Measurement date not recorded._\n"
+
         lines.append("### Our own pipeline (`design.json` -> `.kicad_pcb` -> `import_kicad_pcb` -> `design.json`)\n")
+        lines.append(when("own"))
         own = rt.get("own_pipeline_roundtrip", [])
         lines.append("| board | footprints (pose-exact) | track segments (exact) | vias (exact) | zones before/after |")
         lines.append("|---|---:|---:|---:|---:|")
@@ -248,9 +261,11 @@ def render_report(conn, rt, scores):
         pcb_notes = rt.get("qa_corpus_pcb_import_notes")
         if pcb_notes:
             lines.append(f"\n### KiCad QA corpus: `import_kicad_pcb` on all {pcb_notes['total']} real boards\n")
+            lines.append(when("corpus"))
             lines.append(f"- imported ok: {pcb_notes['imported_ok']}/{pcb_notes['total']}")
-            lines.append(f"- zones skipped (not imported): {pcb_notes['zones_skipped']}")
-            lines.append(f"- track arcs approximated as straight segments: {pcb_notes['track_arcs_approximated']}")
+            lines.append(f"- zones skipped (no polygon, or no copper layer): {pcb_notes['zones_skipped']}")
+            lines.append(f"- track arcs kept as arcs: {pcb_notes.get('track_arcs_kept', 'n/a')}")
+            lines.append(f"- board-outline arcs approximated as straight segments: {pcb_notes['track_arcs_approximated']}")
             lines.append(f"- non-rect pad shapes approximated as rect: {pcb_notes['non_rect_pad_shapes_approximated']}")
             lines.append(f"- boards whose outline didn't close into a loop: {pcb_notes['outline_open']}")
             lines.append(f"- outline source breakdown: {pcb_notes['outline_source_counts']}")
@@ -275,13 +290,17 @@ def render_report(conn, rt, scores):
         subset = rt.get("reexport_fidelity_subset", [])
         if subset:
             lines.append(f"\n### Re-export fidelity on {len(subset)} real QA boards (import -> our export -> kicad-cli DRC, vs kicad-cli DRC on the original)\n")
-            lines.append("| board | original parses | re-export parses | identical violation-type counts |")
-            lines.append("|---|---|---|---|")
+            lines.append(when("reexport"))
+            lines.append("| board | original parses | re-export parses | identical violation-type counts | where kicad-cli's counts differ (type: original -> re-export) |")
+            lines.append("|---|---|---|---|---|")
             for b in subset:
                 if b.get("error"):
-                    lines.append(f"| {b['board']} | ERROR: {b['error']} | | |")
+                    lines.append(f"| {b['board']} | ERROR: {b['error']} | | | |")
                     continue
-                lines.append(f"| {b['board']} | {b['original_parses']} | {b['reexport_parses']} | {b['identical_type_counts']} |")
+                ot, rt_ = b.get("original_types", {}), b.get("reexport_types", {})
+                diff = ", ".join(f"`{k}`: {ot.get(k, 0)} -> {rt_.get(k, 0)}" for k in sorted(set(ot) | set(rt_)) if ot.get(k, 0) != rt_.get(k, 0))
+                lines.append(f"| {b['board']} | {b['original_parses']} | {b['reexport_parses']} | {b['identical_type_counts']} | {diff} |")
+            lines.append(REEXPORT_NOTES)
     else:
         lines.append("_No data -- `docs/parity/raw/roundtrip.json` not found. Run the round-trip parity test._")
     lines.append("")
@@ -295,7 +314,7 @@ def render_report(conn, rt, scores):
     )
     lines.append("")
 
-    lines.append(UI_PARITY_SECTION)
+    lines.append(ui_parity_section())
 
     return "\n".join(lines)
 

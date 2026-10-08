@@ -22,11 +22,13 @@ use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
-pub use pcb::{custom_erc_pin_map, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
+mod pcb_items;
+pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
 mod page;
 mod import;
+mod import_items;
 pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, mm_to_um, parse_project_net_classes, parse_rule_severities, ImportNotes};
 
 mod custom_rules;

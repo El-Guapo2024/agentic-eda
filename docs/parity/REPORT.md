@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-04T00:40:09.281258+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-08T21:01:33.998681+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -10,7 +10,7 @@ cargo test -p eda-kicad --test parity_roundtrip -- --ignored --nocapture
 python3 tools/parity_report.py   # runs both above, then rewrites this file + scores.json
 ```
 
-Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips cleanly (prints a line, exits 0) if it's absent. The KiCad QA-corpus portions additionally skip cleanly if their corpus directory isn't present (see `EDA_KICAD_QA_BOARDS` / the default path in each test file's source) -- the examples/ladder/work-based measurements still run either way. `cargo test` (no `--ignored`) runs `crates/kicad/tests/parity_ratchet.rs`, which reads the committed `docs/parity/scores.json` below and fails if `current` has dropped below its recorded `floor` for any metric -- that test needs neither kicad-cli nor the QA corpus.
+Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips cleanly (prints a line, exits 0) if it's absent. The KiCad QA-corpus portions additionally skip cleanly if their corpus directory isn't present (`KICAD_QA_DATA`, default `qa/data` of the KiCad sources at `~/ws/kicad-src-8303b2ad`; `EDA_KICAD_QA_BOARDS` still wins when set) -- the examples/ladder/work-based measurements still run either way. `EDA_PARITY_PARTS=own,corpus,reexport` (a comma list) runs part of the round-trip harness and keeps the other parts' last results. `cargo test` (no `--ignored`) runs `crates/kicad/tests/parity_ratchet.rs`, which reads the committed `docs/parity/scores.json` below and fails if `current` has dropped below its recorded `floor` for any metric -- that test needs neither kicad-cli nor the QA corpus.
 
 ## Headline numbers
 
@@ -23,9 +23,11 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 | `roundtrip_own_via_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_qa_pcb_import_success_rate` | 99.5% | 99.5% |
 | `roundtrip_qa_sch_import_success_rate` | 100.0% | 100.0% |
-| `roundtrip_reexport_fidelity_rate` | 33.3% | 33.3% |
+| `roundtrip_reexport_fidelity_rate` | 50.0% | 33.3% |
 
 ## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
+
+_Measurement date not recorded._
 
 Boards evaluated: 58 (of 59 attempted).
 
@@ -41,6 +43,8 @@ Totals -- ours: {'unconnected': 527, 'track_dangling': 77, 'via_dangling': 405},
 ## 2. Round-trips
 
 ### Our own pipeline (`design.json` -> `.kicad_pcb` -> `import_kicad_pcb` -> `design.json`)
+
+_Measured 2026-10-04._
 
 | board | footprints (pose-exact) | track segments (exact) | vias (exact) | zones before/after |
 |---|---:|---:|---:|---:|
@@ -64,12 +68,15 @@ Totals -- ours: {'unconnected': 527, 'track_dangling': 77, 'via_dangling': 405},
 
 ### KiCad QA corpus: `import_kicad_pcb` on all 185 real boards
 
+_Measured 2026-10-08._
+
 - imported ok: 184/185
-- zones skipped (not imported): 5847
-- track arcs approximated as straight segments: 3120
-- non-rect pad shapes approximated as rect: 157
-- boards whose outline didn't close into a loop: 6
-- outline source breakdown: {'lines': 143, 'none': 38, 'poly': 3}
+- zones skipped (no polygon, or no copper layer): 12
+- track arcs kept as arcs: 10946
+- board-outline arcs approximated as straight segments: 122
+- non-rect pad shapes approximated as rect: 189
+- boards whose outline didn't close into a loop: 2
+- outline source breakdown: {'circle': 1, 'lines': 143, 'none': 37, 'poly': 3}
 
 Import failures (1):
 
@@ -83,43 +90,50 @@ Import failures (1):
 
 ### Re-export fidelity on 12 real QA boards (import -> our export -> kicad-cli DRC, vs kicad-cli DRC on the original)
 
-| board | original parses | re-export parses | identical violation-type counts |
-|---|---|---|---|
-| api_kitchen_sink | True | True | False |
-| bad_triangulation_case | True | True | False |
-| complex_hierarchy | True | True | False |
-| component_classes | True | True | False |
-| component_classes_drc | True | True | False |
-| connection_width_rules | True | True | False |
-| custom_fields | True | True | True |
-| custom_pads | True | True | True |
-| drc_missing_tuning_profile | True | True | False |
-| fill_bad | True | True | False |
-| footprints_load_save | True | True | True |
-| graphics_load_save_v20240108 | True | True | True |
+_Measured 2026-10-08._
+
+| board | original parses | re-export parses | identical violation-type counts | where kicad-cli's counts differ (type: original -> re-export) |
+|---|---|---|---|---|
+| api_kitchen_sink | True | True | False | `clearance`: 1 -> 0, `lib_footprint_issues`: 0 -> 2, `silk_overlap`: 2 -> 0 |
+| bad_triangulation_case | True | True | True |  |
+| complex_hierarchy | True | True | False | `clearance`: 112 -> 117, `copper_edge_clearance`: 14 -> 15, `lib_footprint_issues`: 0 -> 72, `shorting_items`: 0 -> 2, `silk_edge_clearance`: 14 -> 2, `silk_over_copper`: 104 -> 2, `silk_overlap`: 199 -> 5, `solder_mask_bridge`: 112 -> 115 |
+| component_classes | True | True | False | `lib_footprint_issues`: 0 -> 2, `lib_footprint_mismatch`: 14 -> 12 |
+| component_classes_drc | True | True | False | `assertion_failure`: 2 -> 4 |
+| connection_width_rules | True | True | False | `clearance`: 0 -> 1 |
+| custom_fields | True | True | True |  |
+| custom_pads | True | True | True |  |
+| drc_missing_tuning_profile | True | True | False | `missing_tuning_profile`: 1 -> 0 |
+| fill_bad | True | True | True |  |
+| footprints_load_save | True | True | True |  |
+| graphics_load_save_v20240108 | True | True | True |  |
+
+What the remaining differences are (read from the two kicad-cli reports of each board; every re-export parses):
+
+- `lib_footprint_issues` / `lib_footprint_mismatch` (`api_kitchen_sink`, `component_classes`): the writer names a footprint `eda:<name>` when the source
+  gave it no library (`D5`, `bornier2`), and the board's own project reports library links as warnings, so kicad-cli flags a library that does not
+  exist. The studio's derived project ignores both checks unless the project sets them (`effective_rule_severities`).
+- `silk_overlap`, `silk_over_copper`, `silk_edge_clearance`, `solder_mask_bridge`, `clearance` (`complex_hierarchy`, `api_kitchen_sink`): footprint-local
+  graphics (`fp_line`, `fp_circle`: 512 and 6 on `complex_hierarchy`) are imported into `drawings.footprint_extras`, which only the in-house DRC reads,
+  and the writer does not write them back. `api_kitchen_sink` also has a barcode item, which has no IR item.
+- `assertion_failure` (`component_classes_drc`): its rules test `A.Component_Class`; component classes are project data this importer does not read.
+- `missing_tuning_profile` (`drc_missing_tuning_profile`): tuning profiles are not read either.
+- `connection_width_rules`: one extra `clearance` violation, not analysed.
+
 
 ## 3. Zone fill
 
 The exporter writes each zone's fill as computed by `crates/zone-filler` (the live zone filler the studio shows), and kicad-cli judges those fills; `--refill-zones` is opt-in (docs/ARCHITECTURE.md, "Engines"). The connectivity comparison above runs kicad-cli with `--refill-zones` so a board with a pour isn't penalized for a gap that's out of scope here.
 
 
-## 4. UI parity -- pcbnew, eeschema, the 3D viewer
+## 4. UI parity -- KiCad actions vs the studio
 
-Method: every KiCad action/menu/toolbar/dialog relevant to each editor was classified identical / partial / stub / missing against `web/studio/src`'s actual wiring (`actions/useActionRunner.ts`'s registry, dialog components, canvas interaction code), using the extracted `web/studio/src/kicad/*.json` catalogs as the ground-truth list of what KiCad exposes and the real `.cpp` source as the ground truth for *behavior*. Full per-action tables, hotkey/menu/dialog breakdowns, and mouse-semantics comparisons are in the session that produced this report; `docs/parity/GAPS.md` carries the actionable subset. Percentages below are each audit's own best estimate; see their stated method and confidence.
+Every KiCad action in `web/studio/src/kicad/actions.json` is classified against the studio's action registry by `web/studio/tools/ui-parity-audit.mjs` (it rewrites `docs/parity/UI-ACTIONS.md`). A "missing with a reason" action is one the studio deliberately does not wire, with the reason recorded in `web/studio/tools/ui-parity-missing.json`.
 
-| editor | parity | confidence | one-line why |
-|---|---:|---|---|
-| eeschema | **~5%** | high | it's a read-only viewer -- 0 of 240 cataloged actions are wired; the only things that work are view-only (pan/zoom/select-one/properties-panel-read) |
-| pcbnew | **~20-25%** | medium | core draw/select/route/view mostly work in simplified form; the bulk of real pcbnew (footprint editor, board setup, net classes, push-and-shove routing, most dialogs) is stub or missing |
-| 3D viewer | **~30%** | low (KiCad's `3d-viewer/` source wasn't in the read snapshot) | orbit/pan/zoom/view-presets/layer-toggles work on procedural geometry; real per-footprint 3D models only load via a separate, best-effort async path |
+| editor | actions | handled | referenced | missing | missing with a reason | hotkeyed & not handled |
+|---|---:|---:|---:|---:|---:|---:|
+| pcbnew | 350 | 265 | 0 | 0 | 85 | 5 |
+| eeschema | 233 | 165 | 0 | 0 | 68 | 10 |
+| common | 183 | 143 | 0 | 0 | 40 | 4 |
 
-Headline findings worth reading in full (see GAPS.md for the ranked, actionable version of each):
-
-- **eeschema has no edit commands at all**, confirmed three ways in the source: `SchematicView.tsx`'s own header comment ("Read-only for now"), zero `eeschema.*` entries in the action registry, and no mutating ops in `api/types.ts`'s `Schematic` interface (compare to the PCB `Cmd` union's ~20 mutating ops). The schematic data model also has no sheet/hierarchy concept at all.
-- **ERC now runs from the UI** (closed 2026-10-03): Inspect > Electrical Rules Checker runs `kicad-cli sch erc` on the exported schematic, with a running state, a Lint tab for our own readability checks, and markers on the sheet.
-- **A genuine correctness bug, not just a gap**: `common.Interactive.undo`/`redo` are wired without the `pcbOnly()` guard every sibling action uses, so pressing Ctrl+Z while viewing the Schematic tab silently undoes the last *PCB* edit.
-- **A systemic hotkey-extraction bug**: every KiCad action whose default hotkey is behind a `#ifdef __WXMAC__`/`#else` platform conditional extracts wrong (Ctrl+Y doesn't redo, Home doesn't zoom-fit, F1/F2 zoom in/out don't exist as hotkeys at all -- the studio authors noticed and worked around that last one by excluding both rather than fixing the extractor).
-- **pcbnew's box-select direction rule is correctly ported** (left-right drag = fully-enclosed, right-left = crossing, matching `pcb_selection_tool.cpp`'s exact comment) -- but scoped to footprints only; tracks/vias/zones/shapes/text are never box-selectable.
-- **No click-vs-drag threshold anywhere**: KiCad promotes a mouse-down to a drag only past 8px or 300ms (`tool_dispatcher.cpp`); studio flags "moved" the instant a grid-snapped delta is non-zero, so a sub-pixel jitter on a click can silently nudge a part by one grid step.
-- Dialogs are the starkest surface-area gap: roughly **6 of pcbnew's ~75 dialogs** and **1 of eeschema's ~45** (the shared Hotkeys list) have any counterpart at all, and most of those that exist are explicitly read-only by their own code comments.
+Behavior (not just the presence of an action) is tracked per feature in `web/studio/PARITY-pcb.md` and the ranked, actionable gaps in `docs/parity/GAPS.md`.
 

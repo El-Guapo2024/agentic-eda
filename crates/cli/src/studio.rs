@@ -785,6 +785,9 @@ fn handle(
         // no-Cmd shape as fab_api::bom below (nothing to undo -- it never
         // touches design.json). kicad-cli's, so off the loop like DRC.
         ("POST", "/api/board_stats") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::board_stats),
+        // Board Setup > Custom Rules, "Check syntax": kicad-cli loads the text on a probe board (it has no checker of its own, and
+        // drops a rules file it cannot parse without saying so); kicad-cli's, so off the loop like DRC.
+        ("POST", "/api/check_rules") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::check_rules),
         // Fabrication and schematic outputs (Plot / Generate Drill Files /
         // Footprint Position Files / Plot Schematic / Export Netlist): each
         // dialog's JSON becomes kicad-cli arguments (`crate::fab_api`,
@@ -1040,14 +1043,13 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "via_diameter": model.board.via_diameter,
             "clearance": model.board.clearance,
             // Board Setup dialog (dialog_board_setup.cpp) material this
-            // project's constraint model actually holds. Net classes,
-            // per-class track/via sizing, and text/graphics defaults live
-            // on the *intent*-derived `ConstraintModel` (`model`,
-            // immutable here), not the editable `design.json` IR, so
-            // there is no `Cmd` to change them yet -- exposed read-only,
-            // same "no command exists for this field yet" convention
-            // ItemPropertiesDialog already uses for other fields. See
-            // GAPS.md #10 and PARITY-pcb.md's Board Setup section.
+            // project's constraint model holds, as the board is judged by it
+            // now: the intent's (or the imported project's) values with any
+            // Board Setup edit laid over them (`board::load` applies
+            // `design.drawings.rules`). The pages edit these through the
+            // `set_*` verbs of `crates/ops/src/board_setup.rs`; the fields
+            // below that Board Setup does not edit stay as the intent says.
+            // See GAPS.md #3 and PARITY-pcb.md's Board Setup section.
             "net_classes": model.board.net_classes,
             "hole_to_hole_min_um": model.board.hole_to_hole_min_um,
             "hole_clearance_um": model.board.hole_clearance_um,
@@ -1057,6 +1059,26 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "min_silk_text_thickness_um": model.board.min_silk_text_thickness_um,
             "refdes_font_um": model.board.refdes_font_um,
             "stackup": model.stackup,
+            // Board Setup's pages (`eda_model::rules`), as the board is judged by them right now: the intent's or the
+            // imported project's values with any edit laid over them (`board::load`). `overlay` names the pages an edit has
+            // replaced; `severities` holds only the checks whose severity differs from KiCad's default (or is forced).
+            "default_class": eda_model::rules::net_class_settings_of(&model.board).default,
+            "constraints": eda_model::rules::Constraints::of(&model.board),
+            "constraints_explicit": model.board.constraints_explicit,
+            "mask_paste": model.board.solder_mask,
+            "text_graphics": model.board.text_graphics,
+            "board_thickness_um": model.board.board_thickness_um,
+            "copper_layers": model.board.layers.len(),
+            "layer_names": model.board.layers,
+            "severities": eda_kicad::effective_rule_severities(&model),
+            "custom_rules_text": model.board.custom_rules_text,
+            "overlay": design.drawings.as_ref().and_then(|d| d.rules.as_ref()).map(|r| {
+                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some())]
+                    .iter()
+                    .filter(|(_, set)| *set)
+                    .map(|(name, _)| *name)
+                    .collect::<Vec<_>>()
+            }).unwrap_or_default(),
         },
         "routing": routing,
         "drawings": drawings,

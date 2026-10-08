@@ -32,13 +32,16 @@
 //! - **Footprint-level zones**: imported as zones tagged with `parent_footprint`.
 //!   Board-level zones (pours, teardrops, rule areas) are imported by
 //!   [`import_zones`]; their stored fills are not read, fills are derived.
-//! - **Track/board-edge arcs**: KiCad's `(arc ...)`/`(gr_arc ...)` have no
-//!   analogue in our polyline-only `Track`/`outline`; both are tessellated
-//!   into short straight segments (see [`eda_model::ir::tessellate_arc`]), counted in
+//! - **Board-edge arcs**: KiCad's `(gr_arc ...)` on Edge.Cuts has no
+//!   analogue in our polyline-only `outline`; it is tessellated into short
+//!   straight segments (see [`eda_model::ir::tessellate_arc`]), counted in
 //!   [`ImportNotes::track_arcs_approximated`]. Exact at the sampled points,
-//!   not bit-identical on re-export. A board-level `gr_arc` *not* on
-//!   Edge.Cuts becomes a [`eda_model::ir::Shape::Arc`] instead, exactly
-//!   (KiCad's own three-point arc storage is our `Arc`'s storage too).
+//!   not bit-identical on re-export. A track `(arc ...)` is kept as an arc
+//!   ([`eda_model::ir::Track::new_arc`], counted in
+//!   [`ImportNotes::track_arcs_kept`], and written back as an arc), and a
+//!   board-level `gr_arc` *not* on Edge.Cuts becomes a
+//!   [`eda_model::ir::Shape::Arc`], exactly (KiCad's own three-point arc
+//!   storage is our `Arc`'s storage too).
 //! - **Non-rect/roundrect/circle/oval pads** (trapezoid, custom): mapped to
 //!   `PadShape::Rect` at the pad's nominal `size`, counted in
 //!   [`ImportNotes::non_rect_pad_shapes_approximated`].
@@ -47,15 +50,19 @@
 //!   stays outline-only as before): imported into `design.drawings` as
 //!   [`eda_model::ir::Shape`]/[`eda_model::ir::Text`] (see
 //!   [`import_drawings`]).
-//! - **3D models, stackup dielectric/material/thickness, net ties,
-//!   group/generator objects, footprint-local graphics/text (`fp_line`,
-//!   `fp_text` other than Reference/Value)**: not imported at all.
+//! - **Not imported at all**: barcodes, generator objects, and the
+//!   project-level component classes and tuning profiles (a board that
+//!   depends on them is judged differently by kicad-cli once re-exported;
+//!   `docs/parity/REPORT.md` lists the boards). Groups, dimensions, locks,
+//!   the stackup, net ties, 3D model references and footprint-local
+//!   graphics and text are read.
 
 use std::collections::{BTreeMap, HashMap};
 
 use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
+use crate::import_items::{self, ItemRef, Refs};
 use crate::sexpr::{self, Sexpr};
 
 /// Counts of things the importer saw but could not carry into our model
@@ -63,7 +70,11 @@ use crate::sexpr::{self, Sexpr};
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ImportNotes {
     pub zones_skipped: usize,
+    /// Edge.Cuts arcs, tessellated into the outline's straight segments (a track `(arc ...)` is exact: [`Self::track_arcs_kept`]).
     pub track_arcs_approximated: usize,
+    /// Track `(arc ...)`s kept as arcs (`Track::arc_mid_offset`); informational, nothing was lost.
+    #[serde(default)]
+    pub track_arcs_kept: usize,
     pub non_rect_pad_shapes_approximated: usize,
     /// A `(pad ...)` whose own `(layers ...)` list names no copper layer at
     /// all (no `F.Cu`/`B.Cu`/`*.Cu`/inner `.Cu`) -- dropped on import rather
@@ -110,14 +121,18 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let net_names = import_net_names(root);
     let mut board = import_board_rules(root, &layers);
 
-    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras) = import_footprints(root, &net_names, &layers, &mut notes)?;
+    // Each item parser records the uuid and lock of what it emits (`Refs`), so the groups and locks of the
+    // file can be turned into ids once the items have them.
+    let mut refs = Refs::default();
+    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let nets = build_nets(&net_names, &pin_nets);
     let outline = import_outline(root, &mut notes);
-    let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes);
-    let (shapes, texts) = import_drawings(root);
+    let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
+    let (shapes, texts) = import_drawings(root, &mut refs);
+    let dimensions = import_items::import_dimensions(root, &mut refs);
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
-    let zones = import_zones(root, &net_names, &layers, &mut notes);
+    let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
 
     // The outline override lives on `board` too (used when a downstream
     // tool re-derives placement); keep it in step with what we actually
@@ -150,7 +165,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, footprint_extras, via_tenting, silk_texts, copper_texts, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
@@ -184,12 +199,21 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // deterministic ids a fresh route or a hand-add would get, so an
     // imported board is addressable from the moment it lands.
     design.assign_missing_ids();
+    // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
+    // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
+    let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
+    if !groups.is_empty() || !locked_ids.is_empty() {
+        let dr = design.drawings.get_or_insert_with(Default::default);
+        dr.groups = groups;
+        dr.locked_ids = locked_ids;
+        dr.assign_missing_ids();
+    }
     let model = ConstraintModel {
         parts,
         nets,
         clusters: vec![],
         placement_rules: vec![],
-        stackup: None,
+        stackup: import_stackup(root),
         impedance_targets: vec![],
         footprints: explicit_footprints.into_values().collect(),
         symbols: vec![],
@@ -299,7 +323,9 @@ fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)]) 
 /// net class becomes one of our `NetClass`es, matched by its literal
 /// member list rather than a glob (an exact list is what KiCad wrote).
 fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
-    let mut board = BoardRules { layers: layers.to_vec(), ..BoardRules::default() };
+    // A board file is a board somebody judged with KiCad's rules: its minimums are KiCad's (the project's, or the factory
+    // ones when it has none), stated -- not the unstated ones of an intent (`BoardRules::constraints_explicit`).
+    let mut board = BoardRules { layers: layers.to_vec(), constraints_explicit: true, ..BoardRules::default() };
     // Legacy boards keep the copper-to-edge clearance in `(setup (edge_clearance ..))`.
     if let Some(v) = sexpr::find(root, "setup").and_then(|st| sexpr::find(st, "edge_clearance")).and_then(|e| sexpr::num(e, 1)) {
         board.copper_edge_clearance_um = Some(mm_to_um(v));
@@ -321,6 +347,7 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
         if let Some(v) = sexpr::find(nc, "via_drill").and_then(|f| sexpr::num(f, 1)) {
             board.via_drill = mm_to_um(v);
         }
+        board.default_class = default_class_extras(nc);
     }
 
     board.net_classes = classes
@@ -337,12 +364,28 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
             let clearance = sexpr::find(nc, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
             let via_diameter = sexpr::find(nc, "via_dia").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
             let via_drill = sexpr::find(nc, "via_drill").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
-            Some(NetClass { name, nets, track_width, clearance, via_diameter, via_drill, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 })
+            let extras = default_class_extras(nc);
+            let (microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap) = extras.map_or((None, None, None, None), |e| (e.microvia_diameter, e.microvia_drill, e.diff_pair_width, e.diff_pair_gap));
+            Some(NetClass { name, nets, track_width, clearance, via_diameter, via_drill, microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap, diff_pair_via_gap: None, priority: 0 })
         })
         .collect();
     import_legacy_setup_minimums(root, &mut board);
     import_solder_mask_setup(root, &mut board);
     board
+}
+
+/// A `(net_class ..)` block's microvia size and differential-pair sizes (`uvia_dia`, `uvia_drill`, `diff_pair_width`,
+/// `diff_pair_gap`), as a class with only those set -- `None` when the class has none. KiCad's own 0.3 / 0.1 mm microvia
+/// (what the writer gives a class that sets none) reads back as unset, so a board that never set one round-trips unchanged.
+fn default_class_extras(nc: &[Sexpr]) -> Option<NetClass> {
+    let um = |key: &str| sexpr::find(nc, key).and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+    let microvia_diameter = um("uvia_dia").filter(|v| *v != 300);
+    let microvia_drill = um("uvia_drill").filter(|v| *v != 100);
+    let (diff_pair_width, diff_pair_gap) = (um("diff_pair_width"), um("diff_pair_gap"));
+    if microvia_diameter.is_none() && microvia_drill.is_none() && diff_pair_width.is_none() && diff_pair_gap.is_none() {
+        return None;
+    }
+    Some(NetClass { name: "Default".into(), nets: vec![], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap, diff_pair_via_gap: None, priority: 0 })
 }
 
 /// `(front yes) (back no)` / legacy bare `front back none` tenting list, as
@@ -401,6 +444,52 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
         board.solder_mask.tent_vias_front = front.unwrap_or(false);
         board.solder_mask.tent_vias_back = back.unwrap_or(false);
     }
+    // `m_SolderPasteMargin` / `m_SolderPasteMarginRatio`.
+    if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance").and_then(|f| sexpr::num(f, 1)) {
+        board.solder_mask.paste_margin_um = mm_to_um(v);
+    }
+    if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance_ratio").and_then(|f| sexpr::num(f, 1)) {
+        board.solder_mask.paste_margin_ratio = v;
+    }
+    // `(general (thickness ..))`: `BOARD_DESIGN_SETTINGS::SetBoardThickness`.
+    if let Some(v) = sexpr::find(root, "general").and_then(|g| sexpr::find(g, "thickness")).and_then(|f| sexpr::num(f, 1)) {
+        board.board_thickness_um = mm_to_um(v);
+    }
+}
+
+/// `PCB_IO_KICAD_SEXPR_PARSER::parseBoardStackup`: `(setup (stackup (layer "F.Cu" (type "copper") (thickness 0.035)) ..
+/// (copper_finish "ENIG") (dielectric_constraints yes) ..))`. A layer with several sublayers (`addsublayer`) is read as its
+/// first. `None` when the board has no stackup block.
+fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
+    let st = sexpr::find(root, "setup").and_then(|setup| sexpr::find(setup, "stackup"))?;
+    let layers: Vec<eda_model::StackupLayer> = sexpr::find_all(st, "layer")
+        .filter_map(|l| {
+            let name = sexpr::txt(l, 1)?.to_string();
+            let kind = sexpr::find(l, "type").and_then(|t| sexpr::txt(t, 1)).map(String::from);
+            Some(eda_model::StackupLayer {
+                name,
+                material: sexpr::find(l, "material").and_then(|m| sexpr::txt(m, 1)).map(String::from),
+                thickness_mm: sexpr::find(l, "thickness").and_then(|t| sexpr::num(t, 1)),
+                kind,
+                epsilon_r: sexpr::find(l, "epsilon_r").and_then(|e| sexpr::num(e, 1)),
+                loss_tangent: sexpr::find(l, "loss_tangent").and_then(|e| sexpr::num(e, 1)),
+            })
+        })
+        .collect();
+    if layers.is_empty() {
+        return None;
+    }
+    Some(eda_model::Stackup {
+        layers,
+        copper_finish: sexpr::find(st, "copper_finish").and_then(|f| sexpr::txt(f, 1)).map(String::from),
+        dielectric_constraints: sexpr::find(st, "dielectric_constraints").and_then(|f| sexpr::txt(f, 1)) == Some("yes"),
+        edge_connector: match sexpr::find(st, "edge_connector").and_then(|f| sexpr::txt(f, 1)) {
+            Some("yes") => 1,
+            Some("bevelled") => 2,
+            _ => 0,
+        },
+        edge_plating: sexpr::find(st, "edge_plating").and_then(|f| sexpr::txt(f, 1)) == Some("yes"),
+    })
 }
 
 /// Board-wide *minimum* constraints (`BOARD_DESIGN_SETTINGS`'s `rules.min_*`
@@ -578,11 +667,16 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else {
         return;
     };
-    let Some(rules) = root.get("board").and_then(|b| b.get("design_settings")).and_then(|d| d.get("rules")) else {
+    let Some(design_settings) = root.get("board").and_then(|b| b.get("design_settings")) else {
+        return;
+    };
+    let Some(rules) = design_settings.get("rules") else {
         return;
     };
     let mm = |key: &str| rules.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
     let b = &mut model.board;
+    // The project stated its minimums: they are exact, and written back exactly (`BoardRules::constraints_explicit`).
+    b.constraints_explicit = true;
     if let Some(v) = mm("min_track_width") {
         b.track_width_min_um = v;
     }
@@ -619,6 +713,66 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     // `m_SolderMaskToCopperClearance` lives only in the project file.
     if let Some(v) = mm("solder_mask_to_copper_clearance") {
         b.solder_mask.to_copper_clearance_um = v;
+    }
+    // The rest of Board Setup > Constraints.
+    if let Some(v) = mm("min_connection") {
+        b.min_connection_um = v;
+    }
+    if let Some(v) = mm("min_microvia_diameter") {
+        b.microvia_diameter_min_um = v;
+    }
+    if let Some(v) = mm("min_microvia_drill") {
+        b.microvia_drill_min_um = v;
+    }
+    if let Some(v) = mm("min_groove_width") {
+        b.min_groove_width_um = v;
+    }
+    if let Some(v) = mm("max_error") {
+        b.max_error_um = v.max(1);
+    }
+    if let Some(v) = rules.get("min_resolved_spokes").and_then(|v| v.as_u64()) {
+        b.min_resolved_spokes = v.min(99) as u32;
+    }
+    if let Some(v) = rules.get("use_height_for_length_calcs").and_then(|v| v.as_bool()) {
+        b.use_height_for_length_calcs = v;
+    }
+    if let Some(v) = design_settings.get("zones_allow_external_fillets").and_then(|v| v.as_bool()) {
+        b.zones_allow_external_fillets = v;
+    }
+    // Text & Graphics > Defaults (`defaults.<class>_line_width`, `_text_size_h/_v`, `_text_thickness`, `_text_italic`, `_text_upright`).
+    if let Some(def) = design_settings.get("defaults") {
+        let num = |key: &str| def.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+        let flag = |key: &str| def.get(key).and_then(|v| v.as_bool());
+        let class = |prefix: &str, c: &mut eda_model::rules::LayerClassDefaults| {
+            if let Some(v) = num(&format!("{prefix}_line_width")) {
+                c.line_width_um = v;
+            }
+            if let Some(v) = num(&format!("{prefix}_text_size_h")) {
+                c.text_width_um = v;
+            }
+            if let Some(v) = num(&format!("{prefix}_text_size_v")) {
+                c.text_height_um = v;
+            }
+            if let Some(v) = num(&format!("{prefix}_text_thickness")) {
+                c.text_thickness_um = v;
+            }
+            if let Some(v) = flag(&format!("{prefix}_text_italic")) {
+                c.italic = v;
+            }
+            if let Some(v) = flag(&format!("{prefix}_text_upright")) {
+                c.upright = v;
+            }
+        };
+        class("silk", &mut b.text_graphics.silk);
+        class("copper", &mut b.text_graphics.copper);
+        class("fab", &mut b.text_graphics.fab);
+        class("other", &mut b.text_graphics.others);
+        if let Some(v) = num("board_outline_line_width") {
+            b.text_graphics.edge_cuts_line_width_um = v;
+        }
+        if let Some(v) = num("courtyard_line_width") {
+            b.text_graphics.courtyard_line_width_um = v;
+        }
     }
 }
 
@@ -960,6 +1114,7 @@ fn import_footprints(
     net_names: &BTreeMap<i64, String>,
     layers: &[String],
     notes: &mut ImportNotes,
+    refs: &mut Refs,
 ) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>, Vec<FootprintExtra>), Vec<CheckResult>> {
     let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut extras: Vec<FootprintExtra> = Vec::new();
@@ -1066,6 +1221,7 @@ fn import_footprints(
 
         parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_um: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
+        refs.footprints.push(ItemRef::of(fp));
     }
 
     if !errors.is_empty() {
@@ -1395,7 +1551,7 @@ fn import_fp_graphics(fp: &[Sexpr], inst: &FootprintInstance) -> Vec<FootprintGr
 
 // ---------------------------------------------------------------- routing
 
-fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>) {
+fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>) {
 
     let mut tracks = Vec::new();
     for seg in sexpr::find_all(root, "segment") {
@@ -1406,6 +1562,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e], arc_mid_offset: None });
+        refs.tracks.push(ItemRef::of(seg));
     }
 
     for arc in sexpr::find_all(root, "arc") {
@@ -1417,8 +1574,9 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let net = net_ref(sexpr::find(arc, "net"), net_names);
         let width = sexpr::find(arc, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
-        notes.track_arcs_approximated += 1;
+        notes.track_arcs_kept += 1;
         tracks.push(Track::new_arc(net, layer, width, s, m, e));
+        refs.tracks.push(ItemRef::of(arc));
     }
 
     let mut vias = Vec::new();
@@ -1440,6 +1598,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
             }
         }
         vias.push(Via { id: String::new(), net, at, drill, diameter: dia, from_layer, to_layer });
+        refs.vias.push(ItemRef::of(via));
     }
 
     (tracks, vias, via_tenting)
@@ -1457,7 +1616,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 /// `gr_poly`) and text (`gr_text`), any layer other than Edge.Cuts -- that
 /// one stays dedicated to [`import_outline`], unchanged, so a shape is
 /// never represented twice.
-fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
+fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
     let stroke_width = |item: &[Sexpr]| -> i64 {
         sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0)
     };
@@ -1468,6 +1627,7 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
     for item in sexpr::find_all(root, "gr_line").filter(|it| !is_edge_cuts(it)) {
         let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
         shapes.push(Shape::Segment { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, end });
+        refs.shapes.push(ItemRef::of(item));
     }
     for item in sexpr::find_all(root, "gr_arc").filter(|it| !is_edge_cuts(it)) {
         let (Some(start), Some(mid), Some(end)) =
@@ -1476,18 +1636,22 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
             continue;
         };
         shapes.push(Shape::Arc { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, mid, end });
+        refs.shapes.push(ItemRef::of(item));
     }
     for item in sexpr::find_all(root, "gr_rect").filter(|it| !is_edge_cuts(it)) {
         let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
         shapes.push(Shape::Rect { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, end });
+        refs.shapes.push(ItemRef::of(item));
     }
     for item in sexpr::find_all(root, "gr_circle").filter(|it| !is_edge_cuts(it)) {
         let (Some(center), Some(end)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
         shapes.push(Shape::Circle { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), center, end });
+        refs.shapes.push(ItemRef::of(item));
     }
     for item in sexpr::find_all(root, "gr_poly").filter(|it| !is_edge_cuts(it)) {
         let Some(pts) = poly_points(item) else { continue };
         shapes.push(Shape::Polygon { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), pts });
+        refs.shapes.push(ItemRef::of(item));
     }
     // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`). A curve on
     // Edge.Cuts is not chained into the board outline (`import_outline` only walks lines/rects/arcs).
@@ -1495,6 +1659,7 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
         let Some(pts) = poly_points(item) else { continue };
         let [start, c1, c2, end] = pts[..] else { continue };
         shapes.push(Shape::Bezier { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: false, start, c1, c2, end });
+        refs.shapes.push(ItemRef::of(item));
     }
 
     let mut texts = Vec::new();
@@ -1519,6 +1684,7 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
             }
         }
         texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_um, stroke_width, justify, mirror });
+        refs.texts.push(ItemRef::of(item));
     }
 
     (shapes, texts)
@@ -1633,7 +1799,7 @@ fn import_outline(root: &[Sexpr], notes: &mut ImportNotes) -> Vec<Point> {
 /// fills are always derived (`eda_zone_filler`), which is also what
 /// kicad-cli's own `pcb drc --refill-zones` run does. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
-fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes) -> Vec<Zone> {
+fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes, refs: &mut Refs) -> Vec<Zone> {
     // Board-level zones, then each footprint's own (`forEachGeometryItem`
     // walks `footprint->Zones()` too; a footprint zone's points are stored
     // in board coordinates). The parent reference is recomputed exactly as
@@ -1685,6 +1851,15 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         if let Some(p) = sexpr::find(z, "priority") {
             zone.priority = sexpr::num(p, 1).unwrap_or(0.0).max(0.0) as u32;
         }
+        // `(name "..")` and `(hatch none|edge|full <pitch>)`; an absent `hatch` is `NO_HATCH` in the parser.
+        if let Some(n) = sexpr::find(z, "name") {
+            zone.name = sexpr::txt(n, 1).unwrap_or("").to_string();
+        }
+        zone.border_style = match sexpr::find(z, "hatch").and_then(|h| sexpr::txt(h, 1)) {
+            Some("edge") => eda_model::ir::ZoneBorderStyle::Edge,
+            Some("full") => eda_model::ir::ZoneBorderStyle::Full,
+            _ => eda_model::ir::ZoneBorderStyle::None,
+        };
         if let Some(cp) = sexpr::find(z, "connect_pads") {
             match sexpr::txt(cp, 1) {
                 Some("yes") => zone.pad_connection = PadConnection::Full,
@@ -1725,6 +1900,12 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             if let Some(v) = raw("hatch_min_hole_area") {
                 zone.hatch_hole_min_area = v;
             }
+            // `(hatch_border_algorithm hatch_thickness|min_thickness)`: which width the hatch border is drawn with.
+            match sexpr::find(f, "hatch_border_algorithm").and_then(|v| sexpr::txt(v, 1)) {
+                Some("hatch_thickness") => zone.hatch_border_algorithm = 1,
+                Some("min_thickness") => zone.hatch_border_algorithm = 0,
+                _ => {}
+            }
             if let Some(v) = um("thermal_gap") {
                 zone.thermal_gap = v;
             }
@@ -1741,6 +1922,17 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             // `area * pcbIUScale.IU_PER_MM` after `parseBoardUnits`: mm^2 in the file.
             if let Some(v) = raw("island_area_min") {
                 zone.min_island_area = (v * 1e6).round() as i64;
+            }
+            // `(smoothing none|chamfer|fillet)` and `(radius r)`; both are ignored for a rule area (`parseZONE`).
+            let smoothing = sexpr::find(f, "smoothing").and_then(|v| sexpr::txt(v, 1));
+            let radius = um("radius");
+            if sexpr::find(z, "keepout").is_none() && sexpr::find(z, "placement").is_none() {
+                zone.smoothing = match smoothing {
+                    Some("chamfer") => eda_model::ir::ZoneSmoothing::Chamfer,
+                    Some("fillet") => eda_model::ir::ZoneSmoothing::Fillet,
+                    _ => eda_model::ir::ZoneSmoothing::None,
+                };
+                zone.corner_radius = radius.unwrap_or(0);
             }
         }
         if let Some(k) = sexpr::find(z, "keepout") {
@@ -1767,9 +1959,11 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             notes.zones_skipped += 1;
             continue;
         }
+        let item_ref = ItemRef::of(z);
         for layer in &layers {
             for outline in &outlines {
                 out.push(Zone { layer: layer.clone(), outline: outline.clone(), ..zone.clone() });
+                refs.zones.push(item_ref.clone());
             }
         }
     }

@@ -17,6 +17,7 @@ import { ATTRIBUTE_ACTIONS, attributeChecked, hitSheet, INCREMENT_PARAMS, neares
 import { netAtPoint } from "../kicad-port/schNetAtPoint";
 import { copySheetImage, exportSymbolSvg, saveSheetCopy } from "./schControlExports";
 import { importFootprintAssignments } from "./schControlImports";
+import { openAssignNetclass } from "./assignNetclass";
 
 export interface SchControlContext {
   tab: string;
@@ -149,6 +150,21 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
       dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
       controlDispatch({ type: "SET_NET_FILTER", text: net });
       controlDispatch({ type: "SET_NET_NAVIGATOR", open: true });
+    })
+  );
+  // Assign Netclass... -- `SCH_EDIT_TOOL::AssignNetclass`: the nets of the selected wires, labels and power symbols (a symbol itself has no connection), through the same
+  // dialog as the board editor's (actions/assignNetclass.ts). The assignment is stored with the board's rules, so it is undone from the board editor, as KiCad's project
+  // settings are not part of the schematic's undo either.
+  m.set(
+    "eeschema.InteractiveEdit.assignNetclass",
+    onSchematic(() => {
+      if (!sch) return;
+      const connected = [...sch.wires, ...sch.labels, ...sch.power_symbols];
+      const netOfItem = new Map(connected.map((i) => [i.id, i.net]));
+      const picked = ctx.requestSelection().map((id) => netOfItem.get(id));
+      const nets = [...new Set(picked.filter((n): n is string => !!n))];
+      const candidates = [...new Set(connected.map((i) => i.net).filter((n) => n !== ""))].sort((a, b) => a.localeCompare(b));
+      openAssignNetclass(nets, candidates, toast);
     })
   );
   // Select on PCB -- `ExplicitCrossProbeToPcb` -> `SendSelectItemsToPcb( items, true )`: the selected symbols' footprints are selected in the board editor.

@@ -30,6 +30,16 @@
 //! it). Everything here skips cleanly if the QA corpus directory isn't
 //! present (see `EDA_KICAD_QA_BOARDS`); part 2 (our own examples) always
 //! runs regardless.
+//!
+//! Knobs (all optional):
+//! - `EDA_KICAD_QA_BOARDS` / `KICAD_QA_DATA`: the corpus root (`<root>/pcbnew/*.kicad_pcb`, each with an
+//!   optional `.kicad_pro` and `.kicad_dru` beside it). Default: `qa/data` of the KiCad sources at
+//!   `/Users/juanantonioluera/ws/kicad-src-8303b2ad`.
+//! - `EDA_PARITY_PARTS`: which parts to run, a comma list of `own`, `corpus`, `reexport`
+//!   (default all). A partial run keeps the other parts' results from the `roundtrip.json`
+//!   already on disk instead of erasing them.
+//! - `EDA_PARITY_REEXPORT_CAP`: how many boards part 3 takes (default 12).
+//! - `EDA_PARITY_DRC_TIMEOUT_SECS`: how long one kicad-cli DRC may run (default 600).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::panic::{self, AssertUnwindSafe};
@@ -76,13 +86,18 @@ fn repo_root() -> PathBuf {
 }
 
 const QA_ROOT_ENV: &str = "EDA_KICAD_QA_BOARDS";
-const QA_ROOT_DEFAULT: &str = "/private/tmp/claude-501/-Users-juanantonioluera-ws/8eb77140-1019-4605-b5f4-960e15f5bf6d/scratchpad/kicad_qa_boards/qa/data";
+/// KiCad's own QA data (`qa/data` of the KiCad source at commit 8303b2ad), as one directory: `KICAD_QA_DATA` names it; the default is the
+/// copy kept beside the KiCad sources this port was read from (a persistent place, not a scratch directory).
+const QA_DATA_ENV: &str = "KICAD_QA_DATA";
+const QA_ROOT_DEFAULT: &str = "/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data";
 
 fn qa_root() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var(QA_ROOT_ENV) {
-        let pb = PathBuf::from(p);
-        if pb.exists() {
-            return Some(pb);
+    for var in [QA_ROOT_ENV, QA_DATA_ENV] {
+        if let Ok(p) = std::env::var(var) {
+            let pb = PathBuf::from(p);
+            if pb.exists() {
+                return Some(pb);
+            }
         }
     }
     let d = PathBuf::from(QA_ROOT_DEFAULT);
@@ -142,6 +157,7 @@ struct PcbCorpusStats {
     import_failed: usize,
     zones_skipped: usize,
     track_arcs_approximated: usize,
+    track_arcs_kept: usize,
     non_rect_pad_shapes_approximated: usize,
     outline_open: usize,
     outline_source_counts: BTreeMap<String, usize>,
@@ -150,7 +166,7 @@ struct PcbCorpusStats {
 
 fn pcb_corpus_notes(root: &Path) -> PcbCorpusStats {
     let mut s = PcbCorpusStats::default();
-    for pcb in find_all(root, "kicad_pcb") {
+    for pcb in find_all(&root.join("pcbnew"), "kicad_pcb") {
         s.total += 1;
         let name = pcb.strip_prefix(root).unwrap_or(&pcb).display().to_string();
         let result = catch(AssertUnwindSafe(|| {
@@ -162,6 +178,7 @@ fn pcb_corpus_notes(root: &Path) -> PcbCorpusStats {
                 s.imported_ok += 1;
                 s.zones_skipped += notes.zones_skipped;
                 s.track_arcs_approximated += notes.track_arcs_approximated;
+                s.track_arcs_kept += notes.track_arcs_kept;
                 s.non_rect_pad_shapes_approximated += notes.non_rect_pad_shapes_approximated;
                 if notes.outline_open {
                     s.outline_open += 1;
@@ -193,7 +210,7 @@ struct SchCorpusStats {
 
 fn sch_corpus_notes(root: &Path) -> SchCorpusStats {
     let mut s = SchCorpusStats::default();
-    for sch in find_all(root, "kicad_sch") {
+    for sch in find_all(&root.join("pcbnew"), "kicad_sch") {
         s.total += 1;
         let name = sch.strip_prefix(root).unwrap_or(&sch).display().to_string();
         let result = catch(AssertUnwindSafe(|| {
@@ -323,16 +340,41 @@ fn own_round_trip(yaml: &Path) -> OwnRoundTrip {
 // Part 3: re-export fidelity on a subset of real QA boards
 // ---------------------------------------------------------------------
 
+/// A command with a clock on it: a run still going after `limit` is killed.
+fn output_within(mut cmd: Command, limit: std::time::Duration) -> Option<std::process::Output> {
+    use std::process::Stdio;
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().ok()?;
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Err(_) => return None,
+        }
+    }
+}
+
+fn drc_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(std::env::var("EDA_PARITY_DRC_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(600))
+}
+
 fn kicad_type_counts(cli: &Path, pcb: &Path, tag: &str) -> (BTreeMap<String, usize>, bool) {
     let report_path = pcb.with_file_name(format!("{}.{tag}.drc.json", pcb.file_stem().and_then(|s| s.to_str()).unwrap_or("b")));
-    let out = Command::new(cli)
-        .args(["pcb", "drc", "--refill-zones", "--format", "json", "--severity-all", "--output"])
-        .arg(&report_path)
-        .arg(pcb)
-        .output()
-        .expect("run kicad-cli");
+    let _ = std::fs::remove_file(&report_path);
+    let mut cmd = Command::new(cli);
+    cmd.args(["pcb", "drc", "--refill-zones", "--format", "json", "--severity-all", "--output"]).arg(&report_path).arg(pcb);
+    let out = output_within(cmd, drc_timeout());
     if !report_path.exists() {
-        eprintln!("kicad-cli failed to load {} ({}): stdout={} stderr={}", pcb.display(), tag, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        match out {
+            Some(out) => eprintln!("kicad-cli failed to load {} ({}): stdout={} stderr={}", pcb.display(), tag, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)),
+            None => eprintln!("kicad-cli DRC on {} ({}) did not finish in time", pcb.display(), tag),
+        }
         return (BTreeMap::new(), false);
     }
     let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap_or_default()).unwrap_or_default();
@@ -362,13 +404,33 @@ fn reexport_fidelity(cli: &Path, pcb: &Path) -> ReexportFidelity {
     let result = catch(AssertUnwindSafe(|| {
         let (original_types, original_parses) = kicad_type_counts(cli, pcb, "orig");
         let text = std::fs::read_to_string(pcb).unwrap_or_else(|e| panic!("read: {e}"));
-        let (design, model, _notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb: {e:?}"));
+        let (design, mut model, _notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb: {e:?}"));
+        // The project the board came from, as `eda import-kicad` reads it: net classes, severities and the
+        // design-rule minimums from the sidecar `.kicad_pro`, custom rules from the `.kicad_dru`.
+        if let Ok(pro) = std::fs::read_to_string(pcb.with_extension("kicad_pro")) {
+            eda_kicad::merge_project_net_classes(&mut model, &pro);
+            eda_kicad::merge_project_rule_severities(&mut model, &pro);
+            eda_kicad::merge_project_design_rules(&mut model, &pro);
+        }
+        if let Ok(dru) = std::fs::read_to_string(pcb.with_extension("kicad_dru")) {
+            eda_kicad::merge_custom_rules(&mut model, &dru);
+        }
         let meta = ExportMeta { date: "2026-01-01", title: &name };
         let reexported = export_kicad_pcb(&design, &model, &meta).unwrap_or_else(|e| panic!("export_kicad_pcb: {e:?}"));
         let dir = std::env::temp_dir().join("eda_parity_reexport");
         std::fs::create_dir_all(&dir).unwrap();
         let out_path = dir.join(format!("{name}.kicad_pcb"));
         std::fs::write(&out_path, &reexported).unwrap();
+        // The derived project kicad-cli reads next to the board, as the studio's engine writes it: our design
+        // rules and the imported custom rules.
+        std::fs::write(dir.join(format!("{name}.kicad_pro")), eda_kicad::export_kicad_pro_for(&design, &model)).unwrap();
+        let dru = dir.join(format!("{name}.kicad_dru"));
+        match model.board.custom_rules_text.as_deref() {
+            Some(rules) => std::fs::write(&dru, rules).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&dru);
+            }
+        }
         let (reexport_types, reexport_parses) = kicad_type_counts(cli, &out_path, "reexport");
         (original_types, original_parses, reexport_types, reexport_parses)
     }));
@@ -386,13 +448,18 @@ fn reexport_fidelity(cli: &Path, pcb: &Path) -> ReexportFidelity {
 fn parity_roundtrip_harness() {
     let repo = repo_root();
 
-    // ---- Part 2: always runs, no kicad-cli needed ----
+    let parts = std::env::var("EDA_PARITY_PARTS").unwrap_or_else(|_| "own,corpus,reexport".into());
+    let wants = |part: &str| parts.split(',').any(|p| p.trim() == part);
+
+    // ---- Part 2: no kicad-cli needed ----
     let mut own: Vec<OwnRoundTrip> = Vec::new();
     let mut examples: Vec<PathBuf> = std::fs::read_dir(repo.join("examples")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "yaml")).collect();
     examples.extend(std::fs::read_dir(repo.join("examples/ladder")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "yaml")));
     examples.sort();
-    println!("=== Part 2: own-pipeline round trip ({} boards) ===", examples.len());
-    for yaml in &examples {
+    if wants("own") {
+        println!("=== Part 2: own-pipeline round trip ({} boards) ===", examples.len());
+    }
+    for yaml in examples.iter().filter(|_| wants("own")) {
         let rt = own_round_trip(yaml);
         println!("  {}: {:?}", rt.board, rt.survival);
         if let Some(e) = &rt.error {
@@ -403,7 +470,7 @@ fn parity_roundtrip_harness() {
 
     // ---- Part 1: full corpus import notes, no kicad-cli needed ----
     let (mut pcb_stats, mut sch_stats) = (None, None);
-    if let Some(root) = qa_root() {
+    if let Some(root) = qa_root().filter(|_| wants("corpus")) {
         println!("\n=== Part 1: full-corpus import notes (root={}) ===", root.display());
         let p = pcb_corpus_notes(&root);
         println!("pcb: {p:?}");
@@ -411,21 +478,22 @@ fn parity_roundtrip_harness() {
         println!("sch: {s:?}");
         pcb_stats = Some(p);
         sch_stats = Some(s);
-    } else {
+    } else if wants("corpus") {
         eprintln!("KiCad QA corpus not found; skipping Part 1 (full-corpus import notes) and Part 3 (re-export fidelity)");
     }
 
     // ---- Part 3: re-export fidelity subset, needs kicad-cli ----
     let mut reexport: Vec<ReexportFidelity> = Vec::new();
-    if let (Some(cli), Some(root)) = (find_kicad_cli(), qa_root()) {
-        let subset = select_subset(&root, 12);
+    if let (Some(cli), Some(root)) = (find_kicad_cli().filter(|_| wants("reexport")), qa_root()) {
+        let cap = std::env::var("EDA_PARITY_REEXPORT_CAP").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
+        let subset = select_subset(&root, cap);
         println!("\n=== Part 3: re-export fidelity on {} boards ===", subset.len());
         for pcb in &subset {
             let r = reexport_fidelity(&cli, pcb);
             println!("  {}: orig_parses={} reexport_parses={} identical_type_counts={}", r.board, r.original_parses, r.reexport_parses, r.identical_type_counts);
             reexport.push(r);
         }
-    } else {
+    } else if wants("reexport") {
         eprintln!("kicad-cli and/or QA corpus not found; skipping Part 3 (re-export fidelity)");
     }
 
@@ -439,6 +507,31 @@ fn parity_roundtrip_harness() {
     let report = Report { own_pipeline_roundtrip: own, qa_corpus_pcb_import_notes: pcb_stats, qa_corpus_sch_import_notes: sch_stats, reexport_fidelity_subset: reexport };
     let out_dir = repo.join("docs/parity/raw");
     std::fs::create_dir_all(&out_dir).unwrap();
-    std::fs::write(out_dir.join("roundtrip.json"), serde_json::to_string_pretty(&report).unwrap()).unwrap();
+    let mut json = serde_json::to_value(&report).unwrap();
+    // A partial run keeps what the parts it did not run measured last time.
+    let old = std::fs::read_to_string(out_dir.join("roundtrip.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    if let Some(old) = &old {
+        for (part, keys) in [("own", &["own_pipeline_roundtrip"][..]), ("corpus", &["qa_corpus_pcb_import_notes", "qa_corpus_sch_import_notes"][..]), ("reexport", &["reexport_fidelity_subset"][..])] {
+            if !wants(part) {
+                for k in keys {
+                    if let Some(v) = old.get(*k) {
+                        json[*k] = v.clone();
+                    }
+                }
+            }
+        }
+    }
+    // The day each part was last measured: a partial run keeps the dates of the parts it kept, so the report can say which numbers are old.
+    let today = Command::new("date").args(["-u", "+%Y-%m-%d"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let mut measured = serde_json::Map::new();
+    for part in ["own", "corpus", "reexport"] {
+        if wants(part) {
+            measured.insert(part.into(), today.clone().into());
+        } else if let Some(v) = old.as_ref().and_then(|o| o.get("measured_at")).and_then(|m| m.get(part)) {
+            measured.insert(part.into(), v.clone());
+        }
+    }
+    json["measured_at"] = measured.into();
+    std::fs::write(out_dir.join("roundtrip.json"), serde_json::to_string_pretty(&json).unwrap()).unwrap();
     println!("\nwrote {}", out_dir.join("roundtrip.json").display());
 }

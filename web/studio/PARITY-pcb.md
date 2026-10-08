@@ -352,29 +352,34 @@ lists, see section 9).
 
 ## 9. Board Setup
 
-Port of `pcbnew/dialogs/dialog_board_setup.cpp`, which is really a tree of
-~15 `panel_setup_*.cpp` pages. `BoardSetupDialog.tsx` only builds the pages
-this app's constraint model (`crates/model/src/lib.rs` `BoardRules`) has
-real data for; a page with no IR backing at all is left out.
+Port of `pcbnew/dialogs/dialog_board_setup.cpp`, a tree of `panel_setup_*.cpp` pages. `BoardSetupDialog.tsx` is that treebook (Board Stackup /
+Text & Graphics / Design Rules, with KiCad's own page names); the rule pages are in `components/boardSetup/*`, and what they share -- the net-class
+patterns, the checks each KiCad panel makes before OK, the default stackup, the severity table -- is in `kicad-port/boardSetupRules.ts` with node
+unit tests.
 
-A hard split runs through every page: `BoardRules` (net classes, hole/
-clearance/text defaults, stackup) lives on the *intent*-derived
-`ConstraintModel`, loaded read-only (`crates/cli/src/board.rs::load`) --
-there is no `Cmd` that can change it without a second edit/undo path into
-the intent file, which this session did not build (GAPS.md #10 sizes that
-"L", same size the custom-rule-language page would be). Only the new
-`RoutingSection.track_width_presets`/`via_presets` live on the editable
-`design.json` IR, so only that one page is genuinely editable -- every
-other page is a read-only mirror.
+Every page edits. A rule page keeps a copy of what the board says and Apply sends the whole page as one undoable command (`set_net_classes`,
+`set_constraints`, `set_mask_paste`, `set_text_graphics_defaults`, `set_stackup`, `set_rule_severities`, `set_custom_rules` --
+`crates/ops/src/board_setup.rs`). The backend keeps the page in `design.json` (`drawings.rules`, `eda_model::rules::RulesOverlay`) and
+`board::load` lays it over the intent's (or the imported project's) rules, so the router, DRC, the gates and the KiCad project kicad-cli reads
+(`.kicad_pro`, the `(setup ..)` and `(stackup ..)` of the `.kicad_pcb`, the `.kicad_dru`) follow one set of rules, and one Undo takes a page back. That
+overlay is the second edit/undo path into the intent's rules that this section used to say was missing. `crates/cli/src/board.rs` has the tests that a
+changed clearance, a net class assigned by a pattern, a minimum track width, an ignored check and a custom rule each change what kicad-cli reports.
+A page with edits not applied yet is marked in the tree; leaving the dialog asks first.
 
 | Page | Status | KiCad file |
 |---|---|---|
-| Net Classes: name, net-pattern list, track width, clearance, via size/drill, priority | read-only (no edit command -- see this section's intro) | `panel_setup_rules.cpp`'s net-class grid (the pattern-assignment side of it; `dialog_copper_zones.cpp`'s own net-class picker is the same gap) |
-| Track Widths & Vias: the W/Shift+W and via-size-cycle preset lists, add/remove entries | editable | `panel_setup_tracks_and_vias.cpp` -- `Cmd::SetTrackWidthPresets`/`SetViaPresets` (whole-list replace, no per-entry Cmd, same spirit `paste_items` already uses for several items in one commit) |
-| Design Rules: the custom per-net/per-item constraint expression language | not ported -- no IR concept at all | `panel_setup_rules.cpp`'s actual subject (a small expression language over `DRC_ENGINE::EvalRules`) -- shown instead: the board-wide numeric defaults `eda_drc` does check (clearance, track width, annular ring, hole-to-hole, hole clearance, silk clearance), read-only |
-| Text & Graphics Defaults: refdes font size, minimum silk text height/thickness | read-only | `panel_setup_text_and_graphics.cpp` |
-| Layer Stackup: name/material/thickness per layer | read-only, and usually empty (most intents never set one) | `panel_setup_layers.cpp` -- `crates/model/src/lib.rs` `Stackup`/`StackupLayer` already existed on `ConstraintModel`, just never exposed in `/api/state` before this session |
-| Constraints / Teardrops / Tuning Patterns / Mask & Paste / Formatting / Zones defaults / Severities | not ported -- no IR concept | no model field for any of these; left out entirely rather than faked |
+| Board Stackup > Physical Stackup (with Board Finish): the copper layer count (even, 2 to 32), each layer's type, material and thickness, the dielectrics' constant and loss tangent, copper finish, plated edge, edge connectors; the board thickness is what the layers add up to | editable. Not ported: colours, a dielectric's sub-layers, adding or removing a dielectric, Adjust Dielectric Thickness, impedance control. A smaller layer count is refused while a track, via or zone is on a layer that would go (KiCad deletes them) | `panel_board_stackup.cpp`, `panel_board_finish.cpp`, `board_stackup.cpp` -- the default stackup is computed in `eda_model::rules` and in `boardSetupRules.ts`, and both are held to `src/kicad/default_stackups.json` |
+| Board Stackup > Solder Mask/Paste: expansion, web width, mask-to-copper clearance, bridging inside footprints, via tenting, paste clearance and ratio | editable | `panel_setup_mask_and_paste.cpp` |
+| Text & Graphics > Defaults: line thickness, text size and thickness, italic and upright for each layer class | editable, and written to the derived project so KiCad uses them; this app's own drawing tools do not start new items from them yet | `panel_setup_text_and_graphics.cpp` |
+| Text & Graphics > Dimensions: units, format, precision, text position and style defaults, applied once at creation, never retroactively | editable (task item 7) | `panel_setup_dimensions.cpp` |
+| Design Rules > Constraints: minimum clearance, track width, connection width, annular width, via diameter, drill, micro-via size and drill, hole to hole, copper to hole, copper to edge, silk clearance, text height and thickness, arc deviation, thermal spoke count, external fillets, stackup height in lengths | editable; the ranges of `ValidateDesignRules` are checked in the page and again in the backend. An intent states no minimums, so DRC uses the narrowest sizes its classes ask for until the first Apply makes the shown ones the board's own | `panel_setup_constraints.cpp` |
+| Design Rules > Pre-defined Sizes: the W/Shift+W and via-size-cycle preset lists, add/remove entries | editable | `panel_setup_tracks_and_vias.cpp` -- `Cmd::SetTrackWidthPresets`/`SetViaPresets` (whole-list replace, no per-entry Cmd, same spirit `paste_items` already uses for several items in one commit) |
+| Design Rules > Teardrops | editable (task item 4) | `panel_setup_teardrops.cpp` |
+| Design Rules > Net Classes: the Default class and the others (clearance, track width, via size and hole, micro-via, differential pair), and the table of patterns that assign nets to a class, with the nets a pattern matches | editable. A pattern is `*` and `?` over the whole net name; `a\|b` and `prefix(a\|b)` become one pattern per alternative, KiCad's regular-expression mode and bus notation are not read. The first class in the table whose pattern matches a net owns it (KiCad merges every matching class by priority); "priority" here is the routing order, not KiCad's. Not ported: tuning profile, PCB colour, schematic wire columns | `panel_setup_netclasses.cpp` (its Assign Netclass dialog proposes patterns the same way: `proposePattern`) |
+| Assign Netclass... (right-click a track, via or zone; `pcbnew.EditorControl.assignNetclass`) | partial: the dialog (`components/AssignNetclassDialog.tsx`) proposes the pattern KiCad does for the selected nets (`GetNetclassPatternForSet`), the class (the first one besides Default) and the nets the pattern matches; OK stores the assignment with the net classes (`set_net_classes`, one undo step). The context-menu entry follows `EDIT_TOOL::Init`: shown when every selected item is a track, via or zone (a selected footprint does not get it, as in KiCad). Not ported: the canvas preview that selects the matching nets while typing | `common/dialogs/dialog_assign_netclass.cpp`, `pcbnew/tools/edit_tool.cpp` |
+| Design Rules > Custom Rules: the text of the `.kicad_dru` | editable as text; "Check rule syntax" asks kicad-cli (it has no checker, and drops a file it cannot parse without a word, so the backend loads the text beside a probe board and names the first top-level rule that stops it). Not ported: the highlighting editor, Syntax Help, the compiler's extra warnings, the rule-tree designer (`drcRuleEditor`) | `panel_setup_rules.cpp` |
+| Design Rules > Violation Severity: Error / Warning / Ignore for each of the 64 checks | editable; the list and the defaults come from `drc_item.cpp` (`tools/extract-drc-checks.js`). The two library-link checks start at Ignore (every footprint is embedded in the board) | `panel_setup_severities.cpp` |
+| Board Editor Layers, Zone Hatch Offsets, Formatting, Text Variables, Length-tuning Patterns, Tuning Profiles, Component Classes, Embedded Files | not ported -- nothing in the model holds them | |
 
 W/Shift+W (`pcbnew.EditorControl.trackWidthInc`/`Dec`) and the via-size
 cycle (`viaSizeInc`/`Dec`) now read this page's lists -- `useActionRunner.ts`:
@@ -383,10 +388,9 @@ Canvas.tsx's route/via tools for the *next* item) and, matching source's
 own dual-purpose behavior, also applies the new size to every selected
 track/via in the same keypress via `set_track_width`/`edit_via`.
 
-Rust: `crates/cli/src/studio.rs`'s `state()` gained `board_rules.
-net_classes`/`stackup`/the hole-clearance-and-text-default fields (plain
-JSON exposure, no new endpoint) and `routing.track_width_presets`/
-`via_presets`.
+Rust: `crates/cli/src/studio.rs`'s `state()` sends `board_rules` with the rules as the board is judged by them now (`default_class`,
+`constraints`, `mask_paste`, `text_graphics`, `layer_names`, `severities`, `custom_rules_text`, and `overlay`, the pages an edit has replaced) beside the
+older `net_classes`/`stackup` fields, and `routing.track_width_presets`/`via_presets`; `POST /api/check_rules` is Custom Rules' syntax check.
 
 ## 10. Property dialogs (GAPS.md #11)
 
@@ -500,9 +504,9 @@ two-panels shape source itself uses -- rather than being a separate type.
 | Drawing: outline-drawn with the same tool as a copper-pour zone | ported, one hotkey/menu difference from source rather than a separate tool -- `pcbnew.InteractiveDrawing.ruleArea` (Ctrl+Shift+K) arms the identical outline tool as `.zone`; `state.nextZoneIsRuleArea` is the one bit telling `ZoneDialog.tsx` to pre-check "Rule area" for *this* entry's outline, same end result (draw outline, dialog opens, Rule Area already ticked) with no second drawing-tool code path to maintain | `tools/drawing_tool.cpp`'s zone/keepout entry points, which upstream also funnel through one outline-drawing loop |
 | Properties dialog: "Rule area" checkbox swaps the panel between fill settings and the 5 keepout checkboxes | identical in effect | `dialog_copper_zones.cpp`'s `IsRuleArea()` branch -- `ZoneDialog.tsx` |
 | Zone filler honors a copper-pour keepout: every other zone's fill excludes it, any net, any priority | identical in effect | `ZONE_FILLER::fillCopperZone`'s keepout knockout -- `crates/zone-filler`'s new `FillInput::keepouts`/`FillKeepout`, 2 new tests. Previously an explicit, named gap in that crate's own doc comment ("Not ported: ... keepout zones") |
-| DRC: track/via/pad/footprint landing inside a matching keepout is reported (`items_not_allowed`), and a copper pour inside one | KiCad's own, by running it: the exported rule area is a `(zone (keepout ...))` and kicad-cli's DRC reports `items_not_allowed` (2026-10-03; the Rust `disallow` provider is deleted, so there is nothing to keep in parity) | `drc_test_provider_disallow.cpp` (kicad-cli's) |
+| DRC: track/via/pad/footprint landing inside a matching keepout is reported (`items_not_allowed`), and a copper pour inside one | KiCad's own: the rule area is exported as a `(zone (keepout ...) (placement ...))` and kicad-cli's DRC reports `items_not_allowed` (the Rust `disallow` provider is deleted, so there is nothing to keep in parity). **Status (2026-10-07): true now, and tested** -- until then it was not true of any board with a rule area: the writer asked its net check about the area's empty net and the whole export failed with `kicad.unknown_net`, so there was no file for kicad-cli to read (`kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers`, `crates/kicad/tests/kicad_cli_drc.rs`) | `drc_test_provider_disallow.cpp` (kicad-cli's) |
 | Multi-layer rule areas (one outline, several layers); custom `(disallow ...)` DRC rules on non-keepout items; `DRCE_TEXT_ON_EDGECUTS` (a different, unrelated half of the same KiCad source file) | not ported -- this model's `Zone` is single-layer only (an existing, documented limitation predating this item), has no custom-rule language (GAPS.md #10), and text-on-Edge.Cuts is a separate check | `ZONE::GetLayerSet()`, `panel_setup_rules.cpp`, `drc_test_provider_disallow.cpp`'s `checkTextOnEdgeCuts` |
-| `.kicad_pcb` export of a rule area | not ported -- `crates/kicad`'s exporter was out of this item's explicit scope; a rule area round-tripped through export today would still be written as (and read back as) a zone, net/fill fields included, which is not what a real `.kicad_pcb`'s `(zone (keepout ...))` block looks like | `crates/kicad/src/pcb.rs`'s zone writer -- flagged here for a follow-up, not silently dropped |
+| `.kicad_pcb` export of a rule area | **ported (2026-10-07, WP5 step 1)**: a rule area is written as KiCad writes it -- no `(net ..)`, `(keepout (tracks ..) (vias ..) (pads ..) (copperpour ..) (footprints ..))`, `(placement (enabled no))`, no fill -- and the importer reads those tokens back. Before this it was written as a pour, and having no net it failed the export of the whole board | `pcb_io_kicad_sexpr.cpp` `format( const ZONE* )` -- `crates/kicad/src/pcb_items.rs::write_zone`, tests `a_rule_area_exports_as_a_keepout_zone_without_a_net` and `every_zone_is_written_with_its_own_settings_and_reads_back_the_same` |
 | Canvas rendering: a rule area draws as a dashed outline with a diagonal hatch and a restriction label ("Keepout: Tracks/Vias"), never a solid fill (it never has one) | ported, a simplified stand-in for source's real cross-hatch keepout rendering | `pcb_painter.cpp`'s zone paint, keepout branch -- `painter.ts`'s new `drawRuleArea` |
 
 Rust: `crates/model/src/ir.rs` (`Zone`'s 6 new fields), `crates/ops/src/lib.rs`
@@ -542,7 +546,7 @@ wholesale on every "Add All Teardrops", never hand-edited.
 | Borrowing length from a second track segment when the first is too short (`m_AllowUseTwoTracks`) | not ported -- a track shorter than the requested teardrop length is simply skipped | `findAnchorPointsOnTrack`'s two-segment extension |
 | Excluding a pad already covered by a same-net zone fill (`m_TdOnPadsInZones`) | not ported | `areItemsInSameZone` |
 | Incremental updates (only regenerating teardrops near a just-edited item, `RemoveTeardrops`/`UpdateTeardrops`'s `dirtyPadsAndVias`/`dirtyTracks` lists) | not ported -- "Add All Teardrops" always recomputes the whole board from scratch, same "nothing cached, nothing stale" philosophy this app's zone fills already use | `TEARDROP_MANAGER`'s dirty-item tracking |
-| `.kicad_pcb` export/import of a teardrop zone | not ported, same documented gap as section 14's rule areas | `crates/kicad/src/pcb.rs` |
+| `.kicad_pcb` export/import of a teardrop zone | **ported (2026-10-07)**: `(attr (teardrop (type padvia)))` plus the settings KiCad's own teardrop manager gives a teardrop zone (no clearance, 0.0254 mm minimum width, full pad connection, islands kept); read back as `Zone::teardrop`. A `track_end` teardrop imports as a `padvia` one | `teardrop.cpp` `createTeardrop`, `format( const ZONE* )` -- `crates/kicad/src/pcb_items.rs`, test `a_teardrop_zone_is_flagged_and_carries_kicads_own_teardrop_settings` |
 
 Rust: `crates/model/src/ir.rs` (`Zone::teardrop`, `TeardropSettings`, on
 `RoutingSection` -- a genuinely large mechanical ripple fixing every
@@ -583,7 +587,7 @@ entering/leaving one. A group is its own IR type (`Group`: id, name,
 | Visual: "entered group" dimming/overlay of everything outside it; a named group's own label | not ported -- entering a group changes selection/selectability semantics only, with no distinct rendering of the entered state yet | `pcb_selection_tool.cpp`'s `m_enteredGroupOverlay`, `pcb_painter.cpp`'s group name paint |
 | Group-aware move/rotate/flip/delete (acting on every member as a unit when the group itself is "selected") | not ported -- today's whole-group "selection" is a set of individual member ids under the hood (via substitution at read time), and the existing per-kind edit `Cmd`s have no group-aware bulk path; moving/rotating/deleting "a group" in this app means doing so to each member id already present in `state.selection`, not a single group-level operation | `GROUP_TOOL`'s interaction with `EDIT_TOOL`/`PCB_ACTIONS::move` et al. acting on `PCB_GROUP` as one item |
 | Nested groups (a group containing another group) | not ported, by design -- see the flattening row above | `EDA_GROUP`'s recursive member list |
-| `.kicad_pcb` export/import of a `(group ...)` block | not ported, same documented gap as sections 14-15 | `crates/kicad/src/pcb.rs` |
+| `.kicad_pcb` export/import of a `(group ...)` block | **ported (2026-10-07)**: `(group "name" (uuid ..) [(locked yes)] (members ..))`, written last, members named by the uuids of what was written (a polyline track is several segments, all members). The importer resolves the uuids to ids; a group inside a group is flattened into the outer one, and a group with fewer than two members on the board is dropped | `format( const PCB_GROUP* )`, `parseGROUP` -- `crates/kicad/src/pcb_items.rs::write_group`, `import_items.rs`, test `groups_are_written_with_their_members_uuids_and_read_back_with_their_ids` |
 
 ## 17. Create Array
 
@@ -650,7 +654,7 @@ returns and never re-derives any of it.
 | Interactive placement: Aligned/Orthogonal's third "set height" click with a live crossbar preview; Radial/Leader/Center's own click sequences | simplified to one plain two-click (start, end) placement for every kind, with `height`/`leader_length`/orientation filled from Board Setup defaults and the just-created dimension's own Properties dialog opening immediately for fine-tuning -- a deliberate scope reduction (no live multi-step canvas preview for this item), not a missing capability: every field the live click sequence would have set is still reachable, just numerically instead of by dragging | `tools/drawing_tool.cpp::DrawDimension` |
 | Interactive centre-point/-item picker buttons for Radial's own dialog-free flow | not ported -- plain numeric X/Y fields instead, same convention every other dialog in this app already uses | n/a (this port has no equivalent interactive picker tool) |
 | Selecting a dimension (click, box-select, the Selection Filter's own toggle) | ported -- `components/canvas/selectionCandidates.ts` gained a `"dimension"` kind, hit-tested against the closest of its own `lines` segments (a disconnected set, not one polyline) or its text anchor | `pcb_selection_tool.cpp`'s generic item iteration, extended to this new kind |
-| `.kicad_pcb` export/import of a dimension | not ported, same documented gap as sections 14-17's own new item kinds | `crates/kicad/src/pcb.rs` |
+| `.kicad_pcb` export/import of a dimension | **ported (2026-10-07)**: all five kinds, with their `(format ..)` and `(style ..)` blocks and the label as a `gr_text` (position and text from `compute_dimension_geometry`; KiCad recomputes both on load). The importer reads the new format only (the pre-6.0 `(feature1 ..)` form is skipped); a manual text position imports as `outside`. Text pen thickness is the new `Dimension::text_thickness_um` | `format( const PCB_DIMENSION_BASE* )`, `parseDIMENSION` -- `crates/kicad/src/pcb_items.rs::write_dimension`, `import_items.rs`, test `a_dimension_is_written_with_its_format_and_style_and_reads_back_the_same` |
 
 Rust: `crates/model/src/ir.rs`'s `Dimension`/`DimensionKind`/
 `DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/

@@ -132,6 +132,18 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
             model.symbols.push(lib_sym.to_engine_symbol());
         }
     }
+    // Board Setup's edits to the rules (net classes, constraints, mask and paste, text defaults, the stackup, violation
+    // severities, custom rules): the same "design.json wins over the frozen intent" precedent, applied page by page
+    // (`eda_model::rules::RulesOverlay`). The router, the gates, the studio and the derived `.kicad_pro`/`.kicad_pcb`/
+    // `.kicad_dru` kicad-cli reads all see the model this leaves behind, so an edit reaches DRC.
+    if let Some(overlay) = design.drawings.as_ref().and_then(|d| d.rules.as_ref()) {
+        overlay.apply(&mut model);
+        // The overlay holds the custom rules as text; the parsed subset the router and gates read comes from the same
+        // parser an imported `.kicad_dru` goes through.
+        if let Some(text) = overlay.custom_rules.as_deref().filter(|t| !t.trim().is_empty()) {
+            eda_kicad::merge_custom_rules(&mut model, text);
+        }
+    }
     // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
     fold_unknown_symbols(&design, &mut model);
     Ok((meta, design, model))
@@ -947,6 +959,13 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveDimension { id, dx, dy } => format!("dimension move {id} --by {},{}", mm(*dx), mm(*dy)),
         Cmd::EditDimension { id, .. } => format!("dimension edit {id}"),
         Cmd::SetDimensionSettings { .. } => "board-setup dimensions".to_string(),
+        Cmd::SetNetClasses { settings } => format!("board-setup net-classes ({} classes)", settings.classes.len() + 1),
+        Cmd::SetConstraints { .. } => "board-setup constraints".to_string(),
+        Cmd::SetMaskPaste { .. } => "board-setup mask-paste".to_string(),
+        Cmd::SetTextGraphicsDefaults { .. } => "board-setup text-graphics".to_string(),
+        Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
+        Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
+        Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
         Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
         Cmd::SetLocked { ids, locked } => format!("{} {}", if *locked { "lock" } else { "unlock" }, ids.join(" ")),
         Cmd::SwapChain { parts } => format!("swap-chain {}", parts.join(" ")),
@@ -1174,6 +1193,13 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::MoveDimension { .. } => "dimension-move",
         Cmd::EditDimension { .. } => "dimension-edit",
         Cmd::SetDimensionSettings { .. } => "dimension-settings",
+        Cmd::SetNetClasses { .. } => "net-classes",
+        Cmd::SetConstraints { .. } => "constraints",
+        Cmd::SetMaskPaste { .. } => "mask-paste",
+        Cmd::SetTextGraphicsDefaults { .. } => "text-graphics",
+        Cmd::SetStackup { .. } => "stackup",
+        Cmd::SetRuleSeverities { .. } => "severities",
+        Cmd::SetCustomRules { .. } => "custom-rules",
         Cmd::SwapLayers { .. } => "swap-layers",
         Cmd::SetLocked { .. } => "lock",
         Cmd::SwapChain { .. } => "swap",
@@ -1746,6 +1772,97 @@ mod tests {
         let err = step_with(&cli, cmd, Strictness::Judged, "test").unwrap_err();
         assert_eq!(err[0].check, "board_worse", "{err:?}");
         assert!(err[0].hint.as_deref().unwrap_or("").contains("placement_courtyard_overlap"), "{err:?}");
+    }
+
+    /// kicad-cli's violation counts by type on the board in `dir`, as the studio's DRC reports them.
+    fn drc_counts(dir: &Path) -> std::collections::BTreeMap<String, u64> {
+        let report = crate::kicad_engine::drc(dir, false).expect("kicad-cli ran");
+        report["counts"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap())).collect()
+    }
+
+    /// Two tracks on different nets, 450 um centre to centre and 200 um wide: 250 um of air between them.
+    fn two_close_tracks(dir: &Path) {
+        step(dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_450 }, Point { x: 12_000, y: 12_450 }] }, false, "test").unwrap();
+    }
+
+    /// Board Setup's edits reach kicad-cli: the two tracks of [`two_close_tracks`] are clean under the board's 200 um
+    /// clearance and a `clearance` violation once the Default class asks for 300 um; Undo takes the edit back. The overlay
+    /// lives in `design.json`, `board::load` lays it over the intent's rules, the derived `.kicad_pcb` carries the class.
+    #[test]
+    fn a_changed_clearance_in_board_setup_changes_what_kicad_cli_reports_and_undo_takes_it_back() {
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("board_setup_clearance");
+        setup(&dir);
+        two_close_tracks(&dir);
+        let clearance = |dir: &Path| drc_counts(dir).get("clearance").copied().unwrap_or(0);
+        assert_eq!(clearance(&dir), 0, "250 um apart is fine under 200 um");
+
+        let (_, _, model) = load(&dir).unwrap();
+        let mut settings = eda_model::rules::net_class_settings_of(&model.board);
+        settings.default.clearance = Some(300);
+        step(&dir, Cmd::SetNetClasses { settings }, false, "ui").unwrap();
+        assert_eq!(load(&dir).unwrap().2.board.clearance, 300, "board::load lays the overlay over the intent's rules");
+        assert!(clearance(&dir) >= 1, "250 um apart is too close for a 300 um clearance");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(clearance(&dir), 0, "Undo takes the edit back, overlay and all");
+        assert_eq!(load(&dir).unwrap().2.board.clearance, model.board.clearance);
+    }
+
+    /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a
+    /// pattern, a minimum track width, a violation severity and a custom rule each change the report, and each Undo
+    /// takes its edit back.
+    #[test]
+    fn the_other_board_setup_pages_reach_kicad_cli_and_undo_takes_each_back() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("board_setup_pages");
+        setup(&dir);
+        two_close_tracks(&dir);
+        let count = |dir: &Path, kind: &str| drc_counts(dir).get(kind).copied().unwrap_or(0);
+        let (_, _, model) = load(&dir).unwrap();
+        let defaults = eda_model::rules::net_class_settings_of(&model.board);
+
+        // A class on VCC, assigned by a pattern, asks for 400 um (the larger of the two nets' clearances applies).
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(200), clearance: Some(400), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults.clone() } }, false, "ui").unwrap();
+        assert!(count(&dir, "clearance") >= 1, "a net class assigned by a pattern reaches kicad-cli");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir, "clearance"), 0);
+
+        // Constraints: a minimum track width above the tracks' 200 um.
+        assert_eq!(count(&dir, "track_width"), 0);
+        let constraints = eda_model::rules::Constraints { min_track_width_um: 250, ..eda_model::rules::Constraints::of(&model.board) };
+        step(&dir, Cmd::SetConstraints { constraints }, false, "ui").unwrap();
+        assert_eq!(count(&dir, "track_width"), 2, "both tracks are under the new minimum");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir, "track_width"), 0);
+
+        // Violation Severity: the clearance check turned off reports nothing, whatever the rules.
+        let tight = eda_model::rules::NetClassSettings { default: eda_model::NetClass { clearance: Some(300), ..defaults.default.clone() }, classes: vec![] };
+        step(&dir, Cmd::SetNetClasses { settings: tight }, false, "ui").unwrap();
+        assert!(count(&dir, "clearance") >= 1);
+        step(&dir, Cmd::SetRuleSeverities { severities: [("clearance".to_string(), "ignore".to_string())].into() }, false, "ui").unwrap();
+        assert_eq!(count(&dir, "clearance"), 0, "an ignored check is not run");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+
+        // Custom Rules: the text goes to the derived .kicad_dru.
+        let rule = "(version 1)\n(rule \"wide\"\n  (constraint clearance (min 0.6mm)))\n";
+        step(&dir, Cmd::SetCustomRules { text: rule.into() }, false, "ui").unwrap();
+        assert!(count(&dir, "clearance") >= 1, "a custom clearance rule applies");
+        assert_eq!(std::fs::read_to_string(dir.join(".kicad").join("board.kicad_dru")).unwrap(), rule);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir, "clearance"), 0);
     }
 
     #[test]

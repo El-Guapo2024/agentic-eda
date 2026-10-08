@@ -1,0 +1,423 @@
+{
+  "commit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+  "source": [
+    "pcbnew/drc/drc_item.cpp",
+    "pcbnew/board_design_settings.cpp"
+  ],
+  "groups": [
+    {
+      "title": "Electrical",
+      "items": [
+        {
+          "key": "shorting_items",
+          "title": "Items shorting two nets",
+          "code": "DRCE_SHORTING_ITEMS",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "tracks_crossing",
+          "title": "Tracks crossing",
+          "code": "DRCE_TRACKS_CROSSING",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "clearance",
+          "title": "Clearance violation",
+          "code": "DRCE_CLEARANCE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "creepage",
+          "title": "Creepage violation",
+          "code": "DRCE_CREEPAGE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "via_dangling",
+          "title": "Via is not connected or connected on only one layer",
+          "code": "DRCE_DANGLING_VIA",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "track_dangling",
+          "title": "Track has unconnected end",
+          "code": "DRCE_DANGLING_TRACK",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "starved_thermal",
+          "title": "Thermal relief connection to zone incomplete",
+          "code": "DRCE_STARVED_THERMAL",
+          "defaultSeverity": "error"
+        }
+      ]
+    },
+    {
+      "title": "Design for Manufacturing",
+      "items": [
+        {
+          "key": "copper_edge_clearance",
+          "title": "Board edge clearance violation",
+          "code": "DRCE_EDGE_CLEARANCE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "hole_clearance",
+          "title": "Hole clearance violation",
+          "code": "DRCE_HOLE_CLEARANCE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "hole_to_hole",
+          "title": "Drilled hole too close to other hole",
+          "code": "DRCE_DRILLED_HOLES_TOO_CLOSE",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "holes_co_located",
+          "title": "Drilled holes co-located",
+          "code": "DRCE_DRILLED_HOLES_COLOCATED",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "track_width",
+          "title": "Track width",
+          "code": "DRCE_TRACK_WIDTH",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "track_angle",
+          "title": "Track angle",
+          "code": "DRCE_TRACK_ANGLE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "track_segment_length",
+          "title": "Track segment length",
+          "code": "DRCE_TRACK_SEGMENT_LENGTH",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "annular_width",
+          "title": "Annular width",
+          "code": "DRCE_ANNULAR_WIDTH",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "drill_out_of_range",
+          "title": "Hole size out of range",
+          "code": "DRCE_DRILL_OUT_OF_RANGE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "microvia_drill_out_of_range",
+          "title": "Micro via hole size out of range",
+          "code": "DRCE_MICROVIA_DRILL_OUT_OF_RANGE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "via_diameter",
+          "title": "Via diameter",
+          "code": "DRCE_VIA_DIAMETER",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "courtyards_overlap",
+          "title": "Courtyards overlap",
+          "code": "DRCE_OVERLAPPING_FOOTPRINTS",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "missing_courtyard",
+          "title": "Footprint has no courtyard defined",
+          "code": "DRCE_MISSING_COURTYARD",
+          "defaultSeverity": "ignore"
+        },
+        {
+          "key": "malformed_courtyard",
+          "title": "Footprint has malformed courtyard",
+          "code": "DRCE_MALFORMED_COURTYARD",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "invalid_outline",
+          "title": "Board has malformed outline",
+          "code": "DRCE_INVALID_OUTLINE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "copper_sliver",
+          "title": "Copper sliver",
+          "code": "DRCE_COPPER_SLIVER",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "solder_mask_bridge",
+          "title": "Solder mask aperture bridges items with different nets",
+          "code": "DRCE_SOLDERMASK_BRIDGE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "connection_width",
+          "title": "Copper connection too narrow",
+          "code": "DRCE_CONNECTION_WIDTH",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "track_on_post_machined_layer",
+          "title": "Track connected to post-machined or backdrilled layer",
+          "code": "DRCE_TRACK_ON_POST_MACHINED_LAYER",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "track_not_centered_on_via",
+          "title": "Track endpoint not centered on via",
+          "code": "DRCE_TRACK_NOT_CENTERED_ON_VIA",
+          "defaultSeverity": "ignore"
+        },
+        {
+          "key": "tuning_profile_track_geometries",
+          "title": "Tuning profile track geometries",
+          "code": "DRCE_TUNING_PROFILE_IMPLICIT_RULES",
+          "defaultSeverity": "ignore"
+        }
+      ]
+    },
+    {
+      "title": "Schematic Parity",
+      "items": [
+        {
+          "key": "duplicate_footprints",
+          "title": "Duplicate footprints",
+          "code": "DRCE_DUPLICATE_FOOTPRINT",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "missing_footprint",
+          "title": "Missing footprint",
+          "code": "DRCE_MISSING_FOOTPRINT",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "extra_footprint",
+          "title": "Extra footprint",
+          "code": "DRCE_EXTRA_FOOTPRINT",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "footprint_symbol_mismatch",
+          "title": "Footprint attributes don't match symbol",
+          "code": "DRCE_SCHEMATIC_PARITY",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "footprint_symbol_field_mismatch",
+          "title": "Footprint field does not match symbol field",
+          "code": "DRCE_SCHEMATIC_FIELDS_PARITY",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "footprint_filters_mismatch",
+          "title": "Footprint doesn't match symbol's footprint filters",
+          "code": "DRCE_FOOTPRINT_FILTERS",
+          "defaultSeverity": "ignore"
+        },
+        {
+          "key": "net_conflict",
+          "title": "Pad net doesn't match schematic",
+          "code": "DRCE_NET_CONFLICT",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "unconnected_items",
+          "title": "Missing connection between items",
+          "code": "DRCE_UNCONNECTED_ITEMS",
+          "defaultSeverity": "error"
+        }
+      ]
+    },
+    {
+      "title": "Signal Integrity",
+      "items": [
+        {
+          "key": "length_out_of_range",
+          "title": "Track length out of range",
+          "code": "DRCE_LENGTH_OUT_OF_RANGE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "skew_out_of_range",
+          "title": "Skew between tracks out of range",
+          "code": "DRCE_SKEW_OUT_OF_RANGE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "too_many_vias",
+          "title": "Too many or too few vias on a connection",
+          "code": "DRCE_VIA_COUNT_OUT_OF_RANGE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "diff_pair_gap_out_of_range",
+          "title": "Differential pair gap out of range",
+          "code": "DRCE_DIFF_PAIR_GAP_OUT_OF_RANGE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "diff_pair_uncoupled_length_too_long",
+          "title": "Differential uncoupled length too long",
+          "code": "DRCE_DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG",
+          "defaultSeverity": "error"
+        }
+      ]
+    },
+    {
+      "title": "Readability",
+      "items": [
+        {
+          "key": "silk_overlap",
+          "title": "Silkscreen clearance",
+          "code": "DRCE_SILK_CLEARANCE",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "silk_over_copper",
+          "title": "Silkscreen clipped by solder mask",
+          "code": "DRCE_SILK_MASK_CLEARANCE",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "silk_edge_clearance",
+          "title": "Silkscreen clipped by board edge",
+          "code": "DRCE_SILK_EDGE_CLEARANCE",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "text_height",
+          "title": "Text height out of range",
+          "code": "DRCE_TEXT_HEIGHT",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "text_thickness",
+          "title": "Text thickness out of range",
+          "code": "DRCE_TEXT_THICKNESS",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "mirrored_text_on_front_layer",
+          "title": "Mirrored text on front layer",
+          "code": "DRCE_MIRRORED_TEXT_ON_FRONT_LAYER",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "nonmirrored_text_on_back_layer",
+          "title": "Non-Mirrored text on back layer",
+          "code": "DRCE_NONMIRRORED_TEXT_ON_BACK_LAYER",
+          "defaultSeverity": "warning"
+        }
+      ]
+    },
+    {
+      "title": "Miscellaneous",
+      "items": [
+        {
+          "key": "items_not_allowed",
+          "title": "Items not allowed",
+          "code": "DRCE_ALLOWED_ITEMS",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "text_on_edge_cuts",
+          "title": "Text (or dimension) on Edge.Cuts layer",
+          "code": "DRCE_TEXT_ON_EDGECUTS",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "zones_intersect",
+          "title": "Copper zones intersect",
+          "code": "DRCE_ZONES_INTERSECT",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "isolated_copper",
+          "title": "Isolated copper fill",
+          "code": "DRCE_ISOLATED_COPPER",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "footprint",
+          "title": "Footprint is not valid",
+          "code": "DRCE_FOOTPRINT",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "padstack",
+          "title": "Padstack is questionable",
+          "code": "DRCE_PADSTACK",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "pth_inside_courtyard",
+          "title": "PTH inside courtyard",
+          "code": "DRCE_PTH_IN_COURTYARD",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "npth_inside_courtyard",
+          "title": "NPTH inside courtyard",
+          "code": "DRCE_NPTH_IN_COURTYARD",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "item_on_disabled_layer",
+          "title": "Item on a disabled copper layer",
+          "code": "DRCE_DISABLED_LAYER_ITEM",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "unresolved_variable",
+          "title": "Unresolved text variable",
+          "code": "DRCE_UNRESOLVED_VARIABLE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "assertion_failure",
+          "title": "Assertion failure",
+          "code": "DRCE_ASSERTION_FAILURE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "footprint_type_mismatch",
+          "title": "Footprint component type doesn't match footprint pads",
+          "code": "DRCE_FOOTPRINT_TYPE_MISMATCH",
+          "defaultSeverity": "ignore"
+        },
+        {
+          "key": "lib_footprint_issues",
+          "title": "Footprint not found in libraries",
+          "code": "DRCE_LIB_FOOTPRINT_ISSUES",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "lib_footprint_mismatch",
+          "title": "Footprint doesn't match copy in library",
+          "code": "DRCE_LIB_FOOTPRINT_MISMATCH",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "through_hole_pad_without_hole",
+          "title": "Through hole pad has no hole",
+          "code": "DRCE_PAD_TH_WITH_NO_HOLE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "missing_tuning_profile",
+          "title": "Missing tuning profile",
+          "code": "DRCE_MISSING_TUNING_PROFILE",
+          "defaultSeverity": "warning"
+        }
+      ]
+    }
+  ]
+}

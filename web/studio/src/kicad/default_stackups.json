@@ -1,0 +1,1089 @@
+{
+  "defaults": [
+    {
+      "board_thickness_um": 1600,
+      "copper_layers": 2,
+      "stackup": {
+        "layers": [
+          {
+            "kind": "Top Silk Screen",
+            "material": null,
+            "name": "F.SilkS",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Paste",
+            "material": null,
+            "name": "F.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Mask",
+            "material": null,
+            "name": "F.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "F.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 1",
+            "thickness_mm": 1.51
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "B.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "kind": "Bottom Solder Mask",
+            "material": null,
+            "name": "B.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "Bottom Solder Paste",
+            "material": null,
+            "name": "B.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Bottom Silk Screen",
+            "material": null,
+            "name": "B.SilkS",
+            "thickness_mm": null
+          }
+        ]
+      }
+    },
+    {
+      "board_thickness_um": 1600,
+      "copper_layers": 4,
+      "stackup": {
+        "layers": [
+          {
+            "kind": "Top Silk Screen",
+            "material": null,
+            "name": "F.SilkS",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Paste",
+            "material": null,
+            "name": "F.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Mask",
+            "material": null,
+            "name": "F.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "F.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 1",
+            "thickness_mm": 0.48
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In1.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "prepreg",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 2",
+            "thickness_mm": 0.48
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In2.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 3",
+            "thickness_mm": 0.48
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "B.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "kind": "Bottom Solder Mask",
+            "material": null,
+            "name": "B.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "Bottom Solder Paste",
+            "material": null,
+            "name": "B.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Bottom Silk Screen",
+            "material": null,
+            "name": "B.SilkS",
+            "thickness_mm": null
+          }
+        ]
+      }
+    },
+    {
+      "board_thickness_um": 1000,
+      "copper_layers": 4,
+      "stackup": {
+        "layers": [
+          {
+            "kind": "Top Silk Screen",
+            "material": null,
+            "name": "F.SilkS",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Paste",
+            "material": null,
+            "name": "F.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Mask",
+            "material": null,
+            "name": "F.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "F.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 1",
+            "thickness_mm": 0.27999999999999997
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In1.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "prepreg",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 2",
+            "thickness_mm": 0.27999999999999997
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In2.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 3",
+            "thickness_mm": 0.27999999999999997
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "B.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "kind": "Bottom Solder Mask",
+            "material": null,
+            "name": "B.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "Bottom Solder Paste",
+            "material": null,
+            "name": "B.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Bottom Silk Screen",
+            "material": null,
+            "name": "B.SilkS",
+            "thickness_mm": null
+          }
+        ]
+      }
+    },
+    {
+      "board_thickness_um": 1600,
+      "copper_layers": 6,
+      "stackup": {
+        "layers": [
+          {
+            "kind": "Top Silk Screen",
+            "material": null,
+            "name": "F.SilkS",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Paste",
+            "material": null,
+            "name": "F.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Mask",
+            "material": null,
+            "name": "F.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "F.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 1",
+            "thickness_mm": 0.274
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In1.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "prepreg",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 2",
+            "thickness_mm": 0.274
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In2.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 3",
+            "thickness_mm": 0.274
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In3.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "prepreg",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 4",
+            "thickness_mm": 0.274
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In4.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 5",
+            "thickness_mm": 0.274
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "B.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "kind": "Bottom Solder Mask",
+            "material": null,
+            "name": "B.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "Bottom Solder Paste",
+            "material": null,
+            "name": "B.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Bottom Silk Screen",
+            "material": null,
+            "name": "B.SilkS",
+            "thickness_mm": null
+          }
+        ]
+      }
+    },
+    {
+      "board_thickness_um": 2400,
+      "copper_layers": 8,
+      "stackup": {
+        "layers": [
+          {
+            "kind": "Top Silk Screen",
+            "material": null,
+            "name": "F.SilkS",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Paste",
+            "material": null,
+            "name": "F.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Top Solder Mask",
+            "material": null,
+            "name": "F.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "F.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 1",
+            "thickness_mm": 0.3
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In1.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "prepreg",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 2",
+            "thickness_mm": 0.3
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In2.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 3",
+            "thickness_mm": 0.3
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In3.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "prepreg",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 4",
+            "thickness_mm": 0.3
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In4.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 5",
+            "thickness_mm": 0.3
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In5.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "prepreg",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 6",
+            "thickness_mm": 0.3
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "In6.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "epsilon_r": 4.5,
+            "kind": "core",
+            "loss_tangent": 0.02,
+            "material": "FR4",
+            "name": "dielectric 7",
+            "thickness_mm": 0.3
+          },
+          {
+            "kind": "copper",
+            "material": null,
+            "name": "B.Cu",
+            "thickness_mm": 0.035
+          },
+          {
+            "kind": "Bottom Solder Mask",
+            "material": null,
+            "name": "B.Mask",
+            "thickness_mm": 0.01
+          },
+          {
+            "kind": "Bottom Solder Paste",
+            "material": null,
+            "name": "B.Paste",
+            "thickness_mm": null
+          },
+          {
+            "kind": "Bottom Silk Screen",
+            "material": null,
+            "name": "B.SilkS",
+            "thickness_mm": null
+          }
+        ]
+      }
+    }
+  ],
+  "resizes": [
+    {
+      "expected": {
+        "copper_layers": 6,
+        "stackup": {
+          "copper_finish": "ENIG",
+          "edge_plating": true,
+          "layers": [
+            {
+              "kind": "Top Silk Screen",
+              "material": null,
+              "name": "F.SilkS",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Paste",
+              "material": null,
+              "name": "F.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Mask",
+              "material": null,
+              "name": "F.Mask",
+              "thickness_mm": 0.01
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "F.Cu",
+              "thickness_mm": 0.07
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 1",
+              "thickness_mm": 0.2
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In1.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "prepreg",
+              "loss_tangent": 0.02,
+              "material": "Polyimide",
+              "name": "dielectric 2",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In2.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 3",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In3.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "prepreg",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 4",
+              "thickness_mm": 0.227
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In4.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 5",
+              "thickness_mm": 0.227
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "B.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "kind": "Bottom Solder Mask",
+              "material": null,
+              "name": "B.Mask",
+              "thickness_mm": 0.02
+            },
+            {
+              "kind": "Bottom Solder Paste",
+              "material": null,
+              "name": "B.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Bottom Silk Screen",
+              "material": null,
+              "name": "B.SilkS",
+              "thickness_mm": null
+            }
+          ]
+        }
+      },
+      "from": {
+        "copper_layers": 4,
+        "stackup": {
+          "copper_finish": "ENIG",
+          "edge_plating": true,
+          "layers": [
+            {
+              "kind": "Top Silk Screen",
+              "material": null,
+              "name": "F.SilkS",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Paste",
+              "material": null,
+              "name": "F.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Mask",
+              "material": null,
+              "name": "F.Mask",
+              "thickness_mm": 0.01
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "F.Cu",
+              "thickness_mm": 0.07
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 1",
+              "thickness_mm": 0.2
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In1.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "prepreg",
+              "loss_tangent": 0.02,
+              "material": "Polyimide",
+              "name": "dielectric 2",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In2.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 3",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "B.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "kind": "Bottom Solder Mask",
+              "material": null,
+              "name": "B.Mask",
+              "thickness_mm": 0.02
+            },
+            {
+              "kind": "Bottom Solder Paste",
+              "material": null,
+              "name": "B.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Bottom Silk Screen",
+              "material": null,
+              "name": "B.SilkS",
+              "thickness_mm": null
+            }
+          ]
+        }
+      },
+      "to_copper_layers": 6
+    },
+    {
+      "expected": {
+        "copper_layers": 2,
+        "stackup": {
+          "copper_finish": "ENIG",
+          "edge_plating": true,
+          "layers": [
+            {
+              "kind": "Top Silk Screen",
+              "material": null,
+              "name": "F.SilkS",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Paste",
+              "material": null,
+              "name": "F.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Mask",
+              "material": null,
+              "name": "F.Mask",
+              "thickness_mm": 0.01
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "F.Cu",
+              "thickness_mm": 0.07
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 1",
+              "thickness_mm": 0.2
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "B.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "kind": "Bottom Solder Mask",
+              "material": null,
+              "name": "B.Mask",
+              "thickness_mm": 0.02
+            },
+            {
+              "kind": "Bottom Solder Paste",
+              "material": null,
+              "name": "B.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Bottom Silk Screen",
+              "material": null,
+              "name": "B.SilkS",
+              "thickness_mm": null
+            }
+          ]
+        }
+      },
+      "from": {
+        "copper_layers": 4,
+        "stackup": {
+          "copper_finish": "ENIG",
+          "edge_plating": true,
+          "layers": [
+            {
+              "kind": "Top Silk Screen",
+              "material": null,
+              "name": "F.SilkS",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Paste",
+              "material": null,
+              "name": "F.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Mask",
+              "material": null,
+              "name": "F.Mask",
+              "thickness_mm": 0.01
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "F.Cu",
+              "thickness_mm": 0.07
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 1",
+              "thickness_mm": 0.2
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In1.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "prepreg",
+              "loss_tangent": 0.02,
+              "material": "Polyimide",
+              "name": "dielectric 2",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In2.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 3",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "B.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "kind": "Bottom Solder Mask",
+              "material": null,
+              "name": "B.Mask",
+              "thickness_mm": 0.02
+            },
+            {
+              "kind": "Bottom Solder Paste",
+              "material": null,
+              "name": "B.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Bottom Silk Screen",
+              "material": null,
+              "name": "B.SilkS",
+              "thickness_mm": null
+            }
+          ]
+        }
+      },
+      "to_copper_layers": 2
+    },
+    {
+      "expected": {
+        "copper_layers": 4,
+        "stackup": {
+          "copper_finish": "ENIG",
+          "edge_plating": true,
+          "layers": [
+            {
+              "kind": "Top Silk Screen",
+              "material": null,
+              "name": "F.SilkS",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Paste",
+              "material": null,
+              "name": "F.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Mask",
+              "material": null,
+              "name": "F.Mask",
+              "thickness_mm": 0.01
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "F.Cu",
+              "thickness_mm": 0.07
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 1",
+              "thickness_mm": 0.2
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In1.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "prepreg",
+              "loss_tangent": 0.02,
+              "material": "Polyimide",
+              "name": "dielectric 2",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In2.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 3",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "B.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "kind": "Bottom Solder Mask",
+              "material": null,
+              "name": "B.Mask",
+              "thickness_mm": 0.02
+            },
+            {
+              "kind": "Bottom Solder Paste",
+              "material": null,
+              "name": "B.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Bottom Silk Screen",
+              "material": null,
+              "name": "B.SilkS",
+              "thickness_mm": null
+            }
+          ]
+        }
+      },
+      "from": {
+        "copper_layers": 4,
+        "stackup": {
+          "copper_finish": "ENIG",
+          "edge_plating": true,
+          "layers": [
+            {
+              "kind": "Top Silk Screen",
+              "material": null,
+              "name": "F.SilkS",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Paste",
+              "material": null,
+              "name": "F.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Top Solder Mask",
+              "material": null,
+              "name": "F.Mask",
+              "thickness_mm": 0.01
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "F.Cu",
+              "thickness_mm": 0.07
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 1",
+              "thickness_mm": 0.2
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In1.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "prepreg",
+              "loss_tangent": 0.02,
+              "material": "Polyimide",
+              "name": "dielectric 2",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "In2.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "epsilon_r": 4.5,
+              "kind": "core",
+              "loss_tangent": 0.02,
+              "material": "FR4",
+              "name": "dielectric 3",
+              "thickness_mm": 0.48
+            },
+            {
+              "kind": "copper",
+              "material": null,
+              "name": "B.Cu",
+              "thickness_mm": 0.035
+            },
+            {
+              "kind": "Bottom Solder Mask",
+              "material": null,
+              "name": "B.Mask",
+              "thickness_mm": 0.02
+            },
+            {
+              "kind": "Bottom Solder Paste",
+              "material": null,
+              "name": "B.Paste",
+              "thickness_mm": null
+            },
+            {
+              "kind": "Bottom Silk Screen",
+              "material": null,
+              "name": "B.SilkS",
+              "thickness_mm": null
+            }
+          ]
+        }
+      },
+      "to_copper_layers": 4
+    }
+  ]
+}
