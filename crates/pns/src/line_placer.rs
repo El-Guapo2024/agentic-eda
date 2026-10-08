@@ -66,7 +66,7 @@ use crate::{optimizer, walkaround};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Um};
 use eda_model::BoardRules;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// `ANCHOR_SNAP_UM`-equivalent: how close the cursor must be to a same-net
 /// pad/via/track-end to snap onto it and offer to finish the route there.
@@ -138,8 +138,9 @@ pub struct LinePlacer {
     pub placement_correct: bool,
     /// Accumulated across every accepted (`fix`/`finish`-absorbed) shove
     /// this session, keyed by source id -- see [`Self::displaced_tracks`].
-    displaced_tracks: HashMap<String, Vec<Line>>,
-    displaced_vias: HashMap<String, Point>,
+    // ordered, so the commit a session produces does not depend on hash order
+    displaced_tracks: BTreeMap<String, Vec<Line>>,
+    displaced_vias: BTreeMap<String, Point>,
 }
 
 impl LinePlacer {
@@ -154,7 +155,7 @@ impl LinePlacer {
             Some(Item::Segment(s)) if s.b == p => Direction45::from_seg(s.a, s.b),
             _ => Direction45::N,
         };
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: HashMap::new(), displaced_vias: HashMap::new() }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new() }
     }
 
     pub fn fixed_start(&self) -> Point {

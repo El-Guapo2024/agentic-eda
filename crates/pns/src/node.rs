@@ -689,7 +689,10 @@ impl Node {
             }
             for a in item.anchors() {
                 let d2 = (a.x - pos.x) as i128 * (a.x - pos.x) as i128 + (a.y - pos.y) as i128 * (a.y - pos.y) as i128;
-                if d2 <= (max_dist as i128) * (max_dist as i128) && best.as_ref().map(|(_, _, bd)| d2 < *bd).unwrap_or(true) {
+                // equal distances (a track ending exactly on a pad's centre) are resolved by
+                // item id, not by the order the item table happens to iterate in -- the start
+                // item decides the starting posture, so a random pick made routes unrepeatable
+                if d2 <= (max_dist as i128) * (max_dist as i128) && best.as_ref().map(|(bid, _, bd)| (d2, id) < (*bd, *bid)).unwrap_or(true) {
                     best = Some((id, a, d2));
                 }
             }
@@ -859,6 +862,20 @@ mod tests {
         let hit = n.nearest_anchor(p(1050, 1000), LayerRange::single(0), 200, None);
         assert_eq!(hit.map(|(_, p)| p), Some(p(1000, 1000)));
         assert!(n.nearest_anchor(p(5000, 5000), LayerRange::single(0), 200, None).is_none());
+    }
+
+    /// A track ending exactly on a pad's centre: which of the two a route starts from decides its starting
+    /// posture, so it must not depend on the item table's iteration order (which differs per clone).
+    #[test]
+    fn nearest_anchor_breaks_ties_by_item_id() {
+        // a fresh `Node` per round: every `HashMap` gets its own random hasher, so an answer that
+        // followed the table's iteration order would differ from round to round
+        for _ in 0..40 {
+            let mut n = Node::new();
+            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1000, 1000), shape: Shape::Circle { c: p(1000, 1000), r: 400 }, source: "U1.1".into() }));
+            n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(1000, 1000), b: p(3000, 1000), width: 200, source_track: None, locked: false }));
+            assert_eq!(n.nearest_anchor(p(1100, 1000), LayerRange::single(0), 500, None).map(|(id, _)| id), Some(pad));
+        }
     }
 
     #[test]
