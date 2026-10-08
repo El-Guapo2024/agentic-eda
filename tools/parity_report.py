@@ -240,7 +240,13 @@ def render_report(conn, rt, scores):
 
     lines.append("## 2. Round-trips\n")
     if rt:
+        measured = rt.get("measured_at", {})
+
+        def when(part):
+            return f"_Measured {measured[part]}._\n" if part in measured else "_Measurement date not recorded._\n"
+
         lines.append("### Our own pipeline (`design.json` -> `.kicad_pcb` -> `import_kicad_pcb` -> `design.json`)\n")
+        lines.append(when("own"))
         own = rt.get("own_pipeline_roundtrip", [])
         lines.append("| board | footprints (pose-exact) | track segments (exact) | vias (exact) | zones before/after |")
         lines.append("|---|---:|---:|---:|---:|")
@@ -254,6 +260,7 @@ def render_report(conn, rt, scores):
         pcb_notes = rt.get("qa_corpus_pcb_import_notes")
         if pcb_notes:
             lines.append(f"\n### KiCad QA corpus: `import_kicad_pcb` on all {pcb_notes['total']} real boards\n")
+            lines.append(when("corpus"))
             lines.append(f"- imported ok: {pcb_notes['imported_ok']}/{pcb_notes['total']}")
             lines.append(f"- zones skipped (no polygon, or no copper layer): {pcb_notes['zones_skipped']}")
             lines.append(f"- track arcs kept as arcs: {pcb_notes.get('track_arcs_kept', 'n/a')}")
@@ -282,6 +289,7 @@ def render_report(conn, rt, scores):
         subset = rt.get("reexport_fidelity_subset", [])
         if subset:
             lines.append(f"\n### Re-export fidelity on {len(subset)} real QA boards (import -> our export -> kicad-cli DRC, vs kicad-cli DRC on the original)\n")
+            lines.append(when("reexport"))
             lines.append("| board | original parses | re-export parses | identical violation-type counts | where kicad-cli's counts differ (type: original -> re-export) |")
             lines.append("|---|---|---|---|---|")
             for b in subset:

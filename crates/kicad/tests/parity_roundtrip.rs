@@ -510,7 +510,7 @@ fn parity_roundtrip_harness() {
     let mut json = serde_json::to_value(&report).unwrap();
     // A partial run keeps what the parts it did not run measured last time.
     let old = std::fs::read_to_string(out_dir.join("roundtrip.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-    if let Some(old) = old {
+    if let Some(old) = &old {
         for (part, keys) in [("own", &["own_pipeline_roundtrip"][..]), ("corpus", &["qa_corpus_pcb_import_notes", "qa_corpus_sch_import_notes"][..]), ("reexport", &["reexport_fidelity_subset"][..])] {
             if !wants(part) {
                 for k in keys {
@@ -521,6 +521,17 @@ fn parity_roundtrip_harness() {
             }
         }
     }
+    // The day each part was last measured: a partial run keeps the dates of the parts it kept, so the report can say which numbers are old.
+    let today = Command::new("date").args(["-u", "+%Y-%m-%d"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    let mut measured = serde_json::Map::new();
+    for part in ["own", "corpus", "reexport"] {
+        if wants(part) {
+            measured.insert(part.into(), today.clone().into());
+        } else if let Some(v) = old.as_ref().and_then(|o| o.get("measured_at")).and_then(|m| m.get(part)) {
+            measured.insert(part.into(), v.clone());
+        }
+    }
+    json["measured_at"] = measured.into();
     std::fs::write(out_dir.join("roundtrip.json"), serde_json::to_string_pretty(&json).unwrap()).unwrap();
     println!("\nwrote {}", out_dir.join("roundtrip.json").display());
 }
