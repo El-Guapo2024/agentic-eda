@@ -26,6 +26,7 @@ import { registerGroupActions } from "./commonGroupActions";
 import { registerCheckerActions } from "./commonCheckerActions";
 import { registerSuiteActions } from "./commonSuiteActions";
 import { registerLibraryActions } from "./commonLibraryActions";
+import { registerTextActions } from "./commonTextActions";
 import { replaceAll, replaceAndFindNext, updateFind } from "../components/schematic/findReplaceOps";
 import { gridPresetIndex } from "../kicad-port/cursorControl";
 import { alignToGrid } from "../kicad-port/gridSnap";
@@ -236,4 +237,5 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   registerCheckerActions(m, ctx);
   registerSuiteActions(m, ctx);
   registerLibraryActions(m, ctx);
+  registerTextActions(m, ctx);
 }
