@@ -506,9 +506,12 @@ drawing shows it unwired, and ERC says so.
 
 Verified in the browser pane against scratch copies of `work/mcu30` (the real board was never touched), the second one made from the board as it was before the drag that broke it: Tools > Reorganize into Module Sheets (the
 flat sheet crammed top-left and over the border becomes a root with three sheet symbols, centred inside the frame, the pins wired between them); the Hierarchy panel listing Root and the three sheets and opening each (the
-title block follows); the MCU sheet (U1 centred, the twelve capacitors in a row below with their power symbols), the LED channels sheet (eight tidy columns, a hierarchical label over each resistor) and the header sheet, with nothing
-overlapping; a double-click on a sheet symbol; Navigate Up; a drag and a rotate on a nested sheet (the activity log says `on-sheet "<id>" schematic drag R1 ...`), the stored net list unchanged (20 nets, GND 23 pins, VDD 15, every name the intent's)
-and the PCB tab still showing R1 on PA0 / LED1; Undo twice (the sheet as it was), and a third Undo taking the sheets away (the view follows to the root, which is the flat sheet again, the Hierarchy panel back to Root alone).
+title block follows); the MCU sheet (U1 centred, one supply symbol over its two top pins and one ground symbol under its two bottom pins, the twelve capacitors in a row below with their power symbols), the LED channels sheet (eight
+tidy columns, a hierarchical label over each resistor, a ground symbol at each LED) and the header sheet (J1 with its RESET and SWD labels; the painter's `Pin_1`... names are written over its supply and ground symbols, a limit
+recorded above); a double-click on a sheet symbol; Navigate Up; a drag and a rotate on a nested sheet (the activity log says `on-sheet "<id>" schematic drag R1 ...`), the stored net list unchanged (20 nets, GND 23 pins, VDD 15, every
+name the intent's) and the PCB tab still showing R1 on PA0 / LED1; Undo twice (the sheet as it was), and a third Undo taking the sheets away (the view follows to the root, which is the flat sheet again, the Hierarchy panel back to
+Root alone); the Symbol Fields Table opened from the MCU sheet listing every symbol of the design (C1-C12, D1-D8, J1, R1-R8, U1 grouped) and an Apply of a new resistor value, made while the MCU sheet is in view, changing R1..R8 on the
+LED channels sheet. Not click-tested: Find on a nested sheet (the endpoint is tested), Place Pins from Sheet on a nested sheet.
 
 ## Manual click-through needed
 
