@@ -1306,6 +1306,44 @@ fn default_hatch_border_algorithm() -> i32 {
     1
 }
 
+/// `ZONE_BORDER_DISPLAY_STYLE` as the file stores it: `(hatch none|edge|full <pitch>)`
+/// (`pcb_io_kicad_sexpr.cpp` `format( const ZONE* )`). How the zone's outline is
+/// drawn on screen; it never changes the copper. `Edge` is KiCad's own default for a
+/// new zone (and what every zone this exporter wrote before this field existed said).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneBorderStyle {
+    None,
+    #[default]
+    Edge,
+    Full,
+}
+
+impl ZoneBorderStyle {
+    pub fn is_default(&self) -> bool {
+        *self == ZoneBorderStyle::Edge
+    }
+}
+
+/// `ZONE_SETTINGS::SMOOTHING_*` (`(fill (smoothing chamfer|fillet) (radius r))`): how the
+/// zone outline's corners are rounded or cut before the fill is made. The studio's own
+/// filler does not smooth yet (`docs/parity/GAPS.md` item 13); the setting is carried so
+/// kicad-cli, which does, gets the zone as the user drew it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoneSmoothing {
+    #[default]
+    None,
+    Chamfer,
+    Fillet,
+}
+
+impl ZoneSmoothing {
+    pub fn is_none(&self) -> bool {
+        *self == ZoneSmoothing::None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Zone {
@@ -1421,6 +1459,20 @@ pub struct Zone {
     /// footprint itself (`intersectsArea`'s `aArea->GetParent() == item`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_footprint: Option<String>,
+
+    /// `ZONE::GetZoneName()`: the label the Zone Manager shows (`(name "..")`).
+    /// Empty = unnamed, KiCad's own default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// `ZONE::GetHatchStyle()`: `(hatch none|edge|full ..)`. Display only.
+    #[serde(default, skip_serializing_if = "ZoneBorderStyle::is_default")]
+    pub border_style: ZoneBorderStyle,
+    /// `ZONE::GetCornerSmoothingType()`.
+    #[serde(default, skip_serializing_if = "ZoneSmoothing::is_none")]
+    pub smoothing: ZoneSmoothing,
+    /// `ZONE::GetCornerRadius()`, µm; only meaningful with `smoothing`.
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub corner_radius: Um,
 }
 
 impl Zone {
@@ -1464,6 +1516,10 @@ impl Default for Zone {
             keepout_footprints: false,
             teardrop: false,
             parent_footprint: None,
+            name: String::new(),
+            border_style: ZoneBorderStyle::default(),
+            smoothing: ZoneSmoothing::default(),
+            corner_radius: 0,
         }
     }
 }
@@ -1867,6 +1923,12 @@ pub struct Dimension {
     pub extension_offset: Um,
     pub extension_height: Um,
     pub arrow_direction: ArrowDirection,
+    /// `EDA_TEXT::GetTextThickness()` of the dimension's text, µm: the pen the label is
+    /// drawn with, which the text-dimension DRC checks read. `None` = 15 % of
+    /// `text_size_um`, KiCad's own pen for its default 1 mm label. Additive: absent in an
+    /// older `design.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_thickness_um: Option<Um>,
 }
 
 impl Dimension {

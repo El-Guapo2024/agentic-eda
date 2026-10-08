@@ -13,6 +13,9 @@ eda-layout = { path = "../layout" }
 eda-engine = { path = "../engine" }
 eda-drc = { path = "../drc" }
 eda-zone-filler = { path = "../zone-filler" }
+# The dimension geometry and text (`eda_connectivity::dimension`), the one place they are worked out, for the
+# `(dimension ..)` the PCB writer emits. `eda-connectivity` has `eda-kicad` only as a dev-dependency.
+eda-connectivity = { path = "../connectivity" }
 blake3 = { workspace = true }
 
 [dev-dependencies]

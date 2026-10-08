@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
 
+use crate::pcb_items::{write_dimension, write_group, write_zone, DimensionArgs, ZoneArgs};
 use crate::{fmt_mm_f, mm, sexpr_str};
 
 /// [`export_kicad_pcb`], also returning every exported item's KiCad uuid
@@ -195,6 +196,14 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         writeln!(out, "\t)").unwrap();
     }
 
+    // `BOARD_ITEM::IsLocked()`: every locked item's id (`DrawingsSection::locked_ids`). Each item kind
+    // writes `(locked yes)` where KiCad's own writer does, so a locked board comes back locked.
+    let locked: std::collections::BTreeSet<&str> = design.drawings.as_ref().map(|d| d.locked_ids.iter().map(String::as_str).collect()).unwrap_or_default();
+    let is_locked = |id: &str| !id.is_empty() && locked.contains(id);
+    // Our item id -> the KiCad uuids it was written as (a polyline track is several segments): what a
+    // group's `(members ..)` names.
+    let mut written: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
     // ---- footprints ----
     for fp in &footprints {
         let part = parts_by_ref[fp.id.as_str()];
@@ -202,7 +211,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             errors.push(CheckResult::fail("kicad.no_footprint", fp.id.clone(), "part has no resolvable footprint geometry"));
             continue;
         };
-        write_footprint(&mut out, fp, part, &footprint, &net_num, model);
+        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, is_locked(&fp.id));
+        written.entry(fp.id.clone()).or_default().push(uuid);
     }
     if !errors.is_empty() {
         return Err(errors);
@@ -214,9 +224,14 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // gates passed. A GND pour landing on net 0 is a floating plane that
     // still draws, and `drc --refill-zones` would be answering a question
     // about a different design than the one we routed. The net has to be
-    // in the netlist or the export fails.
+    // in the netlist or the export fails. An item the design says has no
+    // net at all (an empty name: a rule area, or copper an imported board
+    // drew with no net) is KiCad's net 0 on purpose, and says so.
     let mut errors: Vec<CheckResult> = Vec::new();
     let mut net_of = |what: &str, where_: &str, net: &str| -> usize {
+        if net.is_empty() {
+            return 0;
+        }
         match net_num.get(net) {
             Some(n) => *n,
             None => {
@@ -236,14 +251,36 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         tracks.sort_by(|a, b| (&a.net, &a.layer, &a.pts).cmp(&(&b.net, &b.layer, &b.pts)));
         for (ti, t) in tracks.iter().enumerate() {
             let n = net_of("a track", &format!("{} on {}", t.net, t.layer), &t.net);
+            let lock = if is_locked(&t.id) { " (locked yes)" } else { "" };
+            let w = mm(t.width);
+            if let Some((start, mid, end)) = t.arc() {
+                // `PCB_ARC`: one `(arc (start) (mid) (end) (width))` item. `Track::arc()` only reports an arc
+                // while the polyline still is its tessellation, so an edited arc is written as the segments
+                // it has become and never as a stale curve.
+                let uuid = crate::duid_for(&format!("arc:{}:{}:{}", t.net, t.layer, ti), &t.id);
+                written.entry(t.id.clone()).or_default().push(uuid.clone());
+                writeln!(
+                    out,
+                    "\t(arc (start {} {}) (mid {} {}) (end {} {}) (width {w}){lock} (layer {}) (net {n}) (uuid \"{uuid}\"))",
+                    mm(start.x),
+                    mm(start.y),
+                    mm(mid.x),
+                    mm(mid.y),
+                    mm(end.x),
+                    mm(end.y),
+                    sexpr_str(&t.layer)
+                )
+                .unwrap();
+                continue;
+            }
             for (j, pair) in t.pts.windows(2).enumerate() {
                 let x1 = mm(pair[0].x);
                 let y1 = mm(pair[0].y);
                 let x2 = mm(pair[1].x);
                 let y2 = mm(pair[1].y);
-                let w = mm(t.width);
                 let uuid = crate::duid_for(&format!("segment:{}:{}:{}:{}", t.net, t.layer, ti, j), &if j == 0 { t.id.clone() } else { format!("{}#{j}", t.id) });
-                writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}) (layer {}) (net {n}) (uuid \"{uuid}\"))", sexpr_str(&t.layer)).unwrap();
+                written.entry(t.id.clone()).or_default().push(uuid.clone());
+                writeln!(out, "\t(segment (start {x1} {y1}) (end {x2} {y2}) (width {w}){lock} (layer {}) (net {n}) (uuid \"{uuid}\"))", sexpr_str(&t.layer)).unwrap();
             }
         }
 
@@ -255,10 +292,12 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             let y = mm(v.at.y);
             let dia = mm(v.diameter);
             let drill = mm(v.drill);
+            let lock = if is_locked(&v.id) { " (locked yes)" } else { "" };
             let uuid = crate::duid_for(&format!("via:{}:{}:{}", v.net, v.at.x, v.at.y), &v.id);
+            written.entry(v.id.clone()).or_default().push(uuid.clone());
             writeln!(
                 out,
-                "\t(via (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}) (net {n}) (uuid \"{uuid}\"))",
+                "\t(via (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}){lock} (net {n}) (uuid \"{uuid}\"))",
                 sexpr_str(&v.from_layer),
                 sexpr_str(&v.to_layer)
             )
@@ -282,36 +321,18 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             if z.outline.len() < 3 {
                 continue;
             }
-            let n = net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net);
+            // A rule area has no net at all, whatever its `net` says (`ZONE::GetIsRuleArea()`); asking the
+            // net check about it rejected the whole export with `kicad.unknown_net`.
+            let n = if z.is_rule_area { 0 } else { net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net) };
             // Seeded by the zone's own id: two pours on one net and layer must not share a uuid.
             let uuid = crate::duid_for(&if z.id.is_empty() { format!("zone:{}:{}", z.net, z.layer) } else { format!("zone:{}", z.id) }, &z.id);
-            writeln!(out, "\t(zone (net {n}) (net_name {}) (layer {}) (uuid \"{uuid}\")", sexpr_str(&z.net), sexpr_str(&z.layer)).unwrap();
-            writeln!(out, "\t\t(hatch edge 0.5)").unwrap();
-            writeln!(out, "\t\t(connect_pads (clearance {clearance_mm}))").unwrap();
-            writeln!(out, "\t\t(min_thickness {track_mm}) (filled_areas_thickness no)").unwrap();
-            writeln!(out, "\t\t(fill yes (thermal_gap {clearance_mm}) (thermal_bridge_width {track_mm}))").unwrap();
-            writeln!(out, "\t\t(polygon (pts").unwrap();
-            for p in &z.outline {
-                writeln!(out, "\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
-            }
-            writeln!(out, "\t\t))").unwrap();
-            if let Some(fill) = fills.get(&z.id) {
-                for poly in &fill.polys {
-                    let Some(outline) = poly.first() else { continue };
-                    if outline.len() < 3 {
-                        continue;
-                    }
-                    writeln!(out, "\t\t(filled_polygon").unwrap();
-                    writeln!(out, "\t\t\t(layer {})", sexpr_str(&z.layer)).unwrap();
-                    writeln!(out, "\t\t\t(pts").unwrap();
-                    for p in outline {
-                        writeln!(out, "\t\t\t\t(xy {} {})", mm(p.x), mm(p.y)).unwrap();
-                    }
-                    writeln!(out, "\t\t\t)").unwrap();
-                    writeln!(out, "\t\t)").unwrap();
-                }
-            }
-            writeln!(out, "\t)").unwrap();
+            written.entry(z.id.clone()).or_default().push(uuid.clone());
+            // Every disjoint fragment of the fill, as the one ring `(filled_polygon ..)` stores.
+            let fill: Vec<Vec<(i64, i64)>> = fills
+                .get(&z.id)
+                .map(|f| f.polys.iter().filter_map(|poly| poly.first()).filter(|ring| ring.len() >= 3).map(|ring| ring.iter().map(|p| (p.x, p.y)).collect()).collect())
+                .unwrap_or_default();
+            write_zone(&mut out, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fill: &fill });
         }
     }
 
@@ -324,12 +345,29 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         let mut shapes: Vec<&Shape> = drawings.shapes.iter().collect();
         shapes.sort_by(|a, b| a.id().cmp(b.id()));
         for s in &shapes {
-            write_shape(&mut out, s);
+            let uuid = write_shape(&mut out, s, is_locked(s.id()));
+            written.entry(s.id().to_string()).or_default().push(uuid);
         }
         let mut texts: Vec<&Text> = drawings.texts.iter().collect();
         texts.sort_by(|a, b| a.id.cmp(&b.id));
         for t in &texts {
-            write_text(&mut out, t);
+            let uuid = write_text(&mut out, t, is_locked(&t.id));
+            written.entry(t.id.clone()).or_default().push(uuid);
+        }
+        // `PCB_DIMENSION_BASE`: the geometry and the text are worked out in one place
+        // (`eda_connectivity::dimension`); KiCad recomputes both when it loads the file.
+        let mut dims: Vec<&eda_model::ir::Dimension> = drawings.dimensions.iter().collect();
+        dims.sort_by(|a, b| a.id.cmp(&b.id));
+        for d in &dims {
+            let geom = eda_connectivity::dimension::compute_dimension_geometry(d);
+            let uuid = crate::duid_for(&format!("dimension:{}", d.id), &d.id);
+            let text_uuid = crate::duid_for(&format!("dimension:{}:text", d.id), &d.id);
+            written.entry(d.id.clone()).or_default().push(uuid.clone());
+            write_dimension(
+                &mut out,
+                d,
+                &DimensionArgs { uuid: &uuid, text_uuid: &text_uuid, locked: is_locked(&d.id), text: &geom.text, text_at: (geom.text_at.x, geom.text_at.y), text_angle_millideg: geom.text_angle },
+            );
         }
     }
 
@@ -345,6 +383,18 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             let y2 = mm(b.y);
             let uuid = crate::duid_for(&format!("edge:{i}:{}:{}:{}:{}", a.x, a.y, b.x, b.y), "outline");
             writeln!(out, "\t(gr_line (start {x1} {y1}) (end {x2} {y2}) (layer \"Edge.Cuts\") (uuid \"{uuid}\"))").unwrap();
+        }
+    }
+
+    // ---- groups ---- written last, as KiCad does: a group names its members by uuid, and the parser
+    // resolves them once every item has been read.
+    if let Some(drawings) = &design.drawings {
+        let mut groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
+        groups.sort_by(|a, b| a.id.cmp(&b.id));
+        for g in &groups {
+            let members: Vec<String> = g.member_ids.iter().filter_map(|m| written.get(m)).flatten().cloned().collect();
+            let uuid = crate::duid_for(&format!("group:{}", g.id), &g.id);
+            write_group(&mut out, g, &uuid, is_locked(&g.id), members);
         }
     }
 
@@ -424,6 +474,7 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     base.replacen("{\n", &format!("{{\n  \"erc\": {},\n", serde_json::to_string(&erc).unwrap_or_else(|_| "{}".into())), 1)
 }
 
+/// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
 fn write_footprint(
     out: &mut String,
     fp: &FootprintInstance,
@@ -431,7 +482,8 @@ fn write_footprint(
     footprint: &eda_model::Footprint,
     net_num: &BTreeMap<&str, usize>,
     model: &ConstraintModel,
-) {
+    locked: bool,
+) -> String {
     let layer = if fp.side == Side::Bottom { "B.Cu" } else { "F.Cu" };
     let x = mm(fp.at.x);
     let y = mm(fp.at.y);
@@ -448,6 +500,9 @@ fn write_footprint(
     let lib_id = if lib_name.contains(':') { lib_name } else { format!("eda:{lib_name}") };
 
     writeln!(out, "\t(footprint {}", sexpr_str(&lib_id)).unwrap();
+    if locked {
+        writeln!(out, "\t\t(locked yes)").unwrap();
+    }
     writeln!(out, "\t\t(layer {})", sexpr_str(layer)).unwrap();
     writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
     writeln!(out, "\t\t(at {x} {y} {rot_deg})").unwrap();
@@ -615,6 +670,7 @@ fn write_footprint(
     }
 
     writeln!(out, "\t)").unwrap();
+    uuid
 }
 
 /// A free-standing graphic shape as KiCad's `gr_line`/`gr_arc`/`gr_rect`/
@@ -622,16 +678,17 @@ fn write_footprint(
 /// PCB_SHAPE*)`: stroke width and type first, `fill` only for the three
 /// shapes KiCad actually fills (rect/circle/poly -- a line or an arc has no
 /// interior, and KiCad's own writer never emits `fill` for either).
-fn write_shape(out: &mut String, shape: &Shape) {
+fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> String {
     let sw = |w: Um| mm(w.max(0));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let layer = sexpr_str(shape.layer());
     let fill = |filled: bool| if filled { "yes" } else { "no" };
+    let lock = if locked { " (locked yes)" } else { "" };
     match shape {
         Shape::Segment { stroke_width, start, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_line (start {} {}) (end {} {}) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -639,7 +696,7 @@ fn write_shape(out: &mut String, shape: &Shape) {
         Shape::Arc { stroke_width, start, mid, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_arc (start {} {}) (mid {} {}) (end {} {}) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(mid.x), mm(mid.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
@@ -647,7 +704,7 @@ fn write_shape(out: &mut String, shape: &Shape) {
         Shape::Rect { stroke_width, filled, start, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_rect (start {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -655,7 +712,7 @@ fn write_shape(out: &mut String, shape: &Shape) {
         Shape::Circle { stroke_width, filled, center, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_circle (center {} {}) (end {} {}) (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))",
                 mm(center.x), mm(center.y), mm(end.x), mm(end.y), sw(*stroke_width), fill(*filled)
             )
             .unwrap();
@@ -665,18 +722,19 @@ fn write_shape(out: &mut String, shape: &Shape) {
             for p in pts {
                 write!(out, " (xy {} {})", mm(p.x), mm(p.y)).unwrap();
             }
-            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}) (layer {layer}) (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
+            writeln!(out, ") (stroke (width {}) (type solid)) (fill {}){lock} (layer {layer}) (uuid \"{uuid}\"))", sw(*stroke_width), fill(*filled)).unwrap();
         }
         // `case SHAPE_T::BEZIER:` -- `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)) ...)`; like a line, never filled.
         Shape::Bezier { stroke_width, start, c1, c2, end, .. } => {
             writeln!(
                 out,
-                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)) (layer {layer}) (uuid \"{uuid}\"))",
+                "\t(gr_curve (pts (xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})) (stroke (width {}) (type solid)){lock} (layer {layer}) (uuid \"{uuid}\"))",
                 mm(start.x), mm(start.y), mm(c1.x), mm(c1.y), mm(c2.x), mm(c2.y), mm(end.x), mm(end.y), sw(*stroke_width)
             )
             .unwrap();
         }
     }
+    uuid
 }
 
 /// Free board text as KiCad's `gr_text`, matching `PCB_IO_KICAD_SEXPR::
@@ -684,8 +742,9 @@ fn write_shape(out: &mut String, shape: &Shape) {
 /// (thickness t)) (justify ...))`, `justify` present only when the text is
 /// not centred/unmirrored (exactly KiCad's own rule, so a plain centred
 /// label round-trips without growing a token it never had).
-fn write_text(out: &mut String, text: &Text) {
+fn write_text(out: &mut String, text: &Text, locked: bool) -> String {
     let uuid = crate::duid_for(&format!("text:{}", text.id), &text.id);
+    let lock = if locked { " (locked yes)" } else { "" };
     let angle_deg = fmt_mm_f(text.angle as f64 / 1000.0);
     let size_mm = mm(text.size_um);
     let thickness_mm = mm(text.stroke_width);
@@ -701,13 +760,14 @@ fn write_text(out: &mut String, text: &Text) {
     let justify_tok = if justify.is_empty() { String::new() } else { format!(" (justify{justify})") };
     writeln!(
         out,
-        "\t(gr_text {} (at {} {} {angle_deg}) (layer {}) (uuid \"{uuid}\")\n\t\t(effects (font (size {size_mm} {size_mm}) (thickness {thickness_mm})){justify_tok})\n\t)",
+        "\t(gr_text {}{lock} (at {} {} {angle_deg}) (layer {}) (uuid \"{uuid}\")\n\t\t(effects (font (size {size_mm} {size_mm}) (thickness {thickness_mm})){justify_tok})\n\t)",
         sexpr_str(&text.content),
         mm(text.at.x),
         mm(text.at.y),
         sexpr_str(&text.layer)
     )
     .unwrap();
+    uuid
 }
 
 #[cfg(test)]
@@ -925,6 +985,333 @@ mod tests {
         }];
         let err = export_kicad_pcb(&design, &model, &meta()).unwrap_err();
         assert!(err.iter().any(|c| c.check == "kicad.unknown_net"), "got {err:?}");
+    }
+
+    #[test]
+    fn a_rule_area_exports_as_a_keepout_zone_without_a_net() {
+        // `pcb_io_kicad_sexpr.cpp` `format(const ZONE*)`: a rule area has no `(net ..)` at all and
+        // carries `(keepout ..)` + `(placement ..)`. Written as a pour it asked the net check for
+        // a net named "" and the whole export failed with `kicad.unknown_net`.
+        let (mut design, model) = fixture();
+        design.routing.as_mut().unwrap().zones = vec![Zone {
+            id: "ra1".into(),
+            net: String::new(),
+            layer: "F.Cu".into(),
+            outline: vec![Point { x: 1_000, y: 1_000 }, Point { x: 8_000, y: 1_000 }, Point { x: 8_000, y: 8_000 }, Point { x: 1_000, y: 8_000 }],
+            is_rule_area: true,
+            keepout_tracks: true,
+            keepout_vias: true,
+            ..Default::default()
+        }];
+        let out = export_kicad_pcb(&design, &model, &meta()).expect("a board with a rule area must export");
+        let zone = out.split("\t(zone").nth(1).expect("one zone block");
+        assert!(zone.contains("(keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour allowed) (footprints allowed))"), "{zone}");
+        assert!(zone.contains("(placement") && zone.contains("(enabled no)"), "{zone}");
+        assert!(!zone.contains("(net ") && !zone.contains("(net_name"), "a rule area has no net: {zone}");
+        assert!(!zone.contains("filled_polygon"), "a rule area is never filled: {zone}");
+    }
+
+    fn square(x: Um, y: Um, side: Um) -> Vec<eda_model::ir::Point> {
+        vec![
+            eda_model::ir::Point { x, y },
+            eda_model::ir::Point { x: x + side, y },
+            eda_model::ir::Point { x: x + side, y: y + side },
+            eda_model::ir::Point { x, y: y + side },
+        ]
+    }
+
+    /// The text of the first `(zone ...)` block.
+    fn first_zone(out: &str) -> &str {
+        let at = out.find("\t(zone").expect("a zone block");
+        let rest = &out[at..];
+        &rest[..rest.find("\n\t(").map_or(rest.len(), |i| i + 1)]
+    }
+
+    #[test]
+    fn every_zone_is_written_with_its_own_settings_and_reads_back_the_same() {
+        // `pcb_io_kicad_sexpr.cpp` `format( const ZONE* )`: the zone's own priority, clearance, minimum width,
+        // pad connection, thermal gap and spoke width, island removal, hatch fill, name and lock. All of them
+        // used to come out as the board's clearance and track width.
+        let (mut design, model) = fixture();
+        let mut pour = Zone {
+            id: "zp".into(),
+            net: "GND".into(),
+            layer: "B.Cu".into(),
+            outline: square(1_000, 1_000, 10_000),
+            clearance: 300,
+            min_thickness: 150,
+            thermal_gap: 420,
+            thermal_spoke_width: 350,
+            pad_connection: eda_model::ir::PadConnection::Full,
+            priority: 3,
+            island_removal_mode: eda_model::ir::IslandRemovalMode::Area,
+            min_island_area: 2_500_000,
+            fill_mode: eda_model::ir::FillMode::HatchPattern,
+            hatch_thickness: 400,
+            hatch_gap: 900,
+            hatch_orientation_mdeg: 45_000,
+            hatch_smoothing_level: 2,
+            hatch_smoothing_value: 0.25,
+            hatch_hole_min_area: 0.3,
+            hatch_border_algorithm: 0,
+            name: "GND plane".into(),
+            border_style: eda_model::ir::ZoneBorderStyle::Full,
+            smoothing: eda_model::ir::ZoneSmoothing::Fillet,
+            corner_radius: 600,
+            ..Default::default()
+        };
+        let mut thermal = Zone { id: "zt".into(), net: "VIN".into(), layer: "F.Cu".into(), outline: square(12_000, 1_000, 6_000), ..Default::default() };
+        thermal.pad_connection = eda_model::ir::PadConnection::ThtThermal;
+        design.routing.as_mut().unwrap().zones = vec![pour.clone(), thermal.clone()];
+        design.drawings = Some(eda_model::ir::DrawingsSection { locked_ids: vec!["zp".into()], ..Default::default() });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+
+        let gnd = out.split("\t(zone").skip(1).find(|z| z.contains("\"GND\"")).expect("the GND zone");
+        for want in [
+            "(locked yes)",
+            "(name \"GND plane\")",
+            "(hatch full 0.5)",
+            "(priority 3)",
+            "(connect_pads yes (clearance 0.3))",
+            "(min_thickness 0.15)",
+            "(mode hatch)",
+            "(thermal_gap 0.42) (thermal_bridge_width 0.35)",
+            "(smoothing fillet) (radius 0.6)",
+            "(island_removal_mode 2) (island_area_min 2.5)",
+            "(hatch_thickness 0.4) (hatch_gap 0.9) (hatch_orientation 45)",
+            "(hatch_smoothing_level 2) (hatch_smoothing_value 0.25)",
+            "(hatch_border_algorithm min_thickness) (hatch_min_hole_area 0.3)",
+        ] {
+            assert!(gnd.contains(want), "missing {want}:\n{gnd}");
+        }
+        let vin = out.split("\t(zone").skip(1).find(|z| z.contains("\"VIN\"")).expect("the VIN zone");
+        assert!(vin.contains("(connect_pads thru_hole_only (clearance 0.5))"), "{vin}");
+        assert!(!vin.contains("(priority") && !vin.contains("(locked") && !vin.contains("(name"), "defaults write nothing extra: {vin}");
+
+        // And back: the importer reads every one of them.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let zones = &back.routing.as_ref().unwrap().zones;
+        let got = zones.iter().find(|z| z.net == "GND").expect("GND zone");
+        pour.id = got.id.clone();
+        assert_eq!(*got, pour);
+        assert_eq!(zones.iter().find(|z| z.net == "VIN").unwrap().pad_connection, eda_model::ir::PadConnection::ThtThermal);
+        assert!(back.drawings.as_ref().unwrap().locked_ids.contains(&got.id), "the zone comes back locked");
+    }
+
+    #[test]
+    fn an_arc_track_is_written_as_one_arc_and_read_back_as_one() {
+        use eda_model::ir::Point;
+        let (mut design, model) = fixture();
+        let arc = Track::new_arc("VIN".into(), "F.Cu".into(), 250, Point { x: 2_000, y: 2_000 }, Point { x: 4_000, y: 1_000 }, Point { x: 6_000, y: 2_000 });
+        assert!(arc.pts.len() > 3, "the polyline is the tessellation");
+        design.routing.as_mut().unwrap().tracks.push(arc);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(arc ").count(), 1, "{out}");
+        assert!(out.contains("(arc (start 2 2) (mid 4 1) (end 6 2) (width 0.25) (layer \"F.Cu\") (net 2)"), "{out}");
+        assert_eq!(out.matches("\t(segment ").count(), 1, "only the plain track is a segment, not 32 chords of the arc: {out}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let tracks = &back.routing.unwrap().tracks;
+        let arcs: Vec<_> = tracks.iter().filter_map(|t| t.arc()).collect();
+        assert_eq!(arcs, vec![(Point { x: 2_000, y: 2_000 }, Point { x: 4_000, y: 1_000 }, Point { x: 6_000, y: 2_000 })]);
+    }
+
+    #[test]
+    fn a_track_that_was_reshaped_after_it_was_an_arc_is_written_as_segments() {
+        use eda_model::ir::Point;
+        let (mut design, model) = fixture();
+        let mut arc = Track::new_arc("VIN".into(), "F.Cu".into(), 250, Point { x: 2_000, y: 2_000 }, Point { x: 4_000, y: 1_000 }, Point { x: 6_000, y: 2_000 });
+        arc.pts.truncate(5); // an edit that cut the curve short: no longer the tessellation of its arc
+        design.routing.as_mut().unwrap().tracks.push(arc);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(arc ").count(), 0, "a stale arc is never written: {out}");
+        assert_eq!(out.matches("\t(segment ").count(), 1 + 4);
+    }
+
+    #[test]
+    fn locked_items_are_written_locked_and_come_back_locked() {
+        use eda_model::ir::Point;
+        let (mut design, model) = fixture();
+        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            shapes: vec![Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1_000, y: 0 } }],
+            texts: vec![Text { id: String::new(), content: "REV A".into(), at: Point { x: 1_000, y: 2_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            ..Default::default()
+        });
+        design.assign_missing_ids();
+        let rt = design.routing.as_ref().unwrap();
+        let mut locked: Vec<String> = vec!["U1".into(), rt.tracks[0].id.clone(), rt.vias[0].id.clone()];
+        locked.push(design.drawings.as_ref().unwrap().shapes[0].id().to_string());
+        locked.push(design.drawings.as_ref().unwrap().texts[0].id.clone());
+        design.drawings.as_mut().unwrap().locked_ids = locked.clone();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("(locked yes)").count(), 5, "{out}");
+        assert!(out.contains("(footprint \"eda:SOT-23\"\n\t\t(locked yes)\n\t\t(layer"), "{out}");
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let mut got = back.drawings.as_ref().unwrap().locked_ids.clone();
+        got.sort();
+        // The importer gives items ids of its own making, so compare by kind: a footprint, a track, a via, a shape, a text.
+        assert_eq!(got.len(), 5, "{got:?}");
+        assert!(got.contains(&"U1".to_string()));
+        assert!(!got.contains(&"C1".to_string()), "C1 was not locked");
+        let brt = back.routing.as_ref().unwrap();
+        assert!(got.contains(&brt.tracks[0].id) && got.contains(&brt.vias[0].id));
+    }
+
+    #[test]
+    fn a_dimension_is_written_with_its_format_and_style_and_reads_back_the_same() {
+        use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Point};
+        let (mut design, model) = fixture();
+        let dim = |kind, start: Point, end: Point| Dimension {
+            id: String::new(),
+            layer: "Dwgs.User".into(),
+            kind,
+            start,
+            end,
+            prefix: "L=".into(),
+            suffix: "".into(),
+            override_text: None,
+            units: DimensionUnits::Mm,
+            units_format: DimensionUnitsFormat::BareSuffix,
+            precision: 2,
+            suppress_trailing_zeros: true,
+            text_position: DimensionTextPosition::Outside,
+            keep_text_aligned: true,
+            text_angle: 0,
+            text_size_um: 1_200,
+            stroke_width: 150,
+            arrow_length: 1_270,
+            extension_offset: 500,
+            extension_height: 580,
+            arrow_direction: ArrowDirection::Inward,
+            text_thickness_um: Some(180),
+        };
+        let mut dims = vec![
+            dim(DimensionKind::Aligned { height: 2_000 }, Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }),
+            dim(DimensionKind::Orthogonal { height: 1_500, horizontal: false }, Point { x: 2_000, y: 14_000 }, Point { x: 6_000, y: 18_000 }),
+            dim(DimensionKind::Radial { leader_length: 3_000 }, Point { x: 15_000, y: 15_000 }, Point { x: 17_000, y: 15_000 }),
+            dim(DimensionKind::Leader, Point { x: 10_000, y: 10_000 }, Point { x: 12_000, y: 8_000 }),
+            dim(DimensionKind::Center, Point { x: 5_000, y: 5_000 }, Point { x: 6_000, y: 5_000 }),
+        ];
+        dims[0].override_text = Some("ten".into());
+        dims[1].units = DimensionUnits::Mil;
+        dims[1].keep_text_aligned = false;
+        dims[1].text_position = DimensionTextPosition::Inline;
+        let mut dr = eda_model::ir::DrawingsSection::default();
+        dr.dimensions = dims.clone();
+        dr.assign_missing_ids();
+        dims = dr.dimensions.clone();
+        design.drawings = Some(dr);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(dimension ").count(), 5);
+        for ty in ["aligned", "orthogonal", "radial", "leader", "center"] {
+            assert!(out.contains(&format!("(dimension (type {ty})")), "{ty}: {out}");
+        }
+        assert!(out.contains("(height 2)") && out.contains("(orientation 1)") && out.contains("(leader_length 3)") && out.contains("(text_frame 0)"), "{out}");
+        assert!(out.contains("(format (prefix \"L=\") (suffix \"\") (units 2) (units_format 1) (precision 2) (override_value \"ten\") (suppress_zeroes yes))"), "{out}");
+        assert!(out.contains("(units 1)") && out.contains("(text_position_mode 1)"), "{out}");
+        assert!(out.contains("(thickness 0.15) (arrow_length 1.27) (text_position_mode 0) (arrow_direction inward) (extension_height 0.58) (extension_offset 0.5) (keep_text_aligned yes)"), "{out}");
+        assert!(out.contains("(effects (font (size 1.2 1.2) (thickness 0.18)))"), "{out}");
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let mut got = back.drawings.unwrap().dimensions;
+        assert_eq!(got.len(), 5);
+        // The manual angle is only meaningful when the text is not kept aligned.
+        for g in &mut got {
+            let want = dims.iter().find(|d| d.start == g.start && d.end == g.end).expect("same feature points");
+            g.id = want.id.clone();
+            if want.keep_text_aligned {
+                g.text_angle = want.text_angle;
+            }
+            // Where KiCad has no such field, nothing is promised back: only the kinds with an extension height / arrow direction keep them.
+            if matches!(want.kind, DimensionKind::Radial { .. } | DimensionKind::Leader | DimensionKind::Center) {
+                g.extension_height = want.extension_height;
+                g.arrow_direction = want.arrow_direction;
+            }
+            if matches!(want.kind, DimensionKind::Center) {
+                g.prefix = want.prefix.clone();
+                g.units = want.units;
+                g.units_format = want.units_format;
+                g.precision = want.precision;
+                g.suppress_trailing_zeros = want.suppress_trailing_zeros;
+                g.text_size_um = want.text_size_um;
+                g.text_thickness_um = want.text_thickness_um;
+            }
+            assert_eq!(g.kind, want.kind);
+            assert_eq!(g.layer, want.layer);
+            assert_eq!((g.stroke_width, g.arrow_length, g.extension_offset), (want.stroke_width, want.arrow_length, want.extension_offset));
+            assert_eq!((g.override_text.as_deref(), g.units, g.units_format, g.precision), (want.override_text.as_deref(), want.units, want.units_format, want.precision), "{:?}", want.kind);
+            assert_eq!((g.text_position, g.keep_text_aligned), (want.text_position, want.keep_text_aligned));
+        }
+    }
+
+    #[test]
+    fn groups_are_written_with_their_members_uuids_and_read_back_with_their_ids() {
+        use eda_model::ir::{Group, Point};
+        let (mut design, model) = fixture();
+        design.routing.as_mut().unwrap().vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 1_000, y: 6_000 }, Point { x: 5_000, y: 6_000 }, Point { x: 5_000, y: 9_000 }], arc_mid_offset: None });
+        design.assign_missing_ids();
+        let rt = design.routing.as_ref().unwrap();
+        let (via_id, long_track) = (rt.vias[0].id.clone(), rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone());
+        let mut dr = eda_model::ir::DrawingsSection::default();
+        dr.groups = vec![Group { id: String::new(), name: "decoupling".into(), member_ids: vec!["U1".into(), "C1".into(), via_id.clone(), long_track.clone(), "no such item".into()] }];
+        dr.assign_missing_ids();
+        design.drawings = Some(dr);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let group = out.split("\t(group ").nth(1).expect("a group block");
+        assert!(group.starts_with("\"decoupling\" (uuid \""), "{group}");
+        // U1, C1, the via, both segments of the two-segment track; the stale id names nothing.
+        assert_eq!(group.split("(members").nth(1).unwrap().matches('"').count() / 2, 5, "{group}");
+        assert!(out.rfind("\t(group ").unwrap() > out.rfind("\t(segment ").unwrap(), "groups come last, like KiCad's own writer");
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let groups = back.drawings.as_ref().unwrap().groups.clone();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "decoupling");
+        let brt = back.routing.as_ref().unwrap();
+        assert_eq!(groups[0].member_ids.len(), 5, "{:?}", groups[0].member_ids);
+        assert!(groups[0].member_ids.contains(&"U1".to_string()) && groups[0].member_ids.contains(&"C1".to_string()));
+        assert!(groups[0].member_ids.contains(&brt.vias[0].id));
+        for t in brt.tracks.iter().filter(|t| t.net == "GND") {
+            assert!(groups[0].member_ids.contains(&t.id), "both segments of the track are members");
+        }
+    }
+
+    #[test]
+    fn a_teardrop_zone_is_flagged_and_carries_kicads_own_teardrop_settings() {
+        // `TEARDROP_MANAGER::createTeardrop`: no clearance of its own, 0.0254 mm minimum width, full pad
+        // connection, islands kept; `(attr (teardrop (type padvia)))` makes KiCad treat it as a teardrop.
+        let (mut design, model) = fixture();
+        design.routing.as_mut().unwrap().zones = vec![Zone {
+            id: "td1".into(),
+            net: "VIN".into(),
+            layer: "F.Cu".into(),
+            outline: vec![eda_model::ir::Point { x: 4_000, y: 4_000 }, eda_model::ir::Point { x: 5_000, y: 4_300 }, eda_model::ir::Point { x: 5_000, y: 5_300 }],
+            teardrop: true,
+            ..Default::default()
+        }];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let z = first_zone(&out);
+        for want in ["(attr (teardrop (type padvia)))", "(hatch none 0.5)", "(connect_pads yes (clearance 0))", "(min_thickness 0.0254)", "(island_removal_mode 1)"] {
+            assert!(z.contains(want), "missing {want}:\n{z}");
+        }
+        assert!(!z.contains("thermal_gap"), "a teardrop has no thermal relief: {z}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert!(back.routing.unwrap().zones[0].teardrop, "the teardrop flag comes back");
+    }
+
+    #[test]
+    fn copper_with_no_net_exports_as_net_zero_and_a_missing_net_still_fails() {
+        // An imported board can carry copper that has no net (KiCad's net 0); that is not the silent default
+        // the net check exists to catch, so it must not fail the export of the whole board.
+        let (mut design, model) = fixture();
+        let rt = design.routing.as_mut().unwrap();
+        rt.tracks.push(Track { id: String::new(), net: String::new(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![eda_model::ir::Point { x: 1_000, y: 1_000 }, eda_model::ir::Point { x: 2_000, y: 1_000 }], arc_mid_offset: None });
+        rt.zones = vec![Zone { id: "z0".into(), net: String::new(), layer: "F.Cu".into(), outline: square(10_000, 10_000, 3_000), ..Default::default() }];
+        let out = export_kicad_pcb(&design, &model, &meta()).expect("netless copper exports");
+        assert!(out.contains("(width 0.2) (layer \"F.Cu\") (net 0)"), "{out}");
+        assert!(!first_zone(&out).contains("(net "), "{}", first_zone(&out));
     }
 
     #[test]

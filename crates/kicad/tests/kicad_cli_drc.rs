@@ -418,6 +418,65 @@ fn kicad_cli_drc_real_footprints() {
     assert_eq!(in_scope, 0, "the real USB-C connector and button, placed and routed, must clear DRC: {by_type:?}");
 }
 
+/// A rule area (keepout) used to fail the whole export: it has no net, and the writer's net
+/// check rejected the empty one (`kicad.unknown_net`), so DRC and every output on a board with a
+/// keepout failed. Written as KiCad's `(zone (keepout ..) (placement ..))`, kicad-cli loads it,
+/// reports what lands inside it (`items_not_allowed`), and plots the board.
+#[test]
+#[ignore]
+fn kicad_cli_drc_rule_area_reports_items_not_allowed_and_exports_gerbers() {
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let net = |name: &str| Net { name: name.into(), pins: vec![] };
+    let model = ConstraintModel { nets: vec![net("A"), net("B")], ..Default::default() };
+    let track = |net: &str, y: Um| Track { id: String::new(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 250, pts: vec![Point { x: 2_000, y }, Point { x: 12_000, y }], arc_mid_offset: None };
+    let mut routing = RoutingSection {
+        // One track through the keepout, one well clear of it.
+        tracks: vec![track("A", 5_000), track("B", 15_000)],
+        vias: vec![],
+        zones: vec![eda_model::ir::Zone {
+            id: String::new(),
+            net: String::new(),
+            layer: "F.Cu".into(),
+            outline: vec![Point { x: 4_000, y: 3_000 }, Point { x: 10_000, y: 3_000 }, Point { x: 10_000, y: 8_000 }, Point { x: 4_000, y: 8_000 }],
+            is_rule_area: true,
+            keepout_tracks: true,
+            ..Default::default()
+        }],
+        track_width_presets: vec![],
+        via_presets: vec![],
+        teardrop_settings: Default::default(),
+    };
+    routing.assign_missing_ids();
+    let design = Design {
+        footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
+        schema: 1,
+        provenance: Provenance { engine_version: "0".into(), intent_hash: "rule_area".into(), seed: 0, stage_hashes: vec![] },
+        schematic: None, nets: None,
+        placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 20_000, y: 0 }, Point { x: 20_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints: vec![], modules: Vec::new() }),
+        routing: Some(routing),
+        drawings: None,
+    };
+    let meta = ExportMeta { date: "2026-01-01", title: "rule_area" };
+    let pcb_text = export_kicad_pcb(&design, &model, &meta).expect("a board with a rule area must export (it used to fail with kicad.unknown_net)");
+    let dir = std::env::temp_dir().join("eda_kicad_rule_area_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pcb_path = dir.join("rule_area.kicad_pcb");
+    std::fs::write(&pcb_path, &pcb_text).unwrap();
+
+    let by_type = drc_by_type(&cli, &pcb_path);
+    let not_allowed = by_type.get("items_not_allowed").cloned().unwrap_or_default();
+    assert_eq!(not_allowed.len(), 1, "exactly the track inside the keepout is not allowed: {by_type:?}");
+
+    let gerbers = dir.join("gerbers");
+    std::fs::create_dir_all(&gerbers).unwrap();
+    let out = Command::new(&cli).args(["pcb", "export", "gerbers", "-o"]).arg(&gerbers).arg(&pcb_path).output().expect("run kicad-cli pcb export gerbers");
+    assert!(out.status.success(), "gerbers: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(std::fs::read_dir(&gerbers).unwrap().flatten().any(|e| e.path().extension().is_some_and(|x| x == "gtl")), "the top copper Gerber was written");
+}
+
 /// `kicad-cli pcb drc` on `pcb`: its violations and unconnected items
 /// grouped by type, with the counts printed. The report is written next to
 /// the board as drc.json.

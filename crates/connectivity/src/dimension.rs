@@ -499,6 +499,7 @@ mod tests {
             extension_offset: 200,
             extension_height: 500,
             arrow_direction: ArrowDirection::Outward,
+            text_thickness_um: None,
         }
     }
 

@@ -56,6 +56,7 @@ use std::collections::{BTreeMap, HashMap};
 use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
+use crate::import_items::{self, ItemRef, Refs};
 use crate::sexpr::{self, Sexpr};
 
 /// Counts of things the importer saw but could not carry into our model
@@ -110,14 +111,18 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let net_names = import_net_names(root);
     let mut board = import_board_rules(root, &layers);
 
-    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras) = import_footprints(root, &net_names, &layers, &mut notes)?;
+    // Each item parser records the uuid and lock of what it emits (`Refs`), so the groups and locks of the
+    // file can be turned into ids once the items have them.
+    let mut refs = Refs::default();
+    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let nets = build_nets(&net_names, &pin_nets);
     let outline = import_outline(root, &mut notes);
-    let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes);
-    let (shapes, texts) = import_drawings(root);
+    let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
+    let (shapes, texts) = import_drawings(root, &mut refs);
+    let dimensions = import_items::import_dimensions(root, &mut refs);
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
-    let zones = import_zones(root, &net_names, &layers, &mut notes);
+    let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
 
     // The outline override lives on `board` too (used when a downstream
     // tool re-derives placement); keep it in step with what we actually
@@ -150,7 +155,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, footprint_extras, via_tenting, silk_texts, copper_texts, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
@@ -167,6 +172,15 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // deterministic ids a fresh route or a hand-add would get, so an
     // imported board is addressable from the moment it lands.
     design.assign_missing_ids();
+    // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
+    // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
+    let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
+    if !groups.is_empty() || !locked_ids.is_empty() {
+        let dr = design.drawings.get_or_insert_with(Default::default);
+        dr.groups = groups;
+        dr.locked_ids = locked_ids;
+        dr.assign_missing_ids();
+    }
     let model = ConstraintModel {
         parts,
         nets,
@@ -943,6 +957,7 @@ fn import_footprints(
     net_names: &BTreeMap<i64, String>,
     layers: &[String],
     notes: &mut ImportNotes,
+    refs: &mut Refs,
 ) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>, Vec<FootprintExtra>), Vec<CheckResult>> {
     let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut extras: Vec<FootprintExtra> = Vec::new();
@@ -1049,6 +1064,7 @@ fn import_footprints(
 
         parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_um: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
+        refs.footprints.push(ItemRef::of(fp));
     }
 
     if !errors.is_empty() {
@@ -1378,7 +1394,7 @@ fn import_fp_graphics(fp: &[Sexpr], inst: &FootprintInstance) -> Vec<FootprintGr
 
 // ---------------------------------------------------------------- routing
 
-fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>) {
+fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>) {
 
     let mut tracks = Vec::new();
     for seg in sexpr::find_all(root, "segment") {
@@ -1389,6 +1405,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let width = sexpr::find(seg, "width").and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(200);
         let layer = sexpr::find(seg, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         tracks.push(Track { id: String::new(), net, pins: vec![], layer, width, pts: vec![s, e], arc_mid_offset: None });
+        refs.tracks.push(ItemRef::of(seg));
     }
 
     for arc in sexpr::find_all(root, "arc") {
@@ -1402,6 +1419,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
         let layer = sexpr::find(arc, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("F.Cu").to_string();
         notes.track_arcs_approximated += 1;
         tracks.push(Track::new_arc(net, layer, width, s, m, e));
+        refs.tracks.push(ItemRef::of(arc));
     }
 
     let mut vias = Vec::new();
@@ -1423,6 +1441,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
             }
         }
         vias.push(Via { id: String::new(), net, at, drill, diameter: dia, from_layer, to_layer });
+        refs.vias.push(ItemRef::of(via));
     }
 
     (tracks, vias, via_tenting)
@@ -1440,7 +1459,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 /// `gr_poly`) and text (`gr_text`), any layer other than Edge.Cuts -- that
 /// one stays dedicated to [`import_outline`], unchanged, so a shape is
 /// never represented twice.
-fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
+fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
     let stroke_width = |item: &[Sexpr]| -> i64 {
         sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0)
     };
@@ -1451,6 +1470,7 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
     for item in sexpr::find_all(root, "gr_line").filter(|it| !is_edge_cuts(it)) {
         let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
         shapes.push(Shape::Segment { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, end });
+        refs.shapes.push(ItemRef::of(item));
     }
     for item in sexpr::find_all(root, "gr_arc").filter(|it| !is_edge_cuts(it)) {
         let (Some(start), Some(mid), Some(end)) =
@@ -1459,18 +1479,22 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
             continue;
         };
         shapes.push(Shape::Arc { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, mid, end });
+        refs.shapes.push(ItemRef::of(item));
     }
     for item in sexpr::find_all(root, "gr_rect").filter(|it| !is_edge_cuts(it)) {
         let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
         shapes.push(Shape::Rect { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, end });
+        refs.shapes.push(ItemRef::of(item));
     }
     for item in sexpr::find_all(root, "gr_circle").filter(|it| !is_edge_cuts(it)) {
         let (Some(center), Some(end)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
         shapes.push(Shape::Circle { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), center, end });
+        refs.shapes.push(ItemRef::of(item));
     }
     for item in sexpr::find_all(root, "gr_poly").filter(|it| !is_edge_cuts(it)) {
         let Some(pts) = poly_points(item) else { continue };
         shapes.push(Shape::Polygon { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), pts });
+        refs.shapes.push(ItemRef::of(item));
     }
     // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`). A curve on
     // Edge.Cuts is not chained into the board outline (`import_outline` only walks lines/rects/arcs).
@@ -1478,6 +1502,7 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
         let Some(pts) = poly_points(item) else { continue };
         let [start, c1, c2, end] = pts[..] else { continue };
         shapes.push(Shape::Bezier { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: false, start, c1, c2, end });
+        refs.shapes.push(ItemRef::of(item));
     }
 
     let mut texts = Vec::new();
@@ -1502,6 +1527,7 @@ fn import_drawings(root: &[Sexpr]) -> (Vec<Shape>, Vec<Text>) {
             }
         }
         texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_um, stroke_width, justify, mirror });
+        refs.texts.push(ItemRef::of(item));
     }
 
     (shapes, texts)
@@ -1616,7 +1642,7 @@ fn import_outline(root: &[Sexpr], notes: &mut ImportNotes) -> Vec<Point> {
 /// fills are always derived (`eda_zone_filler`), which is also what
 /// kicad-cli's own `pcb drc --refill-zones` run does. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
-fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes) -> Vec<Zone> {
+fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes, refs: &mut Refs) -> Vec<Zone> {
     // Board-level zones, then each footprint's own (`forEachGeometryItem`
     // walks `footprint->Zones()` too; a footprint zone's points are stored
     // in board coordinates). The parent reference is recomputed exactly as
@@ -1668,6 +1694,15 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         if let Some(p) = sexpr::find(z, "priority") {
             zone.priority = sexpr::num(p, 1).unwrap_or(0.0).max(0.0) as u32;
         }
+        // `(name "..")` and `(hatch none|edge|full <pitch>)`; an absent `hatch` is `NO_HATCH` in the parser.
+        if let Some(n) = sexpr::find(z, "name") {
+            zone.name = sexpr::txt(n, 1).unwrap_or("").to_string();
+        }
+        zone.border_style = match sexpr::find(z, "hatch").and_then(|h| sexpr::txt(h, 1)) {
+            Some("edge") => eda_model::ir::ZoneBorderStyle::Edge,
+            Some("full") => eda_model::ir::ZoneBorderStyle::Full,
+            _ => eda_model::ir::ZoneBorderStyle::None,
+        };
         if let Some(cp) = sexpr::find(z, "connect_pads") {
             match sexpr::txt(cp, 1) {
                 Some("yes") => zone.pad_connection = PadConnection::Full,
@@ -1708,6 +1743,12 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             if let Some(v) = raw("hatch_min_hole_area") {
                 zone.hatch_hole_min_area = v;
             }
+            // `(hatch_border_algorithm hatch_thickness|min_thickness)`: which width the hatch border is drawn with.
+            match sexpr::find(f, "hatch_border_algorithm").and_then(|v| sexpr::txt(v, 1)) {
+                Some("hatch_thickness") => zone.hatch_border_algorithm = 1,
+                Some("min_thickness") => zone.hatch_border_algorithm = 0,
+                _ => {}
+            }
             if let Some(v) = um("thermal_gap") {
                 zone.thermal_gap = v;
             }
@@ -1724,6 +1765,17 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             // `area * pcbIUScale.IU_PER_MM` after `parseBoardUnits`: mm^2 in the file.
             if let Some(v) = raw("island_area_min") {
                 zone.min_island_area = (v * 1e6).round() as i64;
+            }
+            // `(smoothing none|chamfer|fillet)` and `(radius r)`; both are ignored for a rule area (`parseZONE`).
+            let smoothing = sexpr::find(f, "smoothing").and_then(|v| sexpr::txt(v, 1));
+            let radius = um("radius");
+            if sexpr::find(z, "keepout").is_none() && sexpr::find(z, "placement").is_none() {
+                zone.smoothing = match smoothing {
+                    Some("chamfer") => eda_model::ir::ZoneSmoothing::Chamfer,
+                    Some("fillet") => eda_model::ir::ZoneSmoothing::Fillet,
+                    _ => eda_model::ir::ZoneSmoothing::None,
+                };
+                zone.corner_radius = radius.unwrap_or(0);
             }
         }
         if let Some(k) = sexpr::find(z, "keepout") {
@@ -1750,9 +1802,11 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             notes.zones_skipped += 1;
             continue;
         }
+        let item_ref = ItemRef::of(z);
         for layer in &layers {
             for outline in &outlines {
                 out.push(Zone { layer: layer.clone(), outline: outline.clone(), ..zone.clone() });
+                refs.zones.push(item_ref.clone());
             }
         }
     }
