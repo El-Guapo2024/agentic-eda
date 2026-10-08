@@ -144,7 +144,8 @@ pub(crate) fn unannotated(design: &eda_model::ir::Design) -> Vec<String> {
 
 /// Runs `program` and waits for it (`GENERATOR_TIMEOUT`); its output (stdout then stderr) and whether it succeeded.
 fn run_generator(program: &str, args: &[String], cwd: &Path) -> Result<(bool, String), String> {
-    let mut child = Command::new(program).args(args).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not run {program}: {e}"))?;
+    // INPUTRC: a Python that loads `readline` prints a complaint about the person's own ~/.inputrc before the generator says anything; none of that is the generator's.
+    let mut child = Command::new(program).args(args).env("INPUTRC", "/dev/null").current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not run {program}: {e}"))?;
     let (mut out, mut errs) = (child.stdout.take().expect("piped"), child.stderr.take().expect("piped"));
     // a generator's output is small, but a full pipe would stall it: read both while it runs
     let (o, e) = (std::thread::spawn(move || { let mut s = String::new(); let _ = out.read_to_string(&mut s); s }), std::thread::spawn(move || { let mut s = String::new(); let _ = errs.read_to_string(&mut s); s }));

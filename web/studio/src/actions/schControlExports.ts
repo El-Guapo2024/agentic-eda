@@ -4,7 +4,7 @@ import type { SchControlContext } from "./schControlActions";
 import { fetchHierarchy, fetchSchematicFiles, postSymbolSvg } from "../api/schControlClient";
 import { fileStem } from "../kicad-port/saveAs";
 import { samePath } from "../kicad-port/sheetPages";
-import { saveTextFile } from "../api/libraryClient";
+import { saveBlob, saveTextFile } from "../api/libraryClient";
 import { layerColor } from "../components/canvas/layers";
 import { drawPageAndFrame, drawTitleBlock, drawZoneReferences, PAGE_HEIGHT_UM, PAGE_WIDTH_UM } from "../components/schematic/drawingSheet";
 import { paintSchematic } from "../components/schematic/painter";
@@ -84,7 +84,10 @@ export async function copySheetImage(ctx: SchControlContext): Promise<void> {
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     toast("Copied the sheet drawing to the clipboard.", "info");
   } catch (e) {
-    toast(`The browser would not put the picture on the clipboard: ${message(e)}`, "error");
+    // A browser that keeps the clipboard from a page (no permission, no focus, no image support): the picture is saved as a file instead.
+    const name = `${fileStem(ctx.state.board?.name ?? "schematic")}.png`;
+    saveBlob(blob, name);
+    toast(`The browser would not put the picture on the clipboard (${message(e)}), so it was saved as ${name}.`, "info");
   }
 }
 

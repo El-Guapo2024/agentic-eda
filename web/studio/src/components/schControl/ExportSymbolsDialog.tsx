@@ -1,7 +1,8 @@
 // Export Symbols... (`eeschema.EditorControl.exportSymbolsToLibrary`, `SCH_EDITOR_CONTROL::ExportSymbolsToLibrary`): every library symbol the schematic uses, once, goes into
 // a library -- here one `.kicad_sym` file the browser saves, named for the library asked for -- with the two options KiCad's library picker has: "Include power symbols
 // in export" and "Update schematic symbols to link to exported symbols". The second one puts the exported symbols into the project's own library under the new
-// nickname and moves the placed symbols' links to them, together, in one undo step (the link verb edits the root sheet, so a sub-sheet's symbols are left as they are).
+// nickname and moves the placed symbols' links to them, together, in one undo step of the schematic (the link verb edits the root sheet, so a sub-sheet's symbols are
+// left as they are).
 import { useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
 import { postExportSymbols } from "../../api/schControlClient";
@@ -38,16 +39,19 @@ export function ExportSymbolsDialog({ onClose }: { onClose: () => void }) {
       }
       const ids = r.ids ?? [];
       if (relink && !inSubSheet) {
-        // The exported symbols become the project's entries of the new library; the placed symbols of those ids link to them.
-        const cmds: Cmd[] = [];
+        // The exported symbols become the project's entries of the new library (published at once -- they are copies of what the schematic already draws, and
+        // kicad-cli resolves a placed symbol through the published ones). That is the library write, which KiCad does not undo either; the link change that
+        // follows is the commit "Update Library Identifiers", one undo step of the schematic.
+        const library: Cmd[] = [];
         for (const id of ids) {
           const { symbol } = await fetchAnySymbol(id);
-          cmds.push({ op: "put_library_symbol", symbol: { ...symbol, lib_id: `${name}:${id.split(":").pop() ?? id}` }, overwrite: true });
+          const linked = `${name}:${id.split(":").pop() ?? id}`;
+          library.push({ op: "put_library_symbol", symbol: { ...symbol, lib_id: linked }, overwrite: true }, { op: "update_symbol_on_board", lib_id: linked });
         }
+        if (!(await api.cmdBatch(library))) return; // the verb's refusal is already on screen
         const used = new Set((state.schematic?.symbols ?? []).map((s) => s.lib_id));
         const changes: Array<[string, string]> = ids.filter((id) => used.has(id)).map((id) => [id, `${name}:${id.split(":").pop() ?? id}`]);
-        if (changes.length > 0) cmds.push({ op: "set_symbol_lib_ids", changes, update_fields: false });
-        if (!(await api.cmdBatch(cmds))) return; // the verb's refusal is already on screen
+        if (changes.length > 0 && !(await api.cmd({ op: "set_symbol_lib_ids", changes, update_fields: false }))) return;
       }
       saveTextFile(r.text, `${name}.kicad_sym`);
       const said = [`Exported ${ids.length} symbol${ids.length === 1 ? "" : "s"} to ${name}.kicad_sym.`, ...(r.clashes ?? []), ...(r.skipped ?? [])];
