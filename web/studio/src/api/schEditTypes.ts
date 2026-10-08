@@ -104,15 +104,18 @@ export type SchEditCmd =
   /** Update Symbol(s) from Library: the symbols placed with these library ids resolve from the project's edited library symbol (`published`). */
   | { verb: "update_library_symbols"; lib_ids: string[] };
 
+/** One turn made while the items are held (`R`, Shift+`R`, `X`, `Y`). */
+export type SchTurn = "rot_ccw" | "rot_cw" | "mirror_h" | "mirror_v";
+
 /**
  * Move, Drag, Rotate, Mirror and Align to Grid for every kind of schematic item -- crates/ops/src/sch_move.rs (`SchMoveCmd`, sent as
  * `{ op: "sch_move", verb: ..., ... }`). `ids` are item ids (a symbol's reference moves every placed unit, `U1#2` names one).
  */
 export type SchMoveCmd =
-  /** `M`: every item moves rigidly; a wire on a moved pin is left where it is. */
-  | { verb: "move"; ids: string[]; dx: Um; dy: Um }
+  /** `M`: every item moves rigidly; a wire on a moved pin is left where it is. `turns` are the R / Shift+R / X / Y pressed while the items were held (done after the move, about `about`, the point they are held at). */
+  | { verb: "move"; ids: string[]; dx: Um; dy: Um; turns?: SchTurn[]; about?: PointXY }
   /** `G` and a click-drag: the items move and the wires, labels, junctions and no-connects attached follow; `vertices` names the picked points of a wire (`STARTPOINT` / `ENDPOINT`), a wire not in it is picked whole; `ortho` keeps right angles. */
-  | { verb: "drag"; ids: string[]; vertices?: Record<string, number[]>; dx: Um; dy: Um; ortho?: boolean; grid?: Um }
+  | { verb: "drag"; ids: string[]; vertices?: Record<string, number[]>; dx: Um; dy: Um; ortho?: boolean; grid?: Um; turns?: SchTurn[]; about?: PointXY }
   /** `R` / Shift+`R`: a quarter turn; `about` overrides the turn point (the cursor, while the selection is held). */
   | { verb: "rotate"; ids: string[]; vertices?: Record<string, number[]>; ccw?: boolean; about?: PointXY; grid?: Um }
   /** `X` (`vertical` false) / `Y`. */

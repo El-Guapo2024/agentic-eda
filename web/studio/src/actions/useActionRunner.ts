@@ -38,13 +38,14 @@ import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging"
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
-import { computeDragAttachment } from "../components/schematic/wireAttachment";
+import { pickedVertices } from "../kicad-port/schMove";
+import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
+import type { SchTurn } from "../api/schEditTypes";
 import { findNextMatch } from "../components/schematic/findNavigation";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
 import { alignToGrid } from "../kicad-port/gridSnap";
-import { alignAxis, alignDeltas, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
 import { netAtPoint } from "../kicad-port/schNetAtPoint";
 import { selectConnection, selectNodeAt } from "../kicad-port/schConnection";
 import { goBack, goForward } from "../kicad-port/navHistory";
@@ -71,7 +72,7 @@ import { registerSchControlActions, schControlChecked } from "./schControlAction
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
-import { allItems, hitItems } from "../components/schematic/schItems";
+import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
 import { deleteCmds } from "../kicad-port/schDelete";
 import { withoutLocked } from "../kicad-port/schLock";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
@@ -217,19 +218,27 @@ export function useActionRunner() {
       const refs = state.movePreview?.refs ?? [...state.selection];
       if (refs.length === 0) return false;
       const first = refs[0]!;
-      // The Schematic tab's only moveable kind is a symbol -- checked
-      // first so a ref that happens to share an id with nothing on the
-      // PCB side (every schematic symbol's id IS a part reference, so
-      // api.partByRef would also resolve on the Schematic tab) still
-      // lands on "symbol"/"symbol_drag", not "part". `activeTool ===
-      // "drag"` only matters here before the first pointer-move after
-      // arming `G` (state.movePreview still null) -- once a preview
-      // exists it already carries its own correct kind.
-      const kind = state.movePreview?.kind ?? (state.activeTool === "drag" ? "symbol_drag" : state.tab === "schematic" ? "symbol" : api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
+      const kind = state.movePreview?.kind ?? (api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
       const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0 };
       const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped } });
+      return true;
+    };
+
+    /**
+     * `SCH_EDIT_TOOL::Rotate` / `Mirror` while a selection is held by `M`, `G` or a click-drag: the turn goes on the held preview (several can
+     * follow one another) and is committed with the move as one step, about the point the items are held at. False -- nothing done -- when
+     * nothing is held, so the caller turns the selection where it stands.
+     */
+    const tryHeldTurn = (turn: SchTurn): boolean => {
+      const held = state.movePreview != null && (state.movePreview.kind === "sch_move" || state.movePreview.kind === "sch_drag");
+      const armed = state.activeTool === "move" || state.activeTool === "drag";
+      if (!held && !armed) return false;
+      const refs = state.movePreview?.refs ?? [...state.selection];
+      if (refs.length === 0) return false;
+      const base = held ? state.movePreview! : { refs, kind: state.activeTool === "drag" ? ("sch_drag" as const) : ("sch_move" as const), dxUm: 0, dyUm: 0, vertices: pickedVertices(state) };
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, turns: [...(base.turns ?? []), turn] } });
       return true;
     };
 
@@ -1089,62 +1098,38 @@ export function useActionRunner() {
         if (state.tab === "schematic") fn(...args);
       };
 
-    m.set(
-      "eeschema.InteractiveMove.move",
-      schematicOnly(() => {
-        // `FilterSelectionForLockedItems` (SCH_MOVE_TOOL::doMoveSelection): a locked symbol is not moved.
-        const first = withoutLocked(requestSelection(), new Set(state.schematic?.locked ?? []))[0];
-        if (!first || !api.symbolById(first)) return;
-        adoptHovered();
-        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-        dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
-      })
-    );
-    // `G` ("Drag", sch_move_tool.cpp): same arm-then-click-to-drop flow as
-    // `M`, except the wire endpoints attached to the selection's own pins
-    // (computeDragAttachment -- resolved now, before the symbol moves out
-    // from under them) rubber-band along with it instead of being left
-    // dangling. See state.dragAttach's own doc and MovePreview's
-    // "symbol_drag" kind.
-    m.set(
-      "eeschema.InteractiveMove.drag",
+    // `M` ("Move") and `G` ("Drag"): any selected or hovered item of any kind, locked ones left out (`FilterSelectionForLockedItems`); then the
+    // pointer carries them and a click drops them (SchematicView.tsx). `G` stretches the wires, labels, junctions and no-connects attached.
+    const armMove = (tool: "move" | "drag") =>
       schematicOnly(() => {
         const refs = withoutLocked(requestSelection(), new Set(state.schematic?.locked ?? []));
-        const first = refs[0];
-        if (!first || !api.symbolById(first) || !state.schematic) return;
+        if (refs.length === 0) return;
         adoptHovered();
-        dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool });
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
-        dispatch({ type: "SET_DRAG_ATTACH", attach: computeDragAttachment(state.schematic, refs) });
-      })
-    );
+      });
+    m.set("eeschema.InteractiveMove.move", armMove("move"));
+    m.set("eeschema.InteractiveMove.drag", armMove("drag"));
 
-    // sch_edit_tool.cpp Rotate/Mirror: RequestSelection (hover fallback), every selected symbol,
-    // one common point for 2+ items, one undo step.
+    // sch_edit_tool.cpp Rotate/Mirror: RequestSelection (hover fallback), every selected item of every kind, one turn point for 2+ items, one undo step.
     // Rotate/Mirror skip locked items (`FilterSelectionForLockedItems`, called first by SCH_EDIT_TOOL::Rotate/Mirror).
     const schLocked = () => new Set(state.schematic?.locked ?? []);
-    const schSymbols = () => withoutLocked(requestSelection(), schLocked()).filter((id) => api.symbolById(id));
-    m.set(
-      "eeschema.InteractiveEdit.rotateCCW",
+    const schItems = () => withoutLocked(requestSelection(), schLocked());
+    const schTurn = (turn: SchTurn) =>
       schematicOnly(() => {
-        if (tryTransformDuringMove(1, false)) return;
-        void api.transformSymbols(schSymbols(), { kind: "rotate", quarterTurns: 1 });
-      })
-    );
-    m.set(
-      "eeschema.InteractiveEdit.rotateCW",
-      schematicOnly(() => {
-        if (tryTransformDuringMove(3, false)) return;
-        void api.transformSymbols(schSymbols(), { kind: "rotate", quarterTurns: 3 });
-      })
-    );
-    m.set("eeschema.InteractiveEdit.mirrorH", schematicOnly(() => void api.transformSymbols(schSymbols(), { kind: "mirrorH" })));
-    m.set("eeschema.InteractiveEdit.mirrorV", schematicOnly(() => void api.transformSymbols(schSymbols(), { kind: "mirrorV" })));
+        if (tryHeldTurn(turn)) return;
+        void api.transformSchItems(schItems(), turn, pickedVertices(state));
+      });
+    m.set("eeschema.InteractiveEdit.rotateCCW", schTurn("rot_ccw"));
+    m.set("eeschema.InteractiveEdit.rotateCW", schTurn("rot_cw"));
+    m.set("eeschema.InteractiveEdit.mirrorH", schTurn("mirror_h"));
+    m.set("eeschema.InteractiveEdit.mirrorV", schTurn("mirror_v"));
 
     // `E`/`U`/`V`/`F` (sch_edit_tool.cpp::Properties/EditField): one
     // shared dialog for all four -- see SymbolPropertiesDialog.tsx's own
     // header comment on why U/V/F don't get source's own separate, far
     // smaller single-field dialog.
+    const schSymbols = () => schItems().filter((id) => api.symbolById(id));
     const openSymbolProperties = (field: "reference" | "value" | "footprint" | "datasheet" | null) =>
       schematicOnly(() => {
         const id = schSymbols()[0];
@@ -1374,44 +1359,36 @@ export function useActionRunner() {
     m.set("eeschema.EditorControl.editWithSymbolEditor", editInSymbolEditor);
     m.set("eeschema.EditorControl.editLibSymbolWithSymbolEditor", editInSymbolEditor);
 
-    // SCH_ACTIONS::alignLeft/Right/Top/Bottom/CenterX/CenterY
-    // (eeschema/tools/sch_edit_tool.cpp -> ALIGN_DISTRIBUTE_TOOL) --
-    // same per-edge math as PCB (kicad-port/alignDistribute.ts) over the
-    // selected symbols' bounding boxes. Symbols only; wires/labels are
-    // attached geometry here and are not aligned independently.
-    const alignSymbols = (edge: AlignEdge) =>
+    // SCH_ACTIONS::alignLeft/Right/Top/Bottom/CenterX/CenterY (eeschema/tools/sch_align_tool.cpp): every selected item of every kind lines up
+    // with the target's edge (kicad-port/schAlign.ts measures it from the boxes the studio draws and picks by); the backend's `align` verb
+    // moves each by its offset, snapped so pins stay on the connection grid and with the wires on each item stretching, as one undo step.
+    const alignItems = (kind: SchAlignKind) =>
       schematicOnly(() => {
         if (!sch) return;
-        const syms = sch.symbols.filter((s) => state.selection.has(s.id));
-        if (syms.length < 2) return;
-        const boxes: Box[] = syms.map((s) => {
-          const b = symbolBounds(s, sch.lib_symbols);
-          return [b.minX, b.minY, b.maxX, b.maxY];
-        });
-        const deltas = alignDeltas(boxes, edge);
-        const axis = alignAxis(edge);
-        syms.forEach((s, i) => {
-          const d = deltas[i]!;
-          if (d !== 0) void api.commitMove([s.id], axis === "x" ? d : 0, axis === "y" ? d : 0, "symbol");
-        });
+        const picked = new Set(requestSelection());
+        const locked = new Set(sch.locked ?? []);
+        const items: SchAlignItem[] = allItems(sch)
+          .filter((r) => picked.has(r.id))
+          .flatMap((r) => {
+            const b = itemBounds(sch, r);
+            return b ? [{ id: r.id, box: [b.minX, b.minY, b.maxX, b.maxY] as const, locked: locked.has(r.id) }] : [];
+          });
+        const moves = alignMoves(items, kind, state.cursorUm ? [state.cursorUm.x, state.cursorUm.y] : null).filter((mv) => mv.dx !== 0 || mv.dy !== 0);
+        if (moves.length > 0) void api.cmd({ op: "sch_move", verb: "align", moves });
       });
-    m.set("eeschema.Align.alignLeft", alignSymbols("left"));
-    m.set("eeschema.Align.alignRight", alignSymbols("right"));
-    m.set("eeschema.Align.alignTop", alignSymbols("top"));
-    m.set("eeschema.Align.alignBottom", alignSymbols("bottom"));
-    m.set("eeschema.Align.alignCenterX", alignSymbols("centerX"));
-    m.set("eeschema.Align.alignCenterY", alignSymbols("centerY"));
-    // SCH_EDIT_TOOL::AlignToGrid: round each selected item's anchor to the
-    // grid (symbols only here; each is one undoable move_symbol Cmd).
+    m.set("eeschema.Align.alignLeft", alignItems("left"));
+    m.set("eeschema.Align.alignRight", alignItems("right"));
+    m.set("eeschema.Align.alignTop", alignItems("top"));
+    m.set("eeschema.Align.alignBottom", alignItems("bottom"));
+    m.set("eeschema.Align.alignCenterX", alignItems("centerX"));
+    m.set("eeschema.Align.alignCenterY", alignItems("centerY"));
+    // SCH_MOVE_TOOL::AlignToGrid: each selected item (hovered when nothing is selected) goes to the nearest grid point, by where most of its
+    // connection points are, with the wires on it -- `align_to_grid`, one undo step.
     m.set(
       "eeschema.AlignToGrid",
       schematicOnly(() => {
-        if (!sch) return;
-        for (const s of sch.symbols) {
-          if (!state.selection.has(s.id)) continue;
-          const p = alignToGrid({ x: s.at[0], y: s.at[1] }, SCH_GRID_UM, { x: 0, y: 0 }, { ctrlOrCmd: false });
-          if (p.x !== s.at[0] || p.y !== s.at[1]) void api.commitMove([s.id], p.x - s.at[0], p.y - s.at[1], "symbol");
-        }
+        const ids = schItems();
+        if (ids.length > 0) void api.cmd({ op: "sch_move", verb: "align_to_grid", ids });
       })
     );
 

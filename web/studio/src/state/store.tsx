@@ -31,14 +31,13 @@ import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
 import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
-import type { SchToolDialog } from "../api/schEditTypes";
+import type { SchToolDialog, SchTurn } from "../api/schEditTypes";
+import { heldCmd, holdPoint, turnCmd } from "../kicad-port/schMove";
 import type { ShapeEdit } from "../kicad-port/schShapeEdit";
 import type { PolyGeom } from "../kicad-port/polygonGeom";
 import type { BreakState } from "../kicad-port/schBreak";
 import type { PinPlacement } from "../components/schematic/schPinTool";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
-import { symbolBounds } from "../components/schematic/painter";
-import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
 import { alignAxis, alignDeltas, getDeltasForDistributeByGaps, getDeltasForDistributeByPoints, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
@@ -306,8 +305,12 @@ export interface ViewTransform {
 /** A part being dragged, previewed locally before `move_to` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
 export interface MovePreview {
   refs: string[];
-  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text/dimension: their own move_* by id; symbol: schematic move_symbol; symbol_drag: schematic drag_symbol, see state.dragAttach). Defaults to "part" (every pre-existing caller moves parts). */
-  kind?: "part" | "via" | "shape" | "text" | "dimension" | "symbol" | "symbol_drag";
+  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text/dimension: their own move_* by id; sch_move / sch_drag: the schematic's `sch_move` verb for items of every kind, see kicad-port/schMove.ts). Defaults to "part" (every pre-existing caller moves parts). */
+  kind?: "part" | "via" | "shape" | "text" | "dimension" | "sch_move" | "sch_drag";
+  /** `sch_move` / `sch_drag`: the picked points of a wire (a click near a wire's end picks that end); a wire not named is picked whole. */
+  vertices?: Record<string, number[]>;
+  /** `sch_move` / `sch_drag`: R, Shift+R, X and Y pressed while the items are held, in order -- committed with the move as one step. */
+  turns?: SchTurn[];
   dxUm: number;
   dyUm: number;
   /**
@@ -675,18 +678,10 @@ export interface StudioState {
   cursorUm: { x: number; y: number } | null;
   moveOriginUm: { x: number; y: number } | null;
   /**
-   * `G`'s own attachment data: which `(wire index, point index)` pairs
-   * (into `schematic.wires[i].pts`) are glued to which selected symbol's
-   * pin, resolved once when a drag starts -- see
-   * `wireAttachment.ts::computeDragAttachment`'s own doc for why this is
-   * frozen at drag-start rather than recomputed live (same reasoning
-   * `moveOriginUm` itself is only ever set, never explicitly cleared: the
-   * next drag always overwrites it, and it's only ever read while a
-   * "symbol_drag" move/preview is actually active). Read by
-   * SchematicView.tsx (the live rubber-band preview) and `commitMove`'s
-   * own "symbol_drag" branch (the real `Cmd::DragSymbol` call).
+   * Which points of a wire a click picked (`SCH_SELECTION_TOOL::selectPoint`: a click near a wire's end picks that end only, so `G` or a drag
+   * stretches it; anywhere else the segment's two ends). Only meaningful while the selection is exactly that wire (`pickedVertices`).
    */
-  dragAttach: Record<string, [number, number][]> | null;
+  schWirePick: { id: string; vertices: number[] } | null;
   /**
    * base_screen.cpp's `m_LocalOrigin` (default (0,0), same as source) --
    * the status bar's dx/dy/dist is always relative to THIS point, set by
@@ -909,7 +904,7 @@ const initialState: StudioState = {
   toast: null,
   cursorUm: null,
   moveOriginUm: null,
-  dragAttach: null,
+  schWirePick: null,
   localOriginUm: { x: 0, y: 0 },
   prefs: loadPreferences(browserStorage()),
   preferencesDialogOpen: false,
@@ -1002,7 +997,7 @@ export type Action =
   | { type: "TOAST_CLEAR" }
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
-  | { type: "SET_DRAG_ATTACH"; attach: Record<string, [number, number][]> | null }
+  | { type: "SET_SCH_WIRE_PICK"; pick: { id: string; vertices: number[] } | null }
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
   | { type: "TOGGLE_AUTO_PAN" }
   | { type: "SET_PREFERENCES"; prefs: Preferences }
@@ -1301,8 +1296,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, cursorUm: action.at };
     case "SET_MOVE_ORIGIN":
       return { ...state, moveOriginUm: action.at };
-    case "SET_DRAG_ATTACH":
-      return { ...state, dragAttach: action.attach };
+    case "SET_SCH_WIRE_PICK":
+      return { ...state, schWirePick: action.pick };
     case "SET_LOCAL_ORIGIN":
       return { ...state, localOriginUm: action.at };
     case "TOGGLE_AUTO_PAN":
@@ -1513,8 +1508,10 @@ export interface StudioApi {
   schTextById: (id: string) => SchematicText | undefined;
   /** R/Shift+R on the Schematic tab: rotate a symbol in place (quarterTurns: 1 = CCW/'R', 3 = CW/Shift+R, matching sch_edit_tool.cpp's own default). */
   rotateSymbol: (id: string, quarterTurns: number) => Promise<void>;
-  /** sch_edit_tool.cpp Rotate/Mirror over a multi-selection: one item turns about its own anchor; several share the selection's (grid-snapped) center. One undo step. */
-  transformSymbols: (ids: string[], op: { kind: "rotate"; quarterTurns: number } | { kind: "mirrorH" } | { kind: "mirrorV" }) => Promise<void>;
+  /** sch_edit_tool.cpp Rotate/Mirror over a selection of any kind of schematic item: one item turns about its own anchor, several about the (half-grid) centre of the selection (`sch_move` rotate / mirror). One undo step. */
+  transformSchItems: (ids: string[], turn: SchTurn, vertices?: Record<string, number[]>) => Promise<void>;
+  /** Drop a held schematic selection: `state.movePreview` (kind `sch_move` / `sch_drag`) as one `sch_move` command, turns made while it was held included. */
+  commitSchHeld: (preview: MovePreview) => Promise<void>;
   /** X on the Schematic tab ("Mirror Horizontally"). */
   mirrorSymbol: (id: string) => Promise<void>;
   /** Y on the Schematic tab ("Mirror Vertically") -- mutually exclusive with `mirrorSymbol` on the backend (Cmd::MirrorSymbolVertical's own doc). */
@@ -1882,40 +1879,23 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "CLEAR_SELECTION" });
       await runCmd({ op: "delete_symbol", id });
     },
-    transformSymbols: async (ids, op) => {
-      const st = stateRef.current;
-      const sch = st.schematic;
-      const syms = ids.map((id) => sch?.symbols.find((x) => x.id === id)).filter((x): x is SchematicSymbol => Boolean(x));
-      if (syms.length === 0) return;
-      const cmds: Cmd[] = [];
-      let center: { x: number; y: number } | null = null;
-      if (syms.length > 1 && sch) {
-        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-        for (const sy of syms) {
-          const b = symbolBounds(sy, sch.lib_symbols);
-          x0 = Math.min(x0, b.minX); y0 = Math.min(y0, b.minY); x1 = Math.max(x1, b.maxX); y1 = Math.max(y1, b.maxY);
-        }
-        // sch_edit_tool.cpp: the shared point is the selection center snapped to the schematic grid (keeps rotated anchors on grid).
-        center = { x: Math.round((x0 + x1) / 2 / SCH_GRID_UM) * SCH_GRID_UM, y: Math.round((y0 + y1) / 2 / SCH_GRID_UM) * SCH_GRID_UM };
-      }
-      for (const sy of syms) {
-        if (op.kind === "rotate") {
-          cmds.push({ op: "rotate_symbol", id: sy.id, quarter_turns: ((op.quarterTurns % 4) + 4) % 4 });
-          if (center) {
-            // symbol rotation +90 maps (x,y) -> (y,-x) (transform.ts "90:none"), i.e. rotateQuarter with the opposite sign.
-            const r = rotateQuarter(sy.at[0], sy.at[1], center.x, center.y, -op.quarterTurns);
-            if (r.x !== sy.at[0] || r.y !== sy.at[1]) cmds.push({ op: "move_symbol", id: sy.id, x: r.x, y: r.y });
-          }
-        } else {
-          cmds.push(op.kind === "mirrorH" ? { op: "mirror_symbol", id: sy.id } : { op: "mirror_symbol_vertical", id: sy.id });
-          if (center) {
-            const x = op.kind === "mirrorH" ? mirrorCoord(sy.at[0], center.x) : sy.at[0];
-            const y = op.kind === "mirrorV" ? mirrorCoord(sy.at[1], center.y) : sy.at[1];
-            if (x !== sy.at[0] || y !== sy.at[1]) cmds.push({ op: "move_symbol", id: sy.id, x, y });
-          }
-        }
-      }
-      await runBatch(cmds);
+    transformSchItems: async (ids, turn, vertices) => {
+      if (ids.length === 0) return;
+      await runCmd(turnCmd(ids, turn, vertices));
+    },
+    commitSchHeld: async (preview) => {
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+      const origin = stateRef.current.moveOriginUm;
+      const cmd = heldCmd({
+        mode: preview.kind === "sch_drag" ? "drag" : "move",
+        ids: preview.refs,
+        vertices: preview.vertices,
+        dxUm: preview.dxUm,
+        dyUm: preview.dyUm,
+        turns: preview.turns,
+        holdUm: holdPoint(origin, preview.dxUm, preview.dyUm),
+      });
+      if (cmd) await runCmd(cmd);
     },
     cmd: (c) => runCmd(c),
     advanceMoveQueue: () => advanceMoveQueue(),
@@ -2061,29 +2041,6 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           if (t) cmds.push({ op: "move_text", id: ref, x: t.x + dxUm, y: t.y + dyUm });
         } else if (kind === "dimension") {
           cmds.push({ op: "move_dimension", id: ref, dx: dxUm, dy: dyUm });
-        } else if (kind === "symbol") {
-          const s = api.symbolById(ref);
-          if (s) cmds.push({ op: "move_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm });
-          // sch_edit_tool.cpp's R/Shift+R-during-move branch (see
-          // useActionRunner.ts's tryTransformDuringMove): applied after
-          // the move, same reasoning commitMove's own doc comment gives
-          // for parts -- rotating about the symbol's own (already-moved)
-          // anchor lands on the same final pose as a live in-place spin.
-          if (rotateQuarterTurns) cmds.push({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
-        } else if (kind === "symbol_drag") {
-          // `G`: same as "symbol" above, except the wire endpoints
-          // `state.dragAttach` resolved for this ref at drag-start move
-          // along with it (sch_move_tool.cpp's rubber-band) -- see
-          // `Cmd::DragSymbol`'s own doc. A ref with no recorded attachment
-          // (shouldn't happen -- computeDragAttachment covers every
-          // dragged symbol -- but cheap to default safely) just drags with
-          // nothing glued to it, same as a plain move.
-          const s = api.symbolById(ref);
-          if (s) {
-            const attached = stateRef.current.dragAttach?.[ref] ?? [];
-            cmds.push({ op: "drag_symbol", id: ref, x: s.at[0] + dxUm, y: s.at[1] + dyUm, attached_wire_endpoints: attached });
-          }
-          if (rotateQuarterTurns) cmds.push({ op: "rotate_symbol", id: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
         }
       }
       // One undo step for the whole drop (BOARD_COMMIT::Push once).

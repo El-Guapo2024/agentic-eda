@@ -687,7 +687,7 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   const hair = 1 / view.scale;
 
   if (l.scope === "local" || !l.shape) {
-    const spin = inferSpin(wires, l.at);
+    const spin = l.spin ?? inferSpin(wires, l.at);
     const { pos, justify } = localLabelTextPlacement(spin, l.at);
     const sizeUm = LABEL_TEXT_SIZE_UM;
     // V BOTTOM: stroke text has no native top/bottom baseline (see this
@@ -699,7 +699,7 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
     return;
   }
 
-  const spin = inferSpin(wires, l.at);
+  const spin = l.spin ?? inferSpin(wires, l.at);
   const shape: LabelShape = l.shape;
   ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(l.scope === "global" ? 159 : 159, hair);
