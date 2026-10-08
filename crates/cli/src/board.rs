@@ -840,9 +840,10 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     }
     let before = all_failures(&board, &model);
     let was = board.fork();
-    // What the command clears is judged against the board it found: a move of copper alone leaves the routing be, one that
-    // takes a footprint with it does not (`Cmd::clears_routing_in`).
-    let clears_routing = cmd.clears_routing_in(was.design());
+    // What the command clears is judged against the board it found: a move of copper alone leaves the routing be, and so does
+    // one that takes a footprint nothing was routed to; one that takes a footprint with copper on its pads does not
+    // (`Cmd::clears_routing_in`).
+    let clears_routing = cmd.clears_routing_in(&was);
 
     // A refused command is not a crash: it is an answer. The caller
     // asked whether this move is possible and the gates said no, with a
@@ -1919,11 +1920,40 @@ mod tests {
         assert_eq!(back.routing.as_ref().unwrap().vias.len(), 1, "and no more than the move");
         assert_eq!(back.routing.as_ref().unwrap().vias[0].at, before.routing.as_ref().unwrap().vias[0].at);
 
-        // A footprint among the items is what clears the routing, as it always has.
+        // A footprint nothing is routed to (U1 sits at (5000, 5000), the track is at y = 12000) takes no routing with it...
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        // ...one with a track on its pad does, as every footprint move always has.
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 4_000, y: 5_000 }, Point { x: 4_000, y: 9_000 }] }, false, "test").unwrap();
         let msg = step(&dir, Cmd::MoveItems { ids: vec![track, "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
         assert!(msg.contains("routing cleared"), "{msg}");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 1, "Undo brings the routing back");
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 2, "Undo brings the routing back");
+    }
+
+    /// Duplicate a footprint on a routed board, place the copy and delete it again: the copy has nothing routed to it, so
+    /// none of it clears the routing -- and moving the original, which has copper on its pad, still does.
+    #[test]
+    fn placing_and_deleting_a_copied_footprint_leaves_the_routing_alone() {
+        let dir = scratch("copy_keeps_routing");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 4_000, y: 5_000 }, Point { x: 4_000, y: 9_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, false, "test").unwrap();
+
+        let msg = step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 8_000 }, true, "test").expect("the copy moves under --strict");
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        let msg = step(&dir, Cmd::RotateItems { ids: vec!["U3".into()], pivot: Point { x: 5_000, y: 13_000 }, angle_millideg: -90_000 }, true, "test").unwrap();
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        let msg = step(&dir, Cmd::Rip { part: "U3".into() }, true, "test").expect("the copy goes again under --strict");
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        let (_, design, model) = load(&dir).unwrap();
+        assert_eq!(design.routing.as_ref().unwrap().tracks.len(), 1, "the routing is still there");
+        assert!(model.part("U3").is_none(), "and the copy is gone");
+
+        // The original has a track on its pad: that is a move out from under it.
+        let msg = step(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: 0, dy: 100 }, false, "test").unwrap();
+        assert!(msg.contains("routing cleared"), "{msg}");
     }
 
     /// Turn a selection about a point and flip it: each is one step, each undoes, and the same two verbs reach the file kicad-cli reads.

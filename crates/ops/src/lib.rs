@@ -1764,13 +1764,15 @@ impl Cmd {
     }
 
     /// [`Cmd::clears_routing`], told what the board holds: the commands that move, turn or flip *any* kind of item
-    /// ([`Cmd::MoveItems`], [`Cmd::RotateItems`], [`Cmd::FlipItems`]) leave the routing alone unless one of the items
-    /// they name is a placed footprint (directly, or as a member of a group), because only a footprint can be moved
-    /// out from under a track. `design` is the board as it was before the command.
-    pub fn clears_routing_in(&self, design: &Design) -> bool {
+    /// ([`Cmd::MoveItems`], [`Cmd::RotateItems`], [`Cmd::FlipItems`]) and the one that takes a footprint off the board
+    /// ([`Cmd::Rip`]) leave the routing alone unless a footprint they name (directly, or as a member of a group) has routed
+    /// copper on a pad, because only such a footprint can be moved out from under a track -- a fresh copy, or one nothing
+    /// was routed to, takes nothing with it. `board` is the board as it was before the command.
+    pub fn clears_routing_in(&self, board: &Board<'_>) -> bool {
         match self {
-            Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(design)),
-            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => pcb_transform::names_placed_part(design, ids),
+            Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => board.names_routed_part(ids),
+            Cmd::Rip { part } => board.names_routed_part(std::slice::from_ref(part)),
             other => other.clears_routing(),
         }
     }

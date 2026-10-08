@@ -21,7 +21,8 @@
 //!   of the selection the tool then works on; the item's own `Move`/`Rotate`/`Flip` never look at them.
 
 use super::{rotate_point_about, Board};
-use eda_model::ir::{tessellate_arc, Design, Dimension, DimensionKind, FootprintInstance, LabelSide, Millideg, Point, Shape, Side, Text, Track, Um, Via, Zone, TRACK_ARC_SEGMENTS};
+use eda_model::footprint::PlacedPad;
+use eda_model::ir::{tessellate_arc, Design, Dimension, DimensionKind, FootprintInstance, LabelSide, Millideg, Point, RoutingSection, Shape, Side, Text, Track, Um, Via, Zone, TRACK_ARC_SEGMENTS};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -124,18 +125,106 @@ impl Targets {
     }
 }
 
-/// Whether `ids` name a placed footprint, directly or as a member of a group they name. Moving, turning or flipping a
-/// footprint leaves the copper that was routed to it behind, which this model answers by clearing the routing
-/// (`Cmd::clears_routing`); copper, graphics and text on their own never do.
-pub(crate) fn names_placed_part(design: &Design, ids: &[String]) -> bool {
-    let placed = |id: &str| design.placement.as_ref().is_some_and(|p| p.footprints.iter().any(|f| f.id == id));
-    ids.iter().any(|id| {
-        let group = design.drawings.as_ref().and_then(|d| d.groups.iter().find(|g| &g.id == id));
-        match group {
-            Some(g) => g.member_ids.iter().any(|m| placed(m)),
-            None => placed(id),
+/// The placed footprints `ids` name, directly or as members of a group they name.
+fn named_footprints<'d>(design: &'d Design, ids: &[String]) -> Vec<&'d FootprintInstance> {
+    let Some(placement) = design.placement.as_ref() else { return vec![] };
+    let mut named: BTreeSet<&str> = BTreeSet::new();
+    for id in ids {
+        match design.drawings.as_ref().and_then(|d| d.groups.iter().find(|g| &g.id == id)) {
+            Some(g) => named.extend(g.member_ids.iter().map(String::as_str)),
+            None => {
+                named.insert(id.as_str());
+            }
         }
-    })
+    }
+    placement.footprints.iter().filter(|f| named.contains(f.id.as_str())).collect()
+}
+
+/// Whether the segment `a`-`b` touches the box `(x0, y0, x1, y1)` (Liang-Barsky clipping; a lone point is a segment of no length).
+fn segment_touches_box(a: Point, b: Point, (x0, y0, x1, y1): (f64, f64, f64, f64)) -> bool {
+    let (ax, ay, dx, dy) = (a.x as f64, a.y as f64, (b.x - a.x) as f64, (b.y - a.y) as f64);
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, q) in [(-dx, ax - x0), (dx, x1 - ax), (-dy, ay - y0), (dy, y1 - ay)] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                t0 = t0.max(t);
+            } else {
+                t1 = t1.min(t);
+            }
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// A piece of routed copper, by where it is in the routing.
+#[derive(PartialEq, Clone, Copy)]
+enum Copper {
+    Track(usize),
+    Via(usize),
+}
+
+/// The routed copper that touches `pad`: a track that runs into or over it, a via on it.
+fn copper_on(routing: &RoutingSection, pad: &PlacedPad) -> Vec<Copper> {
+    let (hw, hh) = (pad.size.0 as f64 / 2.0, pad.size.1 as f64 / 2.0);
+    let (cx, cy) = (pad.center.x as f64, pad.center.y as f64);
+    let reaches = |half_width: Um| (cx - hw - half_width as f64, cy - hh - half_width as f64, cx + hw + half_width as f64, cy + hh + half_width as f64);
+    let mut out = vec![];
+    for (i, t) in routing.tracks.iter().enumerate() {
+        let near = reaches(t.width / 2);
+        if t.pts.len() == 1 && segment_touches_box(t.pts[0], t.pts[0], near) || t.pts.windows(2).any(|w| segment_touches_box(w[0], w[1], near)) {
+            out.push(Copper::Track(i));
+        }
+    }
+    for (i, v) in routing.vias.iter().enumerate() {
+        if segment_touches_box(v.at, v.at, reaches(v.diameter / 2)) {
+            out.push(Copper::Via(i));
+        }
+    }
+    out
+}
+
+/// Whether two pads' boxes overlap (pads of a footprint and of the copy that sits on it).
+fn pads_overlap(a: &PlacedPad, b: &PlacedPad) -> bool {
+    (a.center.x - b.center.x).abs() * 2 < a.size.0 + b.size.0 && (a.center.y - b.center.y).abs() * 2 < a.size.1 + b.size.1
+}
+
+impl Board<'_> {
+    /// Whether moving, turning, flipping or taking away the footprints `ids` name (directly, or as members of a group) would leave routed
+    /// copper behind: a track or via that touches a pad of theirs and is not still held by a pad of a footprint that stays where it
+    /// is *at that very spot* (the original under a fresh copy of it). This model answers it by clearing the routing
+    /// (`Cmd::clears_routing`); copper, graphics and text on their own never do, and neither does a footprint nothing was routed to.
+    /// A footprint whose pads cannot be worked out counts as routed -- the safe answer.
+    pub(crate) fn names_routed_part(&self, ids: &[String]) -> bool {
+        let Some(routing) = self.design.routing.as_ref() else { return false };
+        let named = named_footprints(&self.design, ids);
+        if named.is_empty() {
+            return false;
+        }
+        let pads_of = |fp: &FootprintInstance| self.model.part(&fp.id).and_then(|part| eda_model::footprint::placed_pads(self.model, part, fp));
+        let mut moving: Vec<PlacedPad> = vec![];
+        for fp in &named {
+            match pads_of(fp) {
+                Some(pads) => moving.extend(pads),
+                None => return true,
+            }
+        }
+        let staying: Vec<PlacedPad> = self.design.placement.iter().flat_map(|p| p.footprints.iter()).filter(|f| !named.iter().any(|n| n.id == f.id)).filter_map(|f| pads_of(f)).flatten().collect();
+        for pad in &moving {
+            let held_by: Vec<Vec<Copper>> = staying.iter().filter(|q| pads_overlap(pad, q)).map(|q| copper_on(routing, q)).collect();
+            if copper_on(routing, pad).iter().any(|c| !held_by.iter().any(|h| h.contains(c))) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl Board<'_> {
