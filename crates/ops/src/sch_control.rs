@@ -206,9 +206,13 @@ impl<'a> Board<'a> {
             return Ok(());
         }
         let moving: Vec<&String> = plan.iter().map(|(old, _)| old).collect();
+        let elsewhere: Vec<String> = self.symbols_elsewhere().into_iter().map(|(r, _)| r.to_string()).collect();
         for (_, new) in &plan {
             if refs.iter().any(|r| r == new && !moving.contains(&r)) {
                 return Err(fail("ops_duplicate_symbol", new, "a symbol with this reference is already on the sheet"));
+            }
+            if elsewhere.contains(new) {
+                return Err(fail("ops_duplicate_symbol", new, "a symbol with this reference is already on another sheet"));
             }
         }
         for (i, (old, _)) in plan.iter().enumerate() {

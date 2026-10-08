@@ -1242,7 +1242,7 @@ fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String
 /// error the whole schematic view out). Returns the resolved section
 /// alongside the `(id, name)` breadcrumb actually reached, which may be
 /// shorter than the requested path when it had to fall back.
-fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model::ir::SchematicSection, Vec<(String, String)>) {
+pub(crate) fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model::ir::SchematicSection, Vec<(String, String)>) {
     let mut current = design.schematic.clone().unwrap_or(eda_model::ir::SchematicSection {
         power_symbols: vec![],
         no_connects: vec![], bus_entries: vec![],
@@ -1509,7 +1509,8 @@ fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 
     let lib_name_of = |lib_id: &str| lib_id.split_once(':').map(|(l, _)| l.to_string());
     let mut lib_names: std::collections::BTreeSet<String> = model.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)).collect();
-    if let Some(sch) = &design.schematic {
+    // every sheet's symbols: with module sheets the root holds none of its own
+    for sch in design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
         lib_names.extend(sch.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)));
     }
 

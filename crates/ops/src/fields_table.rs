@@ -24,9 +24,9 @@
 //!
 //! Scope limits (also listed in `web/studio/PARITY-sch.md`): our IR has no
 //! DNP / exclude-from-BOM / exclude-from-board attributes, no field
-//! visibility and no hierarchy-wide scope selector, so the attribute
-//! columns (`${DNP}`, ...) and the DNP / "include excluded" filters do not
-//! exist, and the table covers one sheet's symbols.
+//! visibility and no scope selector, so the attribute columns (`${DNP}`,
+//! ...) and the DNP / "include excluded" filters do not exist. The table
+//! covers the whole design -- every sheet ([`project_view`]).
 
 use std::collections::BTreeMap;
 
@@ -290,6 +290,20 @@ fn field_value(sch: &SchematicSection, model: &ConstraintModel, sym: &SymbolInst
         DATASHEET => sym.datasheet.clone(),
         other => sch.user_fields.get(&sym.id).and_then(|m| m.get(other)).cloned().unwrap_or_default(),
     }
+}
+
+/// The symbols of the whole design as one section, for the table to read: the root sheet's, then every other sheet screen's (a screen shared
+/// by two sheet symbols is one screen, listed once). KiCad's table covers the project the same way (`SCH_REFERENCE_LIST` over
+/// `SCH_SHEET_LIST`); a reference is one part for the whole design, so no row is listed twice.
+pub fn project_view(design: &eda_model::ir::Design) -> Option<SchematicSection> {
+    let mut sch = design.schematic.clone()?;
+    for screen in design.sheet_contents.iter().flat_map(|c| c.values()) {
+        sch.symbols.extend(screen.symbols.iter().cloned());
+        for (reference, fields) in &screen.user_fields {
+            sch.user_fields.entry(reference.clone()).or_default().extend(fields.clone());
+        }
+    }
+    Some(sch)
 }
 
 /// Every user-field name any symbol carries (the dialog adds one column

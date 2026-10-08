@@ -47,9 +47,22 @@ fn parse_spec(req: &Value, sch: &eda_model::ir::SchematicSection) -> Result<Tabl
     }
 }
 
-/// The schematic with the dialog's staged changes (if any) overlaid.
+/// The board as the studio shows it: a board with no stored schematic has the one derived from its intent (module sheets), so the dialogs
+/// read what is on screen, whichever sheet it is.
+fn loaded(dir: &Path) -> Result<(board::Meta, eda_model::ir::Design, eda_model::ConstraintModel), Value> {
+    let (meta, mut design, model) = board::load(dir).map_err(|e| err(board::reasons(&e)))?;
+    if design.schematic.is_none() {
+        let derived = board::derived_schematic(&design, &model).map_err(|e| err(board::reasons(&e)))?;
+        design.schematic = derived.schematic;
+        design.sheet_contents = derived.sheet_contents;
+    }
+    Ok((meta, design, model))
+}
+
+/// The schematic with the dialog's staged changes (if any) overlaid: every sheet of the design as one section, as KiCad's table covers the
+/// project (`fields_table::project_view`).
 fn staged_schematic(req: &Value, design: &eda_model::ir::Design) -> Result<eda_model::ir::SchematicSection, String> {
-    let mut sch = design.schematic.clone().ok_or("this design has no schematic")?;
+    let mut sch = fields_table::project_view(design).ok_or("this design has no schematic")?;
     if let Some(c) = req.get("changes").filter(|v| !v.is_null()) {
         let changes: FieldChanges = serde_json::from_value(c.clone()).map_err(|e| format!("bad changes: {e}"))?;
         fields_table::apply_field_changes(&mut sch, &changes)?;
@@ -61,9 +74,9 @@ fn staged_schematic(req: &Value, design: &eda_model::ir::Design) -> Result<eda_m
 /// `{ok, spec, user_fields, rows: [{refs, flag, item_number, cells, mixed, children}]}`.
 pub fn fields_table(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let (_, design, model) = match board::load(dir) {
+    let (_, design, model) = match loaded(dir) {
         Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
+        Err(e) => return e,
     };
     let sch = match staged_schematic(&req, &design) {
         Ok(s) => s,
@@ -105,9 +118,9 @@ fn safe_relative(path: &str) -> Result<PathBuf, String> {
 /// parent directories (`EnsureFileDirectoryExists`).
 pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let (meta, design, model) = match board::load(dir) {
+    let (meta, design, model) = match loaded(dir) {
         Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
+        Err(e) => return e,
     };
     let sch = match staged_schematic(&req, &design) {
         Ok(s) => s,
@@ -146,21 +159,24 @@ pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
     json!({ "ok": true, "file": rel.to_string_lossy(), "text": text })
 }
 
-/// `POST /api/sch/find`: `{search: SearchData, scope?: [ids]}` ->
+/// `POST /api/sch/find`: `{search: SearchData, scope?: [ids], sheet?: "id/id/..."}` ->
 /// `{ok, matches: [{key, kind, id, name, at: [x, y], text}]}` in
 /// `nextMatch` order (ascending x, y). `scope` (the dialog's "Search only
-/// selected objects") keeps only matches whose owning id is listed.
+/// selected objects") keeps only matches whose owning id is listed. `sheet`
+/// is the sheet in view (the root when absent): the positions are on its
+/// page, and Replace edits that sheet (`Cmd::OnSheet`), so Find searches it.
 pub fn find(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let search: SearchData = match serde_json::from_value(req.get("search").cloned().unwrap_or(Value::Null)) {
         Ok(s) => s,
         Err(e) => return err(format!("bad search: {e}")),
     };
-    let (_, design, model) = match board::load(dir) {
+    let (_, design, model) = match loaded(dir) {
         Ok(v) => v,
-        Err(e) => return err(board::reasons(&e)),
+        Err(e) => return e,
     };
-    let Some(sch) = &design.schematic else { return err("this design has no schematic") };
+    let (sch, _) = crate::studio::resolve_sheet(&design, req.get("sheet").and_then(Value::as_str).unwrap_or(""));
+    let sch = &sch;
     let scope: Option<Vec<String>> = req.get("scope").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
     let matches: Vec<Value> = search::find_items(sch, &model, &search)
         .into_iter()

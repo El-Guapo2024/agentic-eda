@@ -25,3 +25,10 @@ test("nextReference: different prefixes are counted independently", () => {
 test("nextReference: an id that doesn't match <letters><digits> is ignored, not miscounted", () => {
   assert.equal(nextReference([sym("R?"), sym("R1")], "R"), "R2", "the unannotated placeholder has no number to contribute");
 });
+
+test("nextReference: the references of the design's other sheets are taken too", () => {
+  const thisSheet = [sym("U1"), sym("C1")];
+  assert.equal(nextReference(thisSheet, "R", ["R1", "R2", "R8", "D1"]), "R9", "a resistor placed on the MCU sheet does not reuse one the LED channels sheet has");
+  assert.equal(nextReference(thisSheet, "C", ["C12"]), "C13");
+  assert.equal(nextReference(thisSheet, "U", []), "U2");
+});

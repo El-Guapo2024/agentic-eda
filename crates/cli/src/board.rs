@@ -2866,6 +2866,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// With the design on module sheets the root sheet holds no symbol, so the dialogs must not read the root alone: the Symbol Fields Table and the BOM
+    /// preview list every sheet's symbols, and Find searches the sheet in view (where Replace then edits).
+    #[test]
+    fn the_fields_table_reads_every_sheet_and_find_the_sheet_in_view() {
+        let dir = scratch("sheets_dialogs");
+        setup_mcu30_flat(&dir);
+        step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
+        let table = crate::sch_api::fields_table(&dir, b"{}");
+        assert_eq!(table["ok"], true, "{table}");
+        let text = table["rows"].to_string();
+        for reference in ["U1", "J1", "R1", "D8", "C12"] {
+            assert!(text.contains(&format!("\"{reference}\"")) || text.contains(reference), "{reference} is missing from the fields table: {text}");
+        }
+        let bom = crate::sch_api::bom_export(&dir, br#"{"preview":true}"#);
+        assert_eq!(bom["ok"], true, "{bom}");
+        assert!(bom["text"].as_str().unwrap().contains("D8") || bom["text"].as_str().unwrap().contains("D1"), "the BOM lists the LEDs of the channels sheet: {}", bom["text"]);
+
+        // Find: the root has no symbol; the channels sheet has the resistors
+        let (_, hier, _) = load(&dir).unwrap();
+        let channels = hier.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name.starts_with("LED")).unwrap().id.clone();
+        let search = |sheet: &str| {
+            let body = serde_json::json!({ "search": { "find": "R3", "search_and_replace": false }, "sheet": sheet }).to_string();
+            crate::sch_api::find(&dir, body.as_bytes())
+        };
+        assert_eq!(search("")["matches"].as_array().unwrap().len(), 0, "the root sheet has no R3");
+        let hits = search(&channels);
+        assert!(hits["matches"].as_array().unwrap().iter().any(|m| m["id"] == "R3"), "{hits}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Tools > Reorganize into Module Sheets on the user's own board: the old flat drawing reads as loose pins, so the new sheets are drawn from the
     /// intent's nets -- and every one of them, with its name, is still a net the tracks are on. The board stays routable.
     #[test]

@@ -322,6 +322,53 @@ mod tests {
         assert!(d.schematic.as_ref().unwrap().extras.locked.is_empty(), "the root holds sheet symbols only");
     }
 
+    /// A reference is one part for the whole design: what another sheet has counts when a symbol is added, renamed or numbered.
+    #[test]
+    fn a_reference_is_one_part_for_the_whole_design() {
+        let model = mcu30();
+        let mut b = flat_board(&model);
+        b.apply(&Cmd::ReorganizeSheets).unwrap();
+        let root = b.design().schematic.clone().unwrap();
+        let mcu = root.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().id.clone();
+        let on_mcu = |cmd: Cmd| Cmd::OnSheet { sheet: mcu.clone(), cmd: Box::new(cmd) };
+        let add = |id: &str| Cmd::AddSymbol { id: id.into(), lib_id: "Device:R".into(), at: Point { x: 10_160, y: 10_160 }, rot_millideg: 0, value: "1k".into(), footprint: String::new(), unit: 1 };
+        // R1 is on the LED channels sheet: the MCU sheet cannot have another
+        assert_eq!(b.apply(&on_mcu(add("R1"))).unwrap_err()[0].check, "ops_duplicate_symbol");
+        // a part may not be renamed onto a reference another sheet has
+        let rename = Cmd::RenameSymbol { id: "C1".into(), new_id: "R2".into() };
+        assert_eq!(b.apply(&on_mcu(rename)).unwrap_err()[0].check, "ops_duplicate_symbol");
+        // an unnumbered symbol is numbered after the references of every sheet (R1..R8 are the channels')
+        b.apply(&on_mcu(add("R?"))).unwrap();
+        b.apply(&on_mcu(Cmd::Annotate { reset_existing: false, order: Default::default(), ids: None })).unwrap();
+        let screens = b.design().sheet_contents.clone().unwrap();
+        let mcu_file = &root.sheets.iter().find(|s| s.id == mcu).unwrap().file;
+        let mut on_mcu_sheet: Vec<&str> = screens[mcu_file].symbols.iter().map(|s| s.id.as_str()).filter(|r| r.starts_with('R')).collect();
+        on_mcu_sheet.sort();
+        assert_eq!(on_mcu_sheet, vec!["R9"], "the new resistor is R9: the channels sheet has R1..R8");
+    }
+
+    /// The Symbol Fields Table covers every sheet: one view of the design's symbols, and an edit goes to the sheet that has its symbol.
+    #[test]
+    fn the_fields_table_covers_every_sheet() {
+        let model = mcu30();
+        let mut b = flat_board(&model);
+        b.apply(&Cmd::ReorganizeSheets).unwrap();
+        let view = crate::fields_table::project_view(b.design()).unwrap();
+        assert_eq!(view.symbols.len(), 30, "the root has no symbol of its own; the table lists all thirty");
+        let edit = |id: &str, value: &str| crate::fields_table::FieldEdit { id: id.into(), field: "Value".into(), value: value.into() };
+        // R3 is on the channels sheet, C5 on the MCU sheet; the edits are made from the root, with no sheet named
+        b.apply(&Cmd::SetSymbolFields { edits: vec![edit("R3", "470"), edit("C5", "22nF")], add_fields: vec!["MPN".into()], rename_fields: vec![], remove_fields: vec![] }).unwrap();
+        let screens = b.design().sheet_contents.clone().unwrap();
+        let value_of = |reference: &str| screens.values().flat_map(|s| s.symbols.iter()).find(|s| s.id == reference).unwrap().value.clone();
+        assert_eq!((value_of("R3").as_str(), value_of("C5").as_str()), ("470", "22nF"));
+        assert!(screens.values().filter(|s| !s.symbols.is_empty()).all(|s| s.user_fields.values().all(|f| f.contains_key("MPN"))), "a new column is a column of every sheet");
+        // a reference no sheet has is refused, and nothing changed
+        let before = serde_json::to_string(b.design()).unwrap();
+        let err = b.apply(&Cmd::SetSymbolFields { edits: vec![edit("R3", "1k"), edit("R99", "1k")], add_fields: vec![], rename_fields: vec![], remove_fields: vec![] }).unwrap_err();
+        assert_eq!(err[0].check, "ops_bad_fields");
+        assert_eq!(serde_json::to_string(b.design()).unwrap(), before);
+    }
+
     /// The studio addresses everything it sends from the Schematic tab to the sheet in view; what is not a schematic edit is not stopped by it.
     #[test]
     fn a_command_of_another_editor_ignores_the_sheet_path() {

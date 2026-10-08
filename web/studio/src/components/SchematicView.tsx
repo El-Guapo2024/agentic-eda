@@ -560,7 +560,7 @@ export function SchematicView() {
         // is for a part this simple.
         if (state.activeTool === "sch_place_symbol" && state.armedSymbol) {
           const { libId, referencePrefix, unit, ref } = state.armedSymbol;
-          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U");
+          const id = ref ?? nextReference(sch.symbols, referencePrefix || "U", state.board?.parts.map((p) => p.ref));
           const value = state.armedSymbol.value ?? (libId.includes(":") ? libId.slice(libId.indexOf(":") + 1) : libId);
           const [sx, sy] = snapToGrid(wx, wy);
           api.cmd({ op: "add_symbol", id, lib_id: libId, at: { x: sx, y: sy }, rot_millideg: 0, value, footprint: state.armedSymbol.footprint ?? "", unit });

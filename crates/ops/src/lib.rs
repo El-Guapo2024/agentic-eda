@@ -3910,6 +3910,22 @@ impl<'a> Board<'a> {
         r
     }
 
+    /// Every placed symbol of every screen but the one the verbs act on: (reference, unit). A reference is one part for the whole design
+    /// (the model, the PCB and the net list know it by that name), so what is placed on another sheet counts when a symbol is added,
+    /// renamed or numbered here.
+    fn symbols_elsewhere(&self) -> Vec<(&str, u32)> {
+        let mut out: Vec<(&str, u32)> = Vec::new();
+        if self.focus.is_some() {
+            out.extend(self.design.schematic.iter().flat_map(|s| s.symbols.iter().map(|x| (x.id.as_str(), x.unit))));
+        }
+        for (file, screen) in self.design.sheet_contents.iter().flatten() {
+            if self.focus.as_ref() != Some(file) {
+                out.extend(screen.symbols.iter().map(|x| (x.id.as_str(), x.unit)));
+            }
+        }
+        out
+    }
+
     fn find_symbol(&self, id: &str) -> Result<&SymbolInstance, Vec<CheckResult>> {
         self.schematic()?.symbols.iter().find(|s| s.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", id, "no symbol instance with this reference")])
     }
@@ -4305,6 +4321,9 @@ impl<'a> Board<'a> {
         if id.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_symbol", "symbol", "a symbol needs a reference designator")]);
         }
+        if self.symbols_elsewhere().iter().any(|(r, u)| *r == id && *u == unit) {
+            return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, format!("reference '{id}' already has unit {unit} on another sheet"))]);
+        }
         let sch = self.schematic_mut_or_create();
         if sch.symbols.iter().any(|s| s.id == id && s.unit == unit) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, format!("reference '{id}' already has unit {unit} on the sheet"))]);
@@ -4340,9 +4359,30 @@ impl<'a> Board<'a> {
         if edits.is_empty() && add.is_empty() && rename.is_empty() && remove.is_empty() {
             return Err(vec![CheckResult::fail("ops_nothing_to_apply", "symbol_fields", "no field changes to apply")]);
         }
-        let changes = fields_table::FieldChanges { edits: edits.to_vec(), add_fields: add.to_vec(), rename_fields: rename.to_vec(), remove_fields: remove.to_vec() };
-        let sch = self.schematic_mut()?;
-        fields_table::apply_field_changes(sch, &changes).map_err(|m| vec![CheckResult::fail("ops_bad_fields", "symbol_fields", m)])
+        // The table covers the whole design (`fields_table::project_view`): each edit goes to the sheet that has its symbol, and a field column
+        // added, renamed or removed is a column of every sheet. All or nothing.
+        if self.design.schematic.is_none() {
+            return Err(vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")]);
+        }
+        let known: BTreeSet<String> = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter().map(|x| x.id.clone())).collect();
+        if let Some(e) = edits.iter().find(|e| !known.contains(&e.id)) {
+            return Err(vec![CheckResult::fail("ops_bad_fields", "symbol_fields", format!("no symbol with reference '{}'", e.id))]);
+        }
+        let saved = (self.design.schematic.clone(), self.design.sheet_contents.clone());
+        let apply = |sch: &mut SchematicSection| -> Result<(), String> {
+            let here: BTreeSet<&str> = sch.symbols.iter().map(|s| s.id.as_str()).collect();
+            let mine: Vec<fields_table::FieldEdit> = edits.iter().filter(|e| here.contains(e.id.as_str())).cloned().collect();
+            fields_table::apply_field_changes(sch, &fields_table::FieldChanges { edits: mine, add_fields: add.to_vec(), rename_fields: rename.to_vec(), remove_fields: remove.to_vec() })
+        };
+        let mut result: Result<(), String> = Ok(());
+        for sch in self.design.schematic.iter_mut().chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {
+            result = result.and_then(|()| apply(sch));
+        }
+        if let Err(m) = result {
+            (self.design.schematic, self.design.sheet_contents) = saved;
+            return Err(vec![CheckResult::fail("ops_bad_fields", "symbol_fields", m)]);
+        }
+        Ok(())
     }
 
     /// Find and Replace: see `Cmd::ReplaceText`'s own doc. Replacements
@@ -4457,6 +4497,9 @@ impl<'a> Board<'a> {
         if new_id != id && self.schematic()?.symbols.iter().any(|s| s.id == new_id) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on the sheet")]);
         }
+        if new_id != id && self.symbols_elsewhere().iter().any(|(r, _)| *r == new_id) {
+            return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on another sheet")]);
+        }
         if new_id == id {
             return Ok(()); // renaming to the same id is a no-op, not an error
         }
@@ -4498,6 +4541,8 @@ impl<'a> Board<'a> {
     /// "<prefix>?" (dialog's "Reset existing annotations"), so the whole
     /// sheet renumbers from scratch instead of only filling gaps.
     fn annotate(&mut self, reset_existing: bool, order: AnnotateOrder, ids: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
+        // The numbers the other sheets use are taken: a reference is one part for the whole design, so numbering here continues after them.
+        let elsewhere: Vec<String> = self.symbols_elsewhere().into_iter().map(|(r, _)| r.to_string()).collect();
         let sch = self.schematic_mut()?;
         // Scope snapshot, by index, taken before any id mutates: `ids`
         // names symbols by the id the caller/selection saw them under,
@@ -4518,12 +4563,12 @@ impl<'a> Board<'a> {
             }
         }
         let mut next: BTreeMap<String, u32> = BTreeMap::new();
-        for s in &sch.symbols {
-            if s.id.ends_with('?') {
+        for id in sch.symbols.iter().map(|s| s.id.as_str()).chain(elsewhere.iter().map(String::as_str)) {
+            if id.ends_with('?') {
                 continue;
             }
-            let prefix: String = s.id.chars().take_while(|c| c.is_alphabetic()).collect();
-            let num: u32 = s.id[prefix.len()..].parse().unwrap_or(0);
+            let prefix: String = id.chars().take_while(|c| c.is_alphabetic()).collect();
+            let num: u32 = id[prefix.len()..].parse().unwrap_or(0);
             let e = next.entry(prefix).or_insert(0);
             *e = (*e).max(num);
         }
