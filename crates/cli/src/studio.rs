@@ -1597,26 +1597,33 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
 /// usual +y-down sheet millimetres) -- drawing it in sheet space needs the
 /// same negate-y-then-rotate-then-mirror composition
 /// `eda_kicad::lib::baked_local`'s doc comment spells out.
+///
+/// Each graphic and pin carries two spellings: the engine symbol's own (`stroke_mm`, `filled`, `radius_mm`, `text`) and the names the studio's painter and its
+/// `LibSymbol` type read (`stroke_width`, `fill`, `radius`, `content`, `body_style`, and a pin's `hidden`). Without the second a symbol from a library was
+/// drawn with no body and no pins: the painter keeps an item only when its `body_style` is 0 or the placed one's. The engine symbol has no body styles and
+/// no hidden pins, so every item is shared (`body_style` 0) and none is hidden, and it keeps only whether a shape is filled, not how: a filled rectangle is
+/// the body colour (what library ICs use), any other filled shape the outline colour.
 fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     let pt = |p: eda_model::symbol::SPoint| json!([p.x, p.y]);
+    let fill = |filled: bool, how: &str| if filled { how.to_string() } else { "none".to_string() };
     let graphics: Vec<Value> = s
         .graphics
         .iter()
         .map(|g| {
             use eda_model::SymbolGraphic::*;
             match g {
-                Rectangle { unit, start, end, stroke_mm, filled } => json!({ "kind": "rectangle", "unit": unit, "start": pt(*start), "end": pt(*end), "stroke_mm": stroke_mm, "filled": filled }),
-                Polyline { unit, pts, stroke_mm, filled } => json!({ "kind": "polyline", "unit": unit, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "stroke_mm": stroke_mm, "filled": filled }),
-                Circle { unit, center, radius_mm, stroke_mm, filled } => json!({ "kind": "circle", "unit": unit, "center": pt(*center), "radius_mm": radius_mm, "stroke_mm": stroke_mm, "filled": filled }),
-                Arc { unit, start, mid, end, stroke_mm, filled } => json!({ "kind": "arc", "unit": unit, "start": pt(*start), "mid": pt(*mid), "end": pt(*end), "stroke_mm": stroke_mm, "filled": filled }),
-                Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "text": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
+                Rectangle { unit, start, end, stroke_mm, filled } => json!({ "kind": "rectangle", "unit": unit, "body_style": 0, "start": pt(*start), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "background") }),
+                Polyline { unit, pts, stroke_mm, filled } => json!({ "kind": "polyline", "unit": unit, "body_style": 0, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+                Circle { unit, center, radius_mm, stroke_mm, filled } => json!({ "kind": "circle", "unit": unit, "body_style": 0, "center": pt(*center), "radius_mm": radius_mm, "radius": radius_mm, "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+                Arc { unit, start, mid, end, stroke_mm, filled } => json!({ "kind": "arc", "unit": unit, "body_style": 0, "start": pt(*start), "mid": pt(*mid), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+                Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "body_style": 0, "text": text, "content": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
             }
         })
         .collect();
     let pins: Vec<Value> = s
         .pins
         .iter()
-        .map(|p| json!({ "number": p.number, "name": p.name, "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit }))
+        .map(|p| json!({ "number": p.number, "name": p.name, "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": 0, "hidden": false }))
         .collect();
     json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description })
 }
@@ -1879,6 +1886,44 @@ mod tests {
             sheet_contents: (!screens.is_empty()).then_some(screens),
             bus_aliases: vec![], symbol_library: None,
         }
+    }
+
+    #[test]
+    fn a_library_symbol_reaches_the_painter_with_the_names_it_reads() {
+        // `Device:R`: a body (rectangle) and two pins. The painter drops an item whose `body_style` is neither 0 nor the placed symbol's -- a symbol
+        // from a library had no body and no pins on the canvas while the JSON left it out -- and sizes strokes by `stroke_width`.
+        let r = eda_model::symbol::builtin("Device:R").expect("the built-in resistor");
+        let j = lib_symbol_json(&r);
+        let rect = j["graphics"].as_array().unwrap().iter().find(|g| g["kind"] == "rectangle").expect("the body");
+        assert_eq!(rect["body_style"].as_u64(), Some(0));
+        assert!(rect["unit"].is_u64(), "the unit stays as the engine symbol has it");
+        assert_eq!(rect["stroke_width"], rect["stroke_mm"], "the width under both names");
+        assert_eq!(rect["fill"], "none", "a resistor's body is not filled");
+        let pins = j["pins"].as_array().unwrap();
+        assert_eq!(pins.len(), 2);
+        for p in pins {
+            assert_eq!((p["body_style"].as_u64(), p["hidden"].as_bool()), (Some(0), Some(false)));
+        }
+        // a filled body is the body colour, any other filled shape the outline colour, a text carries its `content`
+        let gnd = lib_symbol_json(&eda_model::LibSymbol {
+            lib_id: "T:X".into(),
+            graphics: vec![
+                eda_model::SymbolGraphic::Rectangle { unit: 1, start: eda_model::symbol::SPoint::new(0.0, 0.0), end: eda_model::symbol::SPoint::new(1.0, 1.0), stroke_mm: 0.2, filled: true },
+                eda_model::SymbolGraphic::Circle { unit: 0, center: eda_model::symbol::SPoint::new(0.0, 0.0), radius_mm: 0.5, stroke_mm: 0.2, filled: true },
+                eda_model::SymbolGraphic::Text { unit: 0, text: "hi".into(), at: eda_model::symbol::SPoint::new(0.0, 0.0), angle_deg: 0.0, size_mm: 1.0 },
+            ],
+            pins: vec![],
+            power: false,
+            in_bom: true,
+            on_board: true,
+            datasheet: String::new(),
+            description: String::new(),
+            reference_prefix: String::new(),
+            unit_count: 1,
+        });
+        let g = gnd["graphics"].as_array().unwrap();
+        assert_eq!((g[0]["fill"].as_str(), g[1]["fill"].as_str(), g[1]["radius"].as_f64()), (Some("background"), Some("outline"), Some(0.5)));
+        assert_eq!(g[2]["content"], "hi");
     }
 
     #[test]

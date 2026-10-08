@@ -450,7 +450,12 @@ React in them are the pure `kicad-port/` modules, each with a `.test.ts`: `strin
 | The seven Design Block actions (panel, save sheet / selection, update from sheet / selection, properties, delete) | missing: a design-block library and the schematic copy and paste to place a block do not exist (the same reason as Place Design Block in section 12) | `tools/ui-parity-missing.json` |
 | Simulator, OP voltages and currents, and every `Simulation` / `Simulator` action | deferred, not blocked: the simulator comes after the UI parity sweep | `tools/ui-parity-missing.json` |
 
-Found and fixed while verifying: `export_kicad_sym_library` wrote a hidden property as `(effects ...) hide`, which kicad-cli answers with "Unable to load library", so every
+Found and fixed while verifying: a symbol from a library (`Device:R`, ...) was drawn on the schematic with no body and no pins -- only its reference and value text -- because
+`GET /api/schematic`'s `lib_symbols` carried the engine symbol's field names (`stroke_mm`, `filled`, `radius_mm`, `text`, no `body_style`, no pin `hidden`) while the painter
+and the `LibSymbol` type read `stroke_width`, `fill`, `radius`, `content`, `body_style` and `hidden`, and keeps an item only when its `body_style` is 0 or the placed one's
+(the scratch board `work/mcu30`'s symbols are all plain boxes, which is why it never showed). `lib_symbol_json` sends both spellings now (a filled rectangle is the body colour,
+any other filled shape the outline colour: the engine symbol keeps only whether a shape is filled), with a test; Compare Symbol with Library depends on the same shape.
+`export_kicad_sym_library` wrote a hidden property as `(effects ...) hide`, which kicad-cli answers with "Unable to load library", so every
 `.kicad_sym` the studio exported (Export..., Save Library As..., and now Export Symbols and the SVG plot) was unreadable to KiCad whenever a symbol had a hidden property --
 it is `(effects ... (hide yes))` now, with a test; `board::load` rebuilt the model from the intent file and lost the part `AddSymbol` synthesizes for a symbol the intent does
 not have, so ERC, the BOM, the netlist and every plot refused a board with "symbol id has no matching part in the constraint model" as soon as one symbol had been placed -- `load`
@@ -459,7 +464,9 @@ folds the parts back in now (`fold_unknown_symbols`, with a test); `SetSymbolLib
 Verified in the browser pane against a scratch copy of `work/mcu30` (the real board was never touched): View toggles and check marks, the Net Navigator and Highlight Nets, Do not
 Populate (red cross, undo), Increment Annotations (C10..C12 to C15..C17 and one undo), the Library Links, Assign Footprints and Bus Syntax Help dialogs, the legacy BOM generator
 run (30 components) with Save a copy, Export Symbols with and without the link update (and its undo), the Fields Table's Export tab writing the BOM with kicad-cli (the file
-matches the preview), Export Symbol as SVG from the Symbol tab and the Symbol Libraries tree showing the exported library. Not click-tested: Next / Previous Sheet and Enter Sheet
+matches the preview), Export Symbol as SVG from the Symbol tab and the Symbol Libraries tree showing the exported library. On a second scratch board made from
+`examples/opamp_filter.yaml` (real `Device:R` and `Device:C` symbols): the symbols drawing again, the Do not Populate cross on a real resistor, Compare Symbol with Library (no
+differences for R1), the Symbol Checker on `Device:R` (no issues) and the Library Links dialog. Not click-tested: Next / Previous Sheet and Enter Sheet
 (the scratch board has no sheets; the page order is unit-tested), the clipboard write (refused by the hidden pane).
 
 ## Manual click-through needed
