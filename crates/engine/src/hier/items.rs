@@ -24,6 +24,24 @@ pub struct Keep {
     pub locked: Vec<String>,
 }
 
+/// A pin on a supply or ground rail, waiting to be drawn (`Items::rail_pins`).
+#[derive(Debug, Clone)]
+pub struct RailPin {
+    pub pin_ref: String,
+    pub tip: Point,
+    pub side: Side,
+    pub net: String,
+}
+
+fn side_index(s: Side) -> u8 {
+    match s {
+        Side::Top => 0,
+        Side::Bottom => 1,
+        Side::Left => 2,
+        Side::Right => 3,
+    }
+}
+
 /// How a net is drawn inside one module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetClass {
@@ -281,6 +299,51 @@ impl Items {
         let glyph_up = if rot == 0 { up_glyph } else { !up_glyph };
         self.power.push(PowerSymbol { id: String::new(), lib_id: power_lib_id(net), at: tip, rot, net: net.to_string(), pin: pin_ref.to_string() });
         self.rects.push(power_rect(tip, net, glyph_up));
+    }
+
+    /// The rail pins of one part, drawn the way a person draws them: pins of one rail that sit side by side on one side of the part (at most three
+    /// cells apart, so no other pin is between them) share one power symbol. Each has a stub three cells long, the stubs are joined across their ends, and the symbol sits at the end
+    /// that leaves its glyph clear of the join (a supply glyph rises, so it takes the top-most pin of a side, a ground glyph hangs, so the bottom-most;
+    /// on the top or bottom of a part, where the join is horizontal, the right-most, since the painter writes the net's name to the right of the
+    /// symbol). The stubs take the symbols clear of the part's own texts -- the painter writes the reference above the part and the value and
+    /// footprint below it (`Placed::field_rects`) -- and two symbols never write their names over one another. A pin alone keeps its symbol on its tip.
+    pub fn rail_pins(&mut self, pins: Vec<RailPin>) {
+        let mut groups: BTreeMap<(u8, String), Vec<RailPin>> = BTreeMap::new();
+        for p in pins {
+            groups.entry((side_index(p.side), p.net.clone())).or_default().push(p);
+        }
+        for ((_, net), mut group) in groups {
+            let side = group[0].side;
+            let horizontal = matches!(side, Side::Top | Side::Bottom);
+            group.sort_by_key(|p| if horizontal { p.tip.x } else { p.tip.y });
+            // runs of pins side by side
+            let mut runs: Vec<Vec<RailPin>> = Vec::new();
+            for p in group {
+                let axis = |q: &RailPin| if horizontal { q.tip.x } else { q.tip.y };
+                match runs.last_mut() {
+                    Some(run) if axis(&p) - axis(run.last().expect("a run has a pin")) <= 3 * G => run.push(p),
+                    _ => runs.push(vec![p]),
+                }
+            }
+            for run in runs {
+                if let [only] = run.as_slice() {
+                    self.power_at(&only.pin_ref, only.tip, only.side, &net);
+                    continue;
+                }
+                let (dx, dy) = side_dir(side);
+                let ends: Vec<Point> = run.iter().map(|p| Point { x: p.tip.x + dx * 3 * G, y: p.tip.y + dy * 3 * G }).collect();
+                let anchor = if horizontal || is_ground_net_name(&net) { run.len() - 1 } else { 0 };
+                for (i, p) in run.iter().enumerate() {
+                    self.wire(&net, vec![p.pin_ref.clone()], vec![p.tip, ends[i]]);
+                    self.rects.push(Rect::new(p.tip.x.min(ends[i].x) - 200, p.tip.y.min(ends[i].y) - 200, p.tip.x.max(ends[i].x) + 200, p.tip.y.max(ends[i].y) + 200));
+                    if i + 1 < run.len() {
+                        self.wire(&net, Vec::new(), vec![ends[i], ends[i + 1]]);
+                        self.rects.push(Rect::new(ends[i].x.min(ends[i + 1].x) - 200, ends[i].y.min(ends[i + 1].y) - 200, ends[i].x.max(ends[i + 1].x) + 200, ends[i].y.max(ends[i + 1].y) + 200));
+                    }
+                }
+                self.power_at(&run[anchor].pin_ref, ends[anchor], side, &net);
+            }
+        }
     }
 
     /// A wire from a pin tip straight out `len`, ending in a label.

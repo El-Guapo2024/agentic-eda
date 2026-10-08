@@ -11,7 +11,7 @@ use eda_model::ir::Point;
 use eda_model::modules::{is_anchor_part, natural_cmp, FunctionalModule, ModuleKind};
 use eda_model::resolve_lib_id;
 
-use super::items::{Ctx, Items, View};
+use super::items::{Ctx, Items, NetClass, RailPin, View};
 use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G, PAPERS};
 
 /// A symbol ready to place, resolved the way `derive_schematic` resolves it (or as the existing schematic had it).
@@ -270,11 +270,18 @@ fn single_block(ctx: &Ctx, view: &View, r: &str) -> Block {
     let mut items = Items::default();
     items.symbol(ctx, &p);
     items.core = Some(p.box_rect());
+    let mut rail: Vec<RailPin> = Vec::new();
     for pin in &p.part.pins {
         if let Some((tip, side)) = p.tip(&pin.number) {
-            items.connect(ctx, view, &format!("{r}.{}", pin.number), tip, side);
+            let pin_ref = format!("{r}.{}", pin.number);
+            match ctx.net_of_pin.get(&pin_ref).filter(|n| view.class_of(n) == Some(NetClass::Rail)) {
+                Some(net) => rail.push(RailPin { pin_ref, tip, side, net: net.clone() }),
+                None => items.connect(ctx, view, &pin_ref, tip, side),
+            }
         }
     }
+    // the rails last: pins side by side on one rail share a symbol, out beyond the part's texts
+    items.rail_pins(rail);
     finish(items)
 }
 

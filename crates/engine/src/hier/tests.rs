@@ -206,6 +206,28 @@ fn mcu30_becomes_a_root_and_three_module_sheets() {
     }
 }
 
+/// U1's two supply pins sit side by side on top of the part, and its two ground pins side by side below it: each pair shares one power symbol, set out
+/// beyond the part's own texts, instead of a symbol on every tip with their names written over one another.
+#[test]
+fn pins_side_by_side_on_one_rail_share_a_power_symbol_beyond_the_parts_texts() {
+    let (_, d) = mcu30();
+    let root = d.schematic.as_ref().unwrap();
+    let mcu = &d.sheet_contents.as_ref().unwrap()[&root.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().file];
+    let on_u1 = |net: &str| -> Vec<&eda_model::ir::PowerSymbol> { mcu.power_symbols.iter().filter(|p| p.net == net && p.pin.starts_with("U1.")).collect() };
+    assert_eq!(on_u1("VDD").len(), 1, "U1.1 and U1.14 share one supply symbol");
+    assert_eq!(on_u1("GND").len(), 1, "U1.2 and U1.15 share one ground symbol");
+    let u1 = mcu.symbols.iter().find(|s| s.id == "U1").unwrap();
+    // The symbol is three cells out from the pin tips, along the join of the two stubs.
+    let vdd = on_u1("VDD")[0];
+    let tips: Vec<i64> = mcu.wires.iter().filter(|w| w.pins.iter().any(|p| p == "U1.1" || p == "U1.14")).map(|w| w.pts[0].y).collect();
+    assert_eq!(tips.len(), 2, "each of the two pins has its own stub");
+    assert_eq!(vdd.at.y, tips[0] - 3 * 1_270, "the symbol is three cells above the tips (the supply pair is on top of the part)");
+    // The two stubs are joined across their ends, and both pins are on the supply net through that join.
+    let join = mcu.wires.iter().find(|w| w.pins.is_empty() && w.net == "VDD" && w.pts.iter().any(|p| *p == vdd.at)).expect("a wire joins the two stubs at the symbol");
+    assert_eq!(join.pts.len(), 2);
+    assert!(u1.at.y > vdd.at.y, "the part is below its supply symbol");
+}
+
 #[test]
 fn mcu30_module_sheets_trace_back_to_the_intent_nets() {
     let (model, d) = mcu30();
