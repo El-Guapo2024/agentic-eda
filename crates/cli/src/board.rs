@@ -126,12 +126,7 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     // exporter) goes through `ConstraintModel::symbol_of`, so this one
     // overlay is what makes "Update Symbol from Library" actually update
     // a placed instance -- see `LibrarySymbol::published`'s own doc.
-    if let Some(lib) = &design.symbol_library {
-        for lib_sym in lib.symbols.iter().filter(|s| s.published) {
-            model.symbols.retain(|s| s.lib_id != lib_sym.lib_id);
-            model.symbols.push(lib_sym.to_engine_symbol());
-        }
-    }
+    publish_overlay(&design, &mut model);
     // Board Setup's edits to the rules (net classes, constraints, mask and paste, text defaults, the stackup, violation
     // severities, custom rules): the same "design.json wins over the frozen intent" precedent, applied page by page
     // (`eda_model::rules::RulesOverlay`). The router, the gates, the studio and the derived `.kicad_pro`/`.kicad_pcb`/
@@ -147,6 +142,16 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
     fold_unknown_symbols(&design, &mut model);
     Ok((meta, design, model))
+}
+
+/// A *published* entry of the project's symbol library overrides whatever the intent and the installed libraries resolve for its `lib_id`.
+fn publish_overlay(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
+    if let Some(lib) = &design.symbol_library {
+        for lib_sym in lib.symbols.iter().filter(|s| s.published) {
+            model.symbols.retain(|s| s.lib_id != lib_sym.lib_id);
+            model.symbols.push(lib_sym.to_engine_symbol());
+        }
+    }
 }
 
 /// The library symbol a placed symbol's `lib_id` names; none for an empty or synthetic (`eda:...`) id, which is drawn as a generic box.
@@ -274,10 +279,12 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
 /// Writes `design.nets = Some(nets)` only when the edit changed the nets -- see that field's own doc comment on why this never touches a
 /// board nothing has hand-edited yet (every board in this project's own test/parity corpus included: none of them has ever executed a
 /// schematic `Cmd`, so `design.nets` stays `None` for every one of them, and `load`'s `model.nets` override above never fires).
-fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut ConstraintModel, before: Option<&eda_model::ir::Design>) {
+pub(crate) fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut ConstraintModel, before: Option<&eda_model::ir::Design>) {
     if design.schematic.is_none() {
         return;
     }
+    // A command may have published library symbols (a paste brings the symbols of its fragment): the parts it adds draw their pins from them.
+    publish_overlay(design, model);
     // A part for every symbol the model has not heard of yet, on every sheet.
     fold_unknown_symbols(design, model);
 
