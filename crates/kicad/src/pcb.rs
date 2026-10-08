@@ -69,33 +69,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     // ---- layers ----
-    writeln!(out, "\t(layers").unwrap();
-    let copper_layers = &model.board.layers;
-    let n_cu = copper_layers.len().max(2);
-    for (i, name) in copper_layers.iter().enumerate() {
-        let ltype = if i == 0 { "signal" } else if i + 1 == copper_layers.len() { "signal" } else { "signal" };
-        let ord = if i == 0 { 0 } else if i + 1 == copper_layers.len() { 31 } else { i };
-        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
-    }
-    let _ = n_cu;
-    for (ord, name, ltype) in [
-        (32, "B.Adhes", "user"),
-        (33, "F.Adhes", "user"),
-        (34, "B.Paste", "user"),
-        (35, "F.Paste", "user"),
-        (36, "B.SilkS", "user"),
-        (37, "F.SilkS", "user"),
-        (38, "B.Mask", "user"),
-        (39, "F.Mask", "user"),
-        (44, "Edge.Cuts", "user"),
-        (46, "B.CrtYd", "user"),
-        (47, "F.CrtYd", "user"),
-        (49, "F.Fab", "user"),
-        (50, "B.Fab", "user"),
-    ] {
-        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
-    }
-    writeln!(out, "\t)").unwrap();
+    write_layers(&mut out, &model.board.layers);
 
     // ---- setup ----
     let clearance_mm = mm(model.board.clearance);
@@ -437,6 +411,34 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     Ok(out)
 }
 
+/// `(layers ..)`: the board's copper layers, outer first, then the technical and user layers this writer uses.
+pub(crate) fn write_layers(out: &mut String, copper_layers: &[String]) {
+    writeln!(out, "\t(layers").unwrap();
+    for (i, name) in copper_layers.iter().enumerate() {
+        let ltype = "signal";
+        let ord = if i == 0 { 0 } else if i + 1 == copper_layers.len() { 31 } else { i };
+        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
+    }
+    for (ord, name, ltype) in [
+        (32, "B.Adhes", "user"),
+        (33, "F.Adhes", "user"),
+        (34, "B.Paste", "user"),
+        (35, "F.Paste", "user"),
+        (36, "B.SilkS", "user"),
+        (37, "F.SilkS", "user"),
+        (38, "B.Mask", "user"),
+        (39, "F.Mask", "user"),
+        (44, "Edge.Cuts", "user"),
+        (46, "B.CrtYd", "user"),
+        (47, "F.CrtYd", "user"),
+        (49, "F.Fab", "user"),
+        (50, "B.Fab", "user"),
+    ] {
+        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
+    }
+    writeln!(out, "\t)").unwrap();
+}
+
 /// A net class's microvia size and differential-pair width and gap: `(uvia_dia ..) (uvia_drill ..)` always (KiCad's
 /// 0.3 / 0.1 when the class sets none), `(diff_pair_width ..) (diff_pair_gap ..)` when it does -- what
 /// `parseNETCLASS` reads.
@@ -625,7 +627,7 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
 }
 
 /// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
-fn write_footprint(
+pub(crate) fn write_footprint(
     out: &mut String,
     fp: &FootprintInstance,
     part: &Part,
@@ -836,7 +838,7 @@ fn write_footprint(
 /// PCB_SHAPE*)`: stroke width and type first, `fill` only for the three
 /// shapes KiCad actually fills (rect/circle/poly -- a line or an arc has no
 /// interior, and KiCad's own writer never emits `fill` for either).
-fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> String {
+pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> String {
     let sw = |w: Um| mm(w.max(0));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let layer = sexpr_str(shape.layer());
@@ -900,7 +902,7 @@ fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> String {
 /// (thickness t)) (justify ...))`, `justify` present only when the text is
 /// not centred/unmirrored (exactly KiCad's own rule, so a plain centred
 /// label round-trips without growing a token it never had).
-fn write_text(out: &mut String, text: &Text, locked: bool) -> String {
+pub(crate) fn write_text(out: &mut String, text: &Text, locked: bool) -> String {
     let uuid = crate::duid_for(&format!("text:{}", text.id), &text.id);
     let lock = if locked { " (locked yes)" } else { "" };
     let angle_deg = fmt_mm_f(text.angle as f64 / 1000.0);

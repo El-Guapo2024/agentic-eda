@@ -2129,6 +2129,12 @@ pub struct DrawingsSection {
     /// derived `.kicad_pcb` as `(grid_origin x y)`. Additive: absent in an older `design.json` reads as "no origin set".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_origin: Option<Point>,
+    /// Footprints that exist only on the board: copies of a footprint, and footprints pasted in from another board or from KiCad's
+    /// clipboard, which have no part in the intent and no symbol in the schematic (KiCad's footprint without a schematic link).
+    /// `board::load` folds each into the model as a part of its own -- see [`BoardPart`]. Additive: absent in an older
+    /// `design.json` reads as "every footprint is one of the intent's parts".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub board_parts: Vec<BoardPart>,
     /// Board Setup's edits to the board's rules (net classes, constraints, solder mask and paste, text defaults,
     /// the stackup, violation severities, custom rules): laid over the intent's rules each time the board is
     /// loaded (`crate::rules::RulesOverlay::apply`, `crates/cli/src/board.rs::load`), the way `Design::nets` is.
@@ -2137,6 +2143,28 @@ pub struct DrawingsSection {
     /// `design.json` reads as "the intent's rules stand".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<crate::rules::RulesOverlay>,
+}
+
+/// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part
+/// the footprint stands for has to exist for it to be placed. It plays the role of an intent part for everything downstream --
+/// `board::load` adds a [`crate::Part`] named `reference` to the model, joins its pads to the nets in `pad_nets` (a net the board
+/// does not have yet is created), and gives its footprint name `definition`'s pads when nothing else resolves that name. The pose
+/// is an ordinary `FootprintInstance` in `placement.footprints`; Delete removes the pose and this entry together.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoardPart {
+    /// The reference designator, unique among every part of the board.
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// The footprint's name ("Lib:Name" or a bare name), as `Part::footprint` carries it.
+    pub footprint: String,
+    /// The footprint as the copy was made from it: its pads and courtyard, used when the model resolves nothing under `footprint`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<LibraryFootprint>,
+    /// Pad number -> net name, sorted by pad number. A pad not listed is on no net.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pad_nets: Vec<(String, String)>,
 }
 
 /// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no
@@ -3447,7 +3475,10 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
 /// two items hash the same (an exact duplicate, e.g. a hand-add repeated
 /// verbatim) -- so ids are always unique within one design, and, given the
 /// same seed and the same existing set, always the same.
-pub(crate) fn next_item_id(prefix: &str, seed: &str, existing: &std::collections::BTreeSet<String>) -> String {
+///
+/// Public so a verb that makes several linked items at once (a pasted group and its members, a duplicated footprint and its
+/// copper) can name them all before it inserts any.
+pub fn next_item_id(prefix: &str, seed: &str, existing: &std::collections::BTreeSet<String>) -> String {
     let base = format!("{prefix}_{}", &fnv1a_hex(seed.as_bytes())[..12]);
     if !existing.contains(&base) {
         return base;
