@@ -65,6 +65,9 @@ import { registerLibraryEditorActions } from "./libraryEditorActions";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
 import { makeEditorAdapter } from "./editorAdapter";
 import { cancelLasso, getCommonTool } from "../state/commonTool";
+import { commonChecked } from "../kicad-port/commonChecked";
+import { useCommonOptions } from "../state/commonOptions";
+import { useLibraryTree } from "../state/libraryTree";
 import { registerSchControlActions, schControlChecked } from "./schControlActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
@@ -103,6 +106,10 @@ export function useActionRunner() {
   const fpDispatch = useFpDispatch();
   const schControl = useSchControlState();
   const schControlDispatch = useSchControlDispatch();
+  // The shared tools' toggles (Always Show Crosshairs, Library Tree ...), read by `isChecked`; being subscribed here re-renders a menu or a toolbar when one changes.
+  const commonOptions = useCommonOptions();
+  const fpTree = useLibraryTree("footprint");
+  const symTree = useLibraryTree("symbol");
   /** `m_afterItem` of find-next-marker (SCH_FIND_REPLACE_TOOL): the last ERC marker visited, so the next press continues from it. */
   const markerCursor = useRef<string | null>(null);
   /** The net navigator's own tree selection (`m_netNavigator->GetSelection()`): which item of the highlighted net Tab/Shift+Tab last landed on. */
@@ -2280,6 +2287,11 @@ export function useActionRunner() {
    */
   const isChecked = useCallback(
     (name: string): boolean | undefined => {
+      // The shared tools' toggles (Always Show Crosshairs, the crosshair mode, Draw Bounding Boxes, the selection mode, Library Tree), in every editor.
+      if (registry.has(name)) {
+        const shared = commonChecked(name, { ...commonOptions, libraryTreeShown: state.tab === "footprint" ? fpTree.shown : state.tab === "symbol" ? symTree.shown : null });
+        if (shared !== undefined) return shared;
+      }
       if (state.tab !== "schematic" || !registry.has(name)) return undefined;
       const selection = state.selection;
       const sch = state.schematic;
@@ -2289,7 +2301,7 @@ export function useActionRunner() {
         requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
       });
     },
-    [registry, schControl, state]
+    [registry, schControl, state, commonOptions, fpTree, symTree]
   );
   return { run, isEnabled, isChecked };
 }
