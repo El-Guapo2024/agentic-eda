@@ -29,6 +29,7 @@ import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
+import { editableSelection, flipPivot, rotationPivot } from "../kicad-port/pcbTransform";
 import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
@@ -214,19 +215,26 @@ export function useActionRunner() {
     const tryTransformDuringMove = (addQuarterTurns: number, toggleFlip: boolean): boolean => {
       const moving = state.activeTool === "move" || state.activeTool === "drag" || state.movePreview != null;
       if (!moving) return false;
-      const refs = state.movePreview?.refs ?? [...state.selection];
+      let refs = state.movePreview?.refs ?? [...state.selection];
       if (refs.length === 0) return false;
-      const first = refs[0]!;
       // The Schematic tab's only moveable kind is a symbol -- checked
       // first so a ref that happens to share an id with nothing on the
       // PCB side (every schematic symbol's id IS a part reference, so
       // api.partByRef would also resolve on the Schematic tab) still
-      // lands on "symbol"/"symbol_drag", not "part". `activeTool ===
+      // lands on "symbol"/"symbol_drag", not a PCB item. `activeTool ===
       // "drag"` only matters here before the first pointer-move after
       // arming `G` (state.movePreview still null) -- once a preview
       // exists it already carries its own correct kind.
-      const kind = state.movePreview?.kind ?? (state.activeTool === "drag" ? "symbol_drag" : state.tab === "schematic" ? "symbol" : api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
-      const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0 };
+      const kind = state.movePreview?.kind ?? (state.activeTool === "drag" ? "symbol_drag" : state.tab === "schematic" ? "symbol" : "pcb");
+      // A PCB move carries the selection the tool works on (locked items out) and turns and flips it about where it was picked up.
+      let pivots: Pick<NonNullable<typeof state.movePreview>, "pivotUm" | "flipPivotUm"> = {};
+      if (kind === "pcb" && state.board && !state.movePreview) {
+        refs = editableSelection(state.board, refs).ids;
+        if (refs.length === 0) return false;
+        const snap = (p: readonly [number, number]): [number, number] => snapPoint(p[0], p[1], state.gridUm);
+        pivots = { pivotUm: rotationPivot(state.board, refs, snap) ?? undefined, flipPivotUm: flipPivot(state.board, refs) ?? undefined };
+      }
+      const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0, ...pivots };
       const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped } });
@@ -261,23 +269,16 @@ export function useActionRunner() {
     m.set("pcbnew.AlignAndDistribute.distributeVerticallyGaps", pcbOnly(() => api.distributeSelection("y", "gaps")));
     m.set("pcbnew.AlignAndDistribute.distributeVerticallyCenters", pcbOnly(() => api.distributeSelection("y", "centers")));
 
-    // common.Interactive.cut (Ctrl+X): trivially "copy then delete" -- the
-    // one honorable-mention gap PARITY-pcb.md's hotkey audit named as
-    // exactly that. copySelection is synchronous and reads straight off
-    // the current board/selection, so there is no race with the delete
-    // that follows it.
-    // common.Interactive.cut (Ctrl+X) -- edit_tool.cpp copyToClipboard(cut) + DeleteItems(isCut):
-    // copies exactly what it then deletes. The clipboard only holds tracks/vias/zones/shapes/text,
-    // so footprints and dimensions are neither copied nor deleted (they used to be destroyed
-    // un-restorably), and locked items are skipped. Copy happens first, delete is one undo step.
+    // common.Interactive.cut (Ctrl+X) -- edit_tool.cpp copyToClipboard(cut) + DeleteItems(isCut): copies exactly what it then deletes -- every kind of item,
+    // footprints and groups included, a locked item skipped (only a Cut drops them). The copy is KiCad's clipboard text, written before the delete,
+    // which is one undo step.
     m.set(
       "common.Interactive.cut",
       pcbOnly(() => {
-        const locked = new Set(state.board?.locked ?? []);
-        const refs = requestSelection().filter((id) => !locked.has(id) && Boolean(api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id)));
+        if (!state.board) return;
+        const refs = editableSelection(state.board, requestSelection()).ids;
         if (refs.length === 0) return;
-        api.copySelection(refs);
-        deleteRefs(refs);
+        void api.copySelection(refs).then(() => deleteRefs(refs));
       })
     );
 
@@ -554,7 +555,7 @@ export function useActionRunner() {
       if (state.tab === "pcb") void api.duplicateSelection();
       else if (state.tab === "footprint") void fpApi.duplicateSelection(false);
     });
-    m.set("common.Interactive.copy", pcbOnly(() => api.copySelection()));
+    m.set("common.Interactive.copy", pcbOnly(() => void api.copySelection(requestSelection())));
     m.set("common.Interactive.paste", pcbOnly(() => api.pasteClipboard()));
     // Task item 5: common/tool/group_tool.cpp (Ctrl+G/Ctrl+Shift+G -- see
     // useGlobalHotkeys.ts's own special-cased binding for why those two

@@ -202,6 +202,19 @@ export async function postCmd(cmd: Cmd, strict: boolean): Promise<CmdReply> {
   return (await r.json()) as CmdReply;
 }
 
+/**
+ * A PCB Copy: the named items as KiCad's clipboard text (`CLIPBOARD_IO::SaveSelection`, crates/kicad/src/clipboard.rs), measured from `reference` --
+ * the point a Paste puts back on the cursor. A read: it changes nothing on the board.
+ */
+export async function postClipboardCopy(ids: readonly string[], reference: { x: number; y: number } | null): Promise<{ ok: true; text: string } | { ok: false; message: string }> {
+  const r = await fetch("/api/clipboard/copy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, reference }),
+  });
+  return (await r.json()) as { ok: true; text: string } | { ok: false; message: string };
+}
+
 /** Kick off `eda board route` in the background; poll /api/state's `job` field for progress. */
 export async function postRoute(): Promise<RouteReply> {
   const r = await fetch("/api/route", { method: "POST" });

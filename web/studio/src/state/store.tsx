@@ -12,19 +12,22 @@ import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
-import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
+import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
+import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
+import { editableSelection, planCarry, planFlip, planRotate, type TransformPlan } from "../kicad-port/pcbTransform";
+import { snapPoint } from "../components/canvas/gridHelper";
+import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
-import { pasteMoveOrigin } from "../kicad-port/pcbReference";
 import { repeatSource } from "../kicad-port/schRepeat";
 import { onCurrentSheet } from "../kicad-port/schSheetCmd";
 import { samePath } from "../kicad-port/sheetPages";
@@ -39,7 +42,7 @@ import type { PinPlacement } from "../components/schematic/schPinTool";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
-import { alignAxis, alignDeltas, getDeltasForDistributeByGaps, getDeltasForDistributeByPoints, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
+import type { AlignEdge } from "../kicad-port/alignDistribute";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 /**
@@ -307,17 +310,25 @@ export interface ViewTransform {
 export interface MovePreview {
   refs: string[];
   /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text/dimension: their own move_* by id; symbol: schematic move_symbol; symbol_drag: schematic drag_symbol, see state.dragAttach). Defaults to "part" (every pre-existing caller moves parts). */
-  kind?: "part" | "via" | "shape" | "text" | "dimension" | "symbol" | "symbol_drag";
+  kind?: "pcb" | "part" | "via" | "shape" | "text" | "dimension" | "symbol" | "symbol_drag";
   dxUm: number;
   dyUm: number;
+  /**
+   * `"pcb"`: any mix of footprints, tracks, vias, zones, graphics, text, dimensions and groups (the Move tool's own selection, locked items already
+   * taken out). R and F turn and flip the whole selection about the point it was picked up at (`pivotUm` for a turn, `flipPivotUm` for a flip --
+   * `EDIT_TOOL::Rotate` / `::Flip` act about the selection's reference point, which travels with the cursor), and the drop commits one batch
+   * (kicad-port/pcbTransform.ts `planCarry`). The older kinds below move one kind each.
+   */
+  pivotUm?: [number, number];
+  flipPivotUm?: [number, number];
   /**
    * edit_tool.cpp Rotate/Flip during an active Move: both act on the
    * live preview instead of committing immediately (updateModificationPoint's
    * `m_dragging && HasReferencePoint()` guard -- the item hasn't been
-   * pushed to the board yet, so there's nothing to commit to). Only
-   * meaningful for `kind === "part"` (the only kind with a real
-   * rotate/flip Cmd); harmless and ignored for the others. Quarter turns
-   * 0-3, same units as `Cmd::Rotate`.
+   * pushed to the board yet, so there's nothing to commit to). On the PCB
+   * it is the number of R presses, counter-clockwise quarter turns 0-3
+   * (Shift+R takes one away), for every kind but the schematic's; on the
+   * Schematic tab it is `rotate_symbol`'s own `quarter_turns`.
    */
   rotateQuarterTurns?: number;
   flipped?: boolean;
@@ -1526,21 +1537,18 @@ export interface StudioApi {
   /** `moveIndividually` hand-off to the next queued item (state.pcbx.moveQueue) -- after a drop commits, or for `skip` (Tab) without committing. */
   advanceMoveQueue: () => void;
   /**
-   * Cmd+D on the current selection's tracks/vias/zones/shapes/text
-   * (footprints excluded -- see `Cmd::Duplicate`'s own doc comment).
-   * Duplicates in place, then selects the new copies and arms the Move
-   * tool on them at the current cursor, same as EDIT_TOOL::Duplicate
-   * handing straight off to doMoveSelection in source.
+   * Cmd+D on the current selection: footprints (as new parts), tracks, vias, zones, graphics, text, dimensions and groups -- see `Cmd::Duplicate`'s
+   * own doc comment. Duplicates in place, then selects the new copies and arms the Move tool on them at the current cursor, same as
+   * EDIT_TOOL::Duplicate handing straight off to doMoveSelection in source.
    */
   duplicateSelection: () => Promise<void>;
   /** Ctrl+G: group the current selection (2+ items), then select the new group as a unit. */
   groupSelection: () => Promise<void>;
   /** Ctrl+Shift+G: dissolve every group named in the current selection, then select their former members. */
   ungroupSelection: () => Promise<void>;
-  /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
-  /** `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback. */
-  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => void;
-  /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
+  /** Cmd+C: the selection as KiCad's clipboard text, on the system clipboard and in `state.clipboard`. `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback; `reference` is the point Copy with Reference Point picked. */
+  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => Promise<void>;
+  /** Cmd+V: put what is on the clipboard on the board (KiCad's text, else this session's copy, else plain text as a text item), then select it and arm Move on it, same as duplicateSelection. */
   pasteClipboard: () => Promise<void>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
@@ -1809,6 +1817,30 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
   };
 
+  /** The grid point nearest a reference point (`PCB_GRID_HELPER::BestSnapAnchor`, its grid half): what a multi-item Rotate and Move snap their reference to. */
+  const gridSnap = () => (p: readonly [number, number]): [number, number] => snapPoint(p[0], p[1], stateRef.current.gridUm);
+
+  /** Sends a transform plan (kicad-port/pcbTransform.ts) as one undo step; says so when the locks left nothing to do (`ReportFilteredLockedItems`). */
+  const runPlan = async (plan: TransformPlan): Promise<boolean> => {
+    if (plan.cmds.length === 0) {
+      if (plan.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+      return false;
+    }
+    return runBatch(plan.cmds);
+  };
+
+  /** Where a Paste lands the clipboard's origin: the cursor's grid point, else the middle of the board. */
+  const pasteAt = (): { x: number; y: number } => {
+    const st = stateRef.current;
+    if (st.cursorUm) {
+      const [x, y] = snapPoint(st.cursorUm.x, st.cursorUm.y, st.gridUm);
+      return { x, y };
+    }
+    const o = st.board?.outline;
+    if (o && o.length > 0) return { x: Math.round((Math.min(...o.map((p) => p[0])) + Math.max(...o.map((p) => p[0]))) / 2), y: Math.round((Math.min(...o.map((p) => p[1])) + Math.max(...o.map((p) => p[1]))) / 2) };
+    return { x: 0, y: 0 };
+  };
+
   /**
    * `EDIT_TOOL::Move`'s moveIndividually hand-off ("if( ++itemIdx <
    * orig_items.size() ) { ...Pick up new item }"): once the dropped item has
@@ -1919,43 +1951,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     cmd: (c) => runCmd(c),
     advanceMoveQueue: () => advanceMoveQueue(),
-    // edit_tool.cpp's real Rotate: a single selected item spins about its
-    // own anchor (dx=dy=0, no pivot -- Cmd::MoveExact's own pivot:None
-    // branch lands on exactly the same pose Cmd::Rotate's simpler
-    // part+quarter_turns shape would); 2+ items share ONE pivot --
-    // updateModificationPoint's `aSelection.GetCenter()`, the selection's
-    // union-bounding-box center -- and commit as ONE MoveExact, matching
-    // source's own single BOARD_COMMIT::Push() for the whole group
-    // (previously: one independent Cmd::Rotate per part, each spinning in
-    // place about its own anchor -- see PARITY-pcb.md's "Edit tool"
-    // section for why that was a documented simplification, not the real
-    // behavior).
+    // edit_tool.cpp's Rotate over any selection (kicad-port/pcbTransform.ts `planRotate`): one item turns about its own position, several about the
+    // centre of their box snapped to the grid, a lone rectangle or polygon about its centre; locked items stay. One `rotate_items`, so one undo
+    // step, as one BOARD_COMMIT::Push. R is counter-clockwise: the callers pass 1 for R and 3 for Shift+R.
     rotateSelection: async (quarterTurns, explicit) => {
       const st = stateRef.current;
-      const given = explicit ?? [...st.selection];
-      const refs = given.filter((r) => api.partByRef(r)?.placed);
-      const viaIds = given.filter((r) => api.viaById(r));
-      if (refs.length + viaIds.length === 0) return;
+      if (!st.board) return;
       const q = ((quarterTurns % 4) + 4) % 4;
-      const rotateMillideg = q * 90_000;
-      const cmds: Cmd[] = [];
-      if (refs.length + viaIds.length === 1) {
-        // a single item spins about its own anchor
-        if (refs.length) cmds.push({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot: null });
-        return void (await runBatch(cmds)); // a lone via has no orientation: nothing to do
-      }
-      // 2+ items share the selection's bounding-box center (updateModificationPoint / GetCenter)
-      const center = selectionBoundsCenterWithVias(st.board?.parts ?? [], st.board?.routing?.vias ?? [], refs, viaIds);
-      const pivot = center ? { x: Math.round(center.x), y: Math.round(center.y) } : null;
-      if (refs.length) cmds.push({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot });
-      if (pivot) {
-        for (const id of viaIds) {
-          const v = api.viaById(id)!;
-          const r = rotateQuarter(v.x, v.y, pivot.x, pivot.y, q);
-          if (r.x !== v.x || r.y !== v.y) cmds.push({ op: "move_via", id, x: r.x, y: r.y });
-        }
-      }
-      await runBatch(cmds);
+      await runPlan(planRotate(st.board, explicit ?? [...st.selection], q === 3 ? -1 : q, gridSnap()));
     },
     cmdBatch: (cmds) => runBatch(cmds),
     ripSelection: async () => {
@@ -1963,80 +1966,38 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "CLEAR_SELECTION" });
       await runBatch(refs.map((ref): Cmd => ({ op: "rip", part: ref })));
     },
-    // edit_tool.cpp's real Flip: a single item flips about its own anchor
-    // (no position change, only `side` toggles -- Cmd::Flip's existing
-    // shape already does exactly this); 2+ items share the selection's
-    // bounding-box center as the mirror line's X, same `updateModification
-    // Point`/`GetCenter()` rule Rotate uses above. Cmd::Flip has no pivot
-    // concept of its own (it only ever toggles `side`), so a group flip is
-    // composed client-side as "move to the mirrored X, then flip" per
-    // part, the same two-Cmd composition `commitMove` already uses for a
-    // single dragged-and-flipped part.
+    // edit_tool.cpp's Flip ("Change Side / Flip", F) over any selection (`planFlip`): mirrored about the centre of the selection's box (a lone item
+    // about its own position), each item put on the other side of the board -- a footprint's side, a track's, zone's, graphic's, text's and
+    // dimension's layer. One `flip_items`, one undo step.
     flipSelection: async (explicit) => {
-      const refs = (explicit ?? [...stateRef.current.selection]).filter((r) => api.partByRef(r)?.placed);
-      if (refs.length === 0) return;
-      const center = refs.length > 1 ? selectionBoundsCenter(stateRef.current.board?.parts ?? [], refs) : null;
-      const cmds: Cmd[] = [];
-      for (const ref of refs) {
-        if (center) {
-          const p = api.partByRef(ref)!;
-          const [x] = p.at!;
-          cmds.push({ op: "move_to", part: ref, x: Math.round(mirrorCoord(x, center.x)), y: p.at![1] });
-        }
-        cmds.push({ op: "flip", part: ref });
-      }
-      await runBatch(cmds); // one undo step, like source's single BOARD_COMMIT::Push
+      const st = stateRef.current;
+      if (!st.board) return;
+      await runPlan(planFlip(st.board, explicit ?? [...st.selection]));
     },
+    // align_distribute_tool.cpp (kicad-port/alignDistribute.ts): every kind of item, a locked item is the target and never moves, the cursor can
+    // pick the target; one move per item, one undo step.
     alignSelection: async (edge) => {
-      const refs = [...stateRef.current.selection].filter((r) => {
-        const p = api.partByRef(r);
-        return p?.placed && p.courtyard && p.at;
-      });
-      if (refs.length < 2) return;
-      const boxes: Box[] = refs.map((r) => api.partByRef(r)!.courtyard!);
-      const deltas = alignDeltas(boxes, edge);
-      const axis = alignAxis(edge);
-      const cmds: Cmd[] = [];
-      for (let i = 0; i < refs.length; i++) {
-        const d = deltas[i]!;
-        if (d === 0) continue;
-        const p = api.partByRef(refs[i]!)!;
-        const [x, y] = p.at!;
-        cmds.push({ op: "move_to", part: refs[i]!, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
-      }
-      await runBatch(cmds);
+      const st = stateRef.current;
+      if (!st.board) return;
+      const cursor: [number, number] | null = st.cursorUm ? [st.cursorUm.x, st.cursorUm.y] : null;
+      const cmds = planAlignSelection(st.board, [...st.selection], edge, cursor);
+      if (cmds.length > 0) await runBatch(cmds);
     },
     distributeSelection: async (axis, mode) => {
-      const refs = [...stateRef.current.selection].filter((r) => {
-        const p = api.partByRef(r);
-        return p?.placed && p.courtyard && p.at;
-      });
-      if (refs.length < 3) return;
-      // align_distribute_tool.cpp's doDistributeGaps/doDistributeCenters:
-      // sort by start (gaps) or by center (centers) along the chosen axis
-      // before computing deltas -- the end caps of THIS sort never move.
-      const key = (box: Box): number => {
-        const lo = axis === "x" ? box[0] : box[1];
-        const hi = axis === "x" ? box[2] : box[3];
-        return mode === "gaps" ? lo : (lo + hi) / 2;
-      };
-      const sorted = refs.map((r) => ({ r, box: api.partByRef(r)!.courtyard! })).sort((a, b) => key(a.box) - key(b.box));
-      const deltas =
-        mode === "gaps"
-          ? getDeltasForDistributeByGaps(sorted.map(({ box }) => (axis === "x" ? [box[0], box[2]] : [box[1], box[3]]) as [number, number]))
-          : getDeltasForDistributeByPoints(sorted.map(({ box }) => key(box)));
-      const cmds: Cmd[] = [];
-      for (let i = 0; i < sorted.length; i++) {
-        const d = deltas[i]!;
-        if (d === 0) continue;
-        const p = api.partByRef(sorted[i]!.r)!;
-        const [x, y] = p.at!;
-        cmds.push({ op: "move_to", part: sorted[i]!.r, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
-      }
-      await runBatch(cmds);
+      const st = stateRef.current;
+      if (!st.board) return;
+      const cmds = planDistributeSelection(st.board, [...st.selection], axis, mode);
+      if (cmds.length > 0) await runBatch(cmds);
     },
     commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetUm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+      // Any mix of PCB items: turned and flipped about where it was picked up, then moved, as one batch (`planCarry`).
+      if (kind === "pcb") {
+        const board = stateRef.current.board;
+        if (board) await runPlan(planCarry(board, refs, dxUm, dyUm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap()));
+        advanceMoveQueue();
+        return;
+      }
       const cmds: Cmd[] = [];
       for (const ref of refs) {
         if (kind === "part") {
@@ -2049,7 +2010,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           // when they're called, so applying them after the move lands on
           // the same final pose as KiCad's live in-place spin during a
           // single-item drag -- see MovePreview's own doc comment.
-          if (rotateQuarterTurns) cmds.push({ op: "rotate", part: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
+          // (R presses count counter-clockwise; `Cmd::Rotate` turns clockwise.)
+          if (rotateQuarterTurns) cmds.push({ op: "rotate", part: ref, quarter_turns: (4 - (((rotateQuarterTurns % 4) + 4) % 4)) % 4 });
           if (flipped) cmds.push({ op: "flip", part: ref });
         } else if (kind === "via") {
           const v = api.viaById(ref);
@@ -2143,7 +2105,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     duplicateSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      const ids = [...stateRef.current.selection].filter((id) => api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id));
+      // `Duplicate` filters markers, groups and free pads only: a locked item is copied too (the copy is not locked), a pad stands for its footprint.
+      const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false });
       if (ids.length === 0) return;
       const before = allItemIds(board);
       const ok = await runCmd({ op: "duplicate", ids });
@@ -2152,7 +2115,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // and the Move tool would never pick them up.
       const after = await fetchState().catch(() => null);
       if (!after) return;
-      const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
+      const newIds = newItemIds(before, after);
       if (newIds.length === 0) return;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
@@ -2204,28 +2167,52 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
       if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
     },
-    copySelection: (refs, reference) => {
-      const board = stateRef.current.board;
-      if (!board) return;
-      const clipboard = collectClipboardContents(board, refs ? new Set(refs) : stateRef.current.selection);
-      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard: reference ? { ...clipboard, reference } : clipboard });
+    // edit_tool.cpp copyToClipboard: the selection (a pad stands for its footprint, a locked item is copied) as KiCad's own clipboard text, measured
+    // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.
+    copySelection: async (refs, reference) => {
+      const st = stateRef.current;
+      if (!st.board) return;
+      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false });
+      if (ids.length === 0) return;
+      const at = reference ?? (st.cursorUm ? (([x, y]) => ({ x, y }))(snapPoint(st.cursorUm.x, st.cursorUm.y, st.gridUm)) : null);
+      const reply = await postClipboardCopy(ids, at);
+      if (!reply.ok) {
+        dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+        return;
+      }
+      dispatch({ type: "SET_CLIPBOARD", clipboard: at ? { text: reply.text, reference: at } : { text: reply.text } });
+      await writeClipboardText(reply.text);
     },
+    // pcb_control.cpp Paste: whatever KiCad text is on the system clipboard (a copy made in KiCad, or on another board), else this session's own copy
+    // where the browser will not hand the system clipboard over; text that is not KiCad's is pasted as a text item on the active layer ("If it wasn't
+    // content, then paste as a text object"). The items land with the clipboard's origin on the cursor and are selected, the Move tool armed on them.
     pasteClipboard: async () => {
-      const clip = stateRef.current.clipboard;
-      const board = stateRef.current.board;
-      if (!clip || !board) return;
+      const st = stateRef.current;
+      const board = st.board;
+      if (!board) return;
+      const system = await readClipboardText();
+      const at = pasteAt();
+      let cmd: Cmd;
+      if (system != null && isKicadPcbText(system)) {
+        cmd = { op: "paste_clipboard", text: system, at };
+      } else if (system != null && system.trim() !== "") {
+        cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: st.activeLayer ?? "F.SilkS", size_um: 1000, stroke_width: 150, justify: "center", mirror: false } };
+      } else if (st.clipboard) {
+        cmd = { op: "paste_clipboard", text: st.clipboard.text, at };
+      } else {
+        return;
+      }
       const before = allItemIds(board);
-      const ok = await runCmd({ op: "paste_items", tracks: clip.tracks, vias: clip.vias, zones: clip.zones, shapes: clip.shapes, texts: clip.texts });
+      const ok = await runCmd(cmd);
       if (!ok) return;
       // As in `duplicateSelection`: read the board from the backend, `stateRef` is still the one from before the paste.
       const after = await fetchState().catch(() => null);
       if (!after) return;
-      const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
+      const newIds = newItemIds(before, after);
       if (newIds.length === 0) return;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-      // A copy made with a reference point is carried by that point (see kicad-port/pcbReference.ts).
-      dispatch({ type: "SET_MOVE_ORIGIN", at: pasteMoveOrigin(clip.reference, stateRef.current.cursorUm) });
+      dispatch({ type: "SET_MOVE_ORIGIN", at });
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
