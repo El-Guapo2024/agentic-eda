@@ -10,3 +10,13 @@ export const SYMBOL_EDITOR_MENU_EXTRAS: MenuExtras = {
   File: [{ type: "item", action: "studio.SymbolEditor.updateOnBoard", label: "Update Symbol on Board" }],
   View: [{ type: "item", action: "eeschema.SymbolLibraryControl.showPinNumbers" }],
 };
+
+/** The schematic editor's: Tools > Reorganize into Module Sheets (one hierarchical sheet per functional module; KiCad has no such command, it is the studio's own). */
+export const SCHEMATIC_EDITOR_MENU_EXTRAS: MenuExtras = {
+  Tools: [{ type: "separator" }, { type: "item", action: "studio.Sheets.reorganize", label: "Reorganize into Module Sheets" }],
+};
+
+/** `menus` with `extras` appended to the top-level menus they name (a menu the file does not have is skipped); the generated JSON stays KiCad's. */
+export function withMenuExtras<T extends { menus: { label: string; items: MenuNode[] }[] }>(file: T, extras: MenuExtras): T {
+  return { ...file, menus: file.menus.map((m) => (extras[m.label] ? { ...m, items: [...m.items, ...extras[m.label]!] } : m)) };
+}

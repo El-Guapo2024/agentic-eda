@@ -11,14 +11,15 @@
 // `crates/ops/src/lib.rs::annotate`'s own per-prefix "next free number"
 // logic, just run once at placement time instead of in bulk over the
 // whole sheet.
-import type { SchematicSymbol } from "../api/types";
-
+//
+// A reference is one part for the whole design, not for one sheet: the references the design's other sheets use (its parts, `others`) count too,
+// or a resistor placed on the MCU sheet would be called R1 as the LED channels sheet's is.
 const REF_RE = /^([A-Za-z]+)(\d+)$/;
 
-export function nextReference(symbols: readonly SchematicSymbol[], prefix: string): string {
+export function nextReference(symbols: readonly { readonly id: string }[], prefix: string, others: readonly string[] = []): string {
   let max = 0;
-  for (const s of symbols) {
-    const m = REF_RE.exec(s.id);
+  for (const id of [...symbols.map((s) => s.id), ...others]) {
+    const m = REF_RE.exec(id);
     if (m && m[1] === prefix) max = Math.max(max, Number(m[2]));
   }
   return `${prefix}${max + 1}`;

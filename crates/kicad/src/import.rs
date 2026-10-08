@@ -175,7 +175,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if let Some(page) = crate::page::import_page(root).filter(|p| !p.is_default()) {
         design.drawings.get_or_insert_with(Default::default).page = Some(page);
     }
-    if let Some(tb) = crate::sch_import::import_title_block(root).filter(|tb| *tb != eda_model::ir::TitleBlock::default()) {
+    // (The schematic's title block carries its sheet's paper name too; the board's paper is `page`, so the name is dropped here.)
+    if let Some(tb) = crate::sch_import::import_title_block(root).map(|tb| eda_model::ir::TitleBlock { paper: String::new(), ..tb }).filter(|tb| *tb != eda_model::ir::TitleBlock::default()) {
         design.drawings.get_or_insert_with(Default::default).title_block = Some(tb);
     }
     // Every track/via this parse just built, and every shape/text, has no

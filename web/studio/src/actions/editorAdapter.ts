@@ -12,7 +12,7 @@ import type { FootprintEditorApi, FootprintEditorState, FpAction } from "../stat
 import type { SymAction, SymbolEditorApi, SymbolEditorState } from "../state/symbolEditorStore";
 import { boxOfIds, boxOfPoints, footprintItemBoxes, pcbContentBox, pcbItemBoxes, symbolItemBoxes, unionBoxes, type Box, type ItemBoxes } from "../kicad-port/itemBoxes";
 import type { Schematic } from "../api/types";
-import { PAGE_HEIGHT_UM, PAGE_WIDTH_UM, schPageSize } from "../components/schematic/drawingSheet";
+import { pageOf } from "../components/schematic/drawingSheet";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { hitSymbol, hitWire } from "../components/schematic/schHit";
@@ -210,8 +210,8 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         selectionBox: () => boxOfIds(itemBoxes(), studio.selection),
         contentBox: () => unionBoxes(itemBoxes().values()),
         defaultBox: () => {
-          const page = sch ? schPageSize(sch) : { width: PAGE_WIDTH_UM, height: PAGE_HEIGHT_UM };
-          return [0, 0, page.width, page.height];
+          const page = pageOf(sch?.paper);
+          return [0, 0, page.widthUm, page.heightUm];
         },
         candidatesAt: (x, y) => {
           if (!sch) return [];

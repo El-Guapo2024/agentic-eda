@@ -37,7 +37,7 @@ import { layerColor } from "../canvas/layers";
 import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
 import { resolveLibSymbol, symbolBounds as libSymbolBounds, type ResolvedGraphic } from "./libSymbol";
 import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
-import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement } from "./labelShape";
+import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement, type LabelSpin } from "./labelShape";
 import { drawStrokeText } from "../text/strokeFont";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
@@ -47,6 +47,7 @@ import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
 import { drawSelectionBox, paintGraphics } from "./schGraphicsPainter";
 import { allItems, itemBounds } from "./schItems";
+import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/schFields";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -264,7 +265,7 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
     }
   });
 
-  drawFieldsAbout(ctx, symbol, 0, height, 0, unitSuffix);
+  drawFieldsAbout(ctx, symbol, { minX: 0, minY: 0, maxX: width, maxY: height }, false, unitSuffix);
   ctx.restore();
 }
 
@@ -343,12 +344,15 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
  * even though neither is pixel-exact against a real recorded field
  * position.
  */
-function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol, localX: number, bboxBottom: number, bboxTop: number, unitSuffix: string) {
+function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol, bbox: FieldBox, verticalTwoPin: boolean, unitSuffix: string) {
+  // kicad-port/schFields.ts: beside the body for a resistor/capacitor standing on its end (a wire leaves both ends, straight through
+  // "above and below"), above and below and centred for everything else.
+  const at = fieldAnchors(bbox, verticalTwoPin);
   const refSizeUm = REF_FONT * 1000;
-  drawStrokeText(ctx, symbol.id + unitSuffix, localX, bboxTop - 400, { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, color: layerColor("LAYER_REFERENCEPART") });
+  drawStrokeText(ctx, symbol.id + unitSuffix, at.ref[0], at.ref[1], { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
     const sizeUm = VALUE_FONT * 1000;
-    drawStrokeText(ctx, symbol.value ?? symbol.mpn ?? "", localX, bboxBottom + 1800, { sizeUm, color: layerColor("LAYER_VALUEPART") });
+    drawStrokeText(ctx, symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });
   }
   // Footprint field: small, LAYER_FIELDS purple -- a real field KiCad
   // draws alongside ref/value (this app has no separate "hide field"
@@ -356,7 +360,7 @@ function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol,
   const pkg = symbol.footprint ?? symbol.package;
   if (pkg) {
     const sizeUm = FIELD_FONT * 1000;
-    drawStrokeText(ctx, pkg, localX, bboxBottom + 1800 + FIELD_FONT * 1150, { sizeUm, color: layerColor("LAYER_FIELDS") });
+    drawStrokeText(ctx, pkg, at.footprint[0], at.footprint[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_FIELDS") });
   }
 }
 
@@ -619,7 +623,7 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
   }
 
   drawPins(ctx, view, pins, showHiddenPins);
-  drawFieldsAbout(ctx, instance, (bbox.minX + bbox.maxX) / 2, bbox.maxY, bbox.minY, unitSuffix);
+  drawFieldsAbout(ctx, instance, bbox, isVerticalTwoPin(pins), unitSuffix);
 }
 
 /**
@@ -745,10 +749,26 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   drawStrokeText(ctx, s.name, x, y - 400, { sizeUm: nameSizeUm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
   drawStrokeText(ctx, s.file, x, y + h + 400 + nameSizeUm * 0.8, { sizeUm: nameSizeUm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
 
+  // A sheet pin sits on the border it names (`SCH_SHEET_PIN::SetSide`): its flag points into the sheet from that edge and its name is
+  // written inside, after the flag -- so a wire reaches the pin from outside and the name never runs over it.
+  const pinColor = layerColor("LAYER_SHEETLABEL");
+  ctx.save();
+  ctx.strokeStyle = pinColor;
+  ctx.lineWidth = Math.max(159, hair);
   for (const p of s.pins) {
     const [px, py] = p.at;
-    drawStrokeText(ctx, p.name, px + 300, py, { sizeUm: 1000, justify: "left", color: layerColor("LAYER_SHEETLABEL") });
+    const edge = px <= x ? "left" : px >= x + w ? "right" : py <= y ? "top" : "bottom";
+    const spin: LabelSpin = edge === "left" ? "right" : edge === "right" ? "left" : edge === "top" ? "bottom" : "up";
+    ctx.beginPath();
+    hierLabelOutline(p.shape, spin, [px, py]).forEach(([ox, oy], i) => (i === 0 ? ctx.moveTo(ox, oy) : ctx.lineTo(ox, oy)));
+    ctx.stroke();
+    const gap = 1_270 + 500; // past the flag
+    const sizeUm = 1000;
+    if (edge === "left") drawStrokeText(ctx, p.name, px + gap, py + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "left", color: pinColor });
+    else if (edge === "right") drawStrokeText(ctx, p.name, px - gap, py + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "right", color: pinColor });
+    else drawStrokeText(ctx, p.name, px + 600, edge === "top" ? py + gap : py - gap, { sizeUm, justify: "left", color: pinColor });
   }
+  ctx.restore();
 }
 
 function drawNoConnect(ctx: CanvasRenderingContext2D, view: ViewTransform, nc: NoConnect, on: boolean) {

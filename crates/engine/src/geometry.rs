@@ -381,16 +381,8 @@ fn is_ground_name(name: &str) -> bool {
 /// `eda-render`/`eda-gates` (which glyph is drawn / which wire lengths are
 /// gated) always agree on what counts as a power/ground net.
 pub fn is_power_or_ground_net_name(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
-    let trimmed = upper.trim_start_matches('+');
-    const RAILS: &[&str] = &[
-        "GND", "AGND", "DGND", "VSS", "VCC", "VDD", "VDDA", "VBAT", "VBUS", "VSYS", "3V3", "5V", "1V8", "12V",
-    ];
-    RAILS.iter().any(|r| *r == trimmed)
-        || trimmed.starts_with("GND")
-        || trimmed.starts_with("AGND")
-        || trimmed.starts_with("DGND")
-        || trimmed.starts_with("VSS")
+    // One definition, shared with module inference (`eda_model::modules`), so a rail is a rail to both.
+    eda_model::modules::is_power_or_ground_net_name(name)
 }
 
 /// Builds the port list for a part and returns the per-pin-index ->

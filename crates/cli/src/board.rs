@@ -146,13 +146,14 @@ fn resolve_lib_symbol(lib_id: &str, model: &ConstraintModel) -> Option<eda_model
     }
 }
 
-/// A synthesized `Part` in `model` for every symbol instance of the design's schematic that the model has none for: `AddSymbol` placing a part with no
-/// intent counterpart. [`load`] rebuilds the model from the intent file every time, so it folds these back in too -- without them, everything that
-/// exports the schematic for kicad-cli (ERC, BOM, netlist, plots) refused a board once a symbol had been placed ("symbol id has no matching part in the
-/// constraint model").
+/// A synthesized `Part` in `model` for every symbol instance of the design's schematic -- on every sheet -- that the model has none for: `AddSymbol`
+/// placing a part with no intent counterpart. [`load`] rebuilds the model from the intent file every time, so it folds these back in too -- without
+/// them, everything that exports the schematic for kicad-cli (ERC, BOM, netlist, plots) refused a board once a symbol had been placed ("symbol id has
+/// no matching part in the constraint model").
 fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
-    let Some(sch) = design.schematic.as_ref() else { return };
-    for sym in &sch.symbols {
+    let Some(root) = design.schematic.as_ref() else { return };
+    let every_symbol = root.symbols.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values()).flat_map(|s| s.symbols.iter()));
+    for sym in every_symbol {
         if model.part(&sym.id).is_some() {
             continue;
         }
@@ -180,55 +181,129 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
     }
 }
 
-/// Recompute `design.schematic`'s own derived connectivity (`Wire::net`/
-/// `pins`, `PowerSymbol::pin`, `NoConnect::pin`) from its current drawn
-/// geometry, and the net list that implies -- the same union-find
-/// reconciliation `import_kicad_sch` runs on a real `.kicad_sch` file
-/// (`eda_kicad::reconcile`), run here instead on *this* design's own
-/// schematic every time a schematic-domain `Cmd` lands (see `step_quiet`,
-/// gated on `Cmd::domain`). A no-op if the design has no schematic at all.
+/// "REF.PIN" -> the pin's name, for the names KiCad gives a net nothing drives (`Net-(U1-PA0)`): the part's own pin names.
+fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String, String> {
+    let mut names = std::collections::BTreeMap::new();
+    for part in &model.parts {
+        for pin in &part.pins {
+            if let Some(name) = pin.name.as_ref().filter(|n| !n.is_empty()) {
+                names.insert(format!("{}.{}", part.reference, pin.number), name.clone());
+            }
+        }
+    }
+    names
+}
+
+/// Trace the nets of the whole schematic tree of `design` (`eda_engine::nets`): a sheet pin and the hierarchical label of the same name,
+/// global labels and power symbols are one net across sheets. Writes what the drawing says back into the design's wires (their net and
+/// pins), power symbols and no-connect flags, and returns the nets read.
+fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
+    let Some(mut root) = design.schematic.take() else { return Vec::new() };
+    // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
+    // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
+    let pins_of = |sch: &eda_model::ir::SchematicSection| -> std::collections::BTreeMap<String, Point> {
+        let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
+        for sym in &sch.symbols {
+            if !sch.imported_from_kicad {
+                if let Some(part) = model.part(&sym.id) {
+                    let resolved = model.real_symbol_of(&sym.lib_id, part);
+                    for (number, at) in eda_engine::placed::pin_points(sym, part, resolved.as_ref()) {
+                        pin_world.insert(format!("{}.{number}", sym.id), at);
+                    }
+                }
+                continue;
+            }
+            let lib = resolve_lib_symbol(&sym.lib_id, model).unwrap_or_else(|| crate::studio::synthesize_generic_symbol(&format!("eda:{}", sym.id), model));
+            let angle_deg = sym.rot as f64 / 1000.0;
+            // Multi-unit: this placed instance only seeds `pin_world` for the pins that are actually drawn on its own unit
+            // (plus any `unit == 0` pin, common to every unit) -- a pin of a *different* unit of the same reference is
+            // positioned when *that* unit's own `SymbolInstance` is visited, not here.
+            for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
+                let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
+                pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
+            }
+        }
+        pin_world
+    };
+    let mut contents = design.sheet_contents.take();
+    let root_pins = pins_of(&root);
+    let mut child_pins: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Point>> = contents.iter().flatten().map(|(f, s)| (f.clone(), pins_of(s))).collect();
+    let traced = {
+        let mut screens = vec![eda_engine::nets::ScreenIn { sch: &mut root, file: String::new(), pins: root_pins }];
+        if let Some(c) = contents.as_mut() {
+            for (file, sec) in c.iter_mut() {
+                screens.push(eda_engine::nets::ScreenIn { sch: sec, file: file.clone(), pins: child_pins.remove(file).unwrap_or_default() });
+            }
+        }
+        eda_engine::nets::trace_nets_with(&mut screens, naming)
+    };
+    design.schematic = Some(root);
+    design.sheet_contents = contents;
+    traced
+}
+
+/// Recompute what the drawing says about connectivity after a schematic edit (`Wire::net`/`pins`, `PowerSymbol::pin`, `NoConnect::pin`) and
+/// keep the net list -- `design.nets`, the one netlist the PCB, the exports and the checks read -- in step with what the edit did to it.
+/// Run by `step_quiet` after every schematic-domain `Cmd`; a no-op if the design has no schematic at all.
 ///
-/// Also folds a synthesized `Part` into `model` for any symbol instance it
-/// does not already know about -- `AddSymbol` placing a part with no
-/// intent counterpart, which must still "show up unplaced on the PCB"
-/// (the task's own words): pins come from a real resolved library symbol
-/// when `lib_id` names one, the same generic-box fallback `schematic_json`
-/// already renders with otherwise, same resolution order either way so
-/// the pins a wire can land on always match what the frontend drew.
+/// `before` is the design as it was before the command, for a command that can change what is connected (`Cmd::edits_connectivity`);
+/// `None` for one that cannot (a symbol that moves or turns: layout, which never rewrites the net list). The nets are read from the drawing
+/// twice, before and after, and only the difference is applied to the net list that stands (`eda_engine::nets::follow`): a net the edit did
+/// not touch keeps its name and its pins, even when the drawing shows it in pieces -- a stored schematic whose labels do not quite touch
+/// their pins reads as dozens of loose pins, and one drag must not turn the netlist into that. A net the edit made is named by its driver (a
+/// global label, a power symbol, a local or hierarchical label, a sheet pin), else by the net its pins come from, else the way KiCad names
+/// it (`Net-(R1-Pad1)`), never `NET_<n>`.
 ///
-/// Writes `design.nets = Some(nets)` -- see that field's own doc comment
-/// on why this never touches a board nothing has hand-edited yet (every
-/// board in this project's own test/parity corpus included: none of them
-/// has ever executed a schematic `Cmd`, so `design.nets` stays `None` for
-/// every one of them exactly as before this function existed, and
-/// `load`'s `model.nets` override above never fires).
-fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut ConstraintModel) {
+/// Also folds a synthesized `Part` into `model` for any symbol instance it does not already know about -- `AddSymbol` placing a part with
+/// no intent counterpart, which must still "show up unplaced on the PCB": pins come from a real resolved library symbol when `lib_id`
+/// names one, the same generic-box fallback `schematic_json` already renders with otherwise, same resolution order either way so the pins
+/// a wire can land on always match what the frontend drew.
+///
+/// Writes `design.nets = Some(nets)` only when the edit changed the nets -- see that field's own doc comment on why this never touches a
+/// board nothing has hand-edited yet (every board in this project's own test/parity corpus included: none of them has ever executed a
+/// schematic `Cmd`, so `design.nets` stays `None` for every one of them, and `load`'s `model.nets` override above never fires).
+fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut ConstraintModel, before: Option<&eda_model::ir::Design>) {
+    if design.schematic.is_none() {
+        return;
+    }
+    // A part for every symbol the model has not heard of yet, on every sheet.
     fold_unknown_symbols(design, model);
-    let Some(sch) = design.schematic.as_mut() else { return };
 
-    let resolve = |lib_id: &str, model: &ConstraintModel| resolve_lib_symbol(lib_id, model);
-
-    let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
-    for sym in &sch.symbols {
-        let lib = resolve(&sym.lib_id, model).unwrap_or_else(|| crate::studio::synthesize_generic_symbol(&format!("eda:{}", sym.id), model));
-        let angle_deg = sym.rot as f64 / 1000.0;
-        // Multi-unit: this placed instance only seeds `pin_world` for the
-        // pins that are actually drawn on its own unit (plus any `unit ==
-        // 0` pin, common to every unit) -- a pin belonging to a *different*
-        // unit of the same reference is positioned when *that* unit's own
-        // `SymbolInstance` is visited, not here. Without this filter, two
-        // instances sharing one reference would both claim every pin
-        // number the whole part has, and whichever was iterated last would
-        // silently win for every pin the other unit actually owns.
-        for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
-            let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
-            pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
+    // The nets in force after the command applied: the design's own list (Reorganize sets one), else the intent's.
+    let in_force: Vec<eda_model::Net> = design.nets.clone().unwrap_or_else(|| model.nets.clone());
+    let pin_names = shown_pin_names(model);
+    let naming = eda_engine::nets::Naming { wire_hints: false, pin_names: Some(&pin_names) };
+    let after = trace_design(design, model, &naming);
+    if let Some(before) = before {
+        let mut earlier = before.clone();
+        let was = trace_design(&mut earlier, model, &naming);
+        if let Some(nets) = eda_engine::nets::follow(&in_force, &was, &after) {
+            design.nets = Some(nets);
         }
     }
 
-    let junctions: Vec<Point> = sch.junctions.iter().map(|j| j.at).collect();
-    let nets = eda_kicad::reconcile(&pin_world, &mut sch.wires, &sch.labels, &mut sch.power_symbols, &mut sch.no_connects, &junctions);
-    design.nets = Some(nets);
+    // Every wire carries the name of the net its pins are on, as the list says.
+    let net_of: std::collections::BTreeMap<&str, &str> = design.nets.as_deref().unwrap_or(&in_force).iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
+    let rename = |sch: &mut eda_model::ir::SchematicSection| {
+        for w in sch.wires.iter_mut() {
+            if let Some(name) = w.pins.iter().find_map(|p| net_of.get(p.as_str())) {
+                w.net = (*name).to_string();
+            }
+        }
+    };
+    if let Some(root) = design.schematic.as_mut() {
+        rename(root);
+    }
+    for sec in design.sheet_contents.iter_mut().flat_map(|c| c.values_mut()) {
+        rename(sec);
+    }
+}
+
+/// The schematic a board with none stored shows and edits: derived from its intent as module sheets (one sheet per functional
+/// module, a sheet symbol for each on the root; a design that is a single module stays one sheet). The modules a placement
+/// recorded are used when there are any. Always the same for the same board, so what is shown is what a first edit stores.
+pub(crate) fn derived_schematic(design: &eda_model::ir::Design, model: &ConstraintModel) -> Result<eda_model::ir::Design, Vec<CheckResult>> {
+    eda_engine::derive_schematic_modules_with(model, &eda_engine::EngineOptions::default(), design.placement.as_ref().map(|p| p.modules.as_slice()).unwrap_or(&[]))
 }
 
 pub(crate) fn save(dir: &Path, design: &eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
@@ -573,7 +648,8 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
         None => snapshot,
         Some(Domain::Schematic) => {
             let symbol_library = follow_published(current.symbol_library, snapshot.symbol_library.as_ref());
-            eda_model::ir::Design { schematic: snapshot.schematic, nets: snapshot.nets, symbol_library, ..current }
+            // The sheets' own content (`sheet_contents`) is schematic too: an edit inside a sheet is undone with the root.
+            eda_model::ir::Design { schematic: snapshot.schematic, sheet_contents: snapshot.sheet_contents, nets: snapshot.nets, symbol_library, ..current }
         }
         // GAPS.md #8: the Footprint Editor's own scope touches only
         // `footprint_library`, same reasoning `Schematic`'s own arm
@@ -584,7 +660,7 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
         // The Symbol Editor tab's own scope, same independence
         // `FootprintEditor`'s own arm documents.
         Some(Domain::SymbolEditor) => eda_model::ir::Design { symbol_library: snapshot.symbol_library, ..current },
-        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, nets: current.nets, footprint_library: current.footprint_library, symbol_library: current.symbol_library, ..snapshot },
+        Some(Domain::Pcb) => eda_model::ir::Design { schematic: current.schematic, sheet_contents: current.sheet_contents, nets: current.nets, footprint_library: current.footprint_library, symbol_library: current.symbol_library, ..snapshot },
     }
 }
 
@@ -678,9 +754,21 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
     if cmd.domain() == Domain::Schematic && design.schematic.is_none() {
-        design.schematic = eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic;
+        // The schematic the studio shows -- module sheets for a design of more than one module -- so the edit lands on what is on
+        // screen, in whichever sheet the command names.
+        let derived = derived_schematic(&design, &model)?;
+        design.schematic = derived.schematic;
+        design.sheet_contents = derived.sheet_contents;
     }
+    // What the nets were drawn as before the command, for a command that can change what is connected (`reconcile_schematic`).
+    let drawn_before = (cmd.domain() == Domain::Schematic && cmd.edits_connectivity()).then(|| design.clone());
     let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
+    // Reorganizing into sheets draws the design's nets anew: let it give a net back the name the intent declared for it.
+    if matches!(cmd, Cmd::ReorganizeSheets) {
+        if let Some(intent) = std::fs::read_to_string(&meta.intent).ok().and_then(|t| serde_yaml::from_str::<ConstraintModel>(&t).ok()) {
+            board = board.with_intent_nets(intent.nets);
+        }
+    }
     let before = all_failures(&board, &model);
     let was = board.fork();
 
@@ -746,7 +834,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // -- see `reconcile_schematic`'s own doc on why this is the entire
     // "one netlist" mechanism and why it never touches a PCB-only board.
     if cmd.domain() == Domain::Schematic {
-        reconcile_schematic(&mut design, &mut model);
+        reconcile_schematic(&mut design, &mut model, drawn_before.as_ref());
     }
     save(dir, &design)?;
     Ok(format!(
@@ -932,6 +1020,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
+        Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
         Cmd::Annotate { reset_existing, order, ids } => format!(
             "schematic annotate{}{}{}",
             if *reset_existing { " --reset" } else { "" },
@@ -1117,6 +1207,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
         Cmd::AddSymbol { .. } => "schematic-place",
+        Cmd::OnSheet { cmd, .. } => cmd_name(cmd),
+        Cmd::ReorganizeSheets => "schematic-reorganize-sheets",
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
         Cmd::RenameSymbol { .. } => "schematic-rename",
         Cmd::SetSymbolFields { .. } => "schematic-fields-table",
@@ -1769,7 +1861,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![], bus_entries: vec![],
-                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
@@ -2583,6 +2675,331 @@ mod tests {
         redo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
         redo(&dir, "test", Some(Domain::Schematic)).unwrap();
         assert!(published(&load(&dir).unwrap().1), "redo restores the update");
+    }
+
+    /// mcu30's flat schematic as the engine draws it, in a scratch board. The intent is read from `examples/` and never written.
+    fn setup_mcu30_flat(dir: &Path) {
+        let intent_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mcu_board_30plus.yaml");
+        let model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent_path).unwrap()).unwrap();
+        let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+        design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+        save(dir, &design).unwrap();
+        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    /// A net list in a form two of them can be compared in: nets by name, pins sorted.
+    fn canonical(nets: &[Net]) -> Vec<(String, Vec<String>)> {
+        let mut v: Vec<(String, Vec<String>)> = nets
+            .iter()
+            .map(|n| {
+                let mut p = n.pins.clone();
+                p.sort();
+                (n.name.clone(), p)
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The nets that join two pins or more -- what a netlist is, apart from the names a lone pin is given.
+    fn joined(nets: &[Net]) -> Vec<(String, Vec<String>)> {
+        canonical(nets).into_iter().filter(|(_, p)| p.len() >= 2).collect()
+    }
+
+    /// The user's own board: mcu30 as it was before the drag that broke its nets (a copy of `work/mcu30`'s state, kept as a fixture; the board
+    /// itself is never touched). The flat schematic is one an older engine drew -- its labels sit on the edge of the symbol box, not on the pin
+    /// tips, so most pins read as loose -- over a routed PCB, and no net list is stored: the intent's nets are the board's nets.
+    fn setup_mcu30_users_board(dir: &Path) {
+        let intent_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mcu_board_30plus.yaml");
+        let design: eda_model::ir::Design = serde_json::from_str(include_str!("../tests/fixtures/mcu30_legacy_flat.design.json")).unwrap();
+        save(dir, &design).unwrap();
+        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 600 };
+        std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    /// Every net a track or a via is on is a net of the design: what DRC and the fab exports refuse a board over ("unknown net").
+    fn assert_every_routed_net_exists(design: &eda_model::ir::Design, model: &ConstraintModel) {
+        let known: std::collections::BTreeSet<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+        let routing = design.routing.as_ref().expect("the board is routed");
+        for net in routing.tracks.iter().map(|t| t.net.as_str()).chain(routing.vias.iter().map(|v| v.net.as_str())) {
+            assert!(known.contains(net), "a track is on net {net}, which the design no longer has: {known:?}");
+        }
+    }
+
+    /// The (wire, point) ends of `id`'s wires that sit on its pins, as the studio finds them when a drag starts (`state.dragAttach`).
+    fn attached_ends(design: &eda_model::ir::Design, model: &ConstraintModel, id: &str) -> Vec<(usize, usize)> {
+        let sch = design.schematic.as_ref().unwrap();
+        let sym = sch.symbols.iter().find(|s| s.id == id).unwrap();
+        let part = model.part(id).unwrap();
+        let tips: Vec<Point> = eda_engine::placed::pin_points(sym, part, model.real_symbol_of(&sym.lib_id, part).as_ref()).into_iter().map(|(_, at)| at).collect();
+        let mut out = Vec::new();
+        for (wi, w) in sch.wires.iter().enumerate() {
+            for pi in [0, w.pts.len().saturating_sub(1)] {
+                if w.pts.get(pi).is_some_and(|p| tips.contains(p)) && !out.contains(&(wi, pi)) {
+                    out.push((wi, pi));
+                }
+            }
+        }
+        out
+    }
+
+    /// The edit that broke the user's board, replayed: `schematic drag J1 --to 133.35,86.36` rewrote the net list into dozens of loose pins named
+    /// NET_12, NET_13, ... while the tracks stayed on GND, LED1.. and PA0.., so DRC and every export refused the board. Moving a part is layout:
+    /// the net list is what it was, names and pins, and every net a track is on is still there.
+    #[test]
+    fn dragging_j1_on_the_users_board_leaves_the_nets_alone() {
+        let dir = scratch("users_board_drag");
+        setup_mcu30_users_board(&dir);
+        let (_, before, model_before) = load(&dir).unwrap();
+        assert!(before.nets.is_none(), "the board has never stored a net list: the intent's nets are its nets");
+        let intent = joined(&model_before.nets);
+        assert_eq!(intent.len(), 20);
+        assert_every_routed_net_exists(&before, &model_before);
+
+        step(&dir, Cmd::DragSymbol { id: "J1".into(), x: 133_350, y: 86_360, attached_wire_endpoints: vec![], unit: None }, true, "ui").unwrap();
+        let (_, after, model_after) = load(&dir).unwrap();
+        assert_eq!(after.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "J1").unwrap().at, Point { x: 133_350, y: 86_360 }, "the part moved");
+        assert!(after.nets.is_none(), "a move does not store a net list at all");
+        assert_eq!(joined(&model_after.nets), intent);
+        assert_eq!(canonical(&model_after.nets), canonical(&model_before.nets), "same names, same pins, lone pins included");
+        assert_every_routed_net_exists(&after, &model_after);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Dragging, moving, turning or mirroring any one symbol -- each of the 30 -- leaves the net list alone, on the user's board and on mcu30
+    /// reorganized into module sheets (where the drag takes the wires of the sheet along).
+    #[test]
+    fn moving_or_dragging_any_one_symbol_leaves_the_nets_alone() {
+        for hierarchical in [false, true] {
+            let dir = scratch(if hierarchical { "any_symbol_hier" } else { "any_symbol_flat" });
+            setup_mcu30_users_board(&dir);
+            if hierarchical {
+                // the same board with its schematic drawn anew as module sheets
+                let (_, mut design, model) = load(&dir).unwrap();
+                let fresh = eda_engine::derive_schematic_modules(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+                design.schematic = fresh.schematic;
+                design.sheet_contents = fresh.sheet_contents;
+                save(&dir, &design).unwrap();
+                assert!(load(&dir).unwrap().1.schematic.as_ref().unwrap().sheets.len() == 3);
+            }
+            // The routing makes every step's gate check slow, so it is set aside: the nets the tracks are on are checked by name instead.
+            let routed: Vec<String> = {
+                let (_, mut d, _) = load(&dir).unwrap();
+                let r = d.routing.take().expect("the board is routed");
+                save(&dir, &d).unwrap();
+                r.tracks.iter().map(|t| t.net.clone()).chain(r.vias.iter().map(|v| v.net.clone())).collect::<std::collections::BTreeSet<_>>().into_iter().collect()
+            };
+            assert!(routed.len() >= 20);
+            let (_, start, model) = load(&dir).unwrap();
+            let canonical_before = canonical(&model.nets);
+            // the symbols with the sheet each is drawn on
+            let mut placed: Vec<(String, Option<String>)> = Vec::new();
+            let root = start.schematic.as_ref().unwrap();
+            placed.extend(root.symbols.iter().map(|s| (s.id.clone(), None)));
+            for sheet in &root.sheets {
+                let screen = &start.sheet_contents.as_ref().unwrap()[&sheet.file];
+                placed.extend(screen.symbols.iter().map(|s| (s.id.clone(), Some(sheet.id.clone()))));
+            }
+            assert_eq!(placed.len(), 30);
+            for (id, sheet) in placed {
+                let (_, now, model_now) = load(&dir).unwrap();
+                let screen = match &sheet {
+                    None => now.schematic.clone().unwrap(),
+                    Some(sid) => {
+                        let file = &now.schematic.as_ref().unwrap().sheets.iter().find(|s| &s.id == sid).unwrap().file;
+                        now.sheet_contents.as_ref().unwrap()[file].clone()
+                    }
+                };
+                let at = screen.symbols.iter().find(|s| s.id == id).unwrap().at;
+                let (dx, dy) = (5_080, 2_540);
+                // the drag takes the wires glued to the symbol along; the studio finds them in the drawing it shows
+                let view = Design { schematic: Some(screen.clone()), ..now.clone() };
+                let attached = attached_ends(&view, &model_now, &id);
+                let on = |cmd: Cmd| match &sheet {
+                    None => cmd,
+                    Some(sid) => Cmd::OnSheet { sheet: sid.clone(), cmd: Box::new(cmd) },
+                };
+                let commands = [
+                    on(Cmd::DragSymbol { id: id.clone(), x: at.x + dx, y: at.y + dy, attached_wire_endpoints: attached, unit: None }),
+                    on(Cmd::MoveSymbol { id: id.clone(), x: at.x, y: at.y, unit: None }),
+                    on(Cmd::RotateSymbol { id: id.clone(), quarter_turns: 1, unit: None }),
+                    on(Cmd::MirrorSymbol { id: id.clone(), unit: None }),
+                ];
+                for cmd in commands {
+                    step(&dir, cmd, true, "ui").unwrap_or_else(|e| panic!("{id}: {}", reasons(&e)));
+                    let (_, _, model_after) = load(&dir).unwrap();
+                    assert_eq!(canonical(&model_after.nets), canonical_before, "{id} (hierarchical: {hierarchical}): the net list changed");
+                    for net in &routed {
+                        assert!(model_after.nets.iter().any(|n| &n.name == net), "{id}: the net {net} a track is on is gone");
+                    }
+                }
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// An edit that does connect things is read from the drawing, and only what it touched changes: a wire from R1.1 to R3.1 joins the nets PA0 and PA2
+    /// -- whole, under the name that wins -- and nothing else moves; the tracks' nets are still nets; and no net is ever named NET_<n>.
+    #[test]
+    fn a_wire_on_the_users_board_joins_two_nets_and_nothing_else() {
+        let dir = scratch("users_board_wire");
+        setup_mcu30_users_board(&dir);
+        let (_, before, model) = load(&dir).unwrap();
+        let sch = before.schematic.as_ref().unwrap();
+        let tip = |reference: &str, number: &str| {
+            let sym = sch.symbols.iter().find(|s| s.id == reference).unwrap();
+            let part = model.part(reference).unwrap();
+            eda_engine::placed::pin_points(sym, part, model.real_symbol_of(&sym.lib_id, part).as_ref()).into_iter().find(|(n, _)| n == number).unwrap().1
+        };
+        let (a, b) = (tip("R1", "1"), tip("R3", "1"));
+        step(&dir, Cmd::AddWire { pts: vec![a, Point { x: a.x, y: a.y - 2_540 }, Point { x: b.x, y: a.y - 2_540 }, b], bus: false }, true, "ui").unwrap();
+        let (_, after, model_after) = load(&dir).unwrap();
+        let want: Vec<(String, Vec<String>)> = {
+            let mut nets: Vec<(String, Vec<String>)> = joined(&model.nets).into_iter().filter(|(n, _)| n != "PA0" && n != "PA2").collect();
+            nets.push(("PA0".into(), vec!["R1.1".into(), "R3.1".into(), "U1.3".into(), "U1.5".into()]));
+            nets.sort();
+            nets
+        };
+        assert_eq!(joined(&model_after.nets), want);
+        assert!(model_after.nets.iter().all(|n| !n.name.starts_with("NET_")), "no net is called NET_<n>: {:?}", model_after.nets.iter().map(|n| &n.name).collect::<Vec<_>>());
+        // the net PA2 is gone, so its track is on a net the design no longer has -- the board says so instead of hiding it
+        let routing = after.routing.as_ref().unwrap();
+        assert!(routing.tracks.iter().any(|t| t.net == "PA2"));
+        assert!(model_after.nets.iter().all(|n| n.name != "PA2"));
+        // Undo puts the net list back, and with it every routed net
+        undo(&dir, "ui", Some(Domain::Schematic)).unwrap();
+        let (_, undone, model_undone) = load(&dir).unwrap();
+        assert_eq!(canonical(&model_undone.nets), canonical(&model.nets));
+        assert_every_routed_net_exists(&undone, &model_undone);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With the design on module sheets the root sheet holds no symbol, so the dialogs must not read the root alone: the Symbol Fields Table and the BOM
+    /// preview list every sheet's symbols, and Find searches the sheet in view (where Replace then edits).
+    #[test]
+    fn the_fields_table_reads_every_sheet_and_find_the_sheet_in_view() {
+        let dir = scratch("sheets_dialogs");
+        setup_mcu30_flat(&dir);
+        step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
+        let table = crate::sch_api::fields_table(&dir, b"{}");
+        assert_eq!(table["ok"], true, "{table}");
+        let text = table["rows"].to_string();
+        for reference in ["U1", "J1", "R1", "D8", "C12"] {
+            assert!(text.contains(&format!("\"{reference}\"")) || text.contains(reference), "{reference} is missing from the fields table: {text}");
+        }
+        let bom = crate::sch_api::bom_export(&dir, br#"{"preview":true}"#);
+        assert_eq!(bom["ok"], true, "{bom}");
+        assert!(bom["text"].as_str().unwrap().contains("D8") || bom["text"].as_str().unwrap().contains("D1"), "the BOM lists the LEDs of the channels sheet: {}", bom["text"]);
+
+        // Find: the root has no symbol; the channels sheet has the resistors
+        let (_, hier, _) = load(&dir).unwrap();
+        let channels = hier.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name.starts_with("LED")).unwrap().id.clone();
+        let search = |sheet: &str| {
+            let body = serde_json::json!({ "search": { "find": "R3", "search_and_replace": false }, "sheet": sheet }).to_string();
+            crate::sch_api::find(&dir, body.as_bytes())
+        };
+        assert_eq!(search("")["matches"].as_array().unwrap().len(), 0, "the root sheet has no R3");
+        let hits = search(&channels);
+        assert!(hits["matches"].as_array().unwrap().iter().any(|m| m["id"] == "R3"), "{hits}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Tools > Reorganize into Module Sheets on the user's own board: the old flat drawing reads as loose pins, so the new sheets are drawn from the
+    /// intent's nets -- and every one of them, with its name, is still a net the tracks are on. The board stays routable.
+    #[test]
+    fn reorganizing_the_users_board_keeps_every_net_a_track_is_on() {
+        let dir = scratch("users_board_reorganize");
+        setup_mcu30_users_board(&dir);
+        let (_, _, model_before) = load(&dir).unwrap();
+        let intent = joined(&model_before.nets);
+        step(&dir, Cmd::ReorganizeSheets, true, "ui").unwrap();
+        let (_, after, model_after) = load(&dir).unwrap();
+        assert_eq!(after.schematic.as_ref().unwrap().sheets.len(), 3);
+        assert_eq!(joined(&model_after.nets), intent);
+        assert!(model_after.nets.iter().all(|n| !n.name.starts_with("NET_")));
+        assert_every_routed_net_exists(&after, &model_after);
+        // and the next edit, on a sheet, keeps them
+        let mcu = after.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().id.clone();
+        let note = Cmd::AddSchText { content: "checked".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_um: 1_270 };
+        step(&dir, Cmd::OnSheet { sheet: mcu, cmd: Box::new(note) }, true, "ui").unwrap();
+        let (_, noted, model_noted) = load(&dir).unwrap();
+        assert_eq!(joined(&model_noted.nets), intent);
+        assert_every_routed_net_exists(&noted, &model_noted);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Reorganize into Module Sheets, end to end through `step`: the nets stored with the design after it are the design's nets (the same nets with the same
+    /// pins, traced back across the new sheets, not the root sheet's alone), an edit inside a sheet reaches that sheet alone and moves the nets the way the
+    /// drawing says, and Undo puts each step back -- the sheet edit, then the reorganization.
+    ///
+    /// The nets to keep are the intent's, not the ones traced from the flat drawing: the flat sheet the engine drew used to run a wire through the pin of
+    /// another net, so tracing it merges LED1..LED8 into GND (that is what a board edited on the flat sheet stored). Reorganize reads such a list as stale.
+    #[test]
+    fn reorganizing_into_module_sheets_keeps_the_nets_and_every_step_undoes() {
+        let dir = scratch("reorganize_nets");
+        setup_mcu30_flat(&dir);
+        let (_, flat, model_flat) = load(&dir).unwrap();
+        let nets_before = joined(&model_flat.nets);
+        assert_eq!(nets_before.len(), 20, "mcu30 joins pins in twenty nets: GND, VDD, RESET, SWD, 8 PA and 8 LED");
+        assert!(flat.sheet_contents.is_none());
+
+        step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
+        let (_, hier, model_hier) = load(&dir).unwrap();
+        let root = hier.schematic.as_ref().unwrap();
+        assert_eq!(root.sheets.len(), 3, "MCU, LED channels and the header");
+        assert!(root.symbols.is_empty(), "the root holds sheet symbols only");
+        let screens = hier.sheet_contents.as_ref().unwrap();
+        assert_eq!(screens.len(), 3);
+        assert_eq!(joined(hier.nets.as_ref().unwrap()), nets_before, "design.nets after the reorganization: the same nets, the same pins");
+        assert_eq!(joined(&model_hier.nets), nets_before, "...and so is the netlist everything else reads");
+
+        // An edit inside the MCU sheet lands on that sheet alone, and the nets are still read across all the sheets.
+        let mcu = root.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().clone();
+        let note = Cmd::AddSchText { content: "note".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_um: 1_270 };
+        step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(note) }, false, "test").unwrap();
+        let (_, noted, _) = load(&dir).unwrap();
+        assert_eq!(noted.sheet_contents.as_ref().unwrap()[&mcu.file].texts.len(), 1);
+        assert!(noted.schematic.as_ref().unwrap().texts.is_empty(), "nothing leaked onto the root");
+        assert_eq!(joined(noted.nets.as_ref().unwrap()), nets_before);
+
+        // Taking the hierarchical label PA0 out of the MCU sheet is an electrical edit: U1.3 leaves the net, read across the sheets.
+        let label = noted.sheet_contents.as_ref().unwrap()[&mcu.file].labels.iter().find(|l| l.net == "PA0").expect("the MCU sheet has a PA0 label").id.clone();
+        step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::DeleteLabel { id: label }) }, false, "test").unwrap();
+        let (_, cut, model_cut) = load(&dir).unwrap();
+        let pa0 = |nets: &[Net]| nets.iter().find(|n| n.name == "PA0").map(|n| n.pins.clone());
+        assert_eq!(pa0(&model_cut.nets), Some(vec!["R1.1".to_string()]), "PA0 keeps the LED side: {:?}", cut.nets);
+        assert!(model_cut.nets.iter().any(|n| n.pins == vec!["U1.3".to_string()]), "U1.3 is on a net of its own");
+        assert!(model_cut.nets.iter().all(|n| !n.name.starts_with("NET_")), "no net is called NET_<n>");
+        // ...and Undo puts the label and the nets back.
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, restored, _) = load(&dir).unwrap();
+        assert_eq!(joined(restored.nets.as_ref().unwrap()), nets_before);
+        assert!(restored.sheet_contents.as_ref().unwrap()[&mcu.file].labels.iter().any(|l| l.net == "PA0"));
+
+        // Moving U1 is layout: it lands on the sheet, and the nets stay as they were (the wires it leaves behind are what ERC is for).
+        let u1 = screens[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at;
+        let moved = Point { x: u1.x + 2_540, y: u1.y };
+        step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::MoveSymbol { id: "U1".into(), x: moved.x, y: moved.y, unit: None }) }, false, "test").unwrap();
+        let (_, edited, _) = load(&dir).unwrap();
+        assert_eq!(edited.sheet_contents.as_ref().unwrap()[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at, moved);
+        assert_eq!(edited.schematic.as_ref().unwrap().sheets.len(), 3);
+        assert_eq!(joined(edited.nets.as_ref().unwrap()), nets_before, "moving a symbol leaves the nets alone");
+
+        // Undo takes the move back; then the note; then the reorganization, back to the flat sheet.
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, undone, _) = load(&dir).unwrap();
+        assert_eq!(undone.sheet_contents.as_ref().unwrap()[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at, u1);
+        assert_eq!(joined(undone.nets.as_ref().unwrap()), nets_before);
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert!(load(&dir).unwrap().1.sheet_contents.as_ref().unwrap()[&mcu.file].texts.is_empty());
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, back, model_back) = load(&dir).unwrap();
+        assert!(back.sheet_contents.is_none());
+        assert!(back.schematic.as_ref().unwrap().sheets.is_empty());
+        assert_eq!(back.schematic.as_ref().unwrap().symbols.len(), flat.schematic.as_ref().unwrap().symbols.len());
+        assert_eq!(joined(&model_back.nets), nets_before);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `board::load`'s overlay (mirroring `loading_overlays_only_published_

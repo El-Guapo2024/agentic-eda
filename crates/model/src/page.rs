@@ -97,6 +97,24 @@ impl PageSettings {
         Ok(())
     }
 
+    /// A schematic sheet's page. The sheet keeps its paper's *name* in its title block (`TitleBlock::paper`, which the layout engine chooses
+    /// per sheet and Page Settings edits) and, only when the name cannot say it all -- a portrait paper, a user size -- the full settings in
+    /// `SchExtras::page` (`page`). The page is the full settings when there are, else what the name says, else A4 landscape.
+    pub fn of_sheet(page: Option<&PageSettings>, paper_name: &str) -> PageSettings {
+        if let Some(p) = page {
+            return p.clone();
+        }
+        PageSettings::from_args(paper_name, None, false).unwrap_or_default()
+    }
+
+    /// The two halves a sheet keeps of this page (see [`PageSettings::of_sheet`]): the name for `TitleBlock::paper` -- empty for plain A4, as
+    /// a sheet that never set one -- and the full settings when the name alone is not enough.
+    pub fn sheet_parts(&self) -> (String, Option<PageSettings>) {
+        let name = if self.is_default() { String::new() } else { self.paper.clone() };
+        let full = (self.portrait || self.paper == USER_PAPER).then(|| self.clone());
+        (name, full)
+    }
+
     /// The `(paper ...)` element of a `.kicad_pcb` / `.kicad_sch` (`PAGE_INFO::Format`): the name, the width and height in mm for a user
     /// size and `portrait` for a standard format on its side.
     pub fn to_sexpr(&self) -> String {
@@ -175,6 +193,23 @@ mod tests {
         assert_eq!(PageSettings::default().to_sexpr(), "(paper \"A4\")");
         assert_eq!(PageSettings { portrait: true, ..Default::default() }.to_sexpr(), "(paper \"A4\" portrait)");
         assert_eq!(PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_um: Some((300_000, 200_500)) }.to_sexpr(), "(paper \"User\" 300 200.5)");
+    }
+
+    #[test]
+    fn a_sheet_keeps_the_name_and_only_what_the_name_cannot_say() {
+        let a3 = PageSettings { paper: "A3".into(), ..Default::default() };
+        assert_eq!(a3.sheet_parts(), ("A3".to_string(), None), "a standard landscape paper is its name");
+        assert_eq!(PageSettings::default().sheet_parts(), (String::new(), None), "plain A4 is stored as nothing");
+        let portrait = PageSettings { paper: "A3".into(), portrait: true, user_size_um: None };
+        assert_eq!(portrait.sheet_parts(), ("A3".to_string(), Some(portrait.clone())));
+        let user = PageSettings { paper: USER_PAPER.into(), portrait: false, user_size_um: Some((300_000, 200_000)) };
+        assert_eq!(user.sheet_parts(), (USER_PAPER.to_string(), Some(user.clone())));
+        // and reads back
+        assert_eq!(PageSettings::of_sheet(None, "A3"), a3);
+        assert_eq!(PageSettings::of_sheet(None, ""), PageSettings::default());
+        assert_eq!(PageSettings::of_sheet(None, "nonsense"), PageSettings::default(), "an unknown name is A4, as the layout engine reads it");
+        assert_eq!(PageSettings::of_sheet(Some(&portrait), "A3"), portrait);
+        assert_eq!(PageSettings::of_sheet(Some(&user), "User"), user);
     }
 
     #[test]

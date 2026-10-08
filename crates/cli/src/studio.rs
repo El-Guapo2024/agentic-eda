@@ -1247,7 +1247,7 @@ fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String
 /// error the whole schematic view out). Returns the resolved section
 /// alongside the `(id, name)` breadcrumb actually reached, which may be
 /// shorter than the requested path when it had to fall back.
-fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model::ir::SchematicSection, Vec<(String, String)>) {
+pub(crate) fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model::ir::SchematicSection, Vec<(String, String)>) {
     let mut current = design.schematic.clone().unwrap_or(eda_model::ir::SchematicSection {
         power_symbols: vec![],
         no_connects: vec![], bus_entries: vec![],
@@ -1282,26 +1282,14 @@ fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) -> (eda_model
 /// next to `schematic_svg`'s -- these boards are small, so deriving again
 /// on a cache miss costs nothing worth guarding.
 fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, model) = board::load(dir)?;
-    let (sch, breadcrumb) = if design.schematic.is_some() {
-        resolve_sheet(&design, sheet_path)
-    } else {
-        (
-            eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?.schematic.unwrap_or(eda_model::ir::SchematicSection {
-                power_symbols: vec![],
-                no_connects: vec![], bus_entries: vec![],
-                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
-                title_block: None,
-                sheets: vec![],
-                instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
-                symbols: Vec::new(),
-                wires: Vec::new(),
-                labels: Vec::new(),
-                texts: Vec::new(),
-            }),
-            Vec::new(),
-        )
-    };
+    let (_, mut design, model) = board::load(dir)?;
+    // A board with no stored schematic shows the one derived from its intent: module sheets, whole, so the sheet path resolves.
+    if design.schematic.is_none() {
+        let derived = board::derived_schematic(&design, &model)?;
+        design.schematic = derived.schematic;
+        design.sheet_contents = derived.sheet_contents;
+    }
+    let (sch, breadcrumb) = resolve_sheet(&design, sheet_path);
     let symbols: Vec<Value> = sch
         .symbols
         .iter()
@@ -1427,6 +1415,15 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
     let lib_symbols: Value = lib_ids
         .iter()
         .map(|lib_id| {
+            // A sheet this project drew places its symbols by the corner of their box: draw the symbol the writer bakes (its origin
+            // at that corner, every pin where a wire ends) instead of the library's own, so symbol and wires meet.
+            let instance = sch.symbols.iter().find(|s| (if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() }) == *lib_id);
+            if let (false, Some(s)) = (sch.imported_from_kicad, instance) {
+                if let Some(part) = model.part(&s.id) {
+                    let resolved = model.real_symbol_of(&s.lib_id, part);
+                    return (lib_id.clone(), lib_symbol_json(&eda_engine::placed::corner_symbol(lib_id, part, resolved.as_ref(), s.unit)));
+                }
+            }
             let resolved = if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) };
             let value = resolved.unwrap_or_else(|| synthesize_generic_symbol(lib_id, &model));
             (lib_id.clone(), lib_symbol_json(&value))
@@ -1452,8 +1449,15 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         })
         .collect();
     let sheet_path: Vec<Value> = breadcrumb.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect();
+    // The paper this sheet is drawn on: its full Page Settings when it has them (portrait, a user size), else the name its title block carries
+    // (the layout engine writes it per sheet); A4 landscape when neither.
+    let page = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or(""));
+    let (paper_w, paper_h) = page.size_um().unwrap_or((297_000, 210_000));
+    let file = viewed_file(&design, &breadcrumb);
 
     Ok(json!({
+        "paper": { "name": page.paper, "width_um": paper_w, "height_um": paper_h },
+        "file": file,
         "symbols": symbols,
         "wires": wires,
         "labels": labels,
@@ -1466,11 +1470,24 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "graphics": graphics,
         "locked": locked,
         "title_block": title_block,
-        "page": sch.extras.page.as_ref().map(crate::page_json::page_json),
+        "page": crate::page_json::page_json(&page),
         "lib_symbols": lib_symbols,
         "sheets": sheets,
         "sheet_path": sheet_path,
     }))
+}
+
+/// The file of the screen the breadcrumb ends on (`""` for the root): the title block of the sheet in view names it. The sheets
+/// of the whole design are `GET /api/sch/hierarchy`.
+fn viewed_file(design: &eda_model::ir::Design, breadcrumb: &[(String, String)]) -> String {
+    let mut here = design.schematic.as_ref();
+    let mut file = String::new();
+    for (id, _) in breadcrumb {
+        let Some(sheet) = here.and_then(|s| s.sheets.iter().find(|s| &s.id == id)) else { break };
+        file = sheet.file.clone();
+        here = design.sheet_contents.as_ref().and_then(|c| c.get(&sheet.file));
+    }
+    file
 }
 
 /// `A`'s symbol chooser's own catalog -- GET /api/symbol_library. "The
@@ -1500,7 +1517,8 @@ fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 
     let lib_name_of = |lib_id: &str| lib_id.split_once(':').map(|(l, _)| l.to_string());
     let mut lib_names: std::collections::BTreeSet<String> = model.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)).collect();
-    if let Some(sch) = &design.schematic {
+    // every sheet's symbols: with module sheets the root holds none of its own
+    for sch in design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
         lib_names.extend(sch.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)));
     }
 
@@ -1741,7 +1759,7 @@ fn kicad_sch_files_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (meta, mut design, model) = board::load(dir)?;
     // A board with no stored schematic shows (and saves) the one derived from its intent, like every other schematic output.
     if design.schematic.is_none() {
-        design = eda::prelude::derive_schematic(&model, &eda::prelude::EngineOptions::default())?;
+        design = board::derived_schematic(&design, &model)?;
     }
     let project = PathBuf::from(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
     let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: &crate::kicad_engine::chrono_like_today(), title: &project }, "board.kicad_sch")?;

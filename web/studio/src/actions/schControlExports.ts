@@ -6,7 +6,7 @@ import { fileStem } from "../kicad-port/saveAs";
 import { samePath } from "../kicad-port/sheetPages";
 import { saveBlob, saveTextFile } from "../api/libraryClient";
 import { layerColor } from "../components/canvas/layers";
-import { drawPageAndFrame, drawTitleBlock, drawZoneReferences, schPageSize } from "../components/schematic/drawingSheet";
+import { drawPageAndFrame, drawTitleBlock, drawZoneReferences, pageOf } from "../components/schematic/drawingSheet";
 import { paintSchematic } from "../components/schematic/painter";
 import { DEFAULT_SCH_DISPLAY } from "../components/schematic/displayOptions";
 
@@ -44,10 +44,10 @@ export function renderSheetImage(ctx: SchControlContext): HTMLCanvasElement | nu
   const sch = ctx.state.schematic;
   if (!sch) return null;
   const scale = SHEET_PX_PER_MM / 1000;
-  const page = schPageSize(sch);
+  const page = pageOf(sch.paper);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(page.width * scale);
-  canvas.height = Math.round(page.height * scale);
+  canvas.width = Math.round(page.widthUm * scale);
+  canvas.height = Math.round(page.heightUm * scale);
   const g = canvas.getContext("2d");
   if (!g) return null;
   const view = { x: 0, y: 0, scale };
@@ -59,17 +59,21 @@ export function renderSheetImage(ctx: SchControlContext): HTMLCanvasElement | nu
   drawPageAndFrame(g, view, page);
   drawZoneReferences(g, view, page);
   const tb = sch.title_block;
-  drawTitleBlock(g, view, {
-    title: tb?.title || ctx.state.board?.name || "untitled",
-    date: tb?.date ?? new Date().toISOString().slice(0, 10),
-    rev: tb?.rev ?? "",
-    company: tb?.company,
-    comments: tb?.comments,
-    paper: sch.page?.paper,
-    page,
-    fileName: `${ctx.state.board?.name || "schematic"}.kicad_sch`,
-    sheetPath: "/",
-  });
+  const crumbs = sch.sheet_path ?? [];
+  drawTitleBlock(
+    g,
+    view,
+    {
+      title: tb?.title || ctx.state.board?.name || "untitled",
+      date: tb?.date ?? new Date().toISOString().slice(0, 10),
+      rev: tb?.rev ?? "",
+      company: tb?.company,
+      comments: tb?.comments,
+      fileName: sch.file || `${ctx.state.board?.name || "schematic"}.kicad_sch`,
+      sheetPath: crumbs.length === 0 ? "/" : `/${crumbs.map((c) => c.name).join("/")}/`,
+    },
+    page
+  );
   paintSchematic(g, view, sch, { selection: new Set(), netHighlight: null, display: ctx.control.display ?? DEFAULT_SCH_DISPLAY });
   g.restore();
   return canvas;

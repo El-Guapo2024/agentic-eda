@@ -2178,7 +2178,7 @@ export function useActionRunner() {
         "eeschema.InteractiveEdit.repeatDrawItem",
         schematicOnly(() => {
           if (!sch || state.schRepeat.length === 0) return;
-          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id)) });
+          const cmds = repeatCmds(state.schRepeat, { cursor: cursorSnapped(), nextReference: (id) => nextReference(sch.symbols, refDesPrefix(id), state.board?.parts.map((p) => p.ref)) });
           if (cmds.length > 0) void api.cmdBatch(cmds);
         })
       );

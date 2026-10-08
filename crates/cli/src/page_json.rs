@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn the_title_block_keeps_every_field() {
-        let v = title_block_json(&TitleBlock { title: "T".into(), date: "2026-10-01".into(), rev: "B".into(), company: "Co".into(), comments: vec!["one".into()] });
+        let v = title_block_json(&TitleBlock { title: "T".into(), date: "2026-10-01".into(), rev: "B".into(), company: "Co".into(), comments: vec!["one".into()], ..Default::default() });
         assert_eq!(v, json!({ "title": "T", "date": "2026-10-01", "rev": "B", "company": "Co", "comments": ["one"] }));
     }
 }

@@ -23,7 +23,7 @@ export async function replaceAndFindNext(api: StudioApi, dispatch: Dispatch<Acti
     await findNextMatch(state, dispatch, backward);
     return;
   }
-  const before = await fetchSchFind({ ...search, search_and_replace: true });
+  const before = await fetchSchFind({ ...search, search_and_replace: true }, undefined, state.currentSheetPath);
   const at = before.matches.findIndex((m) => m.key === cursor);
   if (at === -1) {
     await findNextMatch(state, dispatch, backward);
@@ -32,7 +32,7 @@ export async function replaceAndFindNext(api: StudioApi, dispatch: Dispatch<Acti
   const prevKey = at > 0 ? (before.matches[at - 1]?.key ?? null) : null;
   const ok = await api.cmd({ op: "replace_text", search, items: [cursor] });
   if (!ok) return;
-  const after = await fetchSchFind({ ...search, search_and_replace: false });
+  const after = await fetchSchFind({ ...search, search_and_replace: false }, undefined, state.currentSheetPath);
   const next = after.matches.some((m) => m.key === cursor) ? cursor : after.matches.some((m) => m.key === prevKey) ? prevKey : null;
   await findNextMatch(api.getState(), dispatch, backward, next);
 }
@@ -45,7 +45,7 @@ export async function replaceAll(api: StudioApi, dispatch: Dispatch<Action>): Pr
   let items: string[] | null = null;
   const scope = scopeFromSelection(state.selection, selectedOnly);
   if (scope) {
-    const found = await fetchSchFind({ ...search, search_and_replace: true }, scope);
+    const found = await fetchSchFind({ ...search, search_and_replace: true }, scope, state.currentSheetPath);
     items = found.matches.map((m) => m.key);
     if (items.length === 0) {
       dispatch({ type: "SET_SCH_FIND", find: { status: "Nothing to replace in the selection." } });
@@ -68,6 +68,6 @@ export async function updateFind(api: StudioApi): Promise<void> {
     setFindHighlights([]);
     return;
   }
-  const reply = await fetchSchFind({ ...search, search_and_replace: state.schDialog === "replace" }, scopeFromSelection(state.selection, selectedOnly));
+  const reply = await fetchSchFind({ ...search, search_and_replace: state.schDialog === "replace" }, scopeFromSelection(state.selection, selectedOnly), state.currentSheetPath);
   setFindHighlights(reply.ok ? [...new Set(reply.matches.map((m) => m.id))] : []);
 }

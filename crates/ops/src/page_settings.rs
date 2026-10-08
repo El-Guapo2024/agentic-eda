@@ -42,16 +42,19 @@ pub fn set_board_page(design: &mut Design, page: &PageSettings, title_block: &Ti
     Ok(())
 }
 
-/// The schematic's paper and title block (`SCH_SCREEN::SetPageSettings` / `SetTitleBlock`).
+/// The schematic's paper and title block (`SCH_SCREEN::SetPageSettings` / `SetTitleBlock`). A sheet keeps its paper's name in its title
+/// block (`TitleBlock::paper`, the one the layout engine writes for a sheet it laid out and the exporter reads) and, only for a paper the
+/// name cannot say -- portrait, a user size -- the full settings in `SchExtras::page` (see [`PageSettings::of_sheet`]). The title block
+/// passed in carries the dialog's fields; its `paper` is the page's name here, whatever it says.
 pub fn set_schematic_page(design: &mut Design, page: &PageSettings, title_block: &TitleBlock) -> Result<(), Vec<CheckResult>> {
     page.validate(MAX_PAGE_SIZE_EESCHEMA_UM).map_err(|m| fail("ops_page_settings", "page", &m))?;
     let sch = design.schematic.as_mut().ok_or_else(|| fail("ops_no_schematic", "schematic", "this board has no schematic section yet"))?;
-    let new_page = (!page.is_default()).then(|| page.clone());
-    let new_tb = normalized(title_block);
-    if sch.extras.page == new_page && sch.title_block == new_tb {
+    let (name, full) = page.sheet_parts();
+    let new_tb = normalized(&TitleBlock { paper: name, ..title_block.clone() });
+    if sch.extras.page == full && sch.title_block == new_tb {
         return Err(fail("ops_page_settings", "page", "the page settings are already like this"));
     }
-    sch.extras.page = new_page;
+    sch.extras.page = full;
     sch.title_block = new_tb;
     Ok(())
 }
@@ -104,7 +107,35 @@ mod tests {
         let mut d = design(true);
         assert!(set_board_page(&mut d, &big, &TitleBlock::default()).is_err());
         set_schematic_page(&mut d, &big, &TitleBlock::default()).unwrap();
-        assert_eq!(d.schematic.as_ref().unwrap().extras.page, Some(big));
+        let sch = d.schematic.as_ref().unwrap();
+        assert_eq!(sch.extras.page, Some(big));
+        assert_eq!(sch.title_block.as_ref().map(|t| t.paper.as_str()), Some("User"));
+    }
+
+    #[test]
+    fn a_standard_landscape_paper_is_only_its_name_on_a_sheet() {
+        let mut d = design(true);
+        let a3_landscape = PageSettings { paper: "A3".into(), portrait: false, user_size_um: None };
+        set_schematic_page(&mut d, &a3_landscape, &TitleBlock::default()).unwrap();
+        let sch = d.schematic.as_ref().unwrap();
+        assert_eq!(sch.extras.page, None);
+        assert_eq!(sch.title_block, Some(TitleBlock { paper: "A3".into(), ..Default::default() }), "the title block exists to carry the name");
+        assert_eq!(PageSettings::of_sheet(sch.extras.page.as_ref(), &sch.title_block.as_ref().unwrap().paper), a3_landscape);
+        assert!(set_schematic_page(&mut d, &a3_landscape, &TitleBlock::default()).is_err(), "the same again");
+        // back to A4: stored as nothing, the title block with it
+        set_schematic_page(&mut d, &PageSettings::default(), &TitleBlock::default()).unwrap();
+        let sch = d.schematic.as_ref().unwrap();
+        assert_eq!((sch.extras.page.as_ref(), sch.title_block.as_ref()), (None, None));
+    }
+
+    #[test]
+    fn the_layout_engines_paper_survives_a_title_block_edit() {
+        // The engine named the sheet's paper A3; the dialog sends A3 with the new fields: the name stays, the fields change.
+        let mut d = design(true);
+        d.schematic.as_mut().unwrap().title_block = Some(TitleBlock { paper: "A3".into(), ..Default::default() });
+        let a3_landscape = PageSettings { paper: "A3".into(), portrait: false, user_size_um: None };
+        set_schematic_page(&mut d, &a3_landscape, &tb("Renamed", &[])).unwrap();
+        assert_eq!(d.schematic.as_ref().unwrap().title_block, Some(TitleBlock { paper: "A3".into(), ..tb("Renamed", &[]) }));
     }
 
     #[test]
@@ -112,8 +143,8 @@ mod tests {
         let mut d = design(true);
         set_schematic_page(&mut d, &a3(), &tb("Sheet", &[])).unwrap();
         let sch = d.schematic.as_ref().unwrap();
-        assert_eq!(sch.extras.page, Some(a3()));
-        assert_eq!(sch.title_block, Some(tb("Sheet", &[])));
+        assert_eq!(sch.extras.page, Some(a3()), "a portrait paper is more than its name");
+        assert_eq!(sch.title_block, Some(TitleBlock { paper: "A3".into(), ..tb("Sheet", &[]) }), "the name travels with the title block");
         assert!(d.drawings.is_none(), "the board's settings are untouched");
         assert!(set_schematic_page(&mut design(false), &a3(), &TitleBlock::default()).is_err(), "no schematic to set it on");
     }

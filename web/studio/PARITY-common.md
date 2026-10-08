@@ -97,7 +97,7 @@ where it does something -- an action an editor does not offer stays dimmed there
 
 | Behaviour | Status | KiCad file:function |
 |---|---|---|
-| Page Settings (board, schematic) | partial | `DIALOG_PAGES_SETTINGS`: paper (standard formats, orientation, custom size within the editor's limits) and title block (date with Apply, revision, title, company, comments 1 to 9) with a page sketch. OK is one undo step (`Cmd::SetBoardPage` / `SetSchematicPage`; nothing is sent when nothing changed). The IR holds `PageSettings` and the title block (additive), the exporters write `(paper ...)` and `(title_block ...)`, the importers read them back. The schematic's drawing sheet is laid out on the sheet's own paper and draws the size, company and comments. Not ported: a custom drawing-sheet file (`.kicad_wks`; the sheet is KiCad's default one) and the schematic dialog's "export to other sheets" boxes (the editor works on one sheet) |
+| Page Settings (board, schematic) | partial | `DIALOG_PAGES_SETTINGS`: paper (standard formats, orientation, custom size within the editor's limits) and title block (date with Apply, revision, title, company, comments 1 to 9) with a page sketch. OK is one undo step (`Cmd::SetBoardPage` / `SetSchematicPage`; nothing is sent when nothing changed). The IR holds `PageSettings` and the title block (additive), the exporters write `(paper ...)` and `(title_block ...)`, the importers read them back. A schematic sheet keeps its paper's *name* in its title block (`TitleBlock::paper`, which the layout engine chooses per sheet and the dialog now edits) and, only for a paper the name cannot say -- portrait, a user size -- the full settings in `SchExtras::page`; `PageSettings::of_sheet` reads the two as one, and the state JSON's `paper` (size, for the drawing sheet) and `page` (the dialog's) both come from it. The schematic's drawing sheet is laid out on the viewed sheet's own paper and draws its size, company and comments. Not ported: a custom drawing-sheet file (`.kicad_wks`; the sheet is KiCad's default one) and the schematic dialog's "export to other sheets" boxes (the editor works on one sheet) |
 
 ## 10. Grids
 
@@ -126,7 +126,24 @@ All in `tools/ui-parity-missing.json`; each is a subsystem the studio does not h
 | Paste Special | nothing to special-case yet: the clipboard holds no footprints or symbols and the copper it holds must name a net |
 | Toggle Grid Overrides | the five category grids (connected items, wires, vias, text, graphics) and the category-aware snapping that reads them |
 
-## 12. The scripted test hook
+## 12. Offered by KiCad in an editor, not by the studio there
+
+The wired actions above are registered only on the tabs where they do something. These are the ones KiCad offers in an editor that the studio leaves dimmed
+there (or, for Group / Ungroup on the schematic, leaves enabled and inert), with where the reason is kept.
+
+| Action | Editor | Why |
+|---|---|---|
+| Find, Find Next / Previous, Find and Replace, Update Find, Find Next Marker | PCB | `GAPS.md` item 21: there is no Find on the board; the actions are the schematic find dialog's |
+| Find, Find and Replace | Symbol Editor | `editor_toolbar_support.json`: Find searches the schematic, not an open library symbol |
+| Exclude Marker | PCB | DRC exclusions are not modelled (ERC's are) |
+| Left / Center / Right Justify | Schematic | `SchematicText` has no justification yet (`GAPS.md` item 12) |
+| Group Properties, Add / Remove Items, New Group Member | Schematic | the schematic has no groups (`GAPS.md` item 17); Group / Ungroup are registered for the board only and do nothing there |
+| Group, Ungroup | Footprint Editor | `editor_toolbar_support.json`: a library footprint has no groups |
+| Edit Grids, grid presets, Next / Previous Grid, Fast Grids, Grid Origin | Schematic | its grid is the fixed 50 mil (`GAPS.md` item 14); a grid origin is the board's and the Footprint Editor's |
+| Show Properties | Footprint and Symbol editors | `editor_toolbar_support.json`: no Properties pane yet (the Pad, Footprint, Symbol and Pin Properties dialogs are there) |
+| Show Datasheet | Board | KiCad offers it in the schematic, the Symbol Editor and the Footprint Editor only |
+
+## 13. The scripted test hook
 
 `window.__eda` (`kicad-port/edaTestHook.ts` + `actions/useEdaTestHook.ts`) is there for agents and test scripts: `actions()` lists the actions the
 runner handles on the current tab with whether each is enabled and why not, `await run( id, args )` runs one exactly as a menu click does and waits for

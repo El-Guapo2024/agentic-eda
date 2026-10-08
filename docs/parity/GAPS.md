@@ -229,8 +229,9 @@ Old #30. **Partial.** Hit: constantly. Blocks: no. WP3, size S-M.
 ### 17. Groups
 Old #27. **Partial.** Hit: sometimes. Blocks: no. WP3, with WP1 for the schematic, size S-M.
 - Exists: Group, Ungroup, whole-group selection, enter and leave (`Cmd::Group`, `state/store.tsx` `withGroupSubstitution`).
-- Missing: Add Items, Remove Items and Group Properties (unwired); group-aware move, rotate, flip and delete; nested groups; the
-  entered-group overlay; export (item 2); no groups in the schematic.
+- Done since: Add Items, Remove Items and Group Properties on the board (`PARITY-common.md` section 4: one undo step, `Cmd::EditGroup`).
+- Missing: group-aware move, rotate, flip and delete; nested groups; the entered-group overlay; export (item 2); no groups in the
+  schematic or the footprint editor (their Group / Ungroup and the group dialogs are dimmed or do nothing there).
 - Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
 
 ### 18. Appearance and display options

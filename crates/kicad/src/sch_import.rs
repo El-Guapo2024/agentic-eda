@@ -411,7 +411,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     let junction_points: Vec<Point> = junctions.iter().map(|j| j.at).collect();
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).filter(|p| !p.is_default()), ..Default::default() } };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), ..Default::default() } };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -535,7 +535,12 @@ pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, Sc
 }
 
 pub(crate) fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
-    let tb = sexpr::find(root, "title_block")?;
+    // `(paper "A3")` sits next to the title block in the file and travels with it here; plain A4 is the default and is not stored.
+    // (A portrait or user paper is also read in full, into `SchExtras::page`: `PageSettings::of_sheet`.)
+    let paper = sexpr::find(root, "paper").and_then(|p| sexpr::txt(p, 1)).filter(|p| !p.eq_ignore_ascii_case("A4")).unwrap_or("").to_string();
+    let Some(tb) = sexpr::find(root, "title_block") else {
+        return (!paper.is_empty()).then(|| TitleBlock { paper, ..Default::default() });
+    };
     let text = |tag: &str| sexpr::find(tb, tag).and_then(|f| sexpr::txt(f, 1)).unwrap_or("").to_string();
     let mut comments = Vec::new();
     for c in sexpr::find_all(tb, "comment") {
@@ -551,7 +556,7 @@ pub(crate) fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
     while comments.last().is_some_and(|s: &String| s.is_empty()) {
         comments.pop();
     }
-    Some(TitleBlock { title: text("title"), date: text("date"), rev: text("rev"), company: text("company"), comments })
+    Some(TitleBlock { title: text("title"), date: text("date"), rev: text("rev"), company: text("company"), comments, paper })
 }
 
 /// A symbol instance's own `(property "Name" "Value" ...)` text, by name.

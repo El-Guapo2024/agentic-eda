@@ -15,6 +15,9 @@
 #       unit tests and build run in parallel with the Rust side.
 #
 # Both print one summary line per side and exit non-zero when anything fails.
+# The two wall-clock budget tests (random30_layout_is_fast,
+# fixture_4p6n_routes_under_1s_release) run in neither tier: set
+# EDA_TIMING_TESTS=1 and run them on an idle machine.
 # Respects CARGO_BUILD_JOBS (agents share the machine; use 2).
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -67,7 +70,7 @@ rust() {
     fi
     local scope=(--workspace)
     [ ${#crates[@]} -gt 0 ] && scope=("${crates[@]}")
-    # `${profile[@]+...}`: an empty array is "unbound" under `set -u` in the bash 3.2 macOS ships.
+    # `${profile[@]+...}`: macOS's bash 3.2 reports an empty array as unbound under `set -u`.
     nice cargo test ${profile[@]+"${profile[@]}"} "${scope[@]}" --no-fail-fast > "$logs/rust-test.log" 2>&1
     local rc=$?
     local totals

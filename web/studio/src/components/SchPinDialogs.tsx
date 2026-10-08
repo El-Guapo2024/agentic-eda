@@ -3,7 +3,7 @@
 // have no pin -- with the fixes the pin side allows (add the missing pins, delete the unreferenced ones, take a label's shape).
 //
 // Not here: the dialog's other fixes act on the label side (place a hierarchical label in the sheet's file, rename or reshape one), which would edit the
-// content of a nested sheet; the studio's verbs edit the root sheet only.
+// content of the child sheet from its parent's page; those are made by going into the child sheet and editing it there.
 import { useEffect, useState } from "react";
 import type { SchToolDialog } from "../api/schEditTypes";
 import type { Cmd, Sheet } from "../api/types";
