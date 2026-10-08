@@ -26,6 +26,7 @@ import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
 import { pasteMoveOrigin } from "../kicad-port/pcbReference";
 import { repeatSource } from "../kicad-port/schRepeat";
+import { onCurrentSheet } from "../kicad-port/schSheetCmd";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
 import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
@@ -1779,7 +1780,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const runCmd = useCallback(
     async (cmd: Parameters<typeof postCmd>[0]) => {
-      const reply = await postCmd(cmd, stateRef.current.strict);
+      // On a nested sheet every schematic edit is addressed to that sheet (`Cmd::OnSheet`), as KiCad edits whichever sheet is open.
+      const reply = await postCmd(onCurrentSheet(cmd, stateRef.current.tab === "schematic" ? stateRef.current.currentSheetPath : []), stateRef.current.strict);
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
       if (reply.ok && stateRef.current.tab === "schematic") {

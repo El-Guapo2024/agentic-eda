@@ -29,7 +29,7 @@ import { paintSchematic } from "./schematic/painter";
 import { resolveLibSymbol } from "./schematic/libSymbol";
 import { GRID } from "./schematic/layout";
 import { layerColor } from "./canvas/layers";
-import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots } from "./schematic/drawingSheet";
+import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, pageOf } from "./schematic/drawingSheet";
 import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, applyBoxSelectionModifiers, hasModifier } from "../kicad-port/selection";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { isMac } from "../platform";
@@ -256,18 +256,27 @@ export function SchematicView() {
     ctx.save();
     ctx.translate(state.schematicView.x, state.schematicView.y);
     ctx.scale(state.schematicView.scale || 1, state.schematicView.scale || 1);
-    drawPageAndFrame(ctx, state.schematicView);
-    drawGridDots(ctx, state.schematicView, width, height, GRID);
-    drawZoneReferences(ctx, state.schematicView);
+    // The paper this sheet is laid out for (A4 unless the sheet says otherwise), and where in the hierarchy it is.
+    const page = pageOf(sch.paper);
+    drawPageAndFrame(ctx, state.schematicView, page);
+    drawGridDots(ctx, state.schematicView, width, height, GRID, page);
+    drawZoneReferences(ctx, state.schematicView, page);
     const tb = sch.title_block;
-    drawTitleBlock(ctx, state.schematicView, {
-      title: tb?.title || state.board?.name || "untitled",
-      date: tb?.date ?? new Date().toISOString().slice(0, 10),
-      rev: tb?.rev ?? "",
-      company: tb?.company,
-      fileName: `${state.board?.name || "schematic"}.kicad_sch`,
-      sheetPath: "/",
-    });
+    const crumbs = sch.sheet_path ?? [];
+    const here = crumbs.length > 0 ? sch.hierarchy?.find((h) => h.path.length === crumbs.length && h.path.every((id, i) => id === crumbs[i]!.id)) : undefined;
+    drawTitleBlock(
+      ctx,
+      state.schematicView,
+      {
+        title: tb?.title || state.board?.name || "untitled",
+        date: tb?.date ?? new Date().toISOString().slice(0, 10),
+        rev: tb?.rev ?? "",
+        company: tb?.company,
+        fileName: here?.file ?? `${state.board?.name || "schematic"}.kicad_sch`,
+        sheetPath: crumbs.length === 0 ? "/" : `/${crumbs.map((c) => c.name).join("/")}/`,
+      },
+      page
+    );
     paintSchematic(ctx, state.schematicView, displaySch, { selection: state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected });
     if (state.drawState?.kind === "wire") {
       // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the

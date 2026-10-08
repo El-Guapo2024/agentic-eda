@@ -91,8 +91,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   // each arms its tool, which stays armed for the next item until Esc (the click behaviour is components/schematic/schShapeTools.ts, called by SchematicView).
   const arm = (tool: ToolId) =>
     schematicOnly(() => {
-      // The verbs add to the root sheet's content: on a nested sheet a drawn item would land on the root sheet, out of sight of the one in view.
-      if (state.currentSheetPath.length > 0) return ctx.dispatch({ type: "TOAST", message: "The drawing tools work on the root sheet only; this sheet is a nested one.", kind: "info" });
+      // On a nested sheet the item lands on that sheet: `api.cmd` addresses every schematic command to the sheet in view (kicad-port/schSheetCmd.ts).
       ctx.dispatch({ type: "SET_DRAW_STATE", draw: null });
       ctx.dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool });
     });

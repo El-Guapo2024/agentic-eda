@@ -798,6 +798,10 @@ export type Cmd =
   | { op: "move_exact"; parts: string[]; dx: Um; dy: Um; rotate_millideg: number; pivot: PointXY | null }
   /** `Cmd::Batch`: the sub-commands as ONE undo step, all-or-nothing. */
   | { op: "batch"; cmds: Cmd[] }
+  /** `Cmd::OnSheet`: run a schematic command on the sheet at `sheet` (the `/`-joined `SheetInstance::id`s from the root, what `GET /api/schematic?sheet=` takes) instead of the root. */
+  | { op: "on_sheet"; sheet: string; cmd: Cmd }
+  /** `Cmd::ReorganizeSheets` (Tools > Reorganize into Module Sheets): the flat schematic becomes one sheet per functional module under a root of sheet symbols. */
+  | { op: "reorganize_sheets" }
 
   // -------------------------------------------------------- eeschema
   // crates/ops/src/lib.rs's eeschema `Cmd` variants -- see that enum's
@@ -1460,6 +1464,22 @@ export interface SheetPathEntry {
   name: string;
 }
 
+/** The paper a sheet is drawn on (KiCad's names, landscape, micrometres) -- A4 unless the sheet's title block says otherwise. */
+export interface SchematicPaper {
+  name: string;
+  width_um: Um;
+  height_um: Um;
+}
+
+/** One sheet of the whole design, in tree order from the root (`GET /api/schematic`'s `hierarchy`): `path` is what `?sheet=` takes. */
+export interface HierarchyEntry {
+  id: string;
+  path: string[];
+  name: string;
+  file: string;
+  depth: number;
+}
+
 export interface Schematic {
   /** Empty object on a board with no schematic yet, never absent -- see api/client.ts's fetchSchematic for the defensive `?? {}` this file's other optional-till-populated collections already use. */
   lib_symbols: LibSymbols;
@@ -1484,6 +1504,10 @@ export interface Schematic {
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */
   sheet_path: SheetPathEntry[];
+  /** The paper this sheet is drawn on; absent from a backend built before sheets chose their own. */
+  paper?: SchematicPaper;
+  /** Every sheet of the design in tree order, for the Hierarchy panel; absent from a backend built before it was sent. */
+  hierarchy?: HierarchyEntry[];
 }
 
 // ---------------------------------------------------------------- Symbol library

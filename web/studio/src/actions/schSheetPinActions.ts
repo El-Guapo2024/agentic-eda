@@ -17,10 +17,9 @@ export function registerSchSheetPinActions(registry: ActionMap, ctx: SchEditCont
   const sch = state.schematic;
   const info = (message: string) => dispatch({ type: "TOAST", message, kind: "info" });
 
-  /** A sheet pin is part of the sheet it sits on, and the verbs edit the root sheet's sheets only. */
+  /** A sheet pin is part of the sheet it sits on -- whichever sheet is in view: the pin verbs are addressed to it (kicad-port/schSheetCmd.ts). */
   const rootSheetOnly = (fn: () => void) => () => {
     if (state.tab !== "schematic" || !sch) return;
-    if (state.currentSheetPath.length > 0) return info("Sheet pins can be edited on the root sheet only; this sheet is a nested one.");
     fn();
   };
 
