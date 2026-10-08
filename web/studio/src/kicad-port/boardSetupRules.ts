@@ -138,7 +138,7 @@ export const MAXIMUM_CLEARANCE_UM: Um = 500_000;
 /** A mistake in the Net Classes page: row 0 is the Default class, row i + 1 the i-th other class. */
 export interface NetClassIssue {
   row: number;
-  field: "name" | "track_width" | "clearance" | "via_diameter" | "via_drill" | "microvia_diameter" | "microvia_drill" | "diff_pair_width" | "diff_pair_gap" | "pattern";
+  field: "name" | "track_width" | "clearance" | "via_diameter" | "via_drill" | "microvia_diameter" | "microvia_drill" | "diff_pair_width" | "diff_pair_gap" | "priority" | "pattern";
   message: string;
 }
 
@@ -176,6 +176,7 @@ export function validateNetClasses(defaultClass: NetClass, classes: readonly Net
       else if (v === 0 && f !== "clearance" && f !== "diff_pair_gap") issues.push({ row, field: f, message: `${SIZE_LABELS[f]} must be larger than zero.` });
       else if (f === "clearance" && v > MAXIMUM_CLEARANCE_UM) issues.push({ row, field: f, message: "Clearance was too large. The most is 500 mm." });
     }
+    if (!Number.isInteger(c.priority)) issues.push({ row, field: "priority", message: "Priority must be a whole number." });
     if (c.via_diameter !== undefined && c.via_drill !== undefined && Number.isFinite(c.via_diameter) && Number.isFinite(c.via_drill) && c.via_drill >= c.via_diameter) {
       issues.push({ row, field: "via_drill", message: "The via hole must be smaller than the via, or it leaves no annular ring." });
     }
@@ -409,6 +410,34 @@ export function withCopperLayers(settings: StackupSettings, copperLayers: number
   if (settings.stackup.edge_connector) next.stackup.edge_connector = settings.stackup.edge_connector;
   if (settings.stackup.edge_plating) next.stackup.edge_plating = true;
   return next;
+}
+
+/** A stackup written before the stackup was editable has no type on its layers: the copper layers (by name) become `copper`, every other layer is left as it is. */
+export function withKnownKinds(s: Stackup): Stackup {
+  const copper = new Set(copperLayerNames(32));
+  return { ...s, layers: s.layers.map((l) => (l.kind === undefined && copper.has(l.name) ? { ...l, kind: "copper" } : l)) };
+}
+
+/**
+ * The copper layers a board of `copperLayers` would lose that still carry something: a track, a via end or a zone on them. KiCad asks, then deletes
+ * the items; the backend refuses instead (an edit that deletes copper is not one to hide in a settings dialog), so the page says so up front.
+ */
+export function copperLayersLost(
+  routing: { tracks: ReadonlyArray<{ layer: string }>; vias: ReadonlyArray<{ from: string; to: string }>; zones: ReadonlyArray<{ layer: string }> } | null,
+  copperLayers: number
+): Array<{ layer: string; items: number }> {
+  const keep = new Set(copperLayerNames(copperLayers));
+  const used = new Map<string, number>();
+  const count = (layer: string) => {
+    if (/^(F|B|In\d+)\.Cu$/.test(layer) && !keep.has(layer)) used.set(layer, (used.get(layer) ?? 0) + 1);
+  };
+  for (const t of routing?.tracks ?? []) count(t.layer);
+  for (const z of routing?.zones ?? []) count(z.layer);
+  for (const v of routing?.vias ?? []) {
+    count(v.from);
+    count(v.to);
+  }
+  return [...used].map(([layer, items]) => ({ layer, items })).sort((a, b) => strNumCmp(a.layer, b.layer));
 }
 
 /** `IsThicknessEditable`: copper, a dielectric and a solder mask have a thickness; silkscreen and paste do not. */

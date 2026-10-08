@@ -1065,6 +1065,23 @@ export interface CmdReply {
   message: string;
 }
 
+/**
+ * POST /api/check_rules (crates/cli/src/kicad_engine.rs `check_rules`): kicad-cli's verdict on a custom-rules (`.kicad_dru`) text. kicad-cli
+ * has no checker of its own and drops a rules file it cannot parse without saying so, so the backend loads the text on a probe board and,
+ * when it does not load, finds the first top-level form that stops it. `ok: false` = the check itself could not run (`message` says why).
+ */
+export interface RulesCheckReply {
+  ok: boolean;
+  message: string;
+  engine?: string;
+  /** Every rule in the text loaded. */
+  valid?: boolean;
+  /** How many top-level forms the text has (the `(version 1)` header is one). */
+  forms?: number;
+  /** When the text does not load: the first form kicad-cli refuses (position among the forms from 0, its first line from 1, its text cut at 400 characters). */
+  bad?: { index: number; line: number; text: string } | null;
+}
+
 export interface RouteReply {
   ok: boolean;
   message: string;

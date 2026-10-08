@@ -1,0 +1,265 @@
+/* Board Setup (components/BoardSetupDialog.tsx, components/boardSetup/*): KiCad's treebook -- the page tree on the left, one page on the right. */
+.dialog.bs-dialog {
+  width: min(1060px, 96vw);
+  height: min(700px, 88vh);
+  max-height: 88vh;
+}
+.dialog .bs-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.bs-nav {
+  flex: 0 0 196px;
+  overflow-y: auto;
+  border-right: 1px solid var(--chrome-border);
+  padding: 6px 0 10px;
+  font-size: 12px;
+}
+.bs-nav-group {
+  padding: 8px 14px 3px;
+  color: var(--chrome-text-dim);
+  font-weight: 600;
+  font-size: 11px;
+}
+.dialog .bs-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 14px 4px 26px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--chrome-text);
+  text-align: left;
+  font-size: 12px;
+  cursor: default;
+}
+.dialog .bs-nav-item:hover {
+  background: var(--chrome-hover);
+}
+.dialog .bs-nav-item.active {
+  background: var(--chrome-selected-bg);
+  color: var(--chrome-selected-text);
+}
+.bs-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chrome-warn);
+  flex: 0 0 auto;
+}
+.bs-nav-item.active .bs-dot {
+  background: var(--chrome-selected-text);
+}
+.bs-page {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px 18px 16px;
+  font-size: 12px;
+}
+.bs-page[hidden] {
+  display: none;
+}
+.bs-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.bs-section {
+  margin: 14px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--chrome-text-dim);
+  text-transform: none;
+  border-bottom: 1px solid var(--chrome-border);
+  padding-bottom: 2px;
+}
+.bs-note {
+  color: var(--chrome-text-dim);
+  font-size: 11px;
+  margin: 4px 0 8px;
+  max-width: 78ch;
+}
+.bs-row {
+  display: grid;
+  grid-template-columns: 270px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 10px;
+  padding: 2px 0;
+}
+.bs-row > .bs-label {
+  color: var(--chrome-text);
+}
+.bs-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.bs-unit {
+  color: var(--chrome-text-dim);
+  font-size: 11px;
+}
+.bs-error {
+  color: var(--chrome-danger);
+  font-size: 11px;
+}
+.bs-ok {
+  color: var(--chrome-ok);
+  font-size: 11px;
+}
+.bs-input {
+  width: 84px;
+  box-sizing: border-box;
+}
+.bs-input.bs-invalid,
+.bs-textarea.bs-invalid,
+.bs-grid input.bs-invalid,
+.bs-grid select.bs-invalid {
+  border-color: var(--chrome-danger);
+  outline: 1px solid var(--chrome-danger);
+}
+.bs-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.bs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--chrome-border);
+}
+.bs-actions .bs-msg {
+  font-size: 11px;
+  color: var(--chrome-text-dim);
+}
+.bs-actions .bs-msg.bs-bad {
+  color: var(--chrome-danger);
+}
+.bs-grid {
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.bs-grid th,
+.bs-grid td {
+  text-align: left;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--chrome-border);
+  white-space: nowrap;
+}
+.bs-grid th {
+  color: var(--chrome-text-dim);
+  font-weight: 600;
+}
+.bs-grid td.bs-sel,
+.bs-grid tr.bs-sel td {
+  background: var(--chrome-hover);
+}
+.bs-grid input[type="text"],
+.bs-grid input:not([type]),
+.bs-grid input[type="number"] {
+  width: 64px;
+  box-sizing: border-box;
+}
+.bs-grid input.bs-name {
+  width: 120px;
+}
+.bs-grid input.bs-pattern {
+  width: 280px;
+}
+.bs-scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.bs-toolbar {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0;
+  flex-wrap: wrap;
+}
+.bs-matches {
+  margin-top: 6px;
+  max-height: 130px;
+  overflow-y: auto;
+  border: 1px solid var(--chrome-border);
+  background: var(--chrome-input-bg);
+  padding: 4px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.bs-matches b {
+  font-family: inherit;
+}
+.bs-issues {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--chrome-danger);
+  font-size: 11px;
+}
+.bs-sev-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 16px;
+  align-items: center;
+}
+.bs-sev-grid .bs-sev-group {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  font-weight: 600;
+}
+.bs-sev-grid .bs-sev-name {
+  padding-left: 14px;
+}
+.bs-sev-grid .bs-sev-radios {
+  display: inline-flex;
+  gap: 18px;
+}
+.bs-sev-grid label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.bs-textarea {
+  width: 100%;
+  min-height: 300px;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+  background: var(--chrome-input-bg);
+  color: var(--chrome-text);
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.bs-report {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  font-size: 11px;
+  background: var(--chrome-input-bg);
+}
+.bs-report pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.bs-stack-total {
+  margin-top: 8px;
+  font-weight: 600;
+}

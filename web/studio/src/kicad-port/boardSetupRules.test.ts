@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import type { Constraints, MaskPaste, NetClass, StackupSettings, TextGraphicsDefaults } from "../api/types";
+import type { Constraints, MaskPaste, NetClass, Stackup, StackupSettings, TextGraphicsDefaults } from "../api/types";
 import {
   CONSTRAINT_RANGES,
   MAXIMUM_CLEARANCE_UM,
@@ -12,6 +12,7 @@ import {
   boardNetNames,
   classOfNet,
   copperLayerNames,
+  copperLayersLost,
   defaultStackup,
   expandPattern,
   globMatch,
@@ -32,6 +33,7 @@ import {
   validateStackup,
   validateTextGraphics,
   withCopperLayers,
+  withKnownKinds,
   withLineWidth,
   withTextFields,
 } from "./boardSetupRules";
@@ -145,6 +147,9 @@ test("the Net Classes page is refused for what KiCad's panel refuses", () => {
   const drill = validateNetClasses(def, [cls("v", [], { via_diameter: 400, via_drill: 400 })]);
   assert.deepEqual(drill.map((i) => [i.row, i.field]), [[1, "via_drill"]]);
   assert.equal(validateNetClasses(cls("Default", [], { via_diameter: 400, via_drill: 400 }), [])[0]!.row, 0, "the Default class is checked too");
+
+  assert.deepEqual(validateNetClasses(def, [cls("p", [], { priority: 1.5 })]).map((i) => [i.row, i.field]), [[1, "priority"]]);
+  assert.deepEqual(validateNetClasses(def, [cls("p", [], { priority: -2 })]), [], "a negative priority is a priority");
 
   assert.equal(validateNetClasses(cls("Base"), [])[0]!.message, "The default net class is required.");
   assert.deepEqual(validateNetClasses(def, [], [{ pattern: "  ", netclass: "power" }, { pattern: "", netclass: "" }]).map((i) => [i.row, i.field]), [[0, "pattern"]], "a row with no class is not a mistake: it is dropped");
@@ -267,6 +272,24 @@ test("the copper layers are named front, inner and back; the stackup is checked 
   const negative = { ...four, stackup: { layers: four.stackup.layers.map((l) => (l.name === "In1.Cu" ? { ...l, thickness_mm: -0.1 } : l)) } };
   assert.match(validateStackup(negative)!, /In1\.Cu/);
   assert.match(validateStackup({ ...four, stackup: { layers: four.stackup.layers.map((l) => (l.name === "In1.Cu" ? { ...l, thickness_mm: Number.NaN } : l)) } })!, /In1\.Cu/);
+});
+
+test("a stackup from before the table was editable gets its copper layers typed; a smaller board names what it would lose", () => {
+  const legacy: Stackup = { layers: [{ name: "F.Cu", material: null, thickness_mm: 0.035 }, { name: "dielectric 1", material: "FR4", thickness_mm: 1.5 }, { name: "B.Cu", material: null, thickness_mm: 0.035 }] };
+  const typed = withKnownKinds(legacy);
+  assert.deepEqual(typed.layers.map((l) => l.kind), ["copper", undefined, "copper"]);
+  assert.equal(legacy.layers[0]!.kind, undefined, "nothing is changed in place");
+  assert.deepEqual(withKnownKinds(newStackupSettings(4, 1600).stackup), newStackupSettings(4, 1600).stackup, "a typed stackup is left as it is");
+
+  const routing = {
+    tracks: [{ layer: "F.Cu" }, { layer: "In1.Cu" }, { layer: "In3.Cu" }],
+    vias: [{ from: "F.Cu", to: "In3.Cu" }, { from: "F.Cu", to: "B.Cu" }],
+    zones: [{ layer: "In3.Cu" }, { layer: "F.SilkS" }],
+  };
+  assert.deepEqual(copperLayersLost(routing, 2), [{ layer: "In1.Cu", items: 1 }, { layer: "In3.Cu", items: 3 }]);
+  assert.deepEqual(copperLayersLost(routing, 4), [{ layer: "In3.Cu", items: 3 }]);
+  assert.deepEqual(copperLayersLost(routing, 6), []);
+  assert.deepEqual(copperLayersLost(null, 2), []);
 });
 
 test("copper, dielectrics and masks have a thickness; only dielectrics a dielectric constant", () => {

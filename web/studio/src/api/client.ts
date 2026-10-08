@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
@@ -584,6 +584,11 @@ export function cleanupTracksApply(opts: CleanupOptions): Promise<CleanupReply> 
 
 export function postBoardStats(opts: BoardStatsOptions, report?: { units: LengthUnit; date: string }): Promise<BoardStatsReply> {
   return postJson("/api/board_stats", report ? { ...opts, report: true, units: report.units, date: report.date } : opts);
+}
+
+/** Board Setup > Design Rules > Custom Rules, "Check rule syntax": kicad-cli loads the text (crates/cli/src/kicad_engine.rs `check_rules`); nothing is saved. */
+export function postCheckRules(text: string): Promise<RulesCheckReply> {
+  return postJson("/api/check_rules", { text });
 }
 
 // ---- Symbol Fields Table / Find / ERC pin map (crates/cli/src/sch_api.rs)
