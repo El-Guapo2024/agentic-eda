@@ -132,7 +132,52 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
             model.symbols.push(lib_sym.to_engine_symbol());
         }
     }
+    // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
+    fold_unknown_symbols(&design, &mut model);
     Ok((meta, design, model))
+}
+
+/// The library symbol a placed symbol's `lib_id` names; none for an empty or synthetic (`eda:...`) id, which is drawn as a generic box.
+fn resolve_lib_symbol(lib_id: &str, model: &ConstraintModel) -> Option<eda_model::LibSymbol> {
+    if lib_id.is_empty() || eda_model::is_synthetic_lib_id(lib_id) {
+        None
+    } else {
+        model.symbol_of(lib_id)
+    }
+}
+
+/// A synthesized `Part` in `model` for every symbol instance of the design's schematic that the model has none for: `AddSymbol` placing a part with no
+/// intent counterpart. [`load`] rebuilds the model from the intent file every time, so it folds these back in too -- without them, everything that
+/// exports the schematic for kicad-cli (ERC, BOM, netlist, plots) refused a board once a symbol had been placed ("symbol id has no matching part in the
+/// constraint model").
+fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
+    let Some(sch) = design.schematic.as_ref() else { return };
+    for sym in &sch.symbols {
+        if model.part(&sym.id).is_some() {
+            continue;
+        }
+        let pins = resolve_lib_symbol(&sym.lib_id, model)
+            .map(|lib| {
+                lib.pins
+                    .iter()
+                    .map(|p| eda_model::Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind: eda_kicad::pin_kind_from_electrical_type(&p.electrical_type, &p.name) })
+                    .collect()
+            })
+            .unwrap_or_default();
+        model.parts.push(eda_model::Part {
+            reference: sym.id.clone(),
+            mpn: None,
+            lcsc: None,
+            value: (!sym.value.is_empty()).then(|| sym.value.clone()),
+            package: None,
+            footprint: (!sym.footprint.is_empty()).then(|| sym.footprint.clone()),
+            symbol: (!sym.lib_id.is_empty()).then(|| sym.lib_id.clone()),
+            datasheet: (!sym.datasheet.is_empty()).then(|| sym.datasheet.clone()),
+            pins,
+            body_um: None,
+            edge: None,
+        });
+    }
 }
 
 /// Recompute `design.schematic`'s own derived connectivity (`Wire::net`/
@@ -158,42 +203,10 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
 /// every one of them exactly as before this function existed, and
 /// `load`'s `model.nets` override above never fires).
 fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mut ConstraintModel) {
+    fold_unknown_symbols(design, model);
     let Some(sch) = design.schematic.as_mut() else { return };
 
-    let resolve = |lib_id: &str, model: &ConstraintModel| -> Option<eda_model::LibSymbol> {
-        if lib_id.is_empty() || eda_model::is_synthetic_lib_id(lib_id) {
-            None
-        } else {
-            model.symbol_of(lib_id)
-        }
-    };
-
-    for sym in sch.symbols.clone() {
-        if model.part(&sym.id).is_some() {
-            continue;
-        }
-        let pins = resolve(&sym.lib_id, model)
-            .map(|lib| {
-                lib.pins
-                    .iter()
-                    .map(|p| eda_model::Pin { number: p.number.clone(), name: (!p.name.is_empty()).then(|| p.name.clone()), kind: eda_kicad::pin_kind_from_electrical_type(&p.electrical_type, &p.name) })
-                    .collect()
-            })
-            .unwrap_or_default();
-        model.parts.push(eda_model::Part {
-            reference: sym.id.clone(),
-            mpn: None,
-            lcsc: None,
-            value: (!sym.value.is_empty()).then(|| sym.value.clone()),
-            package: None,
-            footprint: (!sym.footprint.is_empty()).then(|| sym.footprint.clone()),
-            symbol: (!sym.lib_id.is_empty()).then(|| sym.lib_id.clone()),
-            datasheet: (!sym.datasheet.is_empty()).then(|| sym.datasheet.clone()),
-            pins,
-            body_um: None,
-            edge: None,
-        });
-    }
+    let resolve = |lib_id: &str, model: &ConstraintModel| resolve_lib_symbol(lib_id, model);
 
     let mut pin_world: std::collections::BTreeMap<String, Point> = std::collections::BTreeMap::new();
     for sym in &sch.symbols {
@@ -913,6 +926,14 @@ fn cmd_line(c: &Cmd) -> String {
             },
             ids.as_ref().map(|v| format!(" --selection {}", v.join(","))).unwrap_or_default(),
         ),
+        Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => {
+            let flag = |name: &str, v: &Option<bool>| v.map(|v| format!(" --{name} {}", if v { "on" } else { "off" })).unwrap_or_default();
+            format!("schematic attrs {}{}{}{}{}", ids.join(","), flag("dnp", dnp), flag("exclude-from-bom", exclude_from_bom), flag("exclude-from-board", exclude_from_board), flag("exclude-from-sim", exclude_from_sim))
+        }
+        Cmd::SetSheetPage { sheet, page } => format!("schematic sheet-page {sheet} {page:?}"),
+        Cmd::SetSchItemText { id, text } => format!("schematic item-text {id} {text:?}"),
+        Cmd::SetSymbolLibIds { changes, .. } => format!("schematic lib-ids {}", changes.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(",")),
+        Cmd::IncrementAnnotations { start, increment } => format!("schematic increment-annotations {start} {increment}"),
         Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids } => {
             format!("route: +{} track(s) +{} via(s), -{} track(s) -{} via(s)", tracks.len(), vias.len(), remove_track_ids.len(), remove_via_ids.len())
         }
@@ -1085,7 +1106,11 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetSymbolFields { .. } => "schematic-fields-table",
         Cmd::ReplaceText { .. } => "schematic-replace-text",
         Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => "schematic-erc-pin-map",
-        Cmd::Annotate { .. } => "schematic-annotate",
+        Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => "schematic-annotate",
+        Cmd::SetSymbolAttrs { .. } => "schematic-attrs",
+        Cmd::SetSheetPage { .. } => "schematic-sheet-page",
+        Cmd::SetSchItemText { .. } => "schematic-text",
+        Cmd::SetSymbolLibIds { .. } => "schematic-lib-ids",
 
         Cmd::OpenFootprintForEdit { .. } | Cmd::NewFootprint { .. } | Cmd::DeleteLibraryFootprint { .. } | Cmd::PutLibraryFootprint { .. } | Cmd::RenameLibraryFootprint { .. } | Cmd::RepairFootprint { .. } | Cmd::EditFootprintProperties { .. } | Cmd::SetFootprintAnchor { .. } | Cmd::UpdateFootprintOnBoard { .. } => "footprint",
         Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::SetPadNumbers { .. } | Cmd::RenumberPads { .. } => "pad",
@@ -1716,7 +1741,7 @@ mod tests {
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
 
-        let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() };
+        let sym = |id: &str, x: Um, y: Um| eda_model::ir::SymbolInstance { id: id.into(), at: Point { x, y }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         let design = Design {
             footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
             schema: 1,
@@ -2272,8 +2297,8 @@ mod tests {
             // Neither point may collide with setup_schematic's own R1
             // (10_000,10_000)/R2 (20_000,10_000) -- `.find(|s| s.at == ...)`
             // below would silently match the wrong symbol otherwise.
-            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 5_000, y: 50_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "A": further left, further down
-            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 60_000, y: 40_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new() }); // "B": further right, further up
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 5_000, y: 50_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }); // "A": further left, further down
+            sch.symbols.push(eda_model::ir::SymbolInstance { id: "C?".into(), at: Point { x: 60_000, y: 40_000 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "TEST:R".into(), unit: 1, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }); // "B": further right, further up
         }
         save(&dir, &design).unwrap();
 
@@ -2293,6 +2318,22 @@ mod tests {
         let b = sch.symbols.iter().find(|s| s.at == Point { x: 60_000, y: 40_000 }).unwrap();
         assert_eq!(a.id, "C1", "X-then-Y: A (lower X) is numbered first -- the opposite of the Y-then-X result above");
         assert_eq!(b.id, "C2");
+    }
+
+    /// A symbol placed with `AddSymbol` has no part in the intent file, and `load` rebuilds the model from that file: it has to give the symbol its
+    /// part back, or everything that exports the schematic for kicad-cli (ERC, BOM, netlist, plots) refuses the board ("symbol id has no matching part").
+    #[test]
+    fn load_gives_a_placed_symbol_its_part_back() {
+        let dir = scratch("sch_placed_symbol_part");
+        setup_schematic(&dir);
+        assert!(load(&dir).unwrap().2.part("R3").is_none(), "the intent has no R3");
+        step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: "10k".into(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let part = model.part("R3").expect("the placed symbol has a part again after a fresh load");
+        assert_eq!((part.symbol.as_deref(), part.value.as_deref(), part.pins.len()), (Some("TEST:R"), Some("10k"), 1));
+        assert_eq!(model.parts.iter().filter(|p| p.reference == "R3").count(), 1);
+        // the schematic the engine exports now has a part for every symbol
+        assert!(design.schematic.as_ref().unwrap().symbols.iter().all(|s| model.part(&s.id).is_some()));
     }
 
     /// `dialog_annotate.cpp`'s "Selection" scope: only the named symbols

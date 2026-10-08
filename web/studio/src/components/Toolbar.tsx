@@ -146,7 +146,7 @@ function ToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "control"
 }
 
 function ToolbarItemView({ item }: { item: ToolbarItem }) {
-  const { run, isEnabled } = useActionRunner();
+  const { run, isEnabled, isChecked } = useActionRunner();
 
   if (item.type === "separator") return <div className="toolbar-separator" role="separator" />;
 
@@ -160,8 +160,9 @@ function ToolbarItemView({ item }: { item: ToolbarItem }) {
   const label = action?.label ?? item.action;
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
   const tooltip = enabled ? [label, hotkey].filter(Boolean).join(" — ") : `${label} (not ported yet)`;
+  const checked = enabled ? isChecked(item.action) : undefined;
   return (
-    <button className="toolbar-button" disabled={!enabled} title={tooltip} onClick={() => run(item.action)}>
+    <button className={checked ? "toolbar-button active" : "toolbar-button"} aria-pressed={checked} disabled={!enabled} title={tooltip} onClick={() => run(item.action)}>
       <ActionIcon iconName={action?.icon ?? null} />
     </button>
   );
