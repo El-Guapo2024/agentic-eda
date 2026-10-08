@@ -70,6 +70,7 @@ import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { Viewer3DAppearancePanel } from "./components/viewer3d/Viewer3DAppearancePanel";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
 import { useEdaTestHook } from "./actions/useEdaTestHook";
+import { useSnapOrigin } from "./actions/useSnapOrigin";
 import "./styles/global.css";
 import "./styles/layout.css";
 import "./styles/panels.css";
@@ -109,6 +110,7 @@ function StudioFrame() {
   const state = useStudioState();
   useGlobalHotkeys();
   useEdaTestHook(); // window.__eda: the scripted test hook (actions/useEdaTestHook.ts)
+  useSnapOrigin(); // the point the grid snapping is anchored at (the grid origin of the PCB / Footprint editor on screen)
   useFootprintEditHotkey();
   useOpenDockWithNetNavigator();
   // Ctrl+Shift+E / Ctrl+E on the Schematic tab are now the registered actions

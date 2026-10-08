@@ -7,6 +7,7 @@ import { describeBoardItem } from "../actions/editorAdapter";
 import { useActionRunner } from "../actions/useActionRunner";
 import { AboutDialog } from "./AboutDialog";
 import { PageSettingsDialog } from "./PageSettingsDialog";
+import { GridOriginDialog } from "./GridOriginDialog";
 
 /**
  * `DIALOG_GROUP_PROPERTIES` (common/dialogs/dialog_group_properties.cpp): the group's name and its member list. The plus button hides the
@@ -109,6 +110,7 @@ export function CommonDialogs() {
       <GroupPropertiesDialog />
       <AboutDialog />
       <PageSettingsDialog />
+      <GridOriginDialog />
     </>
   );
 }

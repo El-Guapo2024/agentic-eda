@@ -630,6 +630,9 @@ pub enum Cmd {
     /// `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin`: the drill/place file origin
     /// (`DrawingsSection::aux_origin`); `None` is the reset to (0, 0).
     SetAuxOrigin { at: Option<Point> },
+    /// `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` (`PCB_CONTROL::DoSetGridOrigin`): the point the editing grid is anchored
+    /// at (`DrawingsSection::grid_origin`); `None` is the reset to (0, 0). The placement snap of the verbs below follows it.
+    SetGridOrigin { at: Option<Point> },
     /// `common.Control.pageSettings` on the board (`BOARD_EDITOR_CONTROL::PageSettings`): the board's paper and title block, set
     /// together as one undo step -- see [`page_settings::set_board_page`]. Refused when nothing changes.
     SetBoardPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
@@ -1556,6 +1559,7 @@ impl Cmd {
             Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::SetZonePriority { id, .. } => vec![id.as_str()],
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
+            Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
             Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
             Cmd::RepairBoard => vec!["repair_board"],
 
@@ -1741,6 +1745,18 @@ impl<'a> Board<'a> {
 
     pub fn design(&self) -> &Design {
         &self.design
+    }
+
+    /// `BOARD_DESIGN_SETTINGS::GetGridOrigin()`: where the editing grid is anchored, (0, 0) unless the board has set one.
+    fn grid_origin(&self) -> Point {
+        self.design.drawings.as_ref().and_then(|d| d.grid_origin).unwrap_or(Point { x: 0, y: 0 })
+    }
+
+    /// A point on the placement grid: whole snap steps from the grid origin, not from (0, 0), so a position the editor snapped to the grid it
+    /// draws (`origin + n * grid`) is the position the verb stores.
+    fn snap_point(&self, x: Um, y: Um) -> Point {
+        let o = self.grid_origin();
+        Point { x: snap(x - o.x, self.snap) + o.x, y: snap(y - o.y, self.snap) + o.y }
     }
 
     pub fn model(&self) -> &'a ConstraintModel {
@@ -1930,6 +1946,7 @@ impl<'a> Board<'a> {
             Cmd::MergeZones { ids } => board_control::merge_zones(&mut self.design, ids).map(|_| ()),
             Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
             Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
+            Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
             Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
             Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
             Cmd::RepairBoard => {
@@ -2297,7 +2314,7 @@ impl<'a> Board<'a> {
                     continue; // centred is one position, not two
                 }
                 let off = sign * step as i64 * self.snap;
-                let at = Point { x: snap(base.0 + sx * off, self.snap), y: snap(base.1 + sy * off, self.snap) };
+                let at = self.snap_point(base.0 + sx * off, base.1 + sy * off);
                 let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
                 if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
@@ -2345,7 +2362,7 @@ impl<'a> Board<'a> {
                 v
             };
             for (ox, oy) in offsets {
-                let at = Point { x: snap(centre.0 + ox, self.snap), y: snap(centre.1 + oy, self.snap) };
+                let at = self.snap_point(centre.0 + ox, centre.1 + oy);
                 let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
                 if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
@@ -2434,7 +2451,7 @@ impl<'a> Board<'a> {
             Dir::West => Point { x: bb.0 + half_w + step.max(w), y: along(bb.1 + n, bb.3 - s, half_h) },
             Dir::East => Point { x: bb.2 - half_w - step.max(e), y: along(bb.1 + n, bb.3 - s, half_h) },
         };
-        let at = Point { x: snap(at.x, self.snap), y: snap(at.y, self.snap) };
+        let at = self.snap_point(at.x, at.y);
         let fp = FootprintInstance { id: part.into(), at, rot, side: Side::Top, label: LabelSide::Above };
         // A part longer than the edge it was given does not fit on it,
         // and saying so is the whole point. The other two resolvers
@@ -2479,7 +2496,7 @@ impl<'a> Board<'a> {
     fn place_at(&mut self, part: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
         self.require_unplaced(part)?;
         let bb = self.board_bbox();
-        let at = Point { x: snap(x, self.snap), y: snap(y, self.snap) };
+        let at = self.snap_point(x, y);
         let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
         let cr = self.courtyard_at(part, &fp)?;
         if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
@@ -2532,9 +2549,10 @@ impl<'a> Board<'a> {
     }
 
     fn set_pose(&mut self, part: &str, at: Point, rot: u32) -> Result<(), Vec<CheckResult>> {
+        let at = self.snap_point(at.x, at.y);
         let fps = &mut self.design.placement.as_mut().unwrap().footprints;
         let i = fps.iter().position(|f| f.id == part).expect("caller checked the part is placed");
-        fps[i].at = Point { x: snap(at.x, self.snap), y: snap(at.y, self.snap) };
+        fps[i].at = at;
         fps[i].rot = rot;
         Ok(())
     }

@@ -28,7 +28,7 @@ import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, g
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
-import { snapPoint } from "../components/canvas/gridHelper";
+import { getSnapOrigin, snapPoint } from "../components/canvas/gridHelper";
 import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
 import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
@@ -1547,7 +1547,7 @@ export function useActionRunner() {
         const um = GRID_OPTIONS_UM[i]!;
         dispatch({ type: "SET_GRID_UM", um });
         if (state.cursorUm) {
-          const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, um, { x: 0, y: 0 }, { ctrlOrCmd: false });
+          const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, um, getSnapOrigin(), { ctrlOrCmd: false });
           dispatch({ type: "SET_CURSOR", at: { x: p.x, y: p.y } });
         }
         dispatch({ type: "TOAST", message: `Grid: ${formatLength(um, state.units)}`, kind: "info" });

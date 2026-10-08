@@ -351,6 +351,7 @@ export function Canvas() {
       sketchText: state.bcx.sketchText,
       showPadNumbers: state.bcx.showPadNumbers,
       auxOrigin: board.aux_origin ?? null,
+      gridOrigin: board.grid_origin ?? null,
       drawState: state.drawState,
       cursorUm: state.cursorUm,
       activeTool: state.activeTool,

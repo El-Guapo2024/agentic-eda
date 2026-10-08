@@ -1065,6 +1065,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         "locked": design.drawings.as_ref().map(|d| d.locked_ids.clone()).unwrap_or_default(),
         // The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`), `[x, y]` um, or null at (0, 0).
         "aux_origin": design.drawings.as_ref().and_then(|d| d.aux_origin).map(|p| json!([p.x, p.y])),
+        // The point the editing grid is anchored at (`BOARD_DESIGN_SETTINGS::GetGridOrigin`), `[x, y]` um, or null at (0, 0).
+        "grid_origin": design.drawings.as_ref().and_then(|d| d.grid_origin).map(|p| json!([p.x, p.y])),
         // The board's paper and title block (Page Settings); null is A4 landscape / an empty title block.
         "page": design.drawings.as_ref().and_then(|d| d.page.as_ref()).map(crate::page_json::page_json),
         "title_block": design.drawings.as_ref().and_then(|d| d.title_block.as_ref()).map(crate::page_json::title_block_json),

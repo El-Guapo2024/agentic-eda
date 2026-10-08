@@ -27,9 +27,11 @@ import { registerCheckerActions } from "./commonCheckerActions";
 import { registerSuiteActions } from "./commonSuiteActions";
 import { registerLibraryActions } from "./commonLibraryActions";
 import { registerTextActions } from "./commonTextActions";
+import { registerGridActions } from "./commonGridActions";
 import { replaceAll, replaceAndFindNext, updateFind } from "../components/schematic/findReplaceOps";
 import { gridPresetIndex } from "../kicad-port/cursorControl";
 import { alignToGrid } from "../kicad-port/gridSnap";
+import { getSnapOrigin } from "../components/canvas/gridHelper";
 import { formatLength } from "../state/units";
 
 export type ActionHandler = (arg?: unknown) => void;
@@ -139,7 +141,7 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
       const um = list[gridPresetIndex(typeof arg === "number" ? Math.round(arg) : 0, list.length)]!;
       adapter.setGridUm(um);
       if (adapter.cursor) {
-        const p = alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, um, { x: 0, y: 0 }, { ctrlOrCmd: false });
+        const p = alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, um, getSnapOrigin(), { ctrlOrCmd: false });
         adapter.setCursor({ x: p.x, y: p.y });
       }
       toast(`Grid: ${formatLength(um, ctx.state.units)}`);
@@ -234,4 +236,5 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   registerSuiteActions(m, ctx);
   registerLibraryActions(m, ctx);
   registerTextActions(m, ctx);
+  registerGridActions(m, ctx);
 }

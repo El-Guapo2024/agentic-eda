@@ -67,7 +67,7 @@
     "common.Interactive.deleteTool": "supported",
     "pcbnew.InteractiveDrawing.placePoint": "not ported: footprint points",
     "pcbnew.InteractiveDrawing.setAnchor": "supported",
-    "common.Control.gridSetOrigin": "not ported: the footprint editor's grid origin is its anchor",
+    "common.Control.gridSetOrigin": "supported",
     "common.Interactive.measureTool": "not ported: the measure tool"
   },
   "symbol": {

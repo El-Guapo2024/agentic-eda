@@ -2058,6 +2058,11 @@ pub struct DrawingsSection {
     /// one. Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_block: Option<TitleBlock>,
+    /// `BOARD_DESIGN_SETTINGS::GetGridOrigin()`: the point the editing grid is anchored at (`common.Control.gridSetOrigin` /
+    /// `gridResetOrigin` / `editGridOrigin`), so a grid point is `origin + n * grid`. `None` is KiCad's default, (0, 0). Written to the
+    /// derived `.kicad_pcb` as `(grid_origin x y)`. Additive: absent in an older `design.json` reads as "no origin set".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_origin: Option<Point>,
 }
 
 /// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no

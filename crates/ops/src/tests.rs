@@ -2790,3 +2790,20 @@ fn batch_applies_every_sub_command_and_rolls_back_whole_on_a_refusal() {
     let j: Cmd = serde_json::from_str(r#"{"op":"batch"}"#).unwrap();
     assert!(matches!(j, Cmd::Batch { ref cmds } if cmds.is_empty()));
 }
+
+#[test]
+fn a_placement_snaps_to_the_grid_anchored_at_the_grid_origin() {
+    // The board snaps to 100 um steps. With no grid origin a position lands on whole steps from (0, 0); with one at (50, 30) it lands on whole steps
+    // from there, so a point the editor snapped to the grid it draws is the point the verb keeps.
+    let m = model(vec![part("R1", "0603")], &[], vec![]);
+    let mut plain = board(&m);
+    plain.apply(&Cmd::PlaceAt { part: "R1".into(), x: 10_234, y: 10_678 }).unwrap();
+    assert_eq!((plain.pose_of("R1").unwrap().at.x, plain.pose_of("R1").unwrap().at.y), (10_200, 10_700), "no grid origin: whole steps from (0, 0)");
+
+    let mut b = board(&m);
+    b.apply(&Cmd::SetGridOrigin { at: Some(Point { x: 50, y: 30 }) }).unwrap();
+    b.apply(&Cmd::PlaceAt { part: "R1".into(), x: 10_234, y: 10_678 }).unwrap();
+    assert_eq!((b.pose_of("R1").unwrap().at.x, b.pose_of("R1").unwrap().at.y), (10_250, 10_630), "a grid origin at (50, 30): 10234 -> 10250, 10678 -> 10630");
+    b.apply(&Cmd::SetGridOrigin { at: None }).unwrap();
+    assert!(b.design().drawings.as_ref().and_then(|d| d.grid_origin).is_none());
+}

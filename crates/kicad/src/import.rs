@@ -162,6 +162,15 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
             }
         }
     }
+    // `(setup (grid_origin x y))`: the point the editing grid was anchored at.
+    if let Some(grid) = sexpr::find(root, "setup").and_then(|s| sexpr::find(s, "grid_origin")) {
+        if let (Some(x), Some(y)) = (sexpr::num(grid, 1), sexpr::num(grid, 2)) {
+            let at = Point { x: mm_to_um(x), y: mm_to_um(y) };
+            if at.x != 0 || at.y != 0 {
+                design.drawings.get_or_insert_with(Default::default).grid_origin = Some(at);
+            }
+        }
+    }
     // `(paper ...)` and `(title_block ...)`: the board's Page Settings. A4 landscape and an empty title block are the defaults and are not kept.
     if let Some(page) = crate::page::import_page(root).filter(|p| !p.is_default()) {
         design.drawings.get_or_insert_with(Default::default).page = Some(page);

@@ -522,6 +522,8 @@ export interface BoardState {
   locked?: string[];
   /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` µm; null/absent = (0, 0). */
   aux_origin?: [Um, Um] | null;
+  /** The point the editing grid is anchored at (`BOARD_DESIGN_SETTINGS::GetGridOrigin`, `common.Control.gridSetOrigin`), `[x, y]` µm; null/absent = (0, 0). */
+  grid_origin?: [Um, Um] | null;
   /** The board's paper and title block (Page Settings, `common.Control.pageSettings`); null/absent are A4 landscape and an empty title block. */
   page?: PageInfo | null;
   title_block?: TitleBlock | null;
@@ -768,6 +770,8 @@ export type Cmd =
   | { op: "set_zone_priority"; id: string; to: ZonePriorityMove }
   /** `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin` -- the drill/place file origin; `null` resets it to (0, 0). */
   | { op: "set_aux_origin"; at: PointXY | null }
+  /** `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` -- the point the editing grid is anchored at; `null` resets it to (0, 0). */
+  | { op: "set_grid_origin"; at: PointXY | null }
   /** `common.Control.pageSettings` -- the board's paper and title block, one undo step (`BOARD_EDITOR_CONTROL::PageSettings`). Refused when nothing changes. */
   | { op: "set_board_page"; page: CmdPage; title_block: TitleBlock }
   /** The same for the schematic (`SCH_EDITOR_CONTROL::PageSetup`). */

@@ -17,9 +17,11 @@ export interface CommonDialogsState {
   about: boolean;
   /** `DIALOG_PAGES_SETTINGS`: which document's page is being edited, or null when the dialog is closed. */
   page: "pcb" | "schematic" | null;
+  /** `COMMON_TOOLS::GridOrigin`'s X / Y entry dialog is open. */
+  gridOrigin: boolean;
 }
 
-const CLOSED: CommonDialogsState = { group: null, about: false, page: null };
+const CLOSED: CommonDialogsState = { group: null, about: false, page: null, gridOrigin: false };
 
 let current: CommonDialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -60,4 +62,8 @@ export function setAboutOpen(open: boolean): void {
 
 export function setPageSettingsOpen(target: "pcb" | "schematic" | null): void {
   set({ ...current, page: target });
+}
+
+export function setGridOriginDialogOpen(open: boolean): void {
+  set({ ...current, gridOrigin: open });
 }

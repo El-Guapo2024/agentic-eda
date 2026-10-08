@@ -106,7 +106,9 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // (when asked) Gerber coordinates from.
     let aux = design.drawings.as_ref().and_then(|d| d.aux_origin).unwrap_or(eda_model::ir::Point { x: 0, y: 0 });
     writeln!(out, "\t\t(aux_axis_origin {} {})", mm(aux.x), mm(aux.y)).unwrap();
-    writeln!(out, "\t\t(grid_origin 0 0)").unwrap();
+    // The point the editing grid is anchored at (`common.Control.gridSetOrigin`): KiCad's `(grid_origin x y)` of the board setup.
+    let grid = design.drawings.as_ref().and_then(|d| d.grid_origin).unwrap_or(eda_model::ir::Point { x: 0, y: 0 });
+    writeln!(out, "\t\t(grid_origin {} {})", mm(grid.x), mm(grid.y)).unwrap();
     writeln!(out, "\t\t(pcbplotparams").unwrap();
     writeln!(out, "\t\t\t(layerselection 0x00010fc_ffffffff)").unwrap();
     writeln!(out, "\t\t\t(plot_on_all_layers_selection 0x0000000_00000000)").unwrap();
@@ -792,6 +794,21 @@ mod tests {
         // A board saved with the default origin imports with none set (no empty drawings section is invented for it).
         let (plain, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&fixture().0, &model, &meta()).unwrap()).unwrap();
         assert!(plain.drawings.and_then(|d| d.aux_origin).is_none());
+    }
+
+    #[test]
+    fn the_grid_origin_is_written_and_read_back_by_the_importer() {
+        let (mut design, model) = fixture();
+        assert!(export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(grid_origin 0 0)"), "none set: KiCad's default");
+        design.drawings = Some(eda_model::ir::DrawingsSection { grid_origin: Some(Point { x: 13_370, y: -8_100 }), ..Default::default() });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(grid_origin 13.37 -8.1)"), "{out}");
+        assert!(out.contains("(aux_axis_origin 0 0)"), "the drill/place file origin is its own setting");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.grid_origin), Some(Point { x: 13_370, y: -8_100 }));
+        assert_eq!(back.drawings.and_then(|d| d.aux_origin), None);
+        let (plain, _, _) = crate::import_kicad_pcb(&export_kicad_pcb(&fixture().0, &model, &meta()).unwrap()).unwrap();
+        assert!(plain.drawings.and_then(|d| d.grid_origin).is_none(), "the default origin is not kept");
     }
 
     #[test]
