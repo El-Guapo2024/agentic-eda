@@ -138,7 +138,14 @@ impl<'a> Board<'a> {
         if modules.len() < 2 {
             return Err(fail("ops_one_module", "sheets", "the design is a single functional module; one sheet already holds it"));
         }
-        let keep = Keep { symbols, user_fields: root.user_fields.clone(), erc_exclusions: root.erc_exclusions.clone(), erc_pin_map: root.erc_pin_map.clone(), title_block: root.title_block.clone() };
+        let keep = Keep {
+            locked: root.extras.locked.iter().filter(|id| symbols.contains_key(*id)).cloned().collect(),
+            symbols,
+            user_fields: root.user_fields.clone(),
+            erc_exclusions: root.erc_exclusions.clone(),
+            erc_pin_map: root.erc_pin_map.clone(),
+            title_block: root.title_block.clone(),
+        };
         let p = &self.design.provenance;
         let opts = EngineOptions { seed: p.seed, engine_version: p.engine_version.clone(), intent_hash: p.intent_hash.clone() };
         let derived = derive_hierarchy(&model, &opts, &modules, &keep)?;
@@ -287,6 +294,42 @@ mod tests {
         let missing = Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::MoveSymbol { id: "R1".into(), x: 0, y: 0, unit: None }) };
         assert!(b.apply(&missing).is_err(), "R1 is on the channels sheet, not the MCU's");
         assert_eq!(serde_json::to_string(b.design()).unwrap(), before);
+    }
+
+    /// Do Not Populate, the exclusions and a lock are part of the symbol: they go with it to its new sheet.
+    #[test]
+    fn reorganize_keeps_what_the_user_set_on_a_symbol() {
+        let model = mcu30();
+        let mut design: Design = eda_engine::derive_schematic(&model, &EngineOptions::new(1, "t")).unwrap();
+        design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+        let root = design.schematic.as_mut().unwrap();
+        for s in root.symbols.iter_mut().filter(|s| s.id == "R3") {
+            s.dnp = true;
+            s.exclude_from_bom = true;
+            s.exclude_from_sim = true;
+        }
+        root.extras.set_locked("R3", true);
+        root.extras.set_locked("U1", true);
+        let mut b = Board::new(design, &model, 100, 300);
+        b.apply(&Cmd::ReorganizeSheets).unwrap();
+        let d = b.design();
+        let screens = d.sheet_contents.as_ref().unwrap();
+        let r3 = screens.values().flat_map(|s| s.symbols.iter()).find(|s| s.id == "R3").unwrap();
+        assert_eq!((r3.dnp, r3.exclude_from_bom, r3.exclude_from_board, r3.exclude_from_sim), (true, true, false, true));
+        let locked_on = |reference: &str| screens.values().find(|s| s.symbols.iter().any(|x| x.id == reference)).unwrap().extras.is_locked(reference);
+        assert!(locked_on("R3") && locked_on("U1"), "the lock moved with the symbol");
+        assert!(!locked_on("R4"));
+        assert!(d.schematic.as_ref().unwrap().extras.locked.is_empty(), "the root holds sheet symbols only");
+    }
+
+    /// The studio addresses everything it sends from the Schematic tab to the sheet in view; what is not a schematic edit is not stopped by it.
+    #[test]
+    fn a_command_of_another_editor_ignores_the_sheet_path() {
+        let model = mcu30();
+        let mut b = flat_board(&model);
+        let cmd = Cmd::OnSheet { sheet: "gone".into(), cmd: Box::new(Cmd::Batch { cmds: vec![] }) };
+        assert_eq!(cmd.domain(), Domain::Pcb);
+        b.apply(&cmd).unwrap();
     }
 
     #[test]

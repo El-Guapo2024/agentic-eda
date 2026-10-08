@@ -3879,6 +3879,11 @@ impl<'a> Board<'a> {
 
     /// [`Cmd::OnSheet`]: run one command with the schematic verbs pointed at another sheet. All or nothing, like a `Batch`.
     fn on_sheet(&mut self, sheet: &str, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
+        // Only a schematic edit has a sheet to act on. The studio addresses everything it sends from the Schematic tab to the sheet in
+        // view, so a command of another editor just runs, and a path that has gone stale does not stop it.
+        if cmd.domain() != Domain::Schematic {
+            return self.apply(cmd);
+        }
         let target = self.screen_at(sheet)?;
         let saved_design = self.design.clone();
         let saved_focus = std::mem::replace(&mut self.focus, target);

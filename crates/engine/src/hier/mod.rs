@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use eda_model::ir::{Design, PowerSymbol, Provenance, SchematicSection, TitleBlock};
 use eda_model::modules::{infer_modules, is_ground_net_name, FunctionalModule};
+use eda_model::sch_extras::SchExtras;
 use eda_model::{CheckResult, ConstraintModel, PinKind};
 
 pub mod items;
@@ -27,6 +28,14 @@ use items::Ctx;
 use kit::Paper;
 
 use crate::EngineOptions;
+
+/// The locked symbols among `refs`, sorted: the lock is part of the symbol and goes with it to its sheet.
+fn locked_among(keep: &Keep, refs: &[String]) -> Vec<String> {
+    let mut locked: Vec<String> = refs.iter().filter(|r| keep.locked.contains(r)).cloned().collect();
+    locked.sort();
+    locked.dedup();
+    locked
+}
 
 /// A file name for a module's sheet: its name in lower case, anything but letters and digits an underscore.
 pub fn sheet_file_name(name: &str, taken: &BTreeSet<String>) -> String {
@@ -209,6 +218,7 @@ pub fn derive_single_sheet(model: &ConstraintModel, opts: &EngineOptions, module
         erc_exclusions: keep.erc_exclusions.clone(),
         erc_pin_map: keep.erc_pin_map.clone(),
         title_block: Some(TitleBlock { paper: o.paper.name.to_string(), ..keep.title_block.clone().unwrap_or_default() }),
+        extras: SchExtras { locked: locked_among(keep, &module.refs), ..Default::default() },
         ..Default::default()
     };
     let mut design = Design {
@@ -274,6 +284,7 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
             no_connects: std::mem::take(&mut o.items.ncs),
             user_fields,
             title_block: Some(TitleBlock { title: m.name.clone(), paper: o.paper.name.to_string(), ..Default::default() }),
+            extras: SchExtras { locked: locked_among(keep, &m.refs), ..Default::default() },
             ..Default::default()
         };
         papers.insert(files[mi].clone(), o.paper);

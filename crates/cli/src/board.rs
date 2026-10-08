@@ -2613,6 +2613,95 @@ mod tests {
         assert!(published(&load(&dir).unwrap().1), "redo restores the update");
     }
 
+    /// mcu30's flat schematic as the engine draws it, in a scratch board. The intent is read from `examples/` and never written.
+    fn setup_mcu30_flat(dir: &Path) {
+        let intent_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mcu_board_30plus.yaml");
+        let model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent_path).unwrap()).unwrap();
+        let mut design = eda_engine::derive_schematic(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+        design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+        save(dir, &design).unwrap();
+        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    /// A net list in a form two of them can be compared in: nets by name, pins sorted.
+    fn canonical(nets: &[Net]) -> Vec<(String, Vec<String>)> {
+        let mut v: Vec<(String, Vec<String>)> = nets
+            .iter()
+            .map(|n| {
+                let mut p = n.pins.clone();
+                p.sort();
+                (n.name.clone(), p)
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The nets that join two pins or more -- what a netlist is, apart from the names a lone pin is given.
+    fn joined(nets: &[Net]) -> Vec<(String, Vec<String>)> {
+        canonical(nets).into_iter().filter(|(_, p)| p.len() >= 2).collect()
+    }
+
+    /// Reorganize into Module Sheets, end to end through `step`: the nets stored with the design after it are the design's nets (the same nets with the same
+    /// pins, traced back across the new sheets, not the root sheet's alone), an edit inside a sheet reaches that sheet alone and moves the nets the way the
+    /// drawing says, and Undo puts each step back -- the sheet edit, then the reorganization.
+    ///
+    /// The nets to keep are the intent's, not the ones traced from the flat drawing: the flat sheet the engine drew used to run a wire through the pin of
+    /// another net, so tracing it merges LED1..LED8 into GND (that is what a board edited on the flat sheet stored). Reorganize reads such a list as stale.
+    #[test]
+    fn reorganizing_into_module_sheets_keeps_the_nets_and_every_step_undoes() {
+        let dir = scratch("reorganize_nets");
+        setup_mcu30_flat(&dir);
+        let (_, flat, model_flat) = load(&dir).unwrap();
+        let nets_before = joined(&model_flat.nets);
+        assert_eq!(nets_before.len(), 20, "mcu30 joins pins in twenty nets: GND, VDD, RESET, SWD, 8 PA and 8 LED");
+        assert!(flat.sheet_contents.is_none());
+
+        step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
+        let (_, hier, model_hier) = load(&dir).unwrap();
+        let root = hier.schematic.as_ref().unwrap();
+        assert_eq!(root.sheets.len(), 3, "MCU, LED channels and the header");
+        assert!(root.symbols.is_empty(), "the root holds sheet symbols only");
+        let screens = hier.sheet_contents.as_ref().unwrap();
+        assert_eq!(screens.len(), 3);
+        assert_eq!(joined(hier.nets.as_ref().unwrap()), nets_before, "design.nets after the reorganization: the same nets, the same pins");
+        assert_eq!(joined(&model_hier.nets), nets_before, "...and so is the netlist everything else reads");
+
+        // An edit inside the MCU sheet lands on that sheet alone, and the nets are still read across all the sheets.
+        let mcu = root.sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().clone();
+        let note = Cmd::AddSchText { content: "note".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_um: 1_270 };
+        step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(note) }, false, "test").unwrap();
+        let (_, noted, _) = load(&dir).unwrap();
+        assert_eq!(noted.sheet_contents.as_ref().unwrap()[&mcu.file].texts.len(), 1);
+        assert!(noted.schematic.as_ref().unwrap().texts.is_empty(), "nothing leaked onto the root");
+        assert_eq!(joined(noted.nets.as_ref().unwrap()), nets_before);
+
+        // Moving U1 without its wires breaks its connections: the nets follow the drawing.
+        let u1 = screens[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at;
+        let moved = Point { x: u1.x + 2_540, y: u1.y };
+        step(&dir, Cmd::OnSheet { sheet: mcu.id.clone(), cmd: Box::new(Cmd::MoveSymbol { id: "U1".into(), x: moved.x, y: moved.y, unit: None }) }, false, "test").unwrap();
+        let (_, edited, _) = load(&dir).unwrap();
+        assert_eq!(edited.sheet_contents.as_ref().unwrap()[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at, moved);
+        assert_eq!(edited.schematic.as_ref().unwrap().sheets.len(), 3);
+        assert_ne!(joined(edited.nets.as_ref().unwrap()), nets_before, "U1 left its wires behind: the nets are read from the drawing, across the sheets");
+
+        // Undo takes the move back, with the nets; then the note; then the reorganization, back to the flat sheet.
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, undone, _) = load(&dir).unwrap();
+        assert_eq!(undone.sheet_contents.as_ref().unwrap()[&mcu.file].symbols.iter().find(|s| s.id == "U1").unwrap().at, u1);
+        assert_eq!(joined(undone.nets.as_ref().unwrap()), nets_before);
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert!(load(&dir).unwrap().1.sheet_contents.as_ref().unwrap()[&mcu.file].texts.is_empty());
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, back, model_back) = load(&dir).unwrap();
+        assert!(back.sheet_contents.is_none());
+        assert!(back.schematic.as_ref().unwrap().sheets.is_empty());
+        assert_eq!(back.schematic.as_ref().unwrap().symbols.len(), flat.schematic.as_ref().unwrap().symbols.len());
+        assert_eq!(joined(&model_back.nets), nets_before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `board::load`'s overlay (mirroring `loading_overlays_only_published_
     /// footprints_onto_the_model`): a *published* library symbol reaches
     /// `ConstraintModel::symbols` (so a placed instance naming it resolves

@@ -20,6 +20,8 @@ pub struct Keep {
     pub erc_exclusions: Vec<eda_model::ir::ErcExclusion>,
     pub erc_pin_map: Option<eda_model::ir::ErcPinMap>,
     pub title_block: Option<eda_model::ir::TitleBlock>,
+    /// References of the symbols that were locked (`SchExtras::locked`); the lock goes with the symbol to its new sheet.
+    pub locked: Vec<String>,
 }
 
 /// How a net is drawn inside one module.
