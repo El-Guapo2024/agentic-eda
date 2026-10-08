@@ -229,6 +229,17 @@ pub fn board_stats(dir: &Path, body: &[u8]) -> Value {
     run().unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }))
 }
 
+/// `POST /api/check_rules` (Board Setup > Custom Rules, "Check syntax"): `{ text }`, a `.kicad_dru` text, answered with
+/// kicad-cli's verdict on it (`eda_kicad_engine::check_rules`): `{ ok, engine, valid, forms, bad, message }`. Nothing here
+/// reads a rule; the board is not involved.
+pub fn check_rules(_dir: &Path, body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let Some(text) = req.get("text").and_then(Value::as_str) else {
+        return json!({ "ok": false, "message": "check_rules needs {\"text\": the rules text}" });
+    };
+    eda_kicad_engine::check_rules(text).map(|c| c.to_json()).unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
