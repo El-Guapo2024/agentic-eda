@@ -78,6 +78,11 @@ test("Polar Coordinates is checked on the board and in the Footprint Editor only
   assert.equal(actionChecked("common.Control.togglePolarCoords", { ...base, tab: "schematic", polar: true }), undefined);
 });
 
+test("the measure tool's button is pressed while the tool runs", () => {
+  assert.equal(actionChecked("common.Interactive.measureTool", base), false);
+  assert.equal(actionChecked("common.Interactive.measureTool", { ...base, tab: "footprint", measureArmed: true }), true);
+});
+
 test("the zoom tool's button is pressed while the rubber-band zoom is armed", () => {
   assert.equal(actionChecked("common.Control.zoomTool", base), false);
   assert.equal(actionChecked("common.Control.zoomTool", { ...base, zoomArmed: true }), true);

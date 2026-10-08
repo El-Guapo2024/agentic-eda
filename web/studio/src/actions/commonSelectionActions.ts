@@ -13,7 +13,7 @@ import type { ActionHandler, CommonActionContext } from "./commonActions";
 import { isCanvasTab, type PickedItem } from "./editorAdapter";
 import { picker } from "./pcbPicker";
 import type { PickerSession } from "../kicad-port/pickerHost";
-import { cancelAreaTool, getCommonTool, getLastPointer, setPickerHover, setZoomArea, showSelectionMenu } from "../state/commonTool";
+import { cancelAreaTool, getCommonTool, getLastPointer, setMeasure, setPickerHover, setZoomArea, showSelectionMenu } from "../state/commonTool";
 import { setCommonOptions } from "../state/commonOptions";
 import { selectionModeForAction } from "../kicad-port/lasso";
 import { idsOfParameter, reselectIds, selectCursorResult, selectIds, unselectIds } from "../kicad-port/selectionEvents";
@@ -66,6 +66,12 @@ export function registerSelectionActions(m: Map<string, ActionHandler>, ctx: Com
   // drag draws the box and the release zooms to it (components/CommonToolHost.tsx); running the action again, or Esc, puts it away.
   if (ctx.tab === "footprint" || ctx.tab === "symbol") {
     m.set("common.Control.zoomTool", () => setZoomArea(getCommonTool().zoomArea ? null : { drag: null }));
+  }
+
+  // ACTIONS::measureTool -- PCB_VIEWER_TOOLS::MeasureTool in the Footprint Editor (the board's is `useActionRunner.ts`'s): two clicks on the grid draw a ruler with
+  // its distance and extent (components/CommonOverlay.tsx); a click after that starts the next, Esc clears it, running the action again ends the tool.
+  if (ctx.tab === "footprint") {
+    m.set("common.Interactive.measureTool", () => setMeasure(getCommonTool().measure ? null : { pts: [] }));
   }
 
   // ACTIONS::selectionCursor -- PCB_SELECTION_TOOL::CursorSelection -> selectCursor( false ): with nothing selected, the item under the

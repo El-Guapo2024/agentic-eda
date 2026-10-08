@@ -26,6 +26,8 @@ export interface CheckedContext {
   zoomArmed?: boolean;
   /** Polar coordinates in the status line (`PCB_BASE_FRAME::m_polarCoords`). */
   polar?: boolean;
+  /** The measure tool is the tool in force. */
+  measureArmed?: boolean;
 }
 
 /** The Footprint Editor's tool-arming actions and the tool each arms (`FpToolId`). */
@@ -69,6 +71,8 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
     // The zoom tool, like any tool, is drawn pressed while it runs.
     case "common.Control.zoomTool":
       return c.zoomArmed === true;
+    case "common.Interactive.measureTool":
+      return c.measureArmed === true;
     case "common.Control.metricUnits":
       return c.units === "mm";
     case "common.Control.imperialUnits":

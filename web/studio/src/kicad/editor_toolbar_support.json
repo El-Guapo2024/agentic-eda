@@ -68,7 +68,7 @@
     "pcbnew.InteractiveDrawing.placePoint": "not ported: footprint points",
     "pcbnew.InteractiveDrawing.setAnchor": "supported",
     "common.Control.gridSetOrigin": "supported",
-    "common.Interactive.measureTool": "not ported: the measure tool"
+    "common.Interactive.measureTool": "supported"
   },
   "symbol": {
     "eeschema.SymbolLibraryControl.newSymbol": "supported",

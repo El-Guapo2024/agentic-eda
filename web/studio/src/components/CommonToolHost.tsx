@@ -15,7 +15,8 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { useFpApi, useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { useSymApi, useSymDispatch, useSymState } from "../state/symbolEditorStore";
 import { useCommonOptions, type CommonOptions } from "../state/commonOptions";
-import { closeSelectionMenu, getCommonTool, setLasso, setLastPointer, setPickerHover, setZoomArea, useCommonTool } from "../state/commonTool";
+import { closeSelectionMenu, getCommonTool, setLasso, setLastPointer, setMeasure, setPickerHover, setZoomArea, useCommonTool } from "../state/commonTool";
+import { measureClick } from "../kicad-port/measureRuler";
 import { picker, usePickerSession } from "../actions/pcbPicker";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { isCanvasTab, makeEditorAdapter, type EditorAdapter } from "../actions/editorAdapter";
@@ -116,6 +117,15 @@ export function CommonToolHost() {
         e.preventDefault();
         if (e.button === 0) answerPicker(a, w);
         else if (e.button === 2) picker.cancel();
+        return;
+      }
+      // The measure tool (`PCB_VIEWER_TOOLS::MeasureTool`): a left click is the ruler's next point, on the grid.
+      const ruler = getCommonTool().measure;
+      if (ruler && e.button === 0) {
+        e.stopPropagation();
+        e.preventDefault();
+        const p = alignToGrid({ x: w[0], y: w[1] }, a.gridUm, getSnapOrigin(), { ctrlOrCmd: false });
+        setMeasure({ pts: measureClick(ruler.pts, [p.x, p.y]) });
         return;
       }
       // The zoom tool (`ZOOM_TOOL::selectRegion`): a press with either button starts the box.
@@ -265,6 +275,7 @@ export function CommonToolHost() {
       col.removeEventListener("contextmenu", onContextMenu, true);
       setLasso(null);
       setZoomArea(null);
+      setMeasure(null);
     };
   }, []);
 

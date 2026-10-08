@@ -17,7 +17,8 @@ import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID
 import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
-import { formatLength, type LengthUnit } from "../../state/units";
+import type { LengthUnit } from "../../state/units";
+import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
@@ -935,8 +936,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     if (end) {
       const [x0, y0] = pts[0]!;
       const [x1, y1] = end;
-      const dist = Math.hypot(x1 - x0, y1 - y0);
-      const label = `${formatLength(dist, opts.units)}  (dx ${formatLength(Math.abs(x1 - x0), opts.units)}, dy ${formatLength(Math.abs(y1 - y0), opts.units)})`;
+      const label = measureLabel([x0, y0], [x1, y1], opts.units);
       drawStrokeText(ctx, label, (x0 + x1) / 2, (y0 + y1) / 2 - hairlineUm(view, 8), { sizeUm: hairlineUm(view, 12), justify: "center", color, thicknessUm: hairlineUm(view, 1.4) });
     }
   }

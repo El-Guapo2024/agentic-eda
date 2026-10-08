@@ -14,6 +14,9 @@ import { useCommonOptions } from "../state/commonOptions";
 import { useCommonTool } from "../state/commonTool";
 import { crosshairSegments, cursorVisible } from "../kicad-port/crosshair";
 import { lassoContained } from "../kicad-port/lasso";
+import { measureLabel } from "../kicad-port/measureRuler";
+import { alignToGrid } from "../kicad-port/gridSnap";
+import { getSnapOrigin } from "./canvas/gridHelper";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { usePickerSession } from "../actions/pcbPicker";
 import { makeEditorAdapter, isCanvasTab } from "../actions/editorAdapter";
@@ -147,6 +150,29 @@ export function CommonOverlay() {
       ctx.setLineDash([]);
     }
 
+    // The measure tool's ruler in the library editors (`RULER_ITEM`): a dashed line from the first click to the second, or to the cursor on the grid while the
+    // second is still to come, with the distance and its extent at the middle.
+    if (tool.measure && tool.measure.pts.length > 0) {
+      const start = tool.measure.pts[0]!;
+      const snapped = adapter.cursor ? alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, adapter.gridUm, getSnapOrigin(), { ctrlOrCmd: false }) : null;
+      const end = tool.measure.pts.length >= 2 ? tool.measure.pts[1]! : snapped ? ([snapped.x, snapped.y] as const) : null;
+      if (end) {
+        ctx.strokeStyle = layerColor("selection");
+        ctx.fillStyle = layerColor("selection");
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(sx(start[0]), sy(start[1]));
+        ctx.lineTo(sx(end[0]), sy(end[1]));
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = "12px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(measureLabel(start, end, studio.units), sx((start[0] + end[0]) / 2), sy((start[1] + end[1]) / 2) - 8);
+        ctx.textAlign = "start";
+      }
+    }
+
     // The zoom tool's box in the library editors (`ZOOM_TOOL::selectRegion`'s `SELECTION_AREA`): a blue rectangle from where the button went down to the cursor.
     const zoomBox = tool.zoomArea?.drag;
     if (zoomBox) {
@@ -160,7 +186,7 @@ export function CommonOverlay() {
     }
 
     // `blitCursor`: at the cursor, in the chosen mode, when a tool wants it or the setting forces it.
-    if (adapter.cursor && cursorVisible(opts.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null || tool.zoomArea != null)) {
+    if (adapter.cursor && cursorVisible(opts.alwaysShowCursor, !adapter.toolIdle || picker != null || tool.lasso != null || tool.zoomArea != null || tool.measure != null)) {
       const px = sx(adapter.cursor.x);
       const py = sy(adapter.cursor.y);
       ctx.strokeStyle = cursorColor(tab);
