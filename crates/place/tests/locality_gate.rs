@@ -28,6 +28,9 @@ fn design() -> Design {
 
 #[test]
 fn corpus_placements_pass_locality_gate() {
+    if slow_tests_off() {
+        return;
+    }
     let dir = examples_dir();
     let mut checked = 0;
     let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir).expect("examples dir").flatten().map(|e| e.path()).collect();
@@ -60,4 +63,15 @@ fn corpus_placements_pass_locality_gate() {
         }
     }
     assert!(checked > 0, "expected to exercise at least one example");
+}
+
+/// Places the whole example corpus: most of a minute in release and many minutes in debug, so it
+/// runs only when `EDA_SLOW_TESTS` is set. `tools/check.sh full`, the check
+/// before a merge lands on main, sets it.
+fn slow_tests_off() -> bool {
+    let off = std::env::var_os("EDA_SLOW_TESTS").is_none();
+    if off {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+    }
+    off
 }

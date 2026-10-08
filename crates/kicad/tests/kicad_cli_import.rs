@@ -86,6 +86,9 @@ fn via_set(vias: &[Via]) -> BTreeSet<(String, i64, i64, i64, i64, String, String
 /// needed (both ends are our own code), so this runs unconditionally.
 #[test]
 fn round_trips_own_pipeline_output() {
+    if slow_tests_off() {
+        return;
+    }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir.parent().and_then(|p| p.parent()).expect("crates/kicad -> repo root");
 
@@ -138,6 +141,9 @@ fn round_trips_own_pipeline_output() {
 /// exporter wrote, so they land back on the same values.
 #[test]
 fn round_trips_shapes_and_text() {
+    if slow_tests_off() {
+        return;
+    }
     use eda_model::ir::{Design, DrawingsSection, PlacementSection, Point, Provenance, Shape, Text, TextJustify};
 
     let mut drawings = DrawingsSection {
@@ -362,4 +368,15 @@ fn kicad_cli_template_boards_match_pos_export() {
     }
     assert_eq!(fps_matched, fps_total, "{fps_matched}/{fps_total} footprints matched kicad-cli's pos export exactly");
     assert_eq!(boards_whole, boards_total, "{boards_whole}/{boards_total} boards had every footprint match");
+}
+
+/// Runs our pipeline, then kicad-cli, on each board: most of a minute in release and many minutes in debug, so it
+/// runs only when `EDA_SLOW_TESTS` is set. `tools/check.sh full`, the check
+/// before a merge lands on main, sets it.
+fn slow_tests_off() -> bool {
+    let off = std::env::var_os("EDA_SLOW_TESTS").is_none();
+    if off {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+    }
+    off
 }
