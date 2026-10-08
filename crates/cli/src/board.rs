@@ -1916,6 +1916,44 @@ mod tests {
         assert!(load(&dir).unwrap().1.drawings.map_or(true, |d| d.drc_exclusions.is_empty()));
     }
 
+    /// Schematic Setup > Violation Severity reaches kicad-cli's ERC through the derived project (slow tier): a check set to Error is
+    /// reported as one, one set to Ignore is not run and shows up in the report's ignored checks. Undo takes the table back.
+    #[test]
+    fn a_changed_erc_severity_changes_what_kicad_cli_reports_and_undo_takes_it_back() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("erc_severities");
+        setup(&dir);
+        // The derived schematic of this board has symbols with no footprint library: `footprint_link_issues`, a warning by default.
+        let check = "footprint_link_issues";
+        let of = |report: &serde_json::Value, severity: &str| report["violations"].as_array().unwrap().iter().filter(|v| v["check"] == check && v["severity"] == severity).count();
+        let ignored = |report: &serde_json::Value| report["ignored_checks"].as_array().unwrap().iter().any(|c| c["key"] == check);
+        let before = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        let n = of(&before, "warning");
+        assert!(n > 0 && of(&before, "error") == 0 && !ignored(&before), "{before:#}");
+
+        let table = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
+        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "error")]) }, false, "ui").unwrap();
+        let errors = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!((of(&errors, "error"), of(&errors, "warning")), (n, 0), "the check is reported as an error now");
+
+        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "ignore")]) }, false, "ui").unwrap();
+        let off = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!(of(&off, "error") + of(&off, "warning"), 0, "an ignored check is not run");
+        assert!(ignored(&off), "and the report lists it as ignored: {:#}", off["ignored_checks"]);
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let back = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!((of(&back, "warning"), ignored(&back)), (n, false), "Undo takes both back");
+    }
+
     /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a
     /// pattern, a minimum track width, a violation severity and a custom rule each change the report, and each Undo
     /// takes its edit back.
