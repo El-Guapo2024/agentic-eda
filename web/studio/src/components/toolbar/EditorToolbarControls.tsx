@@ -1,9 +1,11 @@
 // The combo boxes of the Footprint Editor's and the Symbol Editor's top toolbars (`ACTION_TOOLBAR_CONTROLS`: the grid, zoom and layer selectors of
 // toolbars_footprint_editor.cpp, the symbol body style and unit selectors of toolbars_symbol_editor.cpp), bound to each editor's own store. The board
 // editor's controls are in Toolbar.tsx, bound to the board's.
-import { DEFAULT_PCB_GRIDS_UM } from "../../kicad-port/grid";
+import type { GridEditor } from "../../kicad-port/gridSettings";
 import { zoomAbout } from "../../kicad-port/view";
+import { useActionRunner } from "../../actions/useActionRunner";
 import { useFpDispatch, useFpState } from "../../state/footprintEditorStore";
+import { useGridSettings } from "../../state/gridSettings";
 import { useStudioState } from "../../state/store";
 import { useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { formatLength } from "../../state/units";
@@ -19,17 +21,34 @@ function editorCanvasRect(): DOMRect | null {
   return document.querySelector(".editor-canvas-col .pcb-canvas-container")?.getBoundingClientRect() ?? null;
 }
 
-function GridSelect({ gridUm, onChange }: { gridUm: number; onChange: (um: number) => void }) {
+/** The grid box's last entry (`EDA_DRAW_FRAME::UpdateGridSelectBox`: the grids, a "---" line and "Edit Grids..."). Picking it runs the action instead of choosing a grid. */
+const EDIT_GRIDS = "edit-grids";
+
+/** The grid box of an editor's toolbar: its own list of grids (state/gridSettings.ts), then a line and "Edit Grids..." (`EDA_DRAW_FRAME::OnSelectGrid`). */
+export function GridSelect({ editor, gridUm, onChange }: { editor: GridEditor; gridUm: number; onChange: (um: number) => void }) {
   const { units } = useStudioState();
-  const options = DEFAULT_PCB_GRIDS_UM.includes(gridUm) ? DEFAULT_PCB_GRIDS_UM : [...DEFAULT_PCB_GRIDS_UM, gridUm];
+  const { grids } = useGridSettings(editor);
+  const { run, isEnabled } = useActionRunner();
+  // A grid that left the list (it was edited away in another editor's session) stays on screen as the box's current value until another is chosen.
+  const options = grids.includes(gridUm) ? grids : [...grids, gridUm];
   return (
     <div className="toolbar-control" title="Grid">
-      <select value={gridUm} onChange={(e) => onChange(Number(e.target.value))}>
+      <select
+        value={gridUm}
+        onChange={(e) => {
+          if (e.target.value === EDIT_GRIDS) run("common.Control.editGrids");
+          else onChange(Number(e.target.value));
+        }}
+      >
         {options.map((um) => (
           <option key={um} value={um}>
             {formatLength(um, units)}
           </option>
         ))}
+        <option disabled>---</option>
+        <option value={EDIT_GRIDS} disabled={!isEnabled("common.Control.editGrids")}>
+          Edit Grids...
+        </option>
       </select>
     </div>
   );
@@ -64,7 +83,7 @@ function ZoomSelect({ view, onView }: { view: { scale: number; x: number; y: num
 export function FootprintToolbarControl({ control }: { control: string }) {
   const state = useFpState();
   const dispatch = useFpDispatch();
-  if (control === "gridSelect") return <GridSelect gridUm={state.gridUm} onChange={(um) => dispatch({ type: "SET_GRID_UM", um })} />;
+  if (control === "gridSelect") return <GridSelect editor="footprint" gridUm={state.gridUm} onChange={(um) => dispatch({ type: "SET_GRID_UM", um })} />;
   if (control === "zoomSelect") return <ZoomSelect view={state.view} onView={(view) => dispatch({ type: "SET_VIEW", view })} />;
   if (control === "layerSelector") {
     return (

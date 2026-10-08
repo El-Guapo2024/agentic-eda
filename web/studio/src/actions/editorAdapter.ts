@@ -14,7 +14,6 @@ import { boxOfIds, boxOfPoints, footprintItemBoxes, pcbContentBox, pcbItemBoxes,
 import type { Schematic } from "../api/types";
 import { PAGE_HEIGHT_UM, PAGE_WIDTH_UM, schPageSize } from "../components/schematic/drawingSheet";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
-import { DEFAULT_PCB_GRIDS_UM } from "../kicad-port/grid";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { hitSymbol, hitWire } from "../components/schematic/schHit";
 import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
@@ -22,9 +21,6 @@ import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { deleteCmds as schDeleteCmds } from "../kicad-port/schDelete";
 import { boardDeleteCmds } from "../kicad-port/deleteCmds";
 import { pickFootprintItem, pickSymbolItem } from "../kicad-port/libEditorHit";
-
-/** `DefaultGridSizeList()` for eeschema and the symbol editor: 100, 50, 25 and 10 mil. */
-const EESCHEMA_GRIDS_UM: readonly number[] = [2540, 1270, 635, 254];
 
 /** The four editors that have a canvas (the 3D viewer has its own camera and none of these tools). */
 export type CanvasTab = "pcb" | "schematic" | "footprint" | "symbol";
@@ -63,8 +59,6 @@ export interface EditorAdapter {
   setCursor(at: { x: number; y: number } | null): void;
   /** The editor's own grid, in um. */
   gridUm: number;
-  /** `GRID_SETTINGS::grids`: the grids the editor offers, in list order -- null where the editor's grid is fixed (the schematic's is 50 mil). */
-  gridList: readonly number[] | null;
   setGridUm(um: number): void;
   selection: ReadonlySet<string>;
   /** `SELECTION_TOOL`'s `ClearSelection` + `AddItemToSel`: replace the selection. */
@@ -167,7 +161,6 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         cursor: studio.cursorUm,
         setCursor: (at) => snap.dispatch({ type: "SET_CURSOR", at }),
         gridUm: studio.gridUm,
-        gridList: DEFAULT_PCB_GRIDS_UM,
         setGridUm: (um) => snap.dispatch({ type: "SET_GRID_UM", um }),
         selection: studio.selection,
         setSelection: (ids) => snap.dispatch({ type: "SET_SELECTION", refs: ids }),
@@ -208,7 +201,6 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         cursor: studio.cursorUm,
         setCursor: (at) => snap.dispatch({ type: "SET_CURSOR", at }),
         gridUm: SCH_GRID_UM,
-        gridList: null,
         setGridUm: () => {},
         selection: studio.selection,
         setSelection: (ids) => snap.dispatch({ type: "SET_SELECTION", refs: ids }),
@@ -256,7 +248,6 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         cursor: fp.cursorUm,
         setCursor: (at) => snap.fpDispatch({ type: "SET_CURSOR", at }),
         gridUm: fp.gridUm,
-        gridList: DEFAULT_PCB_GRIDS_UM,
         setGridUm: (um) => snap.fpDispatch({ type: "SET_GRID_UM", um }),
         selection: fp.selection,
         setSelection: (ids) => snap.fpDispatch({ type: "SET_SELECTION", refs: ids }),
@@ -300,7 +291,6 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         cursor: sym.cursorUm,
         setCursor: (at) => snap.symDispatch({ type: "SET_CURSOR", at }),
         gridUm: sym.gridUm,
-        gridList: EESCHEMA_GRIDS_UM,
         setGridUm: (um) => snap.symDispatch({ type: "SET_GRID_UM", um }),
         selection: sym.selection,
         setSelection: (ids) => snap.symDispatch({ type: "SET_SELECTION", refs: ids }),

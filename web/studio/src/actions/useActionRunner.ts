@@ -22,13 +22,12 @@ import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta
 import { finishInteractiveRoute, cancelInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
 import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic } from "../api/client";
-import { formatLength } from "../state/units";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
-import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, gridPresetIndex, fastGridCycleTarget, DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2, type CursorDir } from "../kicad-port/cursorControl";
+import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
-import { getSnapOrigin, snapPoint } from "../components/canvas/gridHelper";
+import { snapPoint } from "../components/canvas/gridHelper";
 import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
 import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
@@ -39,7 +38,6 @@ import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging"
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
-import { GRID_OPTIONS_UM } from "../components/Toolbar";
 import { computeDragAttachment } from "../components/schematic/wireAttachment";
 import { findNextMatch } from "../components/schematic/findNavigation";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
@@ -1047,14 +1045,7 @@ export function useActionRunner() {
     m.set("pcbnew.EditorControl.generateDrillFiles", pcbOnly(() => dispatch({ type: "SET_GENERATE_DRILL_DIALOG_OPEN", open: true })));
     m.set("pcbnew.EditorControl.generatePosFile", pcbOnly(() => dispatch({ type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN", open: true })));
 
-    // common_tools.cpp GridNext/GridPrev: `currentGrid++; if (>= size) = 0` / `--; if (< 0) = size - 1` -- wraps.
-    const cycleGrid = (dir: 1 | -1) => {
-      const i = GRID_OPTIONS_UM.indexOf(state.gridUm);
-      const next = GRID_OPTIONS_UM[wrapStep(i, GRID_OPTIONS_UM.length, dir)]!;
-      dispatch({ type: "SET_GRID_UM", um: next });
-    };
-    m.set("common.Control.gridNext", () => cycleGrid(1));
-    m.set("common.Control.gridPrev", () => cycleGrid(-1));
+    // Next / Previous Grid, the grid presets and the fast grids work on the editor's grid list (state/gridSettings.ts): actions/commonGridListActions.ts.
 
     // common.Interactive.search: this app has no KiCad Search panel --
     // the task put Search on the non-KiCad Activity tab instead (see
@@ -1536,26 +1527,8 @@ export function useActionRunner() {
     m.set("common.Control.panLeft", panView("left"));
     m.set("common.Control.panRight", panView("right"));
 
-    // common_tools.cpp COMMON_TOOLS::GridFast1/GridFast2/GridFastCycle -> GridPreset(idx, fromHotkey=true)
-    // -> OnGridChanged: clamp the index into the grid list, apply it, put the
-    // cursor on the new grid (SetCrossHairCursorPosition( GetCursorPosition(true) )),
-    // and show the hotkey feedback. PCB tab only: the schematic's grid here is a
-    // fixed 50 mil (layout.ts GRID) with no grid list to index into.
+    // The fast grids (common_tools.cpp GridFast1/GridFast2/GridFastCycle) are commonGridListActions.ts's. PCB tab only from here: the board's snap mode.
     if (state.tab === "pcb") {
-      const applyGridPreset = (idx: number) => {
-        const i = gridPresetIndex(idx, GRID_OPTIONS_UM.length);
-        const um = GRID_OPTIONS_UM[i]!;
-        dispatch({ type: "SET_GRID_UM", um });
-        if (state.cursorUm) {
-          const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, um, getSnapOrigin(), { ctrlOrCmd: false });
-          dispatch({ type: "SET_CURSOR", at: { x: p.x, y: p.y } });
-        }
-        dispatch({ type: "TOAST", message: `Grid: ${formatLength(um, state.units)}`, kind: "info" });
-      };
-      m.set("common.Control.gridFast1", () => applyGridPreset(DEFAULT_FAST_GRID_1));
-      m.set("common.Control.gridFast2", () => applyGridPreset(DEFAULT_FAST_GRID_2));
-      m.set("common.Control.gridFastCycle", () => applyGridPreset(fastGridCycleTarget(GRID_OPTIONS_UM.indexOf(state.gridUm), DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2)));
-
       // pcb_control.cpp PCB_CONTROL::SnapMode (magneticSnapToggle, Shift+S):
       // `settings.allLayers = !settings.allLayers`; SnapModeFeedback pops up
       // "Object Snapping: Active Layer / All Layers". The setting feeds

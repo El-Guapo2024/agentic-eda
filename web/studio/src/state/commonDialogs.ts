@@ -2,6 +2,7 @@
 // Plain module state with subscribers (like `state/commonOptions.ts` and `state/commonTool.ts`), so an action registered in the
 // action runner can open a dialog without a place in the big reducer. `components/CommonDialogs.tsx` renders them.
 import { useSyncExternalStore } from "react";
+import type { GridEditor } from "../kicad-port/gridSettings";
 
 /** `DIALOG_GROUP_PROPERTIES`: the group being edited, its name and member list as the dialog has them so far. */
 export interface GroupDialog {
@@ -19,9 +20,11 @@ export interface CommonDialogsState {
   page: "pcb" | "schematic" | null;
   /** `COMMON_TOOLS::GridOrigin`'s X / Y entry dialog is open. */
   gridOrigin: boolean;
+  /** `PANEL_GRID_SETTINGS` ("Edit Grids..."): the editor whose Grids page of the Preferences is showing, or null when the dialog is closed. */
+  grids: GridEditor | null;
 }
 
-const CLOSED: CommonDialogsState = { group: null, about: false, page: null, gridOrigin: false };
+const CLOSED: CommonDialogsState = { group: null, about: false, page: null, gridOrigin: false, grids: null };
 
 let current: CommonDialogsState = CLOSED;
 const listeners = new Set<() => void>();
@@ -66,4 +69,8 @@ export function setPageSettingsOpen(target: "pcb" | "schematic" | null): void {
 
 export function setGridOriginDialogOpen(open: boolean): void {
   set({ ...current, gridOrigin: open });
+}
+
+export function setGridsDialogOpen(editor: GridEditor | null): void {
+  set({ ...current, grids: editor });
 }

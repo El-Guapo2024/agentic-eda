@@ -3,7 +3,7 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], counts, dialogs, open }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], counts, grid, dialogs, open }
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
 // This file is the page glue: the capture that has to start at load (console.error, window errors, the fetch wrapper that counts the studio's requests and reads the
@@ -52,6 +52,8 @@ export interface HookState {
   picker: string | null;
   selection: SelectedItem[];
   counts: Counts;
+  /** The grid of the editor on screen, in um; null on the tabs whose grid is not a choice (the schematic's is the fixed 50 mil, the 3D viewer has none). */
+  grid: number | null;
   dialogs: string[];
   open: string[];
 }
@@ -158,6 +160,8 @@ function openNames(L: Latest): string[] {
   if (L.common.about) out.push("common.about");
   if (L.common.page) out.push(`common.page:${L.common.page}`);
   if (L.common.group) out.push("common.group");
+  if (L.common.gridOrigin) out.push("common.gridOrigin");
+  if (L.common.grids) out.push(`common.grids:${L.common.grids}`);
   return out.sort();
 }
 
@@ -204,6 +208,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         picker: picker.session()?.prompt ?? null,
         selection: selectionWithKinds(selection, kindIndex(lists)),
         counts: countsOf(studio.board, studio.schematic),
+        grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : null,
         dialogs: dialogTitles(),
         open: openNames(L),
       };

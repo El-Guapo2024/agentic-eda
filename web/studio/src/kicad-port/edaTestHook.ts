@@ -8,7 +8,8 @@
 //                                    `revision` is the design revision after it, `dialog` the title of the dialog it opened, `toast` the last toast it showed,
 //                                    `pending` true when it stopped waiting for a request that is still running (a long kicad-cli run).
 //   window.__eda.state()             a small snapshot: { tab, revision, tool, picker, selection: [{ id, kind }], counts: { footprints, tracks, vias, zones,
-//                                    symbols, wires, labels }, dialogs: [titles of the dialogs on screen], open: [names of the open dialog/panel flags] };
+//                                    symbols, wires, labels }, grid: the editor's grid in um (null where it is not a choice), dialogs: [titles of the dialogs on
+//                                    screen], open: [names of the open dialog/panel flags] };
 //                                    `picker` is the prompt of the picker session running (the delete tool's), else null.
 //   window.__eda.errors(since?)      the errors since the page loaded as { time, message }: console.error, uncaught errors and rejected promises, the
 //                                    error toasts and notices of the three stores. Passive-listener noise is left out. `since` is an epoch ms to filter from.
@@ -81,7 +82,7 @@ export interface ActionInfo {
 
 /** Why `name` cannot run on `tab`, or null when it can: no handler, or an action of another editor (`actionTabGate.ts`). */
 export function disabledReason(name: string, tab: string, registered: boolean): string | null {
-  if (!registered) return "no handler: this action is not wired in the studio";
+  if (!registered) return `no handler on the ${tab} tab: the action is not wired in the studio, or that editor does not offer it`;
   if (!isActionEnabledForTab(name, tab, true)) return `not offered on the ${tab} tab: it belongs to another editor`;
   return null;
 }

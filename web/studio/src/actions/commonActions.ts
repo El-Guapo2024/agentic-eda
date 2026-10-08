@@ -28,11 +28,8 @@ import { registerSuiteActions } from "./commonSuiteActions";
 import { registerLibraryActions } from "./commonLibraryActions";
 import { registerTextActions } from "./commonTextActions";
 import { registerGridActions } from "./commonGridActions";
+import { registerGridListActions } from "./commonGridListActions";
 import { replaceAll, replaceAndFindNext, updateFind } from "../components/schematic/findReplaceOps";
-import { gridPresetIndex } from "../kicad-port/cursorControl";
-import { alignToGrid } from "../kicad-port/gridSnap";
-import { getSnapOrigin } from "../components/canvas/gridHelper";
-import { formatLength } from "../state/units";
 
 export type ActionHandler = (arg?: unknown) => void;
 
@@ -127,27 +124,6 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
     })
   );
 
-  // ---------------------------------------------------------------------------------------- grid
-
-  // ACTIONS::gridPreset -- COMMON_TOOLS::GridPreset( idx, false ) -> OnGridChanged: `currentGrid = clamp( idx, 0, size - 1 )`,
-  // the grid becomes that entry of the editor's grid list and the cursor is put on the new grid
-  // (`SetCrossHairCursorPosition( GetCursorPosition( true ) )`). The schematic's grid is the fixed 50 mil, so it has no list
-  // to index and the action is not offered there.
-  if (tab && tab !== "schematic") {
-    m.set("common.Control.gridPreset", (arg) => {
-      const adapter = ctx.getAdapter();
-      const list = adapter?.gridList;
-      if (!adapter || !list) return;
-      const um = list[gridPresetIndex(typeof arg === "number" ? Math.round(arg) : 0, list.length)]!;
-      adapter.setGridUm(um);
-      if (adapter.cursor) {
-        const p = alignToGrid({ x: adapter.cursor.x, y: adapter.cursor.y }, um, getSnapOrigin(), { ctrlOrCmd: false });
-        adapter.setCursor({ x: p.x, y: p.y });
-      }
-      toast(`Grid: ${formatLength(um, ctx.state.units)}`);
-    });
-  }
-
   // ---------------------------------------------------------------------------------------- cursor and display options
 
   // ACTIONS::cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs -- COMMON_TOOLS::CursorSmallCrosshairs etc.:
@@ -237,4 +213,5 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   registerLibraryActions(m, ctx);
   registerTextActions(m, ctx);
   registerGridActions(m, ctx);
+  registerGridListActions(m, ctx);
 }
