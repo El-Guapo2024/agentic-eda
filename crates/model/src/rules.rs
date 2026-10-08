@@ -298,12 +298,12 @@ impl TextGraphicsDefaults {
                 }
             }
         };
-        text("Silk Layer Items", &self.silk, &mut out);
-        text("Copper Layer Items", &self.copper, &mut out);
+        text("Silk Layers", &self.silk, &mut out);
+        text("Copper Layers", &self.copper, &mut out);
         line("Edge Cuts", self.edge_cuts_line_width_um, &mut out);
         line("Courtyards", self.courtyard_line_width_um, &mut out);
-        text("Fab Layer Items", &self.fab, &mut out);
-        text("Other Layer Items", &self.others, &mut out);
+        text("Fab Layers", &self.fab, &mut out);
+        text("Other Layers", &self.others, &mut out);
         out
     }
 }
@@ -646,7 +646,7 @@ mod tests {
         t.copper.line_width_um = 2;
         t.fab.text_width_um = 300_000;
         let rows: Vec<&str> = t.validate().iter().map(|(r, _)| *r).collect();
-        assert_eq!(rows, vec!["Silk Layer Items", "Copper Layer Items", "Fab Layer Items"], "{:?}", t.validate());
+        assert_eq!(rows, vec!["Silk Layers", "Copper Layers", "Fab Layers"], "{:?}", t.validate());
     }
 
     #[test]

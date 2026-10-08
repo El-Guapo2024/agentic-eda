@@ -370,6 +370,133 @@ fn kicad_cli_template_boards_match_pos_export() {
     assert_eq!(boards_whole, boards_total, "{boards_whole}/{boards_total} boards had every footprint match");
 }
 
+/// What the writer keeps for kicad-cli to judge (WP5 step 1) survives KiCad's own parser and writer: `kicad-cli pcb upgrade --force`
+/// loads the board with KiCad's reader and saves it with KiCad's writer, so an item KiCad did not understand is missing from what
+/// comes back. Our importer then reads KiCad's file, and an arc track, a dimension, a group, the locks, a teardrop, a keepout and a
+/// pour with its own settings must all still be there. (The unit tests in `pcb.rs` hold the same items to our own importer; this is
+/// the same round trip with KiCad in the middle.)
+#[test]
+fn kicad_loads_and_resaves_arcs_dimensions_groups_locks_teardrops_and_keepouts() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, Point, Zone};
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent().and_then(|p| p.parent()).expect("crates/kicad -> repo root");
+    let text = std::fs::read_to_string(repo_root.join("examples/two_pin_nets.yaml")).expect("read two_pin_nets");
+    let model: ConstraintModel = serde_yaml::from_str(&text).expect("parse two_pin_nets");
+    let opts = EngineOptions { seed: 0, intent_hash: "kicad_resave".into(), ..Default::default() };
+    let design = derive_schematic(&model, &opts).expect("derive_schematic");
+    let placed = place(&design, &model, &PlaceOptions { seed: 0, ..Default::default() }).expect("place");
+    let mut board = route(&placed, &model, &model.board);
+
+    let net = model.nets[0].name.clone();
+    let footprint = board.placement.as_ref().unwrap().footprints[0].id.clone();
+    let corner = board.placement.as_ref().unwrap().outline[0];
+    let at = |dx: i64, dy: i64| Point { x: corner.x + dx, y: corner.y + dy };
+
+    // The routing section: an arc track, a teardrop, a keepout, a pour with settings of its own.
+    let routing = board.routing.as_mut().unwrap();
+    routing.tracks.push(Track::new_arc(net.clone(), "F.Cu".into(), 250, at(1_000, 1_000), at(2_000, 500), at(3_000, 1_000)));
+    routing.zones.push(Zone { net: net.clone(), layer: "F.Cu".into(), outline: vec![at(1_000, 3_000), at(2_000, 3_300), at(2_000, 4_300)], teardrop: true, ..Default::default() });
+    routing.zones.push(Zone { layer: "F.Cu".into(), outline: vec![at(4_000, 1_000), at(7_000, 1_000), at(7_000, 3_000), at(4_000, 3_000)], is_rule_area: true, keepout_tracks: true, keepout_vias: true, ..Default::default() });
+    routing.zones.push(Zone {
+        net: net.clone(),
+        layer: "B.Cu".into(),
+        outline: vec![at(1_000, 5_000), at(6_000, 5_000), at(6_000, 8_000), at(1_000, 8_000)],
+        name: "pour".into(),
+        priority: 3,
+        clearance: 300,
+        min_thickness: 180,
+        ..Default::default()
+    });
+
+    // The drawings section: a dimension and a group; locks on a footprint and on the arc track.
+    let dimension = Dimension {
+        id: String::new(),
+        layer: "Dwgs.User".into(),
+        kind: DimensionKind::Aligned { height: 2_000 },
+        start: at(0, 9_000),
+        end: at(8_000, 9_000),
+        prefix: "L=".into(),
+        suffix: "".into(),
+        override_text: None,
+        units: DimensionUnits::Mm,
+        units_format: DimensionUnitsFormat::BareSuffix,
+        precision: 2,
+        suppress_trailing_zeros: true,
+        text_position: DimensionTextPosition::Outside,
+        keep_text_aligned: true,
+        text_angle: 0,
+        text_size_um: 1_200,
+        stroke_width: 150,
+        arrow_length: 1_270,
+        extension_offset: 500,
+        extension_height: 580,
+        arrow_direction: ArrowDirection::Inward,
+        text_thickness_um: Some(180),
+    };
+    board.drawings = Some(eda_model::ir::DrawingsSection { dimensions: vec![dimension.clone()], ..Default::default() });
+    board.assign_missing_ids();
+    let arc_id = board.routing.as_ref().unwrap().tracks.iter().find(|t| t.arc().is_some()).expect("the arc").id.clone();
+    let via_id = board.routing.as_ref().unwrap().vias.first().map(|v| v.id.clone());
+    let mut members = vec![footprint.clone(), arc_id.clone()];
+    members.extend(via_id);
+    let drawings = board.drawings.as_mut().unwrap();
+    drawings.groups = vec![Group { id: String::new(), name: "kept together".into(), member_ids: members.clone() }];
+    drawings.locked_ids = vec![footprint.clone(), arc_id.clone()];
+    board.assign_missing_ids();
+
+    let meta = ExportMeta { date: "2026-01-01", title: "kicad_resave" };
+    let ours = export_kicad_pcb(&board, &model, &meta).unwrap_or_else(|e| panic!("export_kicad_pcb failed: {e:?}"));
+    let dir = std::env::temp_dir().join(format!("eda_kicad_resave_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("board.kicad_pcb");
+    std::fs::write(&path, &ours).unwrap();
+    let out = Command::new(&cli).args(["pcb", "upgrade", "--force"]).arg(&path).output().expect("run kicad-cli pcb upgrade");
+    assert!(out.status.success(), "kicad-cli pcb upgrade: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let theirs = std::fs::read_to_string(&path).unwrap();
+    assert_ne!(ours, theirs, "KiCad wrote the file back in its own words");
+    // What KiCad's own file says, before our importer reads any of it.
+    // (KiCad's own writer puts a line break after the name of a block: `(arc` and a newline, where ours writes it on one line.)
+    for (what, want) in [("\t(arc\n", 1), ("\t(dimension\n", 1), ("\t(group \"kept together\"", 1), ("(locked yes)", 2), ("(teardrop\n", 1), ("(keepout\n", 1)] {
+        assert_eq!(theirs.matches(what).count(), want, "KiCad's file has {want} of {what:?}");
+    }
+
+    let (back, _model, _notes) = import_kicad_pcb(&theirs).unwrap_or_else(|e| panic!("import of KiCad's own file failed: {e:?}"));
+    let rt = back.routing.as_ref().expect("routing comes back");
+    let dr = back.drawings.as_ref().expect("drawings come back");
+
+    // The arc is still an arc, with the same three points.
+    let arcs: Vec<_> = rt.tracks.iter().filter_map(|t| t.arc()).collect();
+    assert_eq!(arcs, vec![(at(1_000, 1_000), at(2_000, 500), at(3_000, 1_000))], "the arc track");
+    // The dimension keeps its kind, its feature points, its height and its format.
+    assert_eq!(dr.dimensions.len(), 1, "the dimension");
+    let d = &dr.dimensions[0];
+    assert_eq!((d.kind.clone(), d.start, d.end, d.layer.as_str()), (dimension.kind.clone(), dimension.start, dimension.end, "Dwgs.User"));
+    assert_eq!((d.prefix.as_str(), d.units, d.units_format, d.precision), ("L=", DimensionUnits::Mm, DimensionUnitsFormat::BareSuffix, 2));
+    // The group keeps its name and every member (the footprint, the arc track, the via if there is one).
+    assert_eq!(dr.groups.len(), 1, "the group");
+    assert_eq!(dr.groups[0].name, "kept together");
+    assert_eq!(dr.groups[0].member_ids.len(), members.len(), "members {:?}", dr.groups[0].member_ids);
+    assert!(dr.groups[0].member_ids.contains(&footprint), "the footprint is a member");
+    // The locks: the footprint and the arc track, nothing else.
+    assert_eq!(dr.locked_ids.len(), 2, "locked {:?}", dr.locked_ids);
+    assert!(dr.locked_ids.contains(&footprint), "the footprint stays locked");
+    // The zones: a teardrop, a keepout and the pour with its own settings.
+    assert!(rt.zones.iter().any(|z| z.teardrop), "the teardrop flag");
+    let keepout = rt.zones.iter().find(|z| z.is_rule_area).expect("the keepout");
+    assert!(keepout.keepout_tracks && keepout.keepout_vias && !keepout.keepout_pads, "the keepout's own flags: {keepout:?}");
+    let pour = rt.zones.iter().find(|z| z.name == "pour").expect("the pour keeps its name");
+    assert_eq!((pour.priority, pour.clearance, pour.min_thickness, pour.layer.as_str()), (3, 300, 180, "B.Cu"), "the pour's own settings");
+    println!("KiCad loaded and re-saved {} bytes of our board; arc, dimension, group, locks, teardrop, keepout and pour all came back", theirs.len());
+}
+
 /// Runs our pipeline, then kicad-cli, on each board: most of a minute in release and many minutes in debug, so it
 /// runs only when `EDA_SLOW_TESTS` is set. `tools/check.sh full`, the check
 /// before a merge lands on main, sets it.
