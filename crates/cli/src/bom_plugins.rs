@@ -91,10 +91,11 @@ pub fn list(dir: &Path) -> Vec<(Plugin, PathBuf)> {
             if !is_generator_file(&file) || !path.is_file() {
                 return None;
             }
-            // `kicad_netlist_reader.py` and `kicad_utils.py` are the generators' own helper modules, not generators: no `@package` header.
+            // `kicad_netlist_reader.py` and `kicad_utils.py` are the generators' own helper modules, not generators: a generator's header gives the
+            // command line that runs it, with the netlist (`"%I"`) as its input.
             let text = std::fs::read_to_string(&path).ok()?;
             let plugin = parse(&file, &text);
-            (!plugin.info.is_empty()).then_some((plugin, path))
+            plugin.info.contains("%I").then_some((plugin, path))
         })
         .collect();
     found.sort_by(|a, b| a.0.file.cmp(&b.0.file));
@@ -171,6 +172,8 @@ mod tests {
         std::fs::write(dir.join("b_gen.py"), PY).unwrap();
         std::fs::write(dir.join("a_gen.py"), PY).unwrap();
         std::fs::write(dir.join("kicad_utils.py"), "import os\n").unwrap();
+        // a helper module may have an @package header too, but it is not run on a netlist
+        std::fs::write(dir.join("kicad_netlist_reader.py"), "\"\"\"\n    @package\n    A Python module to read the netlist.\n\"\"\"\n").unwrap();
         std::fs::write(dir.join("README-bom.txt"), "hello").unwrap();
         let names: Vec<String> = list(&dir).into_iter().map(|(p, _)| p.file).collect();
         let _ = std::fs::remove_dir_all(&dir);
