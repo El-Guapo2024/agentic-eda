@@ -125,6 +125,9 @@ pub struct LinePlacer {
     pub width: Um,
     pub origin: Point,
     pub direction: Direction45,
+    /// The posture the session started with (`m_initial_direction`): what
+    /// Backspace goes back to once every run has been undone.
+    initial_direction: Direction45,
     pub manually_forced: bool,
     pub placing_via: bool,
     pub via_diameter: Um,
@@ -151,7 +154,7 @@ impl LinePlacer {
             Some(Item::Segment(s)) if s.b == p => Direction45::from_seg(s.a, s.b),
             _ => Direction45::N,
         };
-        LinePlacer { net, width, origin: p, direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: HashMap::new(), displaced_vias: HashMap::new() }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: HashMap::new(), displaced_vias: HashMap::new() }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -371,7 +374,7 @@ impl LinePlacer {
             .last()
             .and_then(|r| r.pts.windows(2).rev().find(|w| w[0] != w[1]))
             .map(|w| Direction45::from_seg(w[0], w[1]))
-            .unwrap_or(self.direction);
+            .unwrap_or(self.initial_direction);
         let _ = popped;
         true
     }
