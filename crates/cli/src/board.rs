@@ -2948,8 +2948,8 @@ mod tests {
                     on(Cmd::RotateSymbol { id: id.clone(), quarter_turns: 1, unit: None }),
                     on(Cmd::MirrorSymbol { id: id.clone(), unit: None }),
                     // the same four through the verb that moves any item: the wires follow the drag, the net list stays
-                    verb(eda_ops::sch_move::SchMoveCmd::Drag { ids: one.clone(), vertices: Default::default(), dx, dy, ortho: true, grid: 0 }),
-                    verb(eda_ops::sch_move::SchMoveCmd::Move { ids: one.clone(), dx: -dx, dy: -dy }),
+                    verb(eda_ops::sch_move::SchMoveCmd::Drag { ids: one.clone(), vertices: Default::default(), dx, dy, ortho: true, grid: 0, turns: Vec::new(), about: None }),
+                    verb(eda_ops::sch_move::SchMoveCmd::Move { ids: one.clone(), dx: -dx, dy: -dy, turns: Vec::new(), about: None }),
                     verb(eda_ops::sch_move::SchMoveCmd::Rotate { ids: one.clone(), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
                     verb(eda_ops::sch_move::SchMoveCmd::Mirror { ids: one.clone(), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
                     verb(eda_ops::sch_move::SchMoveCmd::AlignToGrid { ids: one.clone(), grid: 0 }),
@@ -3004,9 +3004,9 @@ mod tests {
         let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value(d.schematic.as_ref().unwrap()).unwrap();
         let start = sheet_of(&load(&dir).unwrap().1);
         let commands = vec![
-            Cmd::SchMove(V::Move { ids: all.clone(), dx: 2_540, dy: -1_270 }),
-            Cmd::SchMove(V::Drag { ids: vec!["R1".into(), "lbl_g".into(), "sheet_a".into()], vertices: Default::default(), dx: 5_080, dy: 2_540, ortho: true, grid: 0 }),
-            Cmd::SchMove(V::Drag { ids: vec!["wire_b".into()], vertices: [("wire_b".to_string(), vec![0usize])].into_iter().collect(), dx: 0, dy: 2_540, ortho: true, grid: 0 }),
+            Cmd::SchMove(V::Move { ids: all.clone(), dx: 2_540, dy: -1_270, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Drag { ids: vec!["R1".into(), "lbl_g".into(), "sheet_a".into()], vertices: Default::default(), dx: 5_080, dy: 2_540, ortho: true, grid: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Drag { ids: vec!["wire_b".into()], vertices: [("wire_b".to_string(), vec![0usize])].into_iter().collect(), dx: 0, dy: 2_540, ortho: true, grid: 0, turns: Vec::new(), about: None }),
             Cmd::SchMove(V::Rotate { ids: all.clone(), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
             Cmd::SchMove(V::Rotate { ids: vec!["lbl_a".into()], vertices: Default::default(), ccw: false, about: None, grid: 0 }),
             Cmd::SchMove(V::Mirror { ids: all.clone(), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
@@ -3064,7 +3064,7 @@ mod tests {
                 let (_, now, model_now) = load(&dir).unwrap();
                 let before = ends_on_pins(&now, &model_now, &id, &sheet);
                 wired += (before > 0) as usize;
-                let cmd = Cmd::SchMove(eda_ops::sch_move::SchMoveCmd::Drag { ids: vec![id.clone()], vertices: Default::default(), dx: 5_080, dy: 2_540, ortho: true, grid: 0 });
+                let cmd = Cmd::SchMove(eda_ops::sch_move::SchMoveCmd::Drag { ids: vec![id.clone()], vertices: Default::default(), dx: 5_080, dy: 2_540, ortho: true, grid: 0, turns: Vec::new(), about: None });
                 let cmd = match &sheet {
                     None => cmd,
                     Some(sid) => Cmd::OnSheet { sheet: sid.clone(), cmd: Box::new(cmd) },

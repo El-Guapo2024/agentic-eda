@@ -9,7 +9,7 @@
 // board sizes this project deals with). Angles in `rot` are degrees
 // (the backend already divides millidegrees by 1000 before sending).
 
-import type { SchEditCmd, SchGraphic } from "./schEditTypes";
+import type { SchEditCmd, SchGraphic, SchMoveCmd } from "./schEditTypes";
 
 export type Um = number;
 export type Degrees = number;
@@ -971,6 +971,8 @@ export type Cmd =
   | { op: "swap_sch_items"; a: string; b: string }
   /** The schematic editor's other tool verbs (lock, break, convert text, shapes, sheet pins, ...) -- see api/schEditTypes.ts. */
   | ({ op: "sch_edit" } & SchEditCmd)
+  /** Move, Drag, Rotate, Mirror and Align of every kind of schematic item (crates/ops/src/sch_move.rs) -- see api/schEditTypes.ts. */
+  | ({ op: "sch_move" } & SchMoveCmd)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
@@ -1582,6 +1584,8 @@ export interface SchematicLabel {
   at: [Um, Um];
   scope: LabelScope;
   shape: LabelShape | null;
+  /** Which way the text runs from the anchor once Rotate or Mirror has set it (`SCH_LABEL_BASE::GetSpinStyle`); absent or null reads off the wire that ends at the label. */
+  spin?: "right" | "up" | "left" | "bottom" | null;
 }
 
 /** `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, deliberately minimal next to a PCB `BoardText` (no layer/justify/mirror -- a schematic has none of those concepts). */

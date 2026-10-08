@@ -32,6 +32,7 @@ use crate::kicad_lane::Lane;
 use crate::route_api;
 use crate::sch_api;
 use crate::sch_export_api;
+use crate::sch_move_api;
 use crate::sch_output_api;
 use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
@@ -620,6 +621,8 @@ fn handle(
         }
         // Symbol Fields Table / Find / ERC pin map backends: `crate::sch_api`.
         ("POST", "/api/sch/fields_table") => respond(stream, "200 OK", "application/json", sch_api::fields_table(dir, &body).to_string().as_bytes()),
+        // Move, Drag, Rotate and Mirror previews: the commands applied in memory, the moved geometry back (`crate::sch_move_api`).
+        ("POST", "/api/sch/move_preview") => respond(stream, "200 OK", "application/json", sch_move_api::move_preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
@@ -1406,7 +1409,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 eda_model::ir::LabelKind::Global { shape } => ("global", Some(*shape)),
                 eda_model::ir::LabelKind::Hierarchical { shape } => ("hierarchical", Some(*shape)),
             };
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str) })
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id) })
         })
         .collect();
     let texts: Vec<Value> = sch

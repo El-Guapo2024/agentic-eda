@@ -103,3 +103,40 @@ export type SchEditCmd =
   | { verb: "change_symbol"; id: string; lib_id: string }
   /** Update Symbol(s) from Library: the symbols placed with these library ids resolve from the project's edited library symbol (`published`). */
   | { verb: "update_library_symbols"; lib_ids: string[] };
+
+/**
+ * Move, Drag, Rotate, Mirror and Align to Grid for every kind of schematic item -- crates/ops/src/sch_move.rs (`SchMoveCmd`, sent as
+ * `{ op: "sch_move", verb: ..., ... }`). `ids` are item ids (a symbol's reference moves every placed unit, `U1#2` names one).
+ */
+export type SchMoveCmd =
+  /** `M`: every item moves rigidly; a wire on a moved pin is left where it is. */
+  | { verb: "move"; ids: string[]; dx: Um; dy: Um }
+  /** `G` and a click-drag: the items move and the wires, labels, junctions and no-connects attached follow; `vertices` names the picked points of a wire (`STARTPOINT` / `ENDPOINT`), a wire not in it is picked whole; `ortho` keeps right angles. */
+  | { verb: "drag"; ids: string[]; vertices?: Record<string, number[]>; dx: Um; dy: Um; ortho?: boolean; grid?: Um }
+  /** `R` / Shift+`R`: a quarter turn; `about` overrides the turn point (the cursor, while the selection is held). */
+  | { verb: "rotate"; ids: string[]; vertices?: Record<string, number[]>; ccw?: boolean; about?: PointXY; grid?: Um }
+  /** `X` (`vertical` false) / `Y`. */
+  | { verb: "mirror"; ids: string[]; vertices?: Record<string, number[]>; vertical?: boolean; about?: PointXY; grid?: Um }
+  /** Align Items to Grid: each item to the grid by where most of its connection points are, with the wires on it. */
+  | { verb: "align_to_grid"; ids: string[]; grid?: Um }
+  /** Align Left / Right / Top / Bottom / Center: each item by its own offset, snapped to the connection grid, with its wires. */
+  | { verb: "align"; moves: Array<{ id: string; dx: Um; dy: Um }>; grid?: Um };
+
+/**
+ * What a move preview changes on the sheet (`POST /api/sch/move_preview`): the moved items' new geometry, which the view lays over the
+ * sheet it already has. Collections with ids replace the item of that id; `wires`, `junctions`, `no_connects` and `bus_entries` are the
+ * whole list, since a drag adds and removes some.
+ */
+export interface SchMovePatch {
+  symbols: Array<{ id: string; unit: number; at: [number, number]; rot: number; mirror: "x" | "y" | null }>;
+  power_symbols: Array<{ id: string; at: [number, number]; rot: number }>;
+  wires: Array<{ id: string; net: string; pts: Array<[number, number]>; bus: boolean }>;
+  labels: Array<{ id: string; at: [number, number]; spin: "right" | "up" | "left" | "bottom" | null }>;
+  texts: Array<{ id: string; at: [number, number]; angle: number }>;
+  no_connects: Array<{ id: string; at: [number, number] }>;
+  bus_entries: Array<{ id: string; at: [number, number]; size: [number, number] }>;
+  junctions: Array<{ id: string; at: [number, number] }>;
+  lines: Array<{ id: string; pts: Array<[number, number]> }>;
+  graphics: SchGraphic[];
+  sheets: Array<{ id: string; at: [number, number]; size: [number, number]; pins: Array<{ id: string; at: [number, number] }> }>;
+}

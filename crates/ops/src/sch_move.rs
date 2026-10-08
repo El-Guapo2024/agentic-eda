@@ -45,7 +45,17 @@ pub struct AlignMove {
 pub enum SchMoveCmd {
     /// `M` (`SCH_MOVE_TOOL::Main`, `MOVE`): every item moves rigidly by (`dx`, `dy`). A wire attached to a moved pin is not stretched: it
     /// stays where it is (`moveItem` moves both ends of a line in this mode).
-    Move { ids: Vec<String>, dx: Um, dy: Um },
+    Move {
+        ids: Vec<String>,
+        dx: Um,
+        dy: Um,
+        /// R, Shift+R, X and Y pressed while the items were held, in order (`SCH_EDIT_TOOL::Rotate` / `Mirror` during a move): done
+        /// to the held items after the move, about `about` (the point they are held at) for a turn, as one step with it.
+        #[serde(default)]
+        turns: Vec<Turn>,
+        #[serde(default)]
+        about: Option<Point>,
+    },
     /// `G` and a click-drag (`DRAG`): the items move and the wires, labels, junctions and no-connects attached to them follow, a wire
     /// stretching from the item it is on to where the item has gone, with right angles kept (`ortho`, KiCad's 90 and 45 degree line modes;
     /// off is the free angle line mode). `vertices` names, for a wire, which of its points are picked, as a click near one end of a wire
@@ -61,6 +71,11 @@ pub enum SchMoveCmd {
         ortho: bool,
         #[serde(default)]
         grid: Um,
+        /// As for `Move`: turns made while the items were held; they turn the wires dragged along too.
+        #[serde(default)]
+        turns: Vec<Turn>,
+        #[serde(default)]
+        about: Option<Point>,
     },
     /// `R` (counter-clockwise) and Shift+`R` (`ccw` false): one item turns about its own anchor (or, for a shape or sheet, the half-grid
     /// point nearest its centre), several about the half-grid point nearest the centre of the selection; a lone wire turns about its far
@@ -118,7 +133,7 @@ impl SchMoveCmd {
         let mm = |v: Um| format!("{:.2}", v as f64 / 1000.0);
         let list = |ids: &[String]| ids.join(" ");
         match self {
-            SchMoveCmd::Move { ids, dx, dy } => format!("schematic move {} --by {},{}", list(ids), mm(*dx), mm(*dy)),
+            SchMoveCmd::Move { ids, dx, dy, .. } => format!("schematic move {} --by {},{}", list(ids), mm(*dx), mm(*dy)),
             SchMoveCmd::Drag { ids, dx, dy, .. } => format!("schematic drag {} --by {},{}", list(ids), mm(*dx), mm(*dy)),
             SchMoveCmd::Rotate { ids, ccw, .. } => format!("schematic rotate {} {}", list(ids), if *ccw { "--ccw" } else { "--cw" }),
             SchMoveCmd::Mirror { ids, vertical, .. } => format!("schematic mirror {} {}", list(ids), if *vertical { "--vertical" } else { "--horizontal" }),
@@ -167,21 +182,23 @@ fn fail(check: &str, subject: &str, why: impl Into<String>) -> Vec<CheckResult> 
 pub(crate) fn run(sch: &SchematicSection, model: &ConstraintModel, cmd: &SchMoveCmd) -> Result<SchematicSection, Vec<CheckResult>> {
     let mut scene = Scene::new(sch, model);
     match cmd {
-        SchMoveCmd::Move { ids, dx, dy } => {
+        SchMoveCmd::Move { ids, dx, dy, turns, about } => {
             select(&mut scene, ids, &BTreeMap::new())?;
-            move_selection(&mut scene, Point { x: *dx, y: *dy });
+            move_selection(&mut scene, Point { x: *dx, y: *dy }, turns, *about);
         }
-        SchMoveCmd::Drag { ids, vertices, dx, dy, ortho, grid } => {
+        SchMoveCmd::Drag { ids, vertices, dx, dy, ortho, grid, turns, about } => {
             select(&mut scene, ids, vertices)?;
-            drag_selection(&mut scene, Point { x: *dx, y: *dy }, *ortho, grid_of(*grid));
+            drag_selection(&mut scene, Point { x: *dx, y: *dy }, *ortho, grid_of(*grid), turns, *about);
         }
         SchMoveCmd::Rotate { ids, vertices, ccw, about, grid } => {
             select(&mut scene, ids, vertices)?;
-            turn_selection(&mut scene, Turn::Rotate { ccw: *ccw }, *about, grid_of(*grid));
+            turn_selection(&mut scene, if *ccw { Turn::RotCcw } else { Turn::RotCw }, *about, grid_of(*grid), false);
+            finish_turn(&mut scene);
         }
         SchMoveCmd::Mirror { ids, vertices, vertical, about, grid } => {
             select(&mut scene, ids, vertices)?;
-            turn_selection(&mut scene, Turn::Mirror { vertical: *vertical }, *about, grid_of(*grid));
+            turn_selection(&mut scene, if *vertical { Turn::MirrorV } else { Turn::MirrorH }, *about, grid_of(*grid), false);
+            finish_turn(&mut scene);
         }
         SchMoveCmd::AlignToGrid { ids, grid } => {
             select(&mut scene, ids, &BTreeMap::new())?;
@@ -316,31 +333,45 @@ fn remove_orphaned_junctions(scene: &mut Scene) {
     }
 }
 
-fn move_selection(scene: &mut Scene, delta: Point) {
+fn move_selection(scene: &mut Scene, delta: Point, turns: &[Turn], about: Option<Point>) {
     let internal = internal_points(scene);
     remove_orphaned_junctions(scene);
     for it in scene.in_selection() {
         scene.move_item(it, delta);
     }
+    for &t in turns {
+        turn_selection(scene, t, about, GRID_UM, true);
+    }
     scene.finalize(None, &internal);
 }
 
-fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Um) {
+fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Um, turns: &[Turn], about: Option<Point>) {
     let mut st = Drag { ortho, grid, ..Default::default() };
     scene.setup_items_for_drag(&mut st);
     let internal = internal_points(scene);
     remove_orphaned_junctions(scene);
     scene.perform_item_move(&mut st, delta, true);
+    for &t in turns {
+        turn_selection(scene, t, about, GRID_UM, true);
+    }
     scene.finalize(Some(&st), &internal);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Rotate and Mirror
 
-#[derive(Clone, Copy)]
-enum Turn {
-    Rotate { ccw: bool },
-    Mirror { vertical: bool },
+/// One quarter turn or mirror of a held selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Turn {
+    /// `R`: counter-clockwise.
+    RotCcw,
+    /// Shift+`R`: clockwise.
+    RotCw,
+    /// `X`: mirror left-right.
+    MirrorH,
+    /// `Y`: mirror top-bottom.
+    MirrorV,
 }
 
 /// `GetNearestHalfGridPosition`.
@@ -394,14 +425,20 @@ fn principal_count(scene: &Scene, items: &[Item]) -> usize {
     }).sum()
 }
 
-fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um) {
-    let items = scene.in_selection();
-    let single = principal_count(scene, &items) == 1;
+/// `SCH_EDIT_TOOL::Rotate` and `Mirror` for the selection as it stands (the user's items, and what a drag added). `moving` is true while
+/// the items are held (`moving && selection.HasReferencePoint()`), when `about` is where they are held.
+fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um, moving: bool) {
+    let all = scene.in_selection();
+    if all.is_empty() {
+        return;
+    }
+    // what the user picked: not "SELECTED_BY_DRAG" (the lines and labels a drag added are turned with them, not counted)
+    let principal: Vec<Item> = all.iter().copied().filter(|it| !scene.is_dragged(*it)).collect();
     // sheet pins follow their sheet when it is selected too
-    let sheets: BTreeSet<usize> = items.iter().filter_map(|it| if let Item::Sheet(s) = it { Some(*s) } else { None }).collect();
+    let sheets: BTreeSet<usize> = all.iter().filter_map(|it| if let Item::Sheet(s) = it { Some(*s) } else { None }).collect();
     // a no-connect sitting on a sheet pin follows the pin (`sheet->GetNoConnects()`)
     let mut nc_on_pins: Vec<(usize, usize, usize)> = Vec::new();
-    for it in &items {
+    for it in &all {
         let sheet_ids: Vec<usize> = match it {
             Item::Sheet(s) => vec![*s],
             Item::SheetPin(s, _) => vec![*s],
@@ -415,33 +452,45 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um)
             }
         }
     }
+    let reference = if moving { about } else { None };
 
-    if single {
-        let head = items[0];
-        match turn {
-            Turn::Rotate { ccw } => {
-                let rot_point = about.unwrap_or_else(|| {
-                    if scene.is_connectable(head) {
-                        scene.position(head)
-                    } else {
-                        half_grid(scene.item_box(head).map(box_center).unwrap_or_else(|| scene.position(head)), grid)
+    match turn {
+        Turn::RotCcw | Turn::RotCw => {
+            let ccw = turn == Turn::RotCcw;
+            if principal_count(scene, &principal) == 1 {
+                let head = principal[0];
+                let pivot = rotate_single(scene, head, reference, ccw, grid);
+                // "We've already rotated the user selected item if there was only one. We're just here to rotate the ends of wires that were attached to it."
+                let dragged: Vec<Item> = all.iter().copied().filter(|it| scene.is_dragged(*it)).collect();
+                for it in dragged {
+                    rotate_item(scene, it, pivot, ccw, grid);
+                }
+            } else {
+                let center = reference.unwrap_or_else(|| half_grid(selection_center(scene, &all), grid));
+                for &it in &all {
+                    if let Item::SheetPin(s, _) = it {
+                        if sheets.contains(&s) {
+                            continue; // the sheet turns its pins
+                        }
                     }
-                });
-                rotate_single(scene, head, rot_point, ccw, grid, about);
-            }
-            Turn::Mirror { vertical } => mirror_single(scene, head, vertical, about, grid),
-        }
-    } else {
-        let center = about.unwrap_or_else(|| half_grid(selection_center(scene, &items), grid));
-        for &it in &items {
-            if let Item::SheetPin(s, _) = it {
-                if sheets.contains(&s) {
-                    continue; // the sheet turns its pins
+                    rotate_item(scene, it, center, ccw, grid);
                 }
             }
-            match turn {
-                Turn::Rotate { ccw } => rotate_item(scene, it, center, ccw, grid),
-                Turn::Mirror { vertical } => mirror_item(scene, it, center, vertical, grid),
+        }
+        Turn::MirrorH | Turn::MirrorV => {
+            let vertical = turn == Turn::MirrorV;
+            if all.len() == 1 {
+                mirror_single(scene, all[0], vertical, about, grid);
+            } else {
+                let center = about.unwrap_or_else(|| half_grid(selection_center(scene, &all), grid));
+                for &it in &all {
+                    if let Item::SheetPin(s, _) = it {
+                        if sheets.contains(&s) {
+                            continue;
+                        }
+                    }
+                    mirror_item(scene, it, center, vertical, grid);
+                }
             }
         }
     }
@@ -450,45 +499,81 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um)
     for (s, pi, ni) in nc_on_pins {
         scene.sch.no_connects[ni].at = scene.sch.sheets[s].pins[pi].at;
     }
-
-    let items = scene.in_selection();
-    let connections = items.iter().any(|it| scene.is_connectable(*it));
-    if matches!(turn, Turn::Rotate { .. }) || connections {
-        scene.trim_overlapping_wires(&items);
-        scene.add_junctions_if_needed(&items);
-        scene.clean_up();
-    }
 }
 
-/// `SCH_EDIT_TOOL::Rotate`'s single-item switch.
-fn rotate_single(scene: &mut Scene, head: Item, rot_point: Point, ccw: bool, grid: Um, about: Option<Point>) {
+/// The tail of Rotate and Mirror when nothing is being held (`TrimOverLappingWires`, `AddJunctionsIfNeeded`, `CleanUp`).
+fn finish_turn(scene: &mut Scene) {
+    let items = scene.in_selection();
+    scene.trim_overlapping_wires(&items);
+    scene.add_junctions_if_needed(&items);
+    scene.clean_up();
+}
+
+/// `SCH_EDIT_TOOL::Rotate`'s single-item switch. Returns the point the item was turned about, which the lines a drag brought along turn
+/// about too.
+fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: bool, grid: Um) -> Point {
+    // "if( moving && selection.HasReferencePoint() ) rotPoint = selection.GetReferencePoint(); else if( head->IsConnectable() ) rotPoint =
+    // head->GetPosition(); else rotPoint = GetNearestHalfGridPosition( head->GetBoundingBox().GetCenter() )"
+    let default_pivot = |scene: &Scene| {
+        reference.unwrap_or_else(|| {
+            if scene.is_connectable(head) {
+                scene.position(head)
+            } else {
+                half_grid(scene.item_box(head).map(box_center).unwrap_or_else(|| scene.position(head)), grid)
+            }
+        })
+    };
     match head {
-        Item::Symbol(_) | Item::Power(_) => rotate_item(scene, head, rot_point, ccw, grid),
         // text and every kind of label turn about their own anchor
-        Item::Text(_) | Item::Label(_) => rotate_item(scene, head, scene.position(head), ccw, grid),
-        Item::Graphic(i) if matches!(scene.graphic(i).shape, SchGraphicKind::Directive { .. }) => rotate_item(scene, head, scene.position(head), ccw, grid),
+        Item::Text(_) | Item::Label(_) => {
+            let pivot = default_pivot(scene);
+            let at = scene.position(head);
+            rotate_item(scene, head, at, ccw, grid);
+            pivot
+        }
+        Item::Graphic(i) if matches!(scene.graphic(i).shape, SchGraphicKind::Directive { .. }) => {
+            let pivot = default_pivot(scene);
+            let at = scene.position(head);
+            rotate_item(scene, head, at, ccw, grid);
+            pivot
+        }
         Item::SheetPin(s, p) => {
             // "Rotate pin within parent sheet"
+            let pivot = default_pivot(scene);
             let sheet = scene.sch.sheets[s].clone();
             let center = box_center((sheet.at, Point { x: sheet.at.x + sheet.size.0, y: sheet.at.y + sheet.size.1 }));
             rotate_sheet_pin(&mut scene.sch.sheets[s], p, &sheet, center, ccw);
+            pivot
         }
         Item::Seg(i) => {
-            // "Equal checks for both and neither" -- a line selected at neither end, or both, turns whole
+            // "Equal checks for both and neither" -- a line selected at neither end, or both, turns whole, about its far end
             let s = &mut scene.segs[i];
             if s.has(F_START) == s.has(F_END) {
                 s.flags |= F_START | F_END;
             }
-            let pivot = about.unwrap_or(if scene.segs[i].has(F_START) { scene.segs[i].b } else { scene.segs[i].a });
+            let pivot = if scene.segs[i].has(F_START) { scene.segs[i].b } else { scene.segs[i].a };
             rotate_item(scene, head, pivot, ccw, grid);
+            pivot
+        }
+        Item::NoteLine(i) => {
+            // a graphic line is a `SCH_LINE` too: a lone one turns about its end
+            let pts = scene.sch.lines[i].pts.clone();
+            let pivot = if pts.len() == 2 { pts[1] } else { default_pivot(scene) };
+            rotate_item(scene, head, pivot, ccw, grid);
+            pivot
         }
         Item::Sheet(i) => {
             // "Rotate the sheet on itself. Sheets do not have an anchor point."
             let s = &scene.sch.sheets[i];
-            let c = about.unwrap_or_else(|| half_grid(box_center((s.at, Point { x: s.at.x + s.size.0, y: s.at.y + s.size.1 })), grid));
+            let c = half_grid(box_center((s.at, Point { x: s.at.x + s.size.0, y: s.at.y + s.size.1 })), grid);
             rotate_item(scene, head, c, ccw, grid);
+            c
         }
-        _ => rotate_item(scene, head, rot_point, ccw, grid),
+        other => {
+            let pivot = default_pivot(scene);
+            rotate_item(scene, other, pivot, ccw, grid);
+            pivot
+        }
     }
 }
 

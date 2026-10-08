@@ -64,6 +64,11 @@ impl<'m> Scene<'m> {
         }
     }
 
+    /// `SELECTED_BY_DRAG`: added by the drag, not picked.
+    pub(crate) fn is_dragged(&self, it: Item) -> bool {
+        self.has_by_drag(it)
+    }
+
     fn has_by_drag(&self, it: Item) -> bool {
         match it {
             Item::Seg(i) => self.segs[i].has(F_BY_DRAG),

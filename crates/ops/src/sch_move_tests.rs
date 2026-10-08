@@ -71,11 +71,11 @@ fn ids(v: &[&str]) -> Vec<String> {
 }
 
 fn mv(v: &[&str], dx: Um, dy: Um) -> SchMoveCmd {
-    SchMoveCmd::Move { ids: ids(v), dx, dy }
+    SchMoveCmd::Move { ids: ids(v), dx, dy, turns: Vec::new(), about: None }
 }
 
 fn drag(v: &[&str], dx: Um, dy: Um) -> SchMoveCmd {
-    SchMoveCmd::Drag { ids: ids(v), vertices: BTreeMap::new(), dx, dy, ortho: true, grid: 0 }
+    SchMoveCmd::Drag { ids: ids(v), vertices: BTreeMap::new(), dx, dy, ortho: true, grid: 0, turns: Vec::new(), about: None }
 }
 
 fn rotate(v: &[&str], ccw: bool) -> SchMoveCmd {
@@ -133,7 +133,7 @@ fn move_shifts_every_kind_of_item_by_the_offset_and_nothing_else() {
     let gids = graphic_ids(&before);
     let mut all = ids(&["R1", "wire_a", "lbl_local", "lbl_global", "lbl_hier", "#PWR01", "txt_a", "nc_a", "bent_a", "jct_a", "sln_a", "sheet_a"]);
     all.extend(gids);
-    let after = run_on(before.clone(), SchMoveCmd::Move { ids: all, dx: 2 * G, dy: -G });
+    let after = run_on(before.clone(), SchMoveCmd::Move { ids: all, dx: 2 * G, dy: -G, turns: Vec::new(), about: None });
     let d = |q: Point| p(q.x + 2 * G, q.y - G);
 
     assert_eq!(after.symbols[0].at, d(before.symbols[0].at));
@@ -179,7 +179,7 @@ fn move_leaves_a_wire_where_it_is_when_only_the_symbol_moves() {
 #[test]
 fn move_of_nothing_or_of_an_unknown_id_is_refused_and_a_locked_item_is_not_moved() {
     let mut s = every_kind();
-    assert_eq!(run_err(s.clone(), SchMoveCmd::Move { ids: Vec::new(), dx: G, dy: 0 }), "ops_nothing_selected");
+    assert_eq!(run_err(s.clone(), SchMoveCmd::Move { ids: Vec::new(), dx: G, dy: 0, turns: Vec::new(), about: None }), "ops_nothing_selected");
     assert_eq!(run_err(s.clone(), mv(&["R404"], G, 0)), "ops_unknown_item");
     s.extras.set_locked("R1", true);
     assert_eq!(run_err(s.clone(), mv(&["R1"], G, 0)), "ops_locked");
@@ -392,7 +392,7 @@ fn drag_of_a_wire_end_stretches_only_that_end_and_its_neighbour_follows() {
     // taking wire_b's end with it, which is parallel to the move
     let mut vertices = BTreeMap::new();
     vertices.insert("wire_a".to_string(), vec![0usize]);
-    let after = run_on(s, SchMoveCmd::Drag { ids: ids(&["wire_a"]), vertices, dx: 0, dy: 2 * G, ortho: true, grid: 0 });
+    let after = run_on(s, SchMoveCmd::Drag { ids: ids(&["wire_a"]), vertices, dx: 0, dy: 2 * G, ortho: true, grid: 0, turns: Vec::new(), about: None });
     let got = wire_pts(&after);
     assert_eq!(got, vec![vec![p(0, 2 * G), p(12_700, 2 * G)], vec![p(12_700, 2 * G), p(12_700, 12_700)]], "{got:?}");
 }
@@ -403,7 +403,7 @@ fn drag_with_free_angles_just_moves_the_picked_end() {
     s.wires.push(wire("wire_a", &[p(0, 0), p(12_700, 0)]));
     let mut vertices = BTreeMap::new();
     vertices.insert("wire_a".to_string(), vec![1usize]);
-    let after = run_on(s, SchMoveCmd::Drag { ids: ids(&["wire_a"]), vertices, dx: 0, dy: 2 * G, ortho: false, grid: 0 });
+    let after = run_on(s, SchMoveCmd::Drag { ids: ids(&["wire_a"]), vertices, dx: 0, dy: 2 * G, ortho: false, grid: 0, turns: Vec::new(), about: None });
     assert_eq!(wire_pts(&after), vec![vec![p(0, 0), p(12_700, 2 * G)]]);
 }
 
@@ -709,6 +709,40 @@ fn a_sheet_mirrors_in_place_and_its_pins_change_sides() {
     assert_eq!(a.pins[1].at.x, a.at.x);
 }
 
+// ------------------------------------------------------------------------------------------------------------ turning while held
+
+#[test]
+fn a_symbol_turned_while_it_is_held_turns_about_the_point_it_is_held_at() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(20_320, 25_400)));
+    // picked up, carried 5 cells right, and R pressed with the cursor 3 cells further right
+    let cmd = SchMoveCmd::Move { ids: ids(&["R1"]), dx: 5 * G, dy: 0, turns: vec![crate::sch_move::Turn::RotCcw], about: Some(p(30_480, 25_400)) };
+    let after = run_on(s.clone(), cmd);
+    assert_eq!(after.symbols[0].at, rotate_point(p(26_670, 25_400), p(30_480, 25_400), true));
+    assert_eq!(after.symbols[0].rot, 90_000);
+    // two turns in order: turn, then mirror the held selection
+    let two = run_on(s, SchMoveCmd::Move { ids: ids(&["R1"]), dx: 0, dy: 0, turns: vec![crate::sch_move::Turn::RotCcw, crate::sch_move::Turn::MirrorH], about: Some(p(20_320, 25_400)) });
+    // a quarter turn then a left-right flip is KiCad's "270 degrees, mirrored about x" (`GetOrientation` takes the first of its twelve that matches)
+    assert_eq!((two.symbols[0].rot, two.symbols[0].mirrored, two.symbols[0].mirror_y), (270_000, false, true));
+}
+
+#[test]
+fn a_drag_turned_while_it_is_held_turns_the_wires_it_brought_along() {
+    let mut s = section();
+    s.symbols.push(sym("R1", p(20_320, 45_720)));
+    s.symbols.push(sym("R2", p(20_320, 10_160)));
+    s.wires.push(wire("wire_a", &[p(20_320, 41_910), p(20_320, 13_970)]));
+    // R1 dragged straight down (the wire only gets longer), then turned about its own place
+    let cmd = SchMoveCmd::Drag { ids: ids(&["R1"]), vertices: BTreeMap::new(), dx: 0, dy: 2 * G, ortho: true, grid: 0, turns: vec![crate::sch_move::Turn::RotCcw], about: Some(p(20_320, 45_720 + 2 * G)) };
+    let after = run_on(s, cmd);
+    let r1 = after.symbols.iter().find(|x| x.id == "R1").unwrap();
+    assert_eq!((r1.at, r1.rot), (p(20_320, 45_720 + 2 * G), 90_000));
+    // the wire's end on R1's pin 1 turned with the symbol: pin 1 was 3 cells above its origin, a quarter turn puts it 3 cells to the left
+    let pin1 = pin_points_of(&after, "R1")[0];
+    assert_eq!(pin1, p(20_320 - 3_810, 45_720 + 2 * G));
+    assert!(after.wires.iter().any(|w| w.pts.contains(&pin1)), "a wire still ends on the pin: {:?}", after.wires);
+}
+
 // ------------------------------------------------------------------------------------------------------------------ align to grid
 
 #[test]
@@ -828,7 +862,7 @@ fn a_selection_of_symbols_only_is_layout_and_the_rest_edits_connectivity() {
 fn the_verbs_read_back_from_the_json_the_studio_sends() {
     let cmd: Cmd = serde_json::from_str(r#"{"op":"sch_move","verb":"drag","ids":["R1","wire_a"],"dx":2540,"dy":-1270,"vertices":{"wire_a":[0]}}"#).unwrap();
     match cmd {
-        Cmd::SchMove(SchMoveCmd::Drag { ids, vertices, dx, dy, ortho, grid }) => {
+        Cmd::SchMove(SchMoveCmd::Drag { ids, vertices, dx, dy, ortho, grid, .. }) => {
             assert_eq!(ids, vec!["R1", "wire_a"]);
             assert_eq!(vertices["wire_a"], vec![0]);
             assert_eq!((dx, dy, ortho, grid), (2540, -1270, true, 0));
